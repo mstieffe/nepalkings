@@ -1,0 +1,14 @@
+#!/bin/bash
+
+VENV=./BUILD/venv
+
+rm -rf $VENV
+
+virtualenv -p /usr/bin/python3 $VENV
+source $VENV/bin/activate
+
+mkdir -p $BUILD
+
+pip install -r ./requirements.txt
+
+deactivate
