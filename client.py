@@ -1,10 +1,12 @@
 import pygame
-from pygame.locals import *
+#from pygame.locals import *
 from LoginScreen import LoginScreen
 from GameMenuScreen import GameMenuScreen
+from NewGameScreen import NewGameScreen
+from GameState import GameState
 import settings
-import sys
-import requests
+#import sys
+#import requests
 
 class Client:
     def __init__(self):
@@ -12,47 +14,38 @@ class Client:
         self.screen = pygame.display.set_caption(settings.SCREEN_CAPTION)
         self.clock = pygame.time.Clock()
         self.running = True
-        self.state = 'login'
 
-        self.login_screen = LoginScreen()
-        self.game_menu_screen = GameMenuScreen()
+        self.state = GameState()
 
-    def run_login_screen(self):
-        while self.state == 'login':
-            events = pygame.event.get()
+        self.screens = {
+            'login': LoginScreen(self.state),
+            'game_menu': GameMenuScreen(self.state),
+            'new_game': NewGameScreen(self.state)
+        }
 
-            self.login_screen.handle_events(events)
-            self.login_screen.update(events)
-            self.login_screen.render()
+    def get_events(self):
+        return pygame.event.get()
 
-            if self.login_screen.login_success:
-                self.state = 'game_menu'
+    def run_screen(self, screen):
+        while self.state.screen == screen:
+            events = self.get_events()
 
-            pygame.display.update()
-            self.clock.tick(60)
+            self.screens[screen].handle_events(events)
+            self.screens[screen].update(events)
+            self.screens[screen].render()
 
-    def run_game_menu_screen(self):
-        while self.state == 'game_menu':
-            events = pygame.event.get()
-
-            self.game_menu_screen.handle_events(events)
-            self.game_menu_screen.update(events)
-            self.game_menu_screen.render()
-
-            #if self.login_screen.login_success:
-            #    self.state = 'game'
-
+            self.state.update()
             pygame.display.update()
             self.clock.tick(60)
 
     def run(self):
         while self.running:
-            if self.state == 'login':
-                self.run_login_screen()
-            elif self.state == 'game_menu':
-                self.run_game_menu_screen()
+            print(self.state.screen)
+            if self.state.screen in self.screens:
+                if self.state.screen == 'new_game':
+                    self.screens['new_game'].update_users()
+                self.run_screen(self.state.screen)
 
 if __name__ == '__main__':
     client = Client()
     client.run()
-

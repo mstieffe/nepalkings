@@ -4,7 +4,10 @@ from pygame.locals import *
 import settings
 
 class Screen:
-    def __init__(self):
+    def __init__(self, state):
+
+        self.state = state
+
         # Set up the display
         self.window = pygame.display.set_mode((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
 
@@ -13,6 +16,11 @@ class Screen:
 
         # Set clock
         self.clock = pygame.time.Clock()
+
+    def draw_msg(self):
+        if self.state.msg:
+            self.draw_text(self.state.msg, settings.BLACK, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.6)
+
     def draw_text(self, text, color, x, y):
         text_obj = self.font.render(text, True, color)
         text_rect = text_obj.get_rect()
@@ -26,7 +34,8 @@ class Screen:
                 sys.exit()
 
     def render(self):
-        raise NotImplementedError
+        self.draw_msg()
+        #raise NotImplementedError
 
     def update(self):
         raise NotImplementedError

@@ -1,14 +1,25 @@
 from flask import Flask, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_sqlalchemy import SQLAlchemy
-from models import User
+from models import db, User
 import settings
 
 app = Flask(__name__)
 
 # Configure your database URI
 app.config['SQLALCHEMY_DATABASE_URI'] = settings.DB_URL
-db = SQLAlchemy(app)
+#db = SQLAlchemy(app)
+db.init_app(app)
+
+#with app.app_context():
+#    db.drop_all()
+
+@app.route('/get_users', methods=['GET'])
+def get_users():
+    current_username = request.args.get('username')  # Get the 'username' parameter from the request
+    print(current_username)
+    users = User.query.filter(User.username != current_username).all()  # Query for all users excluding the current user
+    print([user.username for user in users])
+    return jsonify({'users': [user.username for user in users]})
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -33,6 +44,8 @@ def login():
     username = request.form.get('username')
     password = request.form.get('password')
 
+
+    print("ha halskd kasd")
     if not username or not password:
         return jsonify({'success': False, 'message': 'Missing username or password'})
 
@@ -45,5 +58,6 @@ def login():
 
 
 if __name__ == '__main__':
-    db.create_all()
+    with app.app_context():
+        db.create_all()
     app.run(host='localhost', port=5000)
