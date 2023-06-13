@@ -19,6 +19,9 @@ class Screen:
         # Set clock
         self.clock = pygame.time.Clock()
 
+        self.state.action = {"task": None,
+                             "content": None,
+                             "status": None}
         self.dialogue_box = None
         # Initialize buttons
         #self.accept_button = None
@@ -37,8 +40,21 @@ class Screen:
     def make_dialogue_box(self, message):
         self.dialogue_box = DialogueBox(self.window, message, self.font)
 
-    def reset_user_response(self):
-        self.state.user_response = None
+    #def reset_user_response(self):
+    #    self.state.user_response = None
+
+    def reset_action(self):
+        self.state.action = {"task": None,
+                             "content": None,
+                             "status": None}
+
+    #def set_user_respone(self, response: str):
+    #    self.state.user_response = response
+
+    def set_action(self, task: str, content: str, status: str):
+        self.state.action = {"task": task,
+                             "content": content,
+                             "status": status}
 
     def handle_events(self, events):
         for event in events:
@@ -48,7 +64,7 @@ class Screen:
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
             if response:
-                self.state.user_response = response
+                self.state.action["status"] = response
                 self.dialogue_box = None
 
     def render(self):

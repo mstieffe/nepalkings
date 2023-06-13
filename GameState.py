@@ -7,6 +7,7 @@ class GameState:
         self.msg = ''
         self.msg_time = None  # Time when the message was set
 
+        self.action = None
         self.user_response = None
 
     def set_message(self, msg):
