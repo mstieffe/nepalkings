@@ -5,6 +5,18 @@ import enum
 
 db = SQLAlchemy()
 
+class ChallengeStatus(enum.Enum):
+  OPEN = "open"
+  ACCEPTED = "accepted"
+  REJECTED = "rejected"
+
+class Challenge(db.Model):
+  id = db.Column(db.Integer, primary_key=True)
+  challenger_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+  challenged_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+  status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default='Open')
+
+
 class Suit(enum.Enum):
     HEARTS = "Hearts"
     DIAMONDS = "Diamonds"
@@ -21,6 +33,10 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
+    challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
+                                        foreign_keys='Challenge.challenger_id')
+    challenges_received = db.relationship('Challenge', backref='challenged', lazy=True,
+                                          foreign_keys='Challenge.challenged_id')
     #email = db.Column(db.String(120), unique=True, nullable=False)
 
     def set_password(self, password):
