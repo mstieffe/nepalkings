@@ -23,6 +23,9 @@ class Screen:
                              "content": None,
                              "status": None}
         self.dialogue_box = None
+
+        self.last_update_time = pygame.time.get_ticks()
+        self.update_interval = 100
         # Initialize buttons
         #self.accept_button = None
         #self.reject_button = None

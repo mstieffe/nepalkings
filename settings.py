@@ -51,7 +51,7 @@ RED = (255, 0, 0)
 # Server settings
 SERVER_URL = 'http://localhost:5000'
 
-DB_URL = 'sqlite:////tmp/test.db'
+DB_URL = 'sqlite:///test.db'
 
 def get_x(relative_position):
     return SCREEN_WIDTH*relative_position
