@@ -12,6 +12,13 @@ class NewGameScreen(Screen):
         #self.state = state
         self.users = self.get_users()
         self.user_buttons = [Button(self.window, settings.get_x(0.1), settings.get_y(0.2 + 0.1 * i), user) for i, user in enumerate(self.users)]
+        self.challenge_button = None
+
+    def send_challenge(self, opponent):
+        response = requests.post(f'{settings.SERVER_URL}/challenge',
+                                 data={'challenger': self.state.username, 'opponent': opponent})
+        if response.status_code != 200:
+            print("Failed to send challenge")
 
     def update_users(self):
         self.users = self.get_users()
@@ -45,5 +52,14 @@ class NewGameScreen(Screen):
             if event.type == MOUSEBUTTONDOWN:
                 for button in self.user_buttons:
                     if button.collide():
-                        print(f"User {button.text} selected")
+                        #self.dialoge_box('Do you want to start a game with ' + button.text + '?')
+                        #self.state.set_message(f"User {button.text} challened! Waiting for response...")
+                        self.make_dialogue_box('Do you want to start a game with ' + button.text + '?')
+                        if self.state.user_response == 'accept':
+                            #print(f"User {button.text} accepted")
+                            self.send_challenge(button.text)
+                            self.reset_user_response()
+                        elif self.state.user_response == 'reject':
+                            print(f"User {button.text} rejected")
+                            self.reset_user_response()
                         # TODO: implement what happens when a user is selected
