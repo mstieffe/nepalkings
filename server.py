@@ -13,6 +13,15 @@ db.init_app(app)
 #with app.app_context():
 #    db.drop_all()
 
+@app.route('/challenge', methods=['POST'])
+def challenge():
+    challenger = request.form.get('challenger')
+    opponent = request.form.get('opponent')
+
+    # TODO: Add code here to update the database with the new challenge
+
+    return jsonify({'success': True, 'message': 'Challenge sent'})
+
 @app.route('/get_users', methods=['GET'])
 def get_users():
     current_username = request.args.get('username')  # Get the 'username' parameter from the request
