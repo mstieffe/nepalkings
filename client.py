@@ -42,9 +42,12 @@ class Client:
         while self.running:
             print(self.state.screen)
             if self.state.screen in self.screens:
-                if self.state.screen == 'new_game':
-                    self.screens['new_game'].update_users()
+                #if self.state.screen == 'new_game':
+                #    self.screens['new_game'].update_users()
+                #    self.screens['new_game'] = NewGameScreen(self.state)
                 self.run_screen(self.state.screen)
+            #elif self.state.screen == 'new_game':
+            #    self.screens['new_game'] = NewGameScreen(self.state)
 
 if __name__ == '__main__':
     client = Client()
