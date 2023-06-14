@@ -20,8 +20,12 @@ class NewGameScreen(Screen):
         self.challenge_dict = {}
 
     def create_game(self, opponent):
-        # create new game for with players self.state.user and opponent
-        
+        response = requests.post(f'{settings.SERVER_URL}/create_game',
+                                 data={'user1': self.state.username, 'user2': opponent})
+        self.state.set_msg(response.json()['message'])
+        if response.status_code != 200:
+            print("Failed to create game")
+        self.render()
 
     def make_buttons(self, button_names, x=0.0, y=0.0):
         buttons = [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), user) for i, user in enumerate(button_names)]
