@@ -15,29 +15,32 @@ with app.app_context():
 @app.route('/create_game', methods=['POST'])
 def create_game():
     try:
-        # This function will handle the POST request sent by the client to create a new game
-        # For this, it will extract the user details from the request, create a new game instance, and save it to the database
+        challenge_id = request.form.get('challenge_id')
+        challenge = Challenge.query.get(challenge_id)
 
-        # Step 1: Extract the user details from the request
-        username1 = request.form.get('username1')
-        username2 = request.form.get('username2')
+        if not challenge:
+            return jsonify({'success': False, 'message': 'Challenge not found'})
 
-        # Step 2: Check if both players exist in the database
-        user1 = User.query.filter_by(username=username1).first()
-        user2 = User.query.filter_by(username=username2).first()
+        # Get the users from the challenge
+        user1 = User.query.get(challenge.challenger_id)
+        user2 = User.query.get(challenge.challenged_id)
 
         if not user1 or not user2:
             return jsonify({'success': False, 'message': 'One or both players do not exist'})
+
+        # Create a new Game instance
+        game = Game()
+
+        db.session.add(game)
+        db.session.commit()
 
         # Create new Player instances for the users
         player1 = Player(user_id=user1.id, game_id=game.id)
         player2 = Player(user_id=user2.id, game_id=game.id)
 
-        game = Game()
-
         db.session.add(player1)
-        db.session.commit(player2)
-        db.session.commit(game)
+        db.session.add(player2)
+        db.session.commit()
 
     except Exception as e:
         # In case there is an exception while adding the challenge
@@ -90,7 +93,7 @@ def open_challenges():
         username = request.args.get('username')
         user = User.query.filter_by(username=username).first()
         if not user:
-            return jsonify({'error': 'User not found'})
+            return jsonify({'success': False, 'error': 'User not found'})
 
         challenges = Challenge.query.filter(
             (Challenge.challenger_id == user.id) | (Challenge.challenged_id == user.id)).filter_by(status='open').all()
@@ -109,8 +112,33 @@ def open_challenges():
         })
     except Exception as e:
 
-        return jsonify({'message': 'An error occurred: {}'.format(str(e))})
+        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))})
 
+@app.route('/get_games', methods=['GET'])
+def get_games():
+    try:
+        username = request.args.get('username')
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            return jsonify({'success': False, 'error': 'User not found'})
+
+        games = Game.query.filter(
+            (Challenge.challenger_id == user.id) | (Challenge.challenged_id == user.id)).filter_by(status='open').all()
+
+        #challenges = Challenge.query.filter((Challenge.challenger == user) | (Challenge.challenged == user)).filter_by(status='open').all()
+        #challenges = Challenge.query.all()
+
+        return jsonify({
+            'games': [
+                {'opponent': ???,
+                 'date': game.date,
+                 'id': game.id}
+                for game in games
+            ]
+        })
+    except Exception as e:
+
+        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))})
 
 @app.route('/get_users', methods=['GET'])
 def get_users():
