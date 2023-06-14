@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, User, Challenge
+from models import db, User, Challenge, Player, Game
 import settings
 
 app = Flask(__name__)
@@ -11,6 +11,39 @@ db.init_app(app)
 
 with app.app_context():
     db.drop_all()
+
+@app.route('/create_game', methods=['POST'])
+def create_game():
+    try:
+        # This function will handle the POST request sent by the client to create a new game
+        # For this, it will extract the user details from the request, create a new game instance, and save it to the database
+
+        # Step 1: Extract the user details from the request
+        username1 = request.form.get('username1')
+        username2 = request.form.get('username2')
+
+        # Step 2: Check if both players exist in the database
+        user1 = User.query.filter_by(username=username1).first()
+        user2 = User.query.filter_by(username=username2).first()
+
+        if not user1 or not user2:
+            return jsonify({'success': False, 'message': 'One or both players do not exist'})
+
+        # Create new Player instances for the users
+        player1 = Player(user_id=user1.id, game_id=game.id)
+        player2 = Player(user_id=user2.id, game_id=game.id)
+
+        game = Game()
+
+        db.session.add(player1)
+        db.session.commit(player2)
+        db.session.commit(game)
+
+    except Exception as e:
+        # In case there is an exception while adding the challenge
+        return jsonify({'success': False, 'message': f'Failed to create game, Error: {str(e)}'})
+
+    return jsonify({'success': True, 'message': 'Game created successfully'})
 
 @app.route('/remove_challenge', methods=['POST'])
 def remove_challenge():
