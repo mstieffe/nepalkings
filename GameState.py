@@ -10,7 +10,7 @@ class GameState:
         self.action = None
         self.user_response = None
 
-    def set_message(self, msg):
+    def set_msg(self, msg):
         self.msg = msg
         self.msg_time = pygame.time.get_ticks()  # Record the current time
 

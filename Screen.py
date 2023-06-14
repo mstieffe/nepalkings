@@ -2,8 +2,8 @@ import sys
 import pygame
 from pygame.locals import *
 import settings
-from DialogueBox import DialogueBox
-from utils import Button
+from DialogueBox import DialogueBox, InfoBox
+from utils import LogoutButton
 
 class Screen:
     def __init__(self, state):
@@ -23,12 +23,15 @@ class Screen:
                              "content": None,
                              "status": None}
         self.dialogue_box = None
+        self.info_box = None
 
         self.last_update_time = pygame.time.get_ticks()
         self.update_interval = 100
         # Initialize buttons
         #self.accept_button = None
         #self.reject_button = None
+
+        self.logout_button = LogoutButton(self.window, settings.get_x(0.85), settings.get_y(0.0), "Logout")
 
     def draw_msg(self):
         if self.state.msg:
@@ -42,6 +45,9 @@ class Screen:
 
     def make_dialogue_box(self, message):
         self.dialogue_box = DialogueBox(self.window, message, self.font)
+
+    def make_info_box(self, message):
+        self.info_box = InfoBox(self.window, message, self.font)
 
     #def reset_user_response(self):
     #    self.state.user_response = None
@@ -64,17 +70,34 @@ class Screen:
             if event.type == QUIT:
                 pygame.quit()
                 sys.exit()
+            elif event.type == MOUSEBUTTONDOWN:
+                if self.logout_button.collide():
+                    self.state.screen = "login"
+                    self.reset_action()
+                    self.state.user = None
+                    self.state.set_msg("Logged out")
+
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
             if response:
                 self.state.action["status"] = response
                 self.dialogue_box = None
 
+        if self.info_box:
+            response = self.info_box.update(events)
+            if response:
+                self.info_box = None
+
     def render(self):
         self.draw_msg()
+        if self.state.screen != "login":
+            self.logout_button.draw()
         if self.dialogue_box:
             self.dialogue_box.draw()
+        if self.info_box:
+            self.info_box.draw()
         #raise NotImplementedError
 
     def update(self):
-        raise NotImplementedError
+        self.logout_button.update_color()
+        #raise NotImplementedError

@@ -32,6 +32,28 @@ class Button():
             self.color_rect = settings.BUTTON_COLOR_PASSIVE  # Default color
             self.color_text = settings.TEXT_COLOR_PASSIVE
 
+class LogoutButton(Button):
+
+        def __init__(self, window, x: int = 0, y: int =0, text: str = ""):
+            super().__init__(window, x, y, text)
+            self.font = pygame.font.Font(settings.FONT_PATH, settings.LOGOUT_FONT_SIZE)
+            self.rect = pygame.Rect(self.x, self.y, settings.LOGOUT_BUTTON_WIDTH, settings.LOGOUT_BUTTON_HEIGHT)
+
+        def draw(self):
+            pygame.draw.rect(self.window, self.color_rect, self.rect)
+            text_obj = self.font.render(self.text, True, self.color_text)
+            text_rect = text_obj.get_rect(center=(self.x + settings.LOGOUT_BUTTON_WIDTH / 2, self.y + settings.LOGOUT_BUTTON_HEIGHT / 2))
+            self.window.blit(text_obj, text_rect)
+
+        def update_color(self):
+            mx, my = pygame.mouse.get_pos()
+            if self.rect.collidepoint((mx, my)):
+                self.color_rect = settings.BUTTON_COLOR_ACTIVE  # Hover color
+                self.color_text = settings.TEXT_COLOR_ACTIVE
+            else:
+                self.color_rect = settings.BUTTON_COLOR_PASSIVE  # Default color
+                self.color_text = settings.TEXT_COLOR_PASSIVE
+
 class InputField():
 
     def __init__(self, window, x: int = 0, y: int =0, name: str = "", content: str = "", pwd: bool = False, active: bool = False):

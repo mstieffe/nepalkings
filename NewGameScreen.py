@@ -17,6 +17,12 @@ class NewGameScreen(Screen):
         self.open_opponents = []
         self.open_challenge_buttons = []
 
+        self.challenge_dict = {}
+
+    def create_game(self, opponent):
+        # create new game for with players self.state.user and opponent
+        
+
     def make_buttons(self, button_names, x=0.0, y=0.0):
         buttons = [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), user) for i, user in enumerate(button_names)]
         return buttons
@@ -32,15 +38,22 @@ class NewGameScreen(Screen):
         return buttons
     """
 
-    def send_challenge(self, opponent):
-        print("eins")
-        response = requests.post(f'{settings.SERVER_URL}/challenge',
+    def create_challenge(self, opponent):
+        response = requests.post(f'{settings.SERVER_URL}/create_challenge',
                                  data={'challenger': self.state.username, 'opponent': opponent})
-        print('zwei')
-        self.state.set_message(response.json()['message'])
-        #if response.status_code != 200:
-        #    print("Failed to send challenge")
+        self.state.set_msg(response.json()['message'])
+        if response.status_code != 200:
+            print("Failed to send challenge")
         self.render()
+
+    def remove_challenge(self, challenge_id):
+        response = requests.post(f'{settings.SERVER_URL}/remove_challenge',
+                                 data={'challenge_id': challenge_id})
+        self.state.set_msg(response.json()['message'])
+        if response.status_code != 200:
+            print("Failed to remove challenge")
+        self.render()
+
 
     def update_challenge_buttons(self):
         self.users = self.get_users()
@@ -54,20 +67,22 @@ class NewGameScreen(Screen):
     def update_open_challenges_buttons(self):
 
         self.open_challenges = self.get_open_challenges()
-        self.open_opponents = self.get_open_opponents()
+        self.open_opponents, self.challenge_dict = self.get_open_opponents()
         self.open_challenge_buttons = self.make_buttons(self.open_opponents, 0.5, 0.2)
 
         #self.open_challenges = self.get_open_challenges()
         #self.open_challenge_buttons = self.make_open_challenge_buttons()
 
     def get_open_opponents(self):
-        opponents = []
+        opponents, challenge_dict = [], {}
         for challenge in self.open_challenges:
             if challenge["challenger"] == self.state.username:
                 opponents.append(challenge["challenged"])
+                challenge_dict[challenge["challenged"]] = "challenger"
             else:
                 opponents.append(challenge["challenger"])
-        return opponents
+                challenge_dict[challenge["challenger"]] = "challenged"
+        return opponents, challenge_dict
 
     def get_possible_opponents(self):
         opponents = []
@@ -107,6 +122,7 @@ class NewGameScreen(Screen):
         pygame.display.update()
 
     def update(self, events):
+        super().update()
 
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:
@@ -126,14 +142,27 @@ class NewGameScreen(Screen):
                     if button.collide():
                         self.set_action("new_game_challenge", button.text, "open")
                         self.make_dialogue_box('Do you want to start a game with ' + button.text + '?')
-                for button in self.open_challenge_buttons:
+                for button, challenge in zip(self.open_challenge_buttons, self.open_challenges):
                     if button.collide():
-                        self.set_action("accept_game_challenge", button.text, "open")
-                        self.make_dialogue_box('Do you want to accept a game with ' + button.text + '?')
+                        if challenge["challenger"] == self.state.username:
+                            #self.set_action("accept_game_challenge", button.text, "open")
+                            self.make_info_box(f'You have challenged {button.text} at {challenge["date"]}')
+                        else:
+                            self.set_action(f"accept_game_challenge", challenge['id'], "open")
+                            self.make_dialogue_box(f'Do you want to accept a game with {button.text}?')
 
         if self.state.action["task"] == "new_game_challenge" and self.state.action["status"] != "open":
             if self.state.action["status"] == 'accept':
                 opponent = self.state.action["content"]
-                self.send_challenge(opponent)
+                self.create_challenge(opponent)
+            self.reset_action()
+        elif self.state.action["task"] == "accept_game_challenge" and self.state.action["status"] != "open":
+            if self.state.action["status"] == 'accept':
+                print("neues game")
+            elif self.state.action["status"] == 'reject':
+                challenge_id = self.state.action["content"]
+                self.remove_challenge(challenge_id)
+                print("reject")
+
             self.reset_action()
 

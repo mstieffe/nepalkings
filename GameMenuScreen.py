@@ -28,6 +28,8 @@ class GameMenuScreen(Screen):
         pygame.display.update()
 
     def update(self, events):
+        super().update()
+
         self.button_new.update_color()
         self.button_load.update_color()
 

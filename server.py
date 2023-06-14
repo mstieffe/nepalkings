@@ -12,9 +12,23 @@ db.init_app(app)
 with app.app_context():
     db.drop_all()
 
-@app.route('/challenge', methods=['POST'])
-def challenge():
-    print("wir sind hier ok!!!")
+@app.route('/remove_challenge', methods=['POST'])
+def remove_challenge():
+    try:
+        challenge_id = request.form.get('challenge_id')
+        challenge = Challenge.query.filter_by(id=challenge_id).first()
+        if not challenge:
+            return jsonify({'success': False, 'message': 'Challenge not found'})
+
+        db.session.delete(challenge)
+        db.session.commit()
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed to remove challenge, Error: {str(e)}'})
+    return jsonify({'success': True, 'message': 'Challenge removed'})
+
+
+@app.route('/create_challenge', methods=['POST'])
+def create_challenge():
     try:
         challenger = request.form.get('challenger')
         opponent = request.form.get('opponent')
@@ -31,7 +45,6 @@ def challenge():
 
         db.session.add(challenge)
         db.session.commit()
-        print("ja das geht doch")
     except Exception as e:
         # In case there is an exception while adding the challenge
         return jsonify({'success': False, 'message': f'Failed to create challenge, Error: {str(e)}'})
@@ -46,12 +59,18 @@ def open_challenges():
         if not user:
             return jsonify({'error': 'User not found'})
 
-        challenges = Challenge.query.filter((Challenge.challenger == user) | (Challenge.challenged == user)).filter_by(status='open').all()
+        challenges = Challenge.query.filter(
+            (Challenge.challenger_id == user.id) | (Challenge.challenged_id == user.id)).filter_by(status='open').all()
+
+        #challenges = Challenge.query.filter((Challenge.challenger == user) | (Challenge.challenged == user)).filter_by(status='open').all()
         #challenges = Challenge.query.all()
 
         return jsonify({
             'challenges': [
-                {'challenger': challenge.challenger.username, 'challenged': challenge.challenged.username}
+                {'challenger': challenge.challenger.username,
+                 'challenged': challenge.challenged.username,
+                 'date': challenge.date,
+                 'id': challenge.id}
                 for challenge in challenges
             ]
         })
