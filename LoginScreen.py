@@ -5,6 +5,8 @@ from Screen import Screen
 import settings
 from utils import Button, InputField
 
+
+
 class LoginScreen(Screen):
     def __init__(self, state):
         super().__init__(state)
@@ -59,7 +61,7 @@ class LoginScreen(Screen):
         if event.key == K_RETURN:
             response = requests.post(f'{settings.SERVER_URL}/login',
                                      data={'username': self.field_username.content, 'password': self.field_pwd.content})
-            self.state.set_message(response.json()['message'])
+            self.state.set_msg(response.json()['message'])
             if response.json()['success']:
                 # self.login_success = True
                 self.state.username = self.field_username.content
@@ -105,7 +107,7 @@ class LoginScreen(Screen):
         elif self.button_login.collide():
             response = requests.post(f'{settings.SERVER_URL}/login',
                                      data={'username': self.field_username.content, 'password': self.field_pwd.content})
-            self.state.set_message(response.json()['message'])
+            self.state.set_msg(response.json()['message'])
             if response.json()['success']:
                 # self.login_success = True
                 self.state.username = self.field_username.content
@@ -117,7 +119,7 @@ class LoginScreen(Screen):
         elif self.button_register.collide():
             response = requests.post(f'{settings.SERVER_URL}/register',
                                      data={'username': self.field_username.content, 'password': self.field_pwd.content})
-            self.state.set_message(response.json()['message'])
+            self.state.set_msg(response.json()['message'])
             if response.json()['success']:
                 self.state.username = self.field_username.content
                 self.state.screen = "game_menu"
