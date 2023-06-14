@@ -19,17 +19,19 @@ class NewGameScreen(Screen):
 
         self.challenge_dict = {}
 
-    def create_game(self, opponent):
+    def create_game(self, challenge_id):
         response = requests.post(f'{settings.SERVER_URL}/create_game',
-                                 data={'user1': self.state.username, 'user2': opponent})
+                                 data={'challenge_id': challenge_id})
         self.state.set_msg(response.json()['message'])
         if response.status_code != 200:
             print("Failed to create game")
         self.render()
 
+    """
     def make_buttons(self, button_names, x=0.0, y=0.0):
         buttons = [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), user) for i, user in enumerate(button_names)]
         return buttons
+    """
 
     """
     def make_challenge_buttons(self):
@@ -162,10 +164,12 @@ class NewGameScreen(Screen):
             self.reset_action()
         elif self.state.action["task"] == "accept_game_challenge" and self.state.action["status"] != "open":
             if self.state.action["status"] == 'accept':
+                self.create_game(self.state.action["content"])
+                self.remove_challenge(self.state.action["content"])
                 print("neues game")
             elif self.state.action["status"] == 'reject':
-                challenge_id = self.state.action["content"]
-                self.remove_challenge(challenge_id)
+                #challenge_id = self.state.action["content"]
+                self.remove_challenge(self.state.action["content"])
                 print("reject")
 
             self.reset_action()

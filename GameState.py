@@ -1,22 +1,33 @@
 import pygame
+import settings
 
 class GameState:
     def __init__(self):
         self.username = None
         self.screen = "login"
-        self.msg = ''
-        self.msg_time = None  # Time when the message was set
+        self.message_lines = []
 
         self.action = None
         self.user_response = None
 
     def set_msg(self, msg):
-        self.msg = msg
-        self.msg_time = pygame.time.get_ticks()  # Record the current time
+        lines = msg.split('\n')  # Split the message into lines
+        current_time = pygame.time.get_ticks()  # Record the current time
+
+        for line in lines:
+            self.message_lines.append((line, current_time))  # Store the line and its disappearance time
 
     def update(self):
-        if self.msg:
-            # Check if 5 seconds (5000 milliseconds) have passed
-            if pygame.time.get_ticks() - self.msg_time > 5000:
-                self.msg = ''
-                self.msg_time = None
+        if self.message_lines:
+            current_time = pygame.time.get_ticks()  # Record the current time
+
+            # Create a new list for updated message lines
+            updated_message_lines = []
+
+            for line, line_time in self.message_lines:
+                if line_time is not None:
+                    # Check if the disappearance time has not passed
+                    if current_time - line_time <= settings.MESSAGE_DURATION:
+                        updated_message_lines.append((line, line_time))
+
+            self.message_lines = updated_message_lines

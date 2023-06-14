@@ -3,7 +3,7 @@ import pygame
 from pygame.locals import *
 import settings
 from DialogueBox import DialogueBox, InfoBox
-from utils import LogoutButton
+from utils import Button, LogoutButton
 
 class Screen:
     def __init__(self, state):
@@ -33,9 +33,22 @@ class Screen:
 
         self.logout_button = LogoutButton(self.window, settings.get_x(0.85), settings.get_y(0.0), "Logout")
 
+    """
     def draw_msg(self):
         if self.state.msg:
             self.draw_text(self.state.msg, settings.BLACK, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.6)
+    """
+    def make_buttons(self, button_names, x=0.0, y=0.0):
+        buttons = [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), user) for i, user in enumerate(button_names)]
+        return buttons
+
+    def draw_msg(self):
+        #line_spacing = 20  # Adjust this value based on your desired line spacing
+        starting_y_position = settings.get_y(0.6)  # Specify the initial y-coordinate position
+
+        for line, _ in self.state.message_lines:
+            line_y_position = starting_y_position + (self.state.message_lines.index((line, _)) * settings.MESSAGE_SPACING)
+            self.draw_text(line, settings.BLACK, settings.get_x(0.1), line_y_position)
 
     def draw_text(self, text, color, x, y):
         text_obj = self.font.render(text, True, color)
