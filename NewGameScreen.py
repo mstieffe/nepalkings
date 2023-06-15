@@ -25,24 +25,8 @@ class NewGameScreen(Screen):
         self.state.set_msg(response.json()['message'])
         if response.status_code != 200:
             print("Failed to create game")
-        self.render()
-
-    """
-    def make_buttons(self, button_names, x=0.0, y=0.0):
-        buttons = [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), user) for i, user in enumerate(button_names)]
-        return buttons
-    """
-
-    """
-    def make_challenge_buttons(self):
-        buttons = [Button(self.window, settings.get_x(0.1), settings.get_y(0.2 + 0.1 * i), user) for i, user in enumerate(self.possible_opponents)]
-        return buttons
-
-    def make_open_challenge_buttons(self):
-        buttons = [Button(self.window, settings.get_x(0.5), settings.get_y(0.2 + 0.1 * i), user) for i, user in
-                   enumerate(self.open_opponents)]
-        return buttons
-    """
+        #self.render()
+        return response.json()
 
     def create_challenge(self, opponent):
         response = requests.post(f'{settings.SERVER_URL}/create_challenge',
@@ -50,7 +34,7 @@ class NewGameScreen(Screen):
         self.state.set_msg(response.json()['message'])
         if response.status_code != 200:
             print("Failed to send challenge")
-        self.render()
+        #self.render()
 
     def remove_challenge(self, challenge_id):
         response = requests.post(f'{settings.SERVER_URL}/remove_challenge',
@@ -58,26 +42,18 @@ class NewGameScreen(Screen):
         self.state.set_msg(response.json()['message'])
         if response.status_code != 200:
             print("Failed to remove challenge")
-        self.render()
-
+        #self.render()
 
     def update_challenge_buttons(self):
         self.users = self.get_users()
         self.possible_opponents = self.get_possible_opponents()
         self.challenge_buttons = self.make_buttons(self.possible_opponents, 0.1, 0.2)
 
-        #self.users = self.get_users()
-        #self.possible_opponents =
-        #self.challenge_buttons = [Button(self.window, settings.get_x(0.1), settings.get_y(0.2 + 0.1 * i), user) for i, user in enumerate(self.users)]
-
     def update_open_challenges_buttons(self):
 
         self.open_challenges = self.get_open_challenges()
         self.open_opponents, self.challenge_dict = self.get_open_opponents()
         self.open_challenge_buttons = self.make_buttons(self.open_opponents, 0.5, 0.2)
-
-        #self.open_challenges = self.get_open_challenges()
-        #self.open_challenge_buttons = self.make_open_challenge_buttons()
 
     def get_open_opponents(self):
         opponents, challenge_dict = [], {}
@@ -164,9 +140,19 @@ class NewGameScreen(Screen):
             self.reset_action()
         elif self.state.action["task"] == "accept_game_challenge" and self.state.action["status"] != "open":
             if self.state.action["status"] == 'accept':
-                self.create_game(self.state.action["content"])
+                response = self.create_game(self.state.action["content"])
                 self.remove_challenge(self.state.action["content"])
-                print("neues game")
+
+                self.state.game.id = response['id']
+                self.state.game.date = response['date']
+                if response['challenger'] == self.state.username:
+                    opponent = response['challenged']
+                else:
+                    opponent = response['challenger']
+                self.state.game.opponent = opponent
+
+                self.state.screen = "game"
+
             elif self.state.action["status"] == 'reject':
                 #challenge_id = self.state.action["content"]
                 self.remove_challenge(self.state.action["content"])

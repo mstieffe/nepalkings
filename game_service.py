@@ -1,3 +1,5 @@
+from models import db, Game, Player, Card
+
 def create_deck(game):
     ranks = ['02', '03', '04', '05', '06', '07', '08', '09', '10', 'J', 'Q', 'K', 'A']
     suits = ['H', 'D', 'C', 'S']  # Hearts, Diamonds, Clubs, Spades

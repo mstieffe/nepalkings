@@ -2,6 +2,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy_utils import ChoiceType
 import enum
+from datetime import datetime
 
 db = SQLAlchemy()
 
@@ -15,6 +16,7 @@ class Challenge(db.Model):
   challenger_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   challenged_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default='Open')
+  date = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class Suit(enum.Enum):
@@ -48,7 +50,8 @@ class User(db.Model):
 class Game(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     players = db.relationship('Player', backref='game', lazy=True)
-    state = db.Column(db.String(20), nullable=False, default='waiting')
+    state = db.Column(db.String(20), nullable=False, default='open')
+    date = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
