@@ -1,14 +1,16 @@
 import pygame
 import settings
+from Game import Game
 
-class GameState:
+class State:
     def __init__(self):
         self.username = None
         self.screen = "login"
         self.message_lines = []
 
+        self.game = Game()
         self.action = None
-        self.user_response = None
+        #self.user_response = None
 
     def set_msg(self, msg):
         lines = msg.split('\n')  # Split the message into lines

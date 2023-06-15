@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, User, Challenge, Player, Game
+import game_service
 import settings
 
 app = Flask(__name__)
@@ -9,8 +10,8 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = settings.DB_URL
 db.init_app(app)
 
-with app.app_context():
-    db.drop_all()
+#with app.app_context():
+#    db.drop_all()
 
 @app.route('/create_game', methods=['POST'])
 def create_game():
@@ -42,11 +43,20 @@ def create_game():
         db.session.add(player2)
         db.session.commit()
 
+        # Call game_service functions here
+        game_service.create_deck(game)  # Creates a deck for the game
+        game_service.deal_cards(game)  # Deals cards to the players
+
     except Exception as e:
         # In case there is an exception while adding the challenge
         return jsonify({'success': False, 'message': f'Failed to create game, Error: {str(e)}'}), 400
 
-    return jsonify({'success': True, 'message': 'Game created successfully'})
+    return jsonify({'success': True,
+                    'message': 'Game created successfully',
+                    'id': game.id,
+                    'challenger': user1.username,
+                    'challenged': user2.username,
+                    'date': game.date})
 
 @app.route('/remove_challenge', methods=['POST'])
 def remove_challenge():

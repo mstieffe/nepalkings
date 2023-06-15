@@ -41,6 +41,9 @@ class Screen:
         if self.state.msg:
             self.draw_text(self.state.msg, settings.BLACK, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.6)
     """
+    def make_button(self, text, x, y, width: int = None, height: int = None):
+        button = Button(self.window, settings.get_x(x), settings.get_y(y), text, width=width, height=height)
+        return button
     def make_buttons(self, button_names, x=0.0, y=0.0, width: int = None, height: int = None):
         buttons = [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), text, width=width, height=height) for i, text in enumerate(button_names)]
         return buttons
