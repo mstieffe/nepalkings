@@ -19,14 +19,14 @@ def create_game():
         challenge = Challenge.query.get(challenge_id)
 
         if not challenge:
-            return jsonify({'success': False, 'message': 'Challenge not found'})
+            return jsonify({'success': False, 'message': 'Challenge not found'}), 400
 
         # Get the users from the challenge
         user1 = User.query.get(challenge.challenger_id)
         user2 = User.query.get(challenge.challenged_id)
 
         if not user1 or not user2:
-            return jsonify({'success': False, 'message': 'One or both players do not exist'})
+            return jsonify({'success': False, 'message': 'One or both players do not exist'}), 400
 
         # Create a new Game instance
         game = Game()
@@ -44,7 +44,7 @@ def create_game():
 
     except Exception as e:
         # In case there is an exception while adding the challenge
-        return jsonify({'success': False, 'message': f'Failed to create game, Error: {str(e)}'})
+        return jsonify({'success': False, 'message': f'Failed to create game, Error: {str(e)}'}), 400
 
     return jsonify({'success': True, 'message': 'Game created successfully'})
 
@@ -54,12 +54,12 @@ def remove_challenge():
         challenge_id = request.form.get('challenge_id')
         challenge = Challenge.query.filter_by(id=challenge_id).first()
         if not challenge:
-            return jsonify({'success': False, 'message': 'Challenge not found'})
+            return jsonify({'success': False, 'message': 'Challenge not found'}), 400
 
         db.session.delete(challenge)
         db.session.commit()
     except Exception as e:
-        return jsonify({'success': False, 'message': f'Failed to remove challenge, Error: {str(e)}'})
+        return jsonify({'success': False, 'message': f'Failed to remove challenge, Error: {str(e)}'}), 400
     return jsonify({'success': True, 'message': 'Challenge removed'})
 
 
@@ -74,7 +74,7 @@ def create_challenge():
         opponent_user = User.query.filter_by(username=opponent).first()
 
         if not challenger_user or not opponent_user:
-            return jsonify({'success': False, 'message': 'Challenger or opponent does not exist'})
+            return jsonify({'success': False, 'message': 'Challenger or opponent does not exist'}), 400
 
         # Creating a new challenge
         challenge = Challenge(challenger_id=challenger_user.id, challenged_id=opponent_user.id, status='open')
@@ -83,7 +83,7 @@ def create_challenge():
         db.session.commit()
     except Exception as e:
         # In case there is an exception while adding the challenge
-        return jsonify({'success': False, 'message': f'Failed to create challenge, Error: {str(e)}'})
+        return jsonify({'success': False, 'message': f'Failed to create challenge, Error: {str(e)}'}), 400
 
     return jsonify({'success': True, 'message': 'Challenge sent'})
 
@@ -93,7 +93,7 @@ def open_challenges():
         username = request.args.get('username')
         user = User.query.filter_by(username=username).first()
         if not user:
-            return jsonify({'success': False, 'error': 'User not found'})
+            return jsonify({'success': False, 'error': 'User not found'}), 400
 
         challenges = Challenge.query.filter(
             (Challenge.challenger_id == user.id) | (Challenge.challenged_id == user.id)).filter_by(status='open').all()
@@ -112,7 +112,7 @@ def open_challenges():
         })
     except Exception as e:
 
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))})
+        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
 
 @app.route('/get_games', methods=['GET'])
 def get_games():
@@ -120,25 +120,24 @@ def get_games():
         username = request.args.get('username')
         user = User.query.filter_by(username=username).first()
         if not user:
-            return jsonify({'success': False, 'error': 'User not found'})
+            return jsonify({'success': False, 'error': 'User not found'}), 400
 
-        games = Game.query.filter(
-            (Challenge.challenger_id == user.id) | (Challenge.challenged_id == user.id)).filter_by(status='open').all()
-
-        #challenges = Challenge.query.filter((Challenge.challenger == user) | (Challenge.challenged == user)).filter_by(status='open').all()
-        #challenges = Challenge.query.all()
+        games = Game.query.join(Player).filter(
+            (Player.user_id == user.id) & (Game.state == 'open')
+        ).all()
 
         return jsonify({
             'games': [
-                {'opponent': ???,
-                 'date': game.date,
-                 'id': game.id}
+                {
+                    'opponent': User.query.filter(User.id == Player.query.filter(Player.game_id == game.id, Player.user_id != user.id).first().user_id).first().username,
+                    'date': game.date,
+                    'id': game.id
+                }
                 for game in games
             ]
         })
     except Exception as e:
-
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))})
+        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
 
 @app.route('/get_users', methods=['GET'])
 def get_users():
@@ -148,7 +147,7 @@ def get_users():
 
         return jsonify({'users': [user.username for user in users]})
     except Exception as e:
-        return jsonify({'success': False, 'message': f'Error: {str(e)}'})
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 400
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -157,10 +156,10 @@ def register():
         password = request.form.get('password')
 
         if not username or not password:
-            return jsonify({'success': False, 'message': 'Missing username or password'})
+            return jsonify({'success': False, 'message': 'Missing username or password'}), 400
 
         if User.query.filter_by(username=username).first():
-            return jsonify({'success': False, 'message': 'Username already exists'})
+            return jsonify({'success': False, 'message': 'Username already exists'}), 400
 
         user = User(username=username, password_hash=generate_password_hash(password))
         db.session.add(user)
@@ -168,7 +167,7 @@ def register():
 
         return jsonify({'success': True, 'message': 'Registration successful'})
     except Exception as e:
-        return jsonify({'success': False, 'message': f'Registration failed, Error: {str(e)}'})
+        return jsonify({'success': False, 'message': f'Registration failed, Error: {str(e)}'}), 400
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -177,16 +176,16 @@ def login():
         password = request.form.get('password')
 
         if not username or not password:
-            return jsonify({'success': False, 'message': 'Missing username or password'})
+            return jsonify({'success': False, 'message': 'Missing username or password'}), 400
 
         user = User.query.filter_by(username=username).first()
 
         if not user or not user.check_password(password):
-            return jsonify({'success': False, 'message': 'Invalid username or password'})
+            return jsonify({'success': False, 'message': 'Invalid username or password'}), 400
 
         return jsonify({'success': True, 'message': 'Login successful'})
     except Exception as e:
-        return jsonify({'success': False, 'message': f'Login failed, Error: {str(e)}'})
+        return jsonify({'success': False, 'message': f'Login failed, Error: {str(e)}'}), 400
 
 if __name__ == '__main__':
     try:

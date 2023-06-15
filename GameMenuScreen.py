@@ -37,12 +37,11 @@ class GameMenuScreen(Screen):
             if event.type == MOUSEBUTTONDOWN:
                 if self.button_new.collide():
                     self.state.screen = 'new_game'
-                    # Assuming we have a class Game to start a new game
-                    #self.game = Game()
                     #self.game.start_new_game()
-                    print("new game")
+                    #print("new game")
                 elif self.button_load.collide():
-                    print("load game")
+                    self.state.screen = 'load_game'
+                    #print("load game")
                     # Assuming we have a function load_game to load an existing game
                     #load_game()
 

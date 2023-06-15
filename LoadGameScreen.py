@@ -16,12 +16,14 @@ class LoadGameScreen(Screen):
     def update_load_game_buttons(self):
 
         self.games = self.get_games()
-        self.load_game_buttons = self.make_buttons(self.games, 0.5, 0.2)
+        game_names = [f"{game['opponent']} - {game['date']}" for game in self.games]
+        self.load_game_buttons = self.make_buttons(game_names, 0.1, 0.2, width=settings.get_x(0.5))
 
     def get_games(self):
         response = requests.get(f'{settings.SERVER_URL}/get_games', params={'username': self.state.username})
         if response.status_code != 200:
             print("Failed to get games")
+            print(response.json()['message'])
             return []
         games = response.json()['games']
         return games
@@ -44,7 +46,7 @@ class LoadGameScreen(Screen):
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:
             self.last_update_time = current_time
-            self.update_game_buttons()
+            self.update_load_game_buttons()
 
         for button in self.load_game_buttons:
             button.update_color()
@@ -61,6 +63,5 @@ class LoadGameScreen(Screen):
                 #opponent = self.state.action["content"]
                 #self.create_challenge(opponent)
                 print("load game")
-            self.reset_action()
 
             self.reset_action()

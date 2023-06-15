@@ -147,15 +147,15 @@ class NewGameScreen(Screen):
                 for button in self.challenge_buttons:
                     if button.collide():
                         self.set_action("new_game_challenge", button.text, "open")
-                        self.make_dialogue_box('Do you want to start a game with ' + button.text + '?')
+                        self.make_dialogue_box('Do you want to start a game with ' + button.text + '?', actions=["accept", "reject"])
                 for button, challenge in zip(self.open_challenge_buttons, self.open_challenges):
                     if button.collide():
                         if challenge["challenger"] == self.state.username:
                             #self.set_action("accept_game_challenge", button.text, "open")
-                            self.make_info_box(f'You have challenged {button.text} at {challenge["date"]}')
+                            self.make_dialogue_box(f'You have challenged {button.text} at {challenge["date"]}')
                         else:
                             self.set_action(f"accept_game_challenge", challenge['id'], "open")
-                            self.make_dialogue_box(f'Do you want to accept a game with {button.text}?')
+                            self.make_dialogue_box(f'Do you want to accept a game with {button.text}?', actions=["accept", "reject"])
 
         if self.state.action["task"] == "new_game_challenge" and self.state.action["status"] != "open":
             if self.state.action["status"] == 'accept':

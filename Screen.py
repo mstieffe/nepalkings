@@ -2,8 +2,8 @@ import sys
 import pygame
 from pygame.locals import *
 import settings
-from DialogueBox import DialogueBox, InfoBox
-from utils import Button, LogoutButton
+from DialogueBox import DialogueBox
+from utils import Button, ControlButton
 
 class Screen:
     def __init__(self, state):
@@ -23,7 +23,7 @@ class Screen:
                              "content": None,
                              "status": None}
         self.dialogue_box = None
-        self.info_box = None
+        #self.info_box = None
 
         self.last_update_time = pygame.time.get_ticks()
         self.update_interval = 100
@@ -31,15 +31,18 @@ class Screen:
         #self.accept_button = None
         #self.reject_button = None
 
-        self.logout_button = LogoutButton(self.window, settings.get_x(0.85), settings.get_y(0.0), "Logout")
+        self.logout_button = ControlButton(self.window, settings.get_x(0.85), settings.get_y(0.0), "Logout")
+        self.home_button = ControlButton(self.window, settings.get_x(0.0), settings.get_y(0.0), "Home")
+
+        self.buttons = [self.logout_button, self.home_button]
 
     """
     def draw_msg(self):
         if self.state.msg:
             self.draw_text(self.state.msg, settings.BLACK, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.6)
     """
-    def make_buttons(self, button_names, x=0.0, y=0.0):
-        buttons = [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), user) for i, user in enumerate(button_names)]
+    def make_buttons(self, button_names, x=0.0, y=0.0, width: int = None, height: int = None):
+        buttons = [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), text, width=width, height=height) for i, text in enumerate(button_names)]
         return buttons
 
     def draw_msg(self):
@@ -56,11 +59,13 @@ class Screen:
         text_rect.topleft = (x, y)
         self.window.blit(text_obj, text_rect)
 
-    def make_dialogue_box(self, message):
-        self.dialogue_box = DialogueBox(self.window, message, self.font)
+    def make_dialogue_box(self, message, actions=None):
+        self.dialogue_box = DialogueBox(self.window, message, self.font, actions=actions)
 
+    """
     def make_info_box(self, message):
         self.info_box = InfoBox(self.window, message, self.font)
+    """
 
     #def reset_user_response(self):
     #    self.state.user_response = None
@@ -89,6 +94,9 @@ class Screen:
                     self.reset_action()
                     self.state.user = None
                     self.state.set_msg("Logged out")
+                elif self.home_button.collide():
+                    self.state.screen = "game_menu"
+
 
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
@@ -96,21 +104,25 @@ class Screen:
                 self.state.action["status"] = response
                 self.dialogue_box = None
 
+        """
         if self.info_box:
             response = self.info_box.update(events)
             if response:
                 self.info_box = None
+        """
 
     def render(self):
         self.draw_msg()
         if self.state.screen != "login":
             self.logout_button.draw()
+            self.home_button.draw()
         if self.dialogue_box:
             self.dialogue_box.draw()
-        if self.info_box:
-            self.info_box.draw()
+        #if self.info_box:
+        #    self.info_box.draw()
         #raise NotImplementedError
 
     def update(self):
-        self.logout_button.update_color()
+        for button in self.buttons:
+            button.update_color()
         #raise NotImplementedError
