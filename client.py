@@ -3,6 +3,7 @@ import pygame
 from LoginScreen import LoginScreen
 from GameMenuScreen import GameMenuScreen
 from NewGameScreen import NewGameScreen
+from LoadGameScreen import LoadGameScreen
 from GameState import GameState
 import settings
 #import sys
@@ -20,7 +21,8 @@ class Client:
         self.screens = {
             'login': LoginScreen(self.state),
             'game_menu': GameMenuScreen(self.state),
-            'new_game': NewGameScreen(self.state)
+            'new_game': NewGameScreen(self.state),
+            'load_game': LoadGameScreen(self.state)
         }
 
     def get_events(self):

@@ -1,17 +1,32 @@
 import settings
 import pygame
 
-class Button():
+import pygame
+import settings
 
-    def __init__(self, window, x: int = 0, y: int =0, text: str = ""):
+
+class Button:
+    def __init__(self, window, x: int = 0, y: int = 0, text: str = "", width: int = None, height: int = None):
         self.window = window
         self.x = x
         self.y = y
-        self.text= text
+        self.text = text
         self.color_rect = settings.BUTTON_COLOR_PASSIVE
         self.color_text = settings.TEXT_COLOR_PASSIVE
         self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE)
-        self.rect = pygame.Rect(self.x, self.y, settings.BUTTON_WIDTH, settings.BUTTON_HEIGHT)
+
+        # Render the text and adjust the button width if necessary
+        text_obj = self.font.render(self.text, True, self.color_text)
+        text_rect = text_obj.get_rect()
+
+        # If no custom width is provided, use the settings' button width
+        button_width = width if width is not None else settings.BUTTON_WIDTH
+        button_width = max(button_width, text_rect.width + settings.SMALL_SPACER_X)  # Adjusted button width
+
+        button_height = height if height is not None else settings.BUTTON_HEIGHT
+
+        # Adjust button width to fit text at initialization
+        self.rect = pygame.Rect(self.x, self.y, button_width, button_height)
 
     def collide(self):
         mx, my = pygame.mouse.get_pos()
@@ -20,7 +35,10 @@ class Button():
     def draw(self):
         pygame.draw.rect(self.window, self.color_rect, self.rect)
         text_obj = self.font.render(self.text, True, self.color_text)
-        text_rect = text_obj.get_rect(center=(self.x + settings.BUTTON_WIDTH / 2, self.y + settings.BUTTON_HEIGHT / 2))
+
+        # Re-calculate the center position of the text Rect
+        text_rect = text_obj.get_rect(center=self.rect.center)
+
         self.window.blit(text_obj, text_rect)
 
     def update_color(self):
@@ -32,17 +50,18 @@ class Button():
             self.color_rect = settings.BUTTON_COLOR_PASSIVE  # Default color
             self.color_text = settings.TEXT_COLOR_PASSIVE
 
-class LogoutButton(Button):
+
+class ControlButton(Button):
 
         def __init__(self, window, x: int = 0, y: int =0, text: str = ""):
             super().__init__(window, x, y, text)
             self.font = pygame.font.Font(settings.FONT_PATH, settings.LOGOUT_FONT_SIZE)
-            self.rect = pygame.Rect(self.x, self.y, settings.LOGOUT_BUTTON_WIDTH, settings.LOGOUT_BUTTON_HEIGHT)
+            self.rect = pygame.Rect(self.x, self.y, settings.CONTROL_BUTTON_WIDTH, settings.CONTROL_BUTTON_HEIGHT)
 
         def draw(self):
             pygame.draw.rect(self.window, self.color_rect, self.rect)
             text_obj = self.font.render(self.text, True, self.color_text)
-            text_rect = text_obj.get_rect(center=(self.x + settings.LOGOUT_BUTTON_WIDTH / 2, self.y + settings.LOGOUT_BUTTON_HEIGHT / 2))
+            text_rect = text_obj.get_rect(center=(self.x + settings.CONTROL_BUTTON_WIDTH / 2, self.y + settings.CONTROL_BUTTON_HEIGHT / 2))
             self.window.blit(text_obj, text_rect)
 
         def update_color(self):
