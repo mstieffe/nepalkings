@@ -4,7 +4,8 @@ from LoginScreen import LoginScreen
 from GameMenuScreen import GameMenuScreen
 from NewGameScreen import NewGameScreen
 from LoadGameScreen import LoadGameScreen
-from GameState import GameState
+from GameScreen import GameScreen
+from State import State
 import settings
 #import sys
 #import requests
@@ -16,13 +17,14 @@ class Client:
         self.clock = pygame.time.Clock()
         self.running = True
 
-        self.state = GameState()
+        self.state = State()
 
         self.screens = {
             'login': LoginScreen(self.state),
             'game_menu': GameMenuScreen(self.state),
             'new_game': NewGameScreen(self.state),
-            'load_game': LoadGameScreen(self.state)
+            'load_game': LoadGameScreen(self.state),
+            'game': GameScreen(self.state)
         }
 
     def get_events(self):
@@ -48,6 +50,8 @@ class Client:
                 #    self.screens['new_game'].update_users()
                 #    self.screens['new_game'] = NewGameScreen(self.state)
                 self.run_screen(self.state.screen)
+            else:
+                self.running = False
             #elif self.state.screen == 'new_game':
             #    self.screens['new_game'] = NewGameScreen(self.state)
 

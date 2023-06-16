@@ -4,9 +4,9 @@ from Screen import Screen
 import settings
 from utils import Button
 import requests
+from Game import Game
 
 class LoadGameScreen(Screen):
-
     def __init__(self, state):
         super().__init__(state)
 
@@ -14,30 +14,24 @@ class LoadGameScreen(Screen):
         self.load_game_buttons = []
 
     def update_load_game_buttons(self):
-
         self.games = self.get_games()
         self.load_game_buttons = []
-        self.button_to_game = {}
+
         for game in self.games:
-            game_name = f"{game['opponent']} - {game['date']}"
-            self.button_to_game[game_name] = game
+            game_name = f"{game.opponent_name} - {game.date}"
             self.load_game_buttons.append(self.make_button(game_name, 0.1, 0.2, width=settings.get_x(0.5)))
 
-        #self.games = self.get_games()
-        #game_names = [f"{game['opponent']} - {game['date']}" for game in self.games]
-        #self.load_game_buttons = self.make_buttons(game_names, 0.1, 0.2, width=settings.get_x(0.5))
-
     def get_games(self):
-        response = requests.get(f'{settings.SERVER_URL}/get_games', params={'username': self.state.username})
+        response = requests.get(f'{settings.SERVER_URL}/games/get_games', params={'username': self.state.user_dict['username']})
         if response.status_code != 200:
             print("Failed to get games")
             print(response.json()['message'])
             return []
-        games = response.json()['games']
+        game_dicts = response.json().get('games', [])
+        games = [Game(game_dict, self.state.user_dict) for game_dict in game_dicts]
         return games
 
     def render(self):
-
         self.window.fill(settings.BACKGROUND_COLOR)
         self.draw_text('Load Game', settings.BLACK, settings.get_x(0.1), settings.get_x(0.1))
 
@@ -68,14 +62,12 @@ class LoadGameScreen(Screen):
 
         if self.state.action["task"] == "load_game" and self.state.action["status"] != "open":
             if self.state.action["status"] == 'yes':
-                self.state.game.id = self.button_to_game[self.state.action["content"]]['id']
-                self.state.game.date = self.button_to_game[self.state.action["content"]]['date']
-                self.state.game.opponent = self.button_to_game[self.state.action["content"]]['opponent']
-                self.state.set_msg(f"Loaded game with {self.state.game.opponent}")
-                self.state.screen = "game"
-                #opponent = self.state.action["content"]
-                #self.create_challenge(opponent)
-                #print("load game")
-                #self.state.
-
+                game_name = self.state.action["content"]
+                game = next((game for game in self.games if f"{game.opponent_name} - {game.date}" == game_name), None)
+                if game:
+                    self.state.game = game
+                    self.state.set_msg(f"Loaded game with {game.opponent_name}")
+                    self.state.screen = "game"
+                else:
+                    print("Game not found")
             self.reset_action()
