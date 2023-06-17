@@ -11,25 +11,22 @@ class Game:
         self.opponent_name = None
         self.player_id = None
 
-        for player_dict in game_dict.get('players', []):
-            self.players.append({
-                'player_id': player_dict['id'],
-                'user_id': player_dict['user_id'],
-                'username': player_dict['username']
-            })
+        self.players = game_dict.get('players', [])
+        #for player_dict in game_dict.get('players', []):
+        #    self.players.append({
+        #        'player_id': player_dict['id'],
+        #        'user_id': player_dict['user_id'],
+        #        'username': player_dict['username']
+        #    })
 
-        for card_dict in game_dict.get('cards', []):
-            self.cards.append({
-                'card_id': card_dict['id'],
-                'suit': card_dict['suit'],
-                'rank': card_dict['rank'],
-                'player_id': card_dict['player_id']
-            })
+        self.cards = game_dict.get('cards', [])
+        #for card_dict in game_dict.get('cards', []):
+        #    self.cards.append(card_dict)
 
         user_id = user_dict.get('id')
         for player_dict in self.players:
             if player_dict['user_id'] == user_id:
-                self.player_id = player_dict['player_id']
+                self.player_id = player_dict['id']
             else:
                 self.opponent_name = player_dict['username']
 
@@ -42,33 +39,29 @@ class Game:
                 return
 
             game_data = response.json()
-            game = game_data.get('game')
+            game_dict = game_data.get('game')
 
-            if not game:
+            if not game_dict:
                 print("Game data not found in response")
                 return
 
-            self.game_id = game['id']
-            self.state = game['state']
-            self.date = game['date']
+            self.game_id = game_dict['id']
+            self.state = game_dict['state']
+            self.date = game_dict['date']
             self.players = []
             self.cards = []
 
-            for player_dict in game.get('players', []):
-                self.players.append({
-                    'player_id': player_dict['id'],
-                    'user_id': player_dict['user_id'],
-                    'username': player_dict['username']
-                })
+            self.players = game_dict.get('players', [])
+            #for player_dict in game.get('players', []):
+            #    self.players.append({
+            #        'player_id': player_dict['id'],
+            #        'user_id': player_dict['user_id'],
+            #        'username': player_dict['username']
+            #    })
 
-            for card_dict in game.get('cards', []):
-                self.cards.append({
-                    'card_id': card_dict['id'],
-                    'suit': card_dict['suit'],
-                    'rank': card_dict['rank'],
-                    'player_id': card_dict['player_id']
-                })
-
+            self.cards = game_dict.get('cards', [])
+            #for card_dict in game.get('cards', []):
+            #    self.cards.append(card_dict)
         except Exception as e:
             print(f"An error occurred: {str(e)}")
 
@@ -81,3 +74,7 @@ class Game:
 
         hand = [card for card in self.cards if card['player_id'] == player_id]
         return hand
+
+
+
+
