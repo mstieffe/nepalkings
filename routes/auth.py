@@ -18,6 +18,20 @@ def get_users():
     except Exception as e:
         return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 400
 
+@auth.route('/get_user', methods=['GET'])
+def get_user():
+    try:
+        username = request.args.get('username')
+        user = User.query.filter_by(username=username).first()
+
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 400
+
+        serialized_user = user.serialize()
+
+        return jsonify({'success': True, 'user': serialized_user})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 400
 
 @auth.route('/register', methods=['POST'])
 def register():

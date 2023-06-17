@@ -1,4 +1,6 @@
 # settings.py
+import pygame
+from utils import scale
 
 # Screen settings
 SCREEN_WIDTH = 800
@@ -7,7 +9,8 @@ SCREEN_CAPTION = 'Nepal Kings'
 
 # Font settings
 FONT_PATH = None
-FONT_SIZE = int(0.05 * SCREEN_HEIGHT)  # Adjust the font size based on screen height
+FONT_SIZE = int(0.05 * SCREEN_HEIGHT)
+FONT_SIZE_DETAIL = int(0.02 * SCREEN_HEIGHT)
 LOGOUT_FONT_SIZE = int(0.03 * SCREEN_HEIGHT)
 
 # Timings
@@ -20,8 +23,8 @@ CENTER_Y = int(0.5 * SCREEN_HEIGHT)
 BUTTON_WIDTH = int(0.2 * SCREEN_WIDTH)
 BUTTON_HEIGHT = int(0.06 * SCREEN_HEIGHT)
 
-LOGOUT_BUTTON_WIDTH = int(0.15 * SCREEN_WIDTH)
-LOGOUT_BUTTON_HEIGHT = int(0.04 * SCREEN_HEIGHT)
+CONTROL_BUTTON_WIDTH = int(0.15 * SCREEN_WIDTH)
+CONTROL_BUTTON_HEIGHT = int(0.04 * SCREEN_HEIGHT)
 
 SMALL_FIELD_WIDTH = int(0.375 * SCREEN_WIDTH)
 SMALL_FIELD_HEIGHT = int(0.05 * SCREEN_HEIGHT)
@@ -33,6 +36,9 @@ TINY_SPACER_Y = int(0.01 * SCREEN_HEIGHT)
 
 SMALL_SPACER_X = int(0.02 * SCREEN_WIDTH)
 SMALL_SPACER_Y = int(0.02 * SCREEN_HEIGHT)
+
+BIG_SPACER_X = int(0.1 * SCREEN_WIDTH)
+BIG_SPACER_Y = int(0.1 * SCREEN_HEIGHT)
 
 DIALOGUE_BOX_WIDTH = int(0.55 * SCREEN_WIDTH)
 DIALOGUE_BOX_HEIGHT = int(0.2 * SCREEN_HEIGHT)
@@ -51,6 +57,10 @@ FIELD_COLOR_ACTIVE = (100, 100, 100)
 TEXT_COLOR_PASSIVE = (255, 255, 255)
 TEXT_COLOR_ACTIVE = (0, 0, 0)
 
+CARD_SLOT_BORDER_COLOR = (0, 0, 0)
+CARD_SLOT_COLOR = (100, 100, 100)
+CARD_SLOT_COLOR_HOVERED = (150, 150, 150)
+
 BACKGROUND_COLOR = (255, 255, 255)
 
 WHITE = (255, 255, 255)
@@ -67,3 +77,48 @@ def get_x(relative_position):
 
 def get_y(relative_position):
     return SCREEN_HEIGHT*relative_position
+
+# Card settings
+
+MAX_MAIN_CARD_SLOTS = 14
+MAX_SIDE_CARD_SLOTS = 8
+
+CARD_IMG_PATH = 'img/cards/'
+
+# Set the desired relative size as a percentage of the screen size
+CARD_RELATIVE_WIDTH = 0.1
+CARD_WIDTH = int(CARD_RELATIVE_WIDTH * SCREEN_WIDTH)
+test_card = pygame.image.load(CARD_IMG_PATH + '01s.gif')
+CARD_HEIGHT = CARD_WIDTH * test_card.get_height() / test_card.get_width()
+
+BRIGHTNESS_FACTOR = 50
+
+CARD_SPACER = int(0.05 * SCREEN_WIDTH)
+
+CARD_SLOT_BORDER_WIDTH = int(0.01 * SCREEN_WIDTH)
+
+SUITS = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
+RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10','J', 'Q', 'K', 'A']
+
+RANK_TO_IMG_PATH = {
+    'A': '01',
+    'K': '13',
+    'Q': '12',
+    'J': '11',
+    '10': '10',
+    '9': '09',
+    '8': '08',
+    '7': '07',
+    '6': '06',
+    '5': '05',
+    '4': '04',
+    '3': '03',
+    '2': '02',
+}
+
+SUIT_TO_IMG_PATH = {
+    'Spades': 's',
+    'Hearts': 'h',
+    'Diamonds': 'd',
+    'Clubs': 'c',
+}

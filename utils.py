@@ -157,4 +157,45 @@ class InputField():
                 return
         self.cursor_pos = len(self.content)
 
+def scale(img, relative_width):
+    new_width = int(settings.SCREEN_WIDTH * relative_width)
+    new_height = new_width * img.get_height() / img.get_width()
+
+    #relative_height = relative_width * img.get_height() / img.get_width()
+
+    # Calculate the scaled dimensions based on the screen size
+    #new_width = int(settings.SCREEN_WIDTH * relative_width)
+    #new_height = int(settings.SCREEN_HEIGHT * relative_height)
+
+    scaled_image = pygame.transform.scale(img, (new_width, new_height))
+
+    return scaled_image
+
+def brighten(img, brightness_factor):
+    # Create a copy of the image
+    image_copy = img.copy()
+
+    # Lock the image surface to allow pixel-level access
+    image_copy.lock()
+
+    # Iterate over each pixel in the image
+    for x in range(image_copy.get_width()):
+        for y in range(image_copy.get_height()):
+            # Get the color of the pixel
+            r, g, b, a = image_copy.get_at((x, y))
+
+            # Increase the brightness of RGB components
+            r = min(int(r * brightness_factor), 255)
+            g = min(int(g * brightness_factor), 255)
+            b = min(int(b * brightness_factor), 255)
+
+            # Update the pixel with the modified color
+            image_copy.set_at((x, y), (r, g, b, a))
+
+    # Unlock the image surface
+    image_copy.unlock()
+
+    # Return the modified image
+    return image_copy
+
 

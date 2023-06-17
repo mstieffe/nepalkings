@@ -10,8 +10,8 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = settings.DB_URL
 db.init_app(app)
 
-#with app.app_context():
-#    db.drop_all()
+with app.app_context():
+    db.drop_all()
 
 # Register the blueprints
 app.register_blueprint(games, url_prefix='/games')

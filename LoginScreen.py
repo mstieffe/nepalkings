@@ -44,6 +44,7 @@ class LoginScreen(Screen):
         response = requests.post(f'{settings.SERVER_URL}/auth/register', data={'username': self.field_username.content, 'password': self.field_pwd.content})
         response_data = response.json()
         self.state.set_msg(response_data['message'])
+        print(response_data['message'])
         if response_data['success']:
             self.state.user_dict = response_data.get('user')
             self.state.screen = "game_menu"
