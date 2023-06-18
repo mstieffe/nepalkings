@@ -141,7 +141,7 @@ class NewGameScreen(Screen):
             #self.update_open_challenges_buttons()
 
         for button in self.challenge_buttons + self.open_challenge_buttons:
-            button.update_color()
+            button.update()
 
         for event in events:
             if event.type == MOUSEBUTTONDOWN:

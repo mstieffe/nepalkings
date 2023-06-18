@@ -13,6 +13,7 @@ class GameMenuScreen(Screen):
         self.button_new = Button(self.window, settings.get_x(0.1), settings.get_y(0.2), "New Game")
         self.button_load = Button(self.window, settings.get_x(0.1), settings.get_y(0.3), "Load Game")
 
+        self.menu_buttons += [self.button_new, self.button_load]
     def render(self):
 
 
@@ -30,8 +31,8 @@ class GameMenuScreen(Screen):
     def update(self, events):
         super().update()
 
-        self.button_new.update_color()
-        self.button_load.update_color()
+        #self.button_new.update_color()
+        #self.button_load.update_color()
 
         for event in events:
             if event.type == MOUSEBUTTONDOWN:

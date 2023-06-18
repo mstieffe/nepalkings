@@ -51,7 +51,7 @@ class LoadGameScreen(Screen):
             self.update_load_game_buttons()
 
         for button in self.load_game_buttons:
-            button.update_color()
+            button.update()
 
         for event in events:
             if event.type == MOUSEBUTTONDOWN:

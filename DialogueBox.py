@@ -61,7 +61,7 @@ class DialogueBox:
     def update(self, events):
         # Update the button colors
         for button in self.buttons:
-            button.update_color()
+            button.update()
         #self.accept_button.update_color()
         #self.reject_button.update_color()
 

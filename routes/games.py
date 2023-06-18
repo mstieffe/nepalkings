@@ -1,9 +1,11 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
-from models import db, User, Challenge, Player, Game, Card
+from models import db, User, Challenge, Player, Game, MainCard, SideCard
 from deck_storage import game_decks
 from Deck import Deck
-#import settings
+
+import settings
+#settings = None
 
 games = Blueprint('games', __name__)
 
@@ -72,13 +74,12 @@ def create_game():
         db.session.commit()
 
         # Call game_service functions here
+        # Call game_service functions here
         deck = Deck(game)
         deck.create()
         deck.shuffle()
-        deck.deal_cards([player1, player2])
+        deck.deal_cards([player1, player2], num_main_cards=settings.NUM_MAIN_CARDS_START, num_side_cards=settings.NUM_SIDE_CARDS_START)
         game_decks[game.id] = deck
-        #game_service.create_deck(game)  # Creates a deck for the game
-        #game_service.deal_cards(game)  # Deals cards to the players
 
     except Exception as e:
         # In case there is an exception while adding the challenge
@@ -96,9 +97,13 @@ def delete_game():
         game = Game.query.options(joinedload('players').joinedload('hand')).get(game_id)
 
         # Delete all related cards
-        for player in game.players:
-            for card in player.hand:
-                db.session.delete(card)
+        cards = MainCard.query.filter_by(game_id=game.id).all()
+        for card in cards:
+            db.session.delete(card)
+
+        cards = SideCard.query.filter_by(game_id=game.id).all()
+        for card in cards:
+            db.session.delete(card)
 
         # Delete all related players
         for player in game.players:
@@ -114,15 +119,24 @@ def delete_game():
 
     return jsonify({'success': True, 'message': 'Game deleted successfully'})
 
+
 @games.route('/get_hand', methods=['GET'])
 def get_hand():
     try:
         player_id = request.args.get('player_id')
 
-        cards = Card.query.filter_by(player_id=player_id).all()
-        return jsonify({'success': True, 'message': 'successfully loaded hand', 'hand': [card.serialize() for card in cards]})
+        main_cards = MainCard.query.filter_by(player_id=player_id).all()
+        side_cards = SideCard.query.filter_by(player_id=player_id).all()
+
+        return jsonify({
+            'success': True,
+            'message': 'Successfully loaded hand',
+            'main_hand': [card.serialize() for card in main_cards],
+            'side_hand': [card.serialize() for card in side_cards]
+        })
     except Exception as e:
         return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+
 """
 
 

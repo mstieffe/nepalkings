@@ -2,7 +2,15 @@
 from flask import Flask
 from models import db
 import settings
+
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from routes import games, challenges, auth
+
+games.settings = settings
+challenges.settings = settings
+auth.settings = settings
 
 app = Flask(__name__)
 
