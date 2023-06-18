@@ -6,8 +6,8 @@ class Game:
         self.game_id = game_dict['id']
         self.state = game_dict['state']
         self.date = game_dict['date']
-        self.players = []
-        self.cards = []
+        #self.players = []
+        #self.cards = []
         self.opponent_name = None
         self.player_id = None
 
@@ -19,7 +19,9 @@ class Game:
         #        'username': player_dict['username']
         #    })
 
-        self.cards = game_dict.get('cards', [])
+        self.main_cards = game_dict.get('main_cards', [])
+        self.side_cards = game_dict.get('side_cards', [])
+
         #for card_dict in game_dict.get('cards', []):
         #    self.cards.append(card_dict)
 
@@ -29,6 +31,8 @@ class Game:
                 self.player_id = player_dict['id']
             else:
                 self.opponent_name = player_dict['username']
+
+        self.turn = True
 
     def update(self):
         try:
@@ -48,8 +52,7 @@ class Game:
             self.game_id = game_dict['id']
             self.state = game_dict['state']
             self.date = game_dict['date']
-            self.players = []
-            self.cards = []
+
 
             self.players = game_dict.get('players', [])
             #for player_dict in game.get('players', []):
@@ -59,7 +62,8 @@ class Game:
             #        'username': player_dict['username']
             #    })
 
-            self.cards = game_dict.get('cards', [])
+            self.main_cards = game_dict.get('main_cards', [])
+            self.side_cards = game_dict.get('side_cards', [])
             #for card_dict in game.get('cards', []):
             #    self.cards.append(card_dict)
         except Exception as e:
@@ -72,8 +76,9 @@ class Game:
             print("Player ID not found")
             return []
 
-        hand = [card for card in self.cards if card['player_id'] == player_id]
-        return hand
+        main_hand = [card for card in self.main_cards if card['player_id'] == player_id]
+        side_hand = [card for card in self.side_cards if card['player_id'] == player_id]
+        return main_hand, side_hand
 
 
 

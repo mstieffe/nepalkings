@@ -34,7 +34,9 @@ class Screen:
         self.logout_button = ControlButton(self.window, settings.get_x(0.85), settings.get_y(0.0), "Logout")
         self.home_button = ControlButton(self.window, settings.get_x(0.0), settings.get_y(0.0), "Home")
 
-        self.buttons = [self.logout_button, self.home_button]
+        self.control_buttons = [self.logout_button, self.home_button]
+        self.game_buttons = []
+        self.menu_buttons = []
 
     """
     def draw_msg(self):
@@ -126,6 +128,10 @@ class Screen:
         #raise NotImplementedError
 
     def update(self):
-        for button in self.buttons:
-            button.update_color()
+        for button in self.control_buttons:
+            button.update()
+        for button in self.game_buttons:
+            button.update(self.state)
+        for button in self.menu_buttons:
+            button.update()
         #raise NotImplementedError
