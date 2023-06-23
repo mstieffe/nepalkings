@@ -121,8 +121,8 @@ class NewGameScreen(Screen):
     """
     def render(self):
         self.window.fill(settings.BACKGROUND_COLOR)
-        self.draw_text('Possible Opponents', settings.BLACK, settings.get_x(0.1), settings.get_x(0.1))
-        self.draw_text('Open Challenges', settings.BLACK, settings.get_x(0.5), settings.get_x(0.1))
+        self.draw_text('Possible Opponents', settings.MENU_TEXT_COLOR_HEADER, settings.get_x(0.1), settings.get_y(0.1))
+        self.draw_text('Open Challenges', settings.MENU_TEXT_COLOR_HEADER, settings.get_x(0.5), settings.get_y(0.1))
 
         for button in self.challenge_buttons + self.open_challenge_buttons:
             button.draw()

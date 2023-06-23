@@ -1,4 +1,3 @@
-# models.py
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy_utils import ChoiceType
@@ -19,9 +18,6 @@ class Challenge(db.Model):
   status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default='Open')
   date = db.Column(db.DateTime, default=datetime.utcnow)
 
-  #challenger = db.relationship('User', foreign_keys=[challenger_id])
-  #challenged = db.relationship('User', foreign_keys=[challenged_id])
-
   def serialize(self):
     return {
       'id': self.id,
@@ -31,19 +27,13 @@ class Challenge(db.Model):
       'date': self.date
     }
 
-
 class Suit(enum.Enum):
     HEARTS = "Hearts"
     DIAMONDS = "Diamonds"
     CLUBS = "Clubs"
     SPADES = "Spades"
 
-class Rank(enum.Enum):
-    TWO = '2'
-    THREE = '3'
-    FOUR = '4'
-    FIVE = '5'
-    SIX = '6'
+class MainRank(enum.Enum):
     SEVEN = '7'
     EIGHT = '8'
     NINE = '9'
@@ -53,6 +43,13 @@ class Rank(enum.Enum):
     KING = 'K'
     ACE = 'A'
 
+class SideRank(enum.Enum):
+    TWO = '2'
+    THREE = '3'
+    FOUR = '4'
+    FIVE = '5'
+    SIX = '6'
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -61,7 +58,6 @@ class User(db.Model):
                                         foreign_keys='Challenge.challenger_id')
     challenges_received = db.relationship('Challenge', backref='challenged', lazy=True,
                                           foreign_keys='Challenge.challenged_id')
-    #email = db.Column(db.String(120), unique=True, nullable=False)
 
     def serialize(self):
         return {
@@ -77,13 +73,13 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-
 class Game(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     players = db.relationship('Player', backref='game', lazy=True)
     state = db.Column(db.String(20), nullable=False, default='open')
     date = db.Column(db.DateTime, default=datetime.utcnow)
-    cards = db.relationship('Card', backref='game', lazy=True)
+    main_cards = db.relationship('MainCard', backref='game', lazy=True)
+    side_cards = db.relationship('SideCard', backref='game', lazy=True)
 
     def serialize(self):
         return {
@@ -91,14 +87,16 @@ class Game(db.Model):
             'state': self.state,
             'date': self.date,
             'players': [player.serialize() for player in self.players],
-            'cards': [card.serialize() for card in self.cards]
+            'main_cards': [card.serialize() for card in self.main_cards],
+            'side_cards': [card.serialize() for card in self.side_cards]
         }
 
 class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     game_id = db.Column(db.Integer, db.ForeignKey('game.id'))
-    hand = db.relationship('Card', backref='player', lazy=True)
+    main_hand = db.relationship('MainCard', backref='player', lazy=True)
+    side_hand = db.relationship('SideCard', backref='player', lazy=True)
     status = db.Column(db.String(20), nullable=False, default='active')
 
     def serialize(self):
@@ -112,16 +110,17 @@ class Player(db.Model):
             'id': self.id,
             'user_id': self.user_id,
             'game_id': self.game_id,
-            'hand': [card.serialize() for card in self.hand],
+            'main_hand': [card.serialize() for card in self.main_hand],
+            'side_hand': [card.serialize() for card in self.side_hand],
             'status': self.status,
             'username': username
         }
 
-class Card(db.Model):
+class MainCard(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     player_id = db.Column(db.Integer, db.ForeignKey('player.id'))
     suit = db.Column(ChoiceType(Suit, impl=db.String()))
-    rank = db.Column(ChoiceType(Rank, impl=db.String()))
+    rank = db.Column(ChoiceType(MainRank, impl=db.String()))
     game_id = db.Column(db.Integer, db.ForeignKey('game.id'))
 
     def serialize(self):
@@ -133,17 +132,18 @@ class Card(db.Model):
             'game_id': self.game_id
         }
 
-"""
-class Deck:
-    def __init__(self, game):
-        self.game = game
-        self.cards = Card.query.filter_by(player_id=None)
+class SideCard(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    player_id = db.Column(db.Integer, db.ForeignKey('player.id'))
+    suit = db.Column(ChoiceType(Suit, impl=db.String()))
+    rank = db.Column(ChoiceType(SideRank, impl=db.String()))
+    game_id = db.Column(db.Integer, db.ForeignKey('game.id'))
 
-    def shuffle(self):
-        random.shuffle(self.cards)
-
-    def deal(self, player, num_cards=1):
-        for _ in range(num_cards):
-            card = self.cards.pop()
-            card.player_id = player.id
-"""
+    def serialize(self):
+        return {
+            'id': self.id,
+            'suit': self.suit.value,
+            'rank': self.rank.value,
+            'player_id': self.player_id,
+            'game_id': self.game_id
+        }

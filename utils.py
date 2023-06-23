@@ -5,6 +5,156 @@ import pygame
 import settings
 
 import pygame
+from collections import Counter
+
+class FigureIconButton:
+
+    def __init__(self,
+                 window,
+                 game,
+                 fig,
+                 content,
+                 x: int = 0,
+                 y: int = 0):
+        self.window = window
+        self.game = game
+        self.x = x
+        self.y = y
+        self.fig=fig
+        self.content=content
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
+
+        self.is_active = False
+
+        icon_mask_img = pygame.image.load(settings.FIGURE_ICON_IMG_PATH+ 'mask.png')
+        self.icon_mask_img = pygame.transform.scale(icon_mask_img, (settings.FIGURE_ICON_MASK_WIDTH, settings.FIGURE_ICON_MASK_HEIGHT))
+        self.icon_mask_big_img = pygame.transform.scale(icon_mask_img, (settings.FIGURE_ICON_MASK_BIG_WIDTH, settings.FIGURE_ICON_MASK_BIG_HEIGHT))
+
+        #self.icon_img = self.fig.icon_img
+        self.icon_img = pygame.transform.scale(self.fig.icon_img, (settings.FIGURE_ICON_WIDTH, settings.FIGURE_ICON_HEIGHT))
+        self.icon_big_img = pygame.transform.scale(self.fig.icon_img, (settings.FIGURE_ICON_BIG_WIDTH, settings.FIGURE_ICON_BIG_HEIGHT))
+
+        self.icon_darkwhite_img = pygame.transform.scale(self.fig.icon_darkwhite_img, (settings.FIGURE_ICON_WIDTH, settings.FIGURE_ICON_HEIGHT))
+        self.icon_darkwhite_big_img = pygame.transform.scale(self.fig.icon_darkwhite_img, (settings.FIGURE_ICON_BIG_WIDTH, settings.FIGURE_ICON_BIG_HEIGHT))
+
+        self.image_glow_yellow = pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH +'yellow.png')
+        self.image_glow_white = pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH +'white.png')
+        self.image_glow_black = pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH +'black.png')
+        self.image_glow_orange = pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'orange.png')
+
+        self.image_glow_yellow = pygame.transform.scale(self.image_glow_yellow, (settings.FIGURE_ICON_GLOW_WIDTH, settings.FIGURE_ICON_GLOW_WIDTH))
+        self.image_glow_white = pygame.transform.scale(self.image_glow_white, (settings.FIGURE_ICON_GLOW_WIDTH, settings.FIGURE_ICON_GLOW_WIDTH))
+        self.image_glow_black = pygame.transform.scale(self.image_glow_black, (settings.FIGURE_ICON_GLOW_WIDTH, settings.FIGURE_ICON_GLOW_WIDTH))
+        self.image_glow_orange = pygame.transform.scale(self.image_glow_orange, (settings.FIGURE_ICON_GLOW_WIDTH, settings.FIGURE_ICON_GLOW_WIDTH))
+
+
+        self.image_glow_yellow_big = pygame.transform.scale(self.image_glow_yellow, (settings.FIGURE_ICON_GLOW_BIG_WIDTH, settings.FIGURE_ICON_GLOW_BIG_WIDTH))
+        self.image_glow_white_big = pygame.transform.scale(self.image_glow_white, (settings.FIGURE_ICON_GLOW_BIG_WIDTH, settings.FIGURE_ICON_GLOW_BIG_WIDTH))
+        self.image_glow_orange_big = pygame.transform.scale(self.image_glow_orange, (settings.FIGURE_ICON_GLOW_BIG_WIDTH, settings.FIGURE_ICON_GLOW_BIG_WIDTH))
+
+        self.rect_mask= self.icon_mask_img.get_rect()
+        self.rect_icon = self.icon_img.get_rect()
+        self.rect_glow = self.image_glow_yellow.get_rect()
+        self.rect_mask_big= self.icon_mask_big_img.get_rect()
+        self.rect_icon_big = self.icon_big_img.get_rect()
+        self.rect_glow_big = self.image_glow_yellow_big.get_rect()
+
+        # Adjust positions based on image dimensions
+        width_diff_icon = settings.FIGURE_ICON_GLOW_BIG_WIDTH - settings.FIGURE_ICON_WIDTH
+        width_diff_mask = settings.FIGURE_ICON_GLOW_BIG_WIDTH - settings.FIGURE_ICON_MASK_WIDTH
+        width_diff_glow = settings.FIGURE_ICON_GLOW_BIG_WIDTH - settings.FIGURE_ICON_GLOW_WIDTH
+        width_diff_icon_big = settings.FIGURE_ICON_GLOW_BIG_WIDTH - settings.FIGURE_ICON_BIG_WIDTH
+        width_diff_mask_big = settings.FIGURE_ICON_GLOW_BIG_WIDTH - settings.FIGURE_ICON_MASK_BIG_WIDTH
+
+        #self.rect_mask.center = (self.x + width_diff_mask//2, self.y + width_diff_mask//2)
+        #self.rect_icon.center = (self.x + width_diff_icon//2, self.y + width_diff_icon//2)
+        #self.rect_glow.center = (self.x + width_diff_glow//2, self.y + width_diff_glow//2)
+        #self.rect_mask_big.center = (self.x + width_diff_mask_big//2, self.y + width_diff_mask_big//2)
+        #self.rect_icon_big.center = (self.x + width_diff_icon_big//2, self.y + width_diff_icon_big//2)
+        #self.rect_glow_big.center = (self.x, self.y)
+
+
+        self.rect_mask.center = (self.x, self.y)
+        self.rect_icon.center = (self.x, self.y)
+        self.rect_glow.center = (self.x, self.y)
+        self.rect_mask_big.center = (self.x, self.y)
+        self.rect_icon_big.center = (self.x, self.y)
+        self.rect_glow_big.center = (self.x, self.y)
+        # Initialize button states
+        self.clicked = False
+        self.hovered = False
+
+        self.hover_text = self.fig.name  # Store the hover_text
+        self.text_surface_active = self.font.render(self.hover_text, True,
+                                                    settings.GAME_BUTTON_TEXT_COLOR_ACTIVE)  # Prepare the text surface
+        self.text_surface_passive = self.font.render(self.hover_text, True,
+                                                     settings.GAME_BUTTON_TEXT_COLOR_PASSIVE)  # Prepare the text surface
+        self.text_surface_shadow = self.font.render(self.hover_text, True,
+                                                    settings.GAME_BUTTON_TEXT_COLOR_SHADOW)  # Prepare the text surface
+        self.text_rect = self.text_surface_active.get_rect()  # Get the rectangle for positioning text
+
+    def is_in_hand(self, suit=None):
+        main_cards, side_cards = self.game.get_hand()
+        cards = main_cards + side_cards
+        if suit:
+            cards = [(card['suit'], card['rank']) for card in cards if card['suit'] == suit]
+        else:
+            cards = [(card['suit'], card['rank']) for card in cards]
+        cards_counter = Counter(cards)
+
+        for fig in self.content:
+            fig_cards_counter = Counter(fig.cards)
+            if all(cards_counter[card] >= fig_cards_counter[card] for card in fig_cards_counter):
+                return True
+        return False
+    def collide(self):
+        mx, my = pygame.mouse.get_pos()
+        return self.rect_mask.collidepoint((mx, my))
+
+    def draw(self):
+            if self.is_active:
+                icon_img = self.icon_img
+                icon_big_img = self.icon_big_img
+                glow_img = self.image_glow_yellow
+                glow_big_img = self.image_glow_orange_big
+            else:
+                icon_img = self.icon_darkwhite_img
+                icon_big_img = self.icon_darkwhite_big_img
+                glow_img = self.image_glow_black
+                glow_big_img = self.image_glow_white_big
+
+            if self.hovered:
+                if self.clicked:
+                    self.window.blit(glow_big_img, self.rect_glow_big.topleft)
+                    self.window.blit(icon_img, self.rect_icon.topleft)
+                    self.window.blit(self.icon_mask_img, self.rect_mask.topleft)
+                else:
+                    self.window.blit(glow_img, self.rect_glow.topleft)
+                    self.window.blit(icon_big_img, self.rect_icon_big.topleft)
+                    self.window.blit(self.icon_mask_big_img, self.rect_mask_big.topleft)
+                mx, my = pygame.mouse.get_pos()
+                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.GAME_BUTTON_TEXT_SHIFT_Y -1)
+                self.window.blit(self.text_surface_shadow, self.text_rect)
+                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.GAME_BUTTON_TEXT_SHIFT_Y)
+                self.window.blit(self.text_surface_active, self.text_rect)
+            else:
+                #self.window.blit(self.image_glow_black, self.rect_glow.topleft)
+                self.window.blit(icon_img, self.rect_icon.topleft)
+                self.window.blit(self.icon_mask_img, self.rect_mask.topleft)
+
+    def update(self, game):
+        self.game = game
+        if self.game:
+            self.is_active = self.is_in_hand()
+            #self.game = self.state.game
+            #self.game = state.game
+            self.hovered = self.collide()
+
+            if self.hovered and pygame.mouse.get_pressed()[0]:
+                self.clicked = True
+                #self.state.subscreen = self.subscreen_trigger
+            else:
+                self.clicked = False
 
 class GameButton:
     def __init__(self, window,
@@ -18,13 +168,16 @@ class GameButton:
                  symbol_width_big: int = None,
                  glow_width_big: int = None,
                  glow_shift: int = None,
-                 game = None):
+                 state = None,
+                 hover_text = '',
+                 subscreen = 'field'):
         self.window = window
         self.x = x
         self.y = y
-        self.glow_shift = glow_shift if glow_shift is not None else settings.get_x(0.01)
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE)
-        self.game = game
+        self.glow_shift = glow_shift if glow_shift is not None else settings.GAME_BUTTON_GLOW_SHIFT
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
+        self.state = state
+        self.subscreen_trigger = subscreen
 
         # Load images
         self.images = []
@@ -39,6 +192,7 @@ class GameButton:
         self.image_glow_yellow = pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH +'yellow.png')
         self.image_glow_white = pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH +'white.png')
         self.image_glow_black = pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'black.png')
+        self.image_glow_orange = pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'orange.png')
 
 
         # Scale images to the given width and height
@@ -59,24 +213,16 @@ class GameButton:
         self.image_glow_yellow = pygame.transform.scale(self.image_glow_yellow, (glow_width, glow_width))
         self.image_glow_white = pygame.transform.scale(self.image_glow_white, (glow_width, glow_width))
         self.image_glow_black = pygame.transform.scale(self.image_glow_black, (glow_width, glow_width))
+        self.image_glow_orange = pygame.transform.scale(self.image_glow_orange, (glow_width, glow_width))
 
 
         self.image_glow_yellow_big = pygame.transform.scale(self.image_glow_yellow, (glow_width_big, glow_width_big))
         self.image_glow_white_big = pygame.transform.scale(self.image_glow_white, (glow_width_big, glow_width_big))
         self.image_glow_black_big = pygame.transform.scale(self.image_glow_black, (glow_width_big, glow_width_big))
+        self.image_glow_orange_big = pygame.transform.scale(self.image_glow_orange, (glow_width_big, glow_width_big))
 
         self.image_stone = pygame.transform.scale(self.image_stone, (stone_width, stone_width))
 
-        """
-        self.image_active = pygame.transform.scale(self.image_active, (button_width, button_height))
-        self.image_passive = pygame.transform.scale(self.image_passive, (button_width, button_height))
-        if button_name == "change_cards":
-            self.image_hover_active = pygame.transform.scale(self.image_hover_active, (button_width+ settings.SMALL_SPACER_X, button_height+ settings.SMALL_SPACER_X))
-            self.image_hover_passive = pygame.transform.scale(self.image_hover_passive, (button_width+ settings.SMALL_SPACER_X, button_height+ settings.SMALL_SPACER_X))
-        else:
-            self.image_hover_active = pygame.transform.scale(self.image_hover_active, (button_width, button_height))
-            self.image_hover_passive = pygame.transform.scale(self.image_hover_passive, (button_width, button_height))
-        """
 
         self.rect_symbol = self.image_symbol_active.get_rect()
         self.rect_glow = self.image_glow_yellow.get_rect()
@@ -85,46 +231,22 @@ class GameButton:
         self.rect_glow_big = self.image_glow_yellow_big.get_rect()
 
         # Adjust positions based on image dimensions
-        symbol_width_diff = stone_width - glow_width
+        symbol_width_diff = stone_width - symbol_width
         self.rect_symbol.center = (self.x+ symbol_width_diff // 2, self.y + symbol_width_diff // 2)
-        self.rect_glow.center = (self.x - self.glow_shift, self.y - self.glow_shift + symbol_width_diff // 2)
+        self.rect_glow.center = (self.x - self.glow_shift + symbol_width_diff // 2, self.y - self.glow_shift + symbol_width_diff // 2)
         self.rect_stone.center = (self.x, self.y)
         self.rect_symbol_big.center = (self.x+ symbol_width_diff // 2, self.y + symbol_width_diff // 2)
         self.rect_glow_big.center = (self.x - self.glow_shift+ symbol_width_diff // 2, self.y - self.glow_shift + symbol_width_diff // 2)
 
-        """
-        self.rect_symbol = self.image_symbol_active.get_rect()
-        self.rect_symbol.center = (self.x, self.y)
-        self.rect_glow = self.image_glow_yellow.get_rect()
-        self.rect_glow.center = (self.x - self.glow_shift, self.y-self.glow_shift)
-        self.rect_stone = self.image_symbol_passive.get_rect()
-        self.rect_stone.center = (self.x, self.y)
-
-        self.rect_symbol_big = self.image_symbol_active_big.get_rect()
-        self.rect_symbol_big.center = (self.x, self.y)
-
-        self.rect_symbol_big = self.image_symbol_active_big.get_rect()
-        self.rect_symbol_big.center = (self.x, self.y)
-
-        self.rect_glow_big = self.image_glow_yellow_big.get_rect()
-        self.rect_glow_big.center = (self.x - self.glow_shift, self.y-self.glow_shift)
-        """
-
-        """
-        # Initialize button rectangle
-        self.rect = self.image_active.get_rect()
-        #self.rect.topleft = (self.x, self.y)
-        self.rect.center = (self.x, self.y)
-        
-
-        self.rect_hover = self.image_hover_active.get_rect()
-        # self.rect.topleft = (self.x, self.y)
-        self.rect_hover.center = (self.x, self.y)
-        """
-
         # Initialize button states
         self.clicked = False
         self.hovered = False
+
+        self.hover_text = hover_text  # Store the hover_text
+        self.text_surface_active = self.font.render(self.hover_text, True, settings.GAME_BUTTON_TEXT_COLOR_ACTIVE)  # Prepare the text surface
+        self.text_surface_passive = self.font.render(self.hover_text, True, settings.GAME_BUTTON_TEXT_COLOR_PASSIVE)  # Prepare the text surface
+        self.text_surface_shadow = self.font.render(self.hover_text, True, settings.GAME_BUTTON_TEXT_COLOR_SHADOW)  # Prepare the text surface
+        self.text_rect = self.text_surface_active.get_rect()  # Get the rectangle for positioning text
 
     def collide(self):
         mx, my = pygame.mouse.get_pos()
@@ -132,38 +254,51 @@ class GameButton:
 
     def draw(self):
         # Depending on the state of the game and mouse interaction, blit the appropriate image
-        if self.game:
+        if self.state.game:
             self.window.blit(self.image_stone, self.rect_stone.topleft)
-            if self.game.turn:
+            if self.state.game.turn:
                 if self.hovered:
                     if self.clicked:
-                        self.window.blit(self.image_glow_yellow_big, self.rect_glow_big.topleft)
+                        self.window.blit(self.image_glow_orange_big, self.rect_glow_big.topleft)
                         self.window.blit(self.image_symbol_active, self.rect_symbol.topleft)
                     else:
                         self.window.blit(self.image_glow_yellow, self.rect_glow.topleft)
                         self.window.blit(self.image_symbol_active_big, self.rect_symbol_big.topleft)
+                    mx, my = pygame.mouse.get_pos()
+                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.GAME_BUTTON_TEXT_SHIFT_Y -1)
+                    self.window.blit(self.text_surface_shadow, self.text_rect)
+                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.GAME_BUTTON_TEXT_SHIFT_Y)
+                    self.window.blit(self.text_surface_active, self.text_rect)
                 else:
                     self.window.blit(self.image_glow_black, self.rect_glow.topleft)
                     self.window.blit(self.image_symbol_active, self.rect_symbol.topleft)
             else:
                 if self.hovered:
                     if self.clicked:
-                        self.window.blit(self.image_glow_white_big, self.rect_glow_big.topleft)
+                        self.window.blit(self.image_glow_black_big, self.rect_glow_big.topleft)
                         self.window.blit(self.image_symbol_passive, self.rect_symbol.topleft)
                     else:
                         self.window.blit(self.image_glow_white, self.rect_glow.topleft)
                         self.window.blit(self.image_symbol_passive_big, self.rect_symbol.topleft)
+                    mx, my = pygame.mouse.get_pos()
+                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.GAME_BUTTON_TEXT_SHIFT_Y -1)
+                    self.window.blit(self.text_surface_shadow, self.text_rect)
+                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.GAME_BUTTON_TEXT_SHIFT_Y)
+                    self.window.blit(self.text_surface_passive, self.text_rect)
                 else:
                     self.window.blit(self.image_glow_black, self.rect_glow.topleft)
                     self.window.blit(self.image_symbol_passive, self.rect_symbol.topleft)
 
     def update(self, state):
-        if state.game:
-            self.game = state.game
+        self.state = state
+        if self.state.game:
+            #self.game = self.state.game
+            #self.game = state.game
             self.hovered = self.collide()
 
             if self.hovered and pygame.mouse.get_pressed()[0]:
                 self.clicked = True
+                self.state.subscreen = self.subscreen_trigger
             else:
                 self.clicked = False
 
@@ -275,7 +410,7 @@ class InputField():
 
     def draw(self):
         # Name of input field
-        text_obj = self.font.render(self.name, True, settings.COLOR_HEADER)
+        text_obj = self.font.render(self.name, True, settings.TEXT_COLOR_HEADER_INPUTFIELD)
         text_rect = text_obj.get_rect(midleft=(self.x, self.y - settings.SMALL_SPACER_Y))
         self.window.blit(text_obj, text_rect)
 

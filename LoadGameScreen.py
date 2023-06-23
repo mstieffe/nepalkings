@@ -17,9 +17,11 @@ class LoadGameScreen(Screen):
         self.games = self.get_games()
         self.load_game_buttons = []
 
-        for game in self.games:
-            game_name = f"{game.opponent_name} - {game.date}"
-            self.load_game_buttons.append(self.make_button(game_name, 0.1, 0.2, width=settings.get_x(0.5)))
+        game_names = [f"{game.opponent_name} - {game.date}" for game in self.games]
+        self.load_game_buttons = self.make_buttons(game_names, 0.1, 0.2, width=settings.get_x(0.5))
+        #for i, game in enumerate(self.games):
+        #    game_name = f"{game.opponent_name} - {game.date}"
+        #    self.load_game_buttons.append(self.make_button(game_name, 0.1, 0.2, width=settings.get_x(0.5)))
 
     def get_games(self):
         response = requests.get(f'{settings.SERVER_URL}/games/get_games', params={'username': self.state.user_dict['username']})
@@ -33,7 +35,7 @@ class LoadGameScreen(Screen):
 
     def render(self):
         self.window.fill(settings.BACKGROUND_COLOR)
-        self.draw_text('Load Game', settings.BLACK, settings.get_x(0.1), settings.get_x(0.1))
+        self.draw_text('Load Game', settings.MENU_TEXT_COLOR_HEADER, settings.get_x(0.1), settings.get_y(0.1))
 
         for button in self.load_game_buttons:
             button.draw()

@@ -8,13 +8,15 @@ from utils import GameButton
 class Hand:
     """Hand class for pygame application. This class represents a hand of cards."""
 
-    def __init__(self, window, game, x: float = 0.0, y: float = 0.0, type="main_card", hidden=False):
+    def __init__(self, window, state, x: float = 0.0, y: float = 0.0, type="main_card", hidden=False):
         self.window = window
         self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_DETAIL)
-        self.game = game
+        self.state = state
+        self.game = state.game if state else None
         self.type = type
 
         self.cards = self.initialize_cards()
+        self.cards.sort(key=lambda card: settings.RANK_TO_SORT[card['rank']])
 
         self.x = x
         self.y = y
@@ -99,9 +101,10 @@ class Hand:
                                     stone_width=settings.HAND_BUTTON_STONE_WIDTH,
                                     glow_width=settings.HAND_BUTTON_GLOW_WIDTH,
                                     symbol_width_big=settings.HAND_BUTTON_SYMBOL_BIG_WIDTH,
-                                    glow_width_big=settings.HAND_BUTTON_GLOW_WIDTH,
+                                    glow_width_big=settings.HAND_BUTTON_GLOW_BIG_WIDTH,
                                     glow_shift=settings.HAND_BUTTON_GLOW_SHIFT,
-                                    game=self.game))
+                                    state=self.state,
+                                    hover_text='change cards!'))
 
         return buttons
 
@@ -116,6 +119,7 @@ class Hand:
         """Update the game state."""
         self.game = game
         self.cards = self.initialize_cards()
+        self.cards.sort(key=lambda card: settings.RANK_TO_SORT[card['rank']])
 
         for slot in self.card_slots:
             slot.update()
