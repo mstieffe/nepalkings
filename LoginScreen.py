@@ -18,7 +18,7 @@ class LoginScreen(Screen):
         self.menu_buttons += [self.button_login, self.button_register]
     def render(self):
         self.window.fill(settings.BACKGROUND_COLOR)
-        self.draw_text('Login', settings.BLACK, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.1)
+        self.draw_text('Login', settings.MENU_TEXT_COLOR_HEADER, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.1)
 
         self.field_username.draw()
         self.field_pwd.draw()
@@ -95,11 +95,13 @@ class LoginScreen(Screen):
             self.handle_register()
 
     def update(self, events):
+        super().update()
+
         self.field_username.update_color()
         self.field_pwd.update_color()
 
-        #self.button_login.update_color()
-        #self.button_register.update_color()
+        #self.button_login.update()
+        #self.button_register.update()
 
         for event in events:
             if event.type == KEYDOWN:

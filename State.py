@@ -6,6 +6,7 @@ class State:
     def __init__(self):
         self.user_dict = None
         self.screen = "login"
+        self.subscreen = "field"
         self.message_lines = []
 
         self.game = None # Game()

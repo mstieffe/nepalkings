@@ -19,7 +19,7 @@ class GameMenuScreen(Screen):
 
 
         self.window.fill(settings.BACKGROUND_COLOR)
-        self.draw_text('Game Menu', settings.BLACK, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.1)
+        self.draw_text('Game Menu', settings.MENU_TEXT_COLOR_HEADER, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.1)
 
         self.button_new.draw()
         self.button_load.draw()
