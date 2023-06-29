@@ -3,3 +3,4 @@ server_test.py
 test.db
 /BUILD/
 /__pycache__/
+/.idea/
