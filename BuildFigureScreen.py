@@ -2,7 +2,8 @@ import pygame
 from CardImg import CardImg
 from CardSlot import CardSlot
 import settings
-from utils import GameButton, FigureIconButton
+from utils import GameButton
+from Buttons import FigureIconButton, ButtonListShifter, SuitIconButton
 from Figure import Figure, FigureManager
 
 class BuildFigureScreen:
@@ -15,10 +16,17 @@ class BuildFigureScreen:
         self.x = x
         self.y = y
 
+        self.icon_start_index = 0
+
         self.figure_manager = FigureManager()
         self.initialize_icon_buttons()
+        self.initilialize_suit_buttons()
 
         self.initialize_background_attributes()
+
+        self.selected_figures = []
+        self.selected_suits = []
+
 
         print("hier geht es los")
         for name in self.figure_manager.figures_by_name.keys():
@@ -26,6 +34,16 @@ class BuildFigureScreen:
             print("-------")
 
 
+    #def update_selected_figures(self):
+    #    self.selected_figures = []
+    #    for button in self.icon_buttons:
+    #        if button.clicked:
+    #            self.selected_figures += button.content
+
+    #def update_selected_suit(self):
+    #    for button in self.suit_buttons:
+    #        if button.clicked:
+    #            self.selected_suits += button.suit
 
     def initialize_background_attributes(self):
 
@@ -44,14 +62,27 @@ class BuildFigureScreen:
         #icon_mask_img = pygame.image.load(settings.FIGURE_ICON_IMG_PATH+ 'mask.png')
         #icon_mask_img = pygame.transform.scale(icon_mask_img, (settings.FIGURE_ICON_MASK_WIDTH, settings.FIGURE_ICON_MASK_HEIGHT))
 
-        self.icon_buttons, i = [], 0
-        dx =  settings.BUILD_FIGURE_BACKGROUND_IMG_WIDTH *0.3
-        dy = settings.BUILD_FIGURE_BACKGROUND_IMG_HEIGHT * 0.3
+        self.icon_buttons = []
         for fig_name in self.figure_manager.figures_by_name.keys():
             if not "Altar" in fig_name:
                 fig = self.figure_manager.figures_by_name[fig_name][0]
-                self.icon_buttons.append(FigureIconButton(self.window, self.game, fig, self.figure_manager.figures_by_name[fig_name], self.x +dx + i*settings.FIGURE_ICON_DELTA_X, self.y+dy))
-                i += 1
+                self.icon_buttons.append(FigureIconButton(self.window, self.game, fig, self.figure_manager.figures_by_name[fig_name], self.x , self.y))
+        x = self.x + settings.BUILD_FIGURE_BACKGROUND_IMG_WIDTH * 0.28
+        y = self.y + settings.BUILD_FIGURE_BACKGROUND_IMG_HEIGHT * 0.68
+        dx = settings.FIGURE_ICON_DELTA_X
+        self.icon_buttons_shifter = ButtonListShifter(self.window, self.icon_buttons, x, y, dx, num_buttons_displayed=4, title='Choose a figure family!', title_offset_y=settings.get_y(0.07))
+        #self.update_displayed_icon_buttons()
+
+
+    def initilialize_suit_buttons(self):
+
+        self.suit_buttons = []
+        for suit in ['spades', 'hearts', 'diamonds', 'clubs']:
+            self.suit_buttons.append(SuitIconButton(self.window, self.game, suit, self.x, self.y))
+        x = self.x + settings.BUILD_FIGURE_BACKGROUND_IMG_WIDTH * 0.28
+        y = self.y + settings.BUILD_FIGURE_BACKGROUND_IMG_HEIGHT * 0.3
+        dx = settings.FIGURE_ICON_DELTA_X
+        self.suit_buttons_shifter = ButtonListShifter(self.window, self.suit_buttons, x, y, dx, num_buttons_displayed=4, title="Choose a kingdom!")
 
     def draw_text(self, text, color, x, y):
         """Draw text on the window."""
@@ -63,19 +94,25 @@ class BuildFigureScreen:
     def update(self, game):
         """Update the game state."""
         self.game = game
-        for button in self.icon_buttons:
-            button.update(game)
+        self.icon_buttons_shifter.update(game)
+        self.suit_buttons_shifter.update(game)
+        #for button in self.icon_buttons:
+        #    button.update(game)
+
 
     def handle_events(self, events):
-        """Handle game events."""
+        self.icon_buttons_shifter.handle_events(events)
+        self.suit_buttons_shifter.handle_events(events)
 
     def draw(self):
         """Draw elements on the window."""
         if self.game:
             self.window.blit(self.background_image, (self.x, self.y))
 
-            for button in self.icon_buttons:
-                button.draw()
+            self.icon_buttons_shifter.draw()
+            self.suit_buttons_shifter.draw()
+            #for button in self.displayed_icon_buttons:
+            #    button.draw()
             #for i, fig in enumerate(self.icon_buttons[6:]):
             #    if not "Altar" in fig.name:
             #        fig.draw_icon(self.window, self.x + i*settings.FIGURE_ICON_DELTA_X, self.y)

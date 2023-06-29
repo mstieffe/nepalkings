@@ -92,3 +92,7 @@ class GameScreen(Screen):
 
         self.main_hand.handle_events(events)
         self.side_hand.handle_events(events)
+
+        self.main_screens['build_figure'].handle_events(events)
+
+
