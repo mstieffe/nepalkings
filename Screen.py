@@ -56,7 +56,7 @@ class Screen:
 
         for line, _ in self.state.message_lines:
             line_y_position = starting_y_position + (self.state.message_lines.index((line, _)) * settings.MESSAGE_SPACING)
-            self.draw_text(line, settings.BLACK, settings.get_x(0.1), line_y_position)
+            self.draw_text(line, settings.MSG_TEXT_COLOR, settings.get_x(0.1), line_y_position)
 
     def draw_text(self, text, color, x, y):
         text_obj = self.font.render(text, True, color)
