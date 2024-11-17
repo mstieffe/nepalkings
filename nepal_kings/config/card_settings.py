@@ -74,3 +74,10 @@ SUIT_TO_IMG_PATH = {
     'Diamonds': 'd',
     'Clubs': 'c',
 }
+
+SUIT_TO_COLOR = {
+    'spades': 'defensive',
+    'hearts': 'offensive',
+    'diamonds': 'offensive',
+    'clubs': 'defensive',
+}

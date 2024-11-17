@@ -33,11 +33,11 @@ class DialogueBox:
         self.rect = pygame.Rect(box_x, box_y, settings.DIALOGUE_BOX_WIDTH, box_height)
 
         # Adjust the buttons
-        button_y = self.rect.y + self.rect.height - 2*settings.SMALL_SPACER_Y - settings.BUTTON_HEIGHT
+        button_y = self.rect.y + self.rect.height - 2*settings.SMALL_SPACER_Y - settings.MENU_BUTTON_HEIGHT
         #button_y = box_y + box_height / 4 + (len(self.lines)-1) * (self.font.get_height() + settings.SMALL_SPACER_Y)
         #button_names = ['Accept', 'Reject']
-        first_button_x = settings.CENTER_X - len(self.actions) * (settings.BUTTON_WIDTH / 2) - (len(self.actions) - 1) * (settings.SMALL_SPACER_X / 2)
-        button_x = [first_button_x + n * (settings.BUTTON_WIDTH + settings.SMALL_SPACER_X) for n in range(len(self.actions))]
+        first_button_x = settings.CENTER_X - len(self.actions) * (settings.MENU_BUTTON_WIDTH / 2) - (len(self.actions) - 1) * (settings.SMALL_SPACER_X / 2)
+        button_x = [first_button_x + n * (settings.MENU_BUTTON_WIDTH + settings.SMALL_SPACER_X) for n in range(len(self.actions))]
         self.buttons = [Button(self.window, button_x[i], button_y, self.actions[i]) for i in range(len(self.actions))]
         #self.accept_button = Button(self.window, settings.CENTER_X - settings.BUTTON_WIDTH / 2 - settings.BUTTON_WIDTH, button_y, 'Accept')
         #self.reject_button = Button(self.window, settings.CENTER_X - settings.BUTTON_WIDTH / 2 + settings.BUTTON_WIDTH, button_y, 'Reject')

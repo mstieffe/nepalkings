@@ -106,8 +106,15 @@ class Screen:
         self.draw_msg()
         
         if self.state.screen != "login":
-            self.logout_button.draw()
-            self.home_button.draw()
+            for button in self.control_buttons:
+                button.draw()
+            #self.logout_button.draw()
+            #self.home_button.draw()
+
+        for button in self.game_buttons:
+            button.draw()
+        for button in self.menu_buttons:
+            button.draw()
 
         if self.dialogue_box:
             self.dialogue_box.draw()  # Ensure the dialogue box is rendered on top of other elements
