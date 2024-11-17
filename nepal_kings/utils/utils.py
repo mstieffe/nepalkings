@@ -1,12 +1,13 @@
 from config import settings
 import pygame
 
-import pygame
-from config import settings
-
-import pygame
-from collections import Counter
-
+def get_opp_color(color):
+    if color == "offensive":
+        return "defensive"
+    elif color == "defensive":
+        return "offensive"
+    else:
+        return None
 
 class GameButton:
     def __init__(self, window,
@@ -156,39 +157,205 @@ class GameButton:
 
 
 class Button:
-    def __init__(self, window, x: int = 0, y: int = 0, text: str = "", width: int = None, height: int = None):
+    def __init__(self, window, x=0, y=0, text="", width=None, height=None):
         self.window = window
         self.x = x
         self.y = y
         self.text = text
-        self.color_rect = settings.BUTTON_COLOR_PASSIVE
-        self.color_text = settings.TEXT_COLOR_PASSIVE
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE)
 
-        # Render the text and adjust the button width if necessary
-        text_obj = self.font.render(self.text, True, self.color_text)
-        text_rect = text_obj.get_rect()
+        # Load font settings
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_BUTTON)
+        self.font_small = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_BUTTON * 0.9))
 
-        # If no custom width is provided, use the settings' button width
-        button_width = width if width is not None else settings.BUTTON_WIDTH
-        button_width = max(button_width, text_rect.width + settings.SMALL_SPACER_X)  # Adjusted button width
+        # Set button dimensions based on text and provided width/height
+        self.set_dimensions(width, height)
 
-        button_height = height if height is not None else settings.BUTTON_HEIGHT
+        # Load button images
+        self.load_images()
 
-        # Adjust button width to fit text at initialization
+        # Button states
+        self.hovered = False
+        self.clicked = False
+        self.active = False
+
+    def set_dimensions(self, width, height):
+        """Calculate button dimensions and text alignment."""
+        text_obj = self.font.render(self.text, True, settings.TEXT_COLOR_PASSIVE)
+        button_width = max(width or settings.MENU_BUTTON_WIDTH, text_obj.get_width() + settings.SMALL_SPACER_X)
+        button_height = height or settings.MENU_BUTTON_HEIGHT
+
+        # Define button rectangle
         self.rect = pygame.Rect(self.x, self.y, button_width, button_height)
+    
+    def load_images(self):
+        """Load button and glow images and apply scaling."""
+        self.button_image = pygame.transform.scale(
+            pygame.image.load(settings.MENU_BUTTON_IMG_PATH), 
+            (self.rect.width, self.rect.height)
+        )
+        self.button_image_small = pygame.transform.scale(self.button_image, (self.rect.width * 0.9, self.rect.height * 0.9))
+
+        # Load glow images and scale
+        self.glow_images = {
+            "yellow": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'yellow.png'), 
+                                             (self.rect.width * 0.85, self.rect.height * 0.6)),
+            "white": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'white.png'), 
+                                            (self.rect.width * 0.85, self.rect.height * 0.6)),
+            "orange": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'orange.png'), 
+                                             (self.rect.width * 0.85, self.rect.height * 0.6)),
+        }
 
     def collide(self):
-        mx, my = pygame.mouse.get_pos()
-        return self.rect.collidepoint((mx, my))
+        """Check if the mouse is over the button."""
+        return self.rect.collidepoint(pygame.mouse.get_pos())
+
+    def draw(self):
+        """Draw the button, including the background, glow, and text."""
+        # Draw button background
+        self.window.blit(self.button_image if not self.clicked else self.button_image_small, 
+                         self.rect.topleft if not self.clicked else self.button_image_small.get_rect(center=self.rect.center).topleft)
+
+        # Draw glow based on button state
+        if self.hovered and self.clicked:
+            self.draw_glow("yellow")
+        elif self.hovered and not self.active:
+            self.draw_glow("white")
+        elif self.active:
+            self.draw_glow("orange")
+
+        # Draw text with appropriate size
+        text_obj = (self.font_small if self.clicked else self.font).render(self.text, True, self.get_text_color())
+        self.window.blit(text_obj, text_obj.get_rect(center=self.rect.center))
+
+    def draw_glow(self, color):
+        """Draw the glow image based on the given color."""
+        glow_image = self.glow_images.get(color)
+        if glow_image:
+            self.window.blit(glow_image, glow_image.get_rect(center=self.rect.center).topleft)
+
+    def get_text_color(self):
+        """Return the appropriate text color based on the button state."""
+        if self.hovered:
+            return settings.MENU_BUTTON_TEXT_COLOR_HOVERED
+        elif self.active:
+            return settings.MENU_BUTTON_TEXT_COLOR_ACTIVE
+        return settings.TEXT_COLOR_PASSIVE
+
+    def update(self):
+        """Update the button's state based on mouse interaction."""
+        self.hovered = self.collide()
+        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+
+
+class SubScreenButton:
+    def __init__(self, window, x=0, y=0, text="", width=None, height=None):
+        self.window = window
+        self.x = x
+        self.y = y
+        self.text = text
+
+        # Load font settings
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_BUTTON)
+        self.font_small = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_BUTTON * 0.9))
+
+        # Set button dimensions based on text and provided width/height
+        self.set_dimensions(width, height)
+
+        # Load button images
+        self.load_images()
+
+        # Button states
+        self.hovered = False
+        self.clicked = False
+        self.active = False
+
+    def set_dimensions(self, width, height):
+        """Calculate button dimensions and text alignment."""
+        text_obj = self.font.render(self.text, True, settings.TEXT_COLOR_PASSIVE)
+        button_width = max(width or settings.SUB_SCREEN_BUTTON_WIDTH, text_obj.get_width() + settings.SMALL_SPACER_X)
+        button_height = height or settings.SUB_SCREEN_BUTTON_HEIGHT
+
+        # Define button rectangle
+        self.rect = pygame.Rect(self.x, self.y, button_width, button_height)
+    
+    def load_images(self):
+        """Load button and glow images and apply scaling."""
+        self.button_image = pygame.transform.scale(
+            pygame.image.load(settings.SUB_SCREEN_BUTTON_IMG_PATH), 
+            (self.rect.width, self.rect.height)
+        )
+        self.button_image_small = pygame.transform.scale(self.button_image, (self.rect.width * 0.9, self.rect.height * 0.9))
+
+        # Load glow images and scale
+        self.glow_images = {
+            "yellow": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'yellow.png'), 
+                                             (self.rect.width * 1.4, self.rect.height * 1.4)),
+            "white": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'white.png'), 
+                                            (self.rect.width * 1.4, self.rect.height * 1.4)),
+            "orange": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'orange.png'), 
+                                             (self.rect.width * 1.4, self.rect.height * 1.4)),
+            "black": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'black.png'), 
+                                             (self.rect.width * 1.4, self.rect.height * 1.4)),                
+        }
+
+
+    def collide(self):
+        """Check if the mouse is over the button."""
+        return self.rect.collidepoint(pygame.mouse.get_pos())
+
+    def draw(self):
+        """Draw the button, including the background, glow, and text."""
+
+        # Draw glow based on button state
+        if self.hovered and self.clicked:
+            self.draw_glow("yellow")
+        elif self.hovered and not self.active:
+            self.draw_glow("yellow")
+        elif self.hovered and self.active:
+            self.draw_glow("yellow")
+        elif self.active:
+            self.draw_glow("orange")
+        else:
+            self.draw_glow("white")
+
+        # Draw button background
+        self.window.blit(self.button_image if not self.clicked else self.button_image_small, 
+                         self.rect.topleft if not self.clicked else self.button_image_small.get_rect(center=self.rect.center).topleft)
+
+        # Draw text with appropriate size
+        text_obj = (self.font_small if self.clicked else self.font).render(self.text, True, self.get_text_color())
+        self.window.blit(text_obj, text_obj.get_rect(center=self.rect.center))
+
+    def draw_glow(self, color):
+        """Draw the glow image based on the given color."""
+        glow_image = self.glow_images.get(color)
+        if glow_image:
+            self.window.blit(glow_image, glow_image.get_rect(center=self.rect.center).topleft)
+
+    def get_text_color(self):
+        """Return the appropriate text color based on the button state."""
+        if self.hovered:
+            return settings.SUB_SCREEN_BUTTON_TEXT_COLOR_HOVERED
+        elif self.active:
+            return settings.SUB_SCREEN_BUTTON_TEXT_COLOR_ACTIVE
+        return settings.SUB_SCREEN_BUTTON_TEXT_COLOR_PASSIVE
+
+    def update(self):
+        """Update the button's state based on mouse interaction."""
+        self.hovered = self.collide()
+        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+
+class ControlButton(Button):
+
+    def __init__(self, window, x: int = 0, y: int =0, text: str = ""):
+        super().__init__(window, x, y, text)
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.LOGOUT_FONT_SIZE)
+        self.rect = pygame.Rect(self.x, self.y, settings.CONTROL_BUTTON_WIDTH, settings.CONTROL_BUTTON_HEIGHT)
 
     def draw(self):
         pygame.draw.rect(self.window, self.color_rect, self.rect)
         text_obj = self.font.render(self.text, True, self.color_text)
-
-        # Re-calculate the center position of the text Rect
-        text_rect = text_obj.get_rect(center=self.rect.center)
-
+        text_rect = text_obj.get_rect(center=(self.x + settings.CONTROL_BUTTON_WIDTH / 2, self.y + settings.CONTROL_BUTTON_HEIGHT / 2))
         self.window.blit(text_obj, text_rect)
 
     def update(self):
@@ -201,30 +368,7 @@ class Button:
             self.color_text = settings.TEXT_COLOR_PASSIVE
 
 
-class ControlButton(Button):
 
-        def __init__(self, window, x: int = 0, y: int =0, text: str = ""):
-            super().__init__(window, x, y, text)
-            self.font = pygame.font.Font(settings.FONT_PATH, settings.LOGOUT_FONT_SIZE)
-            self.rect = pygame.Rect(self.x, self.y, settings.CONTROL_BUTTON_WIDTH, settings.CONTROL_BUTTON_HEIGHT)
-
-        def draw(self):
-            pygame.draw.rect(self.window, self.color_rect, self.rect)
-            text_obj = self.font.render(self.text, True, self.color_text)
-            text_rect = text_obj.get_rect(center=(self.x + settings.CONTROL_BUTTON_WIDTH / 2, self.y + settings.CONTROL_BUTTON_HEIGHT / 2))
-            self.window.blit(text_obj, text_rect)
-
-        def update_color(self):
-            mx, my = pygame.mouse.get_pos()
-            if self.rect.collidepoint((mx, my)):
-                self.color_rect = settings.BUTTON_COLOR_ACTIVE  # Hover color
-                self.color_text = settings.TEXT_COLOR_ACTIVE
-            else:
-                self.color_rect = settings.BUTTON_COLOR_PASSIVE  # Default color
-                self.color_text = settings.TEXT_COLOR_PASSIVE
-
-import pygame
-from config import settings
 
 class InputField:
     def __init__(self, window, x: int = 0, y: int = 0, name: str = "", content: str = "", pwd: bool = False, active: bool = False):
