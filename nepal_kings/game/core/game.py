@@ -64,6 +64,9 @@ class Game:
 
             self.main_cards = game_dict.get('main_cards', [])
             self.side_cards = game_dict.get('side_cards', [])
+            print(self.main_cards)
+            print(self.side_cards)
+            print("--------------______________________")
             #for card_dict in game.get('cards', []):
             #    self.cards.append(card_dict)
         except Exception as e:
