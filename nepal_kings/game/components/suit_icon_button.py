@@ -36,19 +36,19 @@ class SuitIconButton:
         suit_img_path = settings.SUIT_ICON_IMG_PATH + self.suit + '.png'
         suit_darkwhite_img_path = settings.SUIT_ICON_DARKWHITE_IMG_PATH + self.suit + '.png'
 
-        self.icon_img = pygame.transform.scale(pygame.image.load(suit_img_path), (settings.SUIT_ICON_WIDTH, settings.SUIT_ICON_HEIGHT))
-        self.icon_big_img = pygame.transform.scale(pygame.image.load(suit_img_path), (settings.SUIT_ICON_BIG_WIDTH, settings.SUIT_ICON_BIG_HEIGHT))
+        self.icon_img = pygame.transform.smoothscale(pygame.image.load(suit_img_path).convert_alpha(), (settings.SUIT_ICON_WIDTH, settings.SUIT_ICON_HEIGHT))
+        self.icon_big_img = pygame.transform.smoothscale(pygame.image.load(suit_img_path).convert_alpha(), (settings.SUIT_ICON_BIG_WIDTH, settings.SUIT_ICON_BIG_HEIGHT))
 
-        self.icon_darkwhite_img = pygame.transform.scale(pygame.image.load(suit_darkwhite_img_path), (settings.SUIT_ICON_WIDTH, settings.SUIT_ICON_HEIGHT))
-        self.icon_darkwhite_big_img = pygame.transform.scale(pygame.image.load(suit_darkwhite_img_path), (settings.SUIT_ICON_BIG_WIDTH, settings.SUIT_ICON_BIG_HEIGHT))
+        self.icon_darkwhite_img = pygame.transform.smoothscale(pygame.image.load(suit_darkwhite_img_path).convert_alpha(), (settings.SUIT_ICON_WIDTH, settings.SUIT_ICON_HEIGHT))
+        self.icon_darkwhite_big_img = pygame.transform.smoothscale(pygame.image.load(suit_darkwhite_img_path).convert_alpha(), (settings.SUIT_ICON_BIG_WIDTH, settings.SUIT_ICON_BIG_HEIGHT))
 
         # Load glow effects
-        self.glow_yellow = pygame.transform.scale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'yellow.png'), (settings.SUIT_ICON_GLOW_WIDTH, settings.SUIT_ICON_GLOW_WIDTH))
-        self.glow_black = pygame.transform.scale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'black.png'), (settings.SUIT_ICON_GLOW_WIDTH, settings.SUIT_ICON_GLOW_WIDTH))
-        self.glow_orange_big = pygame.transform.scale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'orange.png'), (settings.SUIT_ICON_GLOW_BIG_WIDTH, settings.SUIT_ICON_GLOW_BIG_WIDTH))
-        self.glow_yellow_big = pygame.transform.scale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'yellow.png'), (settings.SUIT_ICON_GLOW_BIG_WIDTH, settings.SUIT_ICON_GLOW_BIG_WIDTH))
-        self.glow_white_big = pygame.transform.scale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'white.png'), (settings.SUIT_ICON_GLOW_BIG_WIDTH, settings.SUIT_ICON_GLOW_BIG_WIDTH))
-        self.glow_black_big = pygame.transform.scale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'black.png'), (settings.SUIT_ICON_GLOW_BIG_WIDTH, settings.SUIT_ICON_GLOW_BIG_WIDTH))
+        self.glow_yellow = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'yellow.png').convert_alpha(), (settings.SUIT_ICON_GLOW_WIDTH, settings.SUIT_ICON_GLOW_WIDTH))
+        self.glow_black = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'black.png').convert_alpha(), (settings.SUIT_ICON_GLOW_WIDTH, settings.SUIT_ICON_GLOW_WIDTH))
+        self.glow_orange_big = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'orange.png').convert_alpha(), (settings.SUIT_ICON_GLOW_BIG_WIDTH, settings.SUIT_ICON_GLOW_BIG_WIDTH))
+        self.glow_yellow_big = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'yellow.png').convert_alpha(), (settings.SUIT_ICON_GLOW_BIG_WIDTH, settings.SUIT_ICON_GLOW_BIG_WIDTH))
+        self.glow_white_big = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'white.png').convert_alpha(), (settings.SUIT_ICON_GLOW_BIG_WIDTH, settings.SUIT_ICON_GLOW_BIG_WIDTH))
+        self.glow_black_big = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'black.png').convert_alpha(), (settings.SUIT_ICON_GLOW_BIG_WIDTH, settings.SUIT_ICON_GLOW_BIG_WIDTH))
 
         # Set icon positions
         self.rect_icon = self.icon_img.get_rect(center=(self.x, self.y))

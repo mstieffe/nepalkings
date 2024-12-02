@@ -16,6 +16,11 @@ CARD_SPACER = int(0.02 * SCREEN_WIDTH)
 CARD_SLOT_BORDER_WIDTH = int(0.005 * SCREEN_WIDTH)
 
 SUITS = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
+SUITS_BLACK = ['Clubs', 'Spades']
+SUITS_RED = ['Hearts', 'Diamonds']
+
+COLORS = ['offensive', 'defensive']
+
 RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10','J', 'Q', 'K', 'A']
 
 NUMBER_CARDS = ['7', '8', '9', '10']

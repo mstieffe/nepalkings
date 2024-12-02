@@ -2,6 +2,7 @@
 # settings.py
 
 from config.screen_settings import *
+from config.build_screen import *
 from config.game_settings import *
 from config.server_settings import *
 from config.card_settings import *

@@ -6,7 +6,7 @@ from config import settings
 from typing import Dict
 #from utils.utils import GameButton
 from game.components.suit_icon_button import SuitIconButton
-from game.components.figure_icon_button import FigureIconButton
+from nepal_kings.game.components.figure_icon import FigureIconButton
 from game.components.button_list_shifter import ButtonListShifter
 #from nepal_kings.game.components.buttons import FigureIconButton, SuitIconButton, ButtonListShifter
 from game.components.figure import FigureManager
