@@ -3,7 +3,7 @@ from pygame.locals import *
 from config import settings
 
 class CardImg():
-    def __init__(self, window, suit, rank):
+    def __init__(self, window, suit, rank, width=None, height=None):
         self.window = window
         self.suit = suit
         self.rank = rank
@@ -14,10 +14,15 @@ class CardImg():
         self.front_img = pygame.image.load(self.front_img_path)
         self.back_img = pygame.image.load(self.back_img_path)
 
-        self.front_img = pygame.transform.scale(self.front_img, (settings.CARD_WIDTH, settings.CARD_HEIGHT))
-        self.back_img = pygame.transform.scale(self.back_img, (settings.CARD_WIDTH, settings.CARD_HEIGHT))
+        if width == None:
+            width = settings.CARD_WIDTH
+        if height == None:
+            height = settings.CARD_HEIGHT
 
-        self.black_overlay = pygame.Surface((settings.CARD_WIDTH, settings.CARD_HEIGHT), pygame.SRCALPHA)
+        self.front_img = pygame.transform.smoothscale(self.front_img, (width, height))
+        self.back_img = pygame.transform.smoothscale(self.back_img, (width, height))
+
+        self.black_overlay = pygame.Surface((width, height), pygame.SRCALPHA)
         self.black_overlay.fill((0, 0, 0, settings.ALPHA_OVERLAY)) # RGBA
 
     def draw_front(self, x, y):

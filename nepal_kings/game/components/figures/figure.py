@@ -1,8 +1,9 @@
 from typing import List, Optional
 import pygame
 #from config import settings
-from game.components.card import Card
+from game.components.cards.card import Card
 from game.components.figures.figure_icon import BuildFigureIcon
+from config import settings
 
 class FigureFamily:
     """Represents a family of figures with shared attributes."""
@@ -10,6 +11,7 @@ class FigureFamily:
         self,
         name: str,
         color: str,
+        suits: List[str],
         figures: List['Figure'],
         icon_img: pygame.Surface,
         icon_gray_img: pygame.Surface,
@@ -21,6 +23,7 @@ class FigureFamily:
     ):
         self.name = name
         self.color = color
+        self.suits = suits
         self.figures = figures
         self.icon_img = icon_img
         self.icon_gray_img = icon_gray_img
@@ -33,6 +36,10 @@ class FigureFamily:
     def make_icon(self, window, game, x, y) -> BuildFigureIcon:
         """Creates a figure icon for this family."""
         return BuildFigureIcon(window, game, self, x, y)
+    
+    def get_figures_by_suit(self, suit: str) -> List['Figure']:
+        """Returns all figures of this family for a specific suit."""
+        return [figure for figure in self.figures if figure.suit == suit]
 
 
 class Figure:
@@ -40,6 +47,7 @@ class Figure:
     def __init__(
         self,
         name: str,
+        sub_name: str,
         suit: str,
         family: FigureFamily,
         key_cards: List[Card],
@@ -52,25 +60,27 @@ class Figure:
         description: str = "",
     ):
         self.name = name
+        self.sub_name = sub_name
         self.suit = suit
         self.family = family
         self.key_cards = key_cards
         self.number_card = number_card
         self.upgrade_card = upgrade_card
         self.upgrade_family_name = upgrade_family_name
-        self.extension_card = extension_card
-        self.extension_family_name = extension_family_name
-        self.attachment_family_name = attachment_family_name  # Add this attribute
+        #self.extension_card = extension_card
+        #self.extension_family_name = extension_family_name
+        #self.attachment_family_name = attachment_family_name  # Add this attribute
         self.description = description
 
         # Derived properties for gameplay logic
         self.cards = self.key_cards[:]  # Include key cards
         if self.number_card:
             self.cards.append(self.number_card)
+        self.cards_including_upgrade = self.cards[:]
         if self.upgrade_card:
-            self.cards.append(self.upgrade_card)
-        if self.extension_card:
-            self.cards.append(self.extension_card)
+            self.cards_including_upgrade.append(self.upgrade_card)
+        #if self.extension_card:
+        #    self.cards.append(self.extension_card)
 
         self.value = self.get_value()  # Value of the figure
 
@@ -89,10 +99,6 @@ class Figure:
         """Links this figure to an upgraded version."""
         self.upgrade_to.append(figure)
 
-    def add_extension(self, figure: 'Figure'):
-        """Links this figure to an extension."""
-        self.extensions.append(figure)
-
     def is_match(self, cards: List[Card]) -> bool:
         """Checks if a given set of cards can build this figure."""
         required_cards = {card.to_tuple() for card in self.cards}
@@ -103,37 +109,18 @@ class Figure:
         """Checks if the figure can be upgraded."""
         return self.upgrade_family_name is not None
 
-    def has_extension(self) -> bool:
-        """Checks if the figure has an associated extension."""
-        return self.extension_family_name is not None
-
-    def has_attachment(self) -> bool:
-        """Checks if the figure has an associated attachment family."""
-        return self.attachment_family_name is not None
-
     def __repr__(self):
         return f"Figure(name={self.name}, suit={self.suit}, family={self.family.name})"
 
 
    
-class Village1Figure(Figure):
+class VillageFigure(Figure):
     """Represents a figure of the Village I family."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-class Village2Figure(Figure):
-    """Represents a figure of the Village II family."""
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.attachment_family_name = kwargs.get("attachment_family_name")
-
-class Military1Figure(Figure):
+class MilitaryFigure(Figure):
     """Represents a figure of the Military I family."""
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-class Military2Figure(Figure):
-    """Represents a figure of the Military II family."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

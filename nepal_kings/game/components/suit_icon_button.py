@@ -16,7 +16,7 @@ class SuitIconButton:
         self.font_big = pygame.font.Font(settings.FONT_PATH, settings.FIGURE_ICON_FONT_CAPTION_BIG_FONT_SIZE)
 
         # Initialize state variables
-        self.is_active = False
+        self.is_active = True
         self.clicked = False
         self.hovered = False
         self.time = 0  # Used for the bouncing animation
@@ -82,7 +82,7 @@ class SuitIconButton:
                 if fig.suit == self.suit:
                     cards += fig.cards
         else:
-            cards = [(card['suit'], card['rank']) for card in cards if card['suit'].lower() == self.suit]
+            cards = [(card.suit, card.rank) for card in cards if card.suit == self.suit]
 
         return len(cards) > 0
 
@@ -146,7 +146,7 @@ class SuitIconButton:
             else:
                 self.time = 0
 
-            self.is_active = self.is_in_hand()  # Determine if the suit is active (in hand)
+            #self.is_active = self.is_in_hand()  # Determine if the suit is active (in hand)
             self.hovered = self.collide()  # Check if the mouse is hovering
 
     def handle_events(self, events):

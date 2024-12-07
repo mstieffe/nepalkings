@@ -1,6 +1,6 @@
 import pygame
-from game.components.card_img import CardImg
-from game.components.card_slot import CardSlot
+from game.components.cards.card_img import CardImg
+from game.components.cards.card_slot import CardSlot
 from config import settings
 from utils.utils import GameButton
 
@@ -16,7 +16,7 @@ class Hand:
         self.type = type
 
         self.cards = self.initialize_cards()
-        self.cards.sort(key=lambda card: settings.RANK_TO_SORT[card['rank']])
+        self.cards.sort(key=lambda card: card.rank)
 
         self.x = x
         self.y = y
@@ -119,13 +119,13 @@ class Hand:
         """Update the game state."""
         self.game = game
         self.cards = self.initialize_cards()
-        self.cards.sort(key=lambda card: settings.RANK_TO_SORT[card['rank']])
+        self.cards.sort(key=lambda card: card.rank)
 
         for slot in self.card_slots:
             slot.update()
 
         for card, slot in zip(self.cards, reversed(self.card_slots)):
-            slot.content = self.card_imgs[(card['suit'], card['rank'])]
+            slot.content = self.card_imgs[(card.suit, card.rank)]
             slot.card = card
 
         #for button in self.buttons:

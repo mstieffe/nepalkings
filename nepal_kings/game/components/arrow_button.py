@@ -14,6 +14,10 @@ class ArrowButton:
         arrow_image = pygame.image.load(arrow_image_path)
         self.image_arrow = pygame.transform.scale(arrow_image, (settings.ARROW_WIDTH, settings.ARROW_HEIGHT))
         self.image_arrow_big = pygame.transform.scale(arrow_image, (settings.ARROW_BIG_WIDTH, settings.ARROW_BIG_HEIGHT))
+        self.image_arrow_transparent = pygame.transform.scale(arrow_image, (settings.ARROW_WIDTH, settings.ARROW_HEIGHT))
+        self.image_arrow_transparent.set_alpha(0.5)
+        self.image_arrow_big_transparent = pygame.transform.scale(arrow_image, (settings.ARROW_BIG_WIDTH, settings.ARROW_BIG_HEIGHT))
+        self.image_arrow_big_transparent.set_alpha(0.5)
 
         # Load and scale glow images
         self.glow_images = {
@@ -42,8 +46,10 @@ class ArrowButton:
         self.y = y
         self.rect_arrow.center = (self.x, self.y)
         self.rect_arrow_big.center = (self.x, self.y)
-        self.rect_glow.center = (self.x, self.y)
-        self.rect_glow_big.center = (self.x, self.y)
+        delta_x_glow = settings.ARROW_WIDTH*0.03 if self.direction == 'left' else -settings.ARROW_WIDTH*0.03
+        delta_x_glow_big = settings.ARROW_BIG_WIDTH*0.03 if self.direction == 'left' else -settings.ARROW_BIG_WIDTH*0.03
+        self.rect_glow.center = (self.x+delta_x_glow, self.y)
+        self.rect_glow_big.center = (self.x+delta_x_glow_big, self.y)
 
     def collide(self):
         """Check if the mouse is hovering over the arrow."""
@@ -52,20 +58,24 @@ class ArrowButton:
 
     def draw(self):
         """Draw the arrow and glow images based on the state."""
-        arrow_img = self.image_arrow_big if self.clicked or self.hovered else self.image_arrow
-        glow_img = self.glow_images['yellow_big'] if self.clicked else self.glow_images['yellow']
+        arrow_image = self.image_arrow if self.is_active else self.image_arrow_transparent
+        arrow_image_big = self.image_arrow_big if self.is_active else self.image_arrow_big_transparent
 
-        if not self.is_active:
-            glow_img = self.glow_images['black'] if not self.hovered else self.glow_images['white']
-            arrow_img = self.image_arrow
+        glow_image = self.glow_images['orange'] if self.is_active else self.glow_images['white']
+        glow_image_clicked = self.glow_images['orange'] if self.is_active else self.glow_images['white']
+        glow_image_big = self.glow_images['yellow_big'] if self.is_active else self.glow_images['black_big']
 
-        if self.hovered:
-            if self.clicked:
-                self.window.blit(self.glow_images['orange_big'], self.rect_glow_big.topleft)
-            else:
-                self.window.blit(glow_img, self.rect_glow.topleft)
-
-        self.window.blit(arrow_img, self.rect_arrow.topleft)
+        if self.hovered and pygame.mouse.get_pressed()[0]:
+            self.window.blit(glow_image, self.rect_glow)
+            self.window.blit(arrow_image, self.rect_arrow)
+        elif self.hovered:
+            self.window.blit(glow_image_big, self.rect_glow_big)
+            self.window.blit(arrow_image_big, self.rect_arrow_big)
+        elif self.clicked:
+            self.window.blit(glow_image_clicked, self.rect_glow)
+            self.window.blit(arrow_image, self.rect_arrow)
+        else:
+            self.window.blit(arrow_image, self.rect_arrow)
 
     def update(self):
         """Update the hovered and clicked state."""

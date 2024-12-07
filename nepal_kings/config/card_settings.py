@@ -22,6 +22,10 @@ SUITS_RED = ['Hearts', 'Diamonds']
 COLORS = ['offensive', 'defensive']
 
 RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10','J', 'Q', 'K', 'A']
+RANKS_WITH_ZK = ['2', '3', '4', '5', '6', '7', '8', '9', '10','J', 'Q', 'K', 'A', 'K', 'ZK']
+RANKS_ZK = ['3', '4', '6', '7', '8', '9', '10']
+RANKS_MAIN_CARDS = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+RANKS_SIDE_CARDS = ['2', '3', '4', '5', '6']
 
 NUMBER_CARDS = ['7', '8', '9', '10']
 
@@ -39,6 +43,7 @@ RANK_TO_IMG_PATH = {
     '4': '04',
     '3': '03',
     '2': '02',
+    'ZK': '00',
 }
 
 RANK_TO_VALUE = {
@@ -85,4 +90,9 @@ SUIT_TO_COLOR = {
     'hearts': 'offensive',
     'diamonds': 'offensive',
     'clubs': 'defensive',
+}
+
+COLOR_TO_SUITS = {
+    'offensive': ['Hearts', 'Diamonds'],
+    'defensive': ['Spades', 'Clubs'],
 }
