@@ -1,6 +1,6 @@
 from config.settings import SUITS_BLACK, SUITS_RED, NUMBER_CARDS, SCREEN_WIDTH, SCREEN_HEIGHT
 from game.components.figures.figure import Military2Figure
-from game.components.card import Card
+from game.components.cards.card import Card
 
 ############# Military II #############
 

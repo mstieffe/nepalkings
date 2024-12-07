@@ -3,7 +3,7 @@ from pygame.locals import *
 from game.screens.screen import Screen
 from config import settings
 #from game.components.card_img import CardImg
-from game.components.hand import Hand
+from game.components.cards.hand import Hand
 from utils.utils import GameButton
 from game.screens.build_figure_screen import BuildFigureScreen
 

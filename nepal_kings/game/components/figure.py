@@ -54,7 +54,7 @@ class Figure:
         self.key_cards = key_cards
         self.number_card = number_card
         self.upgrade_card = upgrade_card
-        self.extension_card = extension_card
+        #self.extension_card = extension_card
         self.description = description
         self.field = field
         self.upgrade_to = []
@@ -63,10 +63,10 @@ class Figure:
         self.cards = self.key_cards[:]
         if self.number_card:
             self.cards.append(self.number_card)
+        self.cards_including_upgrade = self.cards[:]
         if self.upgrade_card:
-            self.cards.append(self.upgrade_card)
-        if self.extension_card:
-            self.cards.append(self.extension_card)
+            self.cards_including_upgrade.append(self.upgrade_card)
+
 
         # make figure icon
         self.icon = FigureIcon(self.icon_img, self.icon_darkwhite_img)

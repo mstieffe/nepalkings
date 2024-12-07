@@ -1,6 +1,6 @@
 from config.settings import SUITS_BLACK, SUITS_RED, NUMBER_CARDS, SCREEN_WIDTH, SCREEN_HEIGHT
 from game.components.figures.figure import Military1Figure
-from game.components.card import Card
+from game.components.cards.card import Card
 
 ############# Military #############
 military1_dict_list = [

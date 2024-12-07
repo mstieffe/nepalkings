@@ -1,4 +1,4 @@
-from game.components.card_img import CardImg
+from game.components.cards.card_img import CardImg
 import pygame
 from config import settings
 class CardSlot():

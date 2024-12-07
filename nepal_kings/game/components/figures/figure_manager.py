@@ -3,7 +3,7 @@ from typing import List, Dict, Optional, Tuple
 from config import settings
 from game.components.figures.family_configs.family_config_list import FAMILY_CONFIG_LIST
 from game.components.figures.figure import Figure, FigureFamily
-from game.components.card import Card
+from game.components.cards.card import Card
 
 
 class FigureManager:
@@ -12,10 +12,8 @@ class FigureManager:
         self.figures: List[Figure] = []
         self.figures_by_field: Dict[str, List[Figure]] = {
             "all": [],
-            "village1": [],
-            "village2": [],
-            "military1": [],
-            "military2": [],
+            "village": [],
+            "military": [],
             "castle": [],
         }
         self.figures_by_suit: Dict[str, List[Figure]] = {suit: [] for suit in settings.SUITS}
@@ -23,10 +21,8 @@ class FigureManager:
         self.figures_by_number_card: Dict[Optional[Tuple[str, str]], List[Figure]] = {}
         self.families_by_field: Dict[str, List[FigureFamily]] = {
             "all": [],
-            "village1": [],
-            "village2": [],
-            "military1": [],
-            "military2": [],
+            "village": [],
+            "military": [],
             "castle": [],
         }
         self.families_by_color: Dict[str, List[FigureFamily]] = {color: [] for color in settings.COLORS}
@@ -60,11 +56,12 @@ class FigureManager:
             for figure in family.figures:
                 self.add_figure(figure)
 
-    def create_figure_family(self, name, color, figures, field, description, icon_img, icon_gray_img, frame_img, frame_closed_img, build_position=None):
+    def create_figure_family(self, name, color, suits, figures, field, description, icon_img, icon_gray_img, frame_img, frame_closed_img, build_position=None):
         """Helper method to create and add a FigureFamily."""
         family = FigureFamily(
             name=name,
             color=color,
+            suits=suits,
             figures=figures,
             field=field,
             description=description,
@@ -86,6 +83,7 @@ class FigureManager:
             family = self.create_figure_family(
                 name=config["name"],
                 color=config["color"],
+                suits=config["suits"],
                 figures=None,
                 field=config["field"],
                 description=config["description"],
@@ -112,14 +110,6 @@ class FigureManager:
                         upgrade_figure
                         for upgrade_figure in self.figures
                         if upgrade_figure.family == upgrade_family and upgrade_figure.suit == figure.suit
-                    ]
-            if figure.extension_family_name:
-                extension_family = self.families.get(figure.extension_family_name)
-                if extension_family:
-                    figure.extensions = [
-                        extension_figure
-                        for extension_figure in self.figures
-                        if extension_figure.family == extension_family and extension_figure.suit == figure.suit
                     ]
 
     def match_figure(self, cards: List[Card]) -> Optional[Figure]:

@@ -1,5 +1,6 @@
 import requests
 from config import settings
+from game.components.cards.card import Card
 
 class Game:
     def __init__(self, game_dict, user_dict):
@@ -64,9 +65,7 @@ class Game:
 
             self.main_cards = game_dict.get('main_cards', [])
             self.side_cards = game_dict.get('side_cards', [])
-            print(self.main_cards)
-            print(self.side_cards)
-            print("--------------______________________")
+
             #for card_dict in game.get('cards', []):
             #    self.cards.append(card_dict)
         except Exception as e:
@@ -79,8 +78,8 @@ class Game:
             print("Player ID not found")
             return []
 
-        main_hand = [card for card in self.main_cards if card['player_id'] == player_id]
-        side_hand = [card for card in self.side_cards if card['player_id'] == player_id]
+        main_hand = [Card(c['rank'], c['suit'], settings.RANK_TO_VALUE[c['rank']]) for c in self.main_cards if c['player_id'] == player_id]
+        side_hand = [Card(c['rank'], c['suit'], settings.RANK_TO_VALUE[c['rank']]) for c in self.side_cards if c['player_id'] == player_id]
         return main_hand, side_hand
 
 

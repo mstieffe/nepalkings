@@ -51,7 +51,7 @@ class FigureIcon:
         self.text_surface_big = self.font_big.render(self.name, True, settings.SUIT_ICON_CAPTION_COLOR)
 
         # State variables
-        self.is_active = False
+        self.is_active = True
         self.clicked = False
         self.hovered = False
         self.time = 0  # Used for animations (like moving up and down)
@@ -78,10 +78,40 @@ class FigureIcon:
         scale_factor = min(total_width / image.get_width(), total_height / image.get_height())
         return self.scale_image(image, scale_factor)
     
+    def draw_text_with_background(self, big=False, y_offset=0):
+        """Draw text with a background and frame."""
+        padding = settings.FIGURE_NAME_PADDING
+        
+        if big:
+            # Use the big text surface and rect
+            text_surface = self.text_surface_big
+            text_rect = self.text_rect_big
+        else:
+            # Use the regular text surface and rect
+            text_surface = self.text_surface
+            text_rect = self.text_rect
+        
+        # Calculate the rectangle for the background
+        bg_rect = pygame.Rect(
+            text_rect.x - padding,
+            text_rect.y - padding + y_offset,
+            text_rect.width + 2 * padding,
+            text_rect.height + 2 * padding
+        )
+        
+        # Draw background on the main window surface
+        pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR, bg_rect)
+        
+        # Draw frame on the main window surface
+        pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR, bg_rect, width=2)
+        
+        # Draw text on the main window surface
+        self.window.blit(text_surface, (text_rect.topleft[0], text_rect.topleft[1] + y_offset))
 
     def load_glow_effects(self):
         """Load and scale all the necessary glow effects."""
         self.glow_yellow = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'yellow.png'), (settings.FIGURE_ICON_GLOW_WIDTH, settings.FIGURE_ICON_GLOW_WIDTH))
+        self.glow_yellow_big = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'yellow.png'), (settings.FIGURE_ICON_GLOW_BIG_WIDTH, settings.FIGURE_ICON_GLOW_BIG_WIDTH))
         self.glow_black = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'black.png'), (settings.FIGURE_ICON_GLOW_WIDTH, settings.FIGURE_ICON_GLOW_WIDTH))
         self.glow_orange_big = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'orange.png'), (settings.FIGURE_ICON_GLOW_BIG_WIDTH, settings.FIGURE_ICON_GLOW_BIG_WIDTH))
         self.glow_white_big = pygame.transform.smoothscale(pygame.image.load(settings.GAME_BUTTON_GLOW_IMG_PATH + 'white.png'), (settings.FIGURE_ICON_GLOW_BIG_WIDTH, settings.FIGURE_ICON_GLOW_BIG_WIDTH))
@@ -102,8 +132,8 @@ class FigureIcon:
         self.rect_glow_big = self.glow_orange_big.get_rect(center=(self.x, self.y))
 
         # Set text positions
-        self.text_rect = self.text_surface.get_rect(center=(self.x, self.y + settings.FIGURE_ICON_BIG_WIDTH // 2 + settings.get_y(0.015)))
-        self.text_rect_big = self.text_surface_big.get_rect(center=(self.x, self.y + settings.FIGURE_ICON_BIG_WIDTH // 2 + settings.get_y(0.015)))
+        self.text_rect = self.text_surface.get_rect(center=(self.x, self.y + 0.68*settings.FIGURE_ICON_HEIGHT // 2 ))
+        self.text_rect_big = self.text_surface_big.get_rect(center=(self.x, self.y + 0.9*settings.FIGURE_ICON_BIG_HEIGHT // 2 ))
 
     def collide(self):
         """Check if the mouse is hovering over the figure icon."""
@@ -117,37 +147,39 @@ class FigureIcon:
         icon_img = self.icon_img if self.is_active else self.icon_gray_img
         icon_img_big = self.icon_img_big if self.is_active else self.icon_gray_img_big
         glow_img = self.glow_yellow if self.is_active else self.glow_black
-        glow_img_big = self.glow_orange_big if self.is_active else self.glow_white_big
+        glow_img_big = self.glow_yellow_big if self.is_active else self.glow_white_big
         glow_img_clicked = self.glow_orange if self.is_active else self.glow_white
 
         if pygame.mouse.get_pressed()[0] and self.hovered:
-            self.window.blit(glow_img, (self.rect_glow.topleft[0], self.rect_glow.topleft[1] + y_offset))
+            self.window.blit(glow_img_clicked, (self.rect_glow.topleft[0], self.rect_glow.topleft[1] + y_offset))
             self.window.blit(icon_img, (self.rect_icon.topleft[0], self.rect_icon.topleft[1] + y_offset))
             self.window.blit(self.frame_img, (self.rect_frame.topleft[0], self.rect_frame.topleft[1] + y_offset))
             self.window.blit(self.text_surface, (self.text_rect.topleft[0], self.text_rect.topleft[1] + y_offset))
+            self.draw_text_with_background(y_offset=y_offset)
 
         elif self.clicked and self.hovered:
-            self.window.blit(glow_img_big, (self.rect_glow_big.topleft[0], self.rect_glow_big.topleft[1] + y_offset))
+            self.window.blit(glow_img_clicked, (self.rect_glow.topleft[0], self.rect_glow.topleft[1] + y_offset))
             self.window.blit(icon_img_big, (self.rect_icon_big.topleft[0], self.rect_icon_big.topleft[1] + y_offset))
             self.window.blit(self.frame_img_big, (self.rect_frame_big.topleft[0], self.rect_frame_big.topleft[1] + y_offset))
-            self.window.blit(self.text_surface_big, (self.text_rect_big.topleft[0], self.text_rect_big.topleft[1] + y_offset))
+            self.draw_text_with_background(big=True, y_offset=y_offset)
 
         elif self.clicked:
             self.window.blit(glow_img_clicked, (self.rect_glow.topleft[0], self.rect_glow.topleft[1] + y_offset))
             self.window.blit(icon_img_big, (self.rect_icon.topleft[0], self.rect_icon.topleft[1] + y_offset))
             self.window.blit(self.frame_img, (self.rect_frame.topleft[0], self.rect_frame.topleft[1] + y_offset))
-            self.window.blit(self.text_surface, (self.text_rect.topleft[0], self.text_rect.topleft[1] + y_offset))
+            self.draw_text_with_background(y_offset=y_offset)
 
         elif self.hovered:
             self.window.blit(glow_img_big, self.rect_glow_big.topleft)
             self.window.blit(icon_img_big, self.rect_icon_big.topleft)
             self.window.blit(self.frame_img_big, self.rect_frame_big.topleft)
-            self.window.blit(self.text_surface_big, self.text_rect_big.topleft)
+            self.draw_text_with_background(big=True, y_offset=y_offset)
 
         else:
             self.window.blit(icon_img, self.rect_icon.topleft)
             self.window.blit(self.frame_img, self.rect_frame.topleft)
-            self.window.blit(self.text_surface, self.text_rect.topleft)
+            #self.window.blit(self.text_surface, self.text_rect.topleft)
+            self.draw_text_with_background(y_offset=y_offset)
    
 
     def update(self):
@@ -221,4 +253,4 @@ class BuildFigureIcon(FigureIcon):
     def update(self):
         """Update the figure icon with game-specific logic."""
         super().update()
-        self.is_active = self.is_in_hand()
+        #self.is_active = self.is_in_hand()
