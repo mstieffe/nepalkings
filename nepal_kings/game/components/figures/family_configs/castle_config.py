@@ -23,7 +23,7 @@ castle_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("king", suit, 4)]
+                key_cards=[Card("K", suit, 4)]
             )
         ]
     },
@@ -47,7 +47,7 @@ castle_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("king", suit, 4)]
+                key_cards=[Card("K", suit, 4)]
             )
         ]
     }
