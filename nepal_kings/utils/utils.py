@@ -57,24 +57,24 @@ class GameButton:
 
 
         # ...
-        self.image_symbol_active = pygame.transform.scale(self.image_symbol_active_origin, (symbol_width, symbol_width))
-        self.image_symbol_passive = pygame.transform.scale(self.image_symbol_passive_origin,(symbol_width, symbol_width))
+        self.image_symbol_active = pygame.transform.smoothscale(self.image_symbol_active_origin, (symbol_width, symbol_width))
+        self.image_symbol_passive = pygame.transform.smoothscale(self.image_symbol_passive_origin,(symbol_width, symbol_width))
         # ...
-        self.image_symbol_active_big = pygame.transform.scale(self.image_symbol_active_origin,(symbol_width_big, symbol_width_big))
-        self.image_symbol_passive_big = pygame.transform.scale(self.image_symbol_passive_origin, (symbol_width_big, symbol_width_big))
+        self.image_symbol_active_big = pygame.transform.smoothscale(self.image_symbol_active_origin,(symbol_width_big, symbol_width_big))
+        self.image_symbol_passive_big = pygame.transform.smoothscale(self.image_symbol_passive_origin, (symbol_width_big, symbol_width_big))
 
-        self.image_glow_yellow = pygame.transform.scale(self.image_glow_yellow, (glow_width, glow_width))
-        self.image_glow_white = pygame.transform.scale(self.image_glow_white, (glow_width, glow_width))
-        self.image_glow_black = pygame.transform.scale(self.image_glow_black, (glow_width, glow_width))
-        self.image_glow_orange = pygame.transform.scale(self.image_glow_orange, (glow_width, glow_width))
+        self.image_glow_yellow = pygame.transform.smoothscale(self.image_glow_yellow, (glow_width, glow_width))
+        self.image_glow_white = pygame.transform.smoothscale(self.image_glow_white, (glow_width, glow_width))
+        self.image_glow_black = pygame.transform.smoothscale(self.image_glow_black, (glow_width, glow_width))
+        self.image_glow_orange = pygame.transform.smoothscale(self.image_glow_orange, (glow_width, glow_width))
 
 
-        self.image_glow_yellow_big = pygame.transform.scale(self.image_glow_yellow, (glow_width_big, glow_width_big))
-        self.image_glow_white_big = pygame.transform.scale(self.image_glow_white, (glow_width_big, glow_width_big))
-        self.image_glow_black_big = pygame.transform.scale(self.image_glow_black, (glow_width_big, glow_width_big))
-        self.image_glow_orange_big = pygame.transform.scale(self.image_glow_orange, (glow_width_big, glow_width_big))
+        self.image_glow_yellow_big = pygame.transform.smoothscale(self.image_glow_yellow, (glow_width_big, glow_width_big))
+        self.image_glow_white_big = pygame.transform.smoothscale(self.image_glow_white, (glow_width_big, glow_width_big))
+        self.image_glow_black_big = pygame.transform.smoothscale(self.image_glow_black, (glow_width_big, glow_width_big))
+        self.image_glow_orange_big = pygame.transform.smoothscale(self.image_glow_orange, (glow_width_big, glow_width_big))
 
-        self.image_stone = pygame.transform.scale(self.image_stone, (stone_width, stone_width))
+        self.image_stone = pygame.transform.smoothscale(self.image_stone, (stone_width, stone_width))
 
 
         self.rect_symbol = self.image_symbol_active.get_rect()

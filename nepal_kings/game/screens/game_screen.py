@@ -57,6 +57,36 @@ class GameScreen(Screen):
         )
         self.game_buttons.append(build_button)
 
+        # Field button (switches to the field subscreen)
+        field_button = GameButton(
+            self.window, 'map', 'plain',
+            settings.FIELD_BUTTON_X, settings.FIELD_BUTTON_Y,
+            settings.FIELD_BUTTON_WIDTH,
+            settings.FIELD_BUTTON_WIDTH,
+            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.FIELD_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='view field!',
+            subscreen='field'
+        )
+        self.game_buttons.append(field_button)
+
+        # Log button (switches to the log subscreen)
+        field_button = GameButton(
+            self.window, 'letter', 'plain',
+            settings.LETTER_BUTTON_X, settings.LETTER_BUTTON_Y,
+            settings.LETTER_BUTTON_WIDTH,
+            settings.LETTER_BUTTON_WIDTH,
+            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.LETTER_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='view log!',
+            subscreen='log'
+        )
+        self.game_buttons.append(field_button)
+
     def update_game(self):
         """Update the game state and related components."""
         self.state.game.update()
