@@ -1,11 +1,16 @@
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT
 
 CARD_IMG_PATH = 'img/new_cards/'
+RED_CROSS_IMG_PATH = 'img/new_cards/red_cross.png'
 
 ALPHA_OVERLAY = 40
+ALPHA_MISSING_OVERLAY = 60
 
 CARD_WIDTH = int(0.06 * SCREEN_WIDTH)
 CARD_HEIGHT = int(0.15 * SCREEN_HEIGHT)
+
+RED_CROSS_WIDTH = int(0.02 * SCREEN_WIDTH)
+RED_CROSS_HEIGHT = int(0.02 * SCREEN_WIDTH)
 
 #CARD_HEIGHT = CARD_WIDTH * test_card.get_height() / test_card.get_width()
 

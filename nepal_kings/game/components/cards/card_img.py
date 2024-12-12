@@ -25,6 +25,12 @@ class CardImg():
         self.black_overlay = pygame.Surface((width, height), pygame.SRCALPHA)
         self.black_overlay.fill((0, 0, 0, settings.ALPHA_OVERLAY)) # RGBA
 
+        self.missing_overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+        self.missing_overlay.fill((0, 0, 0, settings.ALPHA_MISSING_OVERLAY)) # RGBA
+
+        self.red_cross = pygame.image.load(settings.RED_CROSS_IMG_PATH)
+        self.red_cross = pygame.transform.smoothscale(self.red_cross, (settings.RED_CROSS_WIDTH, settings.RED_CROSS_HEIGHT))
+
     def draw_front(self, x, y):
         self.window.blit(self.front_img, (x, y))
         self.window.blit(self.black_overlay, (x, y))
@@ -38,3 +44,8 @@ class CardImg():
 
     def draw_back_bright(self, x, y):
         self.window.blit(self.back_img, (x, y))
+    
+    def draw_missing(self, x, y):
+        self.window.blit(self.front_img, (x, y))
+        self.window.blit(self.missing_overlay, (x, y))
+        self.window.blit(self.red_cross, (x, y))

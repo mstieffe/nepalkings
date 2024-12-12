@@ -130,7 +130,7 @@ class ScrollTextListShifter:
             if 'missing_cards' in text_dict:
                 for card in text_dict['missing_cards']:
                     card_img = self.card_imgs[(card.suit, card.rank)]
-                    card_img.draw_front(card_x, card_y)
+                    card_img.draw_missing(card_x, card_y)
                     card_x += settings.MINI_CARD_WIDTH + spacer
             y += settings.MINI_CARD_HEIGHT + blank_line_height * 0.4
 

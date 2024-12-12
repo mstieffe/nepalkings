@@ -10,6 +10,7 @@ from config.figure_settings import *
 from config.font_settings import *
 from config.button_settings import *
 from config.colour_settings import *
+from config.info_scroll_settings import *
 
 def get_x(relative_position):
     return SCREEN_WIDTH * relative_position
