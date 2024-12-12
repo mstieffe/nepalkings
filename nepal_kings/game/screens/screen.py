@@ -3,7 +3,7 @@ import pygame
 from pygame.locals import *
 from config import settings
 from game.components.dialogue_box import DialogueBox
-from utils.utils import Button, ControlButton
+from utils.utils import Button, ControlButton, GameButton
 
 class Screen:
     def __init__(self, state):
@@ -46,10 +46,10 @@ class Screen:
 
     def draw_msg(self):
         """Render any messages to the screen."""
-        starting_y_position = settings.get_y(0.6)
+        starting_y_position = settings.get_y(0.0)
         for line, _ in self.state.message_lines:
             line_y_position = starting_y_position + (self.state.message_lines.index((line, _)) * settings.MESSAGE_SPACING)
-            self.draw_text(line, settings.MSG_TEXT_COLOR, settings.get_x(0.1), line_y_position)
+            self.draw_text(line, settings.MSG_TEXT_COLOR, settings.get_x(0.25), line_y_position)
 
     def draw_text(self, text, color, x, y):
         """Draw text to the screen."""
@@ -105,7 +105,7 @@ class Screen:
         """Render buttons, messages, and the dialogue box."""
         self.draw_msg()
         
-        if self.state.screen != "login":
+        if self.state.screen != "login" and self.state.screen != "game":
             for button in self.control_buttons:
                 button.draw()
             #self.logout_button.draw()

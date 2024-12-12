@@ -20,8 +20,8 @@ from utils.utils import get_opp_color
 class BuildFigureScreen(SubScreen):
     """Screen for building a figure by selecting figures and suits."""
 
-    def __init__(self, window, state, x: int = 0.0, y: int = 0.0):
-        super().__init__(window, state.game, x, y)
+    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None):
+        super().__init__(window, state.game, x, y, title)
 
         # Initialize the figure manager and load figures
         self.figure_manager = FigureManager()

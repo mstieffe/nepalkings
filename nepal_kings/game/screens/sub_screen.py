@@ -7,7 +7,7 @@ from game.components.scroll_text_list_shifter import ScrollTextListShifter
 from utils.utils import SubScreenButton
 
 class SubScreen:
-    def __init__(self, window, game, x, y):
+    def __init__(self, window, game, x, y, title=None):
 
         # Set up the display
         self.window = window
@@ -17,6 +17,7 @@ class SubScreen:
         self.x = x
         self.y = y
 
+        self.title = title
 
         self.init_background()
         self.sub_box_background = None
@@ -24,6 +25,7 @@ class SubScreen:
 
         # Set up the font
         self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE)
+        self.title_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_TITLE_FONT_SIZE)
 
         self.dialogue_box = None
 
@@ -38,22 +40,47 @@ class SubScreen:
         """Helper to create a button."""
         return SubScreenButton(self.window, x, y, text, width=width, height=height)
 
+    def draw_title(self):
+        """Draw the title of the sub screen."""
+        if self.title:
+            # Render the title text
+            title_text = self.title_font.render(self.title, True, settings.SUB_SCREEN_TITLE_COLOR)
+            title_rect = title_text.get_rect(center=(settings.SUB_SCREEN_TITLE_X, settings.SUB_SCREEN_TITLE_Y))
+
+            # Draw the background rectangle
+            bg_rect = pygame.Rect(
+                title_rect.left - settings.SUB_SCREEN_TITLE_PADDING,
+                title_rect.top - settings.SUB_SCREEN_TITLE_PADDING,
+                title_rect.width + 2 * settings.SUB_SCREEN_TITLE_PADDING,
+                title_rect.height + 2 * settings.SUB_SCREEN_TITLE_PADDING
+            )
+            pygame.draw.rect(self.window, settings.SUB_SCREEN_TITLE_BG_COLOR, bg_rect)
+
+            # Draw the border
+            pygame.draw.rect(self.window, settings.SUB_SCREEN_TITLE_BORDER_COLOR, bg_rect, settings.SUB_SCREEN_TITLE_BORDER_WIDTH)
+
+            # Draw the title text
+            self.window.blit(title_text, title_rect)
+
+            
+
+
     def init_background(self):
         """Initialize the background image."""
         self.background = pygame.image.load(settings.SUB_SCREEN_BACKGROUND_IMG_PATH)
-        self.background = pygame.transform.scale(self.background, (settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH, settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT))
+        self.background = pygame.transform.smoothscale(self.background, (settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH, settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT))
 
     def init_sub_box_background(self, x, y, width, height):
         """Initialize the background image."""
         self.sub_box_background = pygame.image.load(settings.SUB_BOX_BACKGROUND_IMG_PATH)
-        self.sub_box_background = pygame.transform.scale(self.sub_box_background, (width, height))
+        self.sub_box_background = pygame.transform.smoothscale(self.sub_box_background, (width, height))
         self.sub_box_x = x
         self.sub_box_y = y
 
     def init_scroll_background(self, x, y, width, height):
         """Initialize the background image."""
         self.scroll_background = pygame.image.load(settings.SUB_BOX_SCROLL_BACKGROUND_IMG_PATH)
-        self.scroll_background = pygame.transform.scale(self.scroll_background, (width, height))
+        self.scroll_background = pygame.transform.smoothscale(self.scroll_background, (width, height))
         self.scroll_x = x
         self.scroll_y = y
         self.scroll_text_list = []
@@ -118,6 +145,8 @@ class SubScreen:
             self.dialogue_box.draw()  # Ensure the dialogue box is rendered on top of other elements
 
         self.draw_msg()
+
+        self.draw_title()
 
 
     def update(self, game):

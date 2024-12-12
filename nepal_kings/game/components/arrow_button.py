@@ -8,6 +8,7 @@ class ArrowButton:
         self.x = x
         self.y = y
         self.is_active = is_active
+        self.direction = direction
 
         # Load and scale arrow images based on direction
         arrow_image_path = settings.LEFT_ARROW_IMG_PATH if direction == 'left' else settings.RIGHT_ARROW_IMG_PATH
@@ -36,6 +37,11 @@ class ArrowButton:
         self.rect_glow = self.glow_images['yellow'].get_rect(center=(self.x, self.y))
         self.rect_glow_big = self.glow_images['yellow_big'].get_rect(center=(self.x, self.y))
 
+        self.set_position(x, y)
+
+        #set alpha of black glow
+        self.glow_images['black'].set_alpha(90)
+
         # Initialize button states
         self.clicked = False
         self.hovered = False
@@ -46,8 +52,8 @@ class ArrowButton:
         self.y = y
         self.rect_arrow.center = (self.x, self.y)
         self.rect_arrow_big.center = (self.x, self.y)
-        delta_x_glow = settings.ARROW_WIDTH*0.03 if self.direction == 'left' else -settings.ARROW_WIDTH*0.03
-        delta_x_glow_big = settings.ARROW_BIG_WIDTH*0.03 if self.direction == 'left' else -settings.ARROW_BIG_WIDTH*0.03
+        delta_x_glow = settings.ARROW_WIDTH*0.2 if self.direction == 'left' else -settings.ARROW_WIDTH*0.2
+        delta_x_glow_big = settings.ARROW_BIG_WIDTH*0.2 if self.direction == 'left' else -settings.ARROW_BIG_WIDTH*0.2
         self.rect_glow.center = (self.x+delta_x_glow, self.y)
         self.rect_glow_big.center = (self.x+delta_x_glow_big, self.y)
 
@@ -75,6 +81,7 @@ class ArrowButton:
             self.window.blit(glow_image_clicked, self.rect_glow)
             self.window.blit(arrow_image, self.rect_arrow)
         else:
+            self.window.blit(self.glow_images['black'], self.rect_glow)
             self.window.blit(arrow_image, self.rect_arrow)
 
     def update(self):
