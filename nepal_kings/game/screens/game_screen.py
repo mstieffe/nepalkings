@@ -7,6 +7,7 @@ from config import settings
 from game.components.cards.hand import Hand
 from game.components.info_scroll import InfoScroll
 from game.components.scoreboard_scroll import ScoreboardScroll
+from game.components.buttons.state_button import StateButton
 from utils.utils import GameButton
 from game.screens.build_figure_screen import BuildFigureScreen
 
@@ -21,6 +22,7 @@ class GameScreen(Screen):
 
         # Initialize buttons and add to the game_buttons list
         self.initialize_buttons()
+        self.initialize_state_buttons()
 
         self.display_elements = []
         self.initialiaze_scoareboard_scroll()
@@ -36,24 +38,14 @@ class GameScreen(Screen):
 
     def initialiaze_scoareboard_scroll(self):
         """Initialize resources for the info scroll."""
-        if self.state.game:
-            opponent_name = self.state.game.opponent_name
-        else:
-            opponent_name = "Opponent"
-        scoreboard_dict = {
-            'Opponent': opponent_name,
-            'Turns Left': 4,
-            'Round': 1,
-            'Score': 0,
-            'Opponent Score': 0
-        }
+
         scoreboard_scroll = ScoreboardScroll(
             self.window, 
+            self.state.game,
             settings.SCOREBOARD_SCROLL_X, 
             settings.SCOREBOARD_SCROLL_Y, 
             settings.SCOREBOARD_SCROLL_WIDTH, 
             settings.SCOREBOARD_SCROLL_HEIGHT, 
-            scoreboard_dict, 
             settings.SCOREBOARD_SCROLL_BG_IMG_PATH)
         self.display_elements.append(scoreboard_scroll)
 
@@ -97,6 +89,39 @@ class GameScreen(Screen):
             settings.INFO_SCROLL_BG_IMG_PATH)
         self.display_elements.append(info_scroll)
 
+    def initialize_state_buttons(self):
+        """Initialize state buttons for the game screen."""
+
+        # Add state buttons for the game screen
+        self.game_buttons.append(StateButton(
+            self.window, 
+            'turn_tracker', 
+            'turn', 
+            settings.STATE_BUTTON_TURN_X, 
+            settings.STATE_BUTTON_TURN_Y, 
+            settings.STATE_BUTTON_SYMBOL_WIDTH, 
+            settings.STATE_BUTTON_GLOW_WIDTH, 
+            state=self.state, 
+            hover_text_active='it is your turn!',
+            hover_text_passive='not your turn!',
+            track_turn = True
+        ))
+
+        # Add state buttons for the game screen
+        self.game_buttons.append(StateButton(
+            self.window, 
+            'invader_tracker', 
+            'invader', 
+            settings.STATE_BUTTON_INVADER_X, 
+            settings.STATE_BUTTON_INVADER_Y, 
+            settings.STATE_BUTTON_SYMBOL_WIDTH, 
+            settings.STATE_BUTTON_GLOW_WIDTH, 
+            state=self.state, 
+            hover_text_active='your are the invader!',
+            hover_text_passive='you are the defender!',
+            track_invader = True
+        ))
+
     def initialize_buttons(self):
         """Initialize buttons for the game screen, including hand and action buttons."""
         #self.game_buttons = []
@@ -107,7 +132,10 @@ class GameScreen(Screen):
 
         # Action button (for casting spells)
         action_button = GameButton(
-            self.window, 'book', 'plant',
+            self.window, 
+            'cast_spell',
+            'book', 
+            'plant',
             settings.ACTION_BUTTON_X, settings.ACTION_BUTTON_Y,
             settings.ACTION_BUTTON_WIDTH,
             settings.ACTION_BUTTON_WIDTH,
@@ -118,7 +146,10 @@ class GameScreen(Screen):
 
         # Build figure button (switches to the build figure subscreen)
         build_button = GameButton(
-            self.window, 'hammer', 'rope',
+            self.window, 
+            'build_figure',
+            'hammer', 
+            'rope',
             settings.BUILD_BUTTON_X, settings.BUILD_BUTTON_Y,
             settings.BUILD_BUTTON_WIDTH,
             settings.BUILD_BUTTON_WIDTH,
@@ -130,7 +161,10 @@ class GameScreen(Screen):
 
         # Field button (switches to the field subscreen)
         field_button = GameButton(
-            self.window, 'map', 'plain',
+            self.window, 
+            'view_field',
+            'map', 
+            'plain',
             settings.FIELD_BUTTON_X, settings.FIELD_BUTTON_Y,
             settings.FIELD_BUTTON_WIDTH,
             settings.FIELD_BUTTON_WIDTH,
@@ -139,13 +173,17 @@ class GameScreen(Screen):
             glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
             state=self.state,
             hover_text='view field!',
-            subscreen='field'
+            subscreen='field',
+            track_turn = False
         )
         self.game_buttons.append(field_button)
 
         # Log button (switches to the log subscreen)
         field_button = GameButton(
-            self.window, 'letter', 'plain',
+            self.window, 
+            'view_log',
+            'letter', 
+            'plain',
             settings.LETTER_BUTTON_X, settings.LETTER_BUTTON_Y,
             settings.LETTER_BUTTON_WIDTH,
             settings.LETTER_BUTTON_WIDTH,
@@ -154,12 +192,16 @@ class GameScreen(Screen):
             glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
             state=self.state,
             hover_text='view log!',
-            subscreen='log'
+            subscreen='log',
+            track_turn = False
         )
         self.game_buttons.append(field_button)
 
         home_button = GameButton(
-            self.window, 'home', 'plain',
+            self.window, 
+            'home',
+            'home', 
+            'plain',
             settings.HOME_BUTTON_X, settings.HOME_BUTTON_Y,
             settings.HOME_BUTTON_WIDTH,
             settings.HOME_BUTTON_WIDTH,
@@ -168,7 +210,8 @@ class GameScreen(Screen):
             glow_width_big=settings.HOME_BUTTON_GLOW_WIDTH_BIG,
             state=self.state,
             hover_text='home menu!',
-            subscreen=None
+            screen='game_menu',
+            track_turn = False
         )
         self.game_buttons.append(home_button)
 
@@ -177,6 +220,8 @@ class GameScreen(Screen):
         self.state.game.update()
         self.main_hand.update(self.state.game)
         self.side_hand.update(self.state.game)
+        for elem in self.display_elements:
+            elem.update(self.state.game)
 
     def render(self):
         """Render the game screen, buttons, and active subscreen."""
@@ -192,19 +237,23 @@ class GameScreen(Screen):
         #for button in self.game_buttons:
         #    button.draw()
 
-        # Render the main and side hands
-        self.main_hand.draw()
-        self.side_hand.draw()
+
 
         # Render the currently active subscreen
         if self.active_subscreen in self.subscreens and self.subscreens[self.active_subscreen]:
             self.subscreens[self.active_subscreen].draw()
+
+        # Render the main and side hands
+        self.main_hand.draw()
+        self.side_hand.draw()
 
         # Render any general elements (e.g., dialogue box) from the parent class
         super().render()
 
         # Update the display
         pygame.display.update()
+
+
 
     def update(self, events):
         """Update the game screen and all relevant components."""

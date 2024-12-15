@@ -60,7 +60,7 @@ class Screen:
 
     def make_dialogue_box(self, message, actions=None):
         """Create a dialogue box with specified message and actions."""
-        self.dialogue_box = DialogueBox(self.window, message, self.font, actions=actions)
+        self.dialogue_box = DialogueBox(self.window, message, actions=actions)
 
     def reset_action(self):
         """Reset the current action state."""

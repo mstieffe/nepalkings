@@ -141,3 +141,8 @@ class InfoScroll:
     def collide(self):
         """Check if the mouse is over the scroll."""
         return self.rect.collidepoint(pygame.mouse.get_pos())
+    
+    def update(self, game):
+        """Update the state of the info scroll based on the game state."""
+        pass
+        

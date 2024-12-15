@@ -15,7 +15,8 @@ def get_games():
         if not user:
             return jsonify({'success': False, 'error': 'User not found'}), 400
 
-        games = Game.query.join(Player).filter(
+        # Explicitly specify the onclause to avoid ambiguity
+        games = Game.query.join(Player, Player.game_id == Game.id).filter(
             (Player.user_id == user.id) & (Game.state == 'open')
         ).all()
 
@@ -59,32 +60,36 @@ def create_game():
             return jsonify({'success': False, 'message': 'One or both players do not exist'}), 400
 
         # Create a new Game instance
-        game = Game()
+        game = Game(current_round=1, invader_player_id=None)  # Initialize the round and invader
         db.session.add(game)
         db.session.commit()
 
         # Create new Player instances for the users
-        player1 = Player(user_id=user1.id, game_id=game.id)
-        player2 = Player(user_id=user2.id, game_id=game.id)
+        player1 = Player(user_id=user1.id, game_id=game.id, turns_left=settings.INITIAL_TURNS, points=0)
+        player2 = Player(user_id=user2.id, game_id=game.id, turns_left=settings.INITIAL_TURNS, points=0)
         db.session.add(player1)
         db.session.add(player2)
         db.session.commit()
 
+        # Set the first invader !!!!!!!!!!!!! temporary fix
+        game.invader_player_id = player1.id 
+        game.turn_player_id = player1.id
+        db.session.commit()
+
         # Create and shuffle deck, and deal cards using DeckManager
-        #from game_service.deck import DeckManager
         DeckManager.create_and_shuffle_deck(game)
         DeckManager.deal_cards_to_players(game, [player1, player2], 
-            num_main_cards=settings.NUM_MAIN_CARDS_START, 
-            num_side_cards=settings.NUM_SIDE_CARDS_START)
+                                          num_main_cards=settings.NUM_MAIN_CARDS_START, 
+                                          num_side_cards=settings.NUM_SIDE_CARDS_START)
+
+        return jsonify({
+            'success': True,
+            'message': 'Game created successfully',
+            'game': game.serialize()
+        })
 
     except Exception as e:
-        return jsonify({'success': False, 'message': f'Failed to create game, Error: {str(e)}'}), 400
-
-    return jsonify({
-        'success': True,
-        'message': 'Game created successfully',
-        'game': game.serialize()
-    })
+        return jsonify({'success': False, 'message': f'Failed to create game: {str(e)}'}), 400
 
 
 @games.route('/delete_game', methods=['POST'])
@@ -186,3 +191,65 @@ def return_cards():
         })
     except Exception as e:
         return jsonify({'success': False, 'message': f'Failed to return cards, Error: {str(e)}'}), 400
+    
+@games.route('/change_cards', methods=['POST'])
+def change_cards():
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+        card_ids = [card['id'] for card in data['cards']]
+        card_type = data.get('card_type', 'main')  # Default to main cards
+
+        print(f"Changing {card_type} cards for player {player_id} in game {game_id}")
+        print(f"Selected card IDs: {card_ids}")
+        
+        # Handle MainCards or SideCards based on card_type
+        if card_type == "main":
+            selected_cards = MainCard.query.filter(MainCard.id.in_(card_ids)).all()
+            new_cards = DeckManager.draw_cards_from_deck(Game.query.get(game_id), Player.query.get(player_id), len(card_ids), "main")
+        elif card_type == "side":
+            selected_cards = SideCard.query.filter(SideCard.id.in_(card_ids)).all()
+            new_cards = DeckManager.draw_cards_from_deck(Game.query.get(game_id), Player.query.get(player_id), len(card_ids), "side")
+        else:
+            return jsonify({'success': False, 'message': 'Invalid card type specified'}), 400
+
+        # Return the selected cards to the deck
+        DeckManager.return_cards_to_deck(selected_cards)
+
+        # Update turns left for the player
+        player = Player.query.get(player_id)
+        player.turns_left -= 1
+        db.session.commit()
+
+        # flip turn player id
+        game = Game.query.get(game_id)
+        if game.turn_player_id == player_id:
+            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+            db.session.commit()
+        
+
+        return jsonify({'success': True, 'new_cards': [card.serialize() for card in new_cards], 'turns_left': player.turns_left})
+
+    except Exception as e:
+        return jsonify({'success': False, 'message': f"Failed to change cards: {str(e)}"}), 400
+
+
+@games.route('/update_points', methods=['POST'])
+def update_points():
+    try:
+        data = request.json
+        player_id = data['player_id']
+        points = data['points']
+
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 400
+
+        player.points += points
+        db.session.commit()
+
+        return jsonify({'success': True, 'points': player.points})
+
+    except Exception as e:
+        return jsonify({'success': False, 'message': f"Failed to update points: {str(e)}"}), 400

@@ -3,6 +3,8 @@ from game.components.cards.card_img import CardImg
 from game.components.cards.card_slot import CardSlot
 from config import settings
 from utils.utils import GameButton
+from utils.utils import Button
+from game.components.dialogue_box import DialogueBox
 
 
 class Hand:
@@ -32,6 +34,11 @@ class Hand:
         self.initialize_background_attributes()
 
         self.buttons = self.initialize_buttons()
+
+        self.dialogue_box = None  # To store the active dialogue box
+
+    def get_selected_cards(self):
+        return [slot.card for slot in self.card_slots if slot.clicked and slot.card]
 
     def initialize_cards(self):
         if self.game:
@@ -95,7 +102,9 @@ class Hand:
         button_x = self.x + self.slots_width + self.slots_width * 0.02
         button_y = self.y - settings.CARD_HEIGHT * 0.2
         buttons.append(GameButton(self.window,
-                                    'round_arrow', 'plain',
+                                    'change_cards',
+                                    'round_arrow', 
+                                    'plain',
                                     button_x, button_y,
                                     symbol_width=settings.HAND_BUTTON_SYMBOL_WIDTH,
                                     stone_width=settings.HAND_BUTTON_STONE_WIDTH,
@@ -115,6 +124,42 @@ class Hand:
         text_rect.topleft = (x, y)
         self.window.blit(text_obj, text_rect)
 
+    def handle_button_click(self):
+        """Handle the click on the round_arrow button."""
+        selected_cards = self.get_selected_cards()
+
+        if selected_cards:
+
+            if self.game.turn:
+                # Open DialogueBox for card selection
+                self.dialogue_box = DialogueBox(
+                    self.window,
+                    title="Change Cards",
+                    message="Do you want to change those cards?",
+                    actions=['yes', 'cancel'],
+                    images=[self.card_imgs[(card.suit, card.rank)].front_img for card in selected_cards],
+                    icon="question"
+                )
+            else:
+                # Open DialogueBox for no turn
+                self.dialogue_box = DialogueBox(
+                    self.window,
+                    title="No Turn",
+                    message="It's not your turn...!",
+                    actions=['ok'],
+                    icon="error"
+                )
+
+        else:
+            # Open DialogueBox for no selection
+            self.dialogue_box = DialogueBox(
+                self.window,
+                title="No Cards",
+                message="No cards selected...!",
+                actions=['ok'],
+                icon="error"
+            )
+
     def update(self, game):
         """Update the game state."""
         self.game = game
@@ -128,13 +173,45 @@ class Hand:
             slot.content = self.card_imgs[(card.suit, card.rank)]
             slot.card = card
 
-        #for button in self.buttons:
-        #    button.update(game)
-
     def handle_events(self, events):
         """Handle game events."""
-        for slot in self.card_slots:
-            slot.handle_events(events)
+        if self.dialogue_box:
+            # Update the dialogue box
+            response = self.dialogue_box.update(events)
+            if response == 'yes':
+                print("Cards changed!")
+                # Change the selected cards
+                selected_cards = self.get_selected_cards()
+
+                if selected_cards:
+                    # Call the appropriate card change method based on type and fetch new cards
+                    if self.type == "main_card":
+                        new_cards = self.game.change_main_cards(selected_cards)
+                    else:  # SideCards
+                        new_cards = self.game.change_side_cards(selected_cards)
+
+                    # Open a new DialogueBox to display the drawn cards
+                    self.dialogue_box = DialogueBox(
+                        self.window,
+                        title="New Cards",
+                        message="You have drawn the following cards:",
+                        actions=['ok'],
+                        icon="loot",
+                        images=[self.card_imgs[(card['suit'], card['rank'])].front_img for card in new_cards]
+                    )
+            elif response in ['cancel', 'ok']:
+                self.dialogue_box = None
+        else:
+            # Check for button clicks
+            for event in events:
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    for button in self.buttons:
+                        if button.collide() and button.name == 'change_cards':
+                            self.handle_button_click()
+
+            # Handle slot events
+            for slot in self.card_slots:
+                slot.handle_events(events)
 
     def draw(self):
         """Draw elements on the window."""
@@ -152,3 +229,7 @@ class Hand:
 
             for button in self.buttons:
                 button.draw()
+
+            # Draw the dialogue box if active
+            if self.dialogue_box:
+                self.dialogue_box.draw()

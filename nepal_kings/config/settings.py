@@ -11,6 +11,8 @@ from config.font_settings import *
 from config.button_settings import *
 from config.colour_settings import *
 from config.info_scroll_settings import *
+from config.dialogue_box_settings import *
+from config.state_buttons_settings import *
 
 def get_x(relative_position):
     return SCREEN_WIDTH * relative_position
