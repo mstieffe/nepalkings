@@ -10,17 +10,32 @@ class Deck:
         main_ranks = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
         side_ranks = ['2', '3', '4', '5', '6']
         suits = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
+        rank_to_value = {
+            '2': 2,
+            '3': 3,
+            '4': 4,
+            '5': 5,
+            '6': 6,
+            '7': 7,
+            '8': 8,
+            '9': 9,
+            '10': 10,
+            'J': 1,
+            'Q': 2,
+            'K': 4,
+            'A': 3
+        }
 
         # Create main cards
         for suit in suits:
             for rank in main_ranks:
-                card = MainCard(rank=rank, suit=suit, game_id=self.game.id, in_deck=True)
+                card = MainCard(rank=rank, suit=suit, value=rank_to_value[rank], game_id=self.game.id, in_deck=True)
                 db.session.add(card)
 
         # Create side cards
         for suit in suits:
             for rank in side_ranks:
-                card = SideCard(rank=rank, suit=suit, game_id=self.game.id, in_deck=True)
+                card = SideCard(rank=rank, suit=suit, value=rank_to_value[rank], game_id=self.game.id, in_deck=True)
                 db.session.add(card)
 
         db.session.commit()

@@ -75,21 +75,34 @@ class User(db.Model):
 
 class Game(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    players = db.relationship('Player', backref='game', lazy=True)
+    players = db.relationship(
+        'Player',
+        backref='game',
+        lazy=True,
+        foreign_keys='Player.game_id'  # Specify the foreign key explicitly
+    )
     state = db.Column(db.String(20), nullable=False, default='open')
     date = db.Column(db.DateTime, default=datetime.utcnow)
     main_cards = db.relationship('MainCard', backref='game', lazy=True)
     side_cards = db.relationship('SideCard', backref='game', lazy=True)
+
+    current_round = db.Column(db.Integer, nullable=False, default=1)  # New field
+    invader_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # New field
+    turn_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # New field
 
     def serialize(self):
         return {
             'id': self.id,
             'state': self.state,
             'date': self.date,
+            'current_round': self.current_round,
+            'invader_player_id': self.invader_player_id,
+            'turn_player_id': self.turn_player_id,
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards]
         }
+
 
 class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -97,15 +110,15 @@ class Player(db.Model):
     game_id = db.Column(db.Integer, db.ForeignKey('game.id'))
     main_hand = db.relationship('MainCard', backref='player', lazy=True)
     side_hand = db.relationship('SideCard', backref='player', lazy=True)
-    figures = db.relationship('Figure', backref='player', lazy=True)  # New relationship
+    figures = db.relationship('Figure', backref='player', lazy=True)
+
+    turns_left = db.Column(db.Integer, nullable=False, default=0)  # New field
+    points = db.Column(db.Integer, nullable=False, default=0)  # New field
     status = db.Column(db.String(20), nullable=False, default='active')
 
     def serialize(self):
         user = User.query.get(self.user_id)
-        if user:
-            username = user.username
-        else:
-            username = None
+        username = user.username if user else None
 
         return {
             'id': self.id,
@@ -113,53 +126,69 @@ class Player(db.Model):
             'game_id': self.game_id,
             'main_hand': [card.serialize() for card in self.main_hand],
             'side_hand': [card.serialize() for card in self.side_hand],
-            'figures': [figure.serialize() for figure in self.figures],  # Serialize figures
+            'figures': [figure.serialize() for figure in self.figures],
+            'turns_left': self.turns_left,
+            'points': self.points,
             'status': self.status,
             'username': username
         }
+
+
 class MainCard(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # Null if in the deck
     suit = db.Column(ChoiceType(Suit, impl=db.String()))
     rank = db.Column(ChoiceType(MainRank, impl=db.String()))
+    value = db.Column(db.Integer, nullable=False)  # New: Store the card value  
     game_id = db.Column(db.Integer, db.ForeignKey('game.id'))
     in_deck = db.Column(db.Boolean, default=True)  # Tracks if the card is still in the deck
     deck_position = db.Column(db.Integer, nullable=True)  # Optional: track deck order
     part_of_figure = db.Column(db.Boolean, default=False)  # New: Is this card part of a figure?
 
     def serialize(self):
+        """
+        Serialize the MainCard instance into a dictionary with consistent field naming and order.
+        """
         return {
             'id': self.id,
-            'suit': self.suit.value,
             'rank': self.rank.value,
-            'player_id': self.player_id,
+            'suit': self.suit.value,
+            'value': self.value,
             'game_id': self.game_id,
+            'player_id': self.player_id,
             'in_deck': self.in_deck,
             'deck_position': self.deck_position,
             'part_of_figure': self.part_of_figure
         }
+
 
 class SideCard(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)
     suit = db.Column(ChoiceType(Suit, impl=db.String()))
     rank = db.Column(ChoiceType(SideRank, impl=db.String()))
+    value = db.Column(db.Integer, nullable=False)  # New: Store the card value
     game_id = db.Column(db.Integer, db.ForeignKey('game.id'))
     in_deck = db.Column(db.Boolean, default=True)
     deck_position = db.Column(db.Integer, nullable=True)
     part_of_figure = db.Column(db.Boolean, default=False)  # New: Is this card part of a figure?
 
     def serialize(self):
+        """
+        Serialize the SideCard instance into a dictionary with consistent field naming and order.
+        """
         return {
             'id': self.id,
-            'suit': self.suit.value,
             'rank': self.rank.value,
-            'player_id': self.player_id,
+            'suit': self.suit.value,
+            'value': self.value,
             'game_id': self.game_id,
+            'player_id': self.player_id,
             'in_deck': self.in_deck,
             'deck_position': self.deck_position,
             'part_of_figure': self.part_of_figure
         }
+
 
 
 class Figure(db.Model):

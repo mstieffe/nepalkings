@@ -128,6 +128,7 @@ class NewGameScreen(Screen):
             self.state.screen = "game"
         else:
             self.state.set_msg(response['message'])
+            print(response['message'])
 
     def handle_remove_challenge(self, challenge_id):
         """Remove a challenge and handle potential errors."""

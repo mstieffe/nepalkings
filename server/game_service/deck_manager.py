@@ -22,16 +22,16 @@ class DeckManager:
         deck.deal_cards(players, num_main_cards, num_side_cards)
 
     @staticmethod
-    def draw_cards_from_deck(game, player, num_cards, card_type="main"):
-        """Draw a batch of cards from the deck and assign them to a player."""
-        deck = DeckManager.get_deck_for_game(game)
-        return deck.draw_cards(player, num_cards, card_type)
-
-    @staticmethod
     def return_card_to_deck(card):
         """Return a single card to the deck by updating its state in the database."""
         deck = DeckManager.get_deck_for_game(card.game)
         deck.return_card_to_deck(card)
+
+    @staticmethod
+    def draw_cards_from_deck(game, player, num_cards, card_type="main"):
+        """Draw a batch of cards from the deck."""
+        deck = DeckManager.get_deck_for_game(game)
+        return deck.draw_cards(player, num_cards, card_type)
 
     @staticmethod
     def return_cards_to_deck(cards):

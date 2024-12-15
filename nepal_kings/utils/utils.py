@@ -10,7 +10,9 @@ def get_opp_color(color):
         return None
 
 class GameButton:
-    def __init__(self, window,
+    def __init__(self, 
+                 window,
+                 name,
                  symbol_img,
                  stone_img,
                  x: int = 0,
@@ -23,14 +25,19 @@ class GameButton:
                  glow_shift: int = None,
                  state = None,
                  hover_text = '',
-                 subscreen = 'field'):
+                 subscreen = None,
+                 screen = None,
+                 track_turn = True):
         self.window = window
+        self.name = name
         self.x = x
         self.y = y
         self.glow_shift = glow_shift if glow_shift is not None else settings.GAME_BUTTON_GLOW_SHIFT
         self.font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
         self.state = state
         self.subscreen_trigger = subscreen
+        self.screen_trigger = screen
+        self.track_turn = track_turn
 
         # Load images
         self.images = []
@@ -109,7 +116,7 @@ class GameButton:
         # Depending on the state of the game and mouse interaction, blit the appropriate image
         if self.state.game:
             self.window.blit(self.image_stone, self.rect_stone.topleft)
-            if self.state.game.turn:
+            if self.state.game.turn or not self.track_turn:
                 if self.hovered:
                     if self.clicked:
                         self.window.blit(self.image_glow_orange_big, self.rect_glow_big.topleft)
@@ -132,7 +139,7 @@ class GameButton:
                         self.window.blit(self.image_symbol_passive, self.rect_symbol.topleft)
                     else:
                         self.window.blit(self.image_glow_white, self.rect_glow.topleft)
-                        self.window.blit(self.image_symbol_passive_big, self.rect_symbol.topleft)
+                        self.window.blit(self.image_symbol_passive_big, self.rect_symbol_big.topleft)
                     mx, my = pygame.mouse.get_pos()
                     self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.GAME_BUTTON_TEXT_SHIFT_Y -1)
                     self.window.blit(self.text_surface_shadow, self.text_rect)
@@ -151,7 +158,10 @@ class GameButton:
 
             if self.hovered and pygame.mouse.get_pressed()[0]:
                 self.clicked = True
-                self.state.subscreen = self.subscreen_trigger
+                if self.subscreen_trigger:
+                    self.state.subscreen = self.subscreen_trigger
+                if self.screen_trigger:
+                    self.state.screen = self.screen_trigger
             else:
                 self.clicked = False
 

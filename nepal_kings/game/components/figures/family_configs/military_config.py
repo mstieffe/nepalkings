@@ -67,7 +67,7 @@ military_dict_list = [
                 sub_name=f"{suit} {number}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("A", suit, 1), Card("7", suit, 7)],
+                key_cards=[Card("A", suit, 3), Card("7", suit, 7)],
                 number_card=Card(str(number), suit, number)
             )
             for number in NUMBER_CARDS
@@ -94,7 +94,7 @@ military_dict_list = [
                 sub_name=f"{suit} {number}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("A", suit, 1)],
+                key_cards=[Card("A", suit, 3)],
                 number_card=Card(str(number), suit, number),
                 upgrade_card=Card("7", suit, 7),
                 upgrade_family_name="Elite Gorkha Warriors"
@@ -123,7 +123,7 @@ military_dict_list = [
                 sub_name=f"{suit} {number}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("A", suit, 1), Card("7", suit, 7)],
+                key_cards=[Card("A", suit, 3), Card("7", suit, 7)],
                 number_card=Card(str(number), suit, number)
             )
             for number in NUMBER_CARDS
