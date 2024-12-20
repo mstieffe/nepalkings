@@ -253,3 +253,5 @@ def update_points():
 
     except Exception as e:
         return jsonify({'success': False, 'message': f"Failed to update points: {str(e)}"}), 400
+
+

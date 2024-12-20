@@ -34,6 +34,7 @@ class SubScreen:
 
         self.buttons = []
 
+        self.scroll_text_list = []
         self.scroll_text_list_shifter = None
 
     def make_button(self, text, x, y, width: int = None, height: int = None):

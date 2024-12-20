@@ -1,6 +1,7 @@
 import requests
 from config import settings
 from game.components.cards.card import Card
+from utils.msg_service import fetch_log_entries, add_log_entry, fetch_chat_messages, send_chat_message
 
 class Game:
     def __init__(self, game_dict, user_dict):
@@ -33,6 +34,14 @@ class Game:
         # Whether it is this player's turn
         self.turn = True if self.turn_player_id == self.player_id else False
         self.invader = True if self.invader_player_id == self.player_id else False
+
+        # Initialize log entries and chat messages
+        self.log_entries = []
+        self.chat_messages = []
+
+        # Fetch initial data for logs and chats
+        self.update_logs()
+        self.update_chats()
 
     def update(self):
         try:
@@ -71,9 +80,20 @@ class Game:
             self.turn = True if self.turn_player_id == self.player_id else False
             self.invader = True if self.invader_player_id == self.player_id else False
             
+            # Update logs and chats
+            self.update_logs()
+            self.update_chats()
 
         except Exception as e:
             print(f"An error occurred: {str(e)}")
+
+    def get_player_username(self, player_id):
+        """Fetch the username of a player given their player_id."""
+        for player in self.players:
+            if player['id'] == player_id:
+                return player['username']
+        return "Unknown"
+
 
     def get_hand(self, is_opponent=False):
         """
@@ -140,13 +160,49 @@ class Game:
 
             # Update the game state after a successful response
             new_cards = response.json().get('new_cards', [])
+
+            # Log the card change action
+            round_number = self.current_round
+            turn_number = self.current_player.get('turns_left', 0)  # Example: Remaining turns
+            message = f"{self.current_player.get('username', 'Player')} changed {len(cards)} {card_type} card(s)."
+            self.add_log_entry(round_number, turn_number, message, self.current_player.get('username', 'Player'), 'card_change')
+
             self.update()
-            #print(f"{card_type.capitalize()} cards successfully changed and game updated.")
+
             return new_cards
         except Exception as e:
             print(f"An error occurred while changing {card_type} cards: {str(e)}")
             return []
 
+    def update_logs(self):
+        """Fetch and update log entries."""
+        try:
+            self.log_entries = fetch_log_entries(self.game_id)
+        except Exception as e:
+            print(f"Failed to fetch log entries: {str(e)}")
+
+    def add_log_entry(self, round_number, turn_number, message, author, entry_type):
+        """Add a log entry and update the log list."""
+        try:
+            add_log_entry(self.game_id, self.player_id, round_number, turn_number, message, author, entry_type)
+            self.update_logs()
+        except Exception as e:
+            print(f"Failed to add log entry: {str(e)}")
+
+    def update_chats(self):
+        """Fetch and update chat messages."""
+        try:
+            self.chat_messages = fetch_chat_messages(self.game_id)
+        except Exception as e:
+            print(f"Failed to fetch chat messages: {str(e)}")
+
+    def send_chat_message(self, receiver_id, message):
+        """Send a chat message and update the chat list."""
+        try:
+            send_chat_message(self.game_id, self.player_id, receiver_id, message)
+            self.update_chats()
+        except Exception as e:
+            print(f"Failed to send chat message: {str(e)}")
 
 
 

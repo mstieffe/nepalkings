@@ -90,6 +90,10 @@ class Game(db.Model):
     invader_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # New field
     turn_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # New field
 
+    log_entries = db.relationship('LogEntry', backref='game', lazy=True)
+    chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
+
+
     def serialize(self):
         return {
             'id': self.id,
@@ -100,7 +104,9 @@ class Game(db.Model):
             'turn_player_id': self.turn_player_id,
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
-            'side_cards': [card.serialize() for card in self.side_cards]
+            'side_cards': [card.serialize() for card in self.side_cards],
+            'log_entries': [entry.serialize() for entry in self.log_entries],
+            'chat_messages': [message.serialize() for message in self.chat_messages]
         }
 
 
@@ -115,6 +121,9 @@ class Player(db.Model):
     turns_left = db.Column(db.Integer, nullable=False, default=0)  # New field
     points = db.Column(db.Integer, nullable=False, default=0)  # New field
     status = db.Column(db.String(20), nullable=False, default='active')
+
+    sent_messages = db.relationship('ChatMessage', foreign_keys='ChatMessage.sender_id', backref='sender', lazy=True)
+    received_messages = db.relationship('ChatMessage', foreign_keys='ChatMessage.receiver_id', backref='receiver', lazy=True)
 
     def serialize(self):
         user = User.query.get(self.user_id)
@@ -222,4 +231,47 @@ class CardToFigure(db.Model):
             'figure_id': self.figure_id,
             'card_id': self.card_id,
             'card_type': self.card_type
+        }
+    
+class LogEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False)
+    player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # Player associated with the event
+    round_number = db.Column(db.Integer, nullable=False)  # The round during which the event occurred
+    turn_number = db.Column(db.Integer, nullable=False)  # The turn within the round
+    message = db.Column(db.String(500), nullable=False)  # Description of the event
+    author = db.Column(db.String(80), nullable=False)  # Who logged the event (e.g., "system", "player_name")
+    type = db.Column(db.String(50), nullable=False)  # Event type (e.g., "move", "draw", "figure", etc.)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)  # When the event occurred
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'game_id': self.game_id,
+            'player_id': self.player_id,
+            'round_number': self.round_number,
+            'turn_number': self.turn_number,
+            'message': self.message,
+            'author': self.author,
+            'type': self.type,
+            'timestamp': self.timestamp.isoformat(),
+        }
+
+
+class ChatMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)  # Sender of the message
+    receiver_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)  # Receiver of the message
+    message = db.Column(db.String(1000), nullable=False)  # Content of the message
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)  # When the message was sent
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'game_id': self.game_id,
+            'sender_id': self.sender_id,
+            'receiver_id': self.receiver_id,
+            'message': self.message,
+            'timestamp': self.timestamp.isoformat(),
         }
