@@ -1,5 +1,6 @@
 from config import settings
 import pygame
+from pygame.locals import *
 
 def get_opp_color(color):
     if color == "offensive":
@@ -378,10 +379,8 @@ class ControlButton(Button):
             self.color_text = settings.TEXT_COLOR_PASSIVE
 
 
-
-
 class InputField:
-    def __init__(self, window, x: int = 0, y: int = 0, name: str = "", content: str = "", pwd: bool = False, active: bool = False):
+    def __init__(self, window, x: int = 0, y: int = 0, name: str = "", content: str = "", pwd: bool = False, active: bool = False, max_length: int = 15):
         self.window = window
         self.x = x
         self.y = y
@@ -389,6 +388,7 @@ class InputField:
         self.content = content
         self.pwd = pwd
         self.active = active  # Track if the field is currently active
+        self.max_length = max_length
 
         self.color_rect = settings.FIELD_COLOR_PASSIVE
         self.color_text = settings.TEXT_COLOR_PASSIVE
@@ -398,6 +398,25 @@ class InputField:
         self.cursor_pos = 0
         self.cursor_surface = pygame.Surface((int(self.font.size('|')[0]), int(self.font.get_height())))
         self.cursor_surface.fill((0, 0, 0))  # Black cursor
+
+    def handle_event(self, event):
+        """Handle key and mouse events for the input field."""
+        if event.type == KEYDOWN:
+            if self.active:
+                if event.key == K_BACKSPACE:
+                    self.backspace()
+                elif event.key == K_RETURN:
+                    return 'submit'  # Indicates the user pressed Enter
+                elif event.key == K_TAB:
+                    return 'switch'  # Indicates the user pressed Tab
+                elif len(self.content) < self.max_length:
+                    self.insert(event.unicode)
+        elif event.type == MOUSEBUTTONDOWN:
+            if self.collide():
+                self.activate()
+            else:
+                self.deactivate()
+        return None
 
     def insert(self, character):
         """Insert a character at the current cursor position."""
@@ -467,15 +486,7 @@ class InputField:
         else:
             return pygame.Surface((0, 0))  # Transparent surface when cursor is "invisible"
 
-    def update_cursor_pos(self, mouse_x):
-        """Update the cursor position based on the mouse's x-coordinate."""
-        # Iterate through content to find where the mouse clicked in the field
-        for i in range(len(self.content)):
-            if self.font.size(self.content[:i+1])[0] + self.x >= mouse_x:
-                self.cursor_pos = i
-                return
-        # If the click is at the far right of the content, move the cursor to the end
-        self.cursor_pos = len(self.content)
+
 
 
 class InputField_old():

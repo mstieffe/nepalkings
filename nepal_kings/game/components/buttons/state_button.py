@@ -156,8 +156,8 @@ class StateButton:
 
             if self.track_invader:
                 if self.state.game.invader:
-                    self.active = True
-                else:
                     self.active = False
+                else:
+                    self.active = True
 
             

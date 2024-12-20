@@ -10,6 +10,9 @@ from game.components.scoreboard_scroll import ScoreboardScroll
 from game.components.buttons.state_button import StateButton
 from utils.utils import GameButton
 from game.screens.build_figure_screen import BuildFigureScreen
+from game.screens.log_screen import LogScreen
+from game.screens.field_screen import FieldScreen
+from game.screens.cast_spell_screen import CastSpellScreen
 
 
 class GameScreen(Screen):
@@ -30,10 +33,12 @@ class GameScreen(Screen):
         self.initialize_info_scroll_slots()
 
         # Define which screen is visible, allowing flexibility in switching between subscreens
-        self.active_subscreen = 'build_figure'
+        #self.active_subscreen = 'build_figure'
         self.subscreens = {
-            'field': None,
+            'field': FieldScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Playing Board'),
             'build_figure': BuildFigureScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Figure Builder'),
+            'cast_spell': CastSpellScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Spell Book'),
+            'log': LogScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Log-Book'),
         }
 
     def initialiaze_scoareboard_scroll(self):
@@ -117,8 +122,8 @@ class GameScreen(Screen):
             settings.STATE_BUTTON_SYMBOL_WIDTH, 
             settings.STATE_BUTTON_GLOW_WIDTH, 
             state=self.state, 
-            hover_text_active='your are the invader!',
-            hover_text_passive='you are the defender!',
+            hover_text_active='your are the defender!',
+            hover_text_passive='you are the invader!',
             track_invader = True
         ))
 
@@ -140,7 +145,8 @@ class GameScreen(Screen):
             settings.ACTION_BUTTON_WIDTH,
             settings.ACTION_BUTTON_WIDTH,
             state=self.state,
-            hover_text='cast spell!'
+            hover_text='cast spell!',
+            subscreen='cast_spell'
         )
         self.game_buttons.append(action_button)
 
@@ -240,8 +246,8 @@ class GameScreen(Screen):
 
 
         # Render the currently active subscreen
-        if self.active_subscreen in self.subscreens and self.subscreens[self.active_subscreen]:
-            self.subscreens[self.active_subscreen].draw()
+        if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
+            self.subscreens[self.state.subscreen].draw()
 
         # Render the main and side hands
         self.main_hand.draw()
@@ -265,8 +271,8 @@ class GameScreen(Screen):
             self.update_game()
 
         # Update the active subscreen if necessary
-        if self.active_subscreen in self.subscreens and self.subscreens[self.active_subscreen]:
-            self.subscreens[self.active_subscreen].update(self.state.game)
+        if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
+            self.subscreens[self.state.subscreen].update(self.state.game)
 
     def handle_events(self, events):
         """Handle user input events (e.g., clicks, key presses)."""
@@ -277,7 +283,7 @@ class GameScreen(Screen):
         self.side_hand.handle_events(events)
 
         # Pass events to the active subscreen
-        if self.active_subscreen in self.subscreens and self.subscreens[self.active_subscreen]:
-            self.subscreens[self.active_subscreen].handle_events(events)
+        if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
+            self.subscreens[self.state.subscreen].handle_events(events)
 
 
