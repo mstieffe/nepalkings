@@ -37,6 +37,9 @@ class LogScreen(SubScreen):
 
     def init_ui_elements(self):
         """Initialize buttons, input fields, and other UI components."""
+
+        super().init_sub_box_background(settings.MSG_TEXT_BOX_X, settings.MSG_TEXT_BOX_Y, settings.MSG_TEXT_BOX_WIDTH, settings.MSG_TEXT_BOX_HEIGHT)
+
         # Buttons for toggling log and chat
         self.buttons.extend([
             self.make_button("Log", settings.MSG_LOG_BUTTON_X, settings.MSG_LOG_BUTTON_Y),
