@@ -99,6 +99,7 @@ class Deck:
         # Set the card back to "in deck" status
         card.player_id = None
         card.in_deck = True
+        card.part_of_figure = False
 
         # Check whether we're dealing with a MainCard or SideCard
         if isinstance(card, MainCard):

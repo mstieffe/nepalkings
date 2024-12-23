@@ -1,3 +1,4 @@
+# game_service.py
 import requests
 from config import settings
 from game.core.game import Game

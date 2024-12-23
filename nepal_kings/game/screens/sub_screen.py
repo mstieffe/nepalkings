@@ -102,9 +102,10 @@ class SubScreen:
         text_rect.topleft = (x, y)
         self.window.blit(text_obj, text_rect)
 
-    def make_dialogue_box(self, message, actions=None):
+
+    def make_dialogue_box(self, message, actions=None, images=None, icon=None, title=""):
         """Create a dialogue box with specified message and actions."""
-        self.dialogue_box = DialogueBox(self.window, message, self.font, actions=actions)
+        self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title)
 
     def make_scroll_text_list_shifter(self, text_list, x, y):
         """Create a scroll text list shifter."""
@@ -112,12 +113,12 @@ class SubScreen:
 
     def handle_events(self, events):
         """Handle events like mouse clicks and quit."""
-
+        pass
         # Handle events for dialogue box
-        if self.dialogue_box:
-            response = self.dialogue_box.update(events)
-            if response:
-                self.dialogue_box = None  # Close the dialogue box once action is taken
+        #if self.dialogue_box:
+        #    response = self.dialogue_box.update(events)
+        #    if response:
+        #        self.dialogue_box = None  # Close the dialogue box once action is taken
 
     def draw(self):
         """Render buttons, messages, and the dialogue box."""
@@ -141,13 +142,16 @@ class SubScreen:
 
         for button in self.buttons:
             button.draw()
+            
+        self.draw_title()
+
+    def draw_on_top(self):
 
         if self.dialogue_box:
             self.dialogue_box.draw()  # Ensure the dialogue box is rendered on top of other elements
 
         self.draw_msg()
 
-        self.draw_title()
 
 
     def update(self, game):

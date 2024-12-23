@@ -13,8 +13,8 @@ class LoginScreen(Screen):
         super().__init__(state)
         self.loading = False  # Loading state for login/register feedback
 
-        self.field_username = InputField(self.window, settings.get_x(0.1), settings.get_y(0.2), "username", "", False, True)
-        self.field_pwd = InputField(self.window, settings.get_x(0.1), settings.get_y(0.3), "password", "", True, False)
+        self.field_username = InputField(self.window, settings.get_x(0.1), settings.get_y(0.2), "username", "", False, True, width=settings.INPUTFIELD_WIDTH_SMALL)
+        self.field_pwd = InputField(self.window, settings.get_x(0.1), settings.get_y(0.3), "password", "", True, False, width=settings.INPUTFIELD_WIDTH_SMALL)
         self.button_login = Button(self.window, settings.get_x(0.1), settings.get_y(0.4), "login")
         self.button_register = Button(self.window, settings.get_x(0.1), settings.get_y(0.5), "register")
 

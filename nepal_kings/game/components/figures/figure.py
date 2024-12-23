@@ -33,6 +33,7 @@ class FigureFamily:
         self.description = description
         self.field = field
 
+
     def make_icon(self, window, game, x, y) -> BuildFigureIcon:
         """Creates a figure icon for this family."""
         return BuildFigureIcon(window, game, self, x, y)
@@ -58,6 +59,7 @@ class Figure:
         extension_family_name: Optional[str] = None,
         attachment_family_name: Optional[str] = None,  # Add attachment_family_name here
         description: str = "",
+        id: Optional[int] = None,
     ):
         self.name = name
         self.sub_name = sub_name
@@ -87,6 +89,9 @@ class Figure:
         # Placeholder for relationships with other figures
         self.upgrade_to: List['Figure'] = []
         self.extensions: List['Figure'] = []
+
+        # Store the figure's ID
+        self.id = id
 
     def get_value(self) -> int:
         """Returns the value of the figure."""

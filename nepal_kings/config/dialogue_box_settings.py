@@ -12,6 +12,7 @@ DIALOGUE_BOX_BORDER_WIDTH = 8
 COLOR_DIALOGUE_BOX = (80, 80, 80)
 COLOR_DIALOGUE_BOX_BORDER = (40, 40, 40)
 DIALOGUE_BOX_IMG_HEIGHT = int(0.1 * SCREEN_HEIGHT)
+DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT = int(0.05 * SCREEN_HEIGHT)
 DIALOGUE_BOX_TEXT_MARGIN_Y = int(0.05 * SCREEN_HEIGHT)
 DIALOGUE_BOX_ICON_HEIGHT = int(0.05 * SCREEN_HEIGHT)
 DIALOGUE_BOX_ICON_MARGIN_X = int(0.05 * SCREEN_WIDTH)
@@ -25,4 +26,5 @@ DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT = {
     'success': pygame.image.load('img/dialogue_box/icons/success.png'),
     'victory': pygame.image.load('img/dialogue_box/icons/victory.png'),
     'loot': pygame.image.load('img/dialogue_box/icons/loot.png'),
+    'figure': pygame.image.load('img/dialogue_box/icons/figure.png'),
 }

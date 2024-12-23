@@ -16,7 +16,7 @@ castle_dict_list = [
         "frame_img": "castle.png",
         "frame_closed_img": "castle.png",
         "suits": SUITS_BLACK,
-        "build_position": (0.615 * SCREEN_WIDTH, 0.22 * SCREEN_HEIGHT),
+        "build_position": (0.615 * SCREEN_WIDTH, 0.2 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
             CastleFigure(
                 name=f"Himalaya King",
@@ -40,7 +40,7 @@ castle_dict_list = [
         "frame_img": "castle.png",
         "frame_closed_img": "castle.png",
         "suits": SUITS_RED,
-        "build_position": (0.615 * SCREEN_WIDTH, 0.22 * SCREEN_HEIGHT),
+        "build_position": (0.615 * SCREEN_WIDTH, 0.2 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
             CastleFigure(
                 name=f"Djungle King",
