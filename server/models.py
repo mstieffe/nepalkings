@@ -200,12 +200,65 @@ class SideCard(db.Model):
 
 
 
+class CardRole(enum.Enum):
+    KEY = "key"
+    UPGRADE = "upgrade"
+    NUMBER = "number"
+
+
+class CardToFigure(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=False)
+    card_id = db.Column(db.Integer, nullable=False)  # Store card IDs here
+    card_type = db.Column(db.String(10), nullable=False)  # 'main' or 'side', to differentiate card decks
+    role = db.Column(ChoiceType(CardRole, impl=db.String()), nullable=False)  # Role in the figure
+
+    def serialize(self):
+        # Base metadata
+        card_data = {
+            'id': self.id,
+            'figure_id': self.figure_id,
+            'card_id': self.card_id,
+            'card_type': self.card_type,
+            'role': self.role.value,
+        }
+
+        # Fetch card details based on card type
+        if self.card_type == 'main':
+            card = MainCard.query.get(self.card_id)
+        elif self.card_type == 'side':
+            card = SideCard.query.get(self.card_id)
+        else:
+            card = None
+
+        if card:
+            # Extend with card details
+            card_data.update({
+                'rank': card.rank.value,
+                'suit': card.suit.value,
+                'value': card.value,
+                'player_id': card.player_id,
+                'game_id': card.game_id,
+                'in_deck': card.in_deck,
+                'deck_position': card.deck_position,
+                'part_of_figure': card.part_of_figure,
+            })
+
+        return card_data
+
+
+
 class Figure(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)
     game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False)
+    family_name = db.Column(db.String(50), nullable=False)
+    color = db.Column(db.String(20), nullable=False)
+    name = db.Column(db.String(50), nullable=False)
+    suit = db.Column(db.String(20), nullable=False)
+    description = db.Column(db.String(255), nullable=True)
+    upgrade_family_name = db.Column(db.String(50), nullable=True)
     cards = db.relationship('CardToFigure', backref='figure', lazy=True)
-    figure_type = db.Column(db.String(50), nullable=False)  # Type of the figure, e.g., "Straight", "Flush", etc.
     date_created = db.Column(db.DateTime, default=datetime.utcnow)
 
     def serialize(self):
@@ -213,24 +266,14 @@ class Figure(db.Model):
             'id': self.id,
             'player_id': self.player_id,
             'game_id': self.game_id,
+            'family_name': self.family_name,
+            'color': self.color,
+            'name': self.name,
+            'suit': self.suit,
+            'description': self.description,
+            'upgrade_family_name': self.upgrade_family_name,
             'cards': [card.serialize() for card in self.cards],
-            'figure_type': self.figure_type,
-            'date_created': self.date_created
-        }
-    
-
-class CardToFigure(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=False)
-    card_id = db.Column(db.Integer, nullable=False)  # Store card IDs here
-    card_type = db.Column(db.String(10), nullable=False)  # 'main' or 'side', to differentiate between MainCard and SideCard
-
-    def serialize(self):
-        return {
-            'id': self.id,
-            'figure_id': self.figure_id,
-            'card_id': self.card_id,
-            'card_type': self.card_type
+            'date_created': self.date_created.isoformat(),
         }
     
 class LogEntry(db.Model):

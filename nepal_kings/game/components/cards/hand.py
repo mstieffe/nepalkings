@@ -41,6 +41,7 @@ class Hand:
         return [slot.card for slot in self.card_slots if slot.clicked and slot.card]
 
     def initialize_cards(self):
+
         if self.game:
             return self.game.get_hand()[0] if self.type == "main_card" else self.game.get_hand()[1]
         else:
@@ -166,12 +167,18 @@ class Hand:
         self.cards = self.initialize_cards()
         self.cards.sort(key=lambda card: card.rank)
 
+
         for slot in self.card_slots:
             slot.update()
 
         for card, slot in zip(self.cards, reversed(self.card_slots)):
             slot.content = self.card_imgs[(card.suit, card.rank)]
             slot.card = card
+        # reset all other slots
+        # Iterate over the card slots in reverse order, starting from the length of self.cards
+        for slot in list(reversed(self.card_slots))[len(self.cards):]:
+            slot.content = None
+            slot.card = None
 
     def handle_events(self, events):
         """Handle game events."""

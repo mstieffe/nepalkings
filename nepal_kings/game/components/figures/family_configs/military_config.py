@@ -3,7 +3,7 @@ from game.components.figures.figure import MilitaryFigure
 from game.components.cards.card import Card
 
 MILITARY_START_POS_X = 0.48 * SCREEN_WIDTH
-MILITARY_START_POS_Y = 0.58 * SCREEN_HEIGHT
+MILITARY_START_POS_Y = 0.56 * SCREEN_HEIGHT
 MILITARY_DELTA_X = 0.09 * SCREEN_WIDTH
 
 MILITARY_POSITIONS = {

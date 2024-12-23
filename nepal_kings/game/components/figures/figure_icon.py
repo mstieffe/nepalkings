@@ -140,6 +140,43 @@ class FigureIcon:
         mx, my = pygame.mouse.get_pos()
         return self.rect_frame.collidepoint((mx, my))
 
+    def draw_icon(self, x, y, width, height):
+        """
+        Draw the figure icon with the provided dimensions at the given position
+        as it would appear in its default state (not hovered, clicked, etc.).
+        """
+        # Scale the icon and frame images to the provided dimensions
+        icon_img = self.scale_image_total_size(self.icon_img, width, height)
+        frame_img = self.scale_image_total_size(self.frame_img, width * settings.FRAME_FIGURE_SCALE, height * settings.FRAME_FIGURE_SCALE)
+
+        # Calculate positions for icon and frame to center them
+        icon_rect = icon_img.get_rect(center=(x + width // 2, y + height // 2))
+        frame_rect = frame_img.get_rect(center=(x + width // 2, y + height // 2))
+
+        # Draw the frame and icon
+        self.window.blit(frame_img, frame_rect.topleft)
+        self.window.blit(icon_img, icon_rect.topleft)
+
+        # Draw text with background below the icon
+        text_surface = self.font.render(self.name, True, settings.SUIT_ICON_CAPTION_COLOR)
+        text_rect = text_surface.get_rect(center=(x + width // 2, y + height + settings.FIGURE_NAME_PADDING))
+
+        # Draw background rectangle for text
+        padding = settings.FIGURE_NAME_PADDING
+        bg_rect = pygame.Rect(
+            text_rect.x - padding,
+            text_rect.y - padding,
+            text_rect.width + 2 * padding,
+            text_rect.height + 2 * padding
+        )
+        pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR, bg_rect)
+        pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR, bg_rect, width=2)
+
+        # Draw the text
+        self.window.blit(text_surface, text_rect.topleft)
+
+
+
     def draw(self):
         """Draw the figure icon with the glow and animations based on the state."""
         y_offset = settings.FIGURE_ICON_SIN_AMPL * math.sin(self.time) if self.clicked else 0

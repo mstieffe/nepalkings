@@ -1,6 +1,9 @@
 from game.components.cards.card_img import CardImg
 import pygame
 from config import settings
+
+
+
 class CardSlot():
     def __init__(self, window, content: CardImg = None, card=None, x: float = 0.0, y: float =0.0, width: float = 0.0, height: float =0.0, is_last=False):
         self.window = window
@@ -32,6 +35,8 @@ class CardSlot():
 
         self.border_surface = pygame.Surface((self.rect_border.w, self.rect_border.h), pygame.SRCALPHA)
         self.inner_surface = pygame.Surface((self.rect.w, self.rect.h), pygame.SRCALPHA)
+
+
 
     def point_inside(self, x, y):
         return self.rec_card.collidepoint(x, y)
