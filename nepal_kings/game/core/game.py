@@ -102,7 +102,7 @@ class Game:
         """
         Retrieve the main and side hand of the player or their opponent, excluding cards that are part of a figure.
         """
-        player_id = self.opponent_player['player_id'] if is_opponent else self.player_id
+        player_id = self.opponent_player['id'] if is_opponent else self.player_id
 
         # Main hand
         main_hand = [
@@ -143,7 +143,7 @@ class Game:
         return main_hand, side_hand
 
 
-    def get_figures(self, families: Dict[str, FigureFamily]) -> List[Figure]:
+    def get_figures(self, families: Dict[str, FigureFamily], is_opponent=False) -> List[Figure]:
         """
         Fetch the figures for the current player from the server.
 
@@ -151,7 +151,8 @@ class Game:
         :return: A list of Figure instances.
         """
         try:
-            figures_data = fetch_figures(self.player_id)
+            player_id = self.opponent_player['id'] if is_opponent else self.player_id
+            figures_data = fetch_figures(player_id)
             figures = []
 
 
