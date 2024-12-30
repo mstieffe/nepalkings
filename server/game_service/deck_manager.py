@@ -48,3 +48,15 @@ class DeckManager:
         """Shuffle the deck."""
         deck = DeckManager.get_deck_for_game(game)
         deck.shuffle()
+
+    @staticmethod
+    def delete_deck(game):
+        """Delete all cards associated with the game."""
+        deck = DeckManager.get_deck_for_game(game)
+        deck.delete()
+
+    @staticmethod
+    def draw_maharaja(game, color, player):
+        """Draw the Maharaja card from the deck."""
+        deck = DeckManager.get_deck_for_game(game)
+        return deck.draw_maharaja(color, player)

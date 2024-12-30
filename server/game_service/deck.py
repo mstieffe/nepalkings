@@ -1,4 +1,4 @@
-from models import MainCard, SideCard, db
+from models import MainCard, SideCard, db, MainRank, Suit
 import random
 
 class Deck:
@@ -26,17 +26,31 @@ class Deck:
             'A': 3
         }
 
-        # Create main cards
+        # Create two main cards for each rank and suit
         for suit in suits:
             for rank in main_ranks:
-                card = MainCard(rank=rank, suit=suit, value=rank_to_value[rank], game_id=self.game.id, in_deck=True)
-                db.session.add(card)
+                for _ in range(2):  # Create two cards
+                    card = MainCard(
+                        rank=rank,
+                        suit=suit,
+                        value=rank_to_value[rank],
+                        game_id=self.game.id,
+                        in_deck=True
+                    )
+                    db.session.add(card)
 
-        # Create side cards
+        # Create two side cards for each rank and suit
         for suit in suits:
             for rank in side_ranks:
-                card = SideCard(rank=rank, suit=suit, value=rank_to_value[rank], game_id=self.game.id, in_deck=True)
-                db.session.add(card)
+                for _ in range(2):  # Create two cards
+                    card = SideCard(
+                        rank=rank,
+                        suit=suit,
+                        value=rank_to_value[rank],
+                        game_id=self.game.id,
+                        in_deck=True
+                    )
+                    db.session.add(card)
 
         db.session.commit()
 
@@ -147,3 +161,60 @@ class Deck:
 
         db.session.commit()
 
+    def draw_maharaja(self, color="black", player=None):
+        """Draw a random king of the specified color from the deck."""
+        try:
+            # Map color to suit(s)
+            suit_map = {
+                "black": [Suit.CLUBS.value, Suit.SPADES.value],
+                "red": [Suit.HEARTS.value, Suit.DIAMONDS.value]
+            }
+            suits = suit_map.get(color.lower(), [color])  # Default to color if not black/red
+
+            # Debugging: Print suits being searched
+            print(f"Suits being searched: {suits}")
+
+            print(f"Attempting to draw Maharaja for color: {color}")
+            print(f"Game ID: {self.game.id}")
+            print(f"Player ID: {player.id}")
+
+            cards = MainCard.query.filter_by(game_id=self.game.id).all()
+            print([card.serialize() for card in cards if card.rank == MainRank.KING])
+
+            cards = MainCard.query.filter_by(game_id=self.game.id, in_deck=True, rank=MainRank.KING).all()
+            print([card.serialize() for card in cards])
+
+
+            # Query for the first king of the matching suit(s)
+            king = (
+                MainCard.query.filter(
+                    MainCard.game_id == self.game.id,
+                    MainCard.in_deck == True,
+                    MainCard.rank == MainRank.KING.value,
+                    MainCard.suit.in_(suits)  # Match any of the suits
+                )
+                .order_by(MainCard.deck_position.asc())  # Sort by position
+                .first()
+            )
+
+            # Debugging: Print the result of the query
+            if king:
+                print(f"King found: {king.serialize()}")
+            else:
+                print("No matching king found.")
+
+            if not king:
+                raise ValueError(f"No {color} king available in the deck")
+
+            # Update the card's state
+            king.in_deck = False
+            king.part_of_figure = True
+            if player:
+                king.player_id = player.id
+
+            db.session.commit()
+            return king
+
+        except Exception as e:
+            db.session.rollback()
+            raise RuntimeError(f"Failed to draw Maharaja: {e}")

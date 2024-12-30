@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
-from models import db, User, Challenge, Player, Game, MainCard, SideCard
+import random
+from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure
 from game_service.deck_manager import DeckManager
 
 import server_settings as settings
@@ -72,12 +73,74 @@ def create_game():
         db.session.commit()
 
         # Set the first invader !!!!!!!!!!!!! temporary fix
-        game.invader_player_id = player1.id 
-        game.turn_player_id = player1.id
-        db.session.commit()
+        #game.invader_player_id = player1.id 
+        #game.turn_player_id = player1.id
+        #db.session.commit()
 
         # Create and shuffle deck, and deal cards using DeckManager
         DeckManager.create_and_shuffle_deck(game)
+
+        db.session.commit()
+
+        # put player in random order
+        players = [player1, player2]
+        random.shuffle(players)
+        for player, color in zip(players, ['black', 'red']):
+            maharaja_card = DeckManager.draw_maharaja(game, color, player)
+            
+
+            if color == 'red':##
+
+                # Create the figure
+                figure = Figure(
+                    player_id=player.id,
+                    game_id=game.id,
+                    family_name='Djungle Maharaja',
+                    color="offensive",
+                    name="Djungle Maharaja",
+                    suit=maharaja_card.suit.value,
+                    description="Djungle maharaja",
+                    upgrade_family_name=None
+                )
+                db.session.add(figure)
+                #db.session.flush() ##
+
+
+                game.invader_player_id = player.id
+                game.turn_player_id = player.id
+
+            else:
+                print("Himalaya Maharaja")
+                print(maharaja_card.suit)
+                print(player.id)
+                print(game.id)
+                # Create the figure
+                figure = Figure(
+                    player_id=player.id,
+                    game_id=game.id,
+                    family_name='Himalaya Maharaja',
+                    color="defensive",
+                    name="Himalya Maharaja",
+                    suit=maharaja_card.suit.value,
+                    description="Himalaya maharaja",
+                    upgrade_family_name=None
+                )
+                print(figure)
+                db.session.add(figure)
+                print("created figure")
+            db.session.flush()
+
+            # Add cards to the figure and update card attributes
+            card_to_figure = CardToFigure(
+                figure_id=figure.id,
+                card_id=maharaja_card.id,
+                card_type="main",
+                role="key"
+            )
+            db.session.add(card_to_figure)
+
+        db.session.commit()
+
         DeckManager.deal_cards_to_players(game, [player1, player2], 
                                           num_main_cards=settings.NUM_MAIN_CARDS_START, 
                                           num_side_cards=settings.NUM_SIDE_CARDS_START)

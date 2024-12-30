@@ -37,7 +37,7 @@ class FigureFamily:
     def make_icon(self, window, game, x, y) -> BuildFigureIcon:
         """Creates a figure icon for this family."""
         return BuildFigureIcon(window, game, self, x, y)
-    
+       
     def get_figures_by_suit(self, suit: str) -> List['Figure']:
         """Returns all figures of this family for a specific suit."""
         return [figure for figure in self.figures if figure.suit == suit]
