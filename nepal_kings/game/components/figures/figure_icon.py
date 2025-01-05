@@ -1,10 +1,11 @@
 import math
 from collections import Counter
+import copy
 
 import pygame
 
+from game.components.cards.card_img import CardImg
 from config import settings
-
 
 class FigureIcon:
     """
@@ -22,6 +23,7 @@ class FigureIcon:
         icon_gray_img: pygame.Surface = None,
         frame_img: pygame.Surface = None,
         frame_closed_img: pygame.Surface = None,
+        draw_name: bool = True,
     ) -> None:
         """
         Initialize the FigureIcon.
@@ -69,6 +71,8 @@ class FigureIcon:
         self.load_glow_effects()
         self.set_position(x, y)
 
+        self.draw_name = draw_name
+
     def scale_image(self, image: pygame.Surface, scale_factor: float) -> pygame.Surface:
         """
         Scale the image with a smooth interpolation.
@@ -112,33 +116,35 @@ class FigureIcon:
         :param big: Whether to use the "big" text surface or the normal one.
         :param y_offset: Vertical offset to apply (used in hover or click animations).
         """
-        padding = settings.FIGURE_NAME_PADDING
+        if self.draw_name:
+            padding = settings.FIGURE_NAME_PADDING
 
-        if big:
-            # Use the big text surface and rect
-            text_surface = self.text_surface_big
-            text_rect = self.text_rect_big
-        else:
-            # Use the regular text surface and rect
-            text_surface = self.text_surface
-            text_rect = self.text_rect
+            if big:
+                # Use the big text surface and rect
+                text_surface = self.text_surface_big
+                text_rect = self.text_rect_big
+            else:
+                # Use the regular text surface and rect
+                text_surface = self.text_surface
+                text_rect = self.text_rect
 
-        # Calculate the rectangle for the background
-        bg_rect = pygame.Rect(
-            text_rect.x - padding,
-            text_rect.y - padding + y_offset,
-            text_rect.width + 2 * padding,
-            text_rect.height + 2 * padding
-        )
+            # Calculate the rectangle for the background
+            bg_rect = pygame.Rect(
+                text_rect.x - padding,
+                text_rect.y - padding + y_offset,
+                text_rect.width + 2 * padding,
+                text_rect.height + 2 * padding
+            )
 
-        # Draw background on the main window surface
-        pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR, bg_rect)
+            # Draw background on the main window surface
+            pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR, bg_rect)
 
-        # Draw frame on the main window surface
-        pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR, bg_rect, width=2)
+            # Draw frame on the main window surface
+            pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR, bg_rect, width=2)
 
-        # Draw text on the main window surface
-        self.window.blit(text_surface, (text_rect.topleft[0], text_rect.topleft[1] + y_offset))
+            # Draw text on the main window surface
+            self.window.blit(text_surface, (text_rect.topleft[0], text_rect.topleft[1] + y_offset))
+        
 
     def load_glow_effects(self) -> None:
         """
@@ -455,11 +461,10 @@ class BuildFigureIcon(FigureIcon):
         # self.is_active = self.is_in_hand()
 
 
-
 class FieldFigureIcon(FigureIcon):
     """
     A FigureIcon variant for rendering a single 'figure' at a fixed position,
-    without the sinusoidal animation.
+    with associated cards displayed relative to the figure's position.
     """
 
     def __init__(
@@ -467,16 +472,10 @@ class FieldFigureIcon(FigureIcon):
         window: pygame.Surface,
         game,
         figure,
+        is_visible: bool = True,
         x: int = 0,
         y: int = 0,
     ) -> None:
-        """
-        :param window: The Pygame surface on which to draw.
-        :param figure: The specific figure object. Must have a .family attribute.
-        :param x: The initial x-coordinate of the icon's center.
-        :param y: The initial y-coordinate of the icon's center.
-        """
-        # Instead of fig_fam, we pass figure, which has figure.family.
         super().__init__(
             window,
             figure.family.name,
@@ -485,15 +484,107 @@ class FieldFigureIcon(FigureIcon):
             figure.family.icon_img,
             figure.family.icon_gray_img,
             figure.family.frame_img,
-            figure.family.frame_closed_img
+            figure.family.frame_closed_img,
+            draw_name=False,
         )
         self.game = game
         self.figure = figure
-        self.family = figure.family  # As requested
+        self.family = figure.family
+        self.is_visible = is_visible
 
-        # Call load_glow_effects to initialize glow attributes
+        # Calculate scaling factor between normal and big icon
+        self.icon_scale_factor = self.icon_img_big.get_width() / self.icon_img.get_width()
+
+        # Precompute normal and big card images
+        self.card_images_normal = [
+            CardImg(
+                self.window,
+                card.suit,
+                card.rank,
+                width=settings.FIELD_FIGURE_CARD_WIDTH,
+                height=settings.FIELD_FIGURE_CARD_HEIGHT,
+            ) for card in figure.cards
+        ]
+
+        # Compute the big card width and height using the icon scale factor
+        big_card_width = int(settings.FIELD_FIGURE_CARD_WIDTH * self.icon_scale_factor)
+        big_card_height = int(settings.FIELD_FIGURE_CARD_HEIGHT * self.icon_scale_factor)
+
+        self.card_images_big = [
+            CardImg(
+                self.window,
+                card.suit,
+                card.rank,
+                width=big_card_width,
+                height=big_card_height,
+            ) for card in figure.cards
+        ]
+
+        # Initialize glow effects and images
         self.load_glow_effects()
         self._initialize_images(self.family, x, y)
+
+    def draw(self, x: int, y: int) -> None:
+        """
+        Draw the figure icon at the specified position, along with its cards.
+        """
+        self.set_position(x, y)
+
+        # Draw the figure icon
+        if self.is_visible:
+            super().draw()  # Draw the normal or big icon
+        else:
+            # Draw the closed frame and no-icon
+            frame_img = self.frame_closed_img_big if self.hovered else self.frame_closed_img
+            self.window.blit(frame_img, self.rect_frame.topleft)
+
+        # Adjust card margins based on the type of field
+        if self.family.field == "castle":
+            card_margin_y = settings.FIELD_FIGURE_CARD_MARGIN_Y_CASTLE
+        elif self.family.field == "village":
+            card_margin_y = settings.FIELD_FIGURE_CARD_MARGIN_Y_VILLAGE
+        else:
+            card_margin_y = settings.FIELD_FIGURE_CARD_MARGIN_Y_MILITARY
+
+        # Choose the appropriate set of card images
+        card_images_to_draw = self.card_images_big if self.hovered and not self.clicked else self.card_images_normal
+        card_width = card_images_to_draw[0].front_img.get_width()  # Get width of the first card image
+        num_cards = len(card_images_to_draw)
+
+        # Calculate the start and end positions for cards
+        total_width_available = settings.FIELD_FIGURE_CARD_DELTA_X
+        if num_cards > 1:
+            spacing_between_cards = total_width_available // (num_cards - 1)
+        else:
+            spacing_between_cards = 0  # No spacing needed for a single card
+
+        # Calculate the start x-position (centered)
+        total_cards_width = (num_cards - 1) * spacing_between_cards + num_cards * card_width
+        icon_center_x = self.rect_icon.x + self.rect_icon.width // 2
+        card_start_x = icon_center_x - total_cards_width // 2
+        card_y = self.rect_icon.y + card_margin_y  # Fixed Y-position
+
+        # Draw the associated cards
+        for i, card_img in enumerate(card_images_to_draw):
+            draw_x = card_start_x + i * (card_width + spacing_between_cards)
+
+            # Draw the card front or back based on visibility
+            if self.is_visible:
+                if self.hovered:
+                    card_img.draw_front_bright(draw_x, card_y)
+                elif self.clicked:
+                    card_img.draw_front_bright(draw_x, card_y)
+                else:
+                    card_img.draw_front(draw_x, card_y)
+                #card_img.draw_front(draw_x, card_y) if not self.hovered else card_img.draw_front_bright(draw_x, card_y)
+            else:
+                card_img.draw_back(draw_x, card_y) if not self.hovered else card_img.draw_back_bright(draw_x, card_y)
+
+    def update(self) -> None:
+        """
+        Override update to include hover detection and interaction for cards.
+        """
+        self.hovered = self.collide()  # Check if the icon is hovered
 
     def _initialize_images(self, fig_fam, x, y) -> None:
         """
@@ -545,66 +636,6 @@ class FieldFigureIcon(FigureIcon):
         """
         return self.scale_image_total_size(
             image,
-            settings.FIELD_ICON_WIDTH * scale_factor* 0.8,
-            settings.FIELD_ICON_WIDTH * scale_factor* 0.8,
+            settings.FIELD_ICON_WIDTH * scale_factor * 0.8,
+            settings.FIELD_ICON_WIDTH * scale_factor * 0.8,
         )
-
-    def draw(self, x: int, y: int) -> None:
-        """
-        Draw this icon at a *specific* (x, y) position with no sinusoidal movement.
-
-        :param x: The x-coordinate at which to draw the icon.
-        :param y: The y-coordinate at which to draw the icon.
-        """
-        # Override the parent's draw method so we can place
-        # this icon at the given position and remove the 'time' sinus offset.
-        self.set_position(x, y)
-
-        # Everything else mirrors the parent's draw, except we eliminate y_offset.
-        icon_img = self.icon_img if self.is_active else self.icon_gray_img
-        icon_img_big = self.icon_img_big if self.is_active else self.icon_gray_img_big
-        glow_img = self.glow_yellow if self.is_active else self.glow_black
-        glow_img_big = self.glow_yellow_big if self.is_active else self.glow_white_big
-        glow_img_clicked = self.glow_orange if self.is_active else self.glow_white
-
-        # We always use y_offset = 0 (no sinus movement)
-        y_offset = 0
-
-        if pygame.mouse.get_pressed()[0] and self.hovered:
-            self.window.blit(glow_img_clicked, (self.rect_glow.x, self.rect_glow.y))
-            self.window.blit(icon_img, (self.rect_icon.x, self.rect_icon.y))
-            self.window.blit(self.frame_img, (self.rect_frame.x, self.rect_frame.y))
-            self.window.blit(self.text_surface, (self.text_rect.x, self.text_rect.y))
-            self.draw_text_with_background(y_offset=y_offset)
-
-        elif self.clicked and self.hovered:
-            self.window.blit(glow_img_clicked, (self.rect_glow.x, self.rect_glow.y))
-            self.window.blit(icon_img_big, (self.rect_icon_big.x, self.rect_icon_big.y))
-            self.window.blit(self.frame_img_big, (self.rect_frame_big.x, self.rect_frame_big.y))
-            self.draw_text_with_background(big=True, y_offset=y_offset)
-
-        elif self.clicked:
-            self.window.blit(glow_img_clicked, (self.rect_glow.x, self.rect_glow.y))
-            self.window.blit(icon_img_big, (self.rect_icon.x, self.rect_icon.y))
-            self.window.blit(self.frame_img, (self.rect_frame.x, self.rect_frame.y))
-            self.draw_text_with_background(y_offset=y_offset)
-
-        elif self.hovered:
-            self.window.blit(glow_img_big, self.rect_glow_big.topleft)
-            self.window.blit(icon_img_big, self.rect_icon_big.topleft)
-            self.window.blit(self.frame_img_big, self.rect_frame_big.topleft)
-            self.draw_text_with_background(big=True, y_offset=y_offset)
-
-        else:
-            self.window.blit(icon_img, self.rect_icon.topleft)
-            self.window.blit(self.frame_img, self.rect_frame.topleft)
-            self.draw_text_with_background(y_offset=y_offset)
-
-    def update(self) -> None:
-        """
-        Override the update to skip sinus-based animation.
-        (We still keep hover detection and clicked logic.)
-        """
-        # We do not increment self.time for sinus movement.
-        # Everything else remains the same.
-        self.hovered = self.collide()
