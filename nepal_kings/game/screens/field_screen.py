@@ -30,6 +30,9 @@ class FieldScreen(SubScreen):
         self.game = game
         self.load_figures()  # Load figures whenever the game state updates
 
+        for icon in self.figure_icons:
+            icon.update()
+
     def init_field_compartments(self):
         """Initialize compartments for the field screen.
         generates rectangle of size settings.FIELD_ICON_WIDTH and settings.FIELD_HEIGHT. Fill it with settings.FIELD_FILL_COLOR and make a border with settings.FIELD_BORDER_COLOR of width settings.FIELD_BORDER_WIDTH.
@@ -86,30 +89,33 @@ class FieldScreen(SubScreen):
 
             # Only regenerate icons if figure IDs have changed
             if current_figure_ids != self.last_figure_ids:
+                # check if the figure is opponent or not
                 self._generate_figure_icons()
                 self.last_figure_ids = current_figure_ids
         except Exception as e:
             print(f"Error loading figures: {e}")
 
-    def _generate_figure_icons(self):
+    def _generate_figure_icons(self, is_visible=True):
         """Generate and cache icons for the current figures."""
+
+
+        
         self.figure_icons = []
-        for i, figure in enumerate(self.figures):
-            # Use figure.id as the cache key
-            if figure.id not in self.icon_cache:
-                # Create a new icon and cache it
-                #self.icon_cache[figure.id] = figure.family.make_field_icon(
-                #    window=self.window,
-                #    game=self.game,
-                #    x=settings.FIELD_ICON_START_X + i * (settings.FIELD_ICON_WIDTH + settings.FIELD_ICON_PADDING_X),
-                #    y=settings.FIELD_ICON_START_Y,
-                #)
-                self.icon_cache[figure.id] = FieldFigureIcon(
-                    self.window, 
-                    self.game, 
-                    figure
-                    )
-            self.figure_icons.append(self.icon_cache[figure.id])
+
+        for category, compartments in self.categorized_figures.items():
+            is_visible = category == 'self'  # Visible for self, not for opponent
+            for field_type, figures in compartments.items():
+                for figure in figures:
+                    if figure.name == ' Himalaya Maharaja' or figure.name == 'Djungle Maharaja':
+                        is_visible = True
+                    if figure.id not in self.icon_cache:
+                        self.icon_cache[figure.id] = FieldFigureIcon(
+                            window=self.window,
+                            game=self.game,
+                            figure=figure,
+                            is_visible=is_visible,
+                        )
+                    self.figure_icons.append(self.icon_cache[figure.id])
 
     def handle_events(self, events):
         """Handle events for interacting with the field."""
@@ -117,10 +123,11 @@ class FieldScreen(SubScreen):
         for event in events:
             if event.type == MOUSEBUTTONDOWN:
                 for icon in self.figure_icons:
-                    pass
+                    icon.handle_events(events)
                     #if icon.rect.collidepoint(event.pos):
                     #    print(f"Clicked on figure: {icon.figure.name}")
                     #    self.handle_figure_click(icon.figure)
+
 
     def handle_figure_click(self, figure):
         """Handle actions when a figure is clicked."""
