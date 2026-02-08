@@ -96,11 +96,14 @@ def create_game():
                     player_id=player.id,
                     game_id=game.id,
                     family_name='Djungle Maharaja',
+                    field='castle',
                     color="offensive",
                     name="Djungle Maharaja",
                     suit=maharaja_card.suit.value,
                     description="Djungle maharaja",
-                    upgrade_family_name=None
+                    upgrade_family_name=None,
+                    produces={'villager_red': 2, 'warrior_red': 1},
+                    requires={}
                 )
                 db.session.add(figure)
                 #db.session.flush() ##
@@ -119,11 +122,14 @@ def create_game():
                     player_id=player.id,
                     game_id=game.id,
                     family_name='Himalaya Maharaja',
+                    field='castle',
                     color="defensive",
-                    name="Himalya Maharaja",
+                    name="Himalaya Maharaja",
                     suit=maharaja_card.suit.value,
                     description="Himalaya maharaja",
-                    upgrade_family_name=None
+                    upgrade_family_name=None,
+                    produces={'villager_black': 2, 'warrior_black': 1},
+                    requires={}
                 )
                 print(figure)
                 db.session.add(figure)

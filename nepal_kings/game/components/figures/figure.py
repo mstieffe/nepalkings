@@ -17,6 +17,7 @@ class FigureFamily:
         icon_gray_img: pygame.Surface,
         frame_img: pygame.Surface,
         frame_closed_img: pygame.Surface,
+        frame_hidden_img: pygame.Surface,
         build_position: Optional[tuple] = None,
         description: str = "",
         field: Optional[str] = None,
@@ -29,6 +30,7 @@ class FigureFamily:
         self.icon_gray_img = icon_gray_img
         self.frame_img = frame_img
         self.frame_closed_img = frame_closed_img
+        self.frame_hidden_img = frame_hidden_img
         self.build_position = build_position
         self.description = description
         self.field = field
@@ -57,9 +59,12 @@ class Figure:
         upgrade_family_name: Optional[str] = None,
         extension_card: Optional[Card] = None,
         extension_family_name: Optional[str] = None,
-        attachment_family_name: Optional[str] = None,  # Add attachment_family_name here
+        attachment_family_name: Optional[str] = None,
+        produces: Optional[dict] = None,  # Resources produced by figure
+        requires: Optional[dict] = None,  # Resources required by figure
         description: str = "",
         id: Optional[int] = None,
+        player_id: Optional[int] = None,
     ):
         self.name = name
         self.sub_name = sub_name
@@ -69,9 +74,14 @@ class Figure:
         self.number_card = number_card
         self.upgrade_card = upgrade_card
         self.upgrade_family_name = upgrade_family_name
+        self.player_id = player_id
+        self.produces = produces or {}  # Default to empty dict
+        self.requires = requires or {}  # Default to empty dict
+        # Keep old 'resources' attribute for backward compatibility (alias to produces)
+        self.resources = self.produces
         #self.extension_card = extension_card
         #self.extension_family_name = extension_family_name
-        #self.attachment_family_name = attachment_family_name  # Add this attribute
+        #self.attachment_family_name = attachment_family_name
         self.description = description
 
         # Derived properties for gameplay logic

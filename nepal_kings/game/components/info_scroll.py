@@ -142,7 +142,31 @@ class InfoScroll:
         """Check if the mouse is over the scroll."""
         return self.rect.collidepoint(pygame.mouse.get_pos())
     
-    def update(self, game):
+    def update(self, game, families=None):
         """Update the state of the info scroll based on the game state."""
-        pass
+        if families:
+            resources_data = game.calculate_resources(families)
+            produces = resources_data.get('produces', {})
+            requires = resources_data.get('requires', {})
+            
+            # Update text_df with calculated resources
+            for idx, row in self.text_df.iterrows():
+                element = row['element']
+                
+                # Map element names to resource keys (showing total_required/total_produced)
+                if element == 'food':
+                    self.text_df.at[idx, 'red'] = f"{requires.get('food_red', 0)}/{produces.get('food_red', 0)}"
+                    self.text_df.at[idx, 'black'] = f"{requires.get('food_black', 0)}/{produces.get('food_black', 0)}"
+                elif element == 'amor':
+                    self.text_df.at[idx, 'red'] = f"{requires.get('armor_red', 0)}/{produces.get('armor_red', 0)}"
+                    self.text_df.at[idx, 'black'] = f"{requires.get('armor_black', 0)}/{produces.get('armor_black', 0)}"
+                elif element == 'material':
+                    self.text_df.at[idx, 'red'] = f"{requires.get('material_red', 0)}/{produces.get('material_red', 0)}"
+                    self.text_df.at[idx, 'black'] = f"{requires.get('material_black', 0)}/{produces.get('material_black', 0)}"
+                elif element == 'village':
+                    self.text_df.at[idx, 'red'] = f"{requires.get('villager_red', 0)}/{produces.get('villager_red', 0)}"
+                    self.text_df.at[idx, 'black'] = f"{requires.get('villager_black', 0)}/{produces.get('villager_black', 0)}"
+                elif element == 'military':
+                    self.text_df.at[idx, 'red'] = f"{requires.get('warrior_red', 0)}/{produces.get('warrior_red', 0)}"
+                    self.text_df.at[idx, 'black'] = f"{requires.get('warrior_black', 0)}/{produces.get('warrior_black', 0)}"
         
