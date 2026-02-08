@@ -41,7 +41,8 @@ military_dict_list = [
                 key_cards=[Card("A", suit, 3)],
                 number_card=Card(str(number), suit, number),
                 upgrade_card=Card("7", suit, 7),
-                upgrade_family_name="Stone Fortress"
+                upgrade_family_name="Stone Fortress",
+                requires={'warrior_black': 1, 'food_black': int(number)}
             )
             for number in NUMBER_CARDS
         ]
@@ -68,7 +69,8 @@ military_dict_list = [
                 suit=suit,
                 family=family,
                 key_cards=[Card("A", suit, 3), Card("7", suit, 7)],
-                number_card=Card(str(number), suit, number)
+                number_card=Card(str(number), suit, number),
+                requires={'warrior_black': 1, 'food_black': int(number), 'armor_black': 7}
             )
             for number in NUMBER_CARDS
         ]
@@ -97,7 +99,8 @@ military_dict_list = [
                 key_cards=[Card("A", suit, 3)],
                 number_card=Card(str(number), suit, number),
                 upgrade_card=Card("7", suit, 7),
-                upgrade_family_name="Elite Gorkha Warriors"
+                upgrade_family_name="Elite Gorkha Warriors",
+                requires={'warrior_red': 1, 'food_red': int(number)}
             )
             for number in NUMBER_CARDS
         ]
@@ -124,7 +127,8 @@ military_dict_list = [
                 suit=suit,
                 family=family,
                 key_cards=[Card("A", suit, 3), Card("7", suit, 7)],
-                number_card=Card(str(number), suit, number)
+                number_card=Card(str(number), suit, number),
+                requires={'warrior_red': 1, 'food_red': int(number), 'armor_red': 7}
             )
             for number in NUMBER_CARDS
         ]
@@ -150,7 +154,9 @@ military_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("4", suit, 4), Card("5", suit, 5), Card("6", suit, 6)]
+                key_cards=[Card("4", suit, 4), Card("5", suit, 5)],
+                number_card=Card("6", suit, 6),
+                requires={'warrior_black': 1, 'material_black': 6}
             )
         ]
     },
@@ -175,7 +181,9 @@ military_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("4", suit, 4), Card("5", suit, 5), Card("6", suit, 6)]
+                key_cards=[Card("4", suit, 4), Card("5", suit, 5)],
+                number_card=Card("6", suit, 6),
+                requires={'warrior_red': 1, 'material_red': 6}
             )
         ]
     },
@@ -200,7 +208,9 @@ military_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("J", suit, 1), Card("3", suit, 3)]
+                key_cards=[Card("J", suit, 1)],
+                number_card=Card("3", suit, 3),
+                requires={'warrior_black': 1, 'material_black': 3}
             )
         ]
     },
@@ -225,7 +235,9 @@ military_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("J", suit, 1), Card("3", suit, 3)]
+                key_cards=[Card("J", suit, 1)],
+                number_card=Card("3", suit, 3),
+                requires={'warrior_red': 1, 'material_red': 3}
             )
         ]
     }

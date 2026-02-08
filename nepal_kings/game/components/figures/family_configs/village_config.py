@@ -46,6 +46,8 @@ village_dict_list = [
                 number_card=Card(str(number), suit, number),
                 upgrade_card=Card("Q", suit, 2),
                 upgrade_family_name="Large Yack Farm",
+                produces={'food_black': int(number)} if suit in ['Clubs', 'Spades'] else {'food_red': int(number)},
+                requires={'villager_black': 1}
             )
             for number in NUMBER_CARDS
         ]
@@ -73,6 +75,8 @@ village_dict_list = [
                 family=family,
                 key_cards=[Card("J", suit, 1), Card("Q", suit, 2)],
                 number_card=Card(str(number), suit, number),
+                produces={'food_black': int(number) * 2} if suit in ['Clubs', 'Spades'] else {'food_red': int(number) * 2},
+                requires={'villager_black': 1}
             )
             for number in NUMBER_CARDS
         ]
@@ -103,6 +107,8 @@ village_dict_list = [
                 number_card=Card(str(number), suit, number),
                 upgrade_card=Card("Q", suit, 2),
                 upgrade_family_name="Large Rice Farm",
+                produces={'food_red': int(number)} if suit in ['Hearts', 'Diamonds'] else {'food_black': int(number)},
+                requires={'villager_red': 1}
             )
             for number in NUMBER_CARDS
         ]
@@ -130,6 +136,8 @@ village_dict_list = [
                 family=family,
                 key_cards=[Card("J", suit, 1), Card("Q", suit, 2)],
                 number_card=Card(str(number), suit, number),
+                produces={'food_red': int(number) * 2} if suit in ['Hearts', 'Diamonds'] else {'food_black': int(number) * 2},
+                requires={'villager_red': 1}
             )
             for number in NUMBER_CARDS
         ]
@@ -156,6 +164,9 @@ village_dict_list = [
                 suit=suit,
                 family=family,
                 key_cards=[Card("Q", suit, 2), Card("Q", suit, 2)],
+                upgrade_card=Card("7", suit, 7),
+                upgrade_family_name="Shield Manufactory",
+                requires={'villager_black': 1}
             )
         ]
     },
@@ -181,6 +192,9 @@ village_dict_list = [
                 suit=suit,
                 family=family,
                 key_cards=[Card("Q", suit, 2), Card("Q", suit, 2)],
+                upgrade_card=Card("7", suit, 7),
+                upgrade_family_name="Sword Manufactory",
+                requires={'villager_red': 1}
             )
         ]
     },
@@ -207,6 +221,8 @@ village_dict_list = [
                 family=family,
                 key_cards=[Card("Q", suit, 2), Card("Q", suit, 2)],
                 number_card=Card("7", suit, 7),
+                produces={'armor_black': 7} if suit in ['Clubs', 'Spades'] else {'armor_black': 7},
+                requires={'villager_black': 1}
             )
         ]
     },
@@ -233,7 +249,9 @@ village_dict_list = [
                 family=family,
                 key_cards=[Card("Q", suit, 2), Card("Q", suit, 2)],
                 number_card=Card("7", suit, 7),
-            )
+                produces={'armor_red': 7} if suit in ['Hearts', 'Diamonds'] else {'armor_black': 7},
+                requires={'villager_red': 1}
+                )
         ]
     },
     # Carpenter
@@ -254,13 +272,14 @@ village_dict_list = [
         "figures": lambda family, suit: [
             VillageFigure(
                 name="Carpenter",
-                sub_name=f"{suit} {number}",
+                sub_name=f"{suit} 6",
                 suit=suit,
                 family=family,
                 key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
-                number_card=Card(str(number), suit, number),
+                number_card=Card("6", suit, 6),
+                produces={'material_red': 6} if suit in ['Hearts', 'Diamonds'] else {'material_black': 6},
+                requires={'villager_red': 1}
             )
-            for number in NUMBER_CARDS
         ]
     },
     # Stone Mason
@@ -281,13 +300,14 @@ village_dict_list = [
         "figures": lambda family, suit: [
             VillageFigure(
                 name="Stone Mason",
-                sub_name=f"{suit} {number}",
+                sub_name=f"{suit} 6",
                 suit=suit,
                 family=family,
                 key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
-                number_card=Card(str(number), suit, number),
+                number_card=Card("6", suit, 6),
+                produces={'material_black': 6} if suit in ['Clubs', 'Spades'] else {'material_red': 6},
+                requires={'villager_black': 1}
             )
-            for number in NUMBER_CARDS
         ]
     },
     # Himalaya Healer
@@ -311,6 +331,9 @@ village_dict_list = [
                 suit=suit,
                 family=family,
                 key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
+                upgrade_card=Card("6", suit, 6),
+                upgrade_family_name="Stone Mason",
+                requires={'villager_black': 1}
             )
         ]
     },
@@ -335,6 +358,9 @@ village_dict_list = [
                 suit=suit,
                 family=family,
                 key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
+                upgrade_card=Card("6", suit, 6),
+                upgrade_family_name="Carpenter",
+                requires={'villager_red': 1}
             )
         ]
     }

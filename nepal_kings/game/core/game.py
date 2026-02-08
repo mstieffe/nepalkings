@@ -175,25 +175,92 @@ class Game:
                 number_card = cards.get('number')[0] if cards.get('number') else None
                 upgrade_card = cards.get('upgrade')[0] if cards.get('upgrade') else None
 
+                # If upgrade_card is not in the saved cards, try to get it from the family definition
+                # Match this figure to the correct variant in the family to get upgrade_card
+                key_cards = cards.get('key', [])
+                if not upgrade_card and figure_data.get('upgrade_family_name'):
+                    # Find matching figure in family definitions
+                    for family_figure in family.figures:
+                        # Match by suit and cards
+                        if (family_figure.suit == figure_data['suit'] and 
+                            len(family_figure.key_cards) == len(key_cards)):
+                            # Check if key cards match
+                            key_cards_match = all(
+                                any(kc.rank == fkc.rank and kc.suit == fkc.suit 
+                                    for fkc in family_figure.key_cards)
+                                for kc in key_cards
+                            )
+                            # Check if number cards match (if present)
+                            number_cards_match = True
+                            if number_card and family_figure.number_card:
+                                number_cards_match = (number_card.rank == family_figure.number_card.rank and
+                                                    number_card.suit == family_figure.number_card.suit)
+                            elif number_card or family_figure.number_card:
+                                number_cards_match = False
+                            
+                            if key_cards_match and number_cards_match:
+                                upgrade_card = family_figure.upgrade_card
+                                break
+
                 figure = Figure(
                     name=figure_data['name'],
                     sub_name=figure_data.get('sub_name', ""),
                     suit=figure_data['suit'],
                     family=family,
-                    key_cards=cards.get('key', []),
+                    key_cards=key_cards,
                     number_card=number_card,
                     upgrade_card=upgrade_card,
                     description=figure_data.get('description', ""),
                     upgrade_family_name=figure_data.get('upgrade_family_name'),
+                    produces=figure_data.get('produces', {}),
+                    requires=figure_data.get('requires', {}),
                     id=figure_data['id'],
+                    player_id=figure_data.get('player_id'),
                 )
-                print(figure)
                 figures.append(figure)
 
             return figures
         except Exception as e:
             print(f"Error loading figures: {str(e)}")
             return []
+
+    def calculate_resources(self, families: Dict[str, FigureFamily]) -> Dict[str, Dict[str, int]]:
+        """
+        Calculate total resources produced and required by all player figures.
+        
+        :param families: A dictionary mapping family names to FigureFamily instances.
+        :return: A dictionary with 'produces' and 'requires' keys, each containing resource totals
+        """
+        figures = self.get_figures(families)
+        total_produces = {}
+        total_requires = {}
+        
+        if settings.DEBUG_ENABLED:
+            with open(settings.DEBUG_LOG_PATH, 'a') as f:
+                f.write(f"[CLIENT] Calculating resources for {len(figures)} figures\n")
+                for figure in figures:
+                    f.write(f"[CLIENT] Figure: {figure.name}, produces: {figure.produces}, requires: {figure.requires}\n")
+        
+        for figure in figures:
+            if figure.produces:
+                for resource_type, amount in figure.produces.items():
+                    if resource_type in total_produces:
+                        total_produces[resource_type] += amount
+                    else:
+                        total_produces[resource_type] = amount
+            
+            if figure.requires:
+                for resource_type, amount in figure.requires.items():
+                    if resource_type in total_requires:
+                        total_requires[resource_type] += amount
+                    else:
+                        total_requires[resource_type] = amount
+        
+        if settings.DEBUG_ENABLED:
+            with open(settings.DEBUG_LOG_PATH, 'a') as f:
+                f.write(f"[CLIENT] Total produces: {total_produces}\n")
+                f.write(f"[CLIENT] Total requires: {total_requires}\n")
+        return {'produces': total_produces, 'requires': total_requires}
 
     @staticmethod
     def _load_cards_from_data(cards_data: List[Dict]) -> Dict[str, List[Card]]:

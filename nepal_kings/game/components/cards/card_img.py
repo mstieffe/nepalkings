@@ -49,3 +49,9 @@ class CardImg():
         self.window.blit(self.front_img, (x, y))
         self.window.blit(self.missing_overlay, (x, y))
         self.window.blit(self.red_cross, (x, y))
+
+    def draw_icon(self, x, y, width, height):
+        """Draw card at specified position and size (for use in dialogue boxes)."""
+        # Scale the front image to the requested size
+        scaled_img = pygame.transform.smoothscale(self.front_img, (int(width), int(height)))
+        self.window.blit(scaled_img, (x, y))

@@ -253,11 +253,14 @@ class Figure(db.Model):
     player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)
     game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False)
     family_name = db.Column(db.String(50), nullable=False)
+    field = db.Column(db.String(20), nullable=True)  # castle, village, or military
     color = db.Column(db.String(20), nullable=False)
     name = db.Column(db.String(50), nullable=False)
     suit = db.Column(db.String(20), nullable=False)
     description = db.Column(db.String(255), nullable=True)
     upgrade_family_name = db.Column(db.String(50), nullable=True)
+    produces = db.Column(db.JSON, nullable=True)  # Resources produced
+    requires = db.Column(db.JSON, nullable=True)  # Resources required
     cards = db.relationship('CardToFigure', backref='figure', lazy=True)
     date_created = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -267,11 +270,14 @@ class Figure(db.Model):
             'player_id': self.player_id,
             'game_id': self.game_id,
             'family_name': self.family_name,
+            'field': self.field,
             'color': self.color,
             'name': self.name,
             'suit': self.suit,
             'description': self.description,
             'upgrade_family_name': self.upgrade_family_name,
+            'produces': self.produces or {},
+            'requires': self.requires or {},
             'cards': [card.serialize() for card in self.cards],
             'date_created': self.date_created.isoformat(),
         }

@@ -39,6 +39,7 @@ HOME_BUTTON_Y = int(0.04 * SCREEN_HEIGHT)
 # GAME BUTTON
 GAME_BUTTON_SYMBOL_IMG_PATH = 'img/game_button/symbol/'
 GAME_BUTTON_GLOW_IMG_PATH = 'img/game_button/glow/'
+GAME_BUTTON_GLOW_RECT_IMG_PATH = 'img/game_button/glow_rect/'
 GAME_BUTTON_STONE_IMG_PATH = 'img/game_button/stone/'
 
 GAME_BUTTON_TEXT_COLOR_ACTIVE = (250, 221, 0) #(20, 20, 20)

@@ -13,11 +13,15 @@ from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.log_screen import LogScreen
 from game.screens.field_screen import FieldScreen
 from game.screens.cast_spell_screen import CastSpellScreen
+from game.components.figures.figure_manager import FigureManager
 
 
 class GameScreen(Screen):
     def __init__(self, state):
         super().__init__(state)
+
+        # Initialize figure manager
+        self.figure_manager = FigureManager()
 
         # Initialize hands for the game (main and side hands)
         self.main_hand = Hand(self.window, self.state.game, x=settings.MAIN_HAND_X, y=settings.MAIN_HAND_Y)
@@ -29,8 +33,7 @@ class GameScreen(Screen):
 
         self.display_elements = []
         self.initialiaze_scoareboard_scroll()
-        self.initialize_info_scroll_resources()
-        self.initialize_info_scroll_slots()
+        self.initialize_info_scroll()
 
         # Define which screen is visible, allowing flexibility in switching between subscreens
         #self.active_subscreen = 'build_figure'
@@ -55,42 +58,28 @@ class GameScreen(Screen):
         self.display_elements.append(scoreboard_scroll)
 
 
-    def initialize_info_scroll_resources(self):
-        """Initialize resources for the info scroll."""
-        resources_df = pd.DataFrame({
-            'element': ['food', 'amor', 'material'],
-            'icon_img_red': [settings.RESOURCE_ICON_IMG_PATH_DICT['rice'], settings.RESOURCE_ICON_IMG_PATH_DICT['sword'], settings.RESOURCE_ICON_IMG_PATH_DICT['wood']],
-            'icon_img_black': [settings.RESOURCE_ICON_IMG_PATH_DICT['meat'], settings.RESOURCE_ICON_IMG_PATH_DICT['shield'], settings.RESOURCE_ICON_IMG_PATH_DICT['stone']],
-            'red': [3, 7, 5],
-            'black': [0, 0, 6],
+    def initialize_info_scroll(self):
+        """Initialize merged info scroll with resources and slots (excluding castle)."""
+        info_df = pd.DataFrame({
+            'element': ['village', 'military', 'food', 'material', 'amor'],
+            'icon_img': [
+                settings.SLOT_ICON_IMG_PATH_DICT['village'],
+                settings.SLOT_ICON_IMG_PATH_DICT['military'],
+                settings.RESOURCE_ICON_IMG_PATH_DICT['rice_meat'],
+                settings.RESOURCE_ICON_IMG_PATH_DICT['wood_stone'],
+                settings.RESOURCE_ICON_IMG_PATH_DICT['sword_shield'],
+            ],
+            'red': ["0/0", "0/0", "0/0", "0/0", "0/0"],
+            'black': ["0/0", "0/0", "0/0", "0/0", "0/0"],
         })
         info_scroll = InfoScroll(
-            self.window, 
-            settings.INFO_SCROLL_RESOURCES_X, 
-            settings.INFO_SCROLL_RESOURCES_Y, 
-            settings.INFO_SCROLL_WIDTH, 
-            settings.INFO_SCROLL_HEIGHT, 
-            'Resources', 
-            resources_df, 
-            settings.INFO_SCROLL_BG_IMG_PATH)
-        self.display_elements.append(info_scroll)
-
-    def initialize_info_scroll_slots(self):
-        """Initialize slots for the info scroll."""
-        slots_df = pd.DataFrame({
-            'element': ['castle', 'village', 'military'],
-            'icon_img': [settings.SLOT_ICON_IMG_PATH_DICT['castle'], settings.SLOT_ICON_IMG_PATH_DICT['village'], settings.SLOT_ICON_IMG_PATH_DICT['military']],
-            'red': ["0/3", "0/0", "0/0"],
-            'black': ["2/4", "1/2", "1/1"],
-        })
-        info_scroll = InfoScroll(
-            self.window, 
-            settings.INFO_SCROLL_SLOTS_X, 
-            settings.INFO_SCROLL_SLOTS_Y, 
-            settings.INFO_SCROLL_WIDTH, 
-            settings.INFO_SCROLL_HEIGHT, 
-            'Slots', 
-            slots_df, 
+            self.window,
+            settings.INFO_SCROLL_X,
+            settings.INFO_SCROLL_Y,
+            settings.INFO_SCROLL_WIDTH,
+            settings.INFO_SCROLL_HEIGHT,
+            'Resources',
+            info_df,
             settings.INFO_SCROLL_BG_IMG_PATH)
         self.display_elements.append(info_scroll)
 
@@ -227,7 +216,11 @@ class GameScreen(Screen):
         self.main_hand.update(self.state.game)
         self.side_hand.update(self.state.game)
         for elem in self.display_elements:
-            elem.update(self.state.game)
+            # Pass families to info scroll for resource calculation
+            if isinstance(elem, InfoScroll):
+                elem.update(self.state.game, families=self.figure_manager.families)
+            else:
+                elem.update(self.state.game)
 
     def render(self):
         """Render the game screen, buttons, and active subscreen."""
@@ -255,6 +248,22 @@ class GameScreen(Screen):
 
         # Render any general elements (e.g., dialogue box) from the parent class
         super().render()
+
+        # Render figure detail box on top of everything (if open)
+        if (self.state.subscreen == 'field' and 
+            self.state.subscreen in self.subscreens and 
+            self.subscreens[self.state.subscreen] and
+            hasattr(self.subscreens[self.state.subscreen], 'figure_detail_box') and
+            self.subscreens[self.state.subscreen].figure_detail_box):
+            self.subscreens[self.state.subscreen].figure_detail_box.draw()
+        
+        # Render dialogue box on top of everything (if open)
+        if (self.state.subscreen == 'field' and 
+            self.state.subscreen in self.subscreens and 
+            self.subscreens[self.state.subscreen] and
+            hasattr(self.subscreens[self.state.subscreen], 'dialogue_box') and
+            self.subscreens[self.state.subscreen].dialogue_box):
+            self.subscreens[self.state.subscreen].dialogue_box.draw()
 
         # Update the display
         pygame.display.update()

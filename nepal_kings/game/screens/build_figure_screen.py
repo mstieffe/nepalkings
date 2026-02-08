@@ -2,11 +2,9 @@ import pygame
 from pygame.locals import *
 from collections import Counter
 from config import settings
-from game.components.suit_icon_button import SuitIconButton
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
-from utils.utils import get_opp_color
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
 
@@ -23,20 +21,23 @@ class BuildFigureScreen(SubScreen):
         self.state = state
         self.game = state.game
 
+        # Map display names to internal color names
+        self.color_mapping = {
+            'Djungle': 'offensive',
+            'Himalaya': 'defensive'
+        }
+
         # Initialize buttons and UI components
         self.init_figure_info_box()
         self.init_color_buttons()
-        self.init_suit_icon_buttons()
         self.init_figure_family_icons()
         self.init_scroll_test_list_shifter()
 
-        self.color = "offensive"
-        self.suit = None
+        self.color = "Djungle"
 
-        # Store selected figures and suits
+        # Store selected figures
         self.selected_figure_family = None
         self.selected_figures = []
-        self.selected_suits = []
 
         self.confirm_button = ConfirmButton(
             self.window,
@@ -98,31 +99,35 @@ class BuildFigureScreen(SubScreen):
 
 
     def init_figure_family_icons(self):
-        """Initialize figure family icons and their shifters."""
-        self.figure_family_buttons = {
-            'offensive': [
-                family.make_icon(
-                    self.window,
-                    self.game,
-                    family.build_position[0],
-                    family.build_position[1]
+        """Initialize figure family icons and their shifters.
+        
+        For castle families, only show the King icon (not Maharaja).
+        """
+        self.figure_family_buttons = {}
+        
+        for color in ['offensive', 'defensive']:
+            families = self.figure_manager.families_by_color[color]
+            buttons = []
+            
+            for family in families:
+                # Skip Maharaja families - only show King families
+                if 'Maharaja' in family.name:
+                    continue
+                
+                buttons.append(
+                    family.make_icon(
+                        self.window,
+                        self.game,
+                        family.build_position[0],
+                        family.build_position[1]
+                    )
                 )
-                for family in self.figure_manager.families_by_color['offensive']
-            ],
-            'defensive': [
-                family.make_icon(
-                    self.window,
-                    self.game,
-                    family.build_position[0],
-                    family.build_position[1]
-                )
-                for family in self.figure_manager.families_by_color['defensive']
-            ]
-        }
+            
+            self.figure_family_buttons[color] = buttons
 
     def init_color_buttons(self):
         """Initialize color buttons."""
-        colors = ['offensive', 'defensive']
+        colors = ['Djungle', 'Himalaya']
         self.color_buttons = [
             super(BuildFigureScreen, self).make_button(
                 color,
@@ -155,33 +160,6 @@ class BuildFigureScreen(SubScreen):
             (settings.BUILD_HIERARCHY_WIDTH, settings.BUILD_HIERARCHY_HEIGHT)
         )
 
-    def init_suit_icon_buttons(self):
-        """Initialize suit icon buttons."""
-        button_coords = [
-            (settings.BUILD_FIGURE_SUIT1_X, settings.BUILD_FIGURE_SUIT1_Y),
-            (settings.BUILD_FIGURE_SUIT2_X, settings.BUILD_FIGURE_SUIT2_Y),
-            (settings.BUILD_FIGURE_SUIT3_X, settings.BUILD_FIGURE_SUIT3_Y),
-            (settings.BUILD_FIGURE_SUIT4_X, settings.BUILD_FIGURE_SUIT4_Y)
-        ]
-
-        self.offensive_suit_buttons = {
-            'hearts': SuitIconButton(self.window, self.game, 'hearts', *button_coords[0]),
-            'diamonds': SuitIconButton(self.window, self.game, 'diamonds', *button_coords[1])
-        }
-        self.defensive_suit_buttons = {
-            'spades': SuitIconButton(self.window, self.game, 'spades', *button_coords[2]),
-            'clubs': SuitIconButton(self.window, self.game, 'clubs', *button_coords[3])
-        }
-        self.suit_buttons_dict = {
-            'offensive': list(self.offensive_suit_buttons.values()),
-            'defensive': list(self.defensive_suit_buttons.values())
-        }
-
-        for button in self.offensive_suit_buttons.values():
-            button.clicked = True
-
-        self.suit_buttons = list(self.offensive_suit_buttons.values()) + list(self.defensive_suit_buttons.values())
-
     def update(self, game):
         """Update the game state and button components."""
         super().update(game)
@@ -192,9 +170,11 @@ class BuildFigureScreen(SubScreen):
         else:
             self.confirm_button.disabled = True
 
-        for button in self.suit_buttons:
-            button.update(game)
-        for button in self.figure_family_buttons[self.color]:
+        # Update icon states based on available cards
+        self.update_family_icon_states()
+
+        internal_color = self.color_mapping.get(self.color, self.color)
+        for button in self.figure_family_buttons[internal_color]:
             button.update()
 
         if self.scroll_text_list_shifter:
@@ -202,13 +182,21 @@ class BuildFigureScreen(SubScreen):
             if selected_figure:
                 self.confirm_button.update()
 
+    def update_family_icon_states(self):
+        """Update the active state of family icons based on whether they can be built."""
+        for color in ['offensive', 'defensive']:
+            for button in self.figure_family_buttons[color]:
+                # Check if any figure in this family can be built with current hand
+                buildable_figures = self.get_figures_in_hand(button.family)
+                # Set active state: true if at least one figure can be built
+                button.is_active = len(buildable_figures) > 0
+
     def handle_events(self, events):
         """Handle events for button interactions."""
         super().handle_events(events)
 
-        for button in self.suit_buttons:
-            button.handle_events(events)
-        for button in self.figure_family_buttons[self.color]:
+        internal_color = self.color_mapping.get(self.color, self.color)
+        for button in self.figure_family_buttons[internal_color]:
             button.handle_events(events)
 
         if self.scroll_text_list_shifter:
@@ -247,7 +235,8 @@ class BuildFigureScreen(SubScreen):
                         #self.create_figure_in_db(selected_figure)
 
                         # get figure family button of selected figure
-                        for button in self.figure_family_buttons[self.color]:
+                        internal_color = self.color_mapping.get(self.color, self.color)
+                        for button in self.figure_family_buttons[internal_color]:
                             if button.family == selected_figure.family:
                                 selected_family_button = button
                                 break
@@ -278,11 +267,8 @@ class BuildFigureScreen(SubScreen):
                         if button.collide():
                             self.update_color_selection(button)
 
-                    for button in self.suit_buttons:
-                        if button.collide():
-                            self.update_suit_selection(button)
-
-                    for button in self.figure_family_buttons[self.color]:
+                    internal_color = self.color_mapping.get(self.color, self.color)
+                    for button in self.figure_family_buttons[internal_color]:
                         if button.collide():
                             self.update_figure_family_selection(button)
 
@@ -292,28 +278,15 @@ class BuildFigureScreen(SubScreen):
             other_button.active = False
         button.active = True
         self.color = button.text
-        self.suit = None
-        for other_button in self.suit_buttons_dict[get_opp_color(self.color)]:
-            other_button.clicked = False
-        for other_button in self.suit_buttons_dict[self.color]:
-            other_button.clicked = True
-
-    def update_suit_selection(self, button):
-        """Update suit selection when a suit button is clicked."""
-        if self.color != settings.SUIT_TO_COLOR[button.suit]:
-            for other_button in self.color_buttons:
-                other_button.active = not other_button.active
-        self.suit = button.suit
-        self.color = settings.SUIT_TO_COLOR[self.suit]
-        for other_button in self.suit_buttons_dict[get_opp_color(self.color)]:
-            other_button.clicked = False
 
     def update_figure_family_selection(self, button):
         """Update figure family selection."""
         self.selected_figure_family = button.family
-        for other_button in self.figure_family_buttons[self.color]:
+        internal_color = self.color_mapping.get(self.color, self.color)
+        for other_button in self.figure_family_buttons[internal_color]:
             other_button.clicked = False
         button.clicked = True
+        
         figures = self.get_figures_in_hand(button.family)
         if figures:
             self.selected_figures = figures
@@ -339,9 +312,8 @@ class BuildFigureScreen(SubScreen):
 
         self.window.blit(self.build_hierarchy, (settings.BUILD_HIERARCHY_X, settings.BUILD_HIERARCHY_Y))
 
-        for button in self.suit_buttons:
-            button.draw()
-        for button in self.figure_family_buttons[self.color]:
+        internal_color = self.color_mapping.get(self.color, self.color)
+        for button in self.figure_family_buttons[internal_color]:
             button.draw()
 
         if self.scroll_text_list_shifter:
@@ -354,6 +326,7 @@ class BuildFigureScreen(SubScreen):
     def map_figure_cards_to_hand(self, figure):
         """
         Map dummy cards in the figure to real cards in the player's hand.
+        Handles duplicate cards correctly by tracking which cards have been used.
 
         :param figure: The Figure object with dummy cards.
         :return: A list of real Card objects mapped from the player's hand.
@@ -361,13 +334,21 @@ class BuildFigureScreen(SubScreen):
         main_cards, side_cards = self.game.get_hand()
         hand_cards = main_cards + side_cards
 
-        # Create a mapping of card tuples to real Card instances
-        hand_card_map = {card.to_tuple(): card for card in hand_cards}
+        # Create a list of available cards (will remove as we use them)
+        available_cards = hand_cards.copy()
 
         # Map figure cards to real cards in the hand
         real_cards = []
         for dummy_card in figure.cards:
-            real_card = hand_card_map.get(dummy_card.to_tuple())
+            # Find the first matching card in available_cards
+            real_card = None
+            for i, card in enumerate(available_cards):
+                if card.to_tuple() == dummy_card.to_tuple():
+                    real_card = card
+                    # Remove this card from available so we don't use it twice
+                    available_cards.pop(i)
+                    break
+            
             if real_card:
                 real_cards.append(real_card)
             else:

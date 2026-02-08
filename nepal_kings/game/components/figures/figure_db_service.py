@@ -70,30 +70,39 @@ class FigureDbService:
                 "id": card.id,
                 "type": "main" if card.is_main_card else "side",
                 "role": "key" if card in figure.key_cards else
-                        ("number" if card == figure.number_card else
-                        "upgrade" if card == figure.upgrade_card else None)
+                        ("number" if card == figure.number_card else None)
             }
-            for card in figure.cards
+            for card in figure.cards if card.id
         ]
 
         # Extract fields from the figure
         family_name = figure.family.name
+        field = figure.family.field
         color = figure.family.color
         name = figure.name
         suit = figure.suit
         description = figure.description
         upgrade_family_name = figure.upgrade_family_name
+        produces = figure.produces
+        requires = figure.requires
+
+        if settings.DEBUG_ENABLED:
+            with open(settings.DEBUG_LOG_PATH, 'a') as f:
+                f.write(f"[CLIENT] Saving figure {name}: produces={produces}, requires={requires}\n")
 
         # Call create_figure with individual arguments
         return create_figure(
             player_id=player_id,
             game_id=game_id,
             family_name=family_name,
+            field=field,
             color=color,
             name=name,
             suit=suit,
             description=description,
             upgrade_family_name=upgrade_family_name,
+            produces=produces,
+            requires=requires,
             cards=serialized_cards
         )
 
@@ -110,8 +119,7 @@ class FigureDbService:
                 'id': card.id,
                 'type': 'main' if card.is_main_card else 'side',
                 'role': 'key' if card in figure.key_cards else
-                        'number' if card == figure.number_card else
-                        'upgrade' if card == figure.upgrade_card else None
+                        'number' if card == figure.number_card else None
             }
             for card in figure.cards if card.id
         ]
@@ -158,6 +166,32 @@ class FigureDbService:
             number_card = cards.get('number', [None])[0] if cards.get('number') else None
             upgrade_card = cards.get('upgrade', [None])[0] if cards.get('upgrade') else None
 
+            # If upgrade_card is not in the saved cards, try to get it from the family definition
+            # Match this figure to the correct variant in the family to get upgrade_card
+            if not upgrade_card and figure_data.get('upgrade_family_name'):
+                # Find matching figure in family definitions
+                for family_figure in family.figures:
+                    # Match by suit and cards
+                    if (family_figure.suit == figure_data['suit'] and 
+                        len(family_figure.key_cards) == len(key_cards)):
+                        # Check if key cards match
+                        key_cards_match = all(
+                            any(kc.rank == fkc.rank and kc.suit == fkc.suit 
+                                for fkc in family_figure.key_cards)
+                            for kc in key_cards
+                        )
+                        # Check if number cards match (if present)
+                        number_cards_match = True
+                        if number_card and family_figure.number_card:
+                            number_cards_match = (number_card.rank == family_figure.number_card.rank and
+                                                number_card.suit == family_figure.number_card.suit)
+                        elif number_card or family_figure.number_card:
+                            number_cards_match = False
+                        
+                        if key_cards_match and number_cards_match:
+                            upgrade_card = family_figure.upgrade_card
+                            break
+
             # Create the figure
             figure = Figure(
                 name=figure_data['name'],
@@ -169,7 +203,10 @@ class FigureDbService:
                 upgrade_card=upgrade_card,
                 description=figure_data.get('description', ""),
                 upgrade_family_name=figure_data.get('upgrade_family_name'),
+                produces=figure_data.get('produces', {}),
+                requires=figure_data.get('requires', {}),
                 id=figure_data['id'],
+                player_id=figure_data.get('player_id'),
             )
 
             return figure

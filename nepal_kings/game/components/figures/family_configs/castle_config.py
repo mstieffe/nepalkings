@@ -23,7 +23,8 @@ castle_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("K", suit, 4)]
+                key_cards=[Card("K", suit, 4)],
+                produces={'villager_black': 1, 'warrior_black': 1}
             )
         ]
     },
@@ -46,7 +47,8 @@ castle_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("K", suit, 4)]
+                key_cards=[Card("K", suit, 4)],
+                produces={'villager_black': 2, 'warrior_black': 1}
             )
         ]
     },
@@ -70,7 +72,8 @@ castle_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("K", suit, 4)]
+                key_cards=[Card("K", suit, 4)],
+                produces={'villager_red': 1, 'warrior_red': 1}
             )
         ]
     },
@@ -93,7 +96,8 @@ castle_dict_list = [
                 sub_name=f"{suit}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("K", suit, 4)]
+                key_cards=[Card("K", suit, 4)],
+                produces={'villager_red': 2, 'warrior_red': 1}
             )
         ]
     }
