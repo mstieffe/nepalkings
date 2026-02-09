@@ -105,6 +105,9 @@ class ScrollTextListShifter:
             missing_cards = text_dict.get('missing_cards', [])
             total_cards = cards + missing_cards
 
+            # Use object IDs for missing cards to avoid equality comparisons
+            missing_card_ids = {id(card) for card in missing_cards}
+
             num_cards = len(total_cards)
             spacer = settings.MINI_CARD_WIDTH * (0.1 if num_cards > 2 else 0.4)
             total_width = num_cards * settings.MINI_CARD_WIDTH + (num_cards - 1) * spacer
@@ -112,7 +115,7 @@ class ScrollTextListShifter:
             card_x = x + (max_width - total_width) // 2
             for card in total_cards:
                 card_img = self.card_imgs.get((card.suit, card.rank))
-                if card in missing_cards:
+                if id(card) in missing_card_ids:
                     card_img.draw_missing(card_x, y)
                 else:
                     card_img.draw_front_bright(card_x, y)

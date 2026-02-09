@@ -7,6 +7,7 @@ from config.game_settings import *
 from config.server_settings import *
 from config.card_settings import *
 from config.figure_settings import *
+from config.spell_settings import *
 from config.font_settings import *
 from config.button_settings import *
 from config.colour_settings import *
