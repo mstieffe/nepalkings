@@ -126,23 +126,57 @@ class DialogueBox:
 
         # Draw scaled images horizontally
         if self.scaled_images or self.drawable_objects:
-            total_width = sum(img.get_width() for img in self.scaled_images) + \
-                          (len(self.scaled_images) - 1) * settings.SMALL_SPACER_X
-            for obj in self.drawable_objects:
-                total_width += settings.DIALOGUE_BOX_IMG_HEIGHT + settings.SMALL_SPACER_X
+            # Calculate maximum available width for images (leave margin on sides)
+            max_images_width = settings.DIALOGUE_BOX_WIDTH - 2 * settings.SMALL_SPACER_X
+            
+            # Calculate total number of items and their widths
+            num_images = len(self.scaled_images) + len(self.drawable_objects)
+            image_widths = [img.get_width() for img in self.scaled_images] + \
+                          [settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT] * len(self.drawable_objects)
+            
+            # Calculate natural total width with normal spacing
+            natural_total_width = sum(image_widths) + (num_images - 1) * settings.SMALL_SPACER_X
+            
+            image_y = current_y + len(self.lines_surfaces) * (self.font.get_height() + settings.SMALL_SPACER_Y)
+            
+            if natural_total_width <= max_images_width:
+                # Images fit normally - use natural spacing
+                image_x_start = self.rect.centerx - natural_total_width // 2
+                
+                # Draw scaled pygame.Surface images
+                for img in self.scaled_images:
+                    self.window.blit(img, (image_x_start, image_y))
+                    image_x_start += img.get_width() + settings.SMALL_SPACER_X
 
-            image_x_start = self.rect.centerx - total_width // 2
-            image_y = current_y + len(self.lines_surfaces) * (self.font.get_height() + settings.SMALL_SPACER_Y) #+ settings.SMALL_SPACER_Y
-
-            # Draw scaled pygame.Surface images
-            for img in self.scaled_images:
-                self.window.blit(img, (image_x_start, image_y))
-                image_x_start += img.get_width() + settings.SMALL_SPACER_X
-
-            # Draw objects with a custom draw_icon method
-            for obj in self.drawable_objects:
-                obj.draw_icon(image_x_start, image_y, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
-                image_x_start += settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT + settings.SMALL_SPACER_X
+                # Draw objects with a custom draw_icon method
+                for obj in self.drawable_objects:
+                    obj.draw_icon(image_x_start, image_y, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
+                    image_x_start += settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT + settings.SMALL_SPACER_X
+            else:
+                # Images need to overlap - calculate dynamic spacing
+                total_images_width = sum(image_widths)
+                
+                if num_images == 1:
+                    # Single image - center it
+                    spacing = 0
+                    image_x_start = self.rect.centerx - image_widths[0] // 2
+                else:
+                    # Multiple images - distribute with overlap across max width
+                    # Calculate spacing (may be negative for overlap)
+                    spacing = (max_images_width - image_widths[-1]) / (num_images - 1)
+                    # Start position so images span max_images_width centered
+                    image_x_start = self.rect.centerx - max_images_width // 2
+                
+                # Draw all images with calculated spacing
+                all_images = list(self.scaled_images) + list(self.drawable_objects)
+                for i, item in enumerate(all_images):
+                    x_pos = image_x_start + i * spacing
+                    
+                    if isinstance(item, pygame.Surface):
+                        self.window.blit(item, (x_pos, image_y))
+                    else:
+                        # Drawable object
+                        item.draw_icon(x_pos, image_y, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
 
         # Draw the buttons
         for button in self.buttons:

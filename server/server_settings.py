@@ -10,7 +10,7 @@ DEBUG_ENABLED = os.getenv('DEBUG_ENABLED', 'False').lower() == 'true'
 DEBUG_LOG_PATH = os.getenv('DEBUG_LOG_PATH', '/tmp/nepalkings_debug.log')
 
 # Game Logic
-NUM_MAIN_CARDS_START = 12
+NUM_MAIN_CARDS_START = 5
 NUM_SIDE_CARDS_START = 4
 
 INITIAL_TURNS = 4

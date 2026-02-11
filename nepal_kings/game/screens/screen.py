@@ -90,6 +90,8 @@ class Screen:
                     self.state.screen = "login"
                     self.reset_action()
                     self.state.user = None
+                    self.state.user_dict = None
+                    self.state.game = None  # Clear game object to prevent stale state
                     self.state.set_msg("Logged out")
                 elif self.home_button.collide():
                     self.state.screen = "game_menu"

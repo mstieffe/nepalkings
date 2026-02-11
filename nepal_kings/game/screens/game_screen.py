@@ -43,6 +43,17 @@ class GameScreen(Screen):
             'cast_spell': CastSpellScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Spell Book'),
             'log': LogScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Log-Book'),
         }
+        
+        # Track previous subscreen to detect changes
+        self.previous_subscreen = None
+        
+        # Track last processed log entry to detect new spell notifications
+        self.last_processed_log_id = None
+    
+    def make_dialogue_box(self, message, actions=None, images=None, icon=None, title=""):
+        """Create a dialogue box with specified message, actions, images, and icon."""
+        from game.components.dialogue_box import DialogueBox
+        self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title)
 
     def initialiaze_scoareboard_scroll(self):
         """Initialize resources for the info scroll."""
@@ -212,19 +223,98 @@ class GameScreen(Screen):
 
     def update_game(self):
         """Update the game state and related components."""
+        # Check if game exists (may be None after logout)
+        if not self.state.game:
+            return
+        
+        # Check if subscreen changed - if so, deselect all cards
+        if self.previous_subscreen != self.state.subscreen:
+            self.main_hand.deselect_all_cards()
+            self.side_hand.deselect_all_cards()
+            self.previous_subscreen = self.state.subscreen
+        
         self.state.game.update()
+        
+        # Check for opponent spell notifications (like Dump Cards)
+        self.check_opponent_spell_notifications()
+        
         self.main_hand.update(self.state.game)
         self.side_hand.update(self.state.game)
+        
+        # Check if player needs to discard cards due to exceeding max hand size
+        # Only check if it's the player's turn and they're not already in discard mode
+        if self.state.game.turn and not self.main_hand.discard_mode and not self.side_hand.discard_mode:
+            if self.main_hand.needs_discard():
+                excess = self.main_hand.get_excess_card_count()
+                self.main_hand.start_discard_mode(excess)
+            elif self.side_hand.needs_discard():
+                excess = self.side_hand.get_excess_card_count()
+                self.side_hand.start_discard_mode(excess)
+        
         for elem in self.display_elements:
             # Pass families to info scroll for resource calculation
             if isinstance(elem, InfoScroll):
                 elem.update(self.state.game, families=self.figure_manager.families)
             else:
                 elem.update(self.state.game)
+    
+    def check_opponent_spell_notifications(self):
+        """Check for spells cast by opponent that should trigger notifications."""
+        if not self.state.game or not self.state.game.log_entries:
+            return
+        
+        # Get most recent log entry
+        recent_logs = sorted(self.state.game.log_entries, key=lambda x: x.get('id', 0), reverse=True)
+        if not recent_logs:
+            return
+        
+        latest_log = recent_logs[0]
+        log_id = latest_log.get('id')
+        
+        # Skip if we've already processed this log entry
+        if log_id == self.last_processed_log_id:
+            return
+        
+        self.last_processed_log_id = log_id
+        
+        # Check if this log entry is about a spell cast by the opponent
+        log_type = latest_log.get('type', '')
+        log_message = latest_log.get('message', '')
+        player_id = latest_log.get('player_id')
+        
+        # Only show notification if it was cast by opponent
+        if player_id == self.state.game.player_id:
+            return
+        
+        # Check for Dump Cards spell
+        if log_type == 'spell_cast' and 'Dump Cards' in log_message:
+            # Show notification to opponent with their new cards
+            main_cards, side_cards = self.state.game.get_hand()
+            
+            # Create card images from current hand
+            from game.components.cards.card_img import CardImg
+            card_images = []
+            for card in main_cards + side_cards:
+                card_img = CardImg(self.window, card.suit, card.rank)
+                card_images.append(card_img.front_img)
+            
+            # Show dialogue box
+            self.make_dialogue_box(
+                message=f"{self.state.game.opponent_name} cast Dump Cards! All hands were dumped. You drew:",
+                actions=['ok'],
+                images=card_images,
+                icon="loot",
+                title="Opponent Cast Spell"
+            )
 
     def render(self):
         """Render the game screen, buttons, and active subscreen."""
         self.window.fill(settings.BACKGROUND_COLOR)
+
+        # Check if game exists (may be None after logout)
+        if not self.state.game:
+            pygame.display.update()
+            return
 
         for element in self.display_elements:
             element.draw()
@@ -274,6 +364,10 @@ class GameScreen(Screen):
         """Update the game screen and all relevant components."""
         super().update()
 
+        # Check if game exists (may be None after logout)
+        if not self.state.game:
+            return
+
         # Throttle updates to avoid constant re-rendering
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:
@@ -285,7 +379,18 @@ class GameScreen(Screen):
 
     def handle_events(self, events):
         """Handle user input events (e.g., clicks, key presses)."""
+        # Handle dialogue box first if present
+        if self.dialogue_box:
+            response = self.dialogue_box.update(events)
+            if response:
+                self.dialogue_box = None  # Close dialogue box
+                return  # Don't process other events while dialogue is open
+        
         super().handle_events(events)
+
+        # Check if game exists (may be None after logout)
+        if not self.state.game:
+            return
 
         # Handle events for the main and side hands
         self.main_hand.handle_events(events)

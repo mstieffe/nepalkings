@@ -6,6 +6,7 @@ from game.screens.sub_screen import SubScreen
 from game.components.spells.spell_manager import SpellManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
+from utils import spell_service
 
 
 class CastSpellScreen(SubScreen):
@@ -38,56 +39,119 @@ class CastSpellScreen(SubScreen):
     
     def cast_spell_in_db(self, selected_spell):
         """
-        Cast the selected spell.
-        
-        TODO: Implement spell casting logic:
-        - Map dummy cards to real cards in hand
-        - Execute spell effect based on spell type
-        - Handle target selection if required
-        - Update game state
-        - Save to database if needed
+        Cast the selected spell using the spell service.
+        Maps dummy cards to real cards and sends to server.
         """
         # Map dummy cards in the spell to real cards in the player's hand
         real_cards = self.map_spell_cards_to_hand(selected_spell)
         
         if real_cards is None:
-            print(f"Failed to cast spell: Could not find all cards in the player's hand.")
+            self.make_dialogue_box(
+                message="Could not find all required cards in your hand.",
+                actions=['got it!'],
+                icon="error",
+                title="Casting Failed"
+            )
             return
         
-        # Update the selected spell with real cards
-        selected_spell.cards = real_cards
-        selected_spell.key_cards = [card for card in real_cards if card in selected_spell.key_cards]
+        # TODO: If spell requires target, show target selection UI here
+        target_figure_id = None
+        if selected_spell.requires_target:
+            # For now, we'll skip target selection
+            # This will need to be implemented based on target_type
+            pass
         
-        if selected_spell.number_card is not None:
-            selected_spell.number_card = next(
-                (card for card in real_cards if card == selected_spell.number_card),
-                None
-            )
+        # Prepare card data for server
+        cards_data = [{
+            'id': card.id,
+            'rank': card.rank,
+            'suit': card.suit,
+            'value': card.value
+        } for card in real_cards]
         
-        if selected_spell.upgrade_card is not None:
-            selected_spell.upgrade_card = next(
-                (card for card in real_cards if card == selected_spell.upgrade_card),
-                None
-            )
-        
-        # Execute spell effect
-        # TODO: Implement actual spell execution logic
-        result = selected_spell.execute(self.game)
+        # Call spell service to cast the spell
+        result = spell_service.cast_spell(
+            player_id=self.game.player_id,
+            game_id=self.game.game_id,
+            spell_name=selected_spell.name,
+            spell_type=selected_spell.family.type,
+            spell_family_name=selected_spell.family.name,
+            suit=selected_spell.suit,
+            cards=cards_data,
+            target_figure_id=target_figure_id,
+            counterable=selected_spell.counterable
+        )
         
         if result.get('success'):
-            print(f"Spell {selected_spell.name} cast successfully!")
-            # Add log entry
-            self.game.add_log_entry(
-                self.game.current_round,
-                self.game.current_player.get('turns_left', 0),
-                f"{self.game.current_player.get('username', 'Player')} cast {selected_spell.name}",
-                self.game.current_player.get('username', 'Player'),
-                'spell_cast'
-            )
-        else:
-            print(f"Failed to cast spell: {result.get('message', 'Unknown error')}")
+            # Update game state from server response
+            if result.get('game'):
+                # You may need to refresh the Game object with the new data
+                # For now, just update via the existing update method
+                self.game.update()
+            
+            # Show success message with drawn cards (if any)
+            spell_effect = result.get('spell_effect', {})
+            drawn_cards_data = spell_effect.get('drawn_cards', [])
+            
+            # Create card images from drawn cards
+            card_images = []
+            if drawn_cards_data:
+                from game.components.cards.card import Card
+                for card_data in drawn_cards_data:
+                    card = Card(
+                        rank=card_data['rank'],
+                        suit=card_data['suit'],
+                        value=card_data['value'],
+                        id=card_data.get('id'),
+                        type=card_data.get('type')
+                    )
+                    card_img = card.make_icon(self.window, self.game, 0, 0)
+                    card_images.append(card_img.front_img)
+            
+            if selected_spell.counterable:
+                dialogue_params = {
+                    'message': f"{selected_spell.name} cast! Waiting for opponent to counter...",
+                    'actions': ['ok'],
+                    'icon': "loot",
+                    'title': "Spell Cast"
+                }
+                if card_images:
+                    dialogue_params['images'] = card_images
+                self.make_dialogue_box(**dialogue_params)
+            else:
+                # For non-counterable spells, show drawn cards if any
+                if card_images:
+                    self.make_dialogue_box(
+                        message=f"{selected_spell.name} cast successfully! You drew:",
+                        actions=['ok'],
+                        images=card_images,
+                        icon="loot",
+                        title="Spell Cast"
+                    )
+                else:
+                    self.make_dialogue_box(
+                        message=f"{selected_spell.name} cast successfully!",
+                        actions=['ok'],
+                        icon="loot",
+                        title="Spell Cast"
+                    )
+            
+            # Clear selections
+            self.selected_spell_family = None
+            if self.scroll_text_list_shifter:
+                self.scroll_text_list_shifter.set_displayed_texts([])
+            for button in self.spell_family_buttons:
+                button.clicked = False
         
-        self.game.update()
+        else:
+            # Show error message
+            error_msg = result.get('message', 'Unknown error')
+            self.make_dialogue_box(
+                message=f"Failed to cast spell: {error_msg}",
+                actions=['got it!'],
+                icon="error",
+                title="Casting Failed"
+            )
     
     def map_spell_cards_to_hand(self, spell):
         """
@@ -99,10 +163,13 @@ class CastSpellScreen(SubScreen):
         main_cards, side_cards = self.game.get_hand()
         hand_cards = main_cards + side_cards
         
-        # Count available cards in hand
+        # Filter to only cards belonging to this player
+        hand_cards = [card for card in hand_cards if card.player_id == self.game.player_id]
+        
+        # Count available cards in hand - use (suit, rank) format
         hand_counter = Counter((card.suit, card.rank) for card in hand_cards)
         
-        # Count required cards for spell
+        # Count required cards for spell - use (suit, rank) format
         spell_counter = Counter((card.suit, card.rank) for card in spell.cards)
         
         # Check if all spell cards are available in hand
@@ -110,15 +177,15 @@ class CastSpellScreen(SubScreen):
             if hand_counter[card_tuple] < count:
                 return None  # Not enough of this card in hand
         
-        # Map spell cards to hand cards
+        # Map spell cards to hand cards using indices to avoid __eq__ issues
         real_cards = []
-        hand_cards_copy = hand_cards.copy()
+        used_indices = set()
         
         for spell_card in spell.cards:
-            for hand_card in hand_cards_copy:
-                if (hand_card.suit, hand_card.rank) == (spell_card.suit, spell_card.rank):
+            for i, hand_card in enumerate(hand_cards):
+                if i not in used_indices and (hand_card.suit, hand_card.rank) == (spell_card.suit, spell_card.rank):
                     real_cards.append(hand_card)
-                    hand_cards_copy.remove(hand_card)
+                    used_indices.add(i)
                     break
         
         return real_cards if len(real_cards) == len(spell.cards) else None
@@ -222,6 +289,9 @@ class CastSpellScreen(SubScreen):
         main_cards, side_cards = self.game.get_hand()
         hand_cards = main_cards + side_cards
         
+        # Filter to only cards belonging to this player
+        hand_cards = [card for card in hand_cards if card.player_id == self.game.player_id]
+        
         castable_families = self.spell_manager.get_families_with_castable_spells(hand_cards)
         castable_family_names = {family.name for family in castable_families}
         
@@ -233,12 +303,38 @@ class CastSpellScreen(SubScreen):
         """Handle events for button interactions."""
         super().handle_events(events)
         
+        # If dialogue box is active, handle it first and skip other event handling
+        if self.dialogue_box:
+            response = self.dialogue_box.update(events)
+            if response:
+                if response == 'yes':
+                    # User confirmed spell casting
+                    self.dialogue_box = None
+                    if self.scroll_text_list_shifter:
+                        selected_spell = self.scroll_text_list_shifter.get_current_selected()
+                        if selected_spell:
+                            self.cast_spell_in_db(selected_spell)
+                
+                elif response == 'cancel':
+                    # User cancelled
+                    self.dialogue_box = None
+                
+                elif response == 'got it!':
+                    # Error message acknowledged
+                    self.dialogue_box = None
+                
+                elif response == 'ok':
+                    # Info message acknowledged
+                    self.dialogue_box = None
+            return  # Don't process other events when dialogue is active
+        
         # Handle spell family button clicks
         for button in self.spell_family_buttons:
             button.handle_events(events)
             
             if button.clicked and button.family != self.selected_spell_family:
-                # New family selected
+                # New family selected - refresh game state first
+                self.game.update()
                 self.selected_spell_family = button.family
                 
                 # Get castable spells
@@ -281,14 +377,36 @@ class CastSpellScreen(SubScreen):
                     if other_button != button:
                         other_button.clicked = False
         
-        # Handle confirm button
+        # Handle confirm button click
         for event in events:
-            if event.type == MOUSEBUTTONDOWN:
-                if self.confirm_button.collide() and not self.confirm_button.disabled:
-                    if self.scroll_text_list_shifter:
-                        selected_spell = self.scroll_text_list_shifter.get_current_selected()
-                        if selected_spell:
-                            self.cast_spell_in_db(selected_spell)
+                if event.type == MOUSEBUTTONDOWN:
+                    if self.confirm_button.collide() and not self.confirm_button.disabled:
+                        if self.scroll_text_list_shifter:
+                            selected_spell = self.scroll_text_list_shifter.get_current_selected()
+                            if selected_spell:
+                                # Refresh game state before casting
+                                self.game.update()
+                                # Show confirmation dialogue with spell icon and spell cards
+                                counterable_text = " (counterable)" if selected_spell.counterable else ""
+                                # Include spell family icon first, then the cards being spent
+                                card_img_objects = [card.make_icon(self.window, self.game, 0, 0) for card in selected_spell.cards]
+                                card_images = [self.selected_spell_family.icon_img] + [card_img.front_img for card_img in card_img_objects]
+                                self.make_dialogue_box(
+                                    message=f"Do you want to cast {selected_spell.name}?{counterable_text}",
+                                    actions=['yes', 'cancel'],
+                                    images=card_images,  # Show spell icon and cards being spent
+                                    icon="question",
+                                    title="Cast Spell"
+                                )
+                    
+                    elif self.confirm_button.collide() and self.confirm_button.disabled:
+                        # Inform user it's not their turn
+                        self.make_dialogue_box(
+                            message="You can only cast spells on your turn.",
+                            actions=['got it!'],
+                            icon="error",
+                            title="Not Your Turn"
+                        )
     
     def get_spells_in_hand(self, spell_family):
         """
@@ -300,13 +418,16 @@ class CastSpellScreen(SubScreen):
         main_cards, side_cards = self.game.get_hand()
         hand_cards = main_cards + side_cards
         
-        # Count available cards in hand
-        hand_counter = Counter(card.to_tuple() for card in hand_cards)
+        # Filter to only cards belonging to this player
+        hand_cards = [card for card in hand_cards if card.player_id == self.game.player_id]
+        
+        # Count available cards in hand - use (suit, rank) format
+        hand_counter = Counter((card.suit, card.rank) for card in hand_cards)
         
         castable_spells = []
         for spell in spell_family.spells:
-            # Count required cards for spell
-            spell_counter = Counter(card.to_tuple() for card in spell.cards)
+            # Count required cards for spell - use (suit, rank) format
+            spell_counter = Counter((card.suit, card.rank) for card in spell.cards)
             
             # Check if all spell cards are available in sufficient quantity
             can_cast = True
@@ -331,8 +452,11 @@ class CastSpellScreen(SubScreen):
         main_cards, side_cards = self.game.get_hand()
         hand_cards = main_cards + side_cards
         
-        # Count occurrences of each card in the hand
-        hand_counter = Counter(card.to_tuple() for card in hand_cards)
+        # Filter to only cards belonging to this player
+        hand_cards = [card for card in hand_cards if card.player_id == self.game.player_id]
+        
+        # Count occurrences of each card in the hand - use (suit, rank) format
+        hand_counter = Counter((card.suit, card.rank) for card in hand_cards)
         
         # Track how many of each card we've assigned to "given"
         assigned_counter = Counter()
@@ -342,7 +466,7 @@ class CastSpellScreen(SubScreen):
         
         # Iterate through spell cards in order and assign each to given or missing
         for card in spell.cards:
-            card_tuple = card.to_tuple()
+            card_tuple = (card.suit, card.rank)
             if assigned_counter[card_tuple] < hand_counter[card_tuple]:
                 # We have this card
                 given_cards.append(card)

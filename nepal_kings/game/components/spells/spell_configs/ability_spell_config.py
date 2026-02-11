@@ -14,6 +14,7 @@ Each spell family needs:
 - frame_hidden_img: Filename for hidden frame
 - glow_img: Filename for glow effect (e.g., 'yellow.png', 'blue.png')
 - spells: Function that generates spell instances
+  Enchantment spells should have counterable=False
 """
 
 from game.components.spells.spell import Spell
@@ -41,6 +42,7 @@ POISON_CONFIG = {
             suit=suit,
             key_cards=[Card('3', suit, 3), Card('3', suit, 3)],
             requires_target=True,
+            counterable=False,
         )
     ],  
 }
@@ -64,6 +66,7 @@ BOOST_CONFIG = {
             suit=suit,
             key_cards=[Card('3', suit, 3), Card('3', suit, 3)],
             requires_target=True,
+            counterable=False,
         )
     ],  
 }
@@ -88,6 +91,7 @@ EXPLOSION_CONFIG = {
             suit='Hearts',  # Primary suit for this variant
             key_cards=[Card('6', 'Hearts', 6), Card('6', 'Hearts', 6), Card('6', 'Diamonds', 6), Card('6', 'Diamonds', 6)],
             requires_target=True,
+            counterable=False,
         )
     ] if suit == "Hearts" else [
         Spell(
@@ -97,6 +101,7 @@ EXPLOSION_CONFIG = {
             suit='Spades',  # Primary suit for this variant
             key_cards=[Card('6', 'Spades', 6), Card('6', 'Spades', 6), Card('6', 'Clubs', 6), Card('6', 'Clubs', 6)],
             requires_target=True,
+            counterable=False,
         )
     ],  
 }
@@ -121,6 +126,7 @@ ALL_SEEING_EYE_CONFIG = {
             suit=suit,
             key_cards=[Card('9', suit, 9), Card('9', suit, 9)],
             requires_target=False,
+            counterable=False,
         )
     ],  
 }
@@ -145,6 +151,7 @@ INIFINITE_HAMMER_CONFIG = {
             suit=suit,
             key_cards=[Card('K', suit, 4)],
             requires_target=False,
+            counterable=False,
         )
     ],  
 }

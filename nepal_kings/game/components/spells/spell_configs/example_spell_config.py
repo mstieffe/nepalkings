@@ -14,6 +14,7 @@ Each spell family needs:
 - frame_hidden_img: Filename for hidden frame
 - glow_img: Filename for glow effect (e.g., 'yellow.png', 'blue.png')
 - spells: Function that generates spell instances
+  Each spell should have counterable=True for battle/tactics spells, False for others
 """
 
 from game.components.spells.spell import Spell
@@ -47,6 +48,7 @@ def create_draw_cards_spells(family, suit):
             key_cards=[key_card_1, key_card_2],
             number_card=key_card_1,  # The rank determines power
             requires_target=False,
+            counterable=False,  # greed spells are not counterable
         )
         spells.append(spell)
     
@@ -85,6 +87,7 @@ def create_strengthen_figure_spells(family, suit):
                 number_card=number_card,
                 requires_target=True,
                 target_type='own_figure',
+                counterable=False,  # enchantment spells are not counterable
             )
             spells.append(spell)
     
@@ -115,6 +118,7 @@ def create_change_battle_spells(family, suit):
             suit=suit,
             key_cards=[card],
             requires_target=False,
+            counterable=True,  # tactics spells are counterable
         )
         spells.append(spell)
     
@@ -145,6 +149,7 @@ DRAW_CARDS_CONFIG = {
             suit=suit,
             key_cards=[Card('8', suit, 8)],
             requires_target=False,
+            counterable=False,  # greed spells are not counterable
         )
     ],  
 }
