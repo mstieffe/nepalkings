@@ -14,6 +14,7 @@ Each spell family needs:
 - frame_hidden_img: Filename for hidden frame
 - glow_img: Filename for glow effect (e.g., 'yellow.png', 'blue.png')
 - spells: Function that generates spell instances
+  Battle/tactics spells should have counterable=True
 """
 
 from game.components.spells.spell import Spell
@@ -40,6 +41,7 @@ CIVIL_WAR_CONFIG = {
             suit=suit,
             key_cards=[Card('5', suit, 5), Card('5', suit, 5)],
             requires_target=True,
+            counterable=True,
         )
     ],  
 }
@@ -65,6 +67,7 @@ PEASANT_WAR_CONFIG = {
             suit=suit,
             key_cards=[Card('J', suit, 1), Card('J', suit, 1)],
             requires_target=True,
+            counterable=True,
         )
     ],  
 }
@@ -89,6 +92,7 @@ BLITZKRIEG_CONFIG = {
             suit=suit,
             key_cards=[Card('Q', suit, 2), Card('Q', suit, 2)],
             requires_target=True,
+            counterable=True,
         )
     ],  
 }
@@ -112,6 +116,7 @@ INVADER_SWAP_CONFIG = {
             suit=suit,
             key_cards=[Card('A', suit, 3), Card('A', suit, 3)],
             requires_target=True,
+            counterable=True,
         )
     ],  
 }

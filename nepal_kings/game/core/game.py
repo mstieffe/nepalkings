@@ -18,6 +18,14 @@ class Game:
         self.invader_player_id = game_dict.get('invader_player_id')
         self.turn_player_id = game_dict.get('turn_player_id')
 
+        # Spell-related state
+        self.pending_spell_id = game_dict.get('pending_spell_id')
+        self.battle_modifier = game_dict.get('battle_modifier')
+        self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
+        self.pending_spell = None  # Will be loaded if needed
+        self.waiting_for_counter = False
+        self.active_spell_effects = []  # Will be loaded separately
+
         self.player_id = None
         self.opponent_name = None
         self.current_player = None
@@ -72,6 +80,20 @@ class Game:
             self.invader_player_id = game_dict.get('invader_player_id')
             self.turn_player_id = game_dict.get('turn_player_id')
 
+            # Update spell-related state
+            self.pending_spell_id = game_dict.get('pending_spell_id')
+            self.battle_modifier = game_dict.get('battle_modifier')
+            self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
+            
+            # Check if we're waiting for this player to counter
+            if self.pending_spell_id and self.waiting_for_counter_player_id:
+                self.waiting_for_counter = (self.waiting_for_counter_player_id == self.player_id)
+                # TODO: Load pending spell details if needed
+                # self.pending_spell = spell_service.fetch_pending_spell(self.pending_spell_id)
+            else:
+                self.waiting_for_counter = False
+                self.pending_spell = None
+
             # Reinitialize current and opponent players
             for player_dict in self.players:
                 if player_dict['id'] == self.player_id:
@@ -119,7 +141,7 @@ class Game:
                 type=c.get('type')  # Include the card type
             )
             for c in self.main_cards
-            if c['player_id'] == player_id and not c.get('part_of_figure', False)
+            if c['player_id'] == player_id and not c.get('part_of_figure', False) and not c.get('in_deck', False)
         ]
 
         # Side hand
@@ -137,7 +159,7 @@ class Game:
                 type=c.get('type')  # Include the card type
             )
             for c in self.side_cards
-            if c['player_id'] == player_id and not c.get('part_of_figure', False)
+            if c['player_id'] == player_id and not c.get('part_of_figure', False) and not c.get('in_deck', False)
         ]
 
         return main_hand, side_hand
@@ -335,6 +357,14 @@ class Game:
     def change_side_cards(self, cards):
         """Change the selected side cards and return the new cards."""
         return self._change_cards(cards, card_type="side")
+    
+    def discard_main_cards(self, cards):
+        """Discard the selected main cards (return to deck without drawing new ones)."""
+        return self._discard_cards(cards, card_type="main")
+    
+    def discard_side_cards(self, cards):
+        """Discard the selected side cards (return to deck without drawing new ones)."""
+        return self._discard_cards(cards, card_type="side")
 
     def _change_cards(self, cards, card_type):
         """Helper function to change cards on the server and return the new cards."""
@@ -365,3 +395,30 @@ class Game:
         except Exception as e:
             print(f"An error occurred while changing {card_type} cards: {str(e)}")
             return []
+    
+    def _discard_cards(self, cards, card_type):
+        """Helper function to discard cards on the server (return to deck without drawing)."""
+        try:
+            response = requests.post(f'{settings.SERVER_URL}/games/discard_cards', json={
+                'game_id': self.game_id,
+                'player_id': self.player_id,
+                'card_type': card_type,
+                'cards': [card.serialize() for card in cards]
+            })
+
+            if response.status_code != 200:
+                print(f"Failed to discard {card_type} cards: {response.json().get('message', 'Unknown error')}")
+                return False
+
+            # Log the card discard action
+            round_number = self.current_round
+            turn_number = self.current_player.get('turns_left', 0)
+            message = f"{self.current_player.get('username', 'Player')} discarded {len(cards)} {card_type} card(s)."
+            self.add_log_entry(round_number, turn_number, message, self.current_player.get('username', 'Player'), 'card_discard')
+
+            self.update()
+
+            return True
+        except Exception as e:
+            print(f"An error occurred while discarding {card_type} cards: {str(e)}")
+            return False

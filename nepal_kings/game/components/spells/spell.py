@@ -69,6 +69,7 @@ class Spell:
         upgrade_card: Optional[Card] = None,
         requires_target: bool = False,
         target_type: Optional[str] = None,  # 'own_figure', 'opponent_figure', 'any_figure', 'player'
+        counterable: bool = False,
     ):
         """
         Initialize a Spell.
@@ -82,6 +83,7 @@ class Spell:
         :param upgrade_card: Card that upgrades the spell
         :param requires_target: Whether the spell needs a target (figure, player, etc.)
         :param target_type: Type of target required if requires_target is True
+        :param counterable: Whether the opponent can counter this spell (True for battle spells)
         """
         self.name = name
         self.family = family
@@ -92,6 +94,7 @@ class Spell:
         self.upgrade_card = upgrade_card
         self.requires_target = requires_target
         self.target_type = target_type
+        self.counterable = counterable
         
         # Runtime attributes (set when spell is cast/active)
         self.id = None  # Database ID when spell is cast

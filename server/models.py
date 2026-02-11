@@ -90,8 +90,14 @@ class Game(db.Model):
     invader_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # New field
     turn_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # New field
 
+    # Spell-related fields
+    pending_spell_id = db.Column(db.Integer, db.ForeignKey('active_spell.id'), nullable=True)  # Spell waiting for counter
+    battle_modifier = db.Column(db.JSON, nullable=True)  # Active battle modifications from tactics spells
+    waiting_for_counter_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # Player who can counter
+
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
+    active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
 
 
     def serialize(self):
@@ -102,6 +108,9 @@ class Game(db.Model):
             'current_round': self.current_round,
             'invader_player_id': self.invader_player_id,
             'turn_player_id': self.turn_player_id,
+            'pending_spell_id': self.pending_spell_id,
+            'battle_modifier': self.battle_modifier,
+            'waiting_for_counter_player_id': self.waiting_for_counter_player_id,
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],
@@ -129,12 +138,23 @@ class Player(db.Model):
         user = User.query.get(self.user_id)
         username = user.username if user else None
 
+        # Query cards directly to avoid SQLAlchemy relationship caching issues
+        main_hand_cards = MainCard.query.filter_by(
+            player_id=self.id,
+            in_deck=False
+        ).all()
+        
+        side_hand_cards = SideCard.query.filter_by(
+            player_id=self.id,
+            in_deck=False
+        ).all()
+
         return {
             'id': self.id,
             'user_id': self.user_id,
             'game_id': self.game_id,
-            'main_hand': [card.serialize() for card in self.main_hand],
-            'side_hand': [card.serialize() for card in self.side_hand],
+            'main_hand': [card.serialize() for card in main_hand_cards],
+            'side_hand': [card.serialize() for card in side_hand_cards],
             'figures': [figure.serialize() for figure in self.figures],
             'turns_left': self.turns_left,
             'points': self.points,
@@ -323,4 +343,46 @@ class ChatMessage(db.Model):
             'receiver_id': self.receiver_id,
             'message': self.message,
             'timestamp': self.timestamp.isoformat(),
+        }
+
+
+class ActiveSpell(db.Model):
+    """Represents an active spell effect in the game."""
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False)
+    player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)  # Player who cast the spell
+    spell_name = db.Column(db.String(100), nullable=False)  # Name of the spell
+    spell_type = db.Column(db.String(20), nullable=False)  # 'greed', 'enchantment', or 'tactics'
+    spell_family_name = db.Column(db.String(100), nullable=False)  # Family name
+    suit = db.Column(db.String(20), nullable=False)  # Suit of the spell
+    target_figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)  # Target figure if applicable
+    cast_round = db.Column(db.Integer, nullable=False)  # Round when spell was cast
+    duration = db.Column(db.Integer, default=0)  # Duration in rounds (0 = instant)
+    is_active = db.Column(db.Boolean, default=True)  # Whether spell effect is still active
+    is_pending = db.Column(db.Boolean, default=False)  # True if waiting for counter
+    counterable = db.Column(db.Boolean, default=False)  # Whether this spell can be countered
+    effect_data = db.Column(db.JSON, nullable=True)  # JSON data for spell-specific effects
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationship to player
+    caster = db.relationship('Player', foreign_keys=[player_id], backref='cast_spells')
+    target_figure = db.relationship('Figure', foreign_keys=[target_figure_id])
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'game_id': self.game_id,
+            'player_id': self.player_id,
+            'spell_name': self.spell_name,
+            'spell_type': self.spell_type,
+            'spell_family_name': self.spell_family_name,
+            'suit': self.suit,
+            'target_figure_id': self.target_figure_id,
+            'cast_round': self.cast_round,
+            'duration': self.duration,
+            'is_active': self.is_active,
+            'is_pending': self.is_pending,
+            'counterable': self.counterable,
+            'effect_data': self.effect_data,
+            'created_at': self.created_at.isoformat(),
         }

@@ -36,9 +36,24 @@ class Hand:
         self.buttons = self.initialize_buttons()
 
         self.dialogue_box = None  # To store the active dialogue box
+        self.discard_mode = False  # Track if we're in discard mode
+        self.cards_to_discard_count = 0  # How many cards need to be discarded
 
     def get_selected_cards(self):
         return [slot.card for slot in self.card_slots if slot.clicked and slot.card]
+    
+    def deselect_all_cards(self):
+        """Deselect all card slots."""
+        for slot in self.card_slots:
+            slot.clicked = False
+    
+    def needs_discard(self):
+        """Check if player has too many cards and needs to discard."""
+        return len(self.cards) > self.num_slots
+    
+    def get_excess_card_count(self):
+        """Get the number of cards that exceed the max hand size."""
+        return max(0, len(self.cards) - self.num_slots)
 
     def initialize_cards(self):
 
@@ -51,11 +66,50 @@ class Hand:
         return {(suit, rank): CardImg(self.window, suit, rank) for suit in settings.SUITS for rank in settings.RANKS}
 
     def initialize_card_slots(self):
-        slots = [CardSlot(self.window, x=self.x + i * (settings.CARD_SPACER + settings.CARD_SLOT_BORDER_WIDTH), y=self.y,
-                          width=settings.CARD_SPACER, height=settings.CARD_HEIGHT) for i in range(self.num_slots - 1)]
-        slots.append(CardSlot(self.window, x=self.x + (self.num_slots - 1) * (settings.CARD_SPACER + settings.CARD_SLOT_BORDER_WIDTH), y=self.y,
-                              width=settings.CARD_WIDTH, height=settings.CARD_HEIGHT, is_last=True))
+        """Initialize slots - we'll position them dynamically in update_slot_positions."""
+        # Create enough slots to handle max + some extra for overflow during discard
+        max_slots = max(self.num_slots + 5, 20)  # Allow for overflow
+        slots = []
+        # All slots are the same - we'll handle positioning dynamically
+        for i in range(max_slots):
+            slot = CardSlot(self.window, x=self.x, y=self.y,
+                          width=settings.CARD_WIDTH, height=settings.CARD_HEIGHT, is_last=True)
+            slots.append(slot)
         return slots
+    
+    def update_slot_positions(self):
+        """Dynamically position slots based on number of cards to maintain constant total width."""
+        num_cards = len(self.cards)
+        if num_cards == 0:
+            return
+        
+        # Total available width for the hand
+        total_width = self.slots_width
+        
+        if num_cards == 1:
+            # Single card: center it
+            start_x = self.x + (total_width - settings.CARD_WIDTH) / 2
+            spacing = 0
+        else:
+            # Multiple cards: distribute evenly across full width
+            # First card at self.x, last card ends at self.x + total_width
+            # So last card starts at self.x + total_width - CARD_WIDTH
+            start_x = self.x
+            # Calculate spacing so cards span the full width
+            spacing = (total_width - settings.CARD_WIDTH) / (num_cards - 1)
+        
+        # Position and update rectangles for all active slots
+        for i in range(num_cards):
+            if i < len(self.card_slots):
+                slot = self.card_slots[i]
+                slot.x = start_x + i * spacing
+                slot.y = self.y
+                
+                # Update all rectangles for proper collision detection
+                dx = settings.CARD_SLOT_BORDER_WIDTH / 2
+                slot.rect_border = pygame.Rect(slot.x - dx, slot.y - dx, slot.width + 2*dx, slot.height + 2*dx)
+                slot.rect = pygame.Rect(slot.x, slot.y, slot.width, slot.height)
+                slot.rec_card = pygame.Rect(slot.x, slot.y, settings.CARD_WIDTH, slot.height)
 
     def initialize_background_attributes(self):
         attributes = {
@@ -63,7 +117,7 @@ class Hand:
                 'width_ratio': 0.22,
                 'height_ratio': 1.66,
                 'dx_ratio': 0.1,
-                'dy_ratio': 0.36,
+                'dy_ratio': 0.39,
                 'image_path': './img/icons/main_hand.png',
                 'addon_path': './img/icons/main_hand_addon.png',
                 'text_offset_x': 0.0
@@ -72,7 +126,7 @@ class Hand:
                 'width_ratio': 0.28,
                 'height_ratio': 1.75,
                 'dx_ratio': 0.12,
-                'dy_ratio': 0.4,
+                'dy_ratio': 0.42,
                 'image_path': './img/icons/hand_holder.png',
                 'addon_path': './img/icons/hand_holder_addon2.png',
                 'text_offset_x': 0.05
@@ -161,74 +215,208 @@ class Hand:
                 icon="error"
             )
 
+    def start_discard_mode(self, num_to_discard):
+        """
+        Initiate discard mode when player has too many cards.
+        
+        :param num_to_discard: Number of cards that must be discarded
+        """
+        self.discard_mode = True
+        self.cards_to_discard_count = num_to_discard
+        self.update_discard_dialogue()
+    
+    def update_discard_dialogue(self):
+        """Update the discard dialogue box with current selection."""
+        if not self.discard_mode:
+            return
+        
+        selected_cards = self.get_selected_cards()
+        num_selected = len(selected_cards)
+        num_needed = self.cards_to_discard_count
+        
+        # Build message
+        if num_selected == 0:
+            message = f"You have too many cards! Select {num_needed} card{'s' if num_needed > 1 else ''} to discard."
+        elif num_selected < num_needed:
+            still_needed = num_needed - num_selected
+            message = f"Select {still_needed} more card{'s' if still_needed > 1 else ''} to discard."
+        elif num_selected == num_needed:
+            message = f"Confirm to discard {num_selected} card{'s' if num_selected > 1 else ''}."
+        else:
+            too_many = num_selected - num_needed
+            message = f"Too many cards selected! Deselect {too_many} card{'s' if too_many > 1 else ''}."
+        
+        # Only show confirm button if correct number selected
+        if num_selected == num_needed:
+            actions = ['confirm']
+        else:
+            actions = []  # No actions available until correct number selected
+        
+        # Show images of selected cards
+        card_images = [self.card_imgs[(card.suit, card.rank)].front_img for card in selected_cards] if selected_cards else None
+        
+        self.dialogue_box = DialogueBox(
+            self.window,
+            title="Discard Cards",
+            message=message,
+            actions=actions,
+            images=card_images,
+            icon="error"
+        )
+    
+    def handle_discard_confirm(self):
+        """Handle confirmation of card discard."""
+        selected_cards = self.get_selected_cards()
+        
+        if len(selected_cards) == self.cards_to_discard_count:
+            # Discard the cards
+            if self.type == "main_card":
+                success = self.game.discard_main_cards(selected_cards)
+            else:
+                success = self.game.discard_side_cards(selected_cards)
+            
+            if success:
+                # Exit discard mode
+                self.discard_mode = False
+                self.cards_to_discard_count = 0
+                self.dialogue_box = None
+                
+                # Deselect all slots
+                for slot in self.card_slots:
+                    slot.clicked = False
+                
+                return True
+        
+        return False
+
     def update(self, game):
         """Update the game state."""
         self.game = game
         self.cards = self.initialize_cards()
         self.cards.sort(key=lambda card: card.rank)
 
+        # Update slot positions based on number of cards
+        self.update_slot_positions()
 
+        # First pass: update all slots without hover (we'll handle hover separately)
         for slot in self.card_slots:
-            slot.update()
+            slot.hovered = False  # Reset hover state
 
-        for card, slot in zip(self.cards, reversed(self.card_slots)):
-            slot.content = self.card_imgs[(card.suit, card.rank)]
-            slot.card = card
-        # reset all other slots
-        # Iterate over the card slots in reverse order, starting from the length of self.cards
-        for slot in list(reversed(self.card_slots))[len(self.cards):]:
-            slot.content = None
-            slot.card = None
+        # Assign cards to slots (only as many as we have cards)
+        for i, card in enumerate(self.cards):
+            if i < len(self.card_slots):
+                slot = self.card_slots[i]
+                slot.content = self.card_imgs[(card.suit, card.rank)]
+                slot.card = card
+        
+        # Reset unused slots and deselect them
+        for i in range(len(self.cards), len(self.card_slots)):
+            self.card_slots[i].content = None
+            self.card_slots[i].card = None
+            self.card_slots[i].clicked = False
+        
+        # Handle hover detection - only the topmost card under the mouse should be hovered
+        # Iterate in reverse order (last card drawn is on top)
+        mouse_pos = pygame.mouse.get_pos()
+        hovered_slot = None
+        for i in range(len(self.cards) - 1, -1, -1):
+            if i < len(self.card_slots):
+                slot = self.card_slots[i]
+                if slot.card and slot.rec_card.collidepoint(mouse_pos):
+                    hovered_slot = slot
+                    break  # Found topmost card under mouse
+        
+        # Set hover state only for the topmost card
+        if hovered_slot:
+            hovered_slot.hovered = True
 
     def handle_events(self, events):
         """Handle game events."""
         if self.dialogue_box:
             # Update the dialogue box
             response = self.dialogue_box.update(events)
-            if response == 'yes':
-                print("Cards changed!")
-                # Change the selected cards
-                selected_cards = self.get_selected_cards()
+            
+            if self.discard_mode:
+                # In discard mode, handle confirm action
+                if response == 'confirm':
+                    self.handle_discard_confirm()
+                # Don't close dialogue on other responses - it's persistent
+            else:
+                # Normal mode dialogue handling
+                if response == 'yes':
+                    print("Cards changed!")
+                    # Change the selected cards
+                    selected_cards = self.get_selected_cards()
 
-                if selected_cards:
-                    # Call the appropriate card change method based on type and fetch new cards
-                    if self.type == "main_card":
-                        new_cards = self.game.change_main_cards(selected_cards)
-                    else:  # SideCards
-                        new_cards = self.game.change_side_cards(selected_cards)
+                    if selected_cards:
+                        # Call the appropriate card change method based on type and fetch new cards
+                        if self.type == "main_card":
+                            new_cards = self.game.change_main_cards(selected_cards)
+                        else:  # SideCards
+                            new_cards = self.game.change_side_cards(selected_cards)
 
-                    # Open a new DialogueBox to display the drawn cards
-                    self.dialogue_box = DialogueBox(
-                        self.window,
-                        title="New Cards",
-                        message="You have drawn the following cards:",
-                        actions=['ok'],
-                        icon="loot",
-                        images=[self.card_imgs[(card['suit'], card['rank'])].front_img for card in new_cards]
-                    )
-            elif response in ['cancel', 'ok']:
-                self.dialogue_box = None
+                        # Open a new DialogueBox to display the drawn cards
+                        self.dialogue_box = DialogueBox(
+                            self.window,
+                            title="New Cards",
+                            message="You have drawn the following cards:",
+                            actions=['ok'],
+                            icon="loot",
+                            images=[self.card_imgs[(card['suit'], card['rank'])].front_img for card in new_cards]
+                        )
+                        
+                        # Deselect all cards after exchange
+                        self.deselect_all_cards()
+                elif response in ['cancel', 'ok']:
+                    self.dialogue_box = None
         else:
-            # Check for button clicks
-            for event in events:
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    for button in self.buttons:
-                        if button.collide() and button.name == 'change_cards':
-                            self.handle_button_click()
+            # Check for button clicks (only in normal mode)
+            if not self.discard_mode:
+                for event in events:
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        for button in self.buttons:
+                            if button.collide() and button.name == 'change_cards':
+                                self.handle_button_click()
 
-            # Handle slot events
-            for slot in self.card_slots:
-                slot.handle_events(events)
+        # Handle slot events - only for the topmost card under the mouse
+        # This prevents multiple overlapping cards from being selected
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                # Find topmost card under mouse (iterate in reverse)
+                clicked_slot = None
+                for i in range(len(self.cards) - 1, -1, -1):
+                    if i < len(self.card_slots):
+                        slot = self.card_slots[i]
+                        if slot.card and slot.rec_card.collidepoint(event.pos):
+                            clicked_slot = slot
+                            break  # Found topmost card
+                
+                # Toggle clicked state only for the topmost card
+                if clicked_slot:
+                    clicked_slot.clicked = not clicked_slot.clicked
+        
+        # Update discard dialogue if in discard mode and a card selection changed
+        if self.discard_mode:
+            self.update_discard_dialogue()
 
     def draw(self):
         """Draw elements on the window."""
         if self.game:
             self.window.blit(self.background_image, (self.x - self.backgorund_dx, self.y - self.backgorund_dy))
-            for slot in reversed(self.card_slots):
-                slot.draw_empty()
-            for slot in self.card_slots:
-                slot.draw_content()
+            
+            # Only draw slots that have cards assigned
+            num_cards = len(self.cards)
+            #for i in range(num_cards):
+            #    if i < len(self.card_slots):
+            #        self.card_slots[i].draw_empty()
+            
 
+            # Draw all cards in order to maintain natural hierarchy
+            for i in range(num_cards):
+                if i < len(self.card_slots):
+                    self.card_slots[i].draw_content()
+
+            # Draw the background addon frame behind the cards
             self.window.blit(self.background_image_addon, (self.x - self.backgorund_dx, self.y - self.backgorund_dy))
 
             self.draw_text(f'{str(len(self.cards))}/{self.num_slots} cards', settings.BLACK, self.text_occupied_slots_x,

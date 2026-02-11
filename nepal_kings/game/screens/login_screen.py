@@ -44,6 +44,7 @@ class LoginScreen(Screen):
         self.state.set_msg(response_data['message'])
         if response_data['success']:
             self.state.user_dict = response_data.get('user')
+            self.state.game = None  # Clear any previous game state
             self.state.screen = "game_menu"
         else:
             self.field_username.empty()
@@ -57,6 +58,7 @@ class LoginScreen(Screen):
 
         if response_data['success']:
             self.state.user_dict = response_data.get('user')
+            self.state.game = None  # Clear any previous game state
             self.state.screen = "game_menu"
         else:
             self.field_username.empty()

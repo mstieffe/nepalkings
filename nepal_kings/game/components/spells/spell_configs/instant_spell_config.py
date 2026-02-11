@@ -1,4 +1,4 @@
-"""
+""" 
 Example spell configuration template.
 
 This file demonstrates how to create spell configurations.
@@ -14,6 +14,7 @@ Each spell family needs:
 - frame_hidden_img: Filename for hidden frame
 - glow_img: Filename for glow effect (e.g., 'yellow.png', 'blue.png')
 - spells: Function that generates spell instances
+  Greed spells should have counterable=False
 """
 
 from game.components.spells.spell import Spell
@@ -41,6 +42,7 @@ DRAW_2_SIDE_CARDS_CONFIG = {
             suit=suit,
             key_cards=[Card('2', suit, 2)],
             requires_target=False,
+            counterable=False,
         )
     ],  
 }
@@ -65,6 +67,7 @@ FORCED_DEAL_CONFIG = {
             suit=suit,
             key_cards=[Card('4', suit, 4), Card('4', suit, 4)],
             requires_target=True,
+            counterable=False,
         )
     ],  
 }
@@ -73,7 +76,7 @@ FORCED_DEAL_CONFIG = {
 DUMP_CARDS_CONFIG = {
     "name": "Dump Cards",
     "type": "greed",
-    "description": "Both players have to dump all their cards.",
+    "description": "Both players have to dump all their cards and refill 5 new main cards and 4 new side cards.",
     "suits": ["Hearts", "Spades"],  # Represents the two combinations
     "icon_img": "dump_cards.png",
     "icon_gray_img": "dump_cards.png",
@@ -88,7 +91,8 @@ DUMP_CARDS_CONFIG = {
             cards=[Card('7', 'Hearts', 7), Card('7', 'Hearts', 7), Card('7', 'Diamonds', 7), Card('7', 'Diamonds', 7)],
             suit='Hearts',  # Primary suit for this variant
             key_cards=[Card('7', 'Hearts', 7), Card('7', 'Hearts', 7), Card('7', 'Diamonds', 7), Card('7', 'Diamonds', 7)],
-            requires_target=True,
+            requires_target=False,
+            counterable=False,
         )
     ] if suit == "Hearts" else [
         Spell(
@@ -97,7 +101,8 @@ DUMP_CARDS_CONFIG = {
             cards=[Card('7', 'Spades', 7), Card('7', 'Spades', 7), Card('7', 'Clubs', 7), Card('7', 'Clubs', 7)],
             suit='Spades',  # Primary suit for this variant
             key_cards=[Card('7', 'Spades', 7), Card('7', 'Spades', 7), Card('7', 'Clubs', 7), Card('7', 'Clubs', 7)],
-            requires_target=True,
+            requires_target=False,
+            counterable=False,
         )
     ],  
 }
@@ -123,6 +128,7 @@ DRAW_2_MAIN_CARDS_CONFIG = {
             suit=suit,
             key_cards=[Card('8', suit, 8)],
             requires_target=False,
+            counterable=False,
         )
     ],  
 }
@@ -130,7 +136,7 @@ DRAW_2_MAIN_CARDS_CONFIG = {
 FILL_10_CONFIG = {
     "name": "Fill up to 10",
     "type": "greed",
-    "description": "Fill your hand up to 10 cards.",
+    "description": "Fill your main hand up to 10 cards.",
     "suits": SUITS_BLACK + SUITS_RED,
     "icon_img": "fill10.png",
     "icon_gray_img": "fill10.png",
@@ -146,6 +152,7 @@ FILL_10_CONFIG = {
             suit=suit,
             key_cards=[Card('10', suit, 10)],
             requires_target=False,
+            counterable=False,
         )
     ],  
 }

@@ -120,9 +120,9 @@ class SpellManager:
         :param cards: List of cards to match
         :return: Matching Spell or None
         """
-        card_set = {card.to_tuple() for card in cards}
+        card_set = {(card.suit, card.rank) for card in cards}
         return next(
-            (spell for spell in self.spells if {card.to_tuple() for card in spell.cards} == card_set),
+            (spell for spell in self.spells if {(card.suit, card.rank) for card in spell.cards} == card_set),
             None
         )
     
@@ -151,12 +151,12 @@ class SpellManager:
         """
         castable = []
         
-        # Count available cards in hand
-        hand_counter = Counter(card.to_tuple() for card in hand)
+        # Count available cards in hand - use (suit, rank) format
+        hand_counter = Counter((card.suit, card.rank) for card in hand)
         
         for spell in self.spells:
-            # Count required cards for spell
-            spell_counter = Counter(card.to_tuple() for card in spell.cards)
+            # Count required cards for spell - use (suit, rank) format
+            spell_counter = Counter((card.suit, card.rank) for card in spell.cards)
             
             # Check if all spell cards are available in sufficient quantity
             can_cast = True

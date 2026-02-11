@@ -81,8 +81,8 @@ class CardSlot():
 
         # Set the color based on hover state
         color = settings.CARD_SLOT_COLOR_HOVERED if self.hovered else settings.CARD_SLOT_COLOR
-        # Draw a rectangle onto the inner surface
-        pygame.draw.rect(self.inner_surface, color + (128,), self.inner_surface.get_rect())  # (128,) is the alpha value
+        # Draw a rectangle onto the inner surface (alpha 0 = invisible)
+        pygame.draw.rect(self.inner_surface, color + (0,), self.inner_surface.get_rect())  # (0,) makes it transparent
 
         # Blit the surfaces onto the window
         self.window.blit(self.border_surface, (self.rect_border.x, self.rect_border.y))
@@ -111,7 +111,7 @@ class CardSlot():
                 y = self.y-settings.TINY_SPACER_Y
             else:
                 y = self.y
-            if self.hovered:
+            if self.hovered or self.clicked:
                 self.content.draw_front_bright(self.x, y)
             else:
                 self.content.draw_front(self.x, y)

@@ -9,13 +9,14 @@ from models import db
 #    sys.path.insert(0, project_root)
 
 import server_settings as settings
-from routes import games, challenges, auth, msg, figures
+from routes import games, challenges, auth, msg, figures, spells
 
 games.settings = settings
 challenges.settings = settings
 auth.settings = settings
 msg.settings = settings
 figures.settings = settings
+spells.settings = settings
 
 app = Flask(__name__)
 
@@ -34,6 +35,7 @@ app.register_blueprint(challenges, url_prefix='/challenges')
 app.register_blueprint(auth, url_prefix='/auth')
 app.register_blueprint(msg, url_prefix='/msg')
 app.register_blueprint(figures, url_prefix='/figures')
+app.register_blueprint(spells, url_prefix='/spells')
 
 if __name__ == '__main__':
     try:

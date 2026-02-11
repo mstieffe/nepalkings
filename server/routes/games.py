@@ -304,6 +304,48 @@ def change_cards():
         return jsonify({'success': False, 'message': f"Failed to change cards: {str(e)}"}), 400
 
 
+@games.route('/discard_cards', methods=['POST'])
+def discard_cards():
+    """Discard cards when player has too many (return to deck without drawing new ones)."""
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+        card_ids = [card['id'] for card in data['cards']]
+        card_type = data.get('card_type', 'main')  # Default to main cards
+        card_ranks = [card['rank'] for card in data['cards']]
+
+        print(f"Discarding {card_type} cards for player {player_id} in game {game_id}")
+        print(f"Selected card IDs: {card_ids}")
+        
+        # Side card ranks are 2-6, main card ranks are 7-A
+        side_card_ranks = ['2', '3', '4', '5', '6']
+        
+        # Fetch cards based on rank (to avoid ID collision between tables)
+        selected_cards = []
+        for card_id, card_rank in zip(card_ids, card_ranks):
+            if card_rank in side_card_ranks:
+                card = SideCard.query.get(card_id)
+            else:
+                card = MainCard.query.get(card_id)
+            
+            if card:
+                selected_cards.append(card)
+        
+        if len(selected_cards) != len(card_ids):
+            return jsonify({'success': False, 'message': 'Some cards not found'}), 400
+
+        # Return the selected cards to the deck (no drawing new ones)
+        DeckManager.return_cards_to_deck(selected_cards)
+
+        db.session.commit()
+
+        return jsonify({'success': True})
+
+    except Exception as e:
+        return jsonify({'success': False, 'message': f"Failed to discard cards: {str(e)}"}), 400
+
+
 @games.route('/update_points', methods=['POST'])
 def update_points():
     try:
