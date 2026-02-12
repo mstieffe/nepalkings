@@ -120,9 +120,16 @@ class CastSpellScreen(SubScreen):
                 self.make_dialogue_box(**dialogue_params)
             else:
                 # For non-counterable spells, show drawn cards if any
+                spell_name = selected_spell.name
                 if card_images:
+                    # Customize message based on spell type
+                    if spell_name == "Forced Deal":
+                        message = f"{spell_name} cast successfully! You received these cards from your opponent:"
+                    else:
+                        message = f"{spell_name} cast successfully! You drew:"
+                    
                     self.make_dialogue_box(
-                        message=f"{selected_spell.name} cast successfully! You drew:",
+                        message=message,
                         actions=['ok'],
                         images=card_images,
                         icon="loot",
@@ -130,7 +137,7 @@ class CastSpellScreen(SubScreen):
                     )
                 else:
                     self.make_dialogue_box(
-                        message=f"{selected_spell.name} cast successfully!",
+                        message=f"{spell_name} cast successfully!",
                         actions=['ok'],
                         icon="loot",
                         title="Spell Cast"

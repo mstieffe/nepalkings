@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, SideCard, LogEntry, User
+from game_service.deck_manager import DeckManager
 import server_settings as settings
 
 figures = Blueprint('figures', __name__)
@@ -73,19 +74,21 @@ def create_figure():
         # Update turns left for the player
         player = Player.query.get(player_id)
         player.turns_left -= 1
-        db.session.commit()
 
-        # flip turn player id
+        # Always flip turn to the other player
         game = Game.query.get(game_id)
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-            db.session.commit()
+        game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+        db.session.commit()
 
         serialized = figure.serialize()
         if settings.DEBUG_ENABLED:
             with open(settings.DEBUG_LOG_PATH, 'a') as f:
                 f.write(f"[SERVER] Returning serialized figure: produces={serialized.get('produces')}, requires={serialized.get('requires')}\n")
-        return jsonify({'success': True, 'message': 'Figure created successfully', 'figure': serialized})
+        return jsonify({
+            'success': True, 
+            'message': 'Figure created successfully', 
+            'figure': serialized
+        })
 
     except Exception as e:
         db.session.rollback()
@@ -125,8 +128,6 @@ def update_figure():
                 )
                 db.session.add(card_to_figure)
 
-        db.session.commit()
-
         # Update turns left and flip turn player
         player = Player.query.get(figure.player_id)
         game = Game.query.get(figure.game_id)
@@ -134,9 +135,10 @@ def update_figure():
             return jsonify({'success': False, 'message': 'Player or game not found'}), 404
 
         player.turns_left -= 1
-        game.turn_player_id = (
-            game.players[0].id if game.players[0].id != player.id else game.players[1].id
-        )
+        for p in game.players:
+            if p.id != player.id:
+                game.turn_player_id = p.id
+                break
 
         db.session.commit()
 
@@ -214,6 +216,18 @@ def delete_figure():
         main_cards = MainCard.query.filter(MainCard.id.in_(main_card_ids)).all()
         side_cards = SideCard.query.filter(SideCard.id.in_(side_card_ids)).all()
 
+        # Update turns and flip turn BEFORE deck operations 
+        # (DeckManager commits internally)
+        player = Player.query.get(player_id)
+        player.turns_left -= 1
+
+        # Always flip turn to the other player
+        game = Game.query.get(game_id)
+        for p in game.players:
+            if p.id != player_id:
+                game.turn_player_id = p.id
+                break
+
         # Return cards to the deck and update card attributes
         from game_service.deck import DeckManager
         DeckManager.return_cards_to_deck(main_cards)
@@ -227,18 +241,8 @@ def delete_figure():
         # Delete the card associations and the figure itself
         CardToFigure.query.filter_by(figure_id=figure.id).delete()
         db.session.delete(figure)
-        db.session.flush()
-
-        # Update turns left for the player
-        player = Player.query.get(player_id)
-        player.turns_left -= 1
+        
         db.session.commit()
-
-        # flip turn player id
-        game = Game.query.get(game_id)
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-            db.session.commit()
 
         return jsonify({'success': True, 'message': 'Figure deleted successfully'})
 
@@ -302,13 +306,15 @@ def pickup_figure():
         
         player.turns_left -= 1
         
-        # Get game and flip turn player id
+        # Get game and always flip turn to other player
         game = Game.query.get(game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
         
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+        for p in game.players:
+            if p.id != player_id:
+                game.turn_player_id = p.id
+                break
         
         # Create log entry
         user = User.query.get(player.user_id)
@@ -459,13 +465,15 @@ def upgrade_figure():
         
         player.turns_left -= 1
         
-        # Get game and flip turn player id
+        # Get game and always flip turn to other player
         game = Game.query.get(game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
         
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+        for p in game.players:
+            if p.id != player_id:
+                game.turn_player_id = p.id
+                break
         
         # Create log entry
         user = User.query.get(player.user_id)
@@ -493,3 +501,101 @@ def upgrade_figure():
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': f'Error upgrading figure: {str(e)}'}), 400
+
+
+def _add_figure_log_entry(game_id, player_id, round_number, turn_number, action, entry_type, message):
+    """
+    Add a log entry for a figure action.
+    
+    :param game_id: Game ID
+    :param player_id: Player ID
+    :param round_number: Current round
+    :param turn_number: Current turn
+    :param action: Name of the action (for reference)
+    :param entry_type: Type of log entry
+    :param message: Log message
+    """
+    log_entry = LogEntry(
+        game_id=game_id,
+        player_id=player_id,
+        round_number=round_number,
+        turn_number=turn_number,
+        message=message,
+        author='system',
+        type=entry_type
+    )
+    db.session.add(log_entry)
+
+
+def _check_and_fill_minimum_cards(game, player):
+    """
+    Check if player has minimum required cards and automatically fill up if needed.
+    
+    :param game: Game instance
+    :param player: Player instance
+    :return: Dictionary with fill information
+    """
+    fill_info = {
+        'filled': False,
+        'main_cards_drawn': 0,
+        'side_cards_drawn': 0,
+        'drawn_cards': []
+    }
+    
+    # Count current cards
+    main_count = MainCard.query.filter_by(
+        player_id=player.id,
+        in_deck=False,
+        part_of_figure=False
+    ).count()
+    
+    side_count = SideCard.query.filter_by(
+        player_id=player.id,
+        in_deck=False,
+        part_of_figure=False
+    ).count()
+    
+    # Check and fill main cards
+    if main_count < settings.NUM_MIN_MAIN_CARDS:
+        cards_needed = settings.NUM_MIN_MAIN_CARDS - main_count
+        try:
+            drawn_main = DeckManager.draw_cards_from_deck(game, player, cards_needed, 'main')
+            fill_info['filled'] = True
+            fill_info['main_cards_drawn'] = len(drawn_main)
+            for card in drawn_main:
+                card_data = card.serialize()
+                card_data['type'] = 'main'
+                fill_info['drawn_cards'].append(card_data)
+        except Exception as e:
+            print(f"Could not fill main cards: {e}")
+    
+    # Check and fill side cards
+    if side_count < settings.NUM_MIN_SIDE_CARDS:
+        cards_needed = settings.NUM_MIN_SIDE_CARDS - side_count
+        try:
+            drawn_side = DeckManager.draw_cards_from_deck(game, player, cards_needed, 'side')
+            fill_info['filled'] = True
+            fill_info['side_cards_drawn'] = len(drawn_side)
+            for card in drawn_side:
+                card_data = card.serialize()
+                card_data['type'] = 'side'
+                fill_info['drawn_cards'].append(card_data)
+        except Exception as e:
+            print(f"Could not fill side cards: {e}")
+    
+    # Add log entry if cards were auto-filled
+    if fill_info['filled']:
+        log_parts = []
+        if fill_info['main_cards_drawn'] > 0:
+            log_parts.append(f"{fill_info['main_cards_drawn']} main card{'s' if fill_info['main_cards_drawn'] > 1 else ''}")
+        if fill_info['side_cards_drawn'] > 0:
+            log_parts.append(f"{fill_info['side_cards_drawn']} side card{'s' if fill_info['side_cards_drawn'] > 1 else ''}")
+        
+        log_message = f"{player.serialize()['username']} auto-filled {' and '.join(log_parts)} to reach minimum"
+        _add_figure_log_entry(
+            game.id, player.id, game.current_round,
+            player.turns_left, 'Auto-Fill', 'auto_fill',
+            log_message
+        )
+    
+    return fill_info

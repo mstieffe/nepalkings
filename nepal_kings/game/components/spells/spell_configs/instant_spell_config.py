@@ -51,7 +51,7 @@ DRAW_2_SIDE_CARDS_CONFIG = {
 FORCED_DEAL_CONFIG = {
     "name": "Forced Deal",
     "type": "greed",
-    "description": "Force a deal with an opponent: Draw 2 cards from opponent's hand, then opponent draws 2 cards from your hand.",
+    "description": "Force a deal with an opponent: opponent and you exchange two cards at random from your main cards.",
     "suits": SUITS_RED + SUITS_BLACK,
     "icon_img": "forced_deal.png",
     "icon_gray_img": "forced_deal.png",
@@ -66,7 +66,7 @@ FORCED_DEAL_CONFIG = {
             cards=[Card('4', suit, 4), Card('4', suit, 4)],
             suit=suit,
             key_cards=[Card('4', suit, 4), Card('4', suit, 4)],
-            requires_target=True,
+            requires_target=False,
             counterable=False,
         )
     ],  

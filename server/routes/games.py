@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
 import random
-from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure
+from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry
 from game_service.deck_manager import DeckManager
 
 import server_settings as settings
@@ -32,14 +32,30 @@ def get_games():
 def get_game():
     try:
         game_id = request.args.get('game_id')
+        player_id = request.args.get('player_id')  # Optional: to know which player is requesting
         game = Game.query.get(game_id)
 
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 400
-
-        return jsonify({
+        
+        # Check and auto-fill minimum cards for all players
+        player_auto_fills = {}
+        for player in game.players:
+            fill_info = _check_and_fill_minimum_cards(game, player)
+            if fill_info['filled']:
+                player_auto_fills[player.id] = fill_info
+        
+        db.session.commit()
+        
+        response_data = {
             'game': game.serialize()
-        })
+        }
+        
+        # If a specific player requested and they were auto-filled, include their fill info
+        if player_id and int(player_id) in player_auto_fills:
+            response_data['auto_fill'] = player_auto_fills[int(player_id)]
+
+        return jsonify(response_data)
     except Exception as e:
         return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
 
@@ -273,32 +289,42 @@ def change_cards():
         print(f"Changing {card_type} cards for player {player_id} in game {game_id}")
         print(f"Selected card IDs: {card_ids}")
         
-        # Handle MainCards or SideCards based on card_type
+        # CRITICAL: Update turn state BEFORE any deck operations
+        # DeckManager commits internally, so turn must be set first
+        player = Player.query.get(player_id)
+        game = Game.query.get(game_id)
+        
+        player.turns_left -= 1
+        
+        # Flip turn to opponent
+        for p in game.players:
+            if p.id != player_id:
+                game.turn_player_id = p.id
+                break
+        
+        # Query for selected cards
         if card_type == "main":
             selected_cards = MainCard.query.filter(MainCard.id.in_(card_ids)).all()
-            new_cards = DeckManager.draw_cards_from_deck(Game.query.get(game_id), Player.query.get(player_id), len(card_ids), "main")
         elif card_type == "side":
             selected_cards = SideCard.query.filter(SideCard.id.in_(card_ids)).all()
-            new_cards = DeckManager.draw_cards_from_deck(Game.query.get(game_id), Player.query.get(player_id), len(card_ids), "side")
         else:
             return jsonify({'success': False, 'message': 'Invalid card type specified'}), 400
 
-        # Return the selected cards to the deck
+        # Return cards to deck FIRST, then draw new ones
+        # These operations commit internally, so turn is already flipped above
         DeckManager.return_cards_to_deck(selected_cards)
-
-        # Update turns left for the player
-        player = Player.query.get(player_id)
-        player.turns_left -= 1
+        
+        # Now draw new cards
+        if card_type == "main":
+            new_cards = DeckManager.draw_cards_from_deck(game, player, len(card_ids), "main")
+        else:  # side
+            new_cards = DeckManager.draw_cards_from_deck(game, player, len(card_ids), "side")
+        
+        # Final commit to ensure everything is saved
         db.session.commit()
-
-        # flip turn player id
-        game = Game.query.get(game_id)
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-            db.session.commit()
         
 
-        return jsonify({'success': True, 'new_cards': [card.serialize() for card in new_cards], 'turns_left': player.turns_left})
+        return jsonify({'success': True, 'new_cards': [card.serialize() for card in new_cards]})
 
     except Exception as e:
         return jsonify({'success': False, 'message': f"Failed to change cards: {str(e)}"}), 400
@@ -366,3 +392,99 @@ def update_points():
         return jsonify({'success': False, 'message': f"Failed to update points: {str(e)}"}), 400
 
 
+def _add_log_entry(game_id, player_id, round_number, turn_number, action, entry_type, message):
+    """
+    Add a log entry for a game action.
+    
+    :param game_id: Game ID
+    :param player_id: Player ID
+    :param round_number: Current round
+    :param turn_number: Current turn
+    :param action: Name of the action (for reference)
+    :param entry_type: Type of log entry
+    :param message: Log message
+    """
+    log_entry = LogEntry(
+        game_id=game_id,
+        player_id=player_id,
+        round_number=round_number,
+        turn_number=turn_number,
+        message=message,
+        author='system',
+        type=entry_type
+    )
+    db.session.add(log_entry)
+
+
+def _check_and_fill_minimum_cards(game, player):
+    """
+    Check if player has minimum required cards and automatically fill up if needed.
+    
+    :param game: Game instance
+    :param player: Player instance
+    :return: Dictionary with fill information
+    """
+    fill_info = {
+        'filled': False,
+        'main_cards_drawn': 0,
+        'side_cards_drawn': 0,
+        'drawn_cards': []
+    }
+    
+    # Count current cards
+    main_count = MainCard.query.filter_by(
+        player_id=player.id,
+        in_deck=False,
+        part_of_figure=False
+    ).count()
+    
+    side_count = SideCard.query.filter_by(
+        player_id=player.id,
+        in_deck=False,
+        part_of_figure=False
+    ).count()
+    
+    # Check and fill main cards
+    if main_count < settings.NUM_MIN_MAIN_CARDS:
+        cards_needed = settings.NUM_MIN_MAIN_CARDS - main_count
+        try:
+            drawn_main = DeckManager.draw_cards_from_deck(game, player, cards_needed, 'main')
+            fill_info['filled'] = True
+            fill_info['main_cards_drawn'] = len(drawn_main)
+            for card in drawn_main:
+                card_data = card.serialize()
+                card_data['type'] = 'main'
+                fill_info['drawn_cards'].append(card_data)
+        except Exception as e:
+            print(f"Could not fill main cards: {e}")
+    
+    # Check and fill side cards
+    if side_count < settings.NUM_MIN_SIDE_CARDS:
+        cards_needed = settings.NUM_MIN_SIDE_CARDS - side_count
+        try:
+            drawn_side = DeckManager.draw_cards_from_deck(game, player, cards_needed, 'side')
+            fill_info['filled'] = True
+            fill_info['side_cards_drawn'] = len(drawn_side)
+            for card in drawn_side:
+                card_data = card.serialize()
+                card_data['type'] = 'side'
+                fill_info['drawn_cards'].append(card_data)
+        except Exception as e:
+            print(f"Could not fill side cards: {e}")
+    
+    # Add log entry if cards were auto-filled
+    if fill_info['filled']:
+        log_parts = []
+        if fill_info['main_cards_drawn'] > 0:
+            log_parts.append(f"{fill_info['main_cards_drawn']} main card{'s' if fill_info['main_cards_drawn'] > 1 else ''}")
+        if fill_info['side_cards_drawn'] > 0:
+            log_parts.append(f"{fill_info['side_cards_drawn']} side card{'s' if fill_info['side_cards_drawn'] > 1 else ''}")
+        
+        log_message = f"{player.serialize()['username']} auto-filled {' and '.join(log_parts)} to reach minimum"
+        _add_log_entry(
+            game.id, player.id, game.current_round,
+            player.turns_left, 'Auto-Fill', 'auto_fill',
+            log_message
+        )
+    
+    return fill_info

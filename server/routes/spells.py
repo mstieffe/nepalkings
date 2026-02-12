@@ -108,6 +108,15 @@ def cast_spell():
             # Execute spell immediately
             spell_effect = _execute_spell(active_spell, game, player)
             
+            # End turn for non-counterable spells
+            player.turns_left -= 1
+            
+            # Always flip turn to the other player
+            for p in game.players:
+                if p.id != player_id:
+                    game.turn_player_id = p.id
+                    break
+            
             # Add log entry before commit
             _add_spell_log_entry(
                 game_id, player_id, game.current_round,
@@ -116,15 +125,6 @@ def cast_spell():
             )
             
             db.session.commit()
-            
-            # End turn for non-counterable spells
-            player.turns_left -= 1
-            db.session.commit()
-            
-            # Flip turn player
-            if game.turn_player_id == player_id:
-                game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-                db.session.commit()
             
             return jsonify({
                 'success': True,
@@ -189,8 +189,17 @@ def counter_spell():
         game.pending_spell_id = None
         game.waiting_for_counter_player_id = None
         
-        # Add log entry before commit
+        # End turn for the player who countered
         player = Player.query.get(player_id)
+        player.turns_left -= 1
+        
+        # Always flip turn to the other player
+        for p in game.players:
+            if p.id != player_id:
+                game.turn_player_id = p.id
+                break
+        
+        # Add log entry before commit
         _add_spell_log_entry(
             game_id, player_id, game.current_round,
             player.turns_left, counter_spell_name, 'spell_countered',
@@ -198,15 +207,6 @@ def counter_spell():
         )
         
         db.session.commit()
-        
-        # End turn for the player who countered
-        player.turns_left -= 1
-        db.session.commit()
-        
-        # Flip turn player
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-            db.session.commit()
         
         return jsonify({
             'success': True,
@@ -264,8 +264,17 @@ def allow_spell():
         caster = Player.query.get(pending_spell.player_id)
         spell_effect = _execute_spell(pending_spell, game, caster)
         
-        # Add log entry before commit
+        # End turn for the player who allowed the spell
         player = Player.query.get(player_id)
+        player.turns_left -= 1
+        
+        # Always flip turn to the other player
+        for p in game.players:
+            if p.id != player_id:
+                game.turn_player_id = p.id
+                break
+        
+        # Add log entry before commit
         _add_spell_log_entry(
             game_id, player_id, game.current_round,
             player.turns_left, pending_spell.spell_name, 'spell_allowed',
@@ -273,15 +282,6 @@ def allow_spell():
         )
         
         db.session.commit()
-        
-        # End turn for the player who allowed the spell
-        player.turns_left -= 1
-        db.session.commit()
-        
-        # Flip turn player
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-            db.session.commit()
         
         return jsonify({
             'success': True,
@@ -586,7 +586,74 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 spell_effect['effect'] = f'Failed to dump cards: {str(e)}'
                 spell_effect['error'] = str(e)
         
-        # TODO: Implement other greed spells (Forced Deal)
+        elif spell.spell_name == 'Forced Deal':
+            try:
+                import random
+                
+                # Get both players
+                opponent = None
+                for player in game.players:
+                    if player.id != caster.id:
+                        opponent = player
+                        break
+                
+                if not opponent:
+                    spell_effect['effect'] = 'No opponent found'
+                    spell_effect['error'] = 'No opponent'
+                else:
+                    # Get main cards from both players
+                    caster_main_cards = MainCard.query.filter_by(
+                        player_id=caster.id,
+                        in_deck=False,
+                        part_of_figure=False
+                    ).all()
+                    
+                    opponent_main_cards = MainCard.query.filter_by(
+                        player_id=opponent.id,
+                        in_deck=False,
+                        part_of_figure=False
+                    ).all()
+                    
+                    # Check if both players have at least 2 cards
+                    if len(caster_main_cards) < 2:
+                        spell_effect['effect'] = f'Caster has only {len(caster_main_cards)} main cards, need at least 2'
+                        spell_effect['error'] = 'Not enough cards'
+                    elif len(opponent_main_cards) < 2:
+                        spell_effect['effect'] = f'Opponent has only {len(opponent_main_cards)} main cards, need at least 2'
+                        spell_effect['error'] = 'Not enough cards'
+                    else:
+                        # Randomly select 2 cards from each player
+                        caster_cards_to_give = random.sample(caster_main_cards, 2)
+                        opponent_cards_to_give = random.sample(opponent_main_cards, 2)
+                        
+                        # Swap the cards
+                        for card in caster_cards_to_give:
+                            card.player_id = opponent.id
+                        
+                        for card in opponent_cards_to_give:
+                            card.player_id = caster.id
+                        
+                        db.session.commit()
+                        
+                        # Prepare effect data
+                        spell_effect['effect'] = f'Exchanged 2 cards with opponent'
+                        spell_effect['cards_given'] = [card.serialize() for card in caster_cards_to_give]
+                        spell_effect['cards_received'] = [card.serialize() for card in opponent_cards_to_give]
+                        
+                        # Add type field
+                        spell_effect['drawn_cards'] = []
+                        for card in opponent_cards_to_give:
+                            card_data = card.serialize()
+                            card_data['type'] = 'main'
+                            spell_effect['drawn_cards'].append(card_data)
+                        
+                        # Store opponent's received cards for notification
+                        spell_effect['opponent_received'] = [card.serialize() for card in caster_cards_to_give]
+            except Exception as e:
+                spell_effect['effect'] = f'Failed to exchange cards: {str(e)}'
+                spell_effect['error'] = str(e)
+        
+        # TODO: Implement other greed spells
         
     elif spell.spell_type == 'enchantment':
         # Figure enchantment spells
@@ -630,3 +697,80 @@ def _add_spell_log_entry(game_id, player_id, round_number, turn_number, spell_na
         type=entry_type
     )
     db.session.add(log_entry)
+
+
+def _check_and_fill_minimum_cards(game, player):
+    """
+    Check if player has minimum required cards and automatically fill up if needed.
+    
+    :param game: Game instance
+    :param player: Player instance
+    :return: Dictionary with fill information
+    """
+    from server_settings import NUM_MIN_MAIN_CARDS, NUM_MIN_SIDE_CARDS
+    
+    fill_info = {
+        'filled': False,
+        'main_cards_drawn': 0,
+        'side_cards_drawn': 0,
+        'drawn_cards': []
+    }
+    
+    # Count current cards
+    main_count = MainCard.query.filter_by(
+        player_id=player.id,
+        in_deck=False,
+        part_of_figure=False
+    ).count()
+    
+    side_count = SideCard.query.filter_by(
+        player_id=player.id,
+        in_deck=False,
+        part_of_figure=False
+    ).count()
+    
+    # Check and fill main cards
+    if main_count < NUM_MIN_MAIN_CARDS:
+        cards_needed = NUM_MIN_MAIN_CARDS - main_count
+        try:
+            drawn_main = DeckManager.draw_cards_from_deck(game, player, cards_needed, 'main')
+            fill_info['filled'] = True
+            fill_info['main_cards_drawn'] = len(drawn_main)
+            for card in drawn_main:
+                card_data = card.serialize()
+                card_data['type'] = 'main'
+                fill_info['drawn_cards'].append(card_data)
+        except Exception as e:
+            print(f"Could not fill main cards: {e}")
+    
+    # Check and fill side cards
+    if side_count < NUM_MIN_SIDE_CARDS:
+        cards_needed = NUM_MIN_SIDE_CARDS - side_count
+        try:
+            drawn_side = DeckManager.draw_cards_from_deck(game, player, cards_needed, 'side')
+            fill_info['filled'] = True
+            fill_info['side_cards_drawn'] = len(drawn_side)
+            for card in drawn_side:
+                card_data = card.serialize()
+                card_data['type'] = 'side'
+                fill_info['drawn_cards'].append(card_data)
+        except Exception as e:
+            print(f"Could not fill side cards: {e}")
+    
+    # Add log entry if cards were auto-filled
+    if fill_info['filled']:
+        log_parts = []
+        if fill_info['main_cards_drawn'] > 0:
+            log_parts.append(f"{fill_info['main_cards_drawn']} main card{'s' if fill_info['main_cards_drawn'] > 1 else ''}")
+        if fill_info['side_cards_drawn'] > 0:
+            log_parts.append(f"{fill_info['side_cards_drawn']} side card{'s' if fill_info['side_cards_drawn'] > 1 else ''}")
+        
+        log_message = f"{player.serialize()['username']} auto-filled {' and '.join(log_parts)} to reach minimum"
+        _add_spell_log_entry(
+            game.id, player.id, game.current_round,
+            player.turns_left, 'Auto-Fill', 'auto_fill',
+            log_message
+        )
+    
+    return fill_info
+

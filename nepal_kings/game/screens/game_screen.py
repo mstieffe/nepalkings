@@ -235,6 +235,9 @@ class GameScreen(Screen):
         
         self.state.game.update()
         
+        # Check for auto-fill notifications
+        self.check_auto_fill_notification()
+        
         # Check for opponent spell notifications (like Dump Cards)
         self.check_opponent_spell_notifications()
         
@@ -257,6 +260,44 @@ class GameScreen(Screen):
                 elem.update(self.state.game, families=self.figure_manager.families)
             else:
                 elem.update(self.state.game)
+    
+    def check_auto_fill_notification(self):
+        """Check if player was auto-filled and show notification."""
+        if not self.state.game or not hasattr(self.state.game, 'last_auto_fill'):
+            return
+        
+        auto_fill = self.state.game.last_auto_fill
+        if not auto_fill:
+            return
+        
+        # Clear the auto_fill data so we don't show it again
+        self.state.game.last_auto_fill = None
+        
+        # Create card images for auto-filled cards
+        from game.components.cards.card import Card
+        auto_fill_cards = auto_fill.get('drawn_cards', [])
+        auto_fill_images = []
+        
+        for card_data in auto_fill_cards:
+            card = Card(
+                rank=card_data['rank'],
+                suit=card_data['suit'],
+                value=card_data['value'],
+                id=card_data.get('id'),
+                type=card_data.get('type')
+            )
+            card_img = card.make_icon(self.window, self.state.game, 0, 0)
+            auto_fill_images.append(card_img.front_img)
+        
+        # Show dialogue box with auto-filled cards
+        if auto_fill_images:
+            self.make_dialogue_box(
+                message="Your hand was below minimum. Auto-filled:",
+                actions=['ok'],
+                images=auto_fill_images,
+                icon="loot",
+                title="Auto-Fill"
+            )
     
     def check_opponent_spell_notifications(self):
         """Check for spells cast by opponent that should trigger notifications."""
@@ -301,6 +342,34 @@ class GameScreen(Screen):
             # Show dialogue box
             self.make_dialogue_box(
                 message=f"{self.state.game.opponent_name} cast Dump Cards! All hands were dumped. You drew:",
+                actions=['ok'],
+                images=card_images,
+                icon="loot",
+                title="Opponent Cast Spell"
+            )
+        
+        # Check for Forced Deal spell
+        elif log_type == 'spell_cast' and 'Forced Deal' in log_message:
+            # Show notification to opponent with cards they received
+            main_cards, side_cards = self.state.game.get_hand()
+            
+            # Get the 2 most recently added cards (the ones received from the exchange)
+            # Sort by ID to get the ones just transferred
+            all_main_cards = sorted(main_cards, key=lambda x: x.id if hasattr(x, 'id') else 0, reverse=True)
+            
+            # Take the first 2 (most recent)
+            received_cards = all_main_cards[:2] if len(all_main_cards) >= 2 else all_main_cards
+            
+            # Create card images
+            from game.components.cards.card_img import CardImg
+            card_images = []
+            for card in received_cards:
+                card_img = CardImg(self.window, card.suit, card.rank)
+                card_images.append(card_img.front_img)
+            
+            # Show dialogue box
+            self.make_dialogue_box(
+                message=f"{self.state.game.opponent_name} cast Forced Deal! You exchanged 2 random cards. You received:",
                 actions=['ok'],
                 images=card_images,
                 icon="loot",

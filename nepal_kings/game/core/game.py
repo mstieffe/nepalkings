@@ -25,6 +25,9 @@ class Game:
         self.pending_spell = None  # Will be loaded if needed
         self.waiting_for_counter = False
         self.active_spell_effects = []  # Will be loaded separately
+        
+        # Auto-fill tracking
+        self.last_auto_fill = None  # Stores info about latest auto-fill for this player
 
         self.player_id = None
         self.opponent_name = None
@@ -57,17 +60,24 @@ class Game:
     def update(self):
         """Update game state from the server."""
         try:
-            response = requests.get(f'{settings.SERVER_URL}/games/get_game', params={'game_id': self.game_id})
+            response = requests.get(f'{settings.SERVER_URL}/games/get_game', params={
+                'game_id': self.game_id,
+                'player_id': self.player_id
+            })
             if response.status_code != 200:
                 print("Failed to update game")
                 return
 
             game_data = response.json()
             game_dict = game_data.get('game')
+            auto_fill = game_data.get('auto_fill')  # Check if this player was auto-filled
 
             if not game_dict:
                 print("Game data not found in response")
                 return
+            
+            # Store auto-fill data for later processing
+            self.last_auto_fill = auto_fill if auto_fill and auto_fill.get('filled') else None
 
             # Update game data
             self.game_id = game_dict['id']
