@@ -238,6 +238,9 @@ class GameScreen(Screen):
         # Check for opponent spell notifications (like Dump Cards)
         self.check_opponent_spell_notifications()
         
+        # Check for auto-fill notification
+        self.check_auto_fill_notification()
+        
         self.main_hand.update(self.state.game)
         self.side_hand.update(self.state.game)
         
@@ -306,6 +309,44 @@ class GameScreen(Screen):
                 icon="loot",
                 title="Opponent Cast Spell"
             )
+
+    def check_auto_fill_notification(self):
+        """Check for auto-fill notification and show dialogue if needed."""
+        if not self.state.game or not self.state.game.pending_auto_fill:
+            return
+        
+        auto_fill = self.state.game.pending_auto_fill
+        main_filled = auto_fill.get('main_cards_filled', 0)
+        side_filled = auto_fill.get('side_cards_filled', 0)
+        cards_data = auto_fill.get('cards', [])
+        
+        # Build message
+        message_parts = []
+        if main_filled > 0:
+            message_parts.append(f"{main_filled} main card{'s' if main_filled > 1 else ''}")
+        if side_filled > 0:
+            message_parts.append(f"{side_filled} side card{'s' if side_filled > 1 else ''}")
+        
+        message = f"Your hand was below the minimum. Refilled: {' and '.join(message_parts)}."
+        
+        # Create card images from the cards data
+        from game.components.cards.card_img import CardImg
+        card_images = []
+        for card_data in cards_data:
+            card_img = CardImg(self.window, card_data['suit'], card_data['rank'])
+            card_images.append(card_img.front_img)
+        
+        # Show dialogue
+        self.make_dialogue_box(
+            message=message,
+            actions=['ok'],
+            images=card_images,
+            icon="loot",
+            title="Cards Refilled"
+        )
+        
+        # Clear the notification
+        self.state.game.pending_auto_fill = None
 
     def render(self):
         """Render the game screen, buttons, and active subscreen."""

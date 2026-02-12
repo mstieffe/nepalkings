@@ -1,6 +1,7 @@
 # server.py
 from flask import Flask
 from models import db
+import logging
 
 #import os
 #import sys
@@ -19,6 +20,10 @@ figures.settings = settings
 spells.settings = settings
 
 app = Flask(__name__)
+
+# Disable Flask's default request logging
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)  # Only show errors, not every request
 
 # Configure the database URI
 app.config['SQLALCHEMY_DATABASE_URI'] = settings.DB_URL

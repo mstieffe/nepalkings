@@ -8,6 +8,85 @@ import server_settings as settings
 
 games = Blueprint('games', __name__)
 
+def _check_and_fill_minimum_cards(game, player):
+    """
+    Check if player has minimum required cards and auto-fill if needed.
+    Returns fill_info dict with details about what was filled, or None if no fill needed.
+    """
+    print(f"[AUTO-FILL] Starting check for player {player.id} in game {game.id}")
+    
+    # Count current cards (in hand = not in deck and not part of figure)
+    main_cards_count = MainCard.query.filter_by(
+        game_id=game.id,
+        player_id=player.id,
+        in_deck=False,
+        part_of_figure=False
+    ).count()
+    
+    side_cards_count = SideCard.query.filter_by(
+        game_id=game.id,
+        player_id=player.id,
+        in_deck=False,
+        part_of_figure=False
+    ).count()
+    
+    # Check if auto-fill needed
+    main_cards_needed = max(0, settings.NUM_MIN_MAIN_CARDS - main_cards_count)
+    side_cards_needed = max(0, settings.NUM_MIN_SIDE_CARDS - side_cards_count)
+    
+    print(f"[AUTO-FILL] Player {player.id}: main={main_cards_count}/{settings.NUM_MIN_MAIN_CARDS}, side={side_cards_count}/{settings.NUM_MIN_SIDE_CARDS}")
+    
+    if main_cards_needed == 0 and side_cards_needed == 0:
+        print(f"[AUTO-FILL] No fill needed")
+        return None
+    
+    # Auto-fill needed
+    print(f"[AUTO-FILL] Need to fill: main={main_cards_needed}, side={side_cards_needed}")
+    fill_info = {
+        'main_cards_filled': 0,
+        'side_cards_filled': 0,
+        'cards': []  # List of card data (suit, rank, type)
+    }
+    
+    if main_cards_needed > 0:
+        print(f"[AUTO-FILL] Drawing {main_cards_needed} main cards")
+        drawn_main = DeckManager.draw_cards_from_deck(
+            game,
+            player,
+            main_cards_needed,
+            card_type="main"
+        )
+        fill_info['main_cards_filled'] = len(drawn_main)
+        # Add card data for client to display
+        for card in drawn_main:
+            fill_info['cards'].append({
+                'suit': card.suit.value,
+                'rank': card.rank.value,
+                'type': 'main'
+            })
+        print(f"[AUTO-FILL] Drew {len(drawn_main)} main cards")
+    
+    if side_cards_needed > 0:
+        print(f"[AUTO-FILL] Drawing {side_cards_needed} side cards")
+        drawn_side = DeckManager.draw_cards_from_deck(
+            game,
+            player,
+            side_cards_needed,
+            card_type="side"
+        )
+        fill_info['side_cards_filled'] = len(drawn_side)
+        # Add card data for client to display
+        for card in drawn_side:
+            fill_info['cards'].append({
+                'suit': card.suit.value,
+                'rank': card.rank.value,
+                'type': 'side'
+            })
+        print(f"[AUTO-FILL] Drew {len(drawn_side)} side cards")
+    
+    print(f"[AUTO-FILL] Returning fill_info: {fill_info}")
+    return fill_info
+
 @games.route('/get_games', methods=['GET'])
 def get_games():
     try:
@@ -42,6 +121,54 @@ def get_game():
         })
     except Exception as e:
         return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+
+
+@games.route('/start_turn', methods=['POST'])
+def start_turn():
+    """
+    Called when a player's turn begins. Checks and auto-fills minimum cards if needed.
+    """
+    try:
+        data = request.get_json()
+        game_id = data.get('game_id')
+        player_id = data.get('player_id')
+        
+        print(f"[START_TURN] Called for game {game_id} (type={type(game_id)}), player {player_id} (type={type(player_id)})")
+
+        if not game_id or not player_id:
+            return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 400
+
+        player = Player.query.filter_by(game_id=game_id, id=player_id).first()
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 400
+
+        # Check if it's actually this player's turn
+        print(f"[START_TURN] Checking turn: game.turn_player_id={game.turn_player_id} (type={type(game.turn_player_id)}), player_id={player_id} (type={type(player_id)})")
+        if game.turn_player_id != player_id:
+            print(f"[START_TURN] Turn mismatch: game.turn_player_id={game.turn_player_id}, player_id={player_id}")
+            return jsonify({'success': False, 'message': 'Not your turn'}), 400
+
+        print(f"[START_TURN] Turn check passed, calling _check_and_fill_minimum_cards")
+        
+        # Check and fill minimum cards
+        fill_info = _check_and_fill_minimum_cards(game, player)
+        
+        print(f"[START_TURN] Fill info: {fill_info}")
+
+        return jsonify({
+            'success': True,
+            'auto_fill': fill_info  # None if no fill needed, otherwise dict with fill details
+        })
+
+    except Exception as e:
+        print(f"[START_TURN] Exception occurred: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'An error occurred: {str(e)}'}), 400
 
 
 @games.route('/create_game', methods=['POST'])
