@@ -46,6 +46,12 @@ class Game:
         self.turn = True if self.turn_player_id == self.player_id else False
         self.invader = True if self.invader_player_id == self.player_id else False
 
+        # Track previous turn to detect turn changes
+        self.previous_turn_player_id = self.turn_player_id
+        
+        # Auto-fill notification (cleared after showing dialogue)
+        self.pending_auto_fill = None
+
         # Initialize log entries and chat messages
         self.log_entries = []
         self.chat_messages = []
@@ -103,8 +109,18 @@ class Game:
                     self.opponent_player = player_dict
 
             # Update turn and invader status
+            previous_turn = self.turn
             self.turn = True if self.turn_player_id == self.player_id else False
             self.invader = True if self.invader_player_id == self.player_id else False
+
+            # Check if turn changed to current player - call start_turn endpoint
+            print(f"[TURN CHECK] previous_turn={previous_turn}, self.turn={self.turn}, previous_turn_player_id={self.previous_turn_player_id}, turn_player_id={self.turn_player_id}")
+            if not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
+                print(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
+                self._handle_start_turn()
+            
+            # Update previous turn player for next check
+            self.previous_turn_player_id = self.turn_player_id
 
             # Update logs and chats
             self.update_logs()
@@ -112,6 +128,37 @@ class Game:
 
         except Exception as e:
             print(f"An error occurred: {str(e)}")
+
+    def _handle_start_turn(self):
+        """Called when turn changes to current player. Checks and handles auto-fill."""
+        try:
+            payload = {
+                'game_id': self.game_id,
+                'player_id': self.player_id
+            }
+            print(f"[START_TURN] Sending payload: game_id={self.game_id} (type={type(self.game_id)}), player_id={self.player_id} (type={type(self.player_id)})")
+            
+            response = requests.post(
+                f'{settings.SERVER_URL}/games/start_turn',
+                json=payload
+            )
+            
+            if response.status_code != 200:
+                print(f"[START_TURN] Failed with status {response.status_code}: {response.json()}")
+                return
+            
+            data = response.json()
+            print(f"[START_TURN] Response: {data}")
+            if data.get('success'):
+                auto_fill = data.get('auto_fill')
+                if auto_fill:
+                    # Store for dialogue display
+                    print(f"[START_TURN] Auto-fill needed: {auto_fill}")
+                    self.pending_auto_fill = auto_fill
+                else:
+                    print(f"[START_TURN] No auto-fill needed")
+        except Exception as e:
+            print(f"Error in start_turn: {str(e)}")
 
     def get_player_username(self, player_id):
         """Fetch the username of a player given their player_id."""
