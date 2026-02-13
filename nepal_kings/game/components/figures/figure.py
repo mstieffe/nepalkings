@@ -110,6 +110,17 @@ class Figure:
             v += card.value
         return v
 
+    def get_battle_bonus(self) -> int:
+        """Returns the battle bonus this figure provides (sum of key card values)."""
+        # Military figures do not provide any support
+        if hasattr(self.family, 'field') and self.family.field == 'military':
+            return 0
+        
+        bonus = 0
+        for card in self.key_cards:
+            bonus += card.value
+        return bonus
+
     def add_upgrade(self, figure: 'Figure'):
         """Links this figure to an upgraded version."""
         self.upgrade_to.append(figure)

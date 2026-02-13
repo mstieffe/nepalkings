@@ -43,11 +43,13 @@ class Game:
                 self.opponent_player = player_dict
 
         # Whether it is this player's turn
-        self.turn = True if self.turn_player_id == self.player_id else False
+        # Initialize to False so first update() can detect if it's their turn
+        self.turn = False
         self.invader = True if self.invader_player_id == self.player_id else False
 
         # Track previous turn to detect turn changes
-        self.previous_turn_player_id = self.turn_player_id
+        # Initialize to None so first login triggers turn detection if it's their turn
+        self.previous_turn_player_id = None
         
         # Auto-fill notification (cleared after showing dialogue)
         self.pending_auto_fill = None
@@ -114,7 +116,6 @@ class Game:
             self.invader = True if self.invader_player_id == self.player_id else False
 
             # Check if turn changed to current player - call start_turn endpoint
-            print(f"[TURN CHECK] previous_turn={previous_turn}, self.turn={self.turn}, previous_turn_player_id={self.previous_turn_player_id}, turn_player_id={self.turn_player_id}")
             if not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
                 print(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
                 self._handle_start_turn()

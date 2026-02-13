@@ -64,9 +64,11 @@ class InfoScroll:
                     )
         return preloaded_icons
 
-    def _draw_text_with_background(self, text, color, x, y):
-        """Render text with a colored background."""
-        text_obj = self.font_text.render(text, True, settings.INFO_SCROLL_SCORE_COLOR)
+    def _draw_text_with_background(self, text, color, x, y, has_deficit=False):
+        """Render text with a colored background, using red border if deficit."""
+        # Use bright white for all text
+        text_color = (255, 255, 255)
+        text_obj = self.font_text.render(text, True, text_color)
         text_rect = text_obj.get_rect(topleft=(x, y - text_obj.get_height() // 2))
         bg_rect = pygame.Rect(
             text_rect.x - settings.INFO_SCROLL_TEXT_PADDING,
@@ -74,7 +76,14 @@ class InfoScroll:
             text_rect.width + 2 * settings.INFO_SCROLL_TEXT_PADDING,
             text_rect.height + 2 * settings.INFO_SCROLL_TEXT_PADDING
         )
+        
+        # Draw background with original color
         pygame.draw.rect(self.window, color, bg_rect)
+        
+        # Draw red border if deficit
+        if has_deficit:
+            pygame.draw.rect(self.window, (220, 0, 0), bg_rect, 3)  # Darker red border, 3 pixels wide
+        
         self.window.blit(text_obj, text_rect)
 
     def draw_msg(self):
@@ -100,30 +109,64 @@ class InfoScroll:
                     (icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_ICON_SPACING, starting_y_position)
                 )
 
-                # Draw corresponding text
+                # Draw corresponding text with green/blue, use red for deficit
+                red_text = str(row['red'])
+                black_text = str(row['black'])
+                
+                # Check for deficit
+                red_deficit = row.get('red_deficit', False)
+                black_deficit = row.get('black_deficit', False)
+                
+                # Use darker green and blue colors
+                red_color = (0, 120, 0)  # Darker green for djungle/red suits
+                black_color = (0, 80, 180)  # Darker blue for himalaya/black suits
+                
+                # Adjust green text position slightly to the left
+                red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
+                
                 self._draw_text_with_background(
-                    str(row['red']), settings.COLOR_RED,
-                    icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN,
-                    text_y
+                    red_text, red_color,
+                    red_text_x,
+                    text_y,
+                    has_deficit=red_deficit
                 )
                 self._draw_text_with_background(
-                    str(row['black']), settings.COLOR_BLACK,
+                    black_text, black_color,
                     icon_x + 2 * settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_ICON_SPACING + settings.INFO_SCROLL_TEXT_MARGIN,
-                    text_y
+                    text_y,
+                    has_deficit=black_deficit
                 )
 
             elif 'icon_img' in row:
                 # Scenario: slots_df with one icon
                 self.window.blit(self.preloaded_icons[row['icon_img']], (icon_x, starting_y_position))
+                
+                # Draw corresponding text with green/blue, use red for deficit
+                red_text = str(row['red'])
+                black_text = str(row['black'])
+                
+                # Check for deficit
+                red_deficit = row.get('red_deficit', False)
+                black_deficit = row.get('black_deficit', False)
+                
+                # Use darker green and blue colors
+                red_color = (0, 120, 0)  # Darker green for djungle/red suits
+                black_color = (0, 80, 180)  # Darker blue for himalaya/black suits
+                
+                # Adjust green text position slightly to the left
+                red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
+                
                 self._draw_text_with_background(
-                    str(row['red']), settings.COLOR_RED,
-                    icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN,
-                    text_y
+                    red_text, red_color,
+                    red_text_x,
+                    text_y,
+                    has_deficit=red_deficit
                 )
                 self._draw_text_with_background(
-                    str(row['black']), settings.COLOR_BLACK,
+                    black_text, black_color,
                     icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN + settings.INFO_SCROLL_TEXT_PADDING * 10,
-                    text_y
+                    text_y,
+                    has_deficit=black_deficit
                 )
 
             starting_y_position += settings.INFO_SCROLL_LINE_SPACING
@@ -155,18 +198,57 @@ class InfoScroll:
                 
                 # Map element names to resource keys (showing total_required/total_produced)
                 if element == 'food':
-                    self.text_df.at[idx, 'red'] = f"{requires.get('food_red', 0)}/{produces.get('food_red', 0)}"
-                    self.text_df.at[idx, 'black'] = f"{requires.get('food_black', 0)}/{produces.get('food_black', 0)}"
+                    red_req = requires.get('food_red', 0)
+                    red_prod = produces.get('food_red', 0)
+                    black_req = requires.get('food_black', 0)
+                    black_prod = produces.get('food_black', 0)
+                    
+                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
+                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
+                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
+                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    
                 elif element == 'amor':
-                    self.text_df.at[idx, 'red'] = f"{requires.get('armor_red', 0)}/{produces.get('armor_red', 0)}"
-                    self.text_df.at[idx, 'black'] = f"{requires.get('armor_black', 0)}/{produces.get('armor_black', 0)}"
+                    red_req = requires.get('armor_red', 0)
+                    red_prod = produces.get('armor_red', 0)
+                    black_req = requires.get('armor_black', 0)
+                    black_prod = produces.get('armor_black', 0)
+                    
+                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
+                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
+                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
+                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    
                 elif element == 'material':
-                    self.text_df.at[idx, 'red'] = f"{requires.get('material_red', 0)}/{produces.get('material_red', 0)}"
-                    self.text_df.at[idx, 'black'] = f"{requires.get('material_black', 0)}/{produces.get('material_black', 0)}"
+                    red_req = requires.get('material_red', 0)
+                    red_prod = produces.get('material_red', 0)
+                    black_req = requires.get('material_black', 0)
+                    black_prod = produces.get('material_black', 0)
+                    
+                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
+                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
+                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
+                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    
                 elif element == 'village':
-                    self.text_df.at[idx, 'red'] = f"{requires.get('villager_red', 0)}/{produces.get('villager_red', 0)}"
-                    self.text_df.at[idx, 'black'] = f"{requires.get('villager_black', 0)}/{produces.get('villager_black', 0)}"
+                    red_req = requires.get('villager_red', 0)
+                    red_prod = produces.get('villager_red', 0)
+                    black_req = requires.get('villager_black', 0)
+                    black_prod = produces.get('villager_black', 0)
+                    
+                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
+                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
+                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
+                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    
                 elif element == 'military':
-                    self.text_df.at[idx, 'red'] = f"{requires.get('warrior_red', 0)}/{produces.get('warrior_red', 0)}"
-                    self.text_df.at[idx, 'black'] = f"{requires.get('warrior_black', 0)}/{produces.get('warrior_black', 0)}"
+                    red_req = requires.get('warrior_red', 0)
+                    red_prod = produces.get('warrior_red', 0)
+                    black_req = requires.get('warrior_black', 0)
+                    black_prod = produces.get('warrior_black', 0)
+                    
+                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
+                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
+                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
+                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
         
