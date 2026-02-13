@@ -305,7 +305,8 @@ class FieldScreen(SubScreen):
                         self.figure_detail_box = FigureDetailBox(
                             self.window,
                             clicked_icon.figure,
-                            self.game
+                            self.game,
+                            all_figures=self.figures  # Pass cached figures to avoid server call
                         )
                     # Close detail box if figure was deselected
                     elif not clicked_icon.clicked:

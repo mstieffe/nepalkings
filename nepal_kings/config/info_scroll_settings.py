@@ -33,6 +33,12 @@ RESOURCE_ICON_IMG_PATH_DICT = {
     'rice_meat': 'img/resource_icons/rice_meat.png',
     'wood_stone': 'img/resource_icons/wood_stone.png',
     'sword_shield': 'img/resource_icons/sword_shield.png',
+    'warrior_red': 'img/resource_icons/warrior_red.png',
+    'warrior_black': 'img/resource_icons/warrior_black.png',
+    'warrior_red_black': 'img/resource_icons/warrior_red_black.png',
+    'villager_red': 'img/resource_icons/villager_red.png',
+    'villager_black': 'img/resource_icons/villager_black.png',
+    'villager_red_black': 'img/resource_icons/villager_red_black.png',
 }
 
 SLOT_ICON_IMG_PATH_DICT = {

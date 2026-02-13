@@ -74,14 +74,16 @@ class GameScreen(Screen):
         info_df = pd.DataFrame({
             'element': ['village', 'military', 'food', 'material', 'amor'],
             'icon_img': [
-                settings.SLOT_ICON_IMG_PATH_DICT['village'],
-                settings.SLOT_ICON_IMG_PATH_DICT['military'],
+                settings.RESOURCE_ICON_IMG_PATH_DICT['villager_red_black'],
+                settings.RESOURCE_ICON_IMG_PATH_DICT['warrior_red_black'],
                 settings.RESOURCE_ICON_IMG_PATH_DICT['rice_meat'],
                 settings.RESOURCE_ICON_IMG_PATH_DICT['wood_stone'],
                 settings.RESOURCE_ICON_IMG_PATH_DICT['sword_shield'],
             ],
             'red': ["0/0", "0/0", "0/0", "0/0", "0/0"],
             'black': ["0/0", "0/0", "0/0", "0/0", "0/0"],
+            'red_deficit': [False, False, False, False, False],
+            'black_deficit': [False, False, False, False, False],
         })
         info_scroll = InfoScroll(
             self.window,

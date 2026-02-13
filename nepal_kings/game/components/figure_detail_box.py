@@ -10,7 +10,7 @@ class FigureDetailBox:
     including stats, cards, and action buttons.
     """
 
-    def __init__(self, window, figure, game, x=None, y=None):
+    def __init__(self, window, figure, game, x=None, y=None, all_figures=None):
         """
         Initialize the figure detail box.
 
@@ -19,10 +19,12 @@ class FigureDetailBox:
         :param game: Reference to the game object
         :param x: Optional x position (defaults to center of screen)
         :param y: Optional y position (defaults to center of screen)
+        :param all_figures: Optional list of all figures (to avoid server call)
         """
         self.window = window
         self.figure = figure
         self.game = game
+        self.all_figures = all_figures  # Cache for battle bonus calculation
 
         # Fonts
         self.title_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_TITLE_DIALOGUE_BOX)
@@ -69,6 +71,12 @@ class FigureDetailBox:
         # Check if upgrade card is available in hand
         self.upgrade_card_available = self._check_upgrade_card_available()
 
+        # Load resource icons
+        self.resource_icons = self._load_resource_icons()
+
+        # Calculate battle bonus (do this once, not every frame)
+        self.potential_battle_bonus = self._calculate_potential_battle_bonus()
+
         # Action buttons (customize these based on figure type/state)
         self.buttons = self._create_action_buttons()
 
@@ -109,6 +117,118 @@ class FigureDetailBox:
             buttons.append(button)
 
         return buttons
+
+    def _load_resource_icons(self):
+        """Load and scale resource icons."""
+        icon_size = int(settings.FONT_SIZE_DIALOGUE_BOX * 1.2)  # Slightly larger than text
+        icons = {}
+        
+        # Use the predefined resource icon paths from settings
+        if hasattr(settings, 'RESOURCE_ICON_IMG_PATH_DICT'):
+            for resource, path in settings.RESOURCE_ICON_IMG_PATH_DICT.items():
+                try:
+                    icon = pygame.image.load(path).convert_alpha()
+                    icons[resource] = pygame.transform.smoothscale(icon, (icon_size, icon_size))
+                except Exception as e:
+                    print(f"[FIGURE_DETAIL] Failed to load icon for {resource} from {path}: {e}")
+        
+        return icons
+
+    def _map_resource_to_icon(self, resource_name):
+        """
+        Map database resource names to icon keys.
+        Database uses names like 'food_red', 'warrior_black' etc.
+        Icons use 'rice', 'meat', 'warrior_red', 'villager_black' etc.
+        """
+        # Resource name mapping
+        resource_map = {
+            'food_red': 'rice',
+            'food_black': 'meat',
+            'warrior_red': 'warrior_red',
+            'warrior_black': 'warrior_black',
+            'material_red': 'wood_stone',
+            'material_black': 'wood_stone',
+            'armor_red': 'sword_shield',
+            'armor_black': 'sword_shield',
+            'villager_red': 'villager_red',
+            'villager_black': 'villager_black',
+        }
+        
+        # Return mapped name or original if no mapping exists
+        return resource_map.get(resource_name, resource_name)
+
+    def _calculate_potential_battle_bonus(self):
+        """
+        Calculate the potential battle bonus this figure could receive.
+        Rules:
+        - Castle figures get bonus from other castle figures (same suit)
+        - Village figures get bonus from castle figures (same suit)
+        - Military figures get bonus from castle + village figures (same suit)
+        - Military figures provide 0 bonus
+        """
+        try:
+            # Use cached figures if available, otherwise fetch from server
+            if self.all_figures is not None:
+                all_figures = [fig for fig in self.all_figures if fig.player_id == self.game.player_id]
+                print(f"[BATTLE_BONUS] Using cached figures: {len(all_figures)}")
+            else:
+                # Import here to avoid circular imports
+                from game.components.figures.figure_manager import FigureManager
+                
+                # Get all families
+                figure_manager = FigureManager()
+                families = figure_manager.families
+                
+                # Get all figures for this player
+                all_figures = self.game.get_figures(families, is_opponent=False)
+                print(f"[BATTLE_BONUS] Fetched figures from server: {len(all_figures)}")
+            
+            print(f"[BATTLE_BONUS] Total figures for player: {len(all_figures)}")
+            
+            # Determine this figure's type
+            current_figure_type = self.figure.family.field if hasattr(self.figure.family, 'field') else None
+            print(f"[BATTLE_BONUS] Current figure type: {current_figure_type}")
+            
+            # Determine which figure types can provide bonus to this figure
+            if current_figure_type == 'castle':
+                # Castle gets bonus from other castle figures only
+                valid_types = ['castle']
+            elif current_figure_type == 'village':
+                # Village gets bonus from castle figures only
+                valid_types = ['castle']
+            elif current_figure_type == 'military':
+                # Military gets bonus from castle + village figures
+                valid_types = ['castle', 'village']
+            else:
+                # Unknown type, no bonus
+                valid_types = []
+            
+            print(f"[BATTLE_BONUS] Can receive bonus from types: {valid_types}")
+            
+            # Filter for same suit, valid types, excluding current figure
+            same_suit_figures = [
+                fig for fig in all_figures 
+                if (fig.suit == self.figure.suit and 
+                    fig.id != self.figure.id and
+                    hasattr(fig.family, 'field') and
+                    fig.family.field in valid_types)
+            ]
+            print(f"[BATTLE_BONUS] Same suit figures ({self.figure.suit}) that can provide bonus: {len(same_suit_figures)}")
+            for fig in same_suit_figures:
+                bonus = fig.get_battle_bonus()
+                fig_type = fig.family.field if hasattr(fig.family, 'field') else 'unknown'
+                print(f"  - {fig.name} ({fig.suit}, {fig_type}), bonus: {bonus}")
+            
+            # Sum battle bonuses
+            total_bonus = sum(fig.get_battle_bonus() for fig in same_suit_figures)
+            print(f"[BATTLE_BONUS] Total bonus calculated: {total_bonus}")
+            return total_bonus
+        except Exception as e:
+            # If anything fails, just return 0
+            print(f"[BATTLE_BONUS] Error calculating bonus: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
 
     def _check_upgrade_card_available(self):
         """Check if the upgrade card required for this figure is in the player's hand."""
@@ -174,13 +294,97 @@ class FigureDetailBox:
             self.window.blit(suit_surface, suit_rect)
             current_y += suit_rect.height + settings.SMALL_SPACER_Y
 
-        # Draw power/value
+        # Draw power/value with potential battle bonus
         if current_y + self.font.get_height() <= max_content_y:
-            power_text = f"Power: {self.figure.get_value()}"
+            power_value = self.figure.get_value()
+            power_text = f"Power: {power_value}"
             power_surface = self.font.render(power_text, True, settings.MSG_TEXT_COLOR)
-            power_rect = power_surface.get_rect(centerx=self.rect.centerx, top=current_y)
-            self.window.blit(power_surface, power_rect)
-            current_y += power_rect.height + settings.SMALL_SPACER_Y
+            power_x = self.rect.centerx - power_surface.get_width() // 2
+            self.window.blit(power_surface, (power_x, current_y))
+            
+            # Display potential battle bonus (calculated once in __init__)
+            if self.potential_battle_bonus > 0:
+                bonus_text = f" (+{self.potential_battle_bonus})"
+                bonus_surface = self.font.render(bonus_text, True, (0, 180, 0))  # Green color
+                bonus_x = power_x + power_surface.get_width()
+                self.window.blit(bonus_surface, (bonus_x, current_y))
+            
+            current_y += power_surface.get_height() + settings.SMALL_SPACER_Y // 2
+
+        # Draw battle bonus this figure provides
+        if current_y + self.font.get_height() <= max_content_y:
+            battle_bonus = self.figure.get_battle_bonus()
+            bonus_text = f"Support: {battle_bonus}"
+            bonus_surface = self.font.render(bonus_text, True, settings.MSG_TEXT_COLOR)
+            bonus_rect = bonus_surface.get_rect(centerx=self.rect.centerx, top=current_y)
+            self.window.blit(bonus_surface, bonus_rect)
+            current_y += bonus_rect.height + settings.SMALL_SPACER_Y
+
+        # Draw resources produced
+        if self.figure.produces and current_y + self.font.get_height() <= max_content_y:
+            # Draw "Produces:" label
+            produces_label = self.font.render("Produces:", True, settings.MSG_TEXT_COLOR)
+            label_x = self.rect.centerx - self.width // 3
+            self.window.blit(produces_label, (label_x, current_y))
+            
+            # Draw resource icons and amounts
+            icon_start_x = label_x + produces_label.get_width() + settings.SMALL_SPACER_X
+            current_x = icon_start_x
+            
+            for resource, amount in self.figure.produces.items():
+                # Map resource name to icon key
+                icon_key = self._map_resource_to_icon(resource)
+                
+                # Draw icon if available
+                if icon_key in self.resource_icons:
+                    icon = self.resource_icons[icon_key]
+                    self.window.blit(icon, (current_x, current_y))
+                    current_x += icon.get_width() + 2
+                    
+                    # Draw amount next to icon
+                    amount_text = self.font.render(f"{amount}", True, settings.MSG_TEXT_COLOR)
+                    self.window.blit(amount_text, (current_x, current_y))
+                    current_x += amount_text.get_width() + settings.SMALL_SPACER_X
+                else:
+                    # Fallback to text only
+                    text = self.font.render(f"{resource.capitalize()} ({amount})", True, settings.MSG_TEXT_COLOR)
+                    self.window.blit(text, (current_x, current_y))
+                    current_x += text.get_width() + settings.SMALL_SPACER_X
+            
+            current_y += produces_label.get_height() + settings.SMALL_SPACER_Y
+
+        # Draw resource requirements
+        if self.figure.requires and current_y + self.font.get_height() <= max_content_y:
+            # Draw "Requires:" label
+            requires_label = self.font.render("Requires:", True, settings.MSG_TEXT_COLOR)
+            label_x = self.rect.centerx - self.width // 3
+            self.window.blit(requires_label, (label_x, current_y))
+            
+            # Draw resource icons and amounts
+            icon_start_x = label_x + requires_label.get_width() + settings.SMALL_SPACER_X
+            current_x = icon_start_x
+            
+            for resource, amount in self.figure.requires.items():
+                # Map resource name to icon key
+                icon_key = self._map_resource_to_icon(resource)
+                
+                # Draw icon if available
+                if icon_key in self.resource_icons:
+                    icon = self.resource_icons[icon_key]
+                    self.window.blit(icon, (current_x, current_y))
+                    current_x += icon.get_width() + 2
+                    
+                    # Draw amount next to icon
+                    amount_text = self.font.render(f"{amount}", True, settings.MSG_TEXT_COLOR)
+                    self.window.blit(amount_text, (current_x, current_y))
+                    current_x += amount_text.get_width() + settings.SMALL_SPACER_X
+                else:
+                    # Fallback to text only
+                    text = self.font.render(f"{resource.capitalize()} ({amount})", True, settings.MSG_TEXT_COLOR)
+                    self.window.blit(text, (current_x, current_y))
+                    current_x += text.get_width() + settings.SMALL_SPACER_X
+            
+            current_y += requires_label.get_height() + settings.SMALL_SPACER_Y * 1.5
 
         # Draw divider line
         if current_y + 2 < max_content_y:
