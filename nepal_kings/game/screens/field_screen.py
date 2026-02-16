@@ -302,11 +302,15 @@ class FieldScreen(SubScreen):
                     
                     # Open detail box if figure was just selected and is visible
                     if clicked_icon.clicked and not was_clicked and clicked_icon.is_visible:
+                        # Calculate resources once for efficiency
+                        resources_data = self.game.calculate_resources(self.figure_manager.families)
+                        
                         self.figure_detail_box = FigureDetailBox(
                             self.window,
                             clicked_icon.figure,
                             self.game,
-                            all_figures=self.figures  # Pass cached figures to avoid server call
+                            all_figures=self.figures,  # Pass cached figures to avoid server call
+                            resources_data=resources_data  # Pass pre-calculated resources
                         )
                     # Close detail box if figure was deselected
                     elif not clicked_icon.clicked:

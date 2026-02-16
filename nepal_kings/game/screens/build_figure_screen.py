@@ -95,7 +95,12 @@ class BuildFigureScreen(SubScreen):
 
     def init_scroll_test_list_shifter(self):
         """Initialize the scroll text list shifter."""
-        self.make_scroll_text_list_shifter(self.scroll_text_list, settings.BUILD_FIGURE_SCROLL_TEXT_X, settings.BUILD_FIGURE_SCROLL_TEXT_Y)
+        self.make_scroll_text_list_shifter(
+            self.scroll_text_list, 
+            settings.BUILD_FIGURE_SCROLL_TEXT_X, 
+            settings.BUILD_FIGURE_SCROLL_TEXT_Y,
+            scroll_height=settings.BUILD_FIGURE_INFO_BOX_SCROLL_HEIGHT
+        )
 
 
     def init_figure_family_icons(self):
@@ -132,7 +137,9 @@ class BuildFigureScreen(SubScreen):
             super(BuildFigureScreen, self).make_button(
                 color,
                 settings.BUILD_FIGURE_COLOR_BUTTON_X + settings.SUB_SCREEN_BUTTON_DELTA_X * i,
-                settings.BUILD_FIGURE_COLOR_BUTTON_Y
+                settings.BUILD_FIGURE_COLOR_BUTTON_Y,
+                button_img_active=settings.BUILD_FIGURE_COLOR_BUTTON_ACTIVE_IMG,
+                button_img_inactive=settings.BUILD_FIGURE_COLOR_BUTTON_INACTIVE_IMG
             )
             for i, color in enumerate(colors)
         ]
@@ -291,8 +298,12 @@ class BuildFigureScreen(SubScreen):
         if figures:
             self.selected_figures = figures
             self.scroll_text_list = [{"title": figure.name,
+                                      "figure_type": f"{figure.family.field.capitalize()} Figure",
                                       "text": figure.family.description,
-                                      "figure_strength": f"Base Power: {figure.get_value()}",
+                                      "power": figure.get_value(),
+                                      "support": figure.get_battle_bonus(),
+                                      "produces": figure.produces if figure.produces else None,
+                                      "requires": figure.requires if figure.requires else None,
                                       "cards": figure.cards,
                                       "content": figure}
                                      for figure in figures]

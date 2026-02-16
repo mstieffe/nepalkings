@@ -42,6 +42,7 @@ CIVIL_WAR_CONFIG = {
             key_cards=[Card('5', suit, 5), Card('5', suit, 5)],
             requires_target=True,
             counterable=True,
+            possible_during_ceasefire=False,
         )
     ],  
 }
@@ -68,6 +69,7 @@ PEASANT_WAR_CONFIG = {
             key_cards=[Card('J', suit, 1), Card('J', suit, 1)],
             requires_target=True,
             counterable=True,
+            possible_during_ceasefire=False,
         )
     ],  
 }
@@ -93,6 +95,7 @@ BLITZKRIEG_CONFIG = {
             key_cards=[Card('Q', suit, 2), Card('Q', suit, 2)],
             requires_target=True,
             counterable=True,
+            possible_during_ceasefire=False,
         )
     ],  
 }
@@ -117,6 +120,7 @@ INVADER_SWAP_CONFIG = {
             key_cards=[Card('A', suit, 3), Card('A', suit, 3)],
             requires_target=True,
             counterable=True,
+            possible_during_ceasefire=False,
         )
     ],  
 }

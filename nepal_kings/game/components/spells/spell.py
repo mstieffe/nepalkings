@@ -70,6 +70,7 @@ class Spell:
         requires_target: bool = False,
         target_type: Optional[str] = None,  # 'own_figure', 'opponent_figure', 'any_figure', 'player'
         counterable: bool = False,
+        possible_during_ceasefire: bool = True,
     ):
         """
         Initialize a Spell.
@@ -84,6 +85,7 @@ class Spell:
         :param requires_target: Whether the spell needs a target (figure, player, etc.)
         :param target_type: Type of target required if requires_target is True
         :param counterable: Whether the opponent can counter this spell (True for battle spells)
+        :param possible_during_ceasefire: Whether the spell can be cast during ceasefire (False for battle spells)
         """
         self.name = name
         self.family = family
@@ -95,6 +97,7 @@ class Spell:
         self.requires_target = requires_target
         self.target_type = target_type
         self.counterable = counterable
+        self.possible_during_ceasefire = possible_during_ceasefire
         
         # Runtime attributes (set when spell is cast/active)
         self.id = None  # Database ID when spell is cast
