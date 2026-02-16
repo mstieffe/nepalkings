@@ -259,11 +259,13 @@ class Button:
 
 
 class SubScreenButton:
-    def __init__(self, window, x=0, y=0, text="", width=None, height=None):
+    def __init__(self, window, x=0, y=0, text="", width=None, height=None, button_img_active=None, button_img_inactive=None):
         self.window = window
         self.x = x
         self.y = y
         self.text = text
+        self.button_img_active_path = button_img_active
+        self.button_img_inactive_path = button_img_inactive
 
         # Load font settings
         self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_BUTTON)
@@ -291,11 +293,38 @@ class SubScreenButton:
     
     def load_images(self):
         """Load button and glow images and apply scaling."""
-        self.button_image = pygame.transform.scale(
-            pygame.image.load(settings.SUB_SCREEN_BUTTON_IMG_PATH), 
-            (self.rect.width, self.rect.height)
-        )
-        self.button_image_small = pygame.transform.scale(self.button_image, (self.rect.width * 0.9, self.rect.height * 0.9))
+        # Load custom active/inactive images if provided, otherwise use default
+        if self.button_img_active_path and self.button_img_inactive_path:
+            self.button_image_active = pygame.transform.scale(
+                pygame.image.load(self.button_img_active_path), 
+                (self.rect.width, self.rect.height)
+            )
+            self.button_image_active_small = pygame.transform.scale(
+                self.button_image_active, 
+                (int(self.rect.width * 0.9), int(self.rect.height * 0.9))
+            )
+            self.button_image_inactive = pygame.transform.scale(
+                pygame.image.load(self.button_img_inactive_path), 
+                (self.rect.width, self.rect.height)
+            )
+            self.button_image_inactive_small = pygame.transform.scale(
+                self.button_image_inactive, 
+                (int(self.rect.width * 0.9), int(self.rect.height * 0.9))
+            )
+        else:
+            # Use default button image for all states
+            self.button_image = pygame.transform.scale(
+                pygame.image.load(settings.SUB_SCREEN_BUTTON_IMG_PATH), 
+                (self.rect.width, self.rect.height)
+            )
+            self.button_image_small = pygame.transform.scale(
+                self.button_image, 
+                (int(self.rect.width * 0.9), int(self.rect.height * 0.9))
+            )
+            self.button_image_active = self.button_image
+            self.button_image_active_small = self.button_image_small
+            self.button_image_inactive = self.button_image
+            self.button_image_inactive_small = self.button_image_small
 
         # Load glow images and scale
         self.glow_images = {
@@ -329,9 +358,15 @@ class SubScreenButton:
         else:
             self.draw_glow("white")
 
+        # Select button image based on active state
+        if self.active:
+            button_img = self.button_image_active if not self.clicked else self.button_image_active_small
+        else:
+            button_img = self.button_image_inactive if not self.clicked else self.button_image_inactive_small
+
         # Draw button background
-        self.window.blit(self.button_image if not self.clicked else self.button_image_small, 
-                         self.rect.topleft if not self.clicked else self.button_image_small.get_rect(center=self.rect.center).topleft)
+        self.window.blit(button_img, 
+                         self.rect.topleft if not self.clicked else button_img.get_rect(center=self.rect.center).topleft)
 
         # Draw text with appropriate size
         text_obj = (self.font_small if self.clicked else self.font).render(self.text, True, self.get_text_color())

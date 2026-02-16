@@ -190,12 +190,22 @@ class CastSpellScreen(SubScreen):
         
         return real_cards if len(real_cards) == len(spell.cards) else None
     
+    def format_spell_type(self, spell_type: str) -> str:
+        """Format spell type for display."""
+        type_mapping = {
+            'greed': 'Greed Spell',
+            'enchantment': 'Enchantment Spell',
+            'tactics': 'Tactics Spell'
+        }
+        return type_mapping.get(spell_type, spell_type.capitalize() + ' Spell')
+    
     def init_scroll_test_list_shifter(self):
         """Initialize the scroll text list shifter for spell variants."""
         self.make_scroll_text_list_shifter(
             self.scroll_text_list,
             settings.CAST_SPELL_SCROLL_TEXT_X,
-            settings.CAST_SPELL_SCROLL_TEXT_Y
+            settings.CAST_SPELL_SCROLL_TEXT_Y,
+            scroll_height=settings.CAST_SPELL_INFO_BOX_SCROLL_HEIGHT
         )
     
     def init_spell_family_icons(self):
@@ -348,7 +358,9 @@ class CastSpellScreen(SubScreen):
                             "title": spell.name,
                             "text": spell.family.description,
                             "cards": spell.cards,
-                            "figure_strength": f"Power: {spell.get_power()}" + (" [UPGRADED]" if spell.is_upgraded() else ""),
+                            "spell_type": self.format_spell_type(spell.family.type),
+                            "counterable": spell.counterable,
+                            "ceasefire": spell.possible_during_ceasefire,
                             "content": spell
                         }
                         for spell in castable_spells
@@ -362,7 +374,9 @@ class CastSpellScreen(SubScreen):
                         self.scroll_text_list.append({
                             "title": spell.name,
                             "text": spell.family.description,
-                            "figure_strength": f"Power: {spell.get_power()}" + (" [UPGRADED]" if spell.is_upgraded() else ""),
+                            "spell_type": self.format_spell_type(spell.family.type),
+                            "counterable": spell.counterable,
+                            "ceasefire": spell.possible_during_ceasefire,
                             "cards": given_cards,
                             "missing_cards": missing_cards,
                             "content": None  # None indicates spell cannot be cast

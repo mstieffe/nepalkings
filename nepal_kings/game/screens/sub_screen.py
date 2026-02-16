@@ -37,9 +37,10 @@ class SubScreen:
         self.scroll_text_list = []
         self.scroll_text_list_shifter = None
 
-    def make_button(self, text, x, y, width: int = None, height: int = None):
+    def make_button(self, text, x, y, width: int = None, height: int = None, button_img_active=None, button_img_inactive=None):
         """Helper to create a button."""
-        return SubScreenButton(self.window, x, y, text, width=width, height=height)
+        return SubScreenButton(self.window, x, y, text, width=width, height=height, 
+                             button_img_active=button_img_active, button_img_inactive=button_img_inactive)
 
     def draw_title(self):
         """Draw the title of the sub screen."""
@@ -107,9 +108,9 @@ class SubScreen:
         """Create a dialogue box with specified message and actions."""
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title)
 
-    def make_scroll_text_list_shifter(self, text_list, x, y):
+    def make_scroll_text_list_shifter(self, text_list, x, y, scroll_height=None):
         """Create a scroll text list shifter."""
-        self.scroll_text_list_shifter = ScrollTextListShifter(self.window, text_list, x, y)
+        self.scroll_text_list_shifter = ScrollTextListShifter(self.window, text_list, x, y, scroll_height=scroll_height)
 
     def handle_events(self, events):
         """Handle events like mouse clicks and quit."""

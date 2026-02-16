@@ -10,7 +10,7 @@ class FigureDetailBox:
     including stats, cards, and action buttons.
     """
 
-    def __init__(self, window, figure, game, x=None, y=None, all_figures=None):
+    def __init__(self, window, figure, game, x=None, y=None, all_figures=None, resources_data=None):
         """
         Initialize the figure detail box.
 
@@ -20,11 +20,13 @@ class FigureDetailBox:
         :param x: Optional x position (defaults to center of screen)
         :param y: Optional y position (defaults to center of screen)
         :param all_figures: Optional list of all figures (to avoid server call)
+        :param resources_data: Optional pre-calculated resources data (to avoid recalculation)
         """
         self.window = window
         self.figure = figure
         self.game = game
         self.all_figures = all_figures  # Cache for battle bonus calculation
+        self.resources_data = resources_data  # Cache for resource deficit calculation
 
         # Fonts
         self.title_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_TITLE_DIALOGUE_BOX)
@@ -45,9 +47,14 @@ class FigureDetailBox:
             ) for card in figure.cards
         ]
 
-        # Box dimensions
-        self.width = int(settings.SCREEN_WIDTH * 0.35)
+        # Box dimensions - wider to accommodate two-column layout
+        self.width = int(settings.SCREEN_WIDTH * 0.55)
         self.height = int(settings.SCREEN_HEIGHT * 0.75)
+        
+        # Column widths for two-column layout
+        self.left_column_width = int(self.width * 0.35)
+        self.right_column_width = int(self.width * 0.55)
+        self.column_spacing = int(self.width * 0.05)
         
         # Position (center of screen by default)
         self.x = x if x is not None else (settings.SCREEN_WIDTH - self.width) // 2
@@ -73,9 +80,19 @@ class FigureDetailBox:
 
         # Load resource icons
         self.resource_icons = self._load_resource_icons()
+        
+        # Load state icons (success/error)
+        self.state_icons = self._load_state_icons()
+        
+        # Load figure icon
+        self.figure_icon = self._load_figure_icon()
 
         # Calculate battle bonus (do this once, not every frame)
         self.potential_battle_bonus = self._calculate_potential_battle_bonus()
+        
+        # Calculate resource deficits (do this once, not every frame)
+        self.resource_deficits = self._calculate_resource_deficits()
+        self.has_any_deficit = any(self.resource_deficits.values()) if self.resource_deficits else False
 
         # Action buttons (customize these based on figure type/state)
         self.buttons = self._create_action_buttons()
@@ -134,6 +151,39 @@ class FigureDetailBox:
         
         return icons
 
+    def _load_state_icons(self):
+        """Load and scale state icons (success/error)."""
+        icon_size = int(settings.FONT_SIZE_DIALOGUE_BOX * 1.2)
+        icons = {}
+        
+        icon_paths = {
+            'success': 'img/figures/state_icons/check_yes.png',
+            'error': 'img/figures/state_icons/check_no.png'
+        }
+        
+        for icon_name, path in icon_paths.items():
+            try:
+                icon = pygame.image.load(path).convert_alpha()
+                icons[icon_name] = pygame.transform.smoothscale(icon, (icon_size, icon_size))
+            except Exception as e:
+                print(f"[FIGURE_DETAIL] Failed to load state icon {icon_name} from {path}: {e}")
+        
+        return icons
+
+    def _load_figure_icon(self):
+        """Load and scale the figure's icon image."""
+        try:
+            # Get the icon image from the figure's family
+            if hasattr(self.figure.family, 'icon_img') and self.figure.family.icon_img:
+                # The icon_img should already be a pygame Surface
+                icon = self.figure.family.icon_img
+                # Scale to fit in left column (leave some margin)
+                target_size = int(self.left_column_width * 0.9)
+                return pygame.transform.smoothscale(icon, (target_size, target_size))
+        except Exception as e:
+            print(f"[FIGURE_DETAIL] Failed to load figure icon: {e}")
+        return None
+
     def _map_resource_to_icon(self, resource_name):
         """
         Map database resource names to icon keys.
@@ -157,6 +207,41 @@ class FigureDetailBox:
         # Return mapped name or original if no mapping exists
         return resource_map.get(resource_name, resource_name)
 
+    def _calculate_resource_deficits(self):
+        """
+        Calculate which resources are in deficit for this figure.
+        Returns a dict mapping resource names to deficit status.
+        """
+        try:
+            # Use cached resources data if available
+            if self.resources_data is not None:
+                produces = self.resources_data.get('produces', {})
+                requires = self.resources_data.get('requires', {})
+            else:
+                # Calculate if not provided
+                from game.components.figures.figure_manager import FigureManager
+                
+                figure_manager = FigureManager()
+                families = figure_manager.families
+                
+                resources_data = self.game.calculate_resources(families)
+                produces = resources_data.get('produces', {})
+                requires = resources_data.get('requires', {})
+            
+            deficits = {}
+            
+            # Check each resource this figure requires
+            if hasattr(self.figure, 'requires') and self.figure.requires:
+                for resource_name, amount in self.figure.requires.items():
+                    # Check if this resource type is in deficit overall
+                    total_required = requires.get(resource_name, 0)
+                    total_produced = produces.get(resource_name, 0)
+                    deficits[resource_name] = total_required > total_produced
+            
+            return deficits
+        except Exception as e:
+            return {}
+
     def _calculate_potential_battle_bonus(self):
         """
         Calculate the potential battle bonus this figure could receive.
@@ -170,7 +255,6 @@ class FigureDetailBox:
             # Use cached figures if available, otherwise fetch from server
             if self.all_figures is not None:
                 all_figures = [fig for fig in self.all_figures if fig.player_id == self.game.player_id]
-                print(f"[BATTLE_BONUS] Using cached figures: {len(all_figures)}")
             else:
                 # Import here to avoid circular imports
                 from game.components.figures.figure_manager import FigureManager
@@ -181,13 +265,9 @@ class FigureDetailBox:
                 
                 # Get all figures for this player
                 all_figures = self.game.get_figures(families, is_opponent=False)
-                print(f"[BATTLE_BONUS] Fetched figures from server: {len(all_figures)}")
-            
-            print(f"[BATTLE_BONUS] Total figures for player: {len(all_figures)}")
             
             # Determine this figure's type
             current_figure_type = self.figure.family.field if hasattr(self.figure.family, 'field') else None
-            print(f"[BATTLE_BONUS] Current figure type: {current_figure_type}")
             
             # Determine which figure types can provide bonus to this figure
             if current_figure_type == 'castle':
@@ -203,8 +283,6 @@ class FigureDetailBox:
                 # Unknown type, no bonus
                 valid_types = []
             
-            print(f"[BATTLE_BONUS] Can receive bonus from types: {valid_types}")
-            
             # Filter for same suit, valid types, excluding current figure
             same_suit_figures = [
                 fig for fig in all_figures 
@@ -213,21 +291,12 @@ class FigureDetailBox:
                     hasattr(fig.family, 'field') and
                     fig.family.field in valid_types)
             ]
-            print(f"[BATTLE_BONUS] Same suit figures ({self.figure.suit}) that can provide bonus: {len(same_suit_figures)}")
-            for fig in same_suit_figures:
-                bonus = fig.get_battle_bonus()
-                fig_type = fig.family.field if hasattr(fig.family, 'field') else 'unknown'
-                print(f"  - {fig.name} ({fig.suit}, {fig_type}), bonus: {bonus}")
             
             # Sum battle bonuses
             total_bonus = sum(fig.get_battle_bonus() for fig in same_suit_figures)
-            print(f"[BATTLE_BONUS] Total bonus calculated: {total_bonus}")
             return total_bonus
         except Exception as e:
             # If anything fails, just return 0
-            print(f"[BATTLE_BONUS] Error calculating bonus: {e}")
-            import traceback
-            traceback.print_exc()
             return 0
 
     def _check_upgrade_card_available(self):
@@ -248,7 +317,7 @@ class FigureDetailBox:
         return False
 
     def draw(self):
-        """Draw the figure detail box."""
+        """Draw the figure detail box with two-column layout."""
         # Draw border
         pygame.draw.rect(self.window, settings.COLOR_DIALOGUE_BOX_BORDER, self.border_rect)
 
@@ -261,13 +330,13 @@ class FigureDetailBox:
 
         current_y = self.rect.y + settings.SMALL_SPACER_Y
 
-        # Draw title (figure name)
+        # Draw title (figure name) - centered above both columns
         title_surface = self.title_font.render(self.figure.name, True, settings.TITLE_TEXT_COLOR)
         title_rect = title_surface.get_rect(centerx=self.rect.centerx, top=current_y)
         self.window.blit(title_surface, title_rect)
         current_y += title_rect.height + settings.SMALL_SPACER_Y
 
-        # Draw divider line
+        # Draw divider line under title
         if current_y + 2 < max_content_y:
             pygame.draw.line(
                 self.window,
@@ -278,58 +347,102 @@ class FigureDetailBox:
             )
             current_y += settings.SMALL_SPACER_Y
 
-        # Draw figure family/type
-        if current_y + self.font.get_height() <= max_content_y:
-            family_text = f"Type: {self.figure.family.field.capitalize()}"
-            family_surface = self.font.render(family_text, True, settings.MSG_TEXT_COLOR)
-            family_rect = family_surface.get_rect(centerx=self.rect.centerx, top=current_y)
-            self.window.blit(family_surface, family_rect)
-            current_y += family_rect.height + settings.SMALL_SPACER_Y // 2
+        # Define column positions
+        left_column_x = self.rect.left + settings.SMALL_SPACER_X
+        right_column_x = left_column_x + self.left_column_width + self.column_spacing
+        
+        # Store starting Y position for both columns
+        content_start_y = current_y
+        
+        # --- LEFT COLUMN: Figure icon and cards ---
+        left_y = content_start_y
+        
+        # Draw figure icon
+        if self.figure_icon and left_y < max_content_y:
+            icon_x = left_column_x + (self.left_column_width - self.figure_icon.get_width()) // 2
+            self.window.blit(self.figure_icon, (icon_x, left_y))
+            left_y += self.figure_icon.get_height() + settings.SMALL_SPACER_Y
+        
+        # Draw cards section in left column
+        if self.card_images and left_y < max_content_y:
+            cards_title = self.font.render("Cards:", True, settings.TITLE_TEXT_COLOR)
+            cards_title_x = left_column_x + (self.left_column_width - cards_title.get_width()) // 2
+            self.window.blit(cards_title, (cards_title_x, left_y))
+            left_y += cards_title.get_height() + settings.SMALL_SPACER_Y // 2
 
-        # Draw suit
-        if current_y + self.font.get_height() <= max_content_y:
-            suit_text = f"Suit: {self.figure.suit.capitalize()}"
-            suit_surface = self.font.render(suit_text, True, settings.MSG_TEXT_COLOR)
-            suit_rect = suit_surface.get_rect(centerx=self.rect.centerx, top=current_y)
-            self.window.blit(suit_surface, suit_rect)
-            current_y += suit_rect.height + settings.SMALL_SPACER_Y
+            # Draw card images horizontally in left column
+            card_spacing = int(settings.SMALL_SPACER_X * 0.3)
+            card_width = self.card_images[0].front_img.get_width()
+            card_height = self.card_images[0].front_img.get_height()
+            
+            # Calculate total width of all cards with spacing
+            total_cards_width = len(self.card_images) * card_width + (len(self.card_images) - 1) * card_spacing
+            
+            # Only draw cards if they fit horizontally
+            if total_cards_width <= self.left_column_width and left_y + card_height <= max_content_y:
+                # Start x position to center the cards horizontally
+                cards_start_x = left_column_x + (self.left_column_width - total_cards_width) // 2
+                
+                # Draw each card image horizontally
+                for i, card_img in enumerate(self.card_images):
+                    draw_x = cards_start_x + i * (card_width + card_spacing)
+                    card_img.draw_front(draw_x, left_y)
+                
+                left_y += card_height + card_spacing
+        
+        # --- RIGHT COLUMN: All info ---
+        right_y = content_start_y
+        
+        # Draw figure family/type as subtitle (e.g., "Village Figure")
+        if right_y + self.font.get_height() <= max_content_y:
+            family_text = f"{self.figure.family.field.capitalize()} Figure"
+            family_surface = self.font.render(family_text, True, settings.TITLE_TEXT_COLOR)
+            self.window.blit(family_surface, (right_column_x, right_y))
+            right_y += family_surface.get_height() + settings.SMALL_SPACER_Y
 
         # Draw power/value with potential battle bonus
-        if current_y + self.font.get_height() <= max_content_y:
+        if right_y + self.font.get_height() <= max_content_y:
             power_value = self.figure.get_value()
             power_text = f"Power: {power_value}"
             power_surface = self.font.render(power_text, True, settings.MSG_TEXT_COLOR)
-            power_x = self.rect.centerx - power_surface.get_width() // 2
-            self.window.blit(power_surface, (power_x, current_y))
+            self.window.blit(power_surface, (right_column_x, right_y))
             
             # Display potential battle bonus (calculated once in __init__)
             if self.potential_battle_bonus > 0:
                 bonus_text = f" (+{self.potential_battle_bonus})"
                 bonus_surface = self.font.render(bonus_text, True, (0, 180, 0))  # Green color
-                bonus_x = power_x + power_surface.get_width()
-                self.window.blit(bonus_surface, (bonus_x, current_y))
+                bonus_x = right_column_x + power_surface.get_width()
+                self.window.blit(bonus_surface, (bonus_x, right_y))
             
-            current_y += power_surface.get_height() + settings.SMALL_SPACER_Y // 2
+            right_y += power_surface.get_height() + settings.SMALL_SPACER_Y // 2
 
         # Draw battle bonus this figure provides
-        if current_y + self.font.get_height() <= max_content_y:
+        if right_y + self.font.get_height() <= max_content_y:
             battle_bonus = self.figure.get_battle_bonus()
             bonus_text = f"Support: {battle_bonus}"
             bonus_surface = self.font.render(bonus_text, True, settings.MSG_TEXT_COLOR)
-            bonus_rect = bonus_surface.get_rect(centerx=self.rect.centerx, top=current_y)
-            self.window.blit(bonus_surface, bonus_rect)
-            current_y += bonus_rect.height + settings.SMALL_SPACER_Y
+            self.window.blit(bonus_surface, (right_column_x, right_y))
+            right_y += bonus_surface.get_height() + settings.SMALL_SPACER_Y
 
         # Draw resources produced
-        if self.figure.produces and current_y + self.font.get_height() <= max_content_y:
-            # Draw "Produces:" label
-            produces_label = self.font.render("Produces:", True, settings.MSG_TEXT_COLOR)
-            label_x = self.rect.centerx - self.width // 3
-            self.window.blit(produces_label, (label_x, current_y))
+        if self.figure.produces and right_y + self.font.get_height() <= max_content_y:
+            # Draw horizontal divider line
+            pygame.draw.line(
+                self.window,
+                settings.COLOR_DIALOGUE_BOX_BORDER,
+                (right_column_x, right_y),
+                (right_column_x + self.right_column_width, right_y),
+                2
+            )
+            right_y += settings.SMALL_SPACER_Y
             
-            # Draw resource icons and amounts
-            icon_start_x = label_x + produces_label.get_width() + settings.SMALL_SPACER_X
-            current_x = icon_start_x
+            # Draw "Production" label on first line
+            produces_label = self.font.render("Production", True, settings.TITLE_TEXT_COLOR)
+            self.window.blit(produces_label, (right_column_x, right_y))
+            right_y += produces_label.get_height() + settings.SMALL_SPACER_Y #// 2
+            
+            # Draw resource icons and amounts on second line
+            current_x = right_column_x + settings.SMALL_SPACER_X
             
             for resource, amount in self.figure.produces.items():
                 # Map resource name to icon key
@@ -338,113 +451,116 @@ class FigureDetailBox:
                 # Draw icon if available
                 if icon_key in self.resource_icons:
                     icon = self.resource_icons[icon_key]
-                    self.window.blit(icon, (current_x, current_y))
+                    self.window.blit(icon, (current_x, right_y))
                     current_x += icon.get_width() + 2
                     
                     # Draw amount next to icon
                     amount_text = self.font.render(f"{amount}", True, settings.MSG_TEXT_COLOR)
-                    self.window.blit(amount_text, (current_x, current_y))
+                    self.window.blit(amount_text, (current_x, right_y))
                     current_x += amount_text.get_width() + settings.SMALL_SPACER_X
                 else:
                     # Fallback to text only
                     text = self.font.render(f"{resource.capitalize()} ({amount})", True, settings.MSG_TEXT_COLOR)
-                    self.window.blit(text, (current_x, current_y))
+                    self.window.blit(text, (current_x, right_y))
                     current_x += text.get_width() + settings.SMALL_SPACER_X
             
-            current_y += produces_label.get_height() + settings.SMALL_SPACER_Y
+            right_y += self.resource_icons[list(self.resource_icons.keys())[0]].get_height() + settings.SMALL_SPACER_Y
 
         # Draw resource requirements
-        if self.figure.requires and current_y + self.font.get_height() <= max_content_y:
-            # Draw "Requires:" label
-            requires_label = self.font.render("Requires:", True, settings.MSG_TEXT_COLOR)
-            label_x = self.rect.centerx - self.width // 3
-            self.window.blit(requires_label, (label_x, current_y))
+        if self.figure.requires and right_y + self.font.get_height() <= max_content_y:
+            # Use cached resource deficit data
+            resource_deficits = self.resource_deficits
+            has_any_deficit = self.has_any_deficit
             
-            # Draw resource icons and amounts
-            icon_start_x = label_x + requires_label.get_width() + settings.SMALL_SPACER_X
-            current_x = icon_start_x
+            # Draw horizontal divider line
+            pygame.draw.line(
+                self.window,
+                settings.COLOR_DIALOGUE_BOX_BORDER,
+                (right_column_x, right_y),
+                (right_column_x + self.right_column_width, right_y),
+                2
+            )
+            right_y += settings.SMALL_SPACER_Y
+            
+            # Draw "Requirements" label with state icon on first line
+            requires_label = self.font.render("Requirements", True, settings.TITLE_TEXT_COLOR)
+            self.window.blit(requires_label, (right_column_x, right_y))
+            
+            # Draw success/error icon to the RIGHT of the label, vertically centered
+            icon_to_draw = None
+            if has_any_deficit:
+                # Show error icon if any resource is in deficit
+                if 'error' in self.state_icons:
+                    icon_to_draw = self.state_icons['error']
+            else:
+                # Show success icon if all requirements are met
+                if 'success' in self.state_icons:
+                    icon_to_draw = self.state_icons['success']
+            
+            if icon_to_draw:
+                # Position icon to the right of text, vertically centered
+                icon_x = right_column_x + requires_label.get_width() + settings.SMALL_SPACER_X // 2
+                icon_y = right_y + (requires_label.get_height() - icon_to_draw.get_height()) // 2
+                self.window.blit(icon_to_draw, (icon_x, icon_y))
+            
+            right_y += requires_label.get_height() + settings.SMALL_SPACER_Y #// 2
+            
+            # Draw resource icons and amounts on second line
+            current_x = right_column_x + settings.SMALL_SPACER_X
             
             for resource, amount in self.figure.requires.items():
                 # Map resource name to icon key
                 icon_key = self._map_resource_to_icon(resource)
                 
+                # Check if this specific resource is in deficit
+                is_deficit = resource_deficits.get(resource, False)
+                
                 # Draw icon if available
                 if icon_key in self.resource_icons:
                     icon = self.resource_icons[icon_key]
-                    self.window.blit(icon, (current_x, current_y))
+                    self.window.blit(icon, (current_x, right_y))
                     current_x += icon.get_width() + 2
                     
                     # Draw amount next to icon
                     amount_text = self.font.render(f"{amount}", True, settings.MSG_TEXT_COLOR)
-                    self.window.blit(amount_text, (current_x, current_y))
+                    amount_text_rect = amount_text.get_rect(topleft=(current_x, right_y))
+                    self.window.blit(amount_text, (current_x, right_y))
+                    
+                    # Draw red frame around amount if in deficit
+                    if is_deficit:
+                        frame_rect = amount_text_rect.inflate(4, 4)  # Add padding
+                        pygame.draw.rect(self.window, (220, 0, 0), frame_rect, 2)  # Red frame, 2 pixels
+                    
                     current_x += amount_text.get_width() + settings.SMALL_SPACER_X
                 else:
                     # Fallback to text only
                     text = self.font.render(f"{resource.capitalize()} ({amount})", True, settings.MSG_TEXT_COLOR)
-                    self.window.blit(text, (current_x, current_y))
+                    self.window.blit(text, (current_x, right_y))
                     current_x += text.get_width() + settings.SMALL_SPACER_X
             
-            current_y += requires_label.get_height() + settings.SMALL_SPACER_Y * 1.5
-
-        # Draw divider line
-        if current_y + 2 < max_content_y:
-            pygame.draw.line(
-                self.window,
-                settings.COLOR_DIALOGUE_BOX_BORDER,
-                (self.rect.left + settings.SMALL_SPACER_X, current_y),
-                (self.rect.right - settings.SMALL_SPACER_X, current_y),
-                2
-            )
-            current_y += settings.SMALL_SPACER_Y
-
-        # Draw cards section
-        if self.card_images and current_y + self.font.get_height() <= max_content_y:
-            cards_title = self.font.render("Cards:", True, settings.TITLE_TEXT_COLOR)
-            cards_title_rect = cards_title.get_rect(centerx=self.rect.centerx, top=current_y)
-            self.window.blit(cards_title, cards_title_rect)
-            current_y += cards_title_rect.height + settings.SMALL_SPACER_Y
-
-            # Draw card images horizontally
-            card_spacing = int(settings.SMALL_SPACER_X * 0.5)
-            card_width = self.card_images[0].front_img.get_width()
-            card_height = self.card_images[0].front_img.get_height()
-            
-            # Only draw cards if they fit
-            if current_y + card_height <= max_content_y:
-                # Calculate total width of all cards with spacing
-                total_cards_width = len(self.card_images) * card_width + (len(self.card_images) - 1) * card_spacing
-                
-                # Start x position to center the cards
-                cards_start_x = self.rect.centerx - total_cards_width // 2
-                
-                # Draw each card image
-                for i, card_img in enumerate(self.card_images):
-                    draw_x = cards_start_x + i * (card_width + card_spacing)
-                    draw_y = current_y
-                    card_img.draw_front(draw_x, draw_y)
-                
-                current_y += card_height + settings.SMALL_SPACER_Y
+            right_y += self.resource_icons[list(self.resource_icons.keys())[0]].get_height() + settings.SMALL_SPACER_Y * 1.5
 
         # Draw description if available and there's space
         if hasattr(self.figure.family, 'description') and self.figure.family.description:
             # Check if we have at least 80 pixels for description (title + 1-2 lines)
-            if current_y + 80 <= max_content_y:
+            if right_y + 80 <= max_content_y:
+                # Draw divider line
+                divider_y = right_y
                 pygame.draw.line(
                     self.window,
                     settings.COLOR_DIALOGUE_BOX_BORDER,
-                    (self.rect.left + settings.SMALL_SPACER_X, current_y),
-                    (self.rect.right - settings.SMALL_SPACER_X, current_y),
+                    (right_column_x, divider_y),
+                    (right_column_x + self.right_column_width, divider_y),
                     2
                 )
-                current_y += settings.SMALL_SPACER_Y
+                right_y += settings.SMALL_SPACER_Y
 
                 desc_title = self.font.render("Description:", True, settings.TITLE_TEXT_COLOR)
-                desc_title_rect = desc_title.get_rect(centerx=self.rect.centerx, top=current_y)
-                self.window.blit(desc_title, desc_title_rect)
-                current_y += desc_title_rect.height + settings.SMALL_SPACER_Y // 2
+                self.window.blit(desc_title, (right_column_x, right_y))
+                right_y += desc_title.get_height() + settings.SMALL_SPACER_Y // 2
 
                 # Wrap description text based on actual pixel width
-                max_text_width = self.width - 4 * settings.SMALL_SPACER_X
+                max_text_width = self.right_column_width - settings.SMALL_SPACER_X
                 words = self.figure.family.description.split()
                 desc_lines = []
                 current_line = []
@@ -469,12 +585,11 @@ class FigureDetailBox:
                 # Draw only lines that fit
                 line_height = self.small_font.get_height() + 2
                 for line in desc_lines:
-                    if current_y + line_height >= max_content_y:
+                    if right_y + line_height >= max_content_y:
                         break
                     line_surface = self.small_font.render(line, True, settings.MSG_TEXT_COLOR)
-                    line_rect = line_surface.get_rect(left=self.rect.left + settings.SMALL_SPACER_X * 2, top=current_y)
-                    self.window.blit(line_surface, line_rect)
-                    current_y += line_height
+                    self.window.blit(line_surface, (right_column_x + settings.SMALL_SPACER_X // 2, right_y))
+                    right_y += line_height
 
         # Draw buttons
         for button in self.buttons:
