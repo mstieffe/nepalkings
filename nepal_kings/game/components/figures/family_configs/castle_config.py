@@ -15,6 +15,7 @@ castle_dict_list = [
         "icon_gray_img": "castle_black.png",
         "frame_img": "castle.png",
         "frame_closed_img": "castle.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": (0.615 * SCREEN_WIDTH, 0.2 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -39,6 +40,7 @@ castle_dict_list = [
         "icon_gray_img": "castle_black.png",
         "frame_img": "castle.png",
         "frame_closed_img": "castle.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": (0.615 * SCREEN_WIDTH, 0.2 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -64,6 +66,7 @@ castle_dict_list = [
         "icon_gray_img": "castle_red.png",
         "frame_img": "castle.png",
         "frame_closed_img": "castle.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": (0.615 * SCREEN_WIDTH, 0.2 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -88,6 +91,7 @@ castle_dict_list = [
         "icon_gray_img": "castle_red.png",
         "frame_img": "castle.png",
         "frame_closed_img": "castle.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": (0.615 * SCREEN_WIDTH, 0.2 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [

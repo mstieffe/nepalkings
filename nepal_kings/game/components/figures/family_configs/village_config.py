@@ -34,6 +34,7 @@ village_dict_list = [
         "icon_gray_img": "yack_farm1.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[2],
         "figures": lambda family, suit: [
@@ -47,7 +48,7 @@ village_dict_list = [
                 upgrade_card=Card("Q", suit, 2),
                 upgrade_family_name="Large Yack Farm",
                 produces={'food_black': int(number)} if suit in ['Clubs', 'Spades'] else {'food_red': int(number)},
-                requires={'villager_black': 1}
+                requires={'villager_black': 1},
             )
             for number in NUMBER_CARDS
         ]
@@ -65,6 +66,7 @@ village_dict_list = [
         "icon_gray_img": "yack_farm2.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[3],
         "figures": lambda family, suit: [
@@ -76,7 +78,7 @@ village_dict_list = [
                 key_cards=[Card("J", suit, 1), Card("Q", suit, 2)],
                 number_card=Card(str(number), suit, number),
                 produces={'food_black': int(number) * 2} if suit in ['Clubs', 'Spades'] else {'food_red': int(number) * 2},
-                requires={'villager_black': 1}
+                requires={'villager_black': 1},
             )
             for number in NUMBER_CARDS
         ]
@@ -95,6 +97,7 @@ village_dict_list = [
         "icon_gray_img": "rice_farm1.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[2],
         "figures": lambda family, suit: [
@@ -108,7 +111,7 @@ village_dict_list = [
                 upgrade_card=Card("Q", suit, 2),
                 upgrade_family_name="Large Rice Farm",
                 produces={'food_red': int(number)} if suit in ['Hearts', 'Diamonds'] else {'food_black': int(number)},
-                requires={'villager_red': 1}
+                requires={'villager_red': 1},
             )
             for number in NUMBER_CARDS
         ]
@@ -126,6 +129,7 @@ village_dict_list = [
         "icon_gray_img": "rice_farm2.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[3],
         "figures": lambda family, suit: [
@@ -137,7 +141,7 @@ village_dict_list = [
                 key_cards=[Card("J", suit, 1), Card("Q", suit, 2)],
                 number_card=Card(str(number), suit, number),
                 produces={'food_red': int(number) * 2} if suit in ['Hearts', 'Diamonds'] else {'food_black': int(number) * 2},
-                requires={'villager_red': 1}
+                requires={'villager_red': 1},
             )
             for number in NUMBER_CARDS
         ]
@@ -155,6 +159,7 @@ village_dict_list = [
         "icon_gray_img": "shrine_black.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[0],
         "figures": lambda family, suit: [
@@ -166,7 +171,9 @@ village_dict_list = [
                 key_cards=[Card("Q", suit, 2), Card("Q", suit, 2)],
                 upgrade_card=Card("7", suit, 7),
                 upgrade_family_name="Shield Manufactory",
-                requires={'villager_black': 1}
+                requires={'villager_black': 1},
+                cannot_attack=True,  # Temples cannot attack
+                blocks_bonus=True  # Temples block enemy bloodline bonus
             )
         ]
     },
@@ -183,6 +190,7 @@ village_dict_list = [
         "icon_gray_img": "shrine_red.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[0],
         "figures": lambda family, suit: [
@@ -194,7 +202,9 @@ village_dict_list = [
                 key_cards=[Card("Q", suit, 2), Card("Q", suit, 2)],
                 upgrade_card=Card("7", suit, 7),
                 upgrade_family_name="Sword Manufactory",
-                requires={'villager_red': 1}
+                requires={'villager_red': 1},
+                cannot_attack=True,  # Temples cannot attack
+                blocks_bonus=True  # Temples block enemy bloodline bonus
             )
         ]
     },
@@ -211,6 +221,7 @@ village_dict_list = [
         "icon_gray_img": "manufactory_black.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "yellow.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[1],
         "figures": lambda family, suit: [
@@ -222,7 +233,7 @@ village_dict_list = [
                 key_cards=[Card("Q", suit, 2), Card("Q", suit, 2)],
                 number_card=Card("7", suit, 7),
                 produces={'armor_black': 7} if suit in ['Clubs', 'Spades'] else {'armor_black': 7},
-                requires={'villager_black': 1}
+                requires={'villager_black': 1},
             )
         ]
     },
@@ -239,6 +250,7 @@ village_dict_list = [
         "icon_gray_img": "manufactory_red.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "yellow.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[1],
         "figures": lambda family, suit: [
@@ -250,7 +262,7 @@ village_dict_list = [
                 key_cards=[Card("Q", suit, 2), Card("Q", suit, 2)],
                 number_card=Card("7", suit, 7),
                 produces={'armor_red': 7} if suit in ['Hearts', 'Diamonds'] else {'armor_black': 7},
-                requires={'villager_red': 1}
+                requires={'villager_red': 1},
                 )
         ]
     },
@@ -267,6 +279,7 @@ village_dict_list = [
         "icon_gray_img": "carpenter.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "yellow.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[4],
         "figures": lambda family, suit: [
@@ -278,7 +291,7 @@ village_dict_list = [
                 key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
                 number_card=Card("6", suit, 6),
                 produces={'material_red': 6} if suit in ['Hearts', 'Diamonds'] else {'material_black': 6},
-                requires={'villager_red': 1}
+                requires={'villager_red': 1},
             )
         ]
     },
@@ -295,6 +308,7 @@ village_dict_list = [
         "icon_gray_img": "stone_mason.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "yellow.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[4],
         "figures": lambda family, suit: [
@@ -306,7 +320,7 @@ village_dict_list = [
                 key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
                 number_card=Card("6", suit, 6),
                 produces={'material_black': 6} if suit in ['Clubs', 'Spades'] else {'material_red': 6},
-                requires={'villager_black': 1}
+                requires={'villager_black': 1},
             )
         ]
     },
@@ -322,6 +336,7 @@ village_dict_list = [
         "icon_gray_img": "himalaya_healer.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "yellow.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[5],
         "figures": lambda family, suit: [
@@ -333,7 +348,9 @@ village_dict_list = [
                 key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
                 upgrade_card=Card("6", suit, 6),
                 upgrade_family_name="Stone Mason",
-                requires={'villager_black': 1}
+                requires={'villager_black': 1},
+                cannot_attack=True,  # Healers cannot attack
+                buffs_allies=True  # Healers buff allied figures
             )
         ]
     },
@@ -349,6 +366,7 @@ village_dict_list = [
         "icon_gray_img": "djungle_healer.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "yellow.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[5],
         "figures": lambda family, suit: [
@@ -360,7 +378,9 @@ village_dict_list = [
                 key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
                 upgrade_card=Card("6", suit, 6),
                 upgrade_family_name="Carpenter",
-                requires={'villager_red': 1}
+                requires={'villager_red': 1},
+                cannot_attack=True,  # Healers cannot attack
+                buffs_allies=True  # Healers buff allied figures
             )
         ]
     }

@@ -167,30 +167,33 @@ class FigureDbService:
             upgrade_card = cards.get('upgrade', [None])[0] if cards.get('upgrade') else None
 
             # If upgrade_card is not in the saved cards, try to get it from the family definition
-            # Match this figure to the correct variant in the family to get upgrade_card
-            if not upgrade_card and figure_data.get('upgrade_family_name'):
-                # Find matching figure in family definitions
-                for family_figure in family.figures:
-                    # Match by suit and cards
-                    if (family_figure.suit == figure_data['suit'] and 
-                        len(family_figure.key_cards) == len(key_cards)):
-                        # Check if key cards match
-                        key_cards_match = all(
-                            any(kc.rank == fkc.rank and kc.suit == fkc.suit 
-                                for fkc in family_figure.key_cards)
-                            for kc in key_cards
-                        )
-                        # Check if number cards match (if present)
-                        number_cards_match = True
-                        if number_card and family_figure.number_card:
-                            number_cards_match = (number_card.rank == family_figure.number_card.rank and
-                                                number_card.suit == family_figure.number_card.suit)
-                        elif number_card or family_figure.number_card:
-                            number_cards_match = False
-                        
-                        if key_cards_match and number_cards_match:
+            # Match this figure to the correct variant in the family to get upgrade_card and combat attributes
+            matched_family_figure = None
+            
+            # Always try to find matching figure for combat attributes
+            for family_figure in family.figures:
+                # Match by suit and cards
+                if (family_figure.suit == figure_data['suit'] and 
+                    len(family_figure.key_cards) == len(key_cards)):
+                    # Check if key cards match
+                    key_cards_match = all(
+                        any(kc.rank == fkc.rank and kc.suit == fkc.suit 
+                            for fkc in family_figure.key_cards)
+                        for kc in key_cards
+                    )
+                    # Check if number cards match (if present)
+                    number_cards_match = True
+                    if number_card and family_figure.number_card:
+                        number_cards_match = (number_card.rank == family_figure.number_card.rank and
+                                            number_card.suit == family_figure.number_card.suit)
+                    elif number_card or family_figure.number_card:
+                        number_cards_match = False
+                    
+                    if key_cards_match and number_cards_match:
+                        matched_family_figure = family_figure
+                        if not upgrade_card:
                             upgrade_card = family_figure.upgrade_card
-                            break
+                        break
 
             # Create the figure
             figure = Figure(
@@ -205,6 +208,13 @@ class FigureDbService:
                 upgrade_family_name=figure_data.get('upgrade_family_name'),
                 produces=figure_data.get('produces', {}),
                 requires=figure_data.get('requires', {}),
+                # Copy combat attributes from matched family figure
+                cannot_attack=matched_family_figure.cannot_attack if matched_family_figure else False,
+                must_be_attacked=matched_family_figure.must_be_attacked if matched_family_figure else False,
+                rest_after_attack=matched_family_figure.rest_after_attack if matched_family_figure else False,
+                distance_attack=matched_family_figure.distance_attack if matched_family_figure else False,
+                buffs_allies=matched_family_figure.buffs_allies if matched_family_figure else False,
+                blocks_bonus=matched_family_figure.blocks_bonus if matched_family_figure else False,
                 id=figure_data['id'],
                 player_id=figure_data.get('player_id'),
             )

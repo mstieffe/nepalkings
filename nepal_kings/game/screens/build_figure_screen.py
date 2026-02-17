@@ -304,17 +304,39 @@ class BuildFigureScreen(SubScreen):
                                       "support": figure.get_battle_bonus(),
                                       "produces": figure.produces if figure.produces else None,
                                       "requires": figure.requires if figure.requires else None,
+                                      "cannot_attack": getattr(figure, 'cannot_attack', False),
+                                      "must_be_attacked": getattr(figure, 'must_be_attacked', False),
+                                      "rest_after_attack": getattr(figure, 'rest_after_attack', False),
+                                      "distance_attack": getattr(figure, 'distance_attack', False),
+                                      "buffs_allies": getattr(figure, 'buffs_allies', False),
+                                      "blocks_bonus": getattr(figure, 'blocks_bonus', False),
                                       "cards": figure.cards,
                                       "content": figure}
                                      for figure in figures]
         else:
-            self.scroll_text_list = [{"title": button.family.name,
-                                      "text": button.family.description,
-                                      "figure_strength": "",
-                                      "cards": self.get_given_cards(button.family, suit),
-                                      "missing_cards": self.get_missing_cards_converted_ZK(button.family, suit),
-                                      "content": None}
-                                     for suit in button.family.suits]
+            # Get figure instances to show their attributes even when cards are missing
+            self.scroll_text_list = []
+            for suit in button.family.suits:
+                # Get figure instance to access its attributes
+                figure = button.family.get_figures_by_suit(suit)[0]
+                self.scroll_text_list.append({
+                    "title": button.family.name,
+                    "figure_type": f"{figure.family.field.capitalize()} Figure",
+                    "text": button.family.description,
+                    # Don't show power when cards are missing
+                    "support": figure.get_battle_bonus(),
+                    "produces": figure.produces if figure.produces else None,
+                    "requires": figure.requires if figure.requires else None,
+                    "cannot_attack": getattr(figure, 'cannot_attack', False),
+                    "must_be_attacked": getattr(figure, 'must_be_attacked', False),
+                    "rest_after_attack": getattr(figure, 'rest_after_attack', False),
+                    "distance_attack": getattr(figure, 'distance_attack', False),
+                    "buffs_allies": getattr(figure, 'buffs_allies', False),
+                    "blocks_bonus": getattr(figure, 'blocks_bonus', False),
+                    "cards": self.get_given_cards(button.family, suit),
+                    "missing_cards": self.get_missing_cards_converted_ZK(button.family, suit),
+                    "content": None
+                })
         self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
 
     def draw(self):

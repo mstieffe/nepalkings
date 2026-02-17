@@ -19,6 +19,7 @@ village2_dict_list= [
         "icon_gray_img": "ore_mine.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": (0.6 * SCREEN_WIDTH, 0.19 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -45,6 +46,7 @@ village2_dict_list= [
         "icon_gray_img": "horse_breeding.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": (0.6 * SCREEN_WIDTH, 0.19 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -71,6 +73,7 @@ village2_dict_list= [
         "icon_gray_img": "shrine_black.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": (0.6 * SCREEN_WIDTH, 0.61 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -96,6 +99,7 @@ village2_dict_list= [
         "icon_gray_img": "shrine_red.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": (0.6 * SCREEN_WIDTH, 0.61 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -122,6 +126,7 @@ village2_dict_list= [
         "icon_gray_img": "carpenter_black.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": (0.6 * SCREEN_WIDTH, 0.47 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -148,6 +153,7 @@ village2_dict_list= [
         "icon_gray_img": "carpenter_red.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": (0.6 * SCREEN_WIDTH, 0.47 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [

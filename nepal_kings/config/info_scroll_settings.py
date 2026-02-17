@@ -47,6 +47,15 @@ SLOT_ICON_IMG_PATH_DICT = {
     'military': 'img/slot_icons/military.png',
 }
 
+SKILL_ICON_IMG_PATH_DICT = {
+    'cannot_attack': 'img/figures/state_icons/cannot_attack.png',
+    'must_be_attacked': 'img/figures/state_icons/must_be_attacked.png',
+    'rest_after_attack': 'img/figures/state_icons/hourglass.png',
+    'distance_attack': 'img/figures/state_icons/distance.png',
+    'buffs_allies': 'img/figures/state_icons/ally_buff.png',
+    'blocks_bonus': 'img/figures/state_icons/buff_removal.png',
+}
+
 # SCOREBORD SCROLL
 SCOREBOARD_SCROLL_X = int(0.01 * SCREEN_WIDTH)
 SCOREBOARD_SCROLL_Y = int(0.024 * SCREEN_HEIGHT)

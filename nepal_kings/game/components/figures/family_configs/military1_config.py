@@ -18,6 +18,7 @@ military1_dict_list = [
         "icon_gray_img": "fortress1.png",
         "frame_img": "military.png",
         "frame_closed_img": "military.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": (0.8 * SCREEN_WIDTH, 0.255 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -46,6 +47,7 @@ military1_dict_list = [
         "icon_gray_img": "fortress2.png",
         "frame_img": "military.png",
         "frame_closed_img": "military.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": (0.8 * SCREEN_WIDTH, 0.395 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -72,6 +74,7 @@ military1_dict_list = [
         "icon_gray_img": "army1.png",
         "frame_img": "military.png",
         "frame_closed_img": "military.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": (0.8 * SCREEN_WIDTH, 0.255 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [
@@ -100,6 +103,7 @@ military1_dict_list = [
         "icon_gray_img": "army2.png",
         "frame_img": "military.png",
         "frame_closed_img": "military.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": (0.8 * SCREEN_WIDTH, 0.395 * SCREEN_HEIGHT),
         "figures": lambda family, suit: [

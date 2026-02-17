@@ -18,6 +18,7 @@ class FigureFamily:
         frame_img: pygame.Surface,
         frame_closed_img: pygame.Surface,
         frame_hidden_img: pygame.Surface,
+        glow_img: pygame.Surface,
         build_position: Optional[tuple] = None,
         description: str = "",
         field: Optional[str] = None,
@@ -31,6 +32,7 @@ class FigureFamily:
         self.frame_img = frame_img
         self.frame_closed_img = frame_closed_img
         self.frame_hidden_img = frame_hidden_img
+        self.glow_img = glow_img
         self.build_position = build_position
         self.description = description
         self.field = field
@@ -62,6 +64,12 @@ class Figure:
         attachment_family_name: Optional[str] = None,
         produces: Optional[dict] = None,  # Resources produced by figure
         requires: Optional[dict] = None,  # Resources required by figure
+        cannot_attack: bool = False,  # Figure cannot initiate attacks
+        must_be_attacked: bool = False,  # Figure must be attacked before others
+        rest_after_attack: bool = False,  # Figure needs rest after attacking
+        distance_attack: bool = False,  # Figure can attack from distance
+        buffs_allies: bool = False,  # Figure provides buffs to allied figures
+        blocks_bonus: bool = False,  # Figure blocks enemy bloodline bonus
         description: str = "",
         id: Optional[int] = None,
         player_id: Optional[int] = None,
@@ -79,6 +87,15 @@ class Figure:
         self.requires = requires or {}  # Default to empty dict
         # Keep old 'resources' attribute for backward compatibility (alias to produces)
         self.resources = self.produces
+        
+        # Combat behavior attributes
+        self.cannot_attack = cannot_attack
+        self.must_be_attacked = must_be_attacked
+        self.rest_after_attack = rest_after_attack
+        self.distance_attack = distance_attack
+        self.buffs_allies = buffs_allies
+        self.blocks_bonus = blocks_bonus
+        
         #self.extension_card = extension_card
         #self.extension_family_name = extension_family_name
         #self.attachment_family_name = attachment_family_name
@@ -104,18 +121,42 @@ class Figure:
         self.id = id
 
     def get_value(self) -> int:
-        """Returns the value of the figure."""
+        """Returns the value of the figure.
+        
+        Special rule: Kings and Maharajas (castle figures) always have a base power of 15,
+        regardless of their key card values.
+        """
+        # Castle figures (Kings/Maharajas) have fixed power of 15
+        if hasattr(self.family, 'field') and self.family.field == 'castle':
+            return 15
+        
+        # All other figures: sum of card values
         v = 0
         for card in self.cards:
             v += card.value
         return v
 
     def get_battle_bonus(self) -> int:
-        """Returns the battle bonus this figure provides (sum of key card values)."""
+        """Returns the battle bonus this figure provides (sum of key card values).
+        
+        Special rules:
+        - Military figures provide no battle bonus (0)
+        - Maharajas (castle figures) provide +5
+        - Kings (castle figures) provide +4
+        - All other figures: sum of key card values
+        """
         # Military figures do not provide any support
         if hasattr(self.family, 'field') and self.family.field == 'military':
             return 0
         
+        # Castle figures: Maharajas provide +5, Kings provide +4
+        if hasattr(self.family, 'field') and self.family.field == 'castle':
+            if 'Maharaja' in self.name:
+                return 5
+            else:
+                return 4
+        
+        # All other figures: sum of key card values
         bonus = 0
         for card in self.key_cards:
             bonus += card.value
