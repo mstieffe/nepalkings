@@ -13,6 +13,7 @@ CARD_SLOT_COLOR_HOVERED = (150, 150, 150)
 COLOR_RED = (160, 0, 0)
 COLOR_BLACK = (20, 20, 20)
 COLOR_GREEN = (0, 160, 0)
+COLOR_BATTLE_BONUS = (50, 255, 50)  # Brighter green with slight RGB balance for better contrast
 
 BACKGROUND_COLOR = (22, 55, 60)
 

@@ -25,3 +25,21 @@ FIELD_BORDER_COLOR = (25, 10, 4) #(100, 100, 100)
 FIELD_BORDER_WIDTH = 3
 FIELD_TRANSPARENCY = 200
 
+# Field compartment titles
+FIELD_TITLE_FONT_SIZE = int(0.022 * SCREEN_HEIGHT)
+FIELD_TITLE_COLOR = (220, 200, 180)
+FIELD_TITLE_PADDING = int(0.008 * SCREEN_HEIGHT)
+
+# Board titles ("YOU" / "OPPONENT")
+FIELD_BOARD_TITLE_FONT_SIZE = int(0.028 * SCREEN_HEIGHT)
+FIELD_BOARD_TITLE_COLOR = FIELD_BORDER_COLOR  # Match border color
+FIELD_BOARD_TITLE_Y_OFFSET = int(0.00 * SCREEN_HEIGHT)  # Offset above the field
+
+# Slot icons for compartment backgrounds
+SLOT_ICON_IMG_PATH_DICT = {
+    'castle': 'img/slot_icons/castle.png',
+    'village': 'img/slot_icons/village.png',
+    'military': 'img/slot_icons/military.png',
+}
+SLOT_ICON_TRANSPARENCY = 50  # Alpha value for slot icon backgrounds (0-255)
+

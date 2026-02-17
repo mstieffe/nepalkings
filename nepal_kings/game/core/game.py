@@ -246,31 +246,42 @@ class Game:
                 upgrade_card = cards.get('upgrade')[0] if cards.get('upgrade') else None
 
                 # If upgrade_card is not in the saved cards, try to get it from the family definition
-                # Match this figure to the correct variant in the family to get upgrade_card
+                # Match this figure to the correct variant in the family to get upgrade_card and combat attributes
                 key_cards = cards.get('key', [])
-                if not upgrade_card and figure_data.get('upgrade_family_name'):
-                    # Find matching figure in family definitions
-                    for family_figure in family.figures:
-                        # Match by suit and cards
-                        if (family_figure.suit == figure_data['suit'] and 
-                            len(family_figure.key_cards) == len(key_cards)):
-                            # Check if key cards match
-                            key_cards_match = all(
-                                any(kc.rank == fkc.rank and kc.suit == fkc.suit 
-                                    for fkc in family_figure.key_cards)
-                                for kc in key_cards
-                            )
-                            # Check if number cards match (if present)
-                            number_cards_match = True
-                            if number_card and family_figure.number_card:
-                                number_cards_match = (number_card.rank == family_figure.number_card.rank and
-                                                    number_card.suit == family_figure.number_card.suit)
-                            elif number_card or family_figure.number_card:
-                                number_cards_match = False
-                            
-                            if key_cards_match and number_cards_match:
+                matched_family_figure = None
+                
+                # Find matching figure in family definitions
+                for family_figure in family.figures:
+                    # Match by suit and cards
+                    if (family_figure.suit == figure_data['suit'] and 
+                        len(family_figure.key_cards) == len(key_cards)):
+                        # Check if key cards match
+                        key_cards_match = all(
+                            any(kc.rank == fkc.rank and kc.suit == fkc.suit 
+                                for fkc in family_figure.key_cards)
+                            for kc in key_cards
+                        )
+                        # Check if number cards match (if present)
+                        number_cards_match = True
+                        if number_card and family_figure.number_card:
+                            number_cards_match = (number_card.rank == family_figure.number_card.rank and
+                                                number_card.suit == family_figure.number_card.suit)
+                        elif number_card or family_figure.number_card:
+                            number_cards_match = False
+                        
+                        if key_cards_match and number_cards_match:
+                            matched_family_figure = family_figure
+                            if not upgrade_card:
                                 upgrade_card = family_figure.upgrade_card
-                                break
+                            break
+
+                # Extract combat attributes from matched family figure
+                cannot_attack = matched_family_figure.cannot_attack if matched_family_figure and hasattr(matched_family_figure, 'cannot_attack') else False
+                must_be_attacked = matched_family_figure.must_be_attacked if matched_family_figure and hasattr(matched_family_figure, 'must_be_attacked') else False
+                rest_after_attack = matched_family_figure.rest_after_attack if matched_family_figure and hasattr(matched_family_figure, 'rest_after_attack') else False
+                distance_attack = matched_family_figure.distance_attack if matched_family_figure and hasattr(matched_family_figure, 'distance_attack') else False
+                buffs_allies = matched_family_figure.buffs_allies if matched_family_figure and hasattr(matched_family_figure, 'buffs_allies') else False
+                blocks_bonus = matched_family_figure.blocks_bonus if matched_family_figure and hasattr(matched_family_figure, 'blocks_bonus') else False
 
                 figure = Figure(
                     name=figure_data['name'],
@@ -286,6 +297,12 @@ class Game:
                     requires=figure_data.get('requires', {}),
                     id=figure_data['id'],
                     player_id=figure_data.get('player_id'),
+                    cannot_attack=cannot_attack,
+                    must_be_attacked=must_be_attacked,
+                    rest_after_attack=rest_after_attack,
+                    distance_attack=distance_attack,
+                    buffs_allies=buffs_allies,
+                    blocks_bonus=blocks_bonus,
                 )
                 figures.append(figure)
 

@@ -23,6 +23,7 @@ class ScrollTextListShifter:
         self.num_texts_displayed = num_texts_displayed
         self.shift_cooldown = shift_cooldown  # Cooldown between shifts in milliseconds
         self.last_shift_time = 0  # To track time since the last shift
+        self.scroll_height = scroll_height  # Store scroll height for scrollbar calculations
 
         self.card_imgs = self.initialize_card_imgs()
         
@@ -31,6 +32,12 @@ class ScrollTextListShifter:
         
         # Load check icons for spell attributes
         self.check_icons = self._load_check_icons()
+        
+        # Load skill icons for figure attributes
+        self.skill_icons = self._load_skill_icons()
+        
+        # Load skill icons for figure attributes
+        self.skill_icons = self._load_skill_icons()
 
         # Initialize text shifter states
         self.start_index = 0
@@ -38,8 +45,8 @@ class ScrollTextListShifter:
 
         # Initialize arrow buttons for shifting
         # Position them slightly outside the scroll edges and centered vertically
-        arrow_horizontal_offset = settings.get_x(0.02)  # Distance outside scroll edges
-        left_x = self.x - arrow_horizontal_offset
+        arrow_horizontal_offset = settings.get_x(0.027)  # Distance outside scroll edges
+        left_x = self.x - arrow_horizontal_offset*1.09  # Slightly more offset for left arrow to prevent overlap with scroll edge
         right_x = self.x + settings.SCROLL_TEXT_MAX_WIDTH + arrow_horizontal_offset
         
         # Calculate vertical center position
@@ -110,6 +117,36 @@ class ScrollTextListShifter:
         
         return icons
     
+    def _load_skill_icons(self):
+        """Load and scale skill icons for combat attributes."""
+        icon_size = int(settings.FONT_SIZE_DETAIL * 1.0)  # Match font size
+        icons = {}
+        
+        if hasattr(settings, 'SKILL_ICON_IMG_PATH_DICT'):
+            for skill, path in settings.SKILL_ICON_IMG_PATH_DICT.items():
+                try:
+                    icon = pygame.image.load(path).convert_alpha()
+                    icons[skill] = pygame.transform.smoothscale(icon, (icon_size, icon_size))
+                except Exception as e:
+                    print(f"[SCROLL] Failed to load skill icon {skill} from {path}: {e}")
+        
+        return icons
+    
+    def _load_skill_icons(self):
+        """Load and scale skill icons for combat attributes."""
+        icon_size = int(settings.FONT_SIZE_DETAIL * 1.0)  # Match font size
+        icons = {}
+        
+        if hasattr(settings, 'SKILL_ICON_IMG_PATH_DICT'):
+            for skill, path in settings.SKILL_ICON_IMG_PATH_DICT.items():
+                try:
+                    icon = pygame.image.load(path).convert_alpha()
+                    icons[skill] = pygame.transform.smoothscale(icon, (icon_size, icon_size))
+                except Exception as e:
+                    print(f"[SCROLL] Failed to load skill icon {skill} from {path}: {e}")
+        
+        return icons
+    
     def _map_resource_to_icon(self, resource_name):
         """Map database resource names to icon keys."""
         resource_map = {
@@ -117,8 +154,8 @@ class ScrollTextListShifter:
             'food_black': 'meat',
             'warrior_red': 'warrior_red',
             'warrior_black': 'warrior_black',
-            'material_red': 'wood_stone',
-            'material_black': 'wood_stone',
+            'material_red': 'wood',
+            'material_black': 'stone',
             'armor_red': 'sword_shield',
             'armor_black': 'sword_shield',
             'villager_red': 'villager_red',
@@ -379,6 +416,66 @@ class ScrollTextListShifter:
             # Move y down by icon height
             if self.resource_icons:
                 first_icon = list(self.resource_icons.values())[0]
+                y += first_icon.get_height() + blank_line_height * 0.4
+            else:
+                y += blank_line_height
+
+        # SKILLS
+        skills_to_display = []
+        if 'cannot_attack' in text_dict and text_dict['cannot_attack']:
+            skills_to_display.append(('cannot_attack', 'Cannot Attack'))
+        if 'must_be_attacked' in text_dict and text_dict['must_be_attacked']:
+            skills_to_display.append(('must_be_attacked', 'Must Be Attacked'))
+        if 'rest_after_attack' in text_dict and text_dict['rest_after_attack']:
+            skills_to_display.append(('rest_after_attack', 'Rest After Attack'))
+        if 'distance_attack' in text_dict and text_dict['distance_attack']:
+            skills_to_display.append(('distance_attack', 'Distance Attack'))
+        if 'buffs_allies' in text_dict and text_dict['buffs_allies']:
+            skills_to_display.append(('buffs_allies', 'Buffs Allies'))
+        if 'blocks_bonus' in text_dict and text_dict['blocks_bonus']:
+            skills_to_display.append(('blocks_bonus', 'Blocks Bonus'))
+        
+        if skills_to_display:
+            # Draw divider line
+            pygame.draw.line(
+                self.window,
+                settings.COLOR_DIALOGUE_BOX_BORDER,
+                (x, y),
+                (x + max_width, y),
+                1
+            )
+            y += blank_line_height * 0.4
+            
+            # Draw "Skills" label
+            skills_label = self.scroll_font.render("Skills", True, settings.SCROLL_TEXT_COLOR)
+            skills_rect = skills_label.get_rect(topleft=(x, y))
+            self.window.blit(skills_label, skills_rect)
+            y += skills_rect.height + blank_line_height * 0.4
+            
+            # Draw skill icons and names
+            current_x = x + blank_line_height * 0.5
+            icon_spacing = int(blank_line_height * 0.3)
+            
+            for skill_key, skill_name in skills_to_display:
+                # Draw icon if available
+                if skill_key in self.skill_icons:
+                    icon = self.skill_icons[skill_key]
+                    self.window.blit(icon, (current_x, y))
+                    current_x += icon.get_width() + 2
+                    
+                    # Draw skill name next to icon
+                    skill_text = self.small_font.render(skill_name, True, settings.SCROLL_TEXT_COLOR)
+                    self.window.blit(skill_text, (current_x, y + (icon.get_height() - skill_text.get_height()) // 2))
+                    current_x += skill_text.get_width() + icon_spacing
+                else:
+                    # Fallback to text only
+                    skill_text = self.small_font.render(f"• {skill_name}", True, settings.SCROLL_TEXT_COLOR)
+                    self.window.blit(skill_text, (current_x, y))
+                    current_x += skill_text.get_width() + icon_spacing
+            
+            # Move y down by icon height
+            if self.skill_icons:
+                first_icon = list(self.skill_icons.values())[0]
                 y += first_icon.get_height() + blank_line_height * 0.4
             else:
                 y += blank_line_height

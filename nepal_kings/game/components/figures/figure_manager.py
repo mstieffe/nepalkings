@@ -56,7 +56,7 @@ class FigureManager:
             for figure in family.figures:
                 self.add_figure(figure)
 
-    def create_figure_family(self, name, color, suits, figures, field, description, icon_img, icon_gray_img, frame_img, frame_closed_img, frame_hidden_img, build_position=None):
+    def create_figure_family(self, name, color, suits, figures, field, description, icon_img, icon_gray_img, frame_img, frame_closed_img, frame_hidden_img, glow_img, build_position=None):
         """Helper method to create and add a FigureFamily."""
         family = FigureFamily(
             name=name,
@@ -70,6 +70,7 @@ class FigureManager:
             frame_img=frame_img,
             frame_closed_img=frame_closed_img,
             frame_hidden_img=frame_hidden_img,
+            glow_img=glow_img,
             build_position=build_position,
         )
         self.add_figure_family(family)
@@ -93,6 +94,7 @@ class FigureManager:
                 frame_img=self.load_image(settings.FIGURE_FRAME_IMG_DIR + config["frame_img"]),
                 frame_closed_img=self.load_image(settings.FIGURE_FRAME_GREYSCALE_IMG_DIR + config["frame_closed_img"]),
                 frame_hidden_img=self.load_image(settings.FIGURE_FRAME_HIDDEN_IMG_DIR + config["frame_closed_img"]),
+                glow_img=self.load_image(settings.FIGURE_GLOW_IMG_DIR + config["glow_img"]),
                 build_position=config.get("build_position"),
             )
             family_figures  = []

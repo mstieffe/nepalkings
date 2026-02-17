@@ -26,6 +26,20 @@ class FieldScreen(SubScreen):
         self.figure_detail_box = None  # Detail box for selected figure
         self.figure_pending_pickup = None  # Figure waiting for pickup confirmation
         self.figure_pending_upgrade = None  # Figure waiting for upgrade confirmation
+        
+        # Initialize categorized figures structure
+        self.categorized_figures = {
+            'self': {'castle': [], 'village': [], 'military': []}, 
+            'opponent': {'castle': [], 'village': [], 'military': []}
+        }
+
+        # Font for field titles
+        self.field_title_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
+        self.board_title_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_BOARD_TITLE_FONT_SIZE)
+        self.board_title_font.set_bold(True)
+        
+        # Load slot icons for compartment backgrounds
+        self.slot_icons = self._load_slot_icons()
 
         self.init_field_compartments()
 
@@ -45,6 +59,23 @@ class FieldScreen(SubScreen):
                 hovered_icon = icon
             else:
                 icon.hovered = False
+
+    def _load_slot_icons(self):
+        """Load and prepare slot icons for compartment backgrounds."""
+        slot_icons = {}
+        for field_type, img_path in settings.SLOT_ICON_IMG_PATH_DICT.items():
+            # Load image
+            icon = pygame.image.load(img_path).convert_alpha()
+            
+            # Set transparency
+            icon.set_alpha(settings.SLOT_ICON_TRANSPARENCY)
+            
+            # Scale to fit compartment (leave some padding)
+            target_size = int(settings.FIELD_ICON_WIDTH * 0.7)
+            icon = pygame.transform.smoothscale(icon, (target_size, target_size*1.5))
+            
+            slot_icons[field_type] = icon
+        return slot_icons
 
     def init_field_compartments(self):
         """Initialize compartments for the field screen.
@@ -121,6 +152,20 @@ class FieldScreen(SubScreen):
 
         
         self.figure_icons = []
+        
+        # Collect all player figures for battle bonus calculation
+        all_player_figures = []
+        for field_type, figures in self.categorized_figures['self'].items():
+            all_player_figures.extend(figures)
+        
+        # Calculate resources once for all figures
+        try:
+            from game.components.figures.figure_manager import FigureManager
+            figure_manager = FigureManager()
+            families = figure_manager.families
+            resources_data = self.game.calculate_resources(families)
+        except Exception as e:
+            resources_data = None
 
         for category, compartments in self.categorized_figures.items():
             for field_type, figures in compartments.items():
@@ -133,10 +178,14 @@ class FieldScreen(SubScreen):
                             game=self.game,
                             figure=figure,
                             is_visible=is_visible,
+                            all_player_figures=all_player_figures,
+                            resources_data=resources_data,
                         )
                     else:
-                        # Update visibility for cached icon
+                        # Update visibility and recalculate battle bonus for cached icon
                         self.icon_cache[figure.id].is_visible = is_visible
+                        self.icon_cache[figure.id].battle_bonus_received = self.icon_cache[figure.id]._calculate_battle_bonus_received(all_player_figures)
+                        self.icon_cache[figure.id].has_deficit = self.icon_cache[figure.id]._check_resource_deficit(resources_data)
                     self.figure_icons.append(self.icon_cache[figure.id])
 
     def handle_events(self, events):
@@ -300,6 +349,10 @@ class FieldScreen(SubScreen):
                     was_clicked = clicked_icon.clicked
                     clicked_icon.clicked = not clicked_icon.clicked
                     
+                    # Force immediate visual feedback by redrawing the screen
+                    # This ensures the icon state change is visible before the detail box opens
+                    self._force_immediate_redraw()
+                    
                     # Open detail box if figure was just selected and is visible
                     if clicked_icon.clicked and not was_clicked and clicked_icon.is_visible:
                         # Calculate resources once for efficiency
@@ -322,37 +375,156 @@ class FieldScreen(SubScreen):
         print(f"Selected figure: {figure.name}")
         # Add additional functionality for interacting with the figure
 
+    def _force_immediate_redraw(self):
+        """
+        Force an immediate redraw of the field screen to show visual feedback.
+        This is called when an icon state changes to provide instant visual response
+        before any heavy operations (like opening detail box) occur.
+        """
+        # Redraw the field screen with updated icon states
+        self.draw()
+        # Update only the display to show the changes immediately
+        pygame.display.update()
+
     def draw(self):
         """Draw the screen, including the field background and figure icons."""
         super().draw()
 
-        if self.figures:
+        # Safety check: ensure categorized_figures exists
+        if not hasattr(self, 'categorized_figures') or not self.categorized_figures:
+            return
+
+        if self.figures or True:  # Always draw compartments even without figures
+            # First pass: Draw all compartment fills and slot icon backgrounds
             for player in ['self', 'opponent']:
                 for field in ['castle', 'village', 'military']:
-
                     compartment = self.compartments[player][field]
-                    figures = self.categorized_figures[player][field]   
-
-                    # Draw the field background
-
-                    # Create a new surface with per-pixel alpha
+                    
+                    # Create a new surface with per-pixel alpha for the fill
                     compartment_surface = pygame.Surface((compartment.width, compartment.height), pygame.SRCALPHA)
                     
                     # Draw the filled rectangle with transparency
                     fill_color = (*settings.FIELD_FILL_COLOR[:3], settings.FIELD_TRANSPARENCY)
                     pygame.draw.rect(compartment_surface, fill_color, compartment_surface.get_rect())
                     
-                    # Draw the border rectangle with transparency
-                    border_color = (*settings.FIELD_BORDER_COLOR[:3], settings.FIELD_TRANSPARENCY)
-                    pygame.draw.rect(compartment_surface, border_color, compartment_surface.get_rect(), settings.FIELD_BORDER_WIDTH)
+                    # Draw slot icon as background (upper part of compartment)
+                    if field in self.slot_icons:
+                        slot_icon = self.slot_icons[field]
+                        # Position in upper portion of compartment
+                        icon_rect = slot_icon.get_rect()
+                        icon_rect.centerx = compartment.width // 2
+                        icon_rect.top = int(compartment.height * 0.018)
+                        compartment_surface.blit(slot_icon, icon_rect)
                     
-                    # Blit the new surface onto the main window
+                    # Blit the fill onto the main window
                     self.window.blit(compartment_surface, compartment.topleft)
+            
+            # Second pass: Draw borders (to avoid double-thick borders between compartments)
+            border_color = (*settings.FIELD_BORDER_COLOR[:3], settings.FIELD_TRANSPARENCY)
+            for player in ['self', 'opponent']:
+                # Get the three compartments for this player
+                castle_comp = self.compartments[player]['castle']
+                village_comp = self.compartments[player]['village']
+                military_comp = self.compartments[player]['military']
+                
+                # Calculate the bounding box for all three compartments
+                # Use min/max to handle different arrangements (self vs opponent)
+                left = min(castle_comp.left, village_comp.left, military_comp.left)
+                right = max(castle_comp.right, village_comp.right, military_comp.right)
+                top = castle_comp.top
+                bottom = castle_comp.bottom
+                width = right - left
+                height = bottom - top
+                
+                # Safety check: ensure valid dimensions
+                if width <= 0 or height <= 0:
+                    continue
+                
+                # Create surface for borders
+                border_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+                
+                # Draw outer border (full rectangle)
+                pygame.draw.rect(border_surface, border_color, border_surface.get_rect(), settings.FIELD_BORDER_WIDTH)
+                
+                # Draw vertical dividers between compartments
+                # Get sorted x-positions of all compartments
+                comp_positions = sorted([
+                    (castle_comp.left, castle_comp.width),
+                    (village_comp.left, village_comp.width),
+                    (military_comp.left, military_comp.width)
+                ], key=lambda x: x[0])
+                
+                # Draw dividers between adjacent compartments
+                for i in range(len(comp_positions) - 1):
+                    divider_x = comp_positions[i][0] + comp_positions[i][1] - left
+                    pygame.draw.line(border_surface, border_color, 
+                                   (divider_x, 0), (divider_x, height), 
+                                   settings.FIELD_BORDER_WIDTH)
+                
+                # Blit the border surface
+                self.window.blit(border_surface, (left, top))
+            
+            # Draw board titles ("YOU" / "OPPONENT") - YOU on left, OPPONENT on right
+            for player in ['self', 'opponent']:
+                # Get the bounding box for all compartments
+                castle_comp = self.compartments[player]['castle']
+                village_comp = self.compartments[player]['village']
+                military_comp = self.compartments[player]['military']
+                
+                left = min(castle_comp.left, village_comp.left, military_comp.left)
+                right = max(castle_comp.right, village_comp.right, military_comp.right)
+                
+                # Determine title text
+                title_text_str = "YOU" if player == 'self' else "OPPONENT"
+                title_text = self.board_title_font.render(title_text_str, True, settings.FIELD_BOARD_TITLE_COLOR)
+                title_rect = title_text.get_rect()
+                
+                # Position: YOU on left side, OPPONENT on right side
+                if player == 'self':
+                    title_rect.left = left
+                else:
+                    title_rect.right = right
+                
+                title_rect.bottom = castle_comp.top + settings.FIELD_BOARD_TITLE_Y_OFFSET
+                
+                # Draw title
+                self.window.blit(title_text, title_rect)
+            
+            # Third pass: Draw titles for each compartment
+            for player in ['self', 'opponent']:
+                for field in ['castle', 'village', 'military']:
+                    compartment = self.compartments[player][field]
+                    
+                    # Render title text
+                    title_text = self.field_title_font.render(field.upper(), True, settings.FIELD_TITLE_COLOR)
+                    title_rect = title_text.get_rect()
+                    
+                    # Position: left-aligned for self, right-aligned for opponent
+                    if player == 'self':
+                        title_rect.left = compartment.left + settings.FIELD_TITLE_PADDING
+                    else:
+                        title_rect.right = compartment.right - settings.FIELD_TITLE_PADDING
+                    
+                    title_rect.top = compartment.top + settings.FIELD_TITLE_PADDING
+                    
+                    # Draw title
+                    self.window.blit(title_text, title_rect)
+            
+            # Fourth pass: Draw figures
+            for player in ['self', 'opponent']:
+                for field in ['castle', 'village', 'military']:
+                    compartment = self.compartments[player][field]
+                    # Safety check for categorized_figures
+                    if player not in self.categorized_figures or field not in self.categorized_figures[player]:
+                        continue
+                    figures = self.categorized_figures[player][field]
 
                     if len(figures) > 0:
                         # Calculate the y-position to center the icons in the compartment
+                        # Account for title space at the top
                         icon_height = settings.FIELD_ICON_WIDTH
-                        available_height = compartment.height - 2 * settings.FIELD_BORDER_WIDTH
+                        title_space = settings.FIELD_TITLE_FONT_SIZE + 2 * settings.FIELD_TITLE_PADDING
+                        available_height = compartment.height - 2 * settings.FIELD_BORDER_WIDTH - title_space
                         
                         # Calculate dynamic spacing to fit all figures within available height
                         if len(figures) == 1:
@@ -373,7 +545,8 @@ class FieldScreen(SubScreen):
                                 icon_spacing = (available_height - len(figures) * icon_height) / (len(figures) - 1)
                                 total_icons_height = available_height
                         
-                        icon_y_start = compartment.top + (compartment.height - total_icons_height) // 2 + 0.5*settings.FIELD_ICON_WIDTH
+                        # Start position accounts for title space
+                        icon_y_start = compartment.top + title_space + (available_height - total_icons_height) // 2 + 0.5*settings.FIELD_ICON_WIDTH
 
                         # Calculate positions and separate into layers: regular, selected, hovered
                         regular_positions = []

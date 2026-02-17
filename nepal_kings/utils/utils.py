@@ -268,8 +268,8 @@ class SubScreenButton:
         self.button_img_inactive_path = button_img_inactive
 
         # Load font settings
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_BUTTON)
-        self.font_small = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_BUTTON * 0.9))
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_SUBSCREEN_BUTTON)
+        self.font_small = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_SUBSCREEN_BUTTON * 0.9))
 
         # Set button dimensions based on text and provided width/height
         self.set_dimensions(width, height)

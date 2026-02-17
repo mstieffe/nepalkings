@@ -84,6 +84,9 @@ class FigureDetailBox:
         # Load state icons (success/error)
         self.state_icons = self._load_state_icons()
         
+        # Load skill icons
+        self.skill_icons = self._load_skill_icons()
+        
         # Load figure icon
         self.figure_icon = self._load_figure_icon()
 
@@ -170,6 +173,21 @@ class FigureDetailBox:
         
         return icons
 
+    def _load_skill_icons(self):
+        """Load and scale skill icons for combat attributes."""
+        icon_size = int(settings.FONT_SIZE_DIALOGUE_BOX * 1.2)
+        icons = {}
+        
+        if hasattr(settings, 'SKILL_ICON_IMG_PATH_DICT'):
+            for skill, path in settings.SKILL_ICON_IMG_PATH_DICT.items():
+                try:
+                    icon = pygame.image.load(path).convert_alpha()
+                    icons[skill] = pygame.transform.smoothscale(icon, (icon_size, icon_size))
+                except Exception as e:
+                    print(f"[FIGURE_DETAIL] Failed to load skill icon {skill} from {path}: {e}")
+        
+        return icons
+
     def _load_figure_icon(self):
         """Load and scale the figure's icon image."""
         try:
@@ -196,8 +214,8 @@ class FigureDetailBox:
             'food_black': 'meat',
             'warrior_red': 'warrior_red',
             'warrior_black': 'warrior_black',
-            'material_red': 'wood_stone',
-            'material_black': 'wood_stone',
+            'material_red': 'wood',
+            'material_black': 'stone',
             'armor_red': 'sword_shield',
             'armor_black': 'sword_shield',
             'villager_red': 'villager_red',
@@ -539,6 +557,76 @@ class FigureDetailBox:
                     current_x += text.get_width() + settings.SMALL_SPACER_X
             
             right_y += self.resource_icons[list(self.resource_icons.keys())[0]].get_height() + settings.SMALL_SPACER_Y * 1.5
+
+        # Draw skills section
+        skills_to_display = []
+        
+        if hasattr(self.figure, 'cannot_attack') and self.figure.cannot_attack:
+            skills_to_display.append(('cannot_attack', 'Cannot Attack'))
+        if hasattr(self.figure, 'must_be_attacked') and self.figure.must_be_attacked:
+            skills_to_display.append(('must_be_attacked', 'Must Be Attacked'))
+        if hasattr(self.figure, 'rest_after_attack') and self.figure.rest_after_attack:
+            skills_to_display.append(('rest_after_attack', 'Rest After Attack'))
+        if hasattr(self.figure, 'distance_attack') and self.figure.distance_attack:
+            skills_to_display.append(('distance_attack', 'Distance Attack'))
+        if hasattr(self.figure, 'buffs_allies') and self.figure.buffs_allies:
+            skills_to_display.append(('buffs_allies', 'Buffs Allies'))
+        if hasattr(self.figure, 'blocks_bonus') and self.figure.blocks_bonus:
+            skills_to_display.append(('blocks_bonus', 'Blocks Bonus'))
+        
+        print(f"[FIGURE_DETAIL] Skills to display: {skills_to_display}")
+        
+        # Draw skills if any exist
+        if skills_to_display and right_y + self.font.get_height() + 20 <= max_content_y:
+            # Draw horizontal divider line
+            pygame.draw.line(
+                self.window,
+                settings.COLOR_DIALOGUE_BOX_BORDER,
+                (right_column_x, right_y),
+                (right_column_x + self.right_column_width, right_y),
+                2
+            )
+            right_y += settings.SMALL_SPACER_Y
+            
+            # Draw "Skills" label
+            skills_label = self.font.render("Skills", True, settings.TITLE_TEXT_COLOR)
+            self.window.blit(skills_label, (right_column_x, right_y))
+            right_y += skills_label.get_height() + settings.SMALL_SPACER_Y // 2
+            
+            # Draw skill icons and names
+            for skill_key, skill_name in skills_to_display:
+                # Determine row height
+                if skill_key in self.skill_icons:
+                    row_height = self.skill_icons[skill_key].get_height()
+                else:
+                    row_height = self.small_font.get_height()
+                
+                # Check if we have space for this skill
+                if right_y + row_height > max_content_y - 10:
+                    break  # Stop if we run out of space
+                
+                current_x = right_column_x + settings.SMALL_SPACER_X
+                
+                # Draw icon if available
+                if skill_key in self.skill_icons:
+                    icon = self.skill_icons[skill_key]
+                    self.window.blit(icon, (current_x, right_y))
+                    current_x += icon.get_width() + settings.SMALL_SPACER_X // 2
+                    
+                    # Draw skill name next to icon
+                    skill_text = self.small_font.render(skill_name, True, settings.MSG_TEXT_COLOR)
+                    # Center text vertically with icon
+                    text_y = right_y + (icon.get_height() - skill_text.get_height()) // 2
+                    self.window.blit(skill_text, (current_x, text_y))
+                    
+                    right_y += icon.get_height() + settings.SMALL_SPACER_Y // 2
+                else:
+                    # Fallback to text only
+                    skill_text = self.small_font.render(f"• {skill_name}", True, settings.MSG_TEXT_COLOR)
+                    self.window.blit(skill_text, (current_x, right_y))
+                    right_y += skill_text.get_height() + settings.SMALL_SPACER_Y // 2
+            
+            right_y += settings.SMALL_SPACER_Y // 2  # Reduced spacing after skills
 
         # Draw description if available and there's space
         if hasattr(self.figure.family, 'description') and self.figure.family.description:
