@@ -52,7 +52,7 @@ DRAW_2_SIDE_CARDS_CONFIG = {
 FORCED_DEAL_CONFIG = {
     "name": "Forced Deal",
     "type": "greed",
-    "description": "Force a deal with an opponent: Draw 2 cards from opponent's hand, then opponent draws 2 cards from your hand.",
+    "description": "Force a deal with an opponent: Exchange two MainCards at random with your opponent.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "forced_deal.png",
     "icon_gray_img": "forced_deal.png",
@@ -65,7 +65,7 @@ FORCED_DEAL_CONFIG = {
         color_group='red' if suit == 'Hearts' else 'black',
         ranks=['4', '4'],
         spell_name="Forced Deal",
-        requires_target=True,
+        requires_target=False,
         counterable=False
     ),
 }

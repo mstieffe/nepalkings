@@ -99,12 +99,19 @@ class CastSpellScreen(SubScreen):
             # Show success message with drawn cards (if any)
             spell_effect = result.get('spell_effect', {})
             drawn_cards_data = spell_effect.get('drawn_cards', [])
+            cards_received_data = spell_effect.get('cards_received', [])
+            cards_given_data = spell_effect.get('cards_given', [])
             
+            print(f"[CAST_SPELL_SCREEN] Full spell_effect: {spell_effect}")
             print(f"[CAST_SPELL_SCREEN] Spell effect received: {spell_effect.get('effect')}")
             print(f"[CAST_SPELL_SCREEN] Drawn cards data: {len(drawn_cards_data)} cards")
+            print(f"[CAST_SPELL_SCREEN] Cards received: {len(cards_received_data)} cards")
+            print(f"[CAST_SPELL_SCREEN] Cards given: {len(cards_given_data)} cards")
             
-            # Create card images from drawn cards
+            # Create card images from drawn cards or swapped cards
             card_images = []
+            message_text = f"{selected_spell.name} cast successfully!"
+            
             if drawn_cards_data:
                 from game.components.cards.card import Card
                 for card_data in drawn_cards_data:
@@ -117,6 +124,55 @@ class CastSpellScreen(SubScreen):
                     )
                     card_img = card.make_icon(self.window, self.game, 0, 0)
                     card_images.append(card_img.front_img)
+                message_text = f"{selected_spell.name} cast successfully! You drew:"
+            
+            elif cards_received_data and cards_given_data:
+                # For Forced Deal: show both cards received and given
+                from game.components.cards.card import Card
+                
+                # Add received cards
+                for card_data in cards_received_data:
+                    card = Card(
+                        rank=card_data['rank'],
+                        suit=card_data['suit'],
+                        value=card_data['value'],
+                        id=card_data.get('id'),
+                        type=card_data.get('type')
+                    )
+                    card_img = card.make_icon(self.window, self.game, 0, 0)
+                    card_images.append(card_img.front_img)
+                
+                # Add visual separator or indicator between given and received
+                # For now, just add given cards after received cards with red cross overlay
+                for card_data in cards_given_data:
+                    card = Card(
+                        rank=card_data['rank'],
+                        suit=card_data['suit'],
+                        value=card_data['value'],
+                        id=card_data.get('id'),
+                        type=card_data.get('type')
+                    )
+                    card_img = card.make_icon(self.window, self.game, 0, 0)
+                    # Make the card slightly transparent to show it was given away
+                    given_card_img = card_img.front_img.copy()
+                    given_card_img.set_alpha(128)  # 50% transparency
+                    
+                    # Add red cross overlay
+                    import os
+                    red_cross_path = os.path.join('img', 'new_cards', 'red_cross.png')
+                    if os.path.exists(red_cross_path):
+                        red_cross = pygame.image.load(red_cross_path)
+                        # Scale red cross to fit the card
+                        cross_size = min(given_card_img.get_width(), given_card_img.get_height())
+                        red_cross = pygame.transform.scale(red_cross, (cross_size, cross_size))
+                        # Center the cross on the card
+                        cross_x = (given_card_img.get_width() - cross_size) // 2
+                        cross_y = (given_card_img.get_height() - cross_size) // 2
+                        given_card_img.blit(red_cross, (cross_x, cross_y))
+                    
+                    card_images.append(given_card_img)
+                
+                message_text = f"{selected_spell.name} cast! You received {len(cards_received_data)} main cards and gave {len(cards_given_data)} main cards."
             
             if selected_spell.counterable:
                 dialogue_params = {
@@ -129,10 +185,10 @@ class CastSpellScreen(SubScreen):
                     dialogue_params['images'] = card_images
                 self.make_dialogue_box(**dialogue_params)
             else:
-                # For non-counterable spells, show drawn cards if any
+                # For non-counterable spells, show cards if any
                 if card_images:
                     self.make_dialogue_box(
-                        message=f"{selected_spell.name} cast successfully! You drew:",
+                        message=message_text,
                         actions=['ok'],
                         images=card_images,
                         icon="magic",
@@ -140,7 +196,7 @@ class CastSpellScreen(SubScreen):
                     )
                 else:
                     self.make_dialogue_box(
-                        message=f"{selected_spell.name} cast successfully!",
+                        message=message_text,
                         actions=['ok'],
                         icon="magic",
                         title="Spell Cast"

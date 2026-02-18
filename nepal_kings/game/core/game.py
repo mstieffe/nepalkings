@@ -51,8 +51,17 @@ class Game:
         # Initialize to None so first login triggers turn detection if it's their turn
         self.previous_turn_player_id = None
         
+        # Track if game start notification was shown (needs to be shown once per player)
+        self.game_start_notification_checked = False
+        
         # Auto-fill notification (cleared after showing dialogue)
         self.pending_auto_fill = None
+        
+        # Opponent turn summary notification (cleared after showing dialogue)
+        self.pending_opponent_turn_summary = None
+        
+        # Forced Deal notification with specific cards (cleared after showing dialogue)
+        self.pending_forced_deal_notification = None
 
         # Initialize log entries and chat messages
         self.log_entries = []
@@ -115,8 +124,16 @@ class Game:
             self.turn = True if self.turn_player_id == self.player_id else False
             self.invader = True if self.invader_player_id == self.player_id else False
 
+            # Check for game start notification on first update (regardless of turn number)
+            if not self.game_start_notification_checked:
+                print(f"[GAME_START] First update - player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
+                print(f"[GAME_START] Checking for welcome message...")
+                self._handle_start_turn()  # This will check server-side if player has any logs yet
+                self.game_start_notification_checked = True
+                print(f"[GAME_START] Flag set to True after first check")
+            
             # Check if turn changed to current player - call start_turn endpoint
-            if not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
+            elif not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
                 print(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
                 self._handle_start_turn()
             
@@ -158,6 +175,23 @@ class Game:
                     self.pending_auto_fill = auto_fill
                 else:
                     print(f"[START_TURN] No auto-fill needed")
+                
+                # Store opponent turn summary for dialogue display
+                opponent_turn_summary = data.get('opponent_turn_summary')
+                if opponent_turn_summary:
+                    print(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
+                    self.pending_opponent_turn_summary = opponent_turn_summary
+                else:
+                    print(f"[START_TURN] No opponent turn summary")
+                    self.pending_opponent_turn_summary = None
+                
+                # Store Forced Deal notification if present
+                forced_deal_notification = data.get('forced_deal_notification')
+                if forced_deal_notification:
+                    print(f"[START_TURN] Forced Deal notification: {forced_deal_notification}")
+                    self.pending_forced_deal_notification = forced_deal_notification
+                else:
+                    self.pending_forced_deal_notification = None
         except Exception as e:
             print(f"Error in start_turn: {str(e)}")
 
@@ -348,7 +382,8 @@ class Game:
                             )
                             break
         except Exception as e:
-            print(f"Error loading enchantments: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def has_active_all_seeing_eye(self) -> bool:
         """
