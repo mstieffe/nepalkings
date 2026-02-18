@@ -79,7 +79,23 @@ def create_figure():
         game = Game.query.get(game_id)
         if game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-            db.session.commit()
+
+        # Create log entry
+        user = User.query.get(player.user_id)
+        username = user.username if user else f"Player {player_id}"
+        card_count = len(cards)
+        field_str = field if field else "their hand"
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left + 1,  # +1 because we decremented it above
+            message=f"{username} built a figure with {card_count} cards in {field_str}.",
+            author=username,
+            type='figure_built'
+        )
+        db.session.add(log_entry)
+        db.session.commit()
 
         serialized = figure.serialize()
         if settings.DEBUG_ENABLED:
@@ -476,9 +492,9 @@ def upgrade_figure():
             player_id=player_id,
             round_number=game.current_round,
             turn_number=player.turns_left,
-            message=f"{username} upgraded a {figure_field} figure.",
+            message=f"{username} upgraded a {figure_field} {old_figure.name} to {new_figure.name}.",
             author=username,
-            type='figure_upgrade'
+            type='figure_upgraded'
         )
         db.session.add(log_entry)
 

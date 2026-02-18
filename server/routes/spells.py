@@ -592,7 +592,97 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 spell_effect['effect'] = f'Failed to dump cards: {str(e)}'
                 spell_effect['error'] = str(e)
         
-        # TODO: Implement other greed spells (Forced Deal)
+        elif 'Forced Deal' in spell.spell_name:
+            # Exchange 2 random cards with opponent
+            try:
+                import random
+                
+                print(f"[FORCED DEAL] Starting Forced Deal spell execution")
+                
+                # Get opponent
+                opponent = next((p for p in game.players if p.id != caster.id), None)
+                if not opponent:
+                    spell_effect['effect'] = 'No opponent found'
+                    spell_effect['error'] = 'No opponent'
+                    print(f"[FORCED DEAL] ERROR: No opponent found")
+                else:
+                    print(f"[FORCED DEAL] Caster: {caster.id}, Opponent: {opponent.id}")
+                    
+                    # Get caster's MAIN hand cards only (not in deck, not part of figure)
+                    caster_main_cards = MainCard.query.filter_by(
+                        player_id=caster.id,
+                        in_deck=False,
+                        part_of_figure=False
+                    ).all()
+                    
+                    print(f"[FORCED DEAL] Caster has {len(caster_main_cards)} main cards in hand")
+                    
+                    # Get opponent's MAIN hand cards only
+                    opponent_main_cards = MainCard.query.filter_by(
+                        player_id=opponent.id,
+                        in_deck=False,
+                        part_of_figure=False
+                    ).all()
+                    
+                    print(f"[FORCED DEAL] Opponent has {len(opponent_main_cards)} main cards in hand")
+                    
+                    # Check if both players have at least 2 main cards
+                    if len(caster_main_cards) < 2:
+                        spell_effect['effect'] = 'Not enough main cards in your hand (need at least 2)'
+                        spell_effect['error'] = 'Insufficient cards'
+                        print(f"[FORCED DEAL] ERROR: Caster has only {len(caster_main_cards)} main cards")
+                    elif len(opponent_main_cards) < 2:
+                        spell_effect['effect'] = 'Opponent does not have enough main cards (need at least 2)'
+                        spell_effect['error'] = 'Insufficient opponent cards'
+                        print(f"[FORCED DEAL] ERROR: Opponent has only {len(opponent_main_cards)} main cards")
+                    else:
+                        # Select 2 random MAIN cards from each player
+                        caster_cards_to_swap = random.sample(caster_main_cards, 2)
+                        opponent_cards_to_swap = random.sample(opponent_main_cards, 2)
+                        
+                        print(f"[FORCED DEAL] Swapping cards:")
+                        print(f"[FORCED DEAL] Caster gives: {[f'{c.rank}{c.suit}' for c in caster_cards_to_swap]}")
+                        print(f"[FORCED DEAL] Opponent gives: {[f'{c.rank}{c.suit}' for c in opponent_cards_to_swap]}")
+                        
+                        # Swap ownership
+                        for card in caster_cards_to_swap:
+                            card.player_id = opponent.id
+                        
+                        for card in opponent_cards_to_swap:
+                            card.player_id = caster.id
+                        
+                        print(f"[FORCED DEAL] Card ownership updated successfully")
+                        
+                        spell_effect['effect'] = 'Exchanged 2 random cards with opponent'
+                        spell_effect['cards_given'] = [card.serialize() for card in caster_cards_to_swap]
+                        spell_effect['cards_received'] = [card.serialize() for card in opponent_cards_to_swap]
+                        
+                        # Store swap details in spell's effect_data for opponent notification
+                        spell.effect_data = {
+                            'caster_id': caster.id,
+                            'opponent_id': opponent.id,
+                            'caster_gave': [card.serialize() for card in caster_cards_to_swap],
+                            'caster_received': [card.serialize() for card in opponent_cards_to_swap],
+                            'opponent_gave': [card.serialize() for card in opponent_cards_to_swap],
+                            'opponent_received': [card.serialize() for card in caster_cards_to_swap],
+                            'notification_pending': True  # Flag to show this needs to be shown to opponent
+                        }
+                        
+                        # Add opponent notification data (opponent sees opposite perspective)
+                        spell_effect['opponent_notification'] = {
+                            'message': f'{caster.serialize()["username"]} cast Forced Deal!',
+                            'cards_given': [card.serialize() for card in opponent_cards_to_swap],
+                            'cards_received': [card.serialize() for card in caster_cards_to_swap]
+                        }
+                        
+                        print(f"[FORCED DEAL] Spell effect prepared with {len(spell_effect['cards_given'])} cards given and {len(spell_effect['cards_received'])} cards received")
+                        
+            except Exception as e:
+                spell_effect['effect'] = f'Failed to force deal: {str(e)}'
+                spell_effect['error'] = str(e)
+                print(f"[FORCED DEAL] EXCEPTION: {str(e)}")
+                import traceback
+                traceback.print_exc()
         
     elif spell.spell_type == 'enchantment':
         # Figure enchantment spells
@@ -748,6 +838,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
         }
         # TODO: Implement civil war, peasant war, etc.
     
+    print(f"[_EXECUTE_SPELL] Returning spell_effect: {spell_effect}")
     return spell_effect
 
 

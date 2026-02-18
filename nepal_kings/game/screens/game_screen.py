@@ -50,10 +50,10 @@ class GameScreen(Screen):
         # Track last processed log entry to detect new spell notifications
         self.last_processed_log_id = None
     
-    def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None):
+    def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
         from game.components.dialogue_box import DialogueBox
-        self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay)
+        self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
 
     def initialiaze_scoareboard_scroll(self):
         """Initialize resources for the info scroll."""
@@ -243,6 +243,12 @@ class GameScreen(Screen):
         # Check for auto-fill notification
         self.check_auto_fill_notification()
         
+        # Check for opponent turn notification
+        self.check_opponent_turn_notification()
+        
+        # Check for Forced Deal notification with specific cards
+        self.check_forced_deal_notification()
+        
         self.main_hand.update(self.state.game)
         self.side_hand.update(self.state.game)
         
@@ -311,6 +317,9 @@ class GameScreen(Screen):
                 icon="loot",
                 title="Opponent Cast Spell"
             )
+        
+        # Note: Forced Deal notifications are now handled by check_forced_deal_notification()
+        # which shows the specific cards that were swapped
 
     def check_auto_fill_notification(self):
         """Check for auto-fill notification and show dialogue if needed."""
@@ -349,6 +358,304 @@ class GameScreen(Screen):
         
         # Clear the notification
         self.state.game.pending_auto_fill = None
+    
+    def check_opponent_turn_notification(self):
+        """Check for opponent turn summary and show dialogue if needed."""
+        if not self.state.game or not self.state.game.pending_opponent_turn_summary:
+            return
+        
+        summary = self.state.game.pending_opponent_turn_summary
+        opponent_name = summary.get('opponent_name', 'Opponent')
+        action = summary.get('action')
+        
+        print(f"\n{'='*60}")
+        print(f"[WELCOME_MSG] Processing notification - action: {action}")
+        print(f"{'='*60}\n")
+        
+        # Check for game start notification
+        if action == 'game_start':
+            maharaja_data = summary.get('maharaja', {})
+            is_turn = summary.get('is_turn', False)
+            is_invader = summary.get('is_invader', False)
+            
+            # Create Figure object from maharaja data to generate FieldFigureIcon
+            from game.components.figures.figure import Figure
+            from game.components.figures.figure_manager import FigureManager
+            
+            # Get families for figure reconstruction
+            figure_manager = FigureManager()
+            families = figure_manager.families
+            
+            # Convert maharaja data to Figure instance
+            maharaja_figure = self._create_figure_from_data(maharaja_data, families)
+            
+            if maharaja_figure:
+                print(f"[WELCOME_MSG] Creating FieldFigureIcon for {maharaja_figure.name}")
+                print(f"[WELCOME_MSG] Figure has {len(maharaja_figure.cards)} cards")
+                
+                # Create FieldFigureIcon for the maharaja (same as explosion spell)
+                from game.components.figures.figure_icon import FieldFigureIcon
+                maharaja_icon = FieldFigureIcon(
+                    self.window,
+                    self.state.game,
+                    maharaja_figure,
+                    is_visible=True,
+                    x=0,
+                    y=0,
+                    all_player_figures=[maharaja_figure],
+                    resources_data={}
+                )
+                
+                # Load invader/defender icon based on player's actual role
+                # IMPORTANT: Logic is inverted in the icon naming
+                # is_invader=True (offensive/red) -> show invader_passive.png
+                # is_invader=False (defensive/black) -> show invader_active.png
+                import os
+                invader_icon_name = 'invader_passive.png' if is_invader else 'invader_active.png'
+                invader_icon_path = os.path.join('img', 'status_icons', invader_icon_name)
+                
+                # Build images list - maharaja_icon will be drawn by DialogueBox via draw_icon()
+                # Don't manually scale the invader icon - let DialogueBox handle sizing
+                images = [maharaja_icon]
+                if os.path.exists(invader_icon_path):
+                    invader_img = pygame.image.load(invader_icon_path)
+                    images.append(invader_img)
+                
+                print(f"[WELCOME_MSG] Showing dialogue with {len(images)} images")
+                
+                # Build welcome message with game information
+                role_text = "invader" if is_invader else "defender"
+                maharaja_name = maharaja_figure.name
+                turn_status = "It's your turn!" if is_turn else "It's your opponent's turn."
+                
+                turn_msg = f"Hello Adventurer!\n\nYou are playing with the {maharaja_name} and start with the {role_text} role. You are fighting {opponent_name}.\n\n{turn_status}"
+                
+                self.make_dialogue_box(
+                    message=turn_msg,
+                    actions=['ok'],
+                    images=images,
+                    icon="loot",
+                    title="Game Started"
+                )
+            
+            # Clear the notification
+            self.state.game.pending_opponent_turn_summary = None
+            return
+        
+        # Check if action is missing, None, or the string 'unknown'
+        if not action or action == 'unknown':
+            # Generic message if no specific action detected
+            message = summary.get('message', f"{opponent_name} completed their turn.")
+            self.make_dialogue_box(
+                message=f"{message}\n\nIt's your turn now!",
+                actions=['ok'],
+                icon="info",
+                title="Your Turn"
+            )
+        else:
+            # Build message based on the action (action is a dict)
+            action_type = action.get('type')
+            action_message = action.get('message', 'completed their turn')
+            
+            # Load icons for actions
+            images = []
+            
+            # Load spell icon if this is a spell action
+            if action_type == 'spell' and action.get('spell_icon'):
+                import os
+                spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon'))
+                if os.path.exists(spell_icon_path):
+                    spell_icon_img = pygame.image.load(spell_icon_path)
+                    images.append(spell_icon_img)
+            
+            # Load action icon for build, upgrade, pickup, or card_change actions
+            elif action.get('icon'):
+                import os
+                action_icon_path = os.path.join('img', 'game_button', 'symbol', action.get('icon'))
+                if os.path.exists(action_icon_path):
+                    action_icon_img = pygame.image.load(action_icon_path)
+                    images.append(action_icon_img)
+            
+            # Special handling for explosion - show destroyed figure name prominently
+            if action_type == 'explosion':
+                destroyed_figure = action.get('destroyed_figure', 'a figure')
+                message = f"{opponent_name} cast Explosion!\n\nYour {destroyed_figure} was destroyed.\n\nIt's your turn now!"
+                message_after = None
+                icon = "error"
+            else:
+                # Split message into before and after icon parts
+                message = f"{opponent_name}'s turn:\n• {action_message}"
+                message_after = "It's your turn now!"
+                
+                # Add details if spell affects player (keep in first part)
+                if action.get('affects_player'):
+                    details = action.get('details', '')
+                    if details:
+                        message += f"\n  > {details}"
+                
+                icon = "info"
+            
+            self.make_dialogue_box(
+                message=message,
+                actions=['ok'],
+                icon=icon,
+                title="Your Turn",
+                images=images if images else None,
+                message_after_images=message_after if not action_type == 'explosion' else None
+            )
+        
+        # Clear the notification
+        self.state.game.pending_opponent_turn_summary = None
+    
+    def check_forced_deal_notification(self):
+        """Check for Forced Deal notification with specific cards."""
+        if not self.state.game or not self.state.game.pending_forced_deal_notification:
+            return
+        
+        notification = self.state.game.pending_forced_deal_notification
+        caster_name = notification.get('caster_name', 'Opponent')
+        cards_given = notification.get('cards_given', [])
+        cards_received = notification.get('cards_received', [])
+        
+        print(f"[FORCED_DEAL_CLIENT] Showing notification: gave {len(cards_given)}, received {len(cards_received)}")
+        
+        # Create card images for both given and received cards
+        from game.components.cards.card import Card
+        card_images = []
+        
+        # Add received cards (show first)
+        for card_data in cards_received:
+            card = Card(
+                rank=card_data['rank'],
+                suit=card_data['suit'],
+                value=card_data['value'],
+                id=card_data.get('id'),
+                type=card_data.get('type', 'main')
+            )
+            card_img = card.make_icon(self.window, self.state.game, 0, 0)
+            card_images.append(card_img.front_img)
+        
+        # Add given cards (with transparency and red cross to show they were removed)
+        for card_data in cards_given:
+            card = Card(
+                rank=card_data['rank'],
+                suit=card_data['suit'],
+                value=card_data['value'],
+                id=card_data.get('id'),
+                type=card_data.get('type', 'main')
+            )
+            card_img = card.make_icon(self.window, self.state.game, 0, 0)
+            # Make the card slightly transparent to show it was given away
+            given_card_img = card_img.front_img.copy()
+            given_card_img.set_alpha(128)  # 50% transparency
+            
+            # Add red cross overlay
+            import pygame
+            import os
+            red_cross_path = os.path.join('img', 'new_cards', 'red_cross.png')
+            if os.path.exists(red_cross_path):
+                red_cross = pygame.image.load(red_cross_path)
+                # Scale red cross to fit the card
+                cross_size = min(given_card_img.get_width(), given_card_img.get_height())
+                red_cross = pygame.transform.scale(red_cross, (cross_size, cross_size))
+                # Center the cross on the card
+                cross_x = (given_card_img.get_width() - cross_size) // 2
+                cross_y = (given_card_img.get_height() - cross_size) // 2
+                given_card_img.blit(red_cross, (cross_x, cross_y))
+            
+            card_images.append(given_card_img)
+        
+        message = f"{caster_name} cast Forced Deal!\n\nYou received {len(cards_received)} main card{'s' if len(cards_received) > 1 else ''} and gave {len(cards_given)} main card{'s' if len(cards_given) > 1 else ''}."
+        
+        # Show dialogue
+        self.make_dialogue_box(
+            message=message,
+            actions=['ok'],
+            images=card_images,
+            icon="magic",
+            title="Opponent Cast Spell"
+        )
+        
+        # Clear the notification
+        self.state.game.pending_forced_deal_notification = None
+    
+    def _create_figure_from_data(self, figure_data, families):
+        """Helper method to create a Figure instance from serialized data."""
+        from game.components.figures.figure import Figure
+        from game.components.cards.card import Card
+        
+        family_name = figure_data.get('family_name')
+        if family_name not in families:
+            return None
+        
+        family = families[family_name]
+        
+        # Reconstruct cards from figure data
+        cards_data = figure_data.get('cards', [])
+        key_cards = []
+        number_card = None
+        upgrade_card = None
+        
+        for card_data in cards_data:
+            card = Card(
+                rank=card_data['rank'],
+                suit=card_data['suit'],
+                value=card_data['value'],
+                id=card_data.get('card_id'),  # Use card_id, not id
+                type=card_data.get('card_type', 'main')
+            )
+            # Check the role to categorize the card
+            role = card_data.get('role', 'key')
+            if role == 'key':
+                key_cards.append(card)
+            elif role == 'number':
+                number_card = card
+            elif role == 'upgrade':
+                upgrade_card = card
+        
+        # Try to match family figure for combat attributes
+        matched_family_figure = None
+        for family_figure in family.figures:
+            if family_figure.suit == figure_data.get('suit'):
+                matched_family_figure = family_figure
+                if not upgrade_card:
+                    upgrade_card = family_figure.upgrade_card
+                break
+        
+        # Create Figure instance (no game_id parameter)
+        figure = Figure(
+            name=figure_data.get('name', ''),
+            sub_name='',  # Not stored in DB
+            suit=figure_data.get('suit'),
+            family=family,
+            key_cards=key_cards,
+            number_card=number_card,
+            upgrade_card=upgrade_card,
+            upgrade_family_name=figure_data.get('upgrade_family_name'),
+            produces=figure_data.get('produces', {}),
+            requires=figure_data.get('requires', {}),
+            description=figure_data.get('description', ''),
+            id=figure_data.get('id'),
+            player_id=figure_data.get('player_id'),
+            # Copy combat attributes from matched family figure if found
+            cannot_attack=matched_family_figure.cannot_attack if matched_family_figure else False,
+            must_be_attacked=matched_family_figure.must_be_attacked if matched_family_figure else False,
+            rest_after_attack=matched_family_figure.rest_after_attack if matched_family_figure else False,
+            distance_attack=matched_family_figure.distance_attack if matched_family_figure else False,
+            buffs_allies=matched_family_figure.buffs_allies if matched_family_figure else False,
+            blocks_bonus=matched_family_figure.blocks_bonus if matched_family_figure else False,
+        )
+        
+        # Apply enchantments if present
+        enchantments = figure_data.get('enchantments', [])
+        for enchantment in enchantments:
+            figure.add_enchantment(
+                spell_name=enchantment.get('spell_name', 'Unknown'),
+                spell_icon=enchantment.get('spell_icon', 'default_spell_icon.png'),
+                power_modifier=enchantment.get('power_modifier', 0)
+            )
+        
+        return figure
 
     def render(self):
         """Render the game screen, buttons, and active subscreen."""

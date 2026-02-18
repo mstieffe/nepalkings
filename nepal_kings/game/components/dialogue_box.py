@@ -10,7 +10,7 @@ import pygame
 import textwrap
 
 class DialogueBox:
-    def __init__(self, window, message, actions=None, images=None, icon=None, title="", auto_close_delay=None):
+    def __init__(self, window, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         if actions is None:
             actions = ['ok']
         if images is None:
@@ -18,6 +18,7 @@ class DialogueBox:
 
         self.window = window
         self.message = message
+        self.message_after_images = message_after_images  # Optional text to display after images
         self.images = images  # List of preloaded pygame.Surface objects or drawable objects
         self.icon = None  # Placeholder for the scaled icon image
         self.title = title
@@ -33,12 +34,28 @@ class DialogueBox:
             original_icon = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT[icon]
             self.icon = self.scale_icon(original_icon)
 
-        # Calculate the message lines
-        self.lines = textwrap.wrap(
-            self.message,
-            width=(settings.DIALOGUE_BOX_WIDTH - settings.SMALL_SPACER_X) // (2 * self.font.size(' ')[0])
-        )
+        # Calculate the message lines, respecting explicit line breaks
+        wrap_width = (settings.DIALOGUE_BOX_WIDTH - settings.SMALL_SPACER_X) // (2 * self.font.size(' ')[0])
+        self.lines = []
+        # Split by explicit newlines first, then wrap each part
+        for paragraph in self.message.split('\n'):
+            if paragraph.strip():  # Non-empty line
+                wrapped_lines = textwrap.wrap(paragraph, width=wrap_width)
+                self.lines.extend(wrapped_lines if wrapped_lines else [''])
+            else:  # Empty line (preserve blank lines)
+                self.lines.append('')
         self.lines_surfaces = [self.font.render(line, True, settings.MSG_TEXT_COLOR) for line in self.lines]
+        
+        # Calculate the message_after_images lines if provided
+        self.after_lines = []
+        if self.message_after_images:
+            for paragraph in self.message_after_images.split('\n'):
+                if paragraph.strip():  # Non-empty line
+                    wrapped_lines = textwrap.wrap(paragraph, width=wrap_width)
+                    self.after_lines.extend(wrapped_lines if wrapped_lines else [''])
+                else:  # Empty line (preserve blank lines)
+                    self.after_lines.append('')
+        self.after_lines_surfaces = [self.font.render(line, True, settings.MSG_TEXT_COLOR) for line in self.after_lines]
 
         # Separate drawable objects from plain images
         self.scaled_images, self.drawable_objects = self.process_images()
@@ -48,18 +65,22 @@ class DialogueBox:
 
         # Calculate the new box height
         self.text_height = len(self.lines) * (self.font.get_height() + settings.SMALL_SPACER_Y)
+        self.after_text_height = len(self.after_lines) * (self.font.get_height() + settings.SMALL_SPACER_Y) if self.after_lines else 0
         self.button_height = (settings.MENU_BUTTON_HEIGHT + 2 * settings.SMALL_SPACER_Y) if self.actions else 0
         self.img_height = settings.DIALOGUE_BOX_IMG_HEIGHT if self.scaled_images else 0
         self.drawable_object_height = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT if self.drawable_objects else 0
         self.img_spacing = settings.SMALL_SPACER_Y if self.scaled_images or self.drawable_objects else 0
-        # Add extra spacing below drawable objects (like figure icons) to prevent button overlap
-        self.drawable_bottom_spacing = settings.DIALOGUE_BOX_TEXT_MARGIN_Y if self.drawable_objects else 0
+        # Add small spacing below drawable objects to separate from buttons or after-text
+        self.drawable_bottom_spacing = settings.SMALL_SPACER_Y if self.drawable_objects else 0
         self.box_height = (self.title_height + self.text_height + self.img_height + self.drawable_object_height +
-                           self.img_spacing + self.drawable_bottom_spacing + self.button_height + settings.SMALL_SPACER_Y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y)
+                           self.img_spacing + self.drawable_bottom_spacing + self.after_text_height + self.button_height + settings.SMALL_SPACER_Y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y)
 
         # Calculate the position of the box to make sure it's in the center
         self.x = settings.CENTER_X - settings.DIALOGUE_BOX_WIDTH / 2
-        self.y = settings.CENTER_Y - self.box_height * 0.75
+        # Position standard-sized boxes at 0.75, but adjust for height differences
+        # Grow equally in both directions by moving up by half the extra height
+        height_diff = self.box_height - settings.DIALOGUE_BOX_HEIGHT
+        self.y = settings.CENTER_Y - settings.DIALOGUE_BOX_HEIGHT * 0.75 - height_diff / 2
         self.rect = pygame.Rect(self.x, self.y, settings.DIALOGUE_BOX_WIDTH, self.box_height)
 
         # Define the border rectangle (slightly larger than the dialogue box)
@@ -185,6 +206,14 @@ class DialogueBox:
                     else:
                         # Drawable object
                         item.draw_icon(x_pos, image_y, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
+
+        # Draw message_after_images text if provided
+        if self.after_lines_surfaces:
+            after_text_y = image_y + max(self.img_height, self.drawable_object_height) + self.drawable_bottom_spacing
+            for i, line_surface in enumerate(self.after_lines_surfaces):
+                line_y = after_text_y + i * (self.font.get_height() + settings.SMALL_SPACER_Y)
+                line_rect = line_surface.get_rect(center=(self.rect.centerx, line_y))
+                self.window.blit(line_surface, line_rect)
 
         # Draw the buttons
         for button in self.buttons:

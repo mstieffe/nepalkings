@@ -23,6 +23,7 @@ class FieldScreen(SubScreen):
         self.figure_icons = []  # List to store figure icons for rendering
         self.icon_cache = {}  # Cache to store pre-rendered icons
         self.last_figure_ids = set()  # Track the last set of figure IDs
+        self.last_enchantment_state = {}  # Track enchantment state for each figure
         self.last_player_id = None  # Track the last player ID to detect player changes
         self.figure_detail_box = None  # Detail box for selected figure
         self.figure_pending_pickup = None  # Figure waiting for pickup confirmation
@@ -47,8 +48,21 @@ class FieldScreen(SubScreen):
         self.target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE + 4)
         self.target_prompt_font.set_bold(True)
         
+        # Cache All Seeing Eye status to avoid repeated expensive checks
+        self.cached_all_seeing_eye_status = None
+        self.cached_opponent_all_seeing_eye_status = None
+        self.last_all_seeing_eye_check = 0
+        self.all_seeing_eye_check_interval = 1000  # Check every 1 second instead of every frame
+        
         # Load slot icons for compartment backgrounds
         self.slot_icons = self._load_slot_icons()
+        
+        # Load All Seeing Eye icon for displaying active spell status
+        eye_icon_path = 'img/spells/icons/eye.png'
+        self.all_seeing_eye_icon = pygame.image.load(eye_icon_path).convert_alpha()
+        # Scale to match board title font size
+        icon_size = settings.FIELD_BOARD_TITLE_FONT_SIZE
+        self.all_seeing_eye_icon = pygame.transform.smoothscale(self.all_seeing_eye_icon, (icon_size, icon_size))
 
         self.init_field_compartments()
 
@@ -59,6 +73,8 @@ class FieldScreen(SubScreen):
         self.game = game
         self.load_figures()  # Load figures whenever the game state updates
 
+    def update_hover_state(self):
+        """Update hover state for figure icons. Called only on mouse motion."""
         # Update hover state: only one figure can be hovered at a time
         # Check in reverse order (topmost figures get priority)
         hovered_icon = None
@@ -132,6 +148,7 @@ class FieldScreen(SubScreen):
             if self.last_player_id != self.game.player_id:
                 self.icon_cache.clear()
                 self.last_figure_ids.clear()
+                self.last_enchantment_state.clear()
                 self.last_player_id = self.game.player_id
             
             # Load figures using the game's `get_figures` method
@@ -164,11 +181,29 @@ class FieldScreen(SubScreen):
             self.figures = self_figures + opponent_figures
             self.categorized_figures = categorized_figures
 
-            # Get current figure IDs
+            # Get current figure IDs and enchantment states
             current_figure_ids = {figure.id for figure in self.figures}
+            current_enchantment_state = self._get_enchantment_state()
 
-            # Only regenerate icons if figure IDs have changed
-            if current_figure_ids != self.last_figure_ids:
+            # Regenerate icons if figure IDs or enchantments have changed
+            figures_changed = current_figure_ids != self.last_figure_ids
+            enchantments_changed = current_enchantment_state != self.last_enchantment_state
+            
+            if figures_changed or enchantments_changed:
+                if enchantments_changed:
+                    print(f"[FIELD_SCREEN] Enchantments changed, regenerating icons")
+                    print(f"[FIELD_SCREEN] Old: {self.last_enchantment_state}")
+                    print(f"[FIELD_SCREEN] New: {current_enchantment_state}")
+                    
+                    # Clear cache for figures whose enchantments changed
+                    for figure_id in current_figure_ids:
+                        old_enchant = self.last_enchantment_state.get(figure_id)
+                        new_enchant = current_enchantment_state.get(figure_id)
+                        if old_enchant != new_enchant:
+                            if figure_id in self.icon_cache:
+                                print(f"[FIELD_SCREEN] Clearing cache for figure {figure_id} due to enchantment change")
+                                del self.icon_cache[figure_id]
+                
                 # Remove stale entries from icon_cache (destroyed figures)
                 stale_ids = self.last_figure_ids - current_figure_ids
                 for stale_id in stale_ids:
@@ -178,8 +213,27 @@ class FieldScreen(SubScreen):
                 # check if the figure is opponent or not
                 self._generate_figure_icons()
                 self.last_figure_ids = current_figure_ids
+                self.last_enchantment_state = current_enchantment_state
         except Exception as e:
             print(f"Error loading figures: {e}")
+
+    def _get_enchantment_state(self):
+        """
+        Create a snapshot of current enchantment state for all figures.
+        Returns a dict mapping figure_id to tuple of enchantment data.
+        """
+        enchantment_state = {}
+        for figure in self.figures:
+            if hasattr(figure, 'active_enchantments') and figure.active_enchantments:
+                # Create a hashable representation of enchantments
+                enchantments_tuple = tuple(
+                    (e.get('spell_name'), e.get('power_modifier'))
+                    for e in figure.active_enchantments
+                )
+                enchantment_state[figure.id] = enchantments_tuple
+            else:
+                enchantment_state[figure.id] = None
+        return enchantment_state
 
     def _generate_figure_icons(self, is_visible=True):
         """Generate and cache icons for the current figures."""
@@ -211,7 +265,13 @@ class FieldScreen(SubScreen):
 
         # Check if current player has cast "All Seeing Eye" spell
         # This makes opponent figures visible to the current player
-        player_has_all_seeing_eye = self.game.has_active_all_seeing_eye()
+        # Use cached status if available, otherwise check and cache
+        current_time = pygame.time.get_ticks()
+        if self.cached_all_seeing_eye_status is None or current_time - self.last_all_seeing_eye_check > self.all_seeing_eye_check_interval:
+            self.cached_all_seeing_eye_status = self.game.has_active_all_seeing_eye()
+            self.last_all_seeing_eye_check = current_time
+        
+        player_has_all_seeing_eye = self.cached_all_seeing_eye_status
 
         for category, compartments in self.categorized_figures.items():
             for field_type, figures in compartments.items():
@@ -239,6 +299,8 @@ class FieldScreen(SubScreen):
                             resources_data=resources,
                         )
                     else:
+                        # Update cached icon with new figure reference (in case enchantments changed)
+                        self.icon_cache[figure.id].figure = figure
                         # Update visibility and recalculate battle bonus for cached icon
                         self.icon_cache[figure.id].is_visible = is_visible
                         self.icon_cache[figure.id].battle_bonus_received = self.icon_cache[figure.id]._calculate_battle_bonus_received(figures_list)
@@ -248,6 +310,12 @@ class FieldScreen(SubScreen):
     def handle_events(self, events):
         """Handle events for interacting with the field."""
         super().handle_events(events)
+        
+        # Update hover state only on mouse motion to improve performance
+        for event in events:
+            if event.type == pygame.MOUSEMOTION:
+                self.update_hover_state()
+                break
         
         # Handle dialogue box events first (before target selection mode check)
         # This ensures auto-closing dialogues work even during target selection
@@ -870,6 +938,21 @@ class FieldScreen(SubScreen):
                 title_text = self.board_title_font.render(title_text_str, True, settings.FIELD_BOARD_TITLE_COLOR)
                 title_rect = title_text.get_rect()
                 
+                # Check if All Seeing Eye is active for this player (cached for performance)
+                # For opponent's side: show icon if current player has it active
+                # For self's side: show icon if opponent has it active
+                current_time = pygame.time.get_ticks()
+                if current_time - self.last_all_seeing_eye_check > self.all_seeing_eye_check_interval:
+                    self.cached_all_seeing_eye_status = self.game.has_active_all_seeing_eye()
+                    self.cached_opponent_all_seeing_eye_status = self.game.has_opponent_cast_all_seeing_eye()
+                    self.last_all_seeing_eye_check = current_time
+                
+                show_eye_icon = False
+                if player == 'opponent':
+                    show_eye_icon = self.cached_all_seeing_eye_status
+                else:  # player == 'self'
+                    show_eye_icon = self.cached_opponent_all_seeing_eye_status
+                
                 # Position: YOU on left side, OPPONENT on right side
                 if player == 'self':
                     title_rect.left = left
@@ -877,6 +960,20 @@ class FieldScreen(SubScreen):
                     title_rect.right = right
                 
                 title_rect.bottom = castle_comp.top + settings.FIELD_BOARD_TITLE_Y_OFFSET
+                
+                # Draw All Seeing Eye icon if active
+                # For "YOU": icon to the right of text
+                # For "OPPONENT": icon to the left of text
+                if show_eye_icon:
+                    eye_rect = self.all_seeing_eye_icon.get_rect()
+                    if player == 'self':
+                        # Icon to the right of "YOU"
+                        eye_rect.left = title_rect.right + 5
+                    else:
+                        # Icon to the left of "OPPONENT"
+                        eye_rect.right = title_rect.left - 5
+                    eye_rect.centery = title_rect.centery
+                    self.window.blit(self.all_seeing_eye_icon, eye_rect)
                 
                 # Draw title
                 self.window.blit(title_text, title_rect)
