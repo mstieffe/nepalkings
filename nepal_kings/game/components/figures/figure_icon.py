@@ -782,6 +782,36 @@ class FieldFigureIcon(FigureIcon):
         padding = int(settings.FIGURE_NAME_PADDING * scale_factor)
         element_spacing = int(4 * scale_factor)  # Spacing between icons in info row
         
+        # Calculate default icon size for enchantments (based on suit icon sizing)
+        base_size = int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8)
+        default_icon_size = int(base_size * 0.95)  # Slightly smaller than suit icon
+        if is_big_state:
+            default_icon_size = int(default_icon_size * self.icon_scale_factor)
+        
+        # Check for active enchantments (for both visible and hidden figures)
+        has_enchantments = hasattr(self.figure, 'active_enchantments') and len(self.figure.active_enchantments) > 0
+        enchantment_icons = []
+        enchantment_modifier = 0
+        enchantment_modifier_surface = None
+        enchantment_modifier_outline = None
+        
+        if has_enchantments:
+            # Calculate total enchantment modifier
+            enchantment_modifier = self.figure.get_total_enchantment_modifier()
+            
+            # Create purple modifier text with outline
+            modifier_text = f"({enchantment_modifier:+d})"  # Shows +6 or -6
+            enchantment_modifier_outline = font.render(modifier_text, True, (0, 0, 0))
+            enchantment_modifier_surface = font.render(modifier_text, True, (150, 50, 200))  # Purple color
+            
+            # Load enchantment spell icons at default icon size
+            for enchantment in self.figure.active_enchantments:
+                icon_filename = enchantment.get('spell_icon', '')
+                if icon_filename:
+                    icon = self._load_enchantment_icon(icon_filename, is_big=is_big_state, target_size=default_icon_size)
+                    if icon:
+                        enchantment_icons.append(icon)
+        
         # Only show power/suit/skills for visible figures
         if self.is_visible:
             # Calculate power display
@@ -828,24 +858,42 @@ class FieldFigureIcon(FigureIcon):
             if skills_to_display and skills_to_display[0] in skill_icon_dict:
                 skill_icon_size = skill_icon_dict[skills_to_display[0]].get_height()
             
-            # Calculate total width of info row: power + bonus + suit + skills
+            # Calculate total width of info row: power + bonus + enchantment + suit + skills + enchantment icons
             info_row_width = power_surface.get_width()
             if bonus_surface:
                 info_row_width += element_spacing + bonus_surface.get_width()
+            if has_enchantments and enchantment_modifier_surface:
+                info_row_width += element_spacing + enchantment_modifier_surface.get_width()
             if suit_icon:
                 info_row_width += element_spacing + icon_size
             if skills_to_display and skill_icon_size > 0:
                 info_row_width += element_spacing + (len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing)
+            if has_enchantments and enchantment_icons:
+                info_row_width += element_spacing + (len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing)
             
-            # Info section height: single row with icons
+            # Info section height: single row only
             info_height = max(power_surface.get_height(), icon_size, skill_icon_size if skill_icon_size > 0 else 0) + 2 * padding
             
             # Calculate box width
             box_width = max(text_surface.get_width(), info_row_width) + 2 * padding
         else:
-            # For hidden figures, only show name
-            box_width = text_surface.get_width() + 2 * padding
-            info_height = 0
+            # For hidden figures, show only enchantments if any
+            if has_enchantments:
+                # Calculate width for enchantment info
+                enchant_row_width = 0
+                if enchantment_modifier_surface:
+                    enchant_row_width = enchantment_modifier_surface.get_width()
+                if enchantment_icons:
+                    if enchant_row_width > 0:
+                        enchant_row_width += element_spacing
+                    enchant_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
+                
+                box_width = max(text_surface.get_width(), enchant_row_width) + 2 * padding
+                info_height = max(default_icon_size, enchantment_modifier_surface.get_height() if enchantment_modifier_surface else 0) + 2 * padding
+            else:
+                # No enchantments, only show name
+                box_width = text_surface.get_width() + 2 * padding
+                info_height = 0
         
         # Calculate y-offset for the info box
         base_offset = 0.9 if is_big_state else 0.68
@@ -864,8 +912,8 @@ class FieldFigureIcon(FigureIcon):
             int(text_box_height)
         )
         
-        # Create info background box (slightly darker) if visible
-        if self.is_visible and info_height > 0:
+        # Create info background box (slightly darker) if visible or has enchantments
+        if info_height > 0:
             info_bg_rect = pygame.Rect(
                 int(self.x - box_width // 2),
                 int(text_bg_rect.bottom),
@@ -908,7 +956,7 @@ class FieldFigureIcon(FigureIcon):
         
         # Draw info section for visible figures - all in a single horizontal row
         if self.is_visible:
-            # Calculate vertical center for all elements in info row
+            # Calculate vertical center for the single info row
             info_center_y = text_bg_rect.bottom + info_height // 2
             
             # Start from left side of the row
@@ -931,6 +979,18 @@ class FieldFigureIcon(FigureIcon):
                 self.window.blit(bonus_surface, (current_x, bonus_y))
                 current_x += bonus_surface.get_width()
             
+            # Draw enchantment modifier if applicable (purple, with outline)
+            if has_enchantments and enchantment_modifier_surface:
+                current_x += element_spacing
+                enchant_y = info_center_y - enchantment_modifier_surface.get_height() // 2
+                # Draw outline (black) in 4 directions
+                if enchantment_modifier_outline:
+                    for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                        self.window.blit(enchantment_modifier_outline, (current_x + offset_x, enchant_y + offset_y))
+                # Draw main purple text on top
+                self.window.blit(enchantment_modifier_surface, (current_x, enchant_y))
+                current_x += enchantment_modifier_surface.get_width()
+            
             # Draw suit icon
             if suit_icon:
                 current_x += element_spacing
@@ -951,6 +1011,55 @@ class FieldFigureIcon(FigureIcon):
                         skill_y = info_center_y - skill_icon.get_height() // 2
                         self.window.blit(skill_icon, (current_x, skill_y))
                         current_x += skill_icon.get_width()
+            
+            # Draw enchantment spell icons
+            if has_enchantments and enchantment_icons:
+                current_x += element_spacing
+                for i, enchant_icon in enumerate(enchantment_icons):
+                    if i > 0:
+                        current_x += element_spacing
+                    icon_y = info_center_y - enchant_icon.get_height() // 2
+                    self.window.blit(enchant_icon, (current_x, icon_y))
+                    current_x += enchant_icon.get_width()
+        
+        # Draw enchantments for hidden figures
+        elif not self.is_visible and has_enchantments:
+            # Calculate vertical center for the enchantment row
+            info_center_y = text_bg_rect.bottom + info_height // 2
+            
+            # Calculate enchantment row width
+            enchant_row_width = 0
+            if enchantment_modifier_surface:
+                enchant_row_width = enchantment_modifier_surface.get_width()
+            if enchantment_icons:
+                if enchant_row_width > 0:
+                    enchant_row_width += element_spacing
+                enchant_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
+            
+            # Start from left side of the row
+            current_x = self.x - enchant_row_width // 2
+            
+            # Draw enchantment modifier
+            if enchantment_modifier_surface:
+                enchant_y = info_center_y - enchantment_modifier_surface.get_height() // 2
+                # Draw outline (black) in 4 directions
+                if enchantment_modifier_outline:
+                    for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                        self.window.blit(enchantment_modifier_outline, (current_x + offset_x, enchant_y + offset_y))
+                # Draw main purple text on top
+                self.window.blit(enchantment_modifier_surface, (current_x, enchant_y))
+                current_x += enchantment_modifier_surface.get_width()
+            
+            # Draw enchantment spell icons
+            if enchantment_icons:
+                if enchantment_modifier_surface:
+                    current_x += element_spacing
+                for i, enchant_icon in enumerate(enchantment_icons):
+                    if i > 0:
+                        current_x += element_spacing
+                    icon_y = info_center_y - enchant_icon.get_height() // 2
+                    self.window.blit(enchant_icon, (current_x, icon_y))
+                    current_x += enchant_icon.get_width()
 
     def update(self) -> None:
         """
@@ -1019,7 +1128,7 @@ class FieldFigureIcon(FigureIcon):
         
         # Calculate icon sizes based on suit icon sizing for consistency
         base_size = int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8)
-        normal_size = int(base_size * 0.85)  # Slightly smaller than suit icon
+        normal_size = int(base_size * 1.0)  # Slightly smaller than suit icon
         big_size = int(normal_size * self.icon_scale_factor)
         
         for skill_key, icon_path in SKILL_ICON_IMG_PATH_DICT.items():
@@ -1033,6 +1142,32 @@ class FieldFigureIcon(FigureIcon):
                 print(f"[FIELD_ICON] Failed to load skill icon '{skill_key}': {e}")
         
         return skill_icons_normal, skill_icons_big
+    
+    def _load_enchantment_icon(self, icon_filename, is_big=False, target_size=None):
+        """
+        Load and scale an enchantment spell icon.
+        
+        :param icon_filename: Filename of the spell icon (e.g., 'poisson_portion.png')
+        :param is_big: Whether to load big or normal size
+        :param target_size: Optional target size to match (e.g., skill_icon_size)
+        :return: Scaled pygame Surface or None if loading fails
+        """
+        # Use target_size if provided, otherwise calculate like skill icons
+        if target_size is None:
+            base_size = int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8)
+            normal_size = int(base_size * 0.85)
+            icon_size = int(normal_size * self.icon_scale_factor) if is_big else normal_size
+        else:
+            icon_size = target_size
+        
+        try:
+            # Spell icons are in img/spells/icons/
+            icon_path = f'img/spells/icons/{icon_filename}'
+            icon = pygame.image.load(icon_path).convert_alpha()
+            return pygame.transform.smoothscale(icon, (icon_size, icon_size))
+        except Exception as e:
+            print(f"[FIELD_ICON] Failed to load enchantment icon '{icon_filename}': {e}")
+            return None
     
     def _load_broken_icon(self, is_big=False):
         """Load the broken state icon for figures with resource deficits."""
@@ -1049,6 +1184,33 @@ class FieldFigureIcon(FigureIcon):
         except Exception as e:
             print(f"[FIELD_ICON] Failed to load broken icon: {e}")
         return None
+    
+    def draw_icon(self, x: int, y: int, width: int, height: int) -> None:
+        """
+        Draw the figure icon with full details (power, skills, enchantments) for dialogue boxes.
+        This is called by the dialogue box to render the figure in a specified area.
+        
+        :param x: X position (top-left)
+        :param y: Y position (top-left)  
+        :param width: Width of the area
+        :param height: Height of the area
+        """
+        # Temporarily set position and draw in default state
+        old_hovered = self.hovered
+        old_clicked = self.clicked
+        self.hovered = False
+        self.clicked = False
+        
+        # Calculate center position from top-left and dimensions
+        center_x = x + width // 2
+        center_y = y + height // 2
+        
+        # Draw the figure at the specified position
+        self.draw(center_x, center_y)
+        
+        # Restore original state
+        self.hovered = old_hovered
+        self.clicked = old_clicked
     
     def _check_resource_deficit(self, resources_data=None):
         """Check if this figure has any required resources that are in deficit."""

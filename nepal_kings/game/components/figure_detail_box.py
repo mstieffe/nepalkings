@@ -187,6 +187,24 @@ class FigureDetailBox:
                     print(f"[FIGURE_DETAIL] Failed to load skill icon {skill} from {path}: {e}")
         
         return icons
+    
+    def _load_enchantment_icon(self, icon_filename):
+        """
+        Load and scale an enchantment spell icon for the detail box.
+        
+        :param icon_filename: Filename of the spell icon (e.g., 'poisson_portion.png')
+        :return: Scaled pygame Surface or None if loading fails
+        """
+        icon_size = int(settings.FONT_SIZE_DIALOGUE_BOX * 1.2)  # Same size as skill icons
+        
+        try:
+            # Spell icons are in img/spells/icons/
+            icon_path = f'img/spells/icons/{icon_filename}'
+            icon = pygame.image.load(icon_path).convert_alpha()
+            return pygame.transform.smoothscale(icon, (icon_size, icon_size))
+        except Exception as e:
+            print(f"[FIGURE_DETAIL] Failed to load enchantment icon '{icon_filename}': {e}")
+            return None
 
     def _load_figure_icon(self):
         """Load and scale the figure's icon image."""
@@ -418,19 +436,29 @@ class FigureDetailBox:
             self.window.blit(family_surface, (right_column_x, right_y))
             right_y += family_surface.get_height() + settings.SMALL_SPACER_Y
 
-        # Draw power/value with potential battle bonus
+        # Draw power/value with potential battle bonus and enchantment modifier
         if right_y + self.font.get_height() <= max_content_y:
             power_value = self.figure.get_value()
             power_text = f"Power: {power_value}"
             power_surface = self.font.render(power_text, True, settings.MSG_TEXT_COLOR)
             self.window.blit(power_surface, (right_column_x, right_y))
             
+            current_bonus_x = right_column_x + power_surface.get_width()
+            
             # Display potential battle bonus (calculated once in __init__)
             if self.potential_battle_bonus > 0:
                 bonus_text = f" (+{self.potential_battle_bonus})"
                 bonus_surface = self.font.render(bonus_text, True, (0, 180, 0))  # Green color
-                bonus_x = right_column_x + power_surface.get_width()
-                self.window.blit(bonus_surface, (bonus_x, right_y))
+                self.window.blit(bonus_surface, (current_bonus_x, right_y))
+                current_bonus_x += bonus_surface.get_width()
+            
+            # Display enchantment modifier (purple)
+            if hasattr(self.figure, 'active_enchantments') and self.figure.active_enchantments:
+                enchantment_modifier = self.figure.get_total_enchantment_modifier()
+                if enchantment_modifier != 0:
+                    enchant_text = f" ({enchantment_modifier:+d})"
+                    enchant_surface = self.font.render(enchant_text, True, (150, 50, 200))  # Purple color
+                    self.window.blit(enchant_surface, (current_bonus_x, right_y))
             
             right_y += power_surface.get_height() + settings.SMALL_SPACER_Y // 2
 
@@ -627,6 +655,74 @@ class FigureDetailBox:
                     right_y += skill_text.get_height() + settings.SMALL_SPACER_Y // 2
             
             right_y += settings.SMALL_SPACER_Y // 2  # Reduced spacing after skills
+
+        # Draw enchantments section if any active enchantments
+        if hasattr(self.figure, 'active_enchantments') and self.figure.active_enchantments:
+            if right_y + self.font.get_height() + 20 <= max_content_y:
+                # Draw horizontal divider line
+                pygame.draw.line(
+                    self.window,
+                    settings.COLOR_DIALOGUE_BOX_BORDER,
+                    (right_column_x, right_y),
+                    (right_column_x + self.right_column_width, right_y),
+                    2
+                )
+                right_y += settings.SMALL_SPACER_Y
+                
+                # Draw "Enchantments" label
+                enchant_label = self.font.render("Enchantments", True, settings.TITLE_TEXT_COLOR)
+                self.window.blit(enchant_label, (right_column_x, right_y))
+                right_y += enchant_label.get_height() + settings.SMALL_SPACER_Y // 2
+                
+                # Draw each enchantment
+                for enchantment in self.figure.active_enchantments:
+                    spell_name = enchantment.get('spell_name', 'Unknown')
+                    power_modifier = enchantment.get('power_modifier', 0)
+                    spell_icon_filename = enchantment.get('spell_icon', '')
+                    
+                    # Try to load spell icon
+                    enchant_icon = None
+                    if spell_icon_filename:
+                        enchant_icon = self._load_enchantment_icon(spell_icon_filename)
+                    
+                    # Determine row height
+                    if enchant_icon:
+                        row_height = enchant_icon.get_height()
+                    else:
+                        row_height = self.small_font.get_height()
+                    
+                    # Check if we have space for this enchantment
+                    if right_y + row_height > max_content_y - 10:
+                        break  # Stop if we run out of space
+                    
+                    current_x = right_column_x + settings.SMALL_SPACER_X
+                    
+                    # Draw icon if available
+                    if enchant_icon:
+                        self.window.blit(enchant_icon, (current_x, right_y))
+                        current_x += enchant_icon.get_width() + settings.SMALL_SPACER_X // 2
+                        
+                        # Draw spell name next to icon
+                        spell_text = self.small_font.render(spell_name, True, settings.MSG_TEXT_COLOR)
+                        # Center text vertically with icon
+                        text_y = right_y + (enchant_icon.get_height() - spell_text.get_height()) // 2
+                        self.window.blit(spell_text, (current_x, text_y))
+                        current_x += spell_text.get_width() + settings.SMALL_SPACER_X // 2
+                        
+                        # Draw purple modifier
+                        modifier_text = f"({power_modifier:+d})"
+                        modifier_surface = self.small_font.render(modifier_text, True, (150, 50, 200))
+                        modifier_y = text_y  # Same vertical alignment as spell name
+                        self.window.blit(modifier_surface, (current_x, modifier_y))
+                        
+                        right_y += enchant_icon.get_height() + settings.SMALL_SPACER_Y // 2
+                    else:
+                        # Fallback to text only
+                        enchant_text = self.small_font.render(f"• {spell_name} ({power_modifier:+d})", True, (150, 50, 200))
+                        self.window.blit(enchant_text, (current_x, right_y))
+                        right_y += enchant_text.get_height() + settings.SMALL_SPACER_Y // 2
+                
+                right_y += settings.SMALL_SPACER_Y // 2  # Reduced spacing after enchantments
 
         # Draw description if available and there's space
         if hasattr(self.figure.family, 'description') and self.figure.family.description:

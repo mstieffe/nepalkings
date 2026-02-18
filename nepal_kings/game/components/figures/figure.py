@@ -96,6 +96,9 @@ class Figure:
         self.buffs_allies = buffs_allies
         self.blocks_bonus = blocks_bonus
         
+        # Active enchantment effects on this figure
+        self.active_enchantments = []  # List of dicts: {'spell_name': str, 'spell_icon': str, 'power_modifier': int}
+        
         #self.extension_card = extension_card
         #self.extension_family_name = extension_family_name
         #self.attachment_family_name = attachment_family_name
@@ -121,20 +124,19 @@ class Figure:
         self.id = id
 
     def get_value(self) -> int:
-        """Returns the value of the figure.
+        """Returns the base value of the figure (without enchantment modifiers).
         
         Special rule: Kings and Maharajas (castle figures) always have a base power of 15,
         regardless of their key card values.
+        
+        Enchantment modifiers (Poison/Boost) are displayed separately like battle bonuses.
         """
         # Castle figures (Kings/Maharajas) have fixed power of 15
         if hasattr(self.family, 'field') and self.family.field == 'castle':
             return 15
-        
-        # All other figures: sum of card values
-        v = 0
-        for card in self.cards:
-            v += card.value
-        return v
+        else:
+            # All other figures: sum of card values
+            return sum(card.value for card in self.cards)
 
     def get_battle_bonus(self) -> int:
         """Returns the battle bonus this figure provides (sum of key card values).
@@ -175,6 +177,28 @@ class Figure:
     def has_upgrade(self) -> bool:
         """Checks if the figure can be upgraded."""
         return self.upgrade_family_name is not None
+    
+    def add_enchantment(self, spell_name: str, spell_icon: str, power_modifier: int):
+        """
+        Apply an enchantment effect to this figure.
+        
+        :param spell_name: Name of the spell (e.g., "Poison", "Health Boost")
+        :param spell_icon: Filename of the spell icon image
+        :param power_modifier: Power change (negative for debuffs, positive for buffs)
+        """
+        self.active_enchantments.append({
+            'spell_name': spell_name,
+            'spell_icon': spell_icon,
+            'power_modifier': power_modifier
+        })
+    
+    def clear_enchantments(self):
+        """Remove all active enchantments from this figure (e.g., after battle)."""
+        self.active_enchantments = []
+    
+    def get_total_enchantment_modifier(self) -> int:
+        """Get the total power modification from all active enchantments."""
+        return sum(e.get('power_modifier', 0) for e in self.active_enchantments)
 
     def __repr__(self):
         return f"Figure(name={self.name}, suit={self.suit}, family={self.family.name})"

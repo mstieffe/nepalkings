@@ -25,14 +25,29 @@ app = Flask(__name__)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)  # Only show errors, not every request
 
-# Configure the database URI
+# Configure the database URI and SQLite-specific settings
 app.config['SQLALCHEMY_DATABASE_URI'] = settings.DB_URL
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+    'connect_args': {
+        'timeout': 30,
+        'check_same_thread': False  # Important for SQLite with Flask
+    }
+}
 db.init_app(app)
 
-# Ensure the database is initialized correctly
+# Initialize database tables
 with app.app_context():
-    db.drop_all()
+    if settings.DROP_TABLES_ON_STARTUP:
+        print("⚠️  WARNING: Dropping all database tables (DROP_TABLES_ON_STARTUP=True)")
+        db.drop_all()
+        print("✅ All tables dropped")
+    
+    print("Creating database tables...")
     db.create_all()
+    print("✅ Database initialized")
 
 # Register Blueprints
 app.register_blueprint(games, url_prefix='/games')

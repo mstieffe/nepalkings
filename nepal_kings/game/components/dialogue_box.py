@@ -10,7 +10,7 @@ import pygame
 import textwrap
 
 class DialogueBox:
-    def __init__(self, window, message, actions=None, images=None, icon=None, title=""):
+    def __init__(self, window, message, actions=None, images=None, icon=None, title="", auto_close_delay=None):
         if actions is None:
             actions = ['ok']
         if images is None:
@@ -25,6 +25,8 @@ class DialogueBox:
         self.title_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_TITLE_DIALOGUE_BOX)
         self.title_font.set_bold(True)
         self.actions = actions
+        self.auto_close_delay = auto_close_delay
+        self.auto_close_timer = pygame.time.get_ticks() if auto_close_delay else None
 
         # Check and scale the icon if provided
         if icon and icon in settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT:
@@ -46,12 +48,14 @@ class DialogueBox:
 
         # Calculate the new box height
         self.text_height = len(self.lines) * (self.font.get_height() + settings.SMALL_SPACER_Y)
-        self.button_height = settings.MENU_BUTTON_HEIGHT + 2 * settings.SMALL_SPACER_Y
+        self.button_height = (settings.MENU_BUTTON_HEIGHT + 2 * settings.SMALL_SPACER_Y) if self.actions else 0
         self.img_height = settings.DIALOGUE_BOX_IMG_HEIGHT if self.scaled_images else 0
         self.drawable_object_height = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT if self.drawable_objects else 0
         self.img_spacing = settings.SMALL_SPACER_Y if self.scaled_images or self.drawable_objects else 0
+        # Add extra spacing below drawable objects (like figure icons) to prevent button overlap
+        self.drawable_bottom_spacing = settings.DIALOGUE_BOX_TEXT_MARGIN_Y if self.drawable_objects else 0
         self.box_height = (self.title_height + self.text_height + self.img_height + self.drawable_object_height +
-                           self.img_spacing + self.button_height + settings.SMALL_SPACER_Y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y)
+                           self.img_spacing + self.drawable_bottom_spacing + self.button_height + settings.SMALL_SPACER_Y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y)
 
         # Calculate the position of the box to make sure it's in the center
         self.x = settings.CENTER_X - settings.DIALOGUE_BOX_WIDTH / 2
@@ -61,12 +65,15 @@ class DialogueBox:
         # Define the border rectangle (slightly larger than the dialogue box)
         self.border_rect = self.rect.inflate(settings.DIALOGUE_BOX_BORDER_WIDTH, settings.DIALOGUE_BOX_BORDER_WIDTH)
 
-        # Adjust the buttons
-        button_y = self.rect.y + self.box_height - self.button_height
-        first_button_x = settings.CENTER_X - len(self.actions) * (settings.MENU_BUTTON_WIDTH / 2) - \
-                         (len(self.actions) - 1) * (settings.SMALL_SPACER_X / 2)
-        button_x = [first_button_x + n * (settings.MENU_BUTTON_WIDTH + settings.SMALL_SPACER_X) for n in range(len(self.actions))]
-        self.buttons = [Button(self.window, button_x[i], button_y, self.actions[i]) for i in range(len(self.actions))]
+        # Adjust the buttons (only if actions are provided)
+        if self.actions:
+            button_y = self.rect.y + self.box_height - self.button_height
+            first_button_x = settings.CENTER_X - len(self.actions) * (settings.MENU_BUTTON_WIDTH / 2) - \
+                             (len(self.actions) - 1) * (settings.SMALL_SPACER_X / 2)
+            button_x = [first_button_x + n * (settings.MENU_BUTTON_WIDTH + settings.SMALL_SPACER_X) for n in range(len(self.actions))]
+            self.buttons = [Button(self.window, button_x[i], button_y, self.actions[i]) for i in range(len(self.actions))]
+        else:
+            self.buttons = []
 
     def process_images(self):
         """Separate pygame.Surface images and drawable objects, scaling the surfaces."""
@@ -137,7 +144,8 @@ class DialogueBox:
             # Calculate natural total width with normal spacing
             natural_total_width = sum(image_widths) + (num_images - 1) * settings.SMALL_SPACER_X
             
-            image_y = current_y + len(self.lines_surfaces) * (self.font.get_height() + settings.SMALL_SPACER_Y)
+            # Add spacing between text and drawable objects
+            image_y = current_y + len(self.lines_surfaces) * (self.font.get_height() + settings.SMALL_SPACER_Y) + self.img_spacing
             
             if natural_total_width <= max_images_width:
                 # Images fit normally - use natural spacing
@@ -183,6 +191,12 @@ class DialogueBox:
             button.draw()
 
     def update(self, events):
+        # Check for auto-close timeout
+        if self.auto_close_delay is not None and self.auto_close_timer is not None:
+            elapsed_time = pygame.time.get_ticks() - self.auto_close_timer
+            if elapsed_time >= self.auto_close_delay:
+                return 'auto_close'
+        
         # Update the button colors
         for button in self.buttons:
             button.update()

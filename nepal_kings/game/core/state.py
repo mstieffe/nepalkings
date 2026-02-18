@@ -12,6 +12,9 @@ class State:
         self.game = None # Game()
         self.action = None
         #self.user_response = None
+        
+        # Track pending spell cast that requires target selection
+        self.pending_spell_cast = None  # Dict: {'spell': Spell, 'real_cards': List[Card]}
 
 
     def set_msg(self, msg):

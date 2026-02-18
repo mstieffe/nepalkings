@@ -50,10 +50,10 @@ class GameScreen(Screen):
         # Track last processed log entry to detect new spell notifications
         self.last_processed_log_id = None
     
-    def make_dialogue_box(self, message, actions=None, images=None, icon=None, title=""):
+    def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
         from game.components.dialogue_box import DialogueBox
-        self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title)
+        self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay)
 
     def initialiaze_scoareboard_scroll(self):
         """Initialize resources for the info scroll."""

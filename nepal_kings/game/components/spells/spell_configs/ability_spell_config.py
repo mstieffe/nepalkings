@@ -21,61 +21,56 @@ from game.components.spells.spell import Spell
 from game.components.cards.card import Card
 from config import settings
 from config.settings import SUITS_BLACK, SUITS_RED
+from game.components.spells.spell_configs.battle_spell_config import generate_same_color_spell_variants
 
 
 POISON_CONFIG = {
     "name": "Poison",
     "type": "enchantment",
     "description": "Poison a figure to reduce its power by 6 for the next battle.",
-    "suits": SUITS_BLACK,
+    "suits": ["Spades"],  # Represents black suit group
     "icon_img": "poisson_portion.png",
     "icon_gray_img": "poisson_portion.png",
     "frame_img": "red.png",
     "frame_closed_img": "red.png",
     "frame_hidden_img": "red.png",
     "glow_img": "red.png",
-    "spells": lambda family, suit: [
-        Spell(
-            name=f"Poison",
-            family=family,
-            cards=[Card('3', suit, 3), Card('3', suit, 3)],
-            suit=suit,
-            key_cards=[Card('3', suit, 3), Card('3', suit, 3)],
-            requires_target=True,
-            counterable=False,
-        )
-    ],  
+    "spells": lambda family, suit: generate_same_color_spell_variants(
+        family=family,
+        color_group='black',
+        ranks=['3', '3'],
+        spell_name="Poison",
+        requires_target=True,
+        counterable=False
+    ),
 }
 
 BOOST_CONFIG = {
     "name": "Health Boost",
     "type": "enchantment",
     "description": "Boosts a figure to increase its power by 6 for the next battle.",
-    "suits": SUITS_RED,
+    "suits": ["Hearts"],  # Represents red suit group
     "icon_img": "health_portion.png",
     "icon_gray_img": "health_portion.png",
     "frame_img": "red.png",
     "frame_closed_img": "red.png",
     "frame_hidden_img": "red.png",
     "glow_img": "red.png",
-    "spells": lambda family, suit: [
-        Spell(
-            name=f"Health Boost",
-            family=family,
-            cards=[Card('3', suit, 3), Card('3', suit, 3)],
-            suit=suit,
-            key_cards=[Card('3', suit, 3), Card('3', suit, 3)],
-            requires_target=True,
-            counterable=False,
-        )
-    ],  
+    "spells": lambda family, suit: generate_same_color_spell_variants(
+        family=family,
+        color_group='red',
+        ranks=['3', '3'],
+        spell_name="Health Boost",
+        requires_target=True,
+        counterable=False
+    ),
 }
 
 
 EXPLOSION_CONFIG = {
     "name": "Explosion",
     "type": "enchantment",
-    "description": "Selected figure will be destroyed.",
+    "description": "Selected figure will be destroyed (does not apply to Maharajas).",
     "suits": ["Hearts", "Spades"],  # Represents the two combinations
     "icon_img": "bomb.png",
     "icon_gray_img": "bomb.png",
@@ -111,24 +106,21 @@ ALL_SEEING_EYE_CONFIG = {
     "name": "All Seeing Eye",
     "type": "enchantment",
     "description": "All cards + figures of the opponent become visible until the end of this round.",
-    "suits": SUITS_RED+SUITS_BLACK,
+    "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "eye.png",
     "icon_gray_img": "eye.png",
     "frame_img": "red.png",
     "frame_closed_img": "red.png",
     "frame_hidden_img": "red.png",
     "glow_img": "red.png",
-    "spells": lambda family, suit: [
-        Spell(
-            name=f"All Seeing Eye",
-            family=family,
-            cards=[Card('9', suit, 9), Card('9', suit, 9)],
-            suit=suit,
-            key_cards=[Card('9', suit, 9), Card('9', suit, 9)],
-            requires_target=False,
-            counterable=False,
-        )
-    ],  
+    "spells": lambda family, suit: generate_same_color_spell_variants(
+        family=family,
+        color_group='red' if suit == 'Hearts' else 'black',
+        ranks=['9', '9'],
+        spell_name="All Seeing Eye",
+        requires_target=False,
+        counterable=False
+    ),
 }
 
 

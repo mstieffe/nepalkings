@@ -27,4 +27,5 @@ DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT = {
     'victory': pygame.image.load('img/dialogue_box/icons/victory.png'),
     'loot': pygame.image.load('img/dialogue_box/icons/loot.png'),
     'figure': pygame.image.load('img/dialogue_box/icons/figure.png'),
+    'magic': pygame.image.load('img/dialogue_box/icons/magic.png'),
 }

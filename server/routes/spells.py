@@ -3,7 +3,7 @@ Server-side spell routes for handling spell casting, countering, and management.
 """
 
 from flask import Blueprint, request, jsonify
-from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry
+from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure
 from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
 
@@ -491,9 +491,12 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 
                 cards_needed = max(0, 10 - main_hand_count)
                 
+                print(f"[FILL UP TO 10] Current hand: {main_hand_count}, Cards needed: {cards_needed}")
+                
                 if cards_needed > 0:
                     # Draw main cards to fill up to 10
                     drawn_cards = DeckManager.draw_cards_from_deck(game, caster, cards_needed, 'main')
+                    print(f"[FILL UP TO 10] Drew {len(drawn_cards)} cards")
                     spell_effect['effect'] = f'Drew {len(drawn_cards)} main cards to reach 10 total'
                     spell_effect['cards_drawn'] = len(drawn_cards)
                     spell_effect['card_type'] = 'main'
@@ -505,12 +508,15 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         card_data = card.serialize()
                         card_data['type'] = 'main'
                         spell_effect['drawn_cards'].append(card_data)
+                    print(f"[FILL UP TO 10] Serialized {len(spell_effect['drawn_cards'])} cards to spell_effect")
                 else:
                     spell_effect['effect'] = f'Already at or above 10 main cards (current: {main_hand_count})'
                     spell_effect['cards_drawn'] = 0
                     spell_effect['drawn_cards'] = []
                     spell_effect['current_total'] = main_hand_count
+                    print(f"[FILL UP TO 10] Already at {main_hand_count} cards, no draw needed")
             except Exception as e:
+                print(f"[FILL UP TO 10] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
                 spell_effect['error'] = str(e)
         
@@ -591,9 +597,146 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
     elif spell.spell_type == 'enchantment':
         # Figure enchantment spells
         spell_effect['effect'] = 'Enchantment applied'
-        if spell.target_figure_id:
+        
+        # Handle non-targeted enchantment spells (global effects)
+        if 'All Seeing Eye' in spell.spell_name:
+            spell_effect['effect'] = 'Revealed all opponent cards and figures'
+            spell.effect_data = {
+                'spell_icon': 'eye.png',
+                'caster_player_id': spell.player_id
+            }
+            spell.is_active = True
+            spell_effect['spell_icon'] = 'eye.png'
+            
+        elif 'Infinite Hammer' in spell.spell_name:
+            spell_effect['effect'] = 'Unlimited building this turn'
+            spell.effect_data = {
+                'spell_icon': 'infinite_hammer.png',
+                'caster_player_id': spell.player_id
+            }
+            spell.is_active = True
+            spell_effect['spell_icon'] = 'infinite_hammer.png'
+            
+        elif spell.target_figure_id:
             spell_effect['target_figure_id'] = spell.target_figure_id
-        # TODO: Implement poison, boost, explosion, etc.
+            
+            # Get target figure to validate it exists
+            target_figure = Figure.query.get(spell.target_figure_id)
+            if not target_figure:
+                spell_effect['effect'] = 'Target figure not found'
+                spell_effect['error'] = 'Invalid target'
+            else:
+                # Check if trying to cast Explosion on a Maharaja
+                if 'Explosion' in spell.spell_name and target_figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']:
+                    spell_effect['effect'] = 'Explosion cannot be cast on Maharajas'
+                    spell_effect['error'] = 'Invalid target: Maharajas are immune to Explosion'
+                    db.session.commit()
+                    return jsonify({
+                        'success': False, 
+                        'message': 'Explosion cannot be cast on Maharajas!',
+                        'spell_effect': spell_effect
+                    }), 400
+                
+                # Determine spell icon filename based on spell name
+                spell_icon = 'default_spell_icon.png'
+                power_modifier = 0
+                
+                if 'Poison' in spell.spell_name:
+                    spell_icon = 'poisson_portion.png'
+                    power_modifier = -6
+                    spell_effect['effect'] = f'Poisoned {target_figure.name} (-6 power)'
+                elif 'Boost' in spell.spell_name or 'Health' in spell.spell_name:
+                    spell_icon = 'health_portion.png'
+                    power_modifier = 6
+                    spell_effect['effect'] = f'Boosted {target_figure.name} (+6 power)'
+                elif 'Explosion' in spell.spell_name:
+                    spell_icon = 'bomb.png'
+                    power_modifier = -999  # Not used since figure is destroyed
+                    
+                    # Actually destroy the figure and return cards to deck
+                    try:
+                        # Get all cards associated with this figure
+                        card_associations = CardToFigure.query.filter_by(figure_id=target_figure.id).all()
+                        
+                        main_card_ids = []
+                        side_card_ids = []
+                        for assoc in card_associations:
+                            if assoc.card_type == 'main':
+                                main_card_ids.append(assoc.card_id)
+                            elif assoc.card_type == 'side':
+                                side_card_ids.append(assoc.card_id)
+                        
+                        # Get the actual card objects
+                        main_cards = MainCard.query.filter(MainCard.id.in_(main_card_ids)).all() if main_card_ids else []
+                        side_cards = SideCard.query.filter(SideCard.id.in_(side_card_ids)).all() if side_card_ids else []
+                        
+                        # Return cards to deck (discard pile)
+                        for card in main_cards + side_cards:
+                            card.part_of_figure = False
+                            card.in_deck = True
+                            card.player_id = None  # No longer belongs to any player
+                            card.deck_position = None  # Will be reshuffled
+                        
+                        # Delete card associations
+                        CardToFigure.query.filter_by(figure_id=target_figure.id).delete()
+                        
+                        # Remove any other active enchantment spells on this figure
+                        ActiveSpell.query.filter_by(
+                            game_id=game.id,
+                            target_figure_id=target_figure.id
+                        ).delete()
+                        
+                        # Store figure name before deletion for logging
+                        destroyed_figure_name = target_figure.name
+                        destroyed_figure_field = target_figure.field
+                        destroyed_figure_owner_id = target_figure.player_id
+                        card_count = len(main_card_ids) + len(side_card_ids)
+                        
+                        # Delete the figure
+                        db.session.delete(target_figure)
+                        db.session.flush()
+                        
+                        spell_effect['effect'] = f'Destroyed {destroyed_figure_name} ({card_count} cards returned to deck)'
+                        spell_effect['destroyed_figure_name'] = destroyed_figure_name
+                        spell_effect['card_count'] = card_count
+                        
+                        # Don't keep this spell active since the figure is destroyed
+                        spell.is_active = False
+                        
+                        # Add log entry for destruction
+                        log_entry = LogEntry(
+                            game_id=game.id,
+                            player_id=destroyed_figure_owner_id,
+                            round_number=game.current_round,
+                            turn_number=game.current_turn,
+                            message=f"{destroyed_figure_name} was destroyed by Explosion spell ({card_count} cards returned to deck)",
+                            author='system',
+                            type='figure_destroyed'
+                        )
+                        db.session.add(log_entry)
+                        
+                    except Exception as e:
+                        spell_effect['effect'] = f'Failed to destroy figure: {str(e)}'
+                        spell_effect['error'] = str(e)
+                        spell.is_active = False
+                
+                # Only store enchantment data for non-Explosion spells (Explosion destroys the figure)
+                if 'Explosion' not in spell.spell_name:
+                    # Store enchantment data in spell's effect_data
+                    spell.effect_data = {
+                        'spell_icon': spell_icon,
+                        'power_modifier': power_modifier,
+                        'target_figure_name': target_figure.name
+                    }
+                    
+                    # Keep spell active so it persists until battle/end of turn
+                    spell.is_active = True
+                    
+                    spell_effect['power_modifier'] = power_modifier
+                    spell_effect['spell_icon'] = spell_icon
+        else:
+            spell_effect['effect'] = 'No target specified'
+            spell_effect['error'] = 'Missing target'
         
     elif spell.spell_type == 'tactics':
         # Battle modification spells

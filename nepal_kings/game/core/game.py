@@ -306,19 +306,118 @@ class Game:
                 )
                 figures.append(figure)
 
+            # Load active enchantments for all figures
+            self._load_enchantments_for_figures(figures)
+
             return figures
         except Exception as e:
             print(f"Error loading figures: {str(e)}")
             return []
+    
+    def _load_enchantments_for_figures(self, figures: List[Figure]):
+        """
+        Load active enchantment spells and apply them to figures.
+        
+        :param figures: List of Figure instances to apply enchantments to
+        """
+        try:
+            from utils import spell_service
+            
+            # Fetch all active spells for this game
+            active_spells = spell_service.fetch_active_spells(self.game_id)
+            
+            # Filter enchantment spells and apply to figures
+            for spell_data in active_spells:
+                if spell_data.get('spell_type') == 'enchantment' and spell_data.get('target_figure_id'):
+                    target_figure_id = spell_data['target_figure_id']
+                    
+                    # Find the matching figure
+                    for figure in figures:
+                        if figure.id == target_figure_id:
+                            # Extract enchantment data
+                            effect_data = spell_data.get('effect_data', {})
+                            spell_icon = effect_data.get('spell_icon', 'default_spell_icon.png')
+                            power_modifier = effect_data.get('power_modifier', 0)
+                            spell_name = spell_data.get('spell_name', 'Unknown Spell')
+                            
+                            # Apply enchantment to figure
+                            figure.add_enchantment(
+                                spell_name=spell_name,
+                                spell_icon=spell_icon,
+                                power_modifier=power_modifier
+                            )
+                            break
+        except Exception as e:
+            print(f"Error loading enchantments: {str(e)}")
 
-    def calculate_resources(self, families: Dict[str, FigureFamily]) -> Dict[str, Dict[str, int]]:
+    def has_active_all_seeing_eye(self) -> bool:
+        """
+        Check if current player has an active "All Seeing Eye" spell.
+        This makes all opponent's cards and figures visible to the current player.
+        
+        :return: True if current player has active All Seeing Eye spell, False otherwise
+        """
+        try:
+            from utils import spell_service
+            
+            # Fetch all active spells for this game
+            active_spells = spell_service.fetch_active_spells(self.game_id)
+            
+            # Check if current player has cast "All Seeing Eye"
+            if not self.player_id:
+                return False
+            
+            for spell_data in active_spells:
+                if (spell_data.get('spell_type') == 'enchantment' and
+                    'All Seeing Eye' in spell_data.get('spell_name', '') and
+                    spell_data.get('player_id') == self.player_id):
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"Error checking for All Seeing Eye: {str(e)}")
+            return False
+
+    def has_opponent_cast_all_seeing_eye(self) -> bool:
+        """
+        Check if opponent has an active "All Seeing Eye" spell.
+        This makes all player's cards and figures visible to the opponent.
+        
+        :return: True if opponent has active All Seeing Eye spell, False otherwise
+        """
+        try:
+            from utils import spell_service
+            
+            # Fetch all active spells for this game
+            active_spells = spell_service.fetch_active_spells(self.game_id)
+            
+            # Check if opponent has cast "All Seeing Eye"
+            opponent_id = self.opponent_player.get('id') if self.opponent_player else None
+            if not opponent_id:
+                return False
+            
+            for spell_data in active_spells:
+                if (spell_data.get('spell_type') == 'enchantment' and
+                    'All Seeing Eye' in spell_data.get('spell_name', '') and
+                    spell_data.get('player_id') == opponent_id):
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"Error checking for All Seeing Eye: {str(e)}")
+            return False
+
+    def calculate_resources(self, families: Dict[str, FigureFamily], is_opponent: bool = False) -> Dict[str, Dict[str, int]]:
         """
         Calculate total resources produced and required by all player figures.
         
         :param families: A dictionary mapping family names to FigureFamily instances.
+        :param is_opponent: If True, calculate for opponent's figures instead of current player's
         :return: A dictionary with 'produces' and 'requires' keys, each containing resource totals
         """
-        figures = self.get_figures(families)
+        figures = self.get_figures(families, is_opponent=is_opponent)
         total_produces = {}
         total_requires = {}
         
