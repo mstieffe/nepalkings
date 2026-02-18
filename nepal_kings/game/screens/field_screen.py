@@ -5,6 +5,7 @@ from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
+from game.components.cards.card_img import CardImg
 from utils.figure_service import pickup_figure, upgrade_figure
 
 
@@ -27,6 +28,10 @@ class FieldScreen(SubScreen):
         self.figure_pending_pickup = None  # Figure waiting for pickup confirmation
         self.figure_pending_upgrade = None  # Figure waiting for upgrade confirmation
         
+        # Cache for opponent cards (for All Seeing Eye spell)
+        self.opponent_card_cache = []  # List of pre-rotated card surfaces
+        self.last_opponent_card_ids = set()  # Track opponent card IDs to detect changes
+        
         # Initialize categorized figures structure
         self.categorized_figures = {
             'self': {'castle': [], 'village': [], 'military': []}, 
@@ -37,6 +42,10 @@ class FieldScreen(SubScreen):
         self.field_title_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
         self.board_title_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_BOARD_TITLE_FONT_SIZE)
         self.board_title_font.set_bold(True)
+        
+        # Font for target selection prompt
+        self.target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE + 4)
+        self.target_prompt_font.set_bold(True)
         
         # Load slot icons for compartment backgrounds
         self.slot_icons = self._load_slot_icons()
@@ -96,6 +105,26 @@ class FieldScreen(SubScreen):
 
         self.compartments = compartments
 
+    def _get_opponent_hand_cards(self):
+        """Get opponent's hand cards (not in deck, not part of figure)."""
+        opponent_id = self.game.opponent_player.get('id') if self.game.opponent_player else None
+        if not opponent_id:
+            return [], []
+        
+        # Filter main cards (cards are dictionaries from server)
+        opponent_main_cards = [
+            card for card in self.game.main_cards
+            if card.get('player_id') == opponent_id and not card.get('in_deck') and not card.get('part_of_figure')
+        ]
+        
+        # Filter side cards (cards are dictionaries from server)
+        opponent_side_cards = [
+            card for card in self.game.side_cards
+            if card.get('player_id') == opponent_id and not card.get('in_deck') and not card.get('part_of_figure')
+        ]
+        
+        return opponent_main_cards, opponent_side_cards
+
     def load_figures(self):
         """Retrieve all figures for the current player."""
         try:
@@ -140,6 +169,12 @@ class FieldScreen(SubScreen):
 
             # Only regenerate icons if figure IDs have changed
             if current_figure_ids != self.last_figure_ids:
+                # Remove stale entries from icon_cache (destroyed figures)
+                stale_ids = self.last_figure_ids - current_figure_ids
+                for stale_id in stale_ids:
+                    if stale_id in self.icon_cache:
+                        del self.icon_cache[stale_id]
+                
                 # check if the figure is opponent or not
                 self._generate_figure_icons()
                 self.last_figure_ids = current_figure_ids
@@ -158,44 +193,71 @@ class FieldScreen(SubScreen):
         for field_type, figures in self.categorized_figures['self'].items():
             all_player_figures.extend(figures)
         
-        # Calculate resources once for all figures
+        # Collect all opponent figures for their battle bonus calculation
+        all_opponent_figures = []
+        for field_type, figures in self.categorized_figures['opponent'].items():
+            all_opponent_figures.extend(figures)
+        
+        # Calculate resources for both self and opponent
         try:
             from game.components.figures.figure_manager import FigureManager
             figure_manager = FigureManager()
             families = figure_manager.families
-            resources_data = self.game.calculate_resources(families)
+            resources_data = self.game.calculate_resources(families, is_opponent=False)
+            opponent_resources_data = self.game.calculate_resources(families, is_opponent=True)
         except Exception as e:
             resources_data = None
+            opponent_resources_data = None
+
+        # Check if current player has cast "All Seeing Eye" spell
+        # This makes opponent figures visible to the current player
+        player_has_all_seeing_eye = self.game.has_active_all_seeing_eye()
 
         for category, compartments in self.categorized_figures.items():
             for field_type, figures in compartments.items():
                 for figure in figures:
-                    # Determine visibility: own figures are visible, opponent figures are hidden except Maharajas
-                    is_visible = category == 'self' or figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']
+                    # Determine which figures and resources to use based on category
+                    figures_list = all_opponent_figures if category == 'opponent' else all_player_figures
+                    resources = opponent_resources_data if category == 'opponent' else resources_data
+                    
+                    # Determine visibility: 
+                    # - Own figures (category == 'self') are always visible
+                    # - Opponent figures are visible if:
+                    #   * They are Maharajas (always visible)
+                    #   * Current player cast All Seeing Eye (reveals opponent figures)
+                    is_visible = (category == 'self' or 
+                                  figure.name in ['Himalaya Maharaja', 'Djungle Maharaja'] or
+                                  (category == 'opponent' and player_has_all_seeing_eye))
+                    
                     if figure.id not in self.icon_cache:
                         self.icon_cache[figure.id] = FieldFigureIcon(
                             window=self.window,
                             game=self.game,
                             figure=figure,
                             is_visible=is_visible,
-                            all_player_figures=all_player_figures,
-                            resources_data=resources_data,
+                            all_player_figures=figures_list,
+                            resources_data=resources,
                         )
                     else:
                         # Update visibility and recalculate battle bonus for cached icon
                         self.icon_cache[figure.id].is_visible = is_visible
-                        self.icon_cache[figure.id].battle_bonus_received = self.icon_cache[figure.id]._calculate_battle_bonus_received(all_player_figures)
-                        self.icon_cache[figure.id].has_deficit = self.icon_cache[figure.id]._check_resource_deficit(resources_data)
+                        self.icon_cache[figure.id].battle_bonus_received = self.icon_cache[figure.id]._calculate_battle_bonus_received(figures_list)
+                        self.icon_cache[figure.id].has_deficit = self.icon_cache[figure.id]._check_resource_deficit(resources)
                     self.figure_icons.append(self.icon_cache[figure.id])
 
     def handle_events(self, events):
         """Handle events for interacting with the field."""
         super().handle_events(events)
         
-        # Handle dialogue box events first (for pickup confirmation)
+        # Handle dialogue box events first (before target selection mode check)
+        # This ensures auto-closing dialogues work even during target selection
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
-            if response:
+            if response == 'auto_close':
+                # Auto-close: just close dialogue and continue to other event handling
+                self.dialogue_box = None
+            elif response:
+                # Button clicked - process the response
                 if response == 'yes':
                     # Check which action is pending
                     if self.figure_pending_pickup:
@@ -290,9 +352,21 @@ class FieldScreen(SubScreen):
                     self.figure_pending_upgrade = None
                     # Keep the detail box open
                 
+                elif response == 'ok' or response == 'got it!':
+                    # Simple acknowledgment
+                    pass
+                
                 # Close the dialogue box
                 self.dialogue_box = None
-            return  # Don't process other events when dialogue box is open
+                return  # Don't process other events when button was clicked
+            else:
+                # Dialogue is still open, no response yet - block other events
+                return
+        
+        # If in target selection mode, only allow figure selection
+        if hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast:
+            self._handle_target_selection(events)
+            return
         
         # Handle figure detail box events first (if open)
         if self.figure_detail_box:
@@ -341,6 +415,7 @@ class FieldScreen(SubScreen):
                         break
                 
                 if clicked_icon:
+                    # Normal figure selection behavior
                     # Deselect all other icons
                     for icon in self.figure_icons:
                         if icon != clicked_icon:
@@ -374,7 +449,323 @@ class FieldScreen(SubScreen):
         """Handle actions when a figure is clicked."""
         print(f"Selected figure: {figure.name}")
         # Add additional functionality for interacting with the figure
+    
+    def _handle_target_selection(self, events):
+        """Handle events when in target selection mode for spell casting."""
+        for event in events:
+            if event.type == MOUSEBUTTONDOWN:
+                # Check which figure was clicked
+                clicked_icon = None
+                for icon in reversed(self.figure_icons):
+                    if icon.hovered:
+                        clicked_icon = icon
+                        break
+                
+                if clicked_icon:
+                    # Check if trying to cast Explosion on a Maharaja
+                    pending = self.state.pending_spell_cast
+                    selected_spell = pending['spell']
+                    target_figure = clicked_icon.figure
+                    
+                    if 'Explosion' in selected_spell.name and target_figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']:
+                        self.make_dialogue_box(
+                            message="Explosion cannot be cast on Maharajas!",
+                            actions=[],
+                            icon="error",
+                            title="Invalid Target",
+                            auto_close_delay=2000
+                        )
+                        return
+                    
+                    # Apply spell to the selected figure
+                    self._apply_spell_to_target(target_figure)
+                    return
+            
+            elif event.type == KEYDOWN:
+                # Allow ESC to cancel target selection
+                if event.key == K_ESCAPE:
+                    self.state.pending_spell_cast = None
+                    self.make_dialogue_box(
+                        message="Spell casting cancelled.",
+                        actions=['ok'],
+                        icon="error",
+                        title="Cancelled"
+                    )
+                    return
+    
+    def _apply_spell_to_target(self, target_figure):
+        """
+        Apply a pending spell cast to the selected target figure.
+        
+        :param target_figure: The figure selected as the target
+        """
+        from utils import spell_service
+        
+        pending = self.state.pending_spell_cast
+        selected_spell = pending['spell']
+        real_cards = pending['real_cards']
+        
+        # Determine if target figure should be visible in success dialogue
+        # Explosion always reveals the destroyed figure
+        # Other spells (Poison, Health Boost) respect the figure's actual visibility
+        is_opponent_figure = target_figure.player_id != self.game.player_id
+        player_has_all_seeing_eye = self.game.has_active_all_seeing_eye()
+        is_maharaja = target_figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']
+        
+        if 'Explosion' in selected_spell.name:
+            # Explosion reveals the destroyed figure
+            show_figure_visible = True
+        elif is_opponent_figure:
+            # For opponent figures, check if they're naturally visible
+            show_figure_visible = is_maharaja or player_has_all_seeing_eye
+        else:
+            # Own figures are always visible
+            show_figure_visible = True
+        
+        # Create figure icon for targeted spells to show in success dialogue
+        # Always hide bonus and deficit to avoid revealing opponent's strategic state
+        figure_icon = FieldFigureIcon(
+            window=self.window,
+            game=self.game,
+            figure=target_figure,
+            is_visible=show_figure_visible,
+            all_player_figures=[],  # Empty list to prevent bonus calculation
+            resources_data=None
+        )
+        # Explicitly set battle bonus and deficit to hide them
+        figure_icon.battle_bonus_received = 0
+        figure_icon.has_deficit = False
+        
+        # Prepare card data for server
+        cards_data = [{
+            'id': card.id,
+            'rank': card.rank,
+            'suit': card.suit,
+            'value': card.value
+        } for card in real_cards]
+        
+        # Call spell service to cast the spell
+        result = spell_service.cast_spell(
+            player_id=self.game.player_id,
+            game_id=self.game.game_id,
+            spell_name=selected_spell.name,
+            spell_type=selected_spell.family.type,
+            spell_family_name=selected_spell.family.name,
+            suit=selected_spell.suit,
+            cards=cards_data,
+            target_figure_id=target_figure.id,
+            counterable=selected_spell.counterable
+        )
+        
+        if result.get('success'):
+            # For Explosion spells, don't apply enchantment locally since figure is destroyed
+            # Just update from server to remove the figure
+            if 'Explosion' not in selected_spell.name:
+                # Apply enchantment locally for immediate visual feedback
+                self._apply_enchantment_to_figure(target_figure, selected_spell)
+            else:
+                # For Explosion spells, remove destroyed figure from cache immediately
+                if target_figure.id in self.icon_cache:
+                    del self.icon_cache[target_figure.id]
+            
+            # Update game state from server
+            self.game.update()
+            
+            # Refresh figure icons to show updated enchantments (or removed figure for Explosion)
+            self.load_figures()
+            
+            # Determine figure name to display in message
+            # Only reveal name for Explosion or visible figures
+            if 'Explosion' in selected_spell.name or show_figure_visible:
+                figure_name_display = target_figure.name
+            else:
+                figure_name_display = "an opponent figure"
+            
+            # Show success message with figure icon
+            if 'Explosion' in selected_spell.name:
+                self.make_dialogue_box(
+                    message=f"{selected_spell.name} destroyed {figure_name_display}!",
+                    actions=['ok'],
+                    icon="magic",
+                    title="Figure Destroyed",
+                    images=[figure_icon]
+                )
+            else:
+                self.make_dialogue_box(
+                    message=f"{selected_spell.name} cast on {figure_name_display}!",
+                    actions=['ok'],
+                    icon="magic",
+                    title="Spell Cast",
+                    images=[figure_icon]
+                )
+        else:
+            # Show error message
+            error_msg = result.get('message', 'Unknown error')
+            self.make_dialogue_box(
+                message=f"Failed to cast spell: {error_msg}",
+                actions=['got it!'],
+                icon="error",
+                title="Casting Failed"
+            )
+        
+        # Clear pending spell cast
+        self.state.pending_spell_cast = None
+    
+    def _apply_enchantment_to_figure(self, figure, spell):
+        """
+        Apply an enchantment effect to a figure locally.
+        
+        :param figure: The figure to enchant
+        :param spell: The spell being cast
+        """
+        # Determine power modifier based on spell name
+        power_modifier = 0
+        if 'Poison' in spell.name:
+            power_modifier = -6
+        elif 'Boost' in spell.name or 'Health' in spell.name:
+            power_modifier = 6
+        
+        # Get icon filename from spell family config
+        # The icon_img in configs is a filename string (e.g., 'poisson_portion.png')
+        icon_filename = 'default_spell_icon.png'  # Default fallback
+        
+        # Try to get the icon filename from the spell's family configuration
+        if hasattr(spell, 'family') and spell.family:
+            # Check if it's from the ability_spell_config
+            if 'Poison' in spell.name:
+                icon_filename = 'poisson_portion.png'
+            elif 'Boost' in spell.name or 'Health' in spell.name:
+                icon_filename = 'health_portion.png'
+            elif 'Explosion' in spell.name:
+                icon_filename = 'bomb.png'
+            elif 'All Seeing Eye' in spell.name:
+                icon_filename = 'eye.png'
+            elif 'Infinite Hammer' in spell.name:
+                icon_filename = 'infinite_hammer.png'
+        
+        # Apply enchantment to figure
+        figure.add_enchantment(
+            spell_name=spell.name,
+            spell_icon=icon_filename,
+            power_modifier=power_modifier
+        )
 
+    def _draw_opponent_hand_cards(self):
+        """Draw opponent's hand cards rotated 90 degrees after the castle compartment."""
+        opponent_main_cards, opponent_side_cards = self._get_opponent_hand_cards()
+        all_opponent_cards = opponent_main_cards + opponent_side_cards
+        
+        # Track current opponent card IDs
+        current_card_ids = {card.get('id') for card in all_opponent_cards if card.get('id')}
+        
+        # Only regenerate card surfaces if cards have changed
+        if current_card_ids != self.last_opponent_card_ids:
+            self._generate_opponent_card_cache(opponent_main_cards, opponent_side_cards)
+            self.last_opponent_card_ids = current_card_ids
+        
+        # Get the opponent's castle compartment for positioning
+        castle_comp = self.compartments['opponent']['castle']
+        
+        # Card dimensions (after rotation)
+        card_display_width = int(settings.CARD_WIDTH * 0.30)
+        rotated_card_height = card_display_width
+        
+        # Starting position
+        start_x = castle_comp.right + settings.FIELD_ICON_PADDING_X
+        start_y = castle_comp.top + 30
+        
+        card_spacing = 3
+        
+        # Draw cached card surfaces
+        current_y = start_y
+        for card_surface in self.opponent_card_cache:
+            self.window.blit(card_surface, (start_x, current_y))
+            current_y += rotated_card_height + card_spacing
+
+    def _generate_opponent_card_cache(self, opponent_main_cards, opponent_side_cards):
+        """Generate and cache rotated card surfaces for opponent's hand."""
+        self.opponent_card_cache = []
+        
+        card_display_width = int(settings.CARD_WIDTH * 0.27)
+        card_display_height = int(settings.CARD_HEIGHT * 0.27)
+        
+        # Generate main cards
+        for card in opponent_main_cards:
+            card_img = CardImg(self.window, card.get('suit'), card.get('rank'), 
+                              width=card_display_width, height=card_display_height)
+            
+            # Create and rotate surface
+            card_surface = pygame.Surface((card_display_width, card_display_height), pygame.SRCALPHA)
+            card_img.front_img.convert_alpha()
+            card_surface.blit(card_img.front_img, (0, 0))
+            rotated_surface = pygame.transform.rotate(card_surface, -90)
+            
+            self.opponent_card_cache.append(rotated_surface)
+        
+        # Generate side cards
+        for card in opponent_side_cards:
+            card_img = CardImg(self.window, card.get('suit'), card.get('rank'),
+                              width=card_display_width, height=card_display_height)
+            
+            # Create and rotate surface
+            card_surface = pygame.Surface((card_display_width, card_display_height), pygame.SRCALPHA)
+            card_img.front_img.convert_alpha()
+            card_surface.blit(card_img.front_img, (0, 0))
+            rotated_surface = pygame.transform.rotate(card_surface, -90)
+            
+            self.opponent_card_cache.append(rotated_surface)
+
+    def _draw_target_selection_prompt(self):
+        """Draw a prominent prompt asking the player to select a target figure."""
+        pending = self.state.pending_spell_cast
+        spell_name = pending['spell'].name if 'spell' in pending else 'Spell'
+        
+        # Create prompt text
+        prompt_text = f"SELECT A TARGET FOR {spell_name.upper()}"
+        prompt_surface = self.target_prompt_font.render(prompt_text, True, (255, 50, 50))  # Bright red
+        
+        # Create cancel instruction text
+        cancel_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        cancel_text = "Press ESC to cancel"
+        cancel_surface = cancel_font.render(cancel_text, True, (255, 255, 150))  # Light yellow
+        
+        # Create background box for better visibility
+        text_width = max(prompt_surface.get_width(), cancel_surface.get_width())
+        text_height = prompt_surface.get_height() + cancel_surface.get_height() + 10
+        padding = 20
+        
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+        
+        # Draw semi-transparent black background
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+        
+        # Draw yellow border for emphasis
+        pygame.draw.rect(self.window, (255, 255, 0), box_rect, 4)
+        
+        # Draw main prompt text centered in box
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+        
+        # Draw cancel text below
+        cancel_x = box_rect.centerx - cancel_surface.get_width() // 2
+        cancel_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(cancel_surface, (cancel_x, cancel_y))
+        
+        # Add pulsing effect to main prompt
+        pulse_alpha = int(128 + 127 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+        pulse_surface = prompt_surface.copy()
+        pulse_surface.set_alpha(pulse_alpha)
+        self.window.blit(pulse_surface, (text_x, text_y))
+    
     def _force_immediate_redraw(self):
         """
         Force an immediate redraw of the field screen to show visual feedback.
@@ -578,5 +969,13 @@ class FieldScreen(SubScreen):
                             icon, icon_x, icon_y = hovered_item
                             icon.draw(icon_x, icon_y)
 
+        # Draw opponent's hand cards if All Seeing Eye is active
+        if self.game.has_active_all_seeing_eye():
+            self._draw_opponent_hand_cards()
+
         # Note: Figure detail box is drawn in game_screen.py to ensure it's on top of hand cards
+        
+        # Draw target selection prompt LAST so it appears on top of everything
+        if hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast:
+            self._draw_target_selection_prompt()
 

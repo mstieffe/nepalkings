@@ -57,9 +57,16 @@ class CastSpellScreen(SubScreen):
         # TODO: If spell requires target, show target selection UI here
         target_figure_id = None
         if selected_spell.requires_target:
-            # For now, we'll skip target selection
-            # This will need to be implemented based on target_type
-            pass
+            # Store spell and cards in state for target selection
+            self.state.pending_spell_cast = {
+                'spell': selected_spell,
+                'real_cards': real_cards
+            }
+            
+            # Switch to field screen for target selection
+            # The field screen will display a prominent prompt
+            self.state.subscreen = "field"
+            return
         
         # Prepare card data for server
         cards_data = [{
@@ -93,6 +100,9 @@ class CastSpellScreen(SubScreen):
             spell_effect = result.get('spell_effect', {})
             drawn_cards_data = spell_effect.get('drawn_cards', [])
             
+            print(f"[CAST_SPELL_SCREEN] Spell effect received: {spell_effect.get('effect')}")
+            print(f"[CAST_SPELL_SCREEN] Drawn cards data: {len(drawn_cards_data)} cards")
+            
             # Create card images from drawn cards
             card_images = []
             if drawn_cards_data:
@@ -112,7 +122,7 @@ class CastSpellScreen(SubScreen):
                 dialogue_params = {
                     'message': f"{selected_spell.name} cast! Waiting for opponent to counter...",
                     'actions': ['ok'],
-                    'icon': "loot",
+                    'icon': "magic",
                     'title': "Spell Cast"
                 }
                 if card_images:
@@ -125,14 +135,14 @@ class CastSpellScreen(SubScreen):
                         message=f"{selected_spell.name} cast successfully! You drew:",
                         actions=['ok'],
                         images=card_images,
-                        icon="loot",
+                        icon="magic",
                         title="Spell Cast"
                     )
                 else:
                     self.make_dialogue_box(
                         message=f"{selected_spell.name} cast successfully!",
                         actions=['ok'],
-                        icon="loot",
+                        icon="magic",
                         title="Spell Cast"
                     )
             

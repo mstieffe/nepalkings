@@ -21,6 +21,7 @@ from game.components.spells.spell import Spell
 from game.components.cards.card import Card
 from config import settings
 from config.settings import SUITS_BLACK, SUITS_RED
+from game.components.spells.spell_configs.battle_spell_config import generate_same_color_spell_variants
 
 
 DRAW_2_SIDE_CARDS_CONFIG = {
@@ -52,24 +53,21 @@ FORCED_DEAL_CONFIG = {
     "name": "Forced Deal",
     "type": "greed",
     "description": "Force a deal with an opponent: Draw 2 cards from opponent's hand, then opponent draws 2 cards from your hand.",
-    "suits": SUITS_RED + SUITS_BLACK,
+    "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "forced_deal.png",
     "icon_gray_img": "forced_deal.png",
     "frame_img": "blue.png",
     "frame_closed_img": "blue.png",
     "frame_hidden_img": "blue.png",
     "glow_img": "blue.png",
-    "spells": lambda family, suit: [
-        Spell(
-            name=f"Forced Deal",
-            family=family,
-            cards=[Card('4', suit, 4), Card('4', suit, 4)],
-            suit=suit,
-            key_cards=[Card('4', suit, 4), Card('4', suit, 4)],
-            requires_target=True,
-            counterable=False,
-        )
-    ],  
+    "spells": lambda family, suit: generate_same_color_spell_variants(
+        family=family,
+        color_group='red' if suit == 'Hearts' else 'black',
+        ranks=['4', '4'],
+        spell_name="Forced Deal",
+        requires_target=True,
+        counterable=False
+    ),
 }
 
 

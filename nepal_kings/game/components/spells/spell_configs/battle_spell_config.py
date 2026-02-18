@@ -21,30 +21,72 @@ from game.components.spells.spell import Spell
 from game.components.cards.card import Card
 from config import settings
 from config.settings import SUITS_BLACK, SUITS_RED
+from itertools import combinations_with_replacement
+
+
+def generate_same_color_spell_variants(family, color_group, ranks, spell_name, **spell_kwargs):
+    """
+    Generate all spell variants for cards within the same color group.
+    
+    Args:
+        family: The spell family
+        color_group: 'red' or 'black'
+        ranks: List of card ranks (e.g., ['5', '5'] for two 5s, or ['7', '8', '9'] for a sequence)
+        spell_name: Name of the spell
+        **spell_kwargs: Additional keyword arguments for Spell constructor (requires_target, counterable, etc.)
+    
+    Returns:
+        List of Spell objects with all valid same-color combinations
+    """
+    suits = ['Hearts', 'Diamonds'] if color_group == 'red' else ['Spades', 'Clubs']
+    spells = []
+    
+    # Generate all combinations with replacement for the number of cards
+    for suit_combo in combinations_with_replacement(suits, len(ranks)):
+        cards = [Card(rank, suit, get_card_value(rank)) for rank, suit in zip(ranks, suit_combo)]
+        # Use the first suit as the primary suit for the spell
+        primary_suit = suit_combo[0]
+        
+        spells.append(Spell(
+            name=spell_name,
+            family=family,
+            cards=cards,
+            suit=primary_suit,
+            key_cards=cards,
+            **spell_kwargs
+        ))
+    
+    return spells
+
+
+def get_card_value(rank):
+    """Get the numeric value for a card rank."""
+    value_map = {
+        'J': 1, 'Q': 2, 'K': 4, 'A': 3,
+        '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10
+    }
+    return value_map.get(rank, int(rank) if rank.isdigit() else 0)
 
 CIVIL_WAR_CONFIG = {
     "name": "Civil War",
     "type": "tactics",
     "description": "The upcoming battle is a civil war, where each player may choose two villagers of the same color to fight for them.",
-    "suits": SUITS_RED + SUITS_BLACK,
+    "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "civil_war.png",
     "icon_gray_img": "civil_war.png",
     "frame_img": "gold.png",
     "frame_closed_img": "gold.png",
     "frame_hidden_img": "gold.png",
     "glow_img": "yellow.png",
-    "spells": lambda family, suit: [
-        Spell(
-            name=f"Civil War",
-            family=family,
-            cards=[Card('5', suit, 5), Card('5', suit, 5)],
-            suit=suit,
-            key_cards=[Card('5', suit, 5), Card('5', suit, 5)],
-            requires_target=True,
-            counterable=True,
-            possible_during_ceasefire=False,
-        )
-    ],  
+    "spells": lambda family, suit: generate_same_color_spell_variants(
+        family=family,
+        color_group='red' if suit == 'Hearts' else 'black',
+        ranks=['5', '5'],
+        spell_name="Civil War",
+        requires_target=True,
+        counterable=True,
+        possible_during_ceasefire=False
+    ),
 }
 
 
@@ -53,25 +95,22 @@ PEASANT_WAR_CONFIG = {
     "name": "Peasant War",
     "type": "tactics",
     "description": "The upcoming battle is a peasant war, where only villagers can be selected for the battle.",
-    "suits": SUITS_RED + SUITS_BLACK,
+    "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "peasant_war.png",
     "icon_gray_img": "peasant_war.png",
     "frame_img": "gold.png",
     "frame_closed_img": "gold.png",
     "frame_hidden_img": "gold.png",
     "glow_img": "yellow.png",
-    "spells": lambda family, suit: [
-        Spell(
-            name=f"Peasant War",
-            family=family,
-            cards=[Card('J', suit, 1), Card('J', suit, 1)],
-            suit=suit,
-            key_cards=[Card('J', suit, 1), Card('J', suit, 1)],
-            requires_target=True,
-            counterable=True,
-            possible_during_ceasefire=False,
-        )
-    ],  
+    "spells": lambda family, suit: generate_same_color_spell_variants(
+        family=family,
+        color_group='red' if suit == 'Hearts' else 'black',
+        ranks=['J', 'J'],
+        spell_name="Peasant War",
+        requires_target=True,
+        counterable=True,
+        possible_during_ceasefire=False
+    ),
 }
 
 
@@ -79,54 +118,82 @@ BLITZKRIEG_CONFIG = {
     "name": "Blitzkrieg",
     "type": "tactics",
     "description": "The upcoming battle is a blitzkrieg, where the opponents battle figure is selected by you.",
-    "suits": SUITS_RED + SUITS_BLACK,
+    "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "blitzkrieg.png",
     "icon_gray_img": "blitzkrieg.png",
     "frame_img": "gold.png",
     "frame_closed_img": "gold.png",
     "frame_hidden_img": "gold.png",
     "glow_img": "yellow.png",
-    "spells": lambda family, suit: [
-        Spell(
-            name=f"Blitzkrieg",
-            family=family,
-            cards=[Card('Q', suit, 2), Card('Q', suit, 2)],
-            suit=suit,
-            key_cards=[Card('Q', suit, 2), Card('Q', suit, 2)],
-            requires_target=True,
-            counterable=True,
-            possible_during_ceasefire=False,
-        )
-    ],  
+    "spells": lambda family, suit: generate_same_color_spell_variants(
+        family=family,
+        color_group='red' if suit == 'Hearts' else 'black',
+        ranks=['Q', 'Q'],
+        spell_name="Blitzkrieg",
+        requires_target=True,
+        counterable=True,
+        possible_during_ceasefire=False
+    ),
 }
 
 INVADER_SWAP_CONFIG = {
     "name": "Invader Swap",
     "type": "tactics",
     "description": "The role of invader and defender will be swapped for the upcoming battle.",
-    "suits": SUITS_RED + SUITS_BLACK,
+    "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "invader_swap.png",
     "icon_gray_img": "invader_swap.png",
     "frame_img": "gold.png",
     "frame_closed_img": "gold.png",
     "frame_hidden_img": "gold.png",
     "glow_img": "yellow.png",
-    "spells": lambda family, suit: [
-        Spell(
-            name=f"Invader Swap",
+    "spells": lambda family, suit: generate_same_color_spell_variants(
+        family=family,
+        color_group='red' if suit == 'Hearts' else 'black',
+        ranks=['A', 'A'],
+        spell_name="Invader Swap",
+        requires_target=True,
+        counterable=True,
+        possible_during_ceasefire=False
+    ),
+}
+
+CEASEFIRE_CONFIG = {
+    "name": "Ceasefire",
+    "type": "tactics",
+    "description": "Both players gain 3 additional turns without engaging in battle.",
+    "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
+    "icon_img": "ceasefire.png",
+    "icon_gray_img": "ceasefire.png",
+    "frame_img": "gold.png",
+    "frame_closed_img": "gold.png",
+    "frame_hidden_img": "gold.png",
+    "glow_img": "yellow.png",
+    "spells": lambda family, suit: (
+        generate_same_color_spell_variants(
             family=family,
-            cards=[Card('A', suit, 3), Card('A', suit, 3)],
-            suit=suit,
-            key_cards=[Card('A', suit, 3), Card('A', suit, 3)],
+            color_group='red' if suit == 'Hearts' else 'black',
+            ranks=['7', '8', '9'],
+            spell_name="Ceasefire",
             requires_target=True,
             counterable=True,
-            possible_during_ceasefire=False,
+            possible_during_ceasefire=False
+        ) +
+        generate_same_color_spell_variants(
+            family=family,
+            color_group='red' if suit == 'Hearts' else 'black',
+            ranks=['8', '9', '10'],
+            spell_name="Ceasefire",
+            requires_target=True,
+            counterable=True,
+            possible_during_ceasefire=False
         )
-    ],  
+    ),
 }
 
 
 ALL_BATTLE_CONFIGS = [
+    CEASEFIRE_CONFIG,
     PEASANT_WAR_CONFIG,
     CIVIL_WAR_CONFIG,
     INVADER_SWAP_CONFIG,
