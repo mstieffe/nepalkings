@@ -69,7 +69,7 @@ class DialogueBox:
         self.button_height = (settings.MENU_BUTTON_HEIGHT + 2 * settings.SMALL_SPACER_Y) if self.actions else 0
         self.img_height = settings.DIALOGUE_BOX_IMG_HEIGHT if self.scaled_images else 0
         self.drawable_object_height = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT if self.drawable_objects else 0
-        self.img_spacing = settings.SMALL_SPACER_Y if self.scaled_images or self.drawable_objects else 0
+        self.img_spacing = settings.SMALL_SPACER_Y // 2 if self.scaled_images or self.drawable_objects else 0
         # Add small spacing below drawable objects to separate from buttons or after-text
         self.drawable_bottom_spacing = settings.SMALL_SPACER_Y if self.drawable_objects else 0
         self.box_height = (self.title_height + self.text_height + self.img_height + self.drawable_object_height +

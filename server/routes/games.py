@@ -338,14 +338,63 @@ def _get_opponent_turn_summary(game, current_player_id):
             'message': f'Cast {spell_name}'
         }
         
+        print(f"[OPPONENT_TURN] Detected spell: {spell_name}")
+        
         # Check if spell affects current player
         if spell_name == 'Forced Deal':
             action_data['affects_player'] = True
-            action_data['details'] = 'Cards were exchanged'
+            # Get card swap details from ActiveSpell
+            from models import ActiveSpell
+            forced_deal_spell = ActiveSpell.query.filter(
+                ActiveSpell.game_id == game.id,
+                ActiveSpell.spell_name.like('%Forced Deal%'),
+                ActiveSpell.cast_round == game.current_round,
+                ActiveSpell.player_id == opponent.id
+            ).order_by(ActiveSpell.id.desc()).first()
+            
+            if forced_deal_spell and forced_deal_spell.effect_data:
+                effect_data = forced_deal_spell.effect_data
+                # Include card details in action if notification is pending
+                if effect_data.get('notification_pending') and effect_data.get('opponent_id') == current_player_id:
+                    action_data['cards_given'] = effect_data.get('opponent_gave', [])
+                    action_data['cards_received'] = effect_data.get('opponent_received', [])
+                    action_data['message'] = f'Cast Forced Deal - exchanged {len(action_data["cards_received"])} for {len(action_data["cards_given"])} cards'
+                    
+                    # Clear the notification flag
+                    forced_deal_spell.effect_data['notification_pending'] = False
+                    db.session.commit()
+                else:
+                    action_data['details'] = 'Cards were exchanged'
+            else:
+                action_data['details'] = 'Cards were exchanged'
         
         elif spell_name == 'Dump Cards':
             action_data['affects_player'] = True
-            action_data['details'] = 'All hands were dumped'
+            # Get current player's new hand after dump (only cards in hand, not in deck or figures)
+            from models import MainCard, SideCard
+            main_cards = MainCard.query.filter_by(
+                player_id=current_player_id, 
+                game_id=game.id,
+                in_deck=False,
+                part_of_figure=False
+            ).all()
+            side_cards = SideCard.query.filter_by(
+                player_id=current_player_id, 
+                game_id=game.id,
+                in_deck=False,
+                part_of_figure=False
+            ).all()
+            
+            print(f"[DUMP_CARDS_SERVER] Found {len(main_cards)} main cards and {len(side_cards)} side cards for player {current_player_id}")
+            
+            # Serialize cards for display
+            action_data['new_cards'] = []
+            for card in main_cards + side_cards:
+                card_data = card.serialize()
+                card_data['type'] = 'main' if isinstance(card, MainCard) else 'side'
+                action_data['new_cards'].append(card_data)
+            action_data['message'] = f'Cast Dump Cards - you drew {len(action_data["new_cards"])} new cards'
+            print(f"[DUMP_CARDS_SERVER] Serialized {len(action_data['new_cards'])} cards for notification")
         
         elif spell_name == 'Explosion':
             action_data['affects_player'] = True
@@ -363,52 +412,6 @@ def _get_opponent_turn_summary(game, current_player_id):
     
     print(f"[OPPONENT_TURN] Summary: {summary}")
     return summary
-
-def _get_forced_deal_notification(game, current_player_id):
-    """
-    Check if there's a pending Forced Deal notification for the current player.
-    Returns card swap details if found, otherwise None.
-    """
-    from models import ActiveSpell
-    
-    print(f"[FORCED_DEAL_NOTIF] Checking for notification for player {current_player_id}")
-    
-    # Look for recent Forced Deal spells in this round that have notification_pending flag
-    forced_deal_spells = ActiveSpell.query.filter(
-        ActiveSpell.game_id == game.id,
-        ActiveSpell.spell_name.like('%Forced Deal%'),
-        ActiveSpell.cast_round == game.current_round,
-        ActiveSpell.player_id != current_player_id  # Cast by opponent
-    ).order_by(ActiveSpell.id.desc()).all()
-    
-    for spell in forced_deal_spells:
-        if spell.effect_data and isinstance(spell.effect_data, dict):
-            # Check if notification is pending for this player
-            if spell.effect_data.get('notification_pending') and spell.effect_data.get('opponent_id') == current_player_id:
-                print(f"[FORCED_DEAL_NOTIF] Found pending notification for spell {spell.id}")
-                
-                # Get the swap details for this player (opponent perspective)
-                notification = {
-                    'cards_given': spell.effect_data.get('opponent_gave', []),
-                    'cards_received': spell.effect_data.get('opponent_received', []),
-                    'caster_name': None
-                }
-                
-                # Get caster name
-                for player in game.players:
-                    if player.id == spell.player_id:
-                        notification['caster_name'] = player.serialize()['username']
-                        break
-                
-                # Clear the notification flag
-                spell.effect_data['notification_pending'] = False
-                db.session.commit()
-                
-                print(f"[FORCED_DEAL_NOTIF] Returning notification: {notification}")
-                return notification
-    
-    print(f"[FORCED_DEAL_NOTIF] No pending notification found")
-    return None
 
 @games.route('/get_games', methods=['GET'])
 def get_games():
@@ -496,17 +499,13 @@ def start_turn():
         
         print(f"[START_TURN] Fill info: {fill_info}")
         
-        # Get opponent's last turn summary for normal turn processing
+        # Get opponent's last turn summary (includes Forced Deal card details if applicable)
         opponent_turn_summary = _get_opponent_turn_summary(game, player_id)
-        
-        # Check for pending Forced Deal notification
-        forced_deal_notification = _get_forced_deal_notification(game, player_id)
 
         return jsonify({
             'success': True,
             'auto_fill': fill_info,  # None if no fill needed, otherwise dict with fill details
-            'opponent_turn_summary': opponent_turn_summary,  # Summary of what opponent did
-            'forced_deal_notification': forced_deal_notification  # Specific cards swapped in Forced Deal
+            'opponent_turn_summary': opponent_turn_summary  # Summary of what opponent did (includes Forced Deal cards)
         })
 
     except Exception as e:
