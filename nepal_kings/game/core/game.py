@@ -59,9 +59,6 @@ class Game:
         
         # Opponent turn summary notification (cleared after showing dialogue)
         self.pending_opponent_turn_summary = None
-        
-        # Forced Deal notification with specific cards (cleared after showing dialogue)
-        self.pending_forced_deal_notification = None
 
         # Initialize log entries and chat messages
         self.log_entries = []
@@ -185,13 +182,7 @@ class Game:
                     print(f"[START_TURN] No opponent turn summary")
                     self.pending_opponent_turn_summary = None
                 
-                # Store Forced Deal notification if present
-                forced_deal_notification = data.get('forced_deal_notification')
-                if forced_deal_notification:
-                    print(f"[START_TURN] Forced Deal notification: {forced_deal_notification}")
-                    self.pending_forced_deal_notification = forced_deal_notification
-                else:
-                    self.pending_forced_deal_notification = None
+                # Forced Deal details are now included in opponent_turn_summary
         except Exception as e:
             print(f"Error in start_turn: {str(e)}")
 

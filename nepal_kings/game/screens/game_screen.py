@@ -47,13 +47,28 @@ class GameScreen(Screen):
         # Track previous subscreen to detect changes
         self.previous_subscreen = None
         
-        # Track last processed log entry to detect new spell notifications
-        self.last_processed_log_id = None
+        # Queue for pending notifications (to avoid overwriting active dialogue boxes)
+        self.pending_notifications = []
     
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
         from game.components.dialogue_box import DialogueBox
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
+    
+    def queue_or_show_notification(self, notification_data):
+        """Queue a notification if dialogue box is active, otherwise show it immediately."""
+        if self.dialogue_box:
+            # Dialogue box already showing - add to queue
+            self.pending_notifications.append(notification_data)
+        else:
+            # No dialogue box - show immediately
+            self.make_dialogue_box(**notification_data)
+    
+    def show_next_queued_notification(self):
+        """Show the next queued notification if any exist."""
+        if self.pending_notifications:
+            notification_data = self.pending_notifications.pop(0)
+            self.make_dialogue_box(**notification_data)
 
     def initialiaze_scoareboard_scroll(self):
         """Initialize resources for the info scroll."""
@@ -237,17 +252,11 @@ class GameScreen(Screen):
         
         self.state.game.update()
         
-        # Check for opponent spell notifications (like Dump Cards)
-        self.check_opponent_spell_notifications()
-        
         # Check for auto-fill notification
         self.check_auto_fill_notification()
         
-        # Check for opponent turn notification
+        # Check for opponent turn notification (includes Forced Deal and Dump Cards details)
         self.check_opponent_turn_notification()
-        
-        # Check for Forced Deal notification with specific cards
-        self.check_forced_deal_notification()
         
         self.main_hand.update(self.state.game)
         self.side_hand.update(self.state.game)
@@ -269,58 +278,6 @@ class GameScreen(Screen):
             else:
                 elem.update(self.state.game)
     
-    def check_opponent_spell_notifications(self):
-        """Check for spells cast by opponent that should trigger notifications."""
-        if not self.state.game or not self.state.game.log_entries:
-            return
-        
-        # Get most recent log entry
-        recent_logs = sorted(self.state.game.log_entries, key=lambda x: x.get('id', 0), reverse=True)
-        if not recent_logs:
-            return
-        
-        latest_log = recent_logs[0]
-        log_id = latest_log.get('id')
-        
-        # Skip if we've already processed this log entry
-        if log_id == self.last_processed_log_id:
-            return
-        
-        self.last_processed_log_id = log_id
-        
-        # Check if this log entry is about a spell cast by the opponent
-        log_type = latest_log.get('type', '')
-        log_message = latest_log.get('message', '')
-        player_id = latest_log.get('player_id')
-        
-        # Only show notification if it was cast by opponent
-        if player_id == self.state.game.player_id:
-            return
-        
-        # Check for Dump Cards spell
-        if log_type == 'spell_cast' and 'Dump Cards' in log_message:
-            # Show notification to opponent with their new cards
-            main_cards, side_cards = self.state.game.get_hand()
-            
-            # Create card images from current hand
-            from game.components.cards.card_img import CardImg
-            card_images = []
-            for card in main_cards + side_cards:
-                card_img = CardImg(self.window, card.suit, card.rank)
-                card_images.append(card_img.front_img)
-            
-            # Show dialogue box
-            self.make_dialogue_box(
-                message=f"{self.state.game.opponent_name} cast Dump Cards! All hands were dumped. You drew:",
-                actions=['ok'],
-                images=card_images,
-                icon="loot",
-                title="Opponent Cast Spell"
-            )
-        
-        # Note: Forced Deal notifications are now handled by check_forced_deal_notification()
-        # which shows the specific cards that were swapped
-
     def check_auto_fill_notification(self):
         """Check for auto-fill notification and show dialogue if needed."""
         if not self.state.game or not self.state.game.pending_auto_fill:
@@ -347,14 +304,14 @@ class GameScreen(Screen):
             card_img = CardImg(self.window, card_data['suit'], card_data['rank'])
             card_images.append(card_img.front_img)
         
-        # Show dialogue
-        self.make_dialogue_box(
-            message=message,
-            actions=['ok'],
-            images=card_images,
-            icon="loot",
-            title="Cards Refilled"
-        )
+        # Queue or show dialogue
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'images': card_images,
+            'icon': "loot",
+            'title': "Cards Refilled"
+        })
         
         # Clear the notification
         self.state.game.pending_auto_fill = None
@@ -369,6 +326,10 @@ class GameScreen(Screen):
         action = summary.get('action')
         
         print(f"\n{'='*60}")
+        print(f"[OPPONENT_TURN_CLIENT] Processing notification")
+        print(f"[OPPONENT_TURN_CLIENT] Summary: {summary}")
+        print(f"[OPPONENT_TURN_CLIENT] Action: {action}")
+        print(f"{'='*60}\n")
         print(f"[WELCOME_MSG] Processing notification - action: {action}")
         print(f"{'='*60}\n")
         
@@ -430,13 +391,13 @@ class GameScreen(Screen):
                 
                 turn_msg = f"Hello Adventurer!\n\nYou are playing with the {maharaja_name} and start with the {role_text} role. You are fighting {opponent_name}.\n\n{turn_status}"
                 
-                self.make_dialogue_box(
-                    message=turn_msg,
-                    actions=['ok'],
-                    images=images,
-                    icon="loot",
-                    title="Game Started"
-                )
+                self.queue_or_show_notification({
+                    'message': turn_msg,
+                    'actions': ['ok'],
+                    'images': images,
+                    'icon': "loot",
+                    'title': "Game Started"
+                })
             
             # Clear the notification
             self.state.game.pending_opponent_turn_summary = None
@@ -446,22 +407,100 @@ class GameScreen(Screen):
         if not action or action == 'unknown':
             # Generic message if no specific action detected
             message = summary.get('message', f"{opponent_name} completed their turn.")
-            self.make_dialogue_box(
-                message=f"{message}\n\nIt's your turn now!",
-                actions=['ok'],
-                icon="info",
-                title="Your Turn"
-            )
+            self.queue_or_show_notification({
+                'message': f"{message}\n\nIt's your turn now!",
+                'actions': ['ok'],
+                'icon': "info",
+                'title': "Your Turn"
+            })
         else:
             # Build message based on the action (action is a dict)
             action_type = action.get('type')
             action_message = action.get('message', 'completed their turn')
+            spell_name = action.get('spell_name', '')
+            
+            print(f"[OPPONENT_TURN_CLIENT] Processing action: type={action_type}, spell={repr(spell_name)}, has_new_cards={'new_cards' in action}")
+            if 'new_cards' in action:
+                print(f"[OPPONENT_TURN_CLIENT] new_cards present with {len(action.get('new_cards', []))} cards")
             
             # Load icons for actions
             images = []
             
-            # Load spell icon if this is a spell action
-            if action_type == 'spell' and action.get('spell_icon'):
+            # Special handling for Forced Deal with card details
+            if (action_type == 'spell' and spell_name == 'Forced Deal' and 
+                'cards_given' in action and 'cards_received' in action):
+                
+                from game.components.cards.card import Card
+                import os
+                
+                cards_given = action.get('cards_given', [])
+                cards_received = action.get('cards_received', [])
+                
+                print(f"[FORCED_DEAL_CLIENT] Showing cards: gave {len(cards_given)}, received {len(cards_received)}")
+                
+                # Add received cards (show first)
+                for card_data in cards_received:
+                    card = Card(
+                        rank=card_data['rank'],
+                        suit=card_data['suit'],
+                        value=card_data['value'],
+                        id=card_data.get('id'),
+                        type=card_data.get('type', 'main')
+                    )
+                    card_img = card.make_icon(self.window, self.state.game, 0, 0)
+                    images.append(card_img.front_img)
+                
+                # Add given cards (with transparency and red cross)
+                for card_data in cards_given:
+                    card = Card(
+                        rank=card_data['rank'],
+                        suit=card_data['suit'],
+                        value=card_data['value'],
+                        id=card_data.get('id'),
+                        type=card_data.get('type', 'main')
+                    )
+                    card_img = card.make_icon(self.window, self.state.game, 0, 0)
+                    given_card_img = card_img.front_img.copy()
+                    given_card_img.set_alpha(128)  # 50% transparency
+                    
+                    # Add red cross overlay
+                    red_cross_path = os.path.join('img', 'new_cards', 'red_cross.png')
+                    if os.path.exists(red_cross_path):
+                        red_cross = pygame.image.load(red_cross_path)
+                        cross_size = min(given_card_img.get_width(), given_card_img.get_height())
+                        red_cross = pygame.transform.scale(red_cross, (cross_size, cross_size))
+                        cross_x = (given_card_img.get_width() - cross_size) // 2
+                        cross_y = (given_card_img.get_height() - cross_size) // 2
+                        given_card_img.blit(red_cross, (cross_x, cross_y))
+                    
+                    images.append(given_card_img)
+            
+            # Special handling for Dump Cards with new cards
+            elif (action_type == 'spell' and spell_name == 'Dump Cards' and 
+                  'new_cards' in action):
+                
+                print(f"[DUMP_CARDS_CLIENT] ENTERING Dump Cards card display block")
+                
+                from game.components.cards.card import Card
+                new_cards = action.get('new_cards', [])
+                
+                print(f"[DUMP_CARDS_CLIENT] Showing {len(new_cards)} new cards from opponent turn notification")
+                print(f"[DUMP_CARDS_CLIENT] new_cards data: {new_cards}")
+                
+                # Add all new cards
+                for card_data in new_cards:
+                    card = Card(
+                        rank=card_data['rank'],
+                        suit=card_data['suit'],
+                        value=card_data['value'],
+                        id=card_data.get('id'),
+                        type=card_data.get('type', 'main')
+                    )
+                    card_img = card.make_icon(self.window, self.state.game, 0, 0)
+                    images.append(card_img.front_img)
+            
+            # Load spell icon if this is a spell action (and not Forced Deal/Dump Cards with cards)
+            elif action_type == 'spell' and action.get('spell_icon'):
                 import os
                 spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon'))
                 if os.path.exists(spell_icon_path):
@@ -485,7 +524,7 @@ class GameScreen(Screen):
             else:
                 # Split message into before and after icon parts
                 message = f"{opponent_name}'s turn:\n• {action_message}"
-                message_after = "It's your turn now!"
+                message_after = "\nIt's your turn now!"
                 
                 # Add details if spell affects player (keep in first part)
                 if action.get('affects_player'):
@@ -495,89 +534,18 @@ class GameScreen(Screen):
                 
                 icon = "info"
             
-            self.make_dialogue_box(
-                message=message,
-                actions=['ok'],
-                icon=icon,
-                title="Your Turn",
-                images=images if images else None,
-                message_after_images=message_after if not action_type == 'explosion' else None
-            )
+            self.queue_or_show_notification({
+                'message': message,
+                'actions': ['ok'],
+                'icon': icon,
+                'title': "Your Turn",
+                'images': images if images else None,
+                'message_after_images': message_after if not action_type == 'explosion' else None
+            })
         
         # Clear the notification
         self.state.game.pending_opponent_turn_summary = None
     
-    def check_forced_deal_notification(self):
-        """Check for Forced Deal notification with specific cards."""
-        if not self.state.game or not self.state.game.pending_forced_deal_notification:
-            return
-        
-        notification = self.state.game.pending_forced_deal_notification
-        caster_name = notification.get('caster_name', 'Opponent')
-        cards_given = notification.get('cards_given', [])
-        cards_received = notification.get('cards_received', [])
-        
-        print(f"[FORCED_DEAL_CLIENT] Showing notification: gave {len(cards_given)}, received {len(cards_received)}")
-        
-        # Create card images for both given and received cards
-        from game.components.cards.card import Card
-        card_images = []
-        
-        # Add received cards (show first)
-        for card_data in cards_received:
-            card = Card(
-                rank=card_data['rank'],
-                suit=card_data['suit'],
-                value=card_data['value'],
-                id=card_data.get('id'),
-                type=card_data.get('type', 'main')
-            )
-            card_img = card.make_icon(self.window, self.state.game, 0, 0)
-            card_images.append(card_img.front_img)
-        
-        # Add given cards (with transparency and red cross to show they were removed)
-        for card_data in cards_given:
-            card = Card(
-                rank=card_data['rank'],
-                suit=card_data['suit'],
-                value=card_data['value'],
-                id=card_data.get('id'),
-                type=card_data.get('type', 'main')
-            )
-            card_img = card.make_icon(self.window, self.state.game, 0, 0)
-            # Make the card slightly transparent to show it was given away
-            given_card_img = card_img.front_img.copy()
-            given_card_img.set_alpha(128)  # 50% transparency
-            
-            # Add red cross overlay
-            import pygame
-            import os
-            red_cross_path = os.path.join('img', 'new_cards', 'red_cross.png')
-            if os.path.exists(red_cross_path):
-                red_cross = pygame.image.load(red_cross_path)
-                # Scale red cross to fit the card
-                cross_size = min(given_card_img.get_width(), given_card_img.get_height())
-                red_cross = pygame.transform.scale(red_cross, (cross_size, cross_size))
-                # Center the cross on the card
-                cross_x = (given_card_img.get_width() - cross_size) // 2
-                cross_y = (given_card_img.get_height() - cross_size) // 2
-                given_card_img.blit(red_cross, (cross_x, cross_y))
-            
-            card_images.append(given_card_img)
-        
-        message = f"{caster_name} cast Forced Deal!\n\nYou received {len(cards_received)} main card{'s' if len(cards_received) > 1 else ''} and gave {len(cards_given)} main card{'s' if len(cards_given) > 1 else ''}."
-        
-        # Show dialogue
-        self.make_dialogue_box(
-            message=message,
-            actions=['ok'],
-            images=card_images,
-            icon="magic",
-            title="Opponent Cast Spell"
-        )
-        
-        # Clear the notification
-        self.state.game.pending_forced_deal_notification = None
     
     def _create_figure_from_data(self, figure_data, families):
         """Helper method to create a Figure instance from serialized data."""
@@ -734,6 +702,8 @@ class GameScreen(Screen):
             response = self.dialogue_box.update(events)
             if response:
                 self.dialogue_box = None  # Close dialogue box
+                # Show next queued notification if any
+                self.show_next_queued_notification()
                 return  # Don't process other events while dialogue is open
         
         super().handle_events(events)
