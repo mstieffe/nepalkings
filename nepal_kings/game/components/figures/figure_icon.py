@@ -8,6 +8,23 @@ from game.components.cards.card_img import CardImg
 from config import settings
 
 class FigureIcon:
+    # Class-level cache for base glow images (loaded once for all instances)
+    _glow_cache = {}
+    _suit_icon_cache = {}  # Cache for suit icons
+    _skill_icon_cache = {}  # Cache for skill icons
+    _broken_icon_cache = {}  # Cache for broken state icon
+    
+    @classmethod
+    def _load_base_glow_images(cls):
+        """Load base glow images once and cache them at class level."""
+        if not cls._glow_cache:
+            cls._glow_cache = {
+                'black': pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'black.png').convert_alpha(),
+                'white': pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'white.png').convert_alpha(),
+                'yellow': pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'yellow.png').convert_alpha(),
+                'orange': pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'orange.png').convert_alpha(),
+            }
+        return cls._glow_cache
     """
     A class representing an on-screen figure icon with optional animation,
     highlighting, and interactive behavior.
@@ -159,12 +176,13 @@ class FigureIcon:
         Load and scale all the necessary glow effects.
         Creates both bright and dark versions of colored glows.
         """
-        # Load base images
-        glow_black_img = pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'black.png').convert_alpha()
-        glow_white_img = pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'white.png').convert_alpha()
+        # Load base images from class-level cache (loaded once for all instances)
+        cache = self._load_base_glow_images()
+        glow_black_img = cache['black']
+        glow_white_img = cache['white']
         
         # Use provided glow_img or default to yellow
-        glow_active = self.glow_img if self.glow_img else pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'yellow.png').convert_alpha()
+        glow_active = self.glow_img if self.glow_img else cache['yellow']
         
         # Scale colored glows (bright version)
         self.glow_yellow = pygame.transform.smoothscale(
@@ -214,11 +232,11 @@ class FigureIcon:
         
         # Keep orange glows for compatibility (deprecated - use dark colored glows instead)
         self.glow_orange = pygame.transform.smoothscale(
-            pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'orange.png'),
+            cache['orange'],
             (settings.FIGURE_ICON_GLOW_WIDTH, settings.FIGURE_ICON_GLOW_WIDTH)
         )
         self.glow_orange_big = pygame.transform.smoothscale(
-            pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'orange.png'),
+            cache['orange'],
             (settings.FIGURE_ICON_GLOW_BIG_WIDTH, settings.FIGURE_ICON_GLOW_BIG_WIDTH)
         )
 
@@ -612,12 +630,13 @@ class FieldFigureIcon(FigureIcon):
         normal_glow_size = int(settings.FIGURE_ICON_GLOW_WIDTH * glow_scale)
         big_glow_size = int(settings.FIGURE_ICON_GLOW_BIG_WIDTH * glow_scale)
         
-        # Load base images
-        glow_black_img = pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'black.png').convert_alpha()
-        glow_white_img = pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'white.png').convert_alpha()
+        # Load base images from class-level cache (shared with parent class)
+        cache = self._load_base_glow_images()
+        glow_black_img = cache['black']
+        glow_white_img = cache['white']
         
         # Use provided glow_img or default to yellow
-        glow_active = self.glow_img if self.glow_img else pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'yellow.png').convert_alpha()
+        glow_active = self.glow_img if self.glow_img else cache['yellow']
         
         # Scale colored glows (bright version)
         self.glow_yellow = pygame.transform.smoothscale(
@@ -667,11 +686,11 @@ class FieldFigureIcon(FigureIcon):
         
         # Keep orange glows for compatibility
         self.glow_orange = pygame.transform.smoothscale(
-            pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'orange.png'),
+            cache['orange'],
             (normal_glow_size, normal_glow_size)
         )
         self.glow_orange_big = pygame.transform.smoothscale(
-            pygame.image.load(settings.GAME_BUTTON_GLOW_RECT_IMG_PATH + 'orange.png'),
+            cache['orange'],
             (big_glow_size, big_glow_size)
         )
 
@@ -1107,8 +1126,13 @@ class FieldFigureIcon(FigureIcon):
             }
             suit_file = suit_map.get(self.figure.suit.lower())
             if suit_file:
-                suit_path = settings.SUIT_ICON_IMG_PATH + suit_file
-                suit_img = pygame.image.load(suit_path).convert_alpha()
+                # Check cache first
+                cache_key = suit_file
+                if cache_key not in self._suit_icon_cache:
+                    suit_path = settings.SUIT_ICON_IMG_PATH + suit_file
+                    self._suit_icon_cache[cache_key] = pygame.image.load(suit_path).convert_alpha()
+                
+                suit_img = self._suit_icon_cache[cache_key]
                 # Scale to appropriate size for field view
                 base_size = int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8)
                 if is_big:
@@ -1133,9 +1157,13 @@ class FieldFigureIcon(FigureIcon):
         
         for skill_key, icon_path in SKILL_ICON_IMG_PATH_DICT.items():
             try:
-                # Load original high-res icon once
-                icon = pygame.image.load(icon_path).convert_alpha()
-                # Create both sizes from the original
+                # Check cache first
+                if skill_key not in self._skill_icon_cache:
+                    # Load original high-res icon once and cache it
+                    self._skill_icon_cache[skill_key] = pygame.image.load(icon_path).convert_alpha()
+                
+                icon = self._skill_icon_cache[skill_key]
+                # Create both sizes from the cached original
                 skill_icons_normal[skill_key] = pygame.transform.smoothscale(icon, (normal_size, normal_size))
                 skill_icons_big[skill_key] = pygame.transform.smoothscale(icon, (big_size, big_size))
             except Exception as e:
@@ -1172,8 +1200,13 @@ class FieldFigureIcon(FigureIcon):
     def _load_broken_icon(self, is_big=False):
         """Load the broken state icon for figures with resource deficits."""
         try:
-            broken_path = 'img/figures/state_icons/broken.png'
-            broken_img = pygame.image.load(broken_path).convert_alpha()
+            # Check cache first
+            cache_key = 'broken.png'
+            if cache_key not in self._broken_icon_cache:
+                broken_path = 'img/figures/state_icons/broken.png'
+                self._broken_icon_cache[cache_key] = pygame.image.load(broken_path).convert_alpha()
+            
+            broken_img = self._broken_icon_cache[cache_key]
             # Size to fit in top left corner of icon
             base_size = int(settings.FIELD_ICON_WIDTH * 0.25)
             if is_big:
