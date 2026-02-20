@@ -99,6 +99,9 @@ class FigureDetailBox:
 
         # Action buttons (customize these based on figure type/state)
         self.buttons = self._create_action_buttons()
+        
+        # Track which buttons are disabled and why
+        self.button_disabled_reasons = {}
 
     def _create_action_buttons(self):
         """Create action buttons based on figure state and type."""
@@ -134,6 +137,15 @@ class FigureDetailBox:
                 button_y_start - i * (settings.MENU_BUTTON_HEIGHT + settings.SMALL_SPACER_Y),
                 action
             )
+            # Add disabled property to button
+            button.disabled = False
+            button.disabled_reason = None
+            
+            # Check if charge button should be disabled due to ceasefire
+            if action == 'Charge' and self.game.ceasefire_active:
+                button.disabled = True
+                button.disabled_reason = 'ceasefire'
+            
             buttons.append(button)
 
         return buttons
@@ -858,6 +870,10 @@ class FigureDetailBox:
                 # Check if any action button was clicked
                 for button in self.buttons:
                     if button.collide():
+                        # Check if button is disabled
+                        if hasattr(button, 'disabled') and button.disabled:
+                            # Return a special code to indicate disabled button click
+                            return f'disabled_{button.text.lower()}_{button.disabled_reason}'
                         return button.text.lower()
         
         return None

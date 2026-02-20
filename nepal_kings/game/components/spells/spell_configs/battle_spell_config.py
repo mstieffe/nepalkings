@@ -83,7 +83,7 @@ CIVIL_WAR_CONFIG = {
         color_group='red' if suit == 'Hearts' else 'black',
         ranks=['5', '5'],
         spell_name="Civil War",
-        requires_target=True,
+        requires_target=False,
         counterable=True,
         possible_during_ceasefire=False
     ),
@@ -107,7 +107,7 @@ PEASANT_WAR_CONFIG = {
         color_group='red' if suit == 'Hearts' else 'black',
         ranks=['J', 'J'],
         spell_name="Peasant War",
-        requires_target=True,
+        requires_target=False,
         counterable=True,
         possible_during_ceasefire=False
     ),
@@ -130,7 +130,7 @@ BLITZKRIEG_CONFIG = {
         color_group='red' if suit == 'Hearts' else 'black',
         ranks=['Q', 'Q'],
         spell_name="Blitzkrieg",
-        requires_target=True,
+        requires_target=False,
         counterable=True,
         possible_during_ceasefire=False
     ),
@@ -152,7 +152,7 @@ INVADER_SWAP_CONFIG = {
         color_group='red' if suit == 'Hearts' else 'black',
         ranks=['A', 'A'],
         spell_name="Invader Swap",
-        requires_target=True,
+        requires_target=False,
         counterable=True,
         possible_during_ceasefire=False
     ),
@@ -175,7 +175,7 @@ CEASEFIRE_CONFIG = {
             color_group='red' if suit == 'Hearts' else 'black',
             ranks=['7', '8', '9'],
             spell_name="Ceasefire",
-            requires_target=True,
+            requires_target=False,
             counterable=True,
             possible_during_ceasefire=False
         ) +
@@ -184,7 +184,7 @@ CEASEFIRE_CONFIG = {
             color_group='red' if suit == 'Hearts' else 'black',
             ranks=['8', '9', '10'],
             spell_name="Ceasefire",
-            requires_target=True,
+            requires_target=False,
             counterable=True,
             possible_during_ceasefire=False
         )

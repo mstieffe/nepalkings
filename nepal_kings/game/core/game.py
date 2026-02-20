@@ -17,6 +17,10 @@ class Game:
         self.current_round = game_dict.get('current_round', 1)
         self.invader_player_id = game_dict.get('invader_player_id')
         self.turn_player_id = game_dict.get('turn_player_id')
+        
+        # Ceasefire tracking
+        self.ceasefire_active = game_dict.get('ceasefire_active', False)
+        self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
 
         # Spell-related state
         self.pending_spell_id = game_dict.get('pending_spell_id')
@@ -60,6 +64,12 @@ class Game:
         # Opponent turn summary notification (cleared after showing dialogue)
         self.pending_opponent_turn_summary = None
         
+        # Ceasefire ended notification (cleared after showing dialogue)
+        self.pending_ceasefire_ended = False
+        
+        # Track previous ceasefire state to detect changes
+        self.previous_ceasefire_active = self.ceasefire_active
+        
         # Infinite Hammer mode tracking
         self.infinite_hammer_active = False
         self.infinite_hammer_dialogue_shown = False
@@ -97,6 +107,16 @@ class Game:
             self.current_round = game_dict.get('current_round', 1)
             self.invader_player_id = game_dict.get('invader_player_id')
             self.turn_player_id = game_dict.get('turn_player_id')
+            
+            # Update ceasefire tracking
+            previous_ceasefire = self.ceasefire_active
+            self.ceasefire_active = game_dict.get('ceasefire_active', False)
+            self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
+            
+            # Detect ceasefire ending (transition from active to inactive)
+            if previous_ceasefire and not self.ceasefire_active:
+                print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
+                self.pending_ceasefire_ended = True
 
             # Update spell-related state
             self.pending_spell_id = game_dict.get('pending_spell_id')

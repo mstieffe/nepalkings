@@ -17,7 +17,8 @@ def cast_spell(
     suit: str,
     cards: List[Dict],
     target_figure_id: Optional[int] = None,
-    counterable: bool = False
+    counterable: bool = False,
+    possible_during_ceasefire: bool = True
 ) -> Dict[str, Any]:
     """
     Cast a spell (both counterable and non-counterable).
@@ -31,6 +32,7 @@ def cast_spell(
     :param cards: List of card dictionaries used to cast the spell
     :param target_figure_id: ID of target figure (if spell requires target)
     :param counterable: Whether this spell can be countered
+    :param possible_during_ceasefire: Whether this spell can be cast during ceasefire
     :return: Response dictionary with success status and updated game state
     """
     data = {
@@ -42,7 +44,8 @@ def cast_spell(
         'suit': suit,
         'cards': cards,
         'target_figure_id': target_figure_id,
-        'counterable': counterable
+        'counterable': counterable,
+        'possible_during_ceasefire': possible_during_ceasefire
     }
     
     try:
