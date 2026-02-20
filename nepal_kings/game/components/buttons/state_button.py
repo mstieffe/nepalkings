@@ -19,6 +19,7 @@ class StateButton:
                  subscreen = None,
                  track_turn = False,
                  track_invader = False,
+                 track_ceasefire = False,
                  ):
         self.window = window
         self.name = name
@@ -30,6 +31,7 @@ class StateButton:
         self.subscreen_trigger = subscreen
         self.track_turn = track_turn
         self.track_invader = track_invader
+        self.track_ceasefire = track_ceasefire
 
         # Load images
         self.images = []
@@ -102,6 +104,7 @@ class StateButton:
         return self.rect_symbol.collidepoint((mx, my))
 
     def draw(self):
+        """Draw button graphics (glow and symbol) only. Hover text is drawn separately."""
         # Depending on the state of the game and mouse interaction, blit the appropriate image
         if self.state.game:
             if self.active:
@@ -112,11 +115,6 @@ class StateButton:
                     else:
                         self.window.blit(self.image_glow_yellow, self.rect_glow.topleft)
                         self.window.blit(self.image_symbol_active_big, self.rect_symbol_big.topleft)
-                    mx, my = pygame.mouse.get_pos()
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.STATE_BUTTON_TEXT_SHIFT_Y -1)
-                    self.window.blit(self.text_surface_shadow_active, self.text_rect)
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.STATE_BUTTON_TEXT_SHIFT_Y)
-                    self.window.blit(self.text_surface_active, self.text_rect)
                 else:
                     self.window.blit(self.image_glow_black, self.rect_glow.topleft)
                     self.window.blit(self.image_symbol_active, self.rect_symbol.topleft)
@@ -128,14 +126,24 @@ class StateButton:
                     else:
                         self.window.blit(self.image_glow_white, self.rect_glow.topleft)
                         self.window.blit(self.image_symbol_passive_big, self.rect_symbol_big.topleft)
-                    mx, my = pygame.mouse.get_pos()
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.STATE_BUTTON_TEXT_SHIFT_Y -1)
-                    self.window.blit(self.text_surface_shadow_passive, self.text_rect)
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.STATE_BUTTON_TEXT_SHIFT_Y)
-                    self.window.blit(self.text_surface_passive, self.text_rect)
                 else:
                     self.window.blit(self.image_glow_black, self.rect_glow.topleft)
                     self.window.blit(self.image_symbol_passive, self.rect_symbol.topleft)
+    
+    def draw_hover_text(self):
+        """Draw hover text on top of all buttons."""
+        if self.state.game and self.hovered:
+            mx, my = pygame.mouse.get_pos()
+            if self.active:
+                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.STATE_BUTTON_TEXT_SHIFT_Y -1)
+                self.window.blit(self.text_surface_shadow_active, self.text_rect)
+                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.STATE_BUTTON_TEXT_SHIFT_Y)
+                self.window.blit(self.text_surface_active, self.text_rect)
+            else:
+                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.STATE_BUTTON_TEXT_SHIFT_Y -1)
+                self.window.blit(self.text_surface_shadow_passive, self.text_rect)
+                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.STATE_BUTTON_TEXT_SHIFT_Y)
+                self.window.blit(self.text_surface_passive, self.text_rect)
 
     def update(self, state):
         self.state = state
@@ -159,5 +167,11 @@ class StateButton:
                     self.active = False
                 else:
                     self.active = True
+
+            if self.track_ceasefire:
+                if self.state.game.ceasefire_active:
+                    self.active = True
+                else:
+                    self.active = False
 
             

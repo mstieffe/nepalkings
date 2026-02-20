@@ -451,6 +451,14 @@ class FieldScreen(SubScreen):
                 elif response == 'charge':
                     # Handle charge action
                     print(f"Charge action for {self.figure_detail_box.figure.name}")
+                elif response == 'disabled_charge_ceasefire':
+                    # Charge button clicked while disabled due to ceasefire
+                    self.make_dialogue_box(
+                        message="You cannot charge figures with battle spells during ceasefire.\n\nWait for the ceasefire to end.",
+                        actions=['ok'],
+                        icon="ceasefire_passive",
+                        title="Ceasefire Active"
+                    )
                 elif response == 'upgrade':
                     # Handle upgrade action - show confirmation dialogue with upgrade card image
                     upgrade_card = self.figure_detail_box.figure.upgrade_card
@@ -625,7 +633,8 @@ class FieldScreen(SubScreen):
             suit=selected_spell.suit,
             cards=cards_data,
             target_figure_id=target_figure.id,
-            counterable=selected_spell.counterable
+            counterable=selected_spell.counterable,
+            possible_during_ceasefire=selected_spell.possible_during_ceasefire
         )
         
         if result.get('success'):

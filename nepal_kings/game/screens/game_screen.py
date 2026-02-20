@@ -144,6 +144,21 @@ class GameScreen(Screen):
             track_invader = True
         ))
 
+        # Add ceasefire state button
+        self.game_buttons.append(StateButton(
+            self.window, 
+            'ceasefire_tracker', 
+            'ceasefire', 
+            settings.STATE_BUTTON_CEASEFIRE_X, 
+            settings.STATE_BUTTON_CEASEFIRE_Y, 
+            settings.STATE_BUTTON_SYMBOL_WIDTH, 
+            settings.STATE_BUTTON_GLOW_WIDTH, 
+            state=self.state, 
+            hover_text_active='ceasefire active - battles blocked!',
+            hover_text_passive='battles are allowed!',
+            track_ceasefire = True
+        ))
+
     def initialize_buttons(self):
         """Initialize buttons for the game screen, including hand and action buttons."""
         #self.game_buttons = []
@@ -257,6 +272,9 @@ class GameScreen(Screen):
         
         # Check for opponent turn notification (includes Forced Deal and Dump Cards details)
         self.check_opponent_turn_notification()
+        
+        # Check for ceasefire ended notification
+        self.check_ceasefire_ended_notification()
         
         # Check for Infinite Hammer mode activation
         self.check_infinite_hammer_activation()
@@ -560,6 +578,31 @@ class GameScreen(Screen):
         
         # Clear the notification
         self.state.game.pending_opponent_turn_summary = None
+    
+    def check_ceasefire_ended_notification(self):
+        """Check if ceasefire ended and show notification if needed."""
+        if not self.state.game or not self.state.game.pending_ceasefire_ended:
+            return
+        
+        # Load ceasefire passive icon
+        import os
+        icon_path = os.path.join('img', 'status_icons', 'ceasefire_passive.png')
+        images = []
+        if os.path.exists(icon_path):
+            ceasefire_img = pygame.image.load(icon_path)
+            images.append(ceasefire_img)
+        
+        # Show notification to both players
+        self.queue_or_show_notification({
+            'message': "Ceasefire has ended!\n\nBattles can now begin.",
+            'actions': ['ok'],
+            'images': images if images else None,
+            'icon': "info",
+            'title': "Ceasefire Ended"
+        })
+        
+        # Clear the notification
+        self.state.game.pending_ceasefire_ended = False
     
     def check_infinite_hammer_activation(self):
         """Check if Infinite Hammer spell was just activated and show initial dialogue."""

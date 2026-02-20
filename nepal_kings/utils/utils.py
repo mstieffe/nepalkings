@@ -223,19 +223,23 @@ class Button:
 
     def draw(self):
         """Draw the button, including the background, glow, and text."""
+        # Check if button is disabled
+        is_disabled = hasattr(self, 'disabled') and self.disabled
+        
         # Draw button background
         self.window.blit(self.button_image if not self.clicked else self.button_image_small, 
                          self.rect.topleft if not self.clicked else self.button_image_small.get_rect(center=self.rect.center).topleft)
 
-        # Draw glow based on button state
-        if self.hovered and self.clicked:
-            self.draw_glow("yellow")
-        elif self.hovered and not self.active:
-            self.draw_glow("white")
-        elif self.active:
-            self.draw_glow("orange")
+        # Draw glow based on button state (no glow if disabled)
+        if not is_disabled:
+            if self.hovered and self.clicked:
+                self.draw_glow("yellow")
+            elif self.hovered and not self.active:
+                self.draw_glow("white")
+            elif self.active:
+                self.draw_glow("orange")
 
-        # Draw text with appropriate size
+        # Draw text with appropriate size and color
         text_obj = (self.font_small if self.clicked else self.font).render(self.text, True, self.get_text_color())
         self.window.blit(text_obj, text_obj.get_rect(center=self.rect.center))
 
@@ -247,6 +251,10 @@ class Button:
 
     def get_text_color(self):
         """Return the appropriate text color based on the button state."""
+        # Check if button is disabled
+        if hasattr(self, 'disabled') and self.disabled:
+            return (100, 100, 100)  # Grey color for disabled state
+        
         if self.hovered:
             return settings.MENU_BUTTON_TEXT_COLOR_HOVERED
         elif self.active:
@@ -255,8 +263,15 @@ class Button:
 
     def update(self):
         """Update the button's state based on mouse interaction."""
-        self.hovered = self.collide()
-        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+        # Don't allow hover or click if button is disabled
+        is_disabled = hasattr(self, 'disabled') and self.disabled
+        
+        if is_disabled:
+            self.hovered = False
+            self.clicked = False
+        else:
+            self.hovered = self.collide()
+            self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
 
 
 class SubScreenButton:
@@ -381,16 +396,27 @@ class SubScreenButton:
 
     def get_text_color(self):
         """Return the appropriate text color based on the button state."""
+        # Check if button is disabled
+        if hasattr(self, 'disabled') and self.disabled:
+            return (100, 100, 100)  # Grey color for disabled state
+        
         if self.hovered:
-            return settings.SUB_SCREEN_BUTTON_TEXT_COLOR_HOVERED
+            return settings.MENU_BUTTON_TEXT_COLOR_HOVERED
         elif self.active:
-            return settings.SUB_SCREEN_BUTTON_TEXT_COLOR_ACTIVE
-        return settings.SUB_SCREEN_BUTTON_TEXT_COLOR_PASSIVE
+            return settings.MENU_BUTTON_TEXT_COLOR_ACTIVE
+        return settings.TEXT_COLOR_PASSIVE
 
     def update(self):
         """Update the button's state based on mouse interaction."""
-        self.hovered = self.collide()
-        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+        # Don't allow hover or click if button is disabled
+        is_disabled = hasattr(self, 'disabled') and self.disabled
+        
+        if is_disabled:
+            self.hovered = False
+            self.clicked = False
+        else:
+            self.hovered = self.collide()
+            self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
 
 class ControlButton(Button):
 

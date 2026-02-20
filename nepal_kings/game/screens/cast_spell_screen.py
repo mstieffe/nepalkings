@@ -86,7 +86,8 @@ class CastSpellScreen(SubScreen):
             suit=selected_spell.suit,
             cards=cards_data,
             target_figure_id=target_figure_id,
-            counterable=selected_spell.counterable
+            counterable=selected_spell.counterable,
+            possible_during_ceasefire=selected_spell.possible_during_ceasefire
         )
         
         if result.get('success'):
@@ -344,10 +345,18 @@ class CastSpellScreen(SubScreen):
         super().update(game)
         self.game = game
         
-        if self.game.turn:
-            self.confirm_button.disabled = False
-        else:
+        # Check if confirm button should be disabled
+        if not self.game.turn:
             self.confirm_button.disabled = True
+        elif self.scroll_text_list_shifter:
+            # Check if selected spell can be cast during ceasefire
+            selected_spell = self.scroll_text_list_shifter.get_current_selected()
+            if selected_spell and self.game.ceasefire_active and not selected_spell.possible_during_ceasefire:
+                self.confirm_button.disabled = True
+            else:
+                self.confirm_button.disabled = False
+        else:
+            self.confirm_button.disabled = False
         
         # Update icon states based on available cards
         self.update_spell_icon_states()
@@ -490,13 +499,32 @@ class CastSpellScreen(SubScreen):
                                 )
                     
                     elif self.confirm_button.collide() and self.confirm_button.disabled:
-                        # Inform user it's not their turn
-                        self.make_dialogue_box(
-                            message="You can only cast spells on your turn.",
-                            actions=['got it!'],
-                            icon="error",
-                            title="Not Your Turn"
-                        )
+                        # Check if disabled due to ceasefire or not being player's turn
+                        if self.scroll_text_list_shifter:
+                            selected_spell = self.scroll_text_list_shifter.get_current_selected()
+                            if selected_spell and self.game.ceasefire_active and not selected_spell.possible_during_ceasefire:
+                                self.make_dialogue_box(
+                                    message="This spell cannot be cast during ceasefire.\n\nWait for the ceasefire to end or cast a different spell.",
+                                    actions=['ok'],
+                                    icon="ceasefire_passive",
+                                    title="Ceasefire Active"
+                                )
+                            else:
+                                # Inform user it's not their turn
+                                self.make_dialogue_box(
+                                    message="You can only cast spells on your turn.",
+                                    actions=['got it!'],
+                                    icon="error",
+                                    title="Not Your Turn"
+                                )
+                        else:
+                            # Inform user it's not their turn
+                            self.make_dialogue_box(
+                                message="You can only cast spells on your turn.",
+                                actions=['got it!'],
+                                icon="error",
+                                title="Not Your Turn"
+                            )
     
     def get_spells_in_hand(self, spell_family):
         """

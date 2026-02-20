@@ -8,6 +8,42 @@ import server_settings as settings
 
 games = Blueprint('games', __name__)
 
+def _check_and_update_ceasefire(game):
+    """
+    Check if ceasefire should end and update game state accordingly.
+    Ceasefire lasts for 3 invader turns. Returns True if ceasefire ended this turn.
+    """
+    if not game.ceasefire_active:
+        return False
+    
+    # Get invader player
+    invader_player = Player.query.get(game.invader_player_id)
+    if not invader_player:
+        return False
+    
+    # Calculate how many invader turns have passed since ceasefire started
+    current_turn = settings.INITIAL_TURNS_INVADER - invader_player.turns_left
+    turns_since_start = current_turn - (game.ceasefire_start_turn or 0)
+    
+    print(f"[CEASEFIRE] Current turn: {current_turn}, Start turn: {game.ceasefire_start_turn}, Turns passed: {turns_since_start}")
+    
+    # Ceasefire ends after 3 invader turns
+    if turns_since_start >= 3:
+        print(f"[CEASEFIRE] Ceasefire ending (3 turns passed)")
+        game.ceasefire_active = False
+        game.ceasefire_start_turn = None
+        db.session.commit()
+        return True
+    
+    return False
+
+def _is_ceasefire_active(game_id):
+    """Check if ceasefire is currently active for a game."""
+    game = Game.query.get(game_id)
+    if not game:
+        return False
+    return game.ceasefire_active
+
 def _check_and_fill_minimum_cards(game, player):
     """
     Check if player has minimum required cards and auto-fill if needed.
@@ -542,10 +578,13 @@ def start_turn():
 
         print(f"[START_TURN] Turn check passed, calling _check_and_fill_minimum_cards")
         
+        # Check if ceasefire should end
+        ceasefire_ended = _check_and_update_ceasefire(game)
+        
         # Check and fill minimum cards
         fill_info = _check_and_fill_minimum_cards(game, player)
         
-        print(f"[START_TURN] Fill info: {fill_info}")
+        print(f"[START_TURN] Fill info: {fill_info}, Ceasefire ended: {ceasefire_ended}")
         
         # Get opponent's last turn summary (includes Forced Deal card details if applicable)
         opponent_turn_summary = _get_opponent_turn_summary(game, player_id)
@@ -553,7 +592,8 @@ def start_turn():
         return jsonify({
             'success': True,
             'auto_fill': fill_info,  # None if no fill needed, otherwise dict with fill details
-            'opponent_turn_summary': opponent_turn_summary  # Summary of what opponent did (includes Forced Deal cards)
+            'opponent_turn_summary': opponent_turn_summary,  # Summary of what opponent did (includes Forced Deal cards)
+            'ceasefire_ended': ceasefire_ended  # True if ceasefire just ended
         })
 
     except Exception as e:
@@ -580,13 +620,18 @@ def create_game():
             return jsonify({'success': False, 'message': 'One or both players do not exist'}), 400
 
         # Create a new Game instance
-        game = Game(current_round=1, invader_player_id=None)  # Initialize the round and invader
+        game = Game(
+            current_round=1, 
+            invader_player_id=None,
+            ceasefire_active=True,
+            ceasefire_start_turn=0
+        )
         db.session.add(game)
         db.session.commit()
 
-        # Create new Player instances for the users
-        player1 = Player(user_id=user1.id, game_id=game.id, turns_left=settings.INITIAL_TURNS, points=0)
-        player2 = Player(user_id=user2.id, game_id=game.id, turns_left=settings.INITIAL_TURNS, points=0)
+        # Create new Player instances for the users (start with defender turns)
+        player1 = Player(user_id=user1.id, game_id=game.id, turns_left=settings.INITIAL_TURNS_DEFENDER, points=0)
+        player2 = Player(user_id=user2.id, game_id=game.id, turns_left=settings.INITIAL_TURNS_DEFENDER, points=0)
         db.session.add(player1)
         db.session.add(player2)
         db.session.commit()
@@ -630,6 +675,8 @@ def create_game():
 
                 game.invader_player_id = player.id
                 game.turn_player_id = player.id
+                # Invader gets fewer turns than defender
+                player.turns_left = settings.INITIAL_TURNS_INVADER
 
             else:
                 print("Himalaya Maharaja")

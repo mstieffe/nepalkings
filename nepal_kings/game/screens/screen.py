@@ -113,10 +113,19 @@ class Screen:
             #self.logout_button.draw()
             #self.home_button.draw()
 
+        # Draw all button graphics first
         for button in self.game_buttons:
             button.draw()
         for button in self.menu_buttons:
             button.draw()
+        
+        # Draw all hover texts on top (for StateButtons)
+        for button in self.game_buttons:
+            if hasattr(button, 'draw_hover_text'):
+                button.draw_hover_text()
+        for button in self.menu_buttons:
+            if hasattr(button, 'draw_hover_text'):
+                button.draw_hover_text()
 
         if self.dialogue_box:
             self.dialogue_box.draw()  # Ensure the dialogue box is rendered on top of other elements

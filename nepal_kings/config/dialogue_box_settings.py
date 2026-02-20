@@ -28,4 +28,6 @@ DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT = {
     'loot': pygame.image.load('img/dialogue_box/icons/loot.png'),
     'figure': pygame.image.load('img/dialogue_box/icons/figure.png'),
     'magic': pygame.image.load('img/dialogue_box/icons/magic.png'),
+    'ceasefire_passive': pygame.image.load('img/status_icons/ceasefire_passive.png'),
+    'ceasefire_active': pygame.image.load('img/status_icons/ceasefire_active.png'),
 }

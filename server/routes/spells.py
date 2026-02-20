@@ -39,6 +39,7 @@ def cast_spell():
     cards = data.get('cards', [])
     target_figure_id = data.get('target_figure_id')
     counterable = data.get('counterable', False)
+    possible_during_ceasefire = data.get('possible_during_ceasefire', True)
     
     # Validate required fields
     if not all([player_id, game_id, spell_name, spell_type, spell_family_name, suit]):
@@ -54,6 +55,13 @@ def cast_spell():
     # Verify it's player's turn
     if game.turn_player_id != player_id:
         return jsonify({'success': False, 'message': 'Not your turn'}), 403
+    
+    # Check if spell can be cast during ceasefire
+    if not possible_during_ceasefire and game.ceasefire_active:
+        return jsonify({
+            'success': False, 
+            'message': f'Cannot cast {spell_name} during ceasefire'
+        }), 403
     
     try:
         # Validate and mark cards as used
@@ -604,6 +612,32 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
             except Exception as e:
                 print(f"[FILL UP TO 10] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
+                spell_effect['error'] = str(e)
+        
+        elif spell.spell_name == 'Ceasefire':
+            try:
+                # Activate ceasefire for 3 invader turns
+                invader_player = Player.query.get(game.invader_player_id)
+                if invader_player:
+                    # Calculate current invader turn
+                    from server_settings import INITIAL_TURNS_INVADER
+                    current_turn = INITIAL_TURNS_INVADER - invader_player.turns_left
+                    
+                    # Set ceasefire active and record start turn
+                    game.ceasefire_active = True
+                    game.ceasefire_start_turn = current_turn
+                    
+                    print(f"[CEASEFIRE SPELL] Activated at invader turn {current_turn}")
+                    
+                    spell_effect['effect'] = 'Ceasefire activated for 3 invader turns'
+                    spell_effect['ceasefire_activated'] = True
+                    spell_effect['start_turn'] = current_turn
+                else:
+                    spell_effect['effect'] = 'Failed to activate ceasefire: invader not found'
+                    spell_effect['error'] = 'Invader not found'
+            except Exception as e:
+                print(f"[CEASEFIRE SPELL] ERROR: {str(e)}")
+                spell_effect['effect'] = f'Failed to activate ceasefire: {str(e)}'
                 spell_effect['error'] = str(e)
         
         elif spell.spell_name == 'Dump Cards':

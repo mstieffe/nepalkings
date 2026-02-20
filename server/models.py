@@ -90,6 +90,10 @@ class Game(db.Model):
     invader_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # New field
     turn_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # New field
 
+    # Ceasefire tracking
+    ceasefire_active = db.Column(db.Boolean, nullable=False, default=True)  # Ceasefire starts active each round
+    ceasefire_start_turn = db.Column(db.Integer, nullable=True)  # Turn count when ceasefire started
+
     # Spell-related fields
     pending_spell_id = db.Column(db.Integer, db.ForeignKey('active_spell.id'), nullable=True)  # Spell waiting for counter
     battle_modifier = db.Column(db.JSON, nullable=True)  # Active battle modifications from tactics spells
@@ -108,6 +112,8 @@ class Game(db.Model):
             'current_round': self.current_round,
             'invader_player_id': self.invader_player_id,
             'turn_player_id': self.turn_player_id,
+            'ceasefire_active': self.ceasefire_active,
+            'ceasefire_start_turn': self.ceasefire_start_turn,
             'pending_spell_id': self.pending_spell_id,
             'battle_modifier': self.battle_modifier,
             'waiting_for_counter_player_id': self.waiting_for_counter_player_id,
