@@ -21,7 +21,7 @@ from game.components.spells.spell import Spell
 from game.components.cards.card import Card
 from config import settings
 from config.settings import SUITS_BLACK, SUITS_RED
-from itertools import combinations_with_replacement
+from itertools import combinations_with_replacement, product
 
 
 def generate_same_color_spell_variants(family, color_group, ranks, spell_name, **spell_kwargs):
@@ -41,8 +41,17 @@ def generate_same_color_spell_variants(family, color_group, ranks, spell_name, *
     suits = ['Hearts', 'Diamonds'] if color_group == 'red' else ['Spades', 'Clubs']
     spells = []
     
-    # Generate all combinations with replacement for the number of cards
-    for suit_combo in combinations_with_replacement(suits, len(ranks)):
+    # Use product to get all suit assignments (2^n combinations for n cards),
+    # then deduplicate for cases where ranks repeat (e.g., two 5s where order
+    # doesn't matter: 5♥5♦ == 5♦5♥)
+    seen = set()
+    for suit_combo in product(suits, repeat=len(ranks)):
+        # Canonical key: sorted (rank, suit) pairs to detect duplicates
+        card_key = tuple(sorted(zip(ranks, suit_combo)))
+        if card_key in seen:
+            continue
+        seen.add(card_key)
+        
         cards = [Card(rank, suit, get_card_value(rank)) for rank, suit in zip(ranks, suit_combo)]
         # Use the first suit as the primary suit for the spell
         primary_suit = suit_combo[0]
@@ -161,7 +170,7 @@ INVADER_SWAP_CONFIG = {
 CEASEFIRE_CONFIG = {
     "name": "Ceasefire",
     "type": "tactics",
-    "description": "Both players gain 3 additional turns without engaging in battle.",
+    "description": "Both players gain 3 additional turns without battle. Ceasefire period starts anew.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "ceasefire.png",
     "icon_gray_img": "ceasefire.png",

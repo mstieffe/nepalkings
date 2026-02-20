@@ -42,6 +42,17 @@ class CastSpellScreen(SubScreen):
         Cast the selected spell using the spell service.
         Maps dummy cards to real cards and sends to server.
         """
+        # Check if player is waiting for counter spell response
+        if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
+            if self.state.parent_screen.waiting_for_counter_response:
+                self.make_dialogue_box(
+                    message="You cannot cast a spell while waiting for opponent's response to your previous spell.",
+                    actions=['ok'],
+                    icon="error",
+                    title="Action Blocked"
+                )
+                return
+        
         # Map dummy cards in the spell to real cards in the player's hand
         real_cards = self.map_spell_cards_to_hand(selected_spell)
         
@@ -91,11 +102,19 @@ class CastSpellScreen(SubScreen):
         )
         
         if result.get('success'):
+            # Check if waiting for opponent to respond (counterable spell)
+            waiting_for_player_id = result.get('waiting_for_player_id')
+            if waiting_for_player_id:
+                # Store spell name in game_screen for waiting prompt
+                if hasattr(self.state, 'parent_screen') and self.state.parent_screen:
+                    self.state.parent_screen.pending_spell_name = selected_spell.name
+                self.state.subscreen = 'field'
+                return
+            
             # Update game state from server response
             if result.get('game'):
-                # You may need to refresh the Game object with the new data
-                # For now, just update via the existing update method
-                self.game.update()
+                # Update directly from returned game state (no extra server call)
+                self.game.update_from_dict(result['game'])
             
             # Show success message with drawn cards (if any)
             spell_effect = result.get('spell_effect', {})
@@ -177,10 +196,11 @@ class CastSpellScreen(SubScreen):
             
             if selected_spell.counterable:
                 dialogue_params = {
-                    'message': f"{selected_spell.name} cast! Waiting for opponent to counter...",
-                    'actions': ['ok'],
+                    'message': f"{selected_spell.name} cast! Exiting to field view...\n\nWaiting for opponent to respond.",
+                    'actions': [],  # No actions - auto-close
                     'icon': "magic",
-                    'title': "Spell Cast"
+                    'title': "Spell Cast",
+                    'auto_close_delay': 2000  # Auto-close after 2 seconds
                 }
                 if card_images:
                     dialogue_params['images'] = card_images
@@ -385,6 +405,41 @@ class CastSpellScreen(SubScreen):
         for button in self.spell_family_buttons:
             # Set active if this family has at least one castable spell
             button.is_active = button.family.name in castable_family_names
+        
+        # Refresh the spell list for the currently selected family
+        # so stale entries (e.g. cards consumed by a countered spell) disappear
+        if self.selected_spell_family and self.scroll_text_list_shifter:
+            castable_spells = self.get_spells_in_hand(self.selected_spell_family)
+            if castable_spells:
+                new_list = [
+                    {
+                        "title": spell.name,
+                        "text": spell.family.description,
+                        "cards": spell.cards,
+                        "spell_type": self.format_spell_type(spell.family.type),
+                        "counterable": spell.counterable,
+                        "ceasefire": spell.possible_during_ceasefire,
+                        "content": spell
+                    }
+                    for spell in castable_spells
+                ]
+            else:
+                # No castable spells left — show all variants with given/missing cards
+                new_list = []
+                for spell in self.selected_spell_family.spells:
+                    given_cards, missing_cards = self.get_given_and_missing_cards_for_spell(spell)
+                    new_list.append({
+                        "title": spell.name,
+                        "text": spell.family.description,
+                        "spell_type": self.format_spell_type(spell.family.type),
+                        "counterable": spell.counterable,
+                        "ceasefire": spell.possible_during_ceasefire,
+                        "cards": given_cards,
+                        "missing_cards": missing_cards,
+                        "content": None
+                    })
+            self.scroll_text_list = new_list
+            self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
 
     def handle_events(self, events):
         """Handle events for button interactions."""

@@ -326,6 +326,18 @@ class FieldScreen(SubScreen):
             elif response:
                 # Button clicked - process the response
                 if response == 'yes':
+                    # Check if player is waiting for counter spell response
+                    if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
+                        if self.state.parent_screen.waiting_for_counter_response:
+                            self.dialogue_box = None
+                            self.make_dialogue_box(
+                                message="You cannot pickup or upgrade figures while waiting for opponent's response to your spell.",
+                                actions=['ok'],
+                                icon="error",
+                                title="Action Blocked"
+                            )
+                            return
+                    
                     # Check which action is pending
                     if self.figure_pending_pickup:
                         # User confirmed pickup

@@ -19,6 +19,9 @@ from game.components.figures.figure_manager import FigureManager
 class GameScreen(Screen):
     def __init__(self, state):
         super().__init__(state)
+        
+        # Store reference to game_screen in state for button access
+        self.state.parent_screen = self
 
         # Initialize figure manager
         self.figure_manager = FigureManager()
@@ -49,6 +52,18 @@ class GameScreen(Screen):
         
         # Queue for pending notifications (to avoid overwriting active dialogue boxes)
         self.pending_notifications = []
+        
+        # Counter spell state
+        self.waiting_for_counter_response = False  # True when caster is waiting
+        self.need_to_respond_to_spell = False  # True when defender needs to respond
+        self.pending_spell_details = None  # Store spell details for counter
+        self.counter_spell_selector = None  # Active counter spell selector UI
+        self._cached_castable_spells = None  # Cached castable spells for current pending spell
+        self._pending_spell_fetch_ready = False  # Flag: background fetch completed
+        
+        # Pre-create SpellManager so spell images are loaded at startup, not on first counter-spell
+        from game.components.spells.spell_manager import SpellManager
+        self._cached_spell_manager = SpellManager()
     
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
@@ -265,7 +280,10 @@ class GameScreen(Screen):
             self.side_hand.deselect_all_cards()
             self.previous_subscreen = self.state.subscreen
         
-        self.state.game.update()
+        # Skip full server poll while defender is actively responding to counter spell
+        # (they don't need fresh data while deciding, and the poll blocks the UI)
+        if not self.need_to_respond_to_spell:
+            self.state.game.update()
         
         # Check for auto-fill notification
         self.check_auto_fill_notification()
@@ -278,6 +296,9 @@ class GameScreen(Screen):
         
         # Check for Infinite Hammer mode activation
         self.check_infinite_hammer_activation()
+        
+        # Check for pending counter spell state
+        self.check_counter_spell_state()
         
         self.main_hand.update(self.state.game)
         self.side_hand.update(self.state.game)
@@ -298,6 +319,171 @@ class GameScreen(Screen):
                 elem.update(self.state.game, families=self.figure_manager.families)
             else:
                 elem.update(self.state.game)
+    
+    def check_counter_spell_state(self):
+        """Check if player needs to respond to counter spell or is waiting for opponent."""
+        if not self.state.game:
+            return
+        
+        # Check if this player needs to respond to a counterable spell
+        if self.state.game.waiting_for_counter and not self.need_to_respond_to_spell:
+            # Player needs to respond - start background fetch (non-blocking)
+            self.need_to_respond_to_spell = True
+            self._fetch_pending_spell_async()
+        
+        # Show dialogue once background fetch completes (defender side)
+        if self._pending_spell_fetch_ready and self.need_to_respond_to_spell and not self.dialogue_box:
+            self._pending_spell_fetch_ready = False
+            self._show_counter_spell_dialogue()
+        
+        # Check if player is waiting for opponent's response (caster side)
+        if self.state.game.pending_spell_id and not self.state.game.waiting_for_counter and not self.waiting_for_counter_response:
+            # Player cast a counterable spell and is waiting
+            self.waiting_for_counter_response = True
+            
+            # Fetch spell name for display in background
+            self._fetch_pending_spell_async(is_caster=True)
+        
+        # Pick up caster spell name once fetch completes
+        if self._pending_spell_fetch_ready and self.waiting_for_counter_response:
+            self._pending_spell_fetch_ready = False
+            self.pending_spell_name = self.pending_spell_details.get('spell_name', 'your spell') if self.pending_spell_details else 'your spell'
+            # Persistent prompt will be drawn in render() - no dialogue box
+        
+        # Clear waiting state when spell is resolved
+        if not self.state.game.pending_spell_id:
+            if self.waiting_for_counter_response:
+                self.waiting_for_counter_response = False
+                # Show caster notification that spell was resolved
+                spell_name = self.pending_spell_name or 'Your spell'
+                # Check logs to determine if spell was allowed or countered
+                last_log = None
+                if self.state.game.log_entries:
+                    for log in reversed(self.state.game.log_entries):
+                        if log.get('type') in ('spell_allowed', 'spell_countered'):
+                            last_log = log
+                            break
+                
+                if last_log and last_log.get('type') == 'spell_countered':
+                    self.queue_or_show_notification({
+                        'message': f"{spell_name} was countered by your opponent!\n\nYour cards were consumed but the spell had no effect.\nYou keep your turn.",
+                        'actions': ['ok'],
+                        'icon': "error",
+                        'title': "Spell Countered"
+                    })
+                else:
+                    self.queue_or_show_notification({
+                        'message': f"{spell_name} was allowed by your opponent!\n\nThe spell has been executed successfully.",
+                        'actions': ['ok'],
+                        'icon': "magic",
+                        'title': "Spell Executed"
+                    })
+                self.pending_spell_name = None
+                self.pending_spell_details = None  # Clear cache when spell resolved
+                self._cached_castable_spells = None
+                self._pending_spell_fetch_ready = False
+            if self.need_to_respond_to_spell:
+                self.need_to_respond_to_spell = False
+                self.pending_spell_details = None  # Clear cache when spell resolved
+                self._cached_castable_spells = None
+                self._pending_spell_fetch_ready = False
+    
+    def _get_spell_manager(self):
+        """Get or create a cached SpellManager instance (avoids reloading images from disk)."""
+        if self._cached_spell_manager is None:
+            from game.components.spells.spell_manager import SpellManager
+            self._cached_spell_manager = SpellManager()
+        return self._cached_spell_manager
+    
+    def _fetch_pending_spell_async(self, is_caster=False):
+        """Fetch pending spell details in a background thread to avoid blocking the game loop."""
+        if self.pending_spell_details is not None:
+            # Already cached - signal ready immediately
+            self._pending_spell_fetch_ready = True
+            return
+        
+        if not self.state.game or not self.state.game.pending_spell_id:
+            return
+        
+        import threading
+        spell_id = self.state.game.pending_spell_id
+        
+        def _fetch():
+            import requests
+            try:
+                response = requests.get(
+                    f'{settings.SERVER_URL}/spells/get_pending_spell',
+                    params={'spell_id': spell_id},
+                    timeout=5
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    self.pending_spell_details = data.get('spell', {})
+                else:
+                    self.pending_spell_details = {}
+            except:
+                self.pending_spell_details = {}
+            
+            # Cache castable spells (SpellManager is already pre-loaded, so this is fast)
+            if not is_caster:
+                self._cache_castable_spells()
+            
+            # Signal that data is ready (picked up on next update cycle)
+            self._pending_spell_fetch_ready = True
+        
+        thread = threading.Thread(target=_fetch, daemon=True)
+        thread.start()
+    
+    def _cache_castable_spells(self):
+        """Compute and cache castable counter spells for the current pending spell."""
+        spell_data = self.pending_spell_details or {}
+        spell_family_name = spell_data.get('spell_family_name')
+        
+        if not spell_family_name:
+            self._cached_castable_spells = []
+            return
+        
+        main_hand_cards = self.main_hand.cards if hasattr(self, 'main_hand') else []
+        side_hand_cards = self.side_hand.cards if hasattr(self, 'side_hand') else []
+        all_cards = main_hand_cards + side_hand_cards
+        
+        spell_manager = self._get_spell_manager()
+        family = spell_manager.get_family_by_name(spell_family_name)
+        if family:
+            self._cached_castable_spells = [
+                spell for spell in spell_manager.find_castable_spells(all_cards)
+                if spell.family.name == spell_family_name
+            ]
+        else:
+            self._cached_castable_spells = []
+    
+    def _show_counter_spell_dialogue(self):
+        """Show dialogue asking player to counter or allow spell."""
+        if not self.state.game or not self.state.game.pending_spell_id:
+            return
+        
+        # Use cached spell data and castable spells (no network request, no image loading)
+        spell_data = self.pending_spell_details or {}
+        spell_name = spell_data.get('spell_name', 'a spell')
+        
+        # Use cached castable spells
+        castable_spells = self._cached_castable_spells or []
+        can_counter = len(castable_spells) > 0
+        
+        # Show appropriate dialogue based on whether player can counter
+        if can_counter:
+            message = f"Opponent cast {spell_name}!\n\nDo you want to counter it or allow it?"
+            actions = ['counter', 'allow']
+        else:
+            message = f"Opponent cast {spell_name}!\n\nYou don't have the cards to counter.\nYou must allow it."
+            actions = ['allow']
+        
+        self.make_dialogue_box(
+            message=message,
+            actions=actions,
+            icon="magic",
+            title="Counter Spell?" if can_counter else "Allow Spell"
+        )
     
     def check_auto_fill_notification(self):
         """Check for auto-fill notification and show dialogue if needed."""
@@ -676,6 +862,276 @@ class GameScreen(Screen):
             print(f"[INFINITE_HAMMER] Error ending mode: {str(e)}")
             self.state.set_msg(f"Error ending Infinite Hammer mode: {str(e)}")
     
+    def _handle_counter_spell_counter(self):
+        """Handle player choosing to counter the spell."""
+        if not self.state.game or not self.state.game.pending_spell_id:
+            return
+        
+        # Use cached pending spell details and castable spells (no network request, no image loading)
+        try:
+            spell_data = self.pending_spell_details or {}
+            spell_name = spell_data.get('spell_name', 'Unknown')
+            
+            # Use cached castable spells
+            castable_spells = self._cached_castable_spells or []
+            
+            if not castable_spells:
+                self.make_dialogue_box(
+                    message=f"You don't have the cards to counter {spell_name}.\nYou'll need to allow it.",
+                    actions=['allow'],
+                    icon="error",
+                    title="Cannot Counter"
+                )
+                # Don't clear need_to_respond_to_spell - dialogue will handle the response
+                return
+            
+            # Show counter spell selection
+            self._show_counter_spell_selection(castable_spells, spell_name)
+            
+        except Exception as e:
+            print(f"[COUNTER_SPELL] Error: {str(e)}")
+            self.make_dialogue_box(
+                message=f"Error loading counter spells: {str(e)}",
+                actions=['ok'],
+                icon="error",
+                title="Error"
+            )
+            self.need_to_respond_to_spell = False
+    
+    def _handle_counter_spell_allow(self):
+        """Handle player choosing to allow the spell."""
+        if not self.state.game or not self.state.game.pending_spell_id:
+            return
+        
+        from utils import spell_service
+        
+        result = spell_service.allow_spell(
+            player_id=self.state.game.player_id,
+            game_id=self.state.game.game_id,
+            pending_spell_id=self.state.game.pending_spell_id
+        )
+        
+        if result.get('success'):
+            self.need_to_respond_to_spell = False
+            
+            # Update game state directly from response (no server call needed)
+            if result.get('game'):
+                self.state.game.update_from_dict(result['game'])
+            
+            # Show spell effect result
+            spell_effect = result.get('spell_effect', {})
+            effect_message = spell_effect.get('effect', 'Spell executed successfully')
+            spell_name = spell_effect.get('spell_name', 'The spell')
+            
+            self.queue_or_show_notification({
+                'message': f"You allowed {spell_name}.\n\n{effect_message}\n\nYou did not lose a turn.",
+                'actions': ['ok'],
+                'icon': "magic",
+                'title': "Spell Allowed"
+            })
+        else:
+            self.need_to_respond_to_spell = False
+            self.queue_or_show_notification({
+                'message': f"Error: {result.get('message')}",
+                'actions': ['ok'],
+                'icon': "error",
+                'title': "Error"
+            })
+    
+    def _draw_counter_spell_waiting_prompt(self):
+        """Draw a prominent prompt indicating player is waiting for counter spell response."""
+        # Get spell name if available
+        spell_name = getattr(self, 'pending_spell_name', None) or 'your spell'
+        
+        # Create prompt text
+        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        prompt_text = f"WAITING FOR OPPONENT"
+        prompt_surface = target_prompt_font.render(prompt_text, True, (255, 200, 100))  # Orange
+        
+        # Create detail text
+        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        detail_text = f"You cast {spell_name}. Opponent can counter or allow it."
+        detail_surface = detail_font.render(detail_text, True, (255, 230, 150))  # Light orange
+        
+        # Create background box for better visibility
+        text_width = max(prompt_surface.get_width(), detail_surface.get_width())
+        text_height = prompt_surface.get_height() + detail_surface.get_height() + 10
+        padding = 20
+        
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+        
+        # Draw semi-transparent black background
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+        
+        # Draw orange border for emphasis
+        pygame.draw.rect(self.window, (255, 200, 100), box_rect, 4)
+        
+        # Draw main prompt text centered in box
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+        
+        # Draw detail text below
+        detail_x = box_rect.centerx - detail_surface.get_width() // 2
+        detail_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(detail_surface, (detail_x, detail_y))
+    
+    def _show_counter_spell_selection(self, castable_spells, target_spell_name):
+        """Show UI for selecting which counter spell to cast."""
+        from game.components.counter_spell_selector import CounterSpellSelector
+        from collections import Counter
+        
+        # Get player's actual playable hand from the Hand UI components
+        # These contain only the cards currently visible/playable in the hand
+        main_hand_cards = self.main_hand.cards if hasattr(self, 'main_hand') else []
+        side_hand_cards = self.side_hand.cards if hasattr(self, 'side_hand') else []
+        all_cards = main_hand_cards + side_hand_cards
+        
+        print(f"[COUNTER_SPELL_SELECTOR] Main hand cards count: {len(main_hand_cards)}")
+        print(f"[COUNTER_SPELL_SELECTOR] Side hand cards count: {len(side_hand_cards)}")
+        print(f"[COUNTER_SPELL_SELECTOR] Total playable cards: {len(all_cards)}")
+        print(f"[COUNTER_SPELL_SELECTOR] Main hand: {[(c.suit, c.rank) for c in main_hand_cards]}")
+        print(f"[COUNTER_SPELL_SELECTOR] Side hand: {[(c.suit, c.rank) for c in side_hand_cards]}")
+        
+        hand_counter = Counter((card.suit, card.rank) for card in all_cards)
+        
+        print(f"[COUNTER_SPELL_SELECTOR] Player hand: {dict(hand_counter)}")
+        print(f"[COUNTER_SPELL_SELECTOR] Input castable_spells count: {len(castable_spells)}")
+        
+        # Double-check each spell is actually castable with current hand
+        verified_spells = []
+        for spell in castable_spells:
+            spell_counter = Counter((card.suit, card.rank) for card in spell.cards)
+            can_cast = all(hand_counter[card_tuple] >= count 
+                          for card_tuple, count in spell_counter.items())
+            print(f"[COUNTER_SPELL_SELECTOR] Spell '{spell.name}' requires {dict(spell_counter)}, can_cast={can_cast}")
+            if can_cast:
+                verified_spells.append(spell)
+        
+        print(f"[COUNTER_SPELL_SELECTOR] Verified spells count: {len(verified_spells)}")
+        
+        if not verified_spells:
+            # No valid spells after verification - player cannot counter
+            print(f"[COUNTER_SPELL_SELECTOR] No verified spells found")
+            self.make_dialogue_box(
+                message=f"You don't have the cards to counter {target_spell_name}.\n\nYou'll need to allow it.",
+                actions=['allow'],
+                icon="error",
+                title="Cannot Counter"
+            )
+            # Don't clear need_to_respond_to_spell - dialogue will handle the response
+            return
+        
+        # Create spell selection options from all verified spells
+        spell_options = []
+        for spell in verified_spells:
+            cards_text = " + ".join([f"{card.rank}{card.suit[0]}" for card in spell.cards])
+            spell_options.append({
+                'label': f"{spell.name} ({cards_text})",
+                'spell': spell
+            })
+        
+        if len(spell_options) == 1:
+            # Only one option - cast it directly
+            self._cast_counter_spell(spell_options[0]['spell'])
+            return  # Exit after casting
+        else:
+            # Multiple options - show counter spell selector
+            selector_width = settings.get_x(0.35)
+            selector_height = settings.get_y(0.5)
+            selector_x = (settings.SCREEN_WIDTH - selector_width) // 2
+            selector_y = settings.get_y(0.25)
+            
+            self.counter_spell_selector = CounterSpellSelector(
+                self.window,
+                spell_options,
+                selector_x,
+                selector_y,
+                selector_width,
+                selector_height
+            )
+    
+    def _cast_counter_spell(self, spell):
+        """Cast the selected counter spell."""
+        from utils import spell_service
+        from collections import Counter
+        
+        # Get player's actual playable hand from the Hand UI components (same as in selector)
+        main_hand_cards = self.main_hand.cards if hasattr(self, 'main_hand') else []
+        side_hand_cards = self.side_hand.cards if hasattr(self, 'side_hand') else []
+        all_cards = main_hand_cards + side_hand_cards
+        
+        # Match spell template cards to actual cards in hand and build counter_cards list
+        spell_requirements = Counter((card.suit, card.rank) for card in spell.cards)
+        counter_cards = []
+        used_card_ids = []
+        
+        # For each required card, find matching card in hand
+        for (suit, rank), count in spell_requirements.items():
+            matching_cards = [c for c in all_cards if c.suit == suit and c.rank == rank and c.id not in used_card_ids]
+            if len(matching_cards) < count:
+                self.make_dialogue_box(
+                    message=f"Error: Not enough {rank} of {suit} cards in hand.",
+                    actions=['ok'],
+                    icon="error",
+                    title="Error"
+                )
+                self.need_to_respond_to_spell = False
+                return
+            # Take the required number of cards and build card dictionaries
+            for i in range(count):
+                card = matching_cards[i]
+                counter_cards.append({
+                    'id': card.id,
+                    'suit': card.suit,
+                    'rank': card.rank,
+                    'value': card.value
+                })
+                used_card_ids.append(card.id)
+        
+        result = spell_service.counter_spell(
+            player_id=self.state.game.player_id,
+            game_id=self.state.game.game_id,
+            pending_spell_id=self.state.game.pending_spell_id,
+            counter_spell_name=spell.name,
+            counter_spell_type=spell.family.type,
+            counter_spell_family_name=spell.family.name,
+            counter_cards=counter_cards
+        )
+        
+        if result.get('success'):
+            self.need_to_respond_to_spell = False
+            
+            # Update game state directly from response (no server call needed)
+            if result.get('game'):
+                self.state.game.update_from_dict(result['game'])
+            
+            # Show result
+            effect = result.get('effect', 'Spell countered!')
+            self.queue_or_show_notification({
+                'message': f"You countered with {spell.name}!\n\n{effect}\n\nYou did not lose a turn.",
+                'actions': ['ok'],
+                'icon': "magic",
+                'title': "Spell Countered"
+            })
+        else:
+            error_msg = result.get('message', 'Unknown error')
+            self.queue_or_show_notification({
+                'message': f"Failed to counter spell: {error_msg}",
+                'actions': ['ok'],
+                'icon': "error",
+                'title': "Error"
+            })
+            self.need_to_respond_to_spell = False
+    
     def _draw_infinite_hammer_prompt(self):
         """Draw a prominent prompt indicating Infinite Hammer mode is active."""
         # Create prompt text
@@ -856,6 +1312,21 @@ class GameScreen(Screen):
         # Draw Infinite Hammer mode prompt if active (appears on all subscreens)
         if self.state.game and self.state.game.infinite_hammer_active:
             self._draw_infinite_hammer_prompt()
+        
+        # Draw counter spell waiting prompt if active
+        if self.waiting_for_counter_response:
+            self._draw_counter_spell_waiting_prompt()
+        
+        # Draw counter spell selector on top of everything if active
+        if self.counter_spell_selector:
+            # Draw semi-transparent overlay
+            overlay = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+            overlay.set_alpha(180)
+            overlay.fill((0, 0, 0))
+            self.window.blit(overlay, (0, 0))
+            
+            # Draw selector
+            self.counter_spell_selector.draw()
 
         # Update the display
         pygame.display.update()
@@ -885,8 +1356,17 @@ class GameScreen(Screen):
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
             if response:
+                # Handle counter spell responses
+                if response == 'counter':
+                    self.dialogue_box = None  # Clear dialogue before calling handler
+                    self._handle_counter_spell_counter()
+                    return
+                elif response == 'allow':
+                    self.dialogue_box = None  # Clear dialogue before calling handler
+                    self._handle_counter_spell_allow()
+                    return
                 # Handle Infinite Hammer end confirmation
-                if response == 'yes' and self.state.game and self.state.game.infinite_hammer_active:
+                elif response == 'yes' and self.state.game and self.state.game.infinite_hammer_active:
                     self._end_infinite_hammer_mode()
                 self.dialogue_box = None  # Close dialogue box
                 # Show next queued notification if any
@@ -897,6 +1377,28 @@ class GameScreen(Screen):
         if self.state.game and self.state.game.infinite_hammer_active:
             if self._handle_infinite_hammer_esc(events):
                 return  # ESC was pressed, dialogue shown, block other events
+        
+        # Block actions for defender who needs to respond (dialogue will handle it)
+        if self.need_to_respond_to_spell:
+            # Defender should only interact with the dialogue or counter spell selector
+            # Handle counter spell selector events if active
+            if self.counter_spell_selector:
+                result = self.counter_spell_selector.handle_events(events)
+                if result == 'CANCEL':
+                    # Player cancelled - go back to counter/allow dialogue
+                    self.counter_spell_selector = None
+                    # Only show dialogue if there isn't one already
+                    if not self.dialogue_box:
+                        self._show_counter_spell_dialogue()
+                elif result:
+                    # Player selected a spell to counter with
+                    self.counter_spell_selector = None
+                    self._cast_counter_spell(result)
+            return
+        
+        # For caster waiting for response, allow view actions but show error for game actions
+        # This is handled by subscreens checking self.state.game.turn
+        # The waiting_for_counter_response flag will be checked in action handlers
         
         super().handle_events(events)
 
