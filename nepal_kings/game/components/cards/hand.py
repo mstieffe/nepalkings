@@ -376,7 +376,17 @@ class Hand:
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         for button in self.buttons:
                             if button.collide() and button.name == 'change_cards':
-                                self.handle_button_click()
+                                # Block card changes during Infinite Hammer mode
+                                if hasattr(self.game, 'infinite_hammer_active') and self.game.infinite_hammer_active:
+                                    self.dialogue_box = DialogueBox(
+                                        self.window,
+                                        title="Action Blocked",
+                                        message="You cannot change cards during Infinite Hammer mode.\n\nPress ESC to end the mode.",
+                                        actions=['ok'],
+                                        icon="error"
+                                    )
+                                else:
+                                    self.handle_button_click()
 
         # Handle slot events - only for the topmost card under the mouse
         # This prevents multiple overlapping cards from being selected

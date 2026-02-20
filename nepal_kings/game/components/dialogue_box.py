@@ -152,6 +152,9 @@ class DialogueBox:
             line_rect = line_surface.get_rect(center=(self.rect.centerx, line_y))
             self.window.blit(line_surface, line_rect)
 
+        # Calculate image_y position (needed for after_lines even if no images)
+        image_y = current_y + len(self.lines_surfaces) * (self.font.get_height() + settings.SMALL_SPACER_Y) + self.img_spacing
+
         # Draw scaled images horizontally
         if self.scaled_images or self.drawable_objects:
             # Calculate maximum available width for images (leave margin on sides)
@@ -165,8 +168,7 @@ class DialogueBox:
             # Calculate natural total width with normal spacing
             natural_total_width = sum(image_widths) + (num_images - 1) * settings.SMALL_SPACER_X
             
-            # Add spacing between text and drawable objects
-            image_y = current_y + len(self.lines_surfaces) * (self.font.get_height() + settings.SMALL_SPACER_Y) + self.img_spacing
+            # image_y already calculated above
             
             if natural_total_width <= max_images_width:
                 # Images fit normally - use natural spacing

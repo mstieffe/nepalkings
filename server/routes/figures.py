@@ -1,8 +1,18 @@
 from flask import Blueprint, request, jsonify
-from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, SideCard, LogEntry, User
+from sqlalchemy.orm.attributes import flag_modified
+from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, SideCard, LogEntry, User, ActiveSpell
 import server_settings as settings
 
 figures = Blueprint('figures', __name__)
+
+def _has_active_infinite_hammer(player_id, game_id):
+    """Check if player has an active Infinite Hammer spell."""
+    active_hammer = ActiveSpell.query.filter_by(
+        player_id=player_id,
+        game_id=game_id,
+        is_active=True
+    ).filter(ActiveSpell.spell_name.like('%Infinite Hammer%')).first()
+    return active_hammer is not None
 
 @figures.route('/create_figure', methods=['POST'])
 def create_figure():
@@ -72,13 +82,49 @@ def create_figure():
 
         # Update turns left for the player
         player = Player.query.get(player_id)
-        player.turns_left -= 1
+        
+        # Check if Infinite Hammer is active for this player
+        has_infinite_hammer = _has_active_infinite_hammer(player_id, game_id)
+        
+        if not has_infinite_hammer:
+            player.turns_left -= 1
+        
         db.session.commit()
 
-        # flip turn player id
+        # flip turn player id only if Infinite Hammer is not active
         game = Game.query.get(game_id)
-        if game.turn_player_id == player_id:
+        if not has_infinite_hammer and game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+        
+        # Track action for Infinite Hammer if active
+        if has_infinite_hammer:
+            # Expire session to ensure we get the latest ActiveSpell data
+            db.session.expire_all()
+            
+            from models import ActiveSpell
+            active_hammer = ActiveSpell.query.filter_by(
+                player_id=player_id,
+                game_id=game_id,
+                is_active=True
+            ).filter(ActiveSpell.spell_name.like('%Infinite Hammer%')).first()
+            
+            if active_hammer:
+                if not active_hammer.effect_data:
+                    active_hammer.effect_data = {'actions': []}
+                elif 'actions' not in active_hammer.effect_data:
+                    active_hammer.effect_data['actions'] = []
+                
+                action_desc = f"built a figure with {len(cards)} cards on {field or 'field'}"
+                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                active_hammer.effect_data['actions'].append({
+                    'type': 'build',
+                    'description': action_desc
+                })
+                # Mark field as modified for SQLAlchemy
+                flag_modified(active_hammer, 'effect_data')
+                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                db.session.commit()
 
         # Create log entry
         user = User.query.get(player.user_id)
@@ -149,10 +195,46 @@ def update_figure():
         if not player or not game:
             return jsonify({'success': False, 'message': 'Player or game not found'}), 404
 
-        player.turns_left -= 1
-        game.turn_player_id = (
-            game.players[0].id if game.players[0].id != player.id else game.players[1].id
-        )
+        # Check if Infinite Hammer is active for this player
+        has_infinite_hammer = _has_active_infinite_hammer(player.id, game.id)
+        
+        if not has_infinite_hammer:
+            player.turns_left -= 1
+        
+        if not has_infinite_hammer:
+            game.turn_player_id = (
+                game.players[0].id if game.players[0].id != player.id else game.players[1].id
+            )
+        
+        # Track action for Infinite Hammer if active
+        if has_infinite_hammer:
+            # Expire session to ensure we get the latest ActiveSpell data
+            db.session.expire_all()
+            
+            from models import ActiveSpell
+            active_hammer = ActiveSpell.query.filter_by(
+                player_id=player.id,
+                game_id=game.id,
+                is_active=True
+            ).filter(ActiveSpell.spell_name.like('%Infinite Hammer%')).first()
+            
+            if active_hammer:
+                if not active_hammer.effect_data:
+                    active_hammer.effect_data = {'actions': []}
+                elif 'actions' not in active_hammer.effect_data:
+                    active_hammer.effect_data['actions'] = []
+                
+                action_desc = f"upgraded a figure to {figure.upgrade_family_name}"
+                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                active_hammer.effect_data['actions'].append({
+                    'type': 'upgrade',
+                    'description': action_desc
+                })
+                # Mark field as modified for SQLAlchemy
+                flag_modified(active_hammer, 'effect_data')
+                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                db.session.commit()
 
         db.session.commit()
 
@@ -193,6 +275,9 @@ def get_figures():
             return jsonify({'success': False, 'message': 'Player ID is required'}), 400
 
         figures = Figure.query.filter_by(player_id=player_id).all()
+        print(f"[GET_FIGURES] Retrieved {len(figures)} figures for player {player_id}")
+        for fig in figures:
+            print(f"[GET_FIGURES] Figure: id={fig.id}, name={fig.name}, family={fig.family_name}")
         return jsonify({'success': True, 'figures': [figure.serialize() for figure in figures]})
 
     except Exception as e:
@@ -240,6 +325,9 @@ def delete_figure():
 
         db.session.flush()
 
+        # Store figure field before deleting
+        figure_field = figure.field if figure.field else 'field'
+
         # Delete the card associations and the figure itself
         CardToFigure.query.filter_by(figure_id=figure.id).delete()
         db.session.delete(figure)
@@ -247,14 +335,49 @@ def delete_figure():
 
         # Update turns left for the player
         player = Player.query.get(player_id)
-        player.turns_left -= 1
+        
+        # Check if Infinite Hammer is active for this player
+        has_infinite_hammer = _has_active_infinite_hammer(player_id, game_id)
+        
+        if not has_infinite_hammer:
+            player.turns_left -= 1
+        
         db.session.commit()
 
-        # flip turn player id
+        # flip turn player id only if Infinite Hammer is not active
         game = Game.query.get(game_id)
-        if game.turn_player_id == player_id:
+        if not has_infinite_hammer and game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
             db.session.commit()
+        
+        # Track action for Infinite Hammer if active
+        if has_infinite_hammer:
+            # Expire session to ensure we get the latest ActiveSpell data
+            db.session.expire_all()
+            
+            active_hammer = ActiveSpell.query.filter_by(
+                player_id=player_id,
+                game_id=game_id,
+                is_active=True
+            ).filter(ActiveSpell.spell_name.like('%Infinite Hammer%')).first()
+            
+            if active_hammer:
+                if not active_hammer.effect_data:
+                    active_hammer.effect_data = {'actions': []}
+                elif 'actions' not in active_hammer.effect_data:
+                    active_hammer.effect_data['actions'] = []
+                
+                action_desc = f"removed a figure from {figure_field}"
+                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                active_hammer.effect_data['actions'].append({
+                    'type': 'delete',
+                    'description': action_desc
+                })
+                # Mark field as modified for SQLAlchemy
+                flag_modified(active_hammer, 'effect_data')
+                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                db.session.commit()
 
         return jsonify({'success': True, 'message': 'Figure deleted successfully'})
 
@@ -311,28 +434,62 @@ def pickup_figure():
         db.session.delete(figure)
         db.session.flush()
 
+        # Calculate card count and field before using them
+        card_count = len(main_card_ids) + len(side_card_ids)
+        field_partition = figure.field if figure.field else 'field'
+
         # Update turns left for the player
         player = Player.query.get(player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
         
-        player.turns_left -= 1
+        # Check if Infinite Hammer is active for this player
+        has_infinite_hammer = _has_active_infinite_hammer(player_id, game_id)
         
-        # Get game and flip turn player id
+        if not has_infinite_hammer:
+            player.turns_left -= 1
+        
+        # Get game and flip turn player id only if Infinite Hammer is not active
         game = Game.query.get(game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
         
-        if game.turn_player_id == player_id:
+        if not has_infinite_hammer and game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+        
+        # Track action for Infinite Hammer if active
+        if has_infinite_hammer:
+            # Expire session to ensure we get the latest ActiveSpell data
+            db.session.expire_all()
+            
+            from models import ActiveSpell
+            active_hammer = ActiveSpell.query.filter_by(
+                player_id=player_id,
+                game_id=game_id,
+                is_active=True
+            ).filter(ActiveSpell.spell_name.like('%Infinite Hammer%')).first()
+            
+            if active_hammer:
+                if not active_hammer.effect_data:
+                    active_hammer.effect_data = {'actions': []}
+                elif 'actions' not in active_hammer.effect_data:
+                    active_hammer.effect_data['actions'] = []
+                
+                action_desc = f"picked up a figure with {card_count} cards from {field_partition}"
+                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                active_hammer.effect_data['actions'].append({
+                    'type': 'pickup',
+                    'description': action_desc
+                })
+                # Mark field as modified for SQLAlchemy
+                flag_modified(active_hammer, 'effect_data')
+                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                db.session.commit()
         
         # Create log entry
         user = User.query.get(player.user_id)
         username = user.username if user else f"Player {player_id}"
-        
-        # Count card associations (not unique cards) to handle duplicates correctly
-        card_count = len(main_card_ids) + len(side_card_ids)
-        field_partition = figure.field if figure.field else 'field'
         
         log_entry = LogEntry(
             game_id=game_id,
@@ -468,22 +625,31 @@ def upgrade_figure():
 
         db.session.flush()
 
+        # Serialize the new figure BEFORE expiring session for Infinite Hammer tracking
+        new_figure_serialized = new_figure.serialize()
+        print(f"[UPGRADE_FIGURE] Created new figure: id={new_figure.id}, name={new_figure_name}, player_id={player_id}")
+        print(f"[UPGRADE_FIGURE] Serialized: {new_figure_serialized}")
+
         # Update turns left for the player
         player = Player.query.get(player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
         
-        player.turns_left -= 1
+        # Check if Infinite Hammer is active for this player
+        has_infinite_hammer = _has_active_infinite_hammer(player_id, game_id)
         
-        # Get game and flip turn player id
+        if not has_infinite_hammer:
+            player.turns_left -= 1
+        
+        # Get game and flip turn player id only if Infinite Hammer is not active
         game = Game.query.get(game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
         
-        if game.turn_player_id == player_id:
+        if not has_infinite_hammer and game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
         
-        # Create log entry
+        # Create log entry BEFORE Infinite Hammer tracking
         user = User.query.get(player.user_id)
         username = user.username if user else f"Player {player_id}"
         
@@ -492,18 +658,51 @@ def upgrade_figure():
             player_id=player_id,
             round_number=game.current_round,
             turn_number=player.turns_left,
-            message=f"{username} upgraded a {figure_field} {old_figure.name} to {new_figure.name}.",
+            message=f"{username} upgraded a {figure_field} {old_figure_name} to {new_figure_name}.",
             author=username,
             type='figure_upgraded'
         )
         db.session.add(log_entry)
-
+        
+        # Commit everything BEFORE Infinite Hammer tracking to ensure new figure is in DB
         db.session.commit()
+        print(f"[UPGRADE_FIGURE] Committed new figure and log entry")
+        
+        # Track action for Infinite Hammer if active
+        if has_infinite_hammer:
+            # Expire session to ensure we get the latest ActiveSpell data
+            db.session.expire_all()
+            
+            from models import ActiveSpell
+            active_hammer = ActiveSpell.query.filter_by(
+                player_id=player_id,
+                game_id=game_id,
+                is_active=True
+            ).filter(ActiveSpell.spell_name.like('%Infinite Hammer%')).first()
+            
+            if active_hammer:
+                if not active_hammer.effect_data:
+                    active_hammer.effect_data = {'actions': []}
+                elif 'actions' not in active_hammer.effect_data:
+                    active_hammer.effect_data['actions'] = []
+                
+                action_desc = f"upgraded a {figure_field} {old_figure_name} to {new_figure_name}"
+                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                active_hammer.effect_data['actions'].append({
+                    'type': 'upgrade',
+                    'description': action_desc
+                })
+                # Mark field as modified for SQLAlchemy
+                flag_modified(active_hammer, 'effect_data')
+                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                db.session.commit()
+                print(f"[INFINITE_HAMMER] Committed action tracking")
 
         return jsonify({
             'success': True,
             'message': 'Figure upgraded successfully',
-            'new_figure': new_figure.serialize()
+            'new_figure': new_figure_serialized
         })
 
     except Exception as e:

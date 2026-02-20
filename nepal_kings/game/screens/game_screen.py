@@ -258,6 +258,9 @@ class GameScreen(Screen):
         # Check for opponent turn notification (includes Forced Deal and Dump Cards details)
         self.check_opponent_turn_notification()
         
+        # Check for Infinite Hammer mode activation
+        self.check_infinite_hammer_activation()
+        
         self.main_hand.update(self.state.game)
         self.side_hand.update(self.state.game)
         
@@ -507,6 +510,14 @@ class GameScreen(Screen):
                     spell_icon_img = pygame.image.load(spell_icon_path)
                     images.append(spell_icon_img)
             
+            # Load spell icon for infinite_hammer notification
+            elif action_type == 'infinite_hammer' and action.get('spell_icon'):
+                import os
+                spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon'))
+                if os.path.exists(spell_icon_path):
+                    spell_icon_img = pygame.image.load(spell_icon_path)
+                    images.append(spell_icon_img)
+            
             # Load action icon for build, upgrade, pickup, or card_change actions
             elif action.get('icon'):
                 import os
@@ -522,15 +533,19 @@ class GameScreen(Screen):
                 message_after = None
                 icon = "error"
             else:
-                # Split message into before and after icon parts
-                message = f"{opponent_name}'s turn:\n• {action_message}"
-                message_after = "\nIt's your turn now!"
+                # Split message: title before icon, details after icon
+                message = f"{opponent_name}'s turn:"
                 
-                # Add details if spell affects player (keep in first part)
+                # Build the message after icon
+                message_after = f"• {action_message}"
+                
+                # Add details if spell affects player
                 if action.get('affects_player'):
                     details = action.get('details', '')
                     if details:
-                        message += f"\n  > {details}"
+                        message_after += f"\n  > {details}"
+                
+                message_after += "\n\nIt's your turn now!"
                 
                 icon = "info"
             
@@ -545,6 +560,128 @@ class GameScreen(Screen):
         
         # Clear the notification
         self.state.game.pending_opponent_turn_summary = None
+    
+    def check_infinite_hammer_activation(self):
+        """Check if Infinite Hammer spell was just activated and show initial dialogue."""
+        if not self.state.game:
+            return
+        
+        # Check if Infinite Hammer just became active
+        is_active = self.state.game.check_infinite_hammer_active()
+        
+        if is_active and not self.state.game.infinite_hammer_dialogue_shown:
+            # Show initial dialogue explaining mode
+            self.queue_or_show_notification({
+                'message': "Infinite Hammer is now active!\n\nYou can build, upgrade, and pickup figures without ending your turn.\n\nCard changes and other spells are blocked.\n\nPress ESC when you're ready to end your turn.",
+                'actions': ['ok'],
+                'icon': "infinite_hammer",
+                'title': "Infinite Hammer Active"
+            })
+            
+            # Mark dialogue as shown and enable mode
+            self.state.game.infinite_hammer_dialogue_shown = True
+            self.state.game.infinite_hammer_active = True
+        elif not is_active and self.state.game.infinite_hammer_active:
+            # Spell is no longer active - clear client state
+            self.state.game.infinite_hammer_active = False
+            self.state.game.infinite_hammer_dialogue_shown = False
+    
+    def _handle_infinite_hammer_esc(self, events):
+        """Handle ESC key press during Infinite Hammer mode to prompt for turn end confirmation."""
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    # Show confirmation dialogue
+                    self.make_dialogue_box(
+                        message="Are you sure you want to end Infinite Hammer mode and pass your turn to your opponent?",
+                        actions=['yes', 'no'],
+                        icon="infinite_hammer",
+                        title="End Turn?"
+                    )
+                    return True
+        return False
+    
+    def _end_infinite_hammer_mode(self):
+        """End Infinite Hammer mode and send request to server to flip turn."""
+        try:
+            import requests
+            from config import settings
+            
+            response = requests.post(
+                f'{settings.SERVER_URL}/spells/end_infinite_hammer',
+                json={
+                    'game_id': self.state.game.game_id,
+                    'player_id': self.state.game.player_id
+                }
+            )
+            
+            if response.status_code == 200:
+                # Success - clear client state
+                self.state.game.infinite_hammer_active = False
+                self.state.game.infinite_hammer_dialogue_shown = False
+                
+                # Update game state to reflect turn flip
+                self.state.game.update()
+                
+                print(f"[INFINITE_HAMMER] Mode ended successfully")
+            else:
+                error_msg = response.json().get('message', 'Unknown error')
+                print(f"[INFINITE_HAMMER] Failed to end mode: {error_msg}")
+                self.state.set_msg(f"Error ending Infinite Hammer: {error_msg}")
+        
+        except Exception as e:
+            print(f"[INFINITE_HAMMER] Error ending mode: {str(e)}")
+            self.state.set_msg(f"Error ending Infinite Hammer mode: {str(e)}")
+    
+    def _draw_infinite_hammer_prompt(self):
+        """Draw a prominent prompt indicating Infinite Hammer mode is active."""
+        # Create prompt text
+        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
+        prompt_text = "INFINITE HAMMER MODE"
+        prompt_surface = target_prompt_font.render(prompt_text, True, (255, 215, 0))  # Gold
+        
+        # Create instruction text
+        cancel_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        instruction_text = "Build, upgrade, and pickup without ending turn • Press ESC to end turn"
+        instruction_surface = cancel_font.render(instruction_text, True, (255, 255, 150))  # Light yellow
+        
+        # Create background box for better visibility
+        text_width = max(prompt_surface.get_width(), instruction_surface.get_width())
+        text_height = prompt_surface.get_height() + instruction_surface.get_height() + 10
+        padding = 20
+        
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+        
+        # Draw semi-transparent black background
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+        
+        # Draw gold border for emphasis
+        pygame.draw.rect(self.window, (255, 215, 0), box_rect, 4)
+        
+        # Draw main prompt text centered in box
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+        
+        # Draw instruction text below
+        instruction_x = box_rect.centerx - instruction_surface.get_width() // 2
+        instruction_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(instruction_surface, (instruction_x, instruction_y))
+        
+        # Add pulsing effect to main prompt
+        pulse_alpha = int(128 + 127 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+        pulse_surface = prompt_surface.copy()
+        pulse_surface.set_alpha(pulse_alpha)
+        self.window.blit(pulse_surface, (text_x, text_y))
+    
     
     
     def _create_figure_from_data(self, figure_data, families):
@@ -672,6 +809,10 @@ class GameScreen(Screen):
             hasattr(self.subscreens[self.state.subscreen], 'dialogue_box') and
             self.subscreens[self.state.subscreen].dialogue_box):
             self.subscreens[self.state.subscreen].dialogue_box.draw()
+        
+        # Draw Infinite Hammer mode prompt if active (appears on all subscreens)
+        if self.state.game and self.state.game.infinite_hammer_active:
+            self._draw_infinite_hammer_prompt()
 
         # Update the display
         pygame.display.update()
@@ -701,10 +842,18 @@ class GameScreen(Screen):
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
             if response:
+                # Handle Infinite Hammer end confirmation
+                if response == 'yes' and self.state.game and self.state.game.infinite_hammer_active:
+                    self._end_infinite_hammer_mode()
                 self.dialogue_box = None  # Close dialogue box
                 # Show next queued notification if any
                 self.show_next_queued_notification()
                 return  # Don't process other events while dialogue is open
+        
+        # Check for ESC during Infinite Hammer mode (works across all subscreens)
+        if self.state.game and self.state.game.infinite_hammer_active:
+            if self._handle_infinite_hammer_esc(events):
+                return  # ESC was pressed, dialogue shown, block other events
         
         super().handle_events(events)
 
