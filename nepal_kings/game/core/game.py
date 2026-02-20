@@ -168,6 +168,61 @@ class Game:
         except Exception as e:
             print(f"An error occurred: {str(e)}")
 
+    def update_from_dict(self, game_dict):
+        """Update game state directly from a dictionary (e.g., from spell service response)."""
+        # Update game data
+        self.game_id = game_dict['id']
+        self.state = game_dict['state']
+        self.date = game_dict['date']
+        self.players = game_dict.get('players', [])
+        self.main_cards = game_dict.get('main_cards', [])
+        self.side_cards = game_dict.get('side_cards', [])
+        self.current_round = game_dict.get('current_round', 1)
+        self.invader_player_id = game_dict.get('invader_player_id')
+        self.turn_player_id = game_dict.get('turn_player_id')
+        
+        # Update ceasefire tracking
+        previous_ceasefire = self.ceasefire_active
+        self.ceasefire_active = game_dict.get('ceasefire_active', False)
+        self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
+        
+        # Detect ceasefire ending (transition from active to inactive)
+        if previous_ceasefire and not self.ceasefire_active:
+            print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
+            self.pending_ceasefire_ended = True
+
+        # Update spell-related state
+        self.pending_spell_id = game_dict.get('pending_spell_id')
+        self.battle_modifier = game_dict.get('battle_modifier')
+        self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
+        
+        # Check if we're waiting for this player to counter
+        if self.pending_spell_id and self.waiting_for_counter_player_id:
+            self.waiting_for_counter = (self.waiting_for_counter_player_id == self.player_id)
+        else:
+            self.waiting_for_counter = False
+            self.pending_spell = None
+
+        # Reinitialize current and opponent players
+        for player_dict in self.players:
+            if player_dict['id'] == self.player_id:
+                self.current_player = player_dict
+            else:
+                self.opponent_name = player_dict['username']
+                self.opponent_player = player_dict
+
+        # Update turn and invader status
+        previous_turn = self.turn
+        self.turn = True if self.turn_player_id == self.player_id else False
+        self.invader = True if self.invader_player_id == self.player_id else False
+        
+        # Update previous turn player for next check
+        self.previous_turn_player_id = self.turn_player_id
+
+        # Update logs and chats
+        self.update_logs()
+        self.update_chats()
+
     def _handle_start_turn(self):
         """Called when turn changes to current player. Checks and handles auto-fill."""
         try:

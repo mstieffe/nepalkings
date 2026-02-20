@@ -376,6 +376,17 @@ class Hand:
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         for button in self.buttons:
                             if button.collide() and button.name == 'change_cards':
+                                # Block card changes while waiting for counter spell response
+                                if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
+                                    if self.state.parent_screen.waiting_for_counter_response:
+                                        self.dialogue_box = DialogueBox(
+                                            self.window,
+                                            title="Action Blocked",
+                                            message="You cannot change cards while waiting for opponent's response to your spell.",
+                                            actions=['ok'],
+                                            icon="error"
+                                        )
+                                        continue
                                 # Block card changes during Infinite Hammer mode
                                 if hasattr(self.game, 'infinite_hammer_active') and self.game.infinite_hammer_active:
                                     self.dialogue_box = DialogueBox(

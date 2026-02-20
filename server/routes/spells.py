@@ -186,9 +186,8 @@ def counter_spell():
         return jsonify({'success': False, 'message': 'Not your turn to counter'}), 403
     
     try:
-        # Validate counter cards
-        counter_card_ids = [card['id'] for card in counter_cards]
-        if not _validate_and_mark_spell_cards(player_id, counter_card_ids):
+        # Validate counter cards (pass full card dicts, not just IDs)
+        if not _validate_and_mark_spell_cards(player_id, counter_cards):
             return jsonify({'success': False, 'message': 'Counter cards not available'}), 400
         
         # Cancel the original spell
@@ -209,20 +208,15 @@ def counter_spell():
         
         db.session.commit()
         
-        # End turn for the player who countered
-        player.turns_left -= 1
-        db.session.commit()
-        
-        # Flip turn player
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-            db.session.commit()
+        # Neither player loses a turn when a spell is countered
+        # Both players lose their cards but keep their turns
         
         return jsonify({
             'success': True,
-            'message': f'Spell countered with {counter_spell_name}',
+            'message': f'Spell countered with {counter_spell_name}. Both players lost cards but kept their turns.',
             'game': game.serialize(),
-            'original_spell_cancelled': True
+            'original_spell_cancelled': True,
+            'no_turn_lost': True
         }), 200
         
     except Exception as e:
@@ -282,22 +276,25 @@ def allow_spell():
             f"{player.serialize()['username']} allowed {pending_spell.spell_name}"
         )
         
+        # End the caster's turn (they used it to cast the spell)
+        caster.turns_left -= 1
+        
+        # Flip turn to other player
+        if game.turn_player_id == caster.id:
+            other_player = next((p for p in game.players if p.id != caster.id), None)
+            if other_player:
+                game.turn_player_id = other_player.id
+        
         db.session.commit()
         
-        # End turn for the player who allowed the spell
-        player.turns_left -= 1
-        db.session.commit()
-        
-        # Flip turn player
-        if game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-            db.session.commit()
+        # The defender does NOT lose a turn for allowing
         
         return jsonify({
             'success': True,
-            'message': f'{pending_spell.spell_name} executed',
+            'message': f'{pending_spell.spell_name} executed. Spell was allowed.',
             'game': game.serialize(),
-            'spell_effect': spell_effect
+            'spell_effect': spell_effect,
+            'no_turn_lost': True
         }), 200
         
     except Exception as e:
@@ -612,32 +609,6 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
             except Exception as e:
                 print(f"[FILL UP TO 10] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
-                spell_effect['error'] = str(e)
-        
-        elif spell.spell_name == 'Ceasefire':
-            try:
-                # Activate ceasefire for 3 invader turns
-                invader_player = Player.query.get(game.invader_player_id)
-                if invader_player:
-                    # Calculate current invader turn
-                    from server_settings import INITIAL_TURNS_INVADER
-                    current_turn = INITIAL_TURNS_INVADER - invader_player.turns_left
-                    
-                    # Set ceasefire active and record start turn
-                    game.ceasefire_active = True
-                    game.ceasefire_start_turn = current_turn
-                    
-                    print(f"[CEASEFIRE SPELL] Activated at invader turn {current_turn}")
-                    
-                    spell_effect['effect'] = 'Ceasefire activated for 3 invader turns'
-                    spell_effect['ceasefire_activated'] = True
-                    spell_effect['start_turn'] = current_turn
-                else:
-                    spell_effect['effect'] = 'Failed to activate ceasefire: invader not found'
-                    spell_effect['error'] = 'Invader not found'
-            except Exception as e:
-                print(f"[CEASEFIRE SPELL] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to activate ceasefire: {str(e)}'
                 spell_effect['error'] = str(e)
         
         elif spell.spell_name == 'Dump Cards':
@@ -956,6 +927,37 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
             'spell_id': spell.id,
             'effect_data': {}  # Spell-specific data
         }
+        
+        # Handle Ceasefire specifically
+        if spell.spell_name == 'Ceasefire':
+            try:
+                # Give both players 3 additional turns
+                invader_player = Player.query.get(game.invader_player_id)
+                defender_player = next((p for p in game.players if p.id != game.invader_player_id), None)
+                
+                if not invader_player or not defender_player:
+                    spell_effect['effect'] = 'Failed to activate ceasefire: player not found'
+                    spell_effect['error'] = 'Player not found'
+                else:
+                    # Add 3 turns to both players
+                    invader_player.turns_left += 3
+                    defender_player.turns_left += 3
+                    
+                    # Reset ceasefire to start of round state
+                    game.ceasefire_active = True
+                    game.ceasefire_start_turn = 0  # Reset as if round just started
+                    
+                    print(f"[CEASEFIRE SPELL] Both players gained 3 turns. Invader: {invader_player.turns_left}, Defender: {defender_player.turns_left}")
+                    
+                    spell_effect['effect'] = 'Both players gained 3 additional turns. Ceasefire restored.'
+                    spell_effect['ceasefire_activated'] = True
+                    spell_effect['invader_turns'] = invader_player.turns_left
+                    spell_effect['defender_turns'] = defender_player.turns_left
+            except Exception as e:
+                print(f"[CEASEFIRE SPELL] ERROR: {str(e)}")
+                spell_effect['effect'] = f'Failed to activate ceasefire: {str(e)}'
+                spell_effect['error'] = str(e)
+        
         # TODO: Implement civil war, peasant war, etc.
     
     print(f"[_EXECUTE_SPELL] Returning spell_effect: {spell_effect}")

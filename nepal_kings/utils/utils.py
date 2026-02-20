@@ -159,7 +159,8 @@ class GameButton:
 
             if self.hovered and pygame.mouse.get_pressed()[0]:
                 self.clicked = True
-                # Allow all subscreen changes during Infinite Hammer (cast button is blocked instead)
+                # Allow all subscreen changes (including during waiting for counter response)
+                # Action blocking happens at the action level, not screen access level
                 if self.subscreen_trigger:
                     self.state.subscreen = self.subscreen_trigger
                 if self.screen_trigger:

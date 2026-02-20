@@ -216,6 +216,18 @@ class BuildFigureScreen(SubScreen):
                 
                 print("Response:", response)
                 if response == 'yes':
+                    # Check if player is waiting for counter spell response
+                    if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
+                        if self.state.parent_screen.waiting_for_counter_response:
+                            self.dialogue_box = None
+                            self.make_dialogue_box(
+                                message="You cannot build a figure while waiting for opponent's response to your spell.",
+                                actions=['ok'],
+                                icon="error",
+                                title="Action Blocked"
+                            )
+                            return
+                    
                     print("Creating figure...")
                     self.create_figure_in_db(selected_figure)
 
