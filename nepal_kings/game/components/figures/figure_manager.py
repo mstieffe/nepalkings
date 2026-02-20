@@ -7,6 +7,9 @@ from game.components.cards.card import Card
 
 
 class FigureManager:
+    # Class-level cache for loaded images (shared across all instances)
+    _image_cache = {}
+    
     def __init__(self):
         self.families: Dict[str, FigureFamily] = {}
         self.figures: List[Figure] = []
@@ -33,8 +36,10 @@ class FigureManager:
         #self.categorize_all_figures()
 
     def load_image(self, path: str) -> pygame.Surface:
-        """Helper method to load an image."""
-        return pygame.image.load(path).convert_alpha()
+        """Helper method to load an image with caching."""
+        if path not in self._image_cache:
+            self._image_cache[path] = pygame.image.load(path).convert_alpha()
+        return self._image_cache[path]
 
     def add_figure_family(self, family: FigureFamily) -> None:
         """Add a figure family to the manager and categorize it."""

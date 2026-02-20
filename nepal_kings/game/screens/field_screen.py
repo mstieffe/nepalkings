@@ -253,10 +253,9 @@ class FieldScreen(SubScreen):
             all_opponent_figures.extend(figures)
         
         # Calculate resources for both self and opponent
+        # Use the cached figure_manager instead of creating a new one
         try:
-            from game.components.figures.figure_manager import FigureManager
-            figure_manager = FigureManager()
-            families = figure_manager.families
+            families = self.figure_manager.families
             resources_data = self.game.calculate_resources(families, is_opponent=False)
             opponent_resources_data = self.game.calculate_resources(families, is_opponent=True)
         except Exception as e:
@@ -398,11 +397,7 @@ class FieldScreen(SubScreen):
                                 # Success message
                                 print(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 self.state.set_msg(f"Upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
-                                # Clear icon cache to force regeneration
-                                print("[FIELD_SCREEN] Clearing icon cache after upgrade")
-                                self.icon_cache.clear()
-                                self.last_figure_ids.clear()
-                                # Refresh game state and reload figures to show the upgraded figure
+                                # Refresh game state and reload figures - load_figures() will handle cache updates
                                 self.game.update()
                                 self.load_figures()
                                 print(f"[FIELD_SCREEN] Figures reloaded after upgrade, count: {len(self.figures)}")
