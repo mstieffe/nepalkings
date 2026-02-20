@@ -141,6 +141,54 @@ def _get_opponent_turn_summary(game, current_player_id):
             }
         }
     
+    # Check if opponent ended Infinite Hammer mode this turn
+    infinite_hammer_log = LogEntry.query.filter(
+        LogEntry.game_id == game.id,
+        LogEntry.player_id == opponent.id,
+        LogEntry.round_number == game.current_round,
+        LogEntry.type == 'spell_end',
+        LogEntry.message.like('%Infinite Hammer%')
+    ).order_by(LogEntry.id.desc()).first()
+    
+    if infinite_hammer_log:
+        # Check if there are any more recent actions after the spell_end log
+        more_recent_action = LogEntry.query.filter(
+            LogEntry.game_id == game.id,
+            LogEntry.player_id == opponent.id,
+            LogEntry.round_number == game.current_round,
+            LogEntry.id > infinite_hammer_log.id,
+            LogEntry.type.in_(['figure_built', 'figure_upgraded', 'spell_cast', 'figure_pickup', 'card_changed'])
+        ).first()
+        
+        # Only show Infinite Hammer notification if it's the most recent action
+        if not more_recent_action:
+            import re
+            # Extract actions from message: "username ended Infinite Hammer mode after: action1, action2, action3."
+            print(f"[INFINITE_HAMMER] Log message: {infinite_hammer_log.message}")
+            match = re.search(r'ended Infinite Hammer mode after: (.+)\.', infinite_hammer_log.message)
+            if match:
+                actions_text = match.group(1)
+                print(f"[INFINITE_HAMMER] Extracted actions: {actions_text}")
+                return {
+                    'opponent_name': opponent.serialize()['username'],
+                    'action': {
+                        'type': 'infinite_hammer',
+                        'message': f'Cast Infinite Hammer and performed: {actions_text}',
+                        'spell_icon': 'infinite_hammer.png'
+                    }
+                }
+            else:
+                # No actions performed during Infinite Hammer
+                print(f"[INFINITE_HAMMER] No actions match found in message")
+                return {
+                    'opponent_name': opponent.serialize()['username'],
+                    'action': {
+                        'type': 'infinite_hammer',
+                        'message': f'Cast Infinite Hammer (no figures modified)',
+                        'spell_icon': 'infinite_hammer.png'
+                    }
+                }
+    
     recent_log = LogEntry.query.filter(
         LogEntry.game_id == game.id,
         LogEntry.player_id == opponent.id,

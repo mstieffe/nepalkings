@@ -398,6 +398,14 @@ class FieldScreen(SubScreen):
                                 # Success message
                                 print(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 self.state.set_msg(f"Upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
+                                # Clear icon cache to force regeneration
+                                print("[FIELD_SCREEN] Clearing icon cache after upgrade")
+                                self.icon_cache.clear()
+                                self.last_figure_ids.clear()
+                                # Refresh game state and reload figures to show the upgraded figure
+                                self.game.update()
+                                self.load_figures()
+                                print(f"[FIELD_SCREEN] Figures reloaded after upgrade, count: {len(self.figures)}")
                             else:
                                 # Show error message
                                 error_msg = result.get('message', 'Unknown error')
@@ -1072,7 +1080,6 @@ class FieldScreen(SubScreen):
 
         # Note: Figure detail box is drawn in game_screen.py to ensure it's on top of hand cards
         
-        # Draw target selection prompt LAST so it appears on top of everything
+        # Draw target selection prompt if in target selection mode
         if hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast:
             self._draw_target_selection_prompt()
-

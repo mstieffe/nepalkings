@@ -3,7 +3,7 @@ Server-side spell routes for handling spell casting, countering, and management.
 """
 
 from flask import Blueprint, request, jsonify
-from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure
+from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User
 from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
 
@@ -117,14 +117,16 @@ def cast_spell():
             
             db.session.commit()
             
-            # End turn for non-counterable spells
-            player.turns_left -= 1
-            db.session.commit()
-            
-            # Flip turn player
-            if game.turn_player_id == player_id:
-                game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+            # End turn for non-counterable spells (except Infinite Hammer)
+            # Infinite Hammer allows unlimited actions, so don't end turn
+            if 'Infinite Hammer' not in spell_name:
+                player.turns_left -= 1
                 db.session.commit()
+                
+                # Flip turn player
+                if game.turn_player_id == player_id:
+                    game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+                    db.session.commit()
             
             return jsonify({
                 'success': True,
@@ -380,6 +382,90 @@ def remove_spell_effect():
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': f'Error removing spell: {str(e)}'}), 500
+
+
+@spells.route('/end_infinite_hammer', methods=['POST'])
+def end_infinite_hammer():
+    """
+    End Infinite Hammer mode and flip the turn to the opponent.
+    
+    Request JSON:
+    {
+        "game_id": int,
+        "player_id": int
+    }
+    """
+    data = request.json
+    game_id = data.get('game_id')
+    player_id = data.get('player_id')
+    
+    if not game_id or not player_id:
+        return jsonify({'success': False, 'message': 'game_id and player_id required'}), 400
+    
+    try:
+        # Expire session to get the latest ActiveSpell data with all accumulated actions
+        db.session.expire_all()
+        
+        # Find the active Infinite Hammer spell for this player
+        active_hammer = ActiveSpell.query.filter_by(
+            player_id=player_id,
+            game_id=game_id,
+            is_active=True
+        ).filter(ActiveSpell.spell_name.like('%Infinite Hammer%')).first()
+        
+        if not active_hammer:
+            return jsonify({'success': False, 'message': 'No active Infinite Hammer found'}), 404
+        
+        # Get all accumulated actions BEFORE deactivating
+        actions = active_hammer.effect_data.get('actions', []) if active_hammer.effect_data else []
+        print(f"[END_INFINITE_HAMMER] Actions tracked: {actions}")
+        print(f"[END_INFINITE_HAMMER] Full effect_data: {active_hammer.effect_data}")
+        
+        # Deactivate the spell
+        active_hammer.is_active = False
+        
+        # Flip the turn to the opponent
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+        
+        if game.turn_player_id == player_id:
+            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
+        
+        # Create log entry
+        player = Player.query.get(player_id)
+        user = User.query.get(player.user_id)
+        username = user.username if user else f"Player {player_id}"
+        
+        # Build action summary for log
+        if actions:
+            action_descriptions = [action['description'] for action in actions]
+            action_summary = ", ".join(action_descriptions)
+            log_message = f"{username} ended Infinite Hammer mode after: {action_summary}."
+        else:
+            log_message = f"{username} ended Infinite Hammer mode."
+        
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left,
+            message=log_message,
+            author=username,
+            type='spell_end'
+        )
+        db.session.add(log_entry)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Infinite Hammer mode ended'
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Error ending Infinite Hammer: {str(e)}'}), 500
 
 
 # Helper functions

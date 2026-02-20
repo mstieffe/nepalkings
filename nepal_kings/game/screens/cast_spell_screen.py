@@ -186,18 +186,20 @@ class CastSpellScreen(SubScreen):
                 self.make_dialogue_box(**dialogue_params)
             else:
                 # For non-counterable spells, show cards if any
-                if card_images:
-                    self.make_dialogue_box(
-                        message=message_text,
-                        actions=['ok'],
-                        images=card_images,
-                        icon="magic",
-                        title="Spell Cast"
-                    )
-                else:
-                    self.make_dialogue_box(
-                        message=message_text,
-                        actions=['ok'],
+                # Skip success dialogue for Infinite Hammer (it has its own mode dialogue)
+                if 'Infinite Hammer' not in selected_spell.name:
+                    if card_images:
+                        self.make_dialogue_box(
+                            message=message_text,
+                            actions=['ok'],
+                            images=card_images,
+                            icon="magic",
+                            title="Spell Cast"
+                        )
+                    else:
+                        self.make_dialogue_box(
+                            message=message_text,
+                            actions=['ok'],
                         icon="magic",
                         title="Spell Cast"
                     )
@@ -461,7 +463,15 @@ class CastSpellScreen(SubScreen):
         for event in events:
                 if event.type == MOUSEBUTTONDOWN:
                     if self.confirm_button.collide() and not self.confirm_button.disabled:
-                        if self.scroll_text_list_shifter:
+                        # Block casting spells during Infinite Hammer mode
+                        if hasattr(self.game, 'infinite_hammer_active') and self.game.infinite_hammer_active:
+                            self.make_dialogue_box(
+                                message="You cannot cast spells during Infinite Hammer mode.\n\nPress ESC to end the mode.",
+                                actions=['ok'],
+                                icon="error",
+                                title="Action Blocked"
+                            )
+                        elif self.scroll_text_list_shifter:
                             selected_spell = self.scroll_text_list_shifter.get_current_selected()
                             if selected_spell:
                                 # Refresh game state before casting

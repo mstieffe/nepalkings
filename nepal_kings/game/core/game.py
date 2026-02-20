@@ -59,6 +59,10 @@ class Game:
         
         # Opponent turn summary notification (cleared after showing dialogue)
         self.pending_opponent_turn_summary = None
+        
+        # Infinite Hammer mode tracking
+        self.infinite_hammer_active = False
+        self.infinite_hammer_dialogue_shown = False
 
         # Initialize log entries and chat messages
         self.log_entries = []
@@ -403,6 +407,35 @@ class Game:
             
         except Exception as e:
             print(f"Error checking for All Seeing Eye: {str(e)}")
+            return False
+    
+    def check_infinite_hammer_active(self) -> bool:
+        """
+        Check if current player has an active "Infinite Hammer" spell.
+        This allows unlimited figure actions without ending turn.
+        
+        :return: True if current player has active Infinite Hammer spell, False otherwise
+        """
+        try:
+            from utils import spell_service
+            
+            # Fetch all active spells for this game
+            active_spells = spell_service.fetch_active_spells(self.game_id)
+            
+            # Check if current player has cast "Infinite Hammer"
+            if not self.player_id:
+                return False
+            
+            for spell_data in active_spells:
+                if (spell_data.get('spell_type') == 'enchantment' and
+                    'Infinite Hammer' in spell_data.get('spell_name', '') and
+                    spell_data.get('player_id') == self.player_id):
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"Error checking for Infinite Hammer: {str(e)}")
             return False
 
     def has_opponent_cast_all_seeing_eye(self) -> bool:
