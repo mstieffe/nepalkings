@@ -107,7 +107,8 @@ military_dict_list = [
                 number_card=Card(str(number), suit, number),
                 upgrade_card=Card("7", suit, 7),
                 upgrade_family_name="Elite Gorkha Warriors",
-                requires={'warrior_red': 1, 'food_red': int(number)}
+                requires={'warrior_red': 1, 'food_red': int(number)},
+                instant_charge=True  # Warriors charge instantly into battle
             )
             for number in NUMBER_CARDS
         ]
@@ -136,7 +137,8 @@ military_dict_list = [
                 family=family,
                 key_cards=[Card("A", suit, 3), Card("7", suit, 7)],
                 number_card=Card(str(number), suit, number),
-                requires={'warrior_red': 1, 'food_red': int(number), 'armor_red': 7}
+                requires={'warrior_red': 1, 'food_red': int(number), 'armor_red': 7},
+                instant_charge=True  # Elite Warriors charge instantly into battle
             )
             for number in NUMBER_CARDS
         ]
@@ -166,7 +168,9 @@ military_dict_list = [
                 key_cards=[Card("4", suit, 4), Card("5", suit, 5)],
                 number_card=Card("6", suit, 6),
                 requires={'warrior_black': 1, 'material_black': 6},
-                cannot_attack=True  # Walls are defensive and cannot attack
+                cannot_attack=True,  # Walls are defensive and cannot attack
+                cannot_defend=True,  # Walls cannot defend other figures
+                buffs_allies=True  # Walls provide buffs to allied figures under attack
             )
         ]
     },
@@ -195,7 +199,10 @@ military_dict_list = [
                 key_cards=[Card("4", suit, 4), Card("5", suit, 5)],
                 number_card=Card("6", suit, 6),
                 requires={'warrior_red': 1, 'material_red': 6},
-                rest_after_attack=True  # Cavalry needs rest after attacking
+                rest_after_attack=True,  # Cavalry needs rest after attacking
+                cannot_defend=True,  # Cavalry cannot defend other figures
+                instant_charge=True,  # Cavalry charges instantly into battle
+                cannot_be_blocked=True  # Cavalry cannot be blocked when advancing
             )
         ]
     },

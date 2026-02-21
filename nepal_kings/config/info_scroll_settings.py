@@ -54,6 +54,9 @@ SKILL_ICON_IMG_PATH_DICT = {
     'distance_attack': 'img/figures/state_icons/distance.png',
     'buffs_allies': 'img/figures/state_icons/ally_buff.png',
     'blocks_bonus': 'img/figures/state_icons/buff_removal.png',
+    'cannot_defend': 'img/figures/state_icons/cannot_defend.png',
+    'instant_charge': 'img/figures/state_icons/instant_charge.png',
+    'cannot_be_blocked': 'img/figures/state_icons/cannot_be_blocked.png',
 }
 
 # SCOREBORD SCROLL

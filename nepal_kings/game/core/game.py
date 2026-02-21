@@ -386,6 +386,9 @@ class Game:
                 distance_attack = matched_family_figure.distance_attack if matched_family_figure and hasattr(matched_family_figure, 'distance_attack') else False
                 buffs_allies = matched_family_figure.buffs_allies if matched_family_figure and hasattr(matched_family_figure, 'buffs_allies') else False
                 blocks_bonus = matched_family_figure.blocks_bonus if matched_family_figure and hasattr(matched_family_figure, 'blocks_bonus') else False
+                cannot_defend = matched_family_figure.cannot_defend if matched_family_figure and hasattr(matched_family_figure, 'cannot_defend') else False
+                instant_charge = matched_family_figure.instant_charge if matched_family_figure and hasattr(matched_family_figure, 'instant_charge') else False
+                cannot_be_blocked = matched_family_figure.cannot_be_blocked if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_blocked') else False
 
                 figure = Figure(
                     name=figure_data['name'],
@@ -407,6 +410,9 @@ class Game:
                     distance_attack=distance_attack,
                     buffs_allies=buffs_allies,
                     blocks_bonus=blocks_bonus,
+                    cannot_defend=cannot_defend,
+                    instant_charge=instant_charge,
+                    cannot_be_blocked=cannot_be_blocked,
                 )
                 figures.append(figure)
 

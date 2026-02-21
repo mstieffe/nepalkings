@@ -322,6 +322,9 @@ class BuildFigureScreen(SubScreen):
                                       "distance_attack": getattr(figure, 'distance_attack', False),
                                       "buffs_allies": getattr(figure, 'buffs_allies', False),
                                       "blocks_bonus": getattr(figure, 'blocks_bonus', False),
+                                      "cannot_defend": getattr(figure, 'cannot_defend', False),
+                                      "instant_charge": getattr(figure, 'instant_charge', False),
+                                      "cannot_be_blocked": getattr(figure, 'cannot_be_blocked', False),
                                       "cards": figure.cards,
                                       "content": figure}
                                      for figure in figures]
@@ -345,6 +348,9 @@ class BuildFigureScreen(SubScreen):
                     "distance_attack": getattr(figure, 'distance_attack', False),
                     "buffs_allies": getattr(figure, 'buffs_allies', False),
                     "blocks_bonus": getattr(figure, 'blocks_bonus', False),
+                    "cannot_defend": getattr(figure, 'cannot_defend', False),
+                    "instant_charge": getattr(figure, 'instant_charge', False),
+                    "cannot_be_blocked": getattr(figure, 'cannot_be_blocked', False),
                     "cards": self.get_given_cards(button.family, suit),
                     "missing_cards": self.get_missing_cards_converted_ZK(button.family, suit),
                     "content": None

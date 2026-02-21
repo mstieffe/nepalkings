@@ -35,9 +35,6 @@ class ScrollTextListShifter:
         
         # Load skill icons for figure attributes
         self.skill_icons = self._load_skill_icons()
-        
-        # Load skill icons for figure attributes
-        self.skill_icons = self._load_skill_icons()
 
         # Initialize text shifter states
         self.start_index = 0
@@ -114,21 +111,6 @@ class ScrollTextListShifter:
                 icons[icon_name] = pygame.transform.smoothscale(icon, (icon_size, icon_size))
             except Exception as e:
                 print(f"[SCROLL] Failed to load check icon {icon_name} from {path}: {e}")
-        
-        return icons
-    
-    def _load_skill_icons(self):
-        """Load and scale skill icons for combat attributes."""
-        icon_size = int(settings.FONT_SIZE_DETAIL * 1.0)  # Match font size
-        icons = {}
-        
-        if hasattr(settings, 'SKILL_ICON_IMG_PATH_DICT'):
-            for skill, path in settings.SKILL_ICON_IMG_PATH_DICT.items():
-                try:
-                    icon = pygame.image.load(path).convert_alpha()
-                    icons[skill] = pygame.transform.smoothscale(icon, (icon_size, icon_size))
-                except Exception as e:
-                    print(f"[SCROLL] Failed to load skill icon {skill} from {path}: {e}")
         
         return icons
     
@@ -434,6 +416,12 @@ class ScrollTextListShifter:
             skills_to_display.append(('buffs_allies', 'Buffs Allies'))
         if 'blocks_bonus' in text_dict and text_dict['blocks_bonus']:
             skills_to_display.append(('blocks_bonus', 'Blocks Bonus'))
+        if 'cannot_defend' in text_dict and text_dict['cannot_defend']:
+            skills_to_display.append(('cannot_defend', 'Cannot Defend'))
+        if 'instant_charge' in text_dict and text_dict['instant_charge']:
+            skills_to_display.append(('instant_charge', 'Instant Charge'))
+        if 'cannot_be_blocked' in text_dict and text_dict['cannot_be_blocked']:
+            skills_to_display.append(('cannot_be_blocked', 'Cannot Be Blocked'))
         
         if skills_to_display:
             # Draw divider line
@@ -452,11 +440,20 @@ class ScrollTextListShifter:
             self.window.blit(skills_label, skills_rect)
             y += skills_rect.height + blank_line_height * 0.4
             
-            # Draw skill icons and names
+            # Draw skill icons and names (max 2 per row)
             current_x = x + blank_line_height * 0.5
             icon_spacing = int(blank_line_height * 0.3)
+            skills_in_row = 0
+            row_height = 0
             
             for skill_key, skill_name in skills_to_display:
+                # Start a new row after every 2 skills
+                if skills_in_row >= 2:
+                    y += row_height + blank_line_height * 0.3
+                    current_x = x + blank_line_height * 0.5
+                    skills_in_row = 0
+                    row_height = 0
+                
                 # Draw icon if available
                 if skill_key in self.skill_icons:
                     icon = self.skill_icons[skill_key]
@@ -467,14 +464,20 @@ class ScrollTextListShifter:
                     skill_text = self.small_font.render(skill_name, True, settings.SCROLL_TEXT_COLOR)
                     self.window.blit(skill_text, (current_x, y + (icon.get_height() - skill_text.get_height()) // 2))
                     current_x += skill_text.get_width() + icon_spacing
+                    row_height = max(row_height, icon.get_height())
                 else:
                     # Fallback to text only
                     skill_text = self.small_font.render(f"• {skill_name}", True, settings.SCROLL_TEXT_COLOR)
                     self.window.blit(skill_text, (current_x, y))
                     current_x += skill_text.get_width() + icon_spacing
+                    row_height = max(row_height, skill_text.get_height())
+                
+                skills_in_row += 1
             
-            # Move y down by icon height
-            if self.skill_icons:
+            # Move y down by last row height
+            if row_height > 0:
+                y += row_height + blank_line_height * 0.4
+            elif self.skill_icons:
                 first_icon = list(self.skill_icons.values())[0]
                 y += first_icon.get_height() + blank_line_height * 0.4
             else:

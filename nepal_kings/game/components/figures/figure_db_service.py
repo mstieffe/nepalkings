@@ -215,6 +215,9 @@ class FigureDbService:
                 distance_attack=matched_family_figure.distance_attack if matched_family_figure else False,
                 buffs_allies=matched_family_figure.buffs_allies if matched_family_figure else False,
                 blocks_bonus=matched_family_figure.blocks_bonus if matched_family_figure else False,
+                cannot_defend=matched_family_figure.cannot_defend if matched_family_figure else False,
+                instant_charge=matched_family_figure.instant_charge if matched_family_figure else False,
+                cannot_be_blocked=matched_family_figure.cannot_be_blocked if matched_family_figure else False,
                 id=figure_data['id'],
                 player_id=figure_data.get('player_id'),
             )
