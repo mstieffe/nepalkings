@@ -79,7 +79,7 @@ def get_card_value(rank):
 CIVIL_WAR_CONFIG = {
     "name": "Civil War",
     "type": "tactics",
-    "description": "The upcoming battle is a civil war, where each player may choose two villagers of the same color to fight for them.",
+    "description": "The upcoming battle is a civil war, where each player may choose two villagers of the same color to fight for them. Turns left is set to 1 for both players.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "civil_war.png",
     "icon_gray_img": "civil_war.png",
@@ -103,7 +103,7 @@ CIVIL_WAR_CONFIG = {
 PEASANT_WAR_CONFIG = {
     "name": "Peasant War",
     "type": "tactics",
-    "description": "The upcoming battle is a peasant war, where only villagers can be selected for the battle.",
+    "description": "The upcoming battle is a peasant war, where only villagers can be selected for the battle. Turns left is set to 1 for both players.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "peasant_war.png",
     "icon_gray_img": "peasant_war.png",
@@ -126,7 +126,7 @@ PEASANT_WAR_CONFIG = {
 BLITZKRIEG_CONFIG = {
     "name": "Blitzkrieg",
     "type": "tactics",
-    "description": "The upcoming battle is a blitzkrieg, where the opponents battle figure is selected by you.",
+    "description": "The upcoming battle is a blitzkrieg, where the opponents battle figure is selected by you. Turns left is set to 1 for both players.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "blitzkrieg.png",
     "icon_gray_img": "blitzkrieg.png",
@@ -148,7 +148,7 @@ BLITZKRIEG_CONFIG = {
 INVADER_SWAP_CONFIG = {
     "name": "Invader Swap",
     "type": "tactics",
-    "description": "The role of invader and defender will be swapped for the upcoming battle.",
+    "description": "The role of invader and defender will be swapped. Turns left is set to 1 for both players.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "invader_swap.png",
     "icon_gray_img": "invader_swap.png",

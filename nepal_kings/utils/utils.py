@@ -28,11 +28,14 @@ class GameButton:
                  hover_text = '',
                  subscreen = None,
                  screen = None,
-                 track_turn = True):
+                 track_turn = True,
+                 locked = False):
         self.window = window
         self.name = name
         self.x = x
         self.y = y
+        self.locked = locked
+        self.locked_clicked = False
         self.glow_shift = glow_shift if glow_shift is not None else settings.GAME_BUTTON_GLOW_SHIFT
         self.font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
         self.state = state
@@ -117,7 +120,20 @@ class GameButton:
         # Depending on the state of the game and mouse interaction, blit the appropriate image
         if self.state.game:
             self.window.blit(self.image_stone, self.rect_stone.topleft)
-            if self.state.game.turn or not self.track_turn:
+            if self.locked:
+                # Locked buttons show passive icon but still show hover text
+                if self.hovered:
+                    self.window.blit(self.image_glow_white, self.rect_glow.topleft)
+                    self.window.blit(self.image_symbol_passive_big, self.rect_symbol_big.topleft)
+                    mx, my = pygame.mouse.get_pos()
+                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.GAME_BUTTON_TEXT_SHIFT_Y -1)
+                    self.window.blit(self.text_surface_shadow, self.text_rect)
+                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.GAME_BUTTON_TEXT_SHIFT_Y)
+                    self.window.blit(self.text_surface_passive, self.text_rect)
+                else:
+                    self.window.blit(self.image_glow_black, self.rect_glow.topleft)
+                    self.window.blit(self.image_symbol_passive, self.rect_symbol.topleft)
+            elif self.state.game.turn or not self.track_turn:
                 if self.hovered:
                     if self.clicked:
                         self.window.blit(self.image_glow_orange_big, self.rect_glow_big.topleft)
@@ -153,8 +169,16 @@ class GameButton:
     def update(self, state):
         self.state = state
         if self.state.game:
-            #self.game = self.state.game
-            #self.game = state.game
+            # Locked buttons track hover and click but don't trigger screen changes
+            if self.locked:
+                self.hovered = self.collide()
+                if self.hovered and pygame.mouse.get_pressed()[0]:
+                    self.locked_clicked = True
+                else:
+                    self.locked_clicked = False
+                self.clicked = False
+                return
+            
             self.hovered = self.collide()
 
             if self.hovered and pygame.mouse.get_pressed()[0]:

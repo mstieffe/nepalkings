@@ -6,6 +6,7 @@ from flask import Blueprint, request, jsonify
 from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User
 from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
+from sqlalchemy.orm.attributes import flag_modified
 
 spells = Blueprint('spells', __name__)
 
@@ -62,6 +63,17 @@ def cast_spell():
             'success': False, 
             'message': f'Cannot cast {spell_name} during ceasefire'
         }), 403
+    
+    # Check for duplicate battle modifier (Civil War, Peasant War, Blitzkrieg can only be cast once per round)
+    if spell_name in ('Civil War', 'Peasant War', 'Blitzkrieg'):
+        existing_modifiers = game.battle_modifier or []
+        if isinstance(existing_modifiers, list):
+            for mod in existing_modifiers:
+                if mod.get('type') == spell_name:
+                    return jsonify({
+                        'success': False,
+                        'message': f'{spell_name} is already active this round. Each battle modifier can only be cast once per round.'
+                    }), 403
     
     try:
         # Validate and mark cards as used
@@ -277,7 +289,10 @@ def allow_spell():
         )
         
         # End the caster's turn (they used it to cast the spell)
-        caster.turns_left -= 1
+        # Some spells (e.g., Invader Swap, battle modifiers) explicitly set turns_left
+        # and should not have it decremented again
+        if not spell_effect.get('sets_turns'):
+            caster.turns_left -= 1
         
         # Flip turn to other player
         if game.turn_player_id == caster.id:
@@ -920,13 +935,8 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
             spell_effect['error'] = 'Missing target'
         
     elif spell.spell_type == 'tactics':
-        # Battle modification spells
+        # Battle modification spells (stackable - battle_modifier is a list)
         spell_effect['effect'] = 'Battle modifier set'
-        game.battle_modifier = {
-            'type': spell.spell_name,
-            'spell_id': spell.id,
-            'effect_data': {}  # Spell-specific data
-        }
         
         # Handle Ceasefire specifically
         if spell.spell_name == 'Ceasefire':
@@ -958,7 +968,87 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 spell_effect['effect'] = f'Failed to activate ceasefire: {str(e)}'
                 spell_effect['error'] = str(e)
         
-        # TODO: Implement civil war, peasant war, etc.
+        elif spell.spell_name == 'Invader Swap':
+            try:
+                old_invader_id = game.invader_player_id
+                new_invader = next((p for p in game.players if p.id != old_invader_id), None)
+                
+                if not new_invader:
+                    spell_effect['effect'] = 'Failed to swap invader: opponent not found'
+                    spell_effect['error'] = 'Player not found'
+                else:
+                    old_invader = Player.query.get(old_invader_id)
+                    old_invader_name = old_invader.serialize()['username'] if old_invader else 'Unknown'
+                    new_invader_name = new_invader.serialize()['username']
+                    
+                    # Swap invader
+                    game.invader_player_id = new_invader.id
+                    
+                    # Set both players' turns left to 1
+                    old_invader.turns_left = 1
+                    new_invader.turns_left = 1
+                    
+                    print(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
+                    print(f"[INVADER SWAP] Both players' turns_left set to 1")
+                    
+                    spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 1 turn left.'
+                    spell_effect['sets_turns'] = True
+                    spell_effect['old_invader_id'] = old_invader_id
+                    spell_effect['new_invader_id'] = new_invader.id
+                    spell_effect['invader_swapped'] = True
+            except Exception as e:
+                print(f"[INVADER SWAP] ERROR: {str(e)}")
+                spell_effect['effect'] = f'Failed to swap invader: {str(e)}'
+                spell_effect['error'] = str(e)
+        
+        elif spell.spell_name in ('Civil War', 'Peasant War', 'Blitzkrieg'):
+            try:
+                invader_player = Player.query.get(game.invader_player_id)
+                defender_player = next((p for p in game.players if p.id != game.invader_player_id), None)
+                
+                if not invader_player or not defender_player:
+                    spell_effect['effect'] = f'Failed to activate {spell.spell_name}: player not found'
+                    spell_effect['error'] = 'Player not found'
+                else:
+                    caster_name = caster.serialize()['username']
+                    
+                    # Set both players' turns left to 1
+                    invader_player.turns_left = 1
+                    defender_player.turns_left = 1
+                    
+                    # Initialize battle_modifier as list if needed (stackable modifiers)
+                    if not isinstance(game.battle_modifier, list):
+                        game.battle_modifier = []
+                    
+                    # Append this modifier (non-exclusive: can stack with others)
+                    game.battle_modifier.append({
+                        'type': spell.spell_name,
+                        'spell_id': spell.id,
+                        'caster_id': caster.id,
+                        'caster_name': caster_name
+                    })
+                    
+                    # Spell-specific descriptions
+                    descriptions = {
+                        'Civil War': 'Each player selects two villagers of the same color for battle.',
+                        'Peasant War': 'Only villagers can be selected for the upcoming battle.',
+                        'Blitzkrieg': "The opponent's battle figure is selected by the caster."
+                    }
+                    
+                    spell_effect['effect'] = f'{spell.spell_name} activated by {caster_name}! {descriptions[spell.spell_name]} Both players have 1 turn left.'
+                    spell_effect['battle_modifier_added'] = spell.spell_name
+                    spell_effect['caster_name'] = caster_name
+                    spell_effect['sets_turns'] = True
+                    
+                    # Signal SQLAlchemy that the JSON column was mutated in place
+                    flag_modified(game, 'battle_modifier')
+                    
+                    print(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 1.")
+                    print(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
+            except Exception as e:
+                print(f"[{spell.spell_name.upper()}] ERROR: {str(e)}")
+                spell_effect['effect'] = f'Failed to activate {spell.spell_name}: {str(e)}'
+                spell_effect['error'] = str(e)
     
     print(f"[_EXECUTE_SPELL] Returning spell_effect: {spell_effect}")
     return spell_effect
