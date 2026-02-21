@@ -13,6 +13,8 @@ from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.log_screen import LogScreen
 from game.screens.field_screen import FieldScreen
 from game.screens.cast_spell_screen import CastSpellScreen
+from game.screens.tutorial_screen import TutorialScreen
+from game.screens.battle_screen import BattleScreen
 from game.components.figures.figure_manager import FigureManager
 
 
@@ -45,6 +47,8 @@ class GameScreen(Screen):
             'build_figure': BuildFigureScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Figure Builder'),
             'cast_spell': CastSpellScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Spell Book'),
             'log': LogScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Log-Book'),
+            'tutorial': TutorialScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Tutorial'),
+            'battle': BattleScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Arena'),
         }
         
         # Track previous subscreen to detect changes
@@ -64,6 +68,13 @@ class GameScreen(Screen):
         # Pre-create SpellManager so spell images are loaded at startup, not on first counter-spell
         from game.components.spells.spell_manager import SpellManager
         self._cached_spell_manager = SpellManager()
+        
+        # Battle modifier icon cache (loaded once at init)
+        self._battle_modifier_icons = {}
+        self._load_battle_modifier_icons()
+        self._previous_battle_modifiers = []  # Track for change detection / notifications
+        self._hovered_battle_modifier = None  # Index of currently hovered modifier (or None)
+        self._battle_modifier_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
     
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
@@ -250,6 +261,46 @@ class GameScreen(Screen):
         )
         self.game_buttons.append(field_button)
 
+        # Tutorial button (switches to the tutorial subscreen)
+        tutorial_button = GameButton(
+            self.window, 
+            'view_tutorial',
+            'tutorial', 
+            'plain',
+            settings.TUTORIAL_BUTTON_X, settings.TUTORIAL_BUTTON_Y,
+            settings.TUTORIAL_BUTTON_WIDTH,
+            settings.TUTORIAL_BUTTON_WIDTH,
+            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.TUTORIAL_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='tutorial!',
+            subscreen='tutorial',
+            track_turn = False
+        )
+        self.game_buttons.append(tutorial_button)
+
+        # Battle button (switches to the battle subscreen)
+        # Inactive during normal round, only becomes active in battle phase
+        self.battle_button = GameButton(
+            self.window, 
+            'view_battle',
+            'battle', 
+            'plain',
+            settings.BATTLE_BUTTON_X, settings.BATTLE_BUTTON_Y,
+            settings.BATTLE_BUTTON_WIDTH,
+            settings.BATTLE_BUTTON_WIDTH,
+            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.BATTLE_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='battle!',
+            subscreen='battle',
+            track_turn = False,
+            locked = True  # Locked until battle phase starts
+        )
+        self.game_buttons.append(self.battle_button)
+
         home_button = GameButton(
             self.window, 
             'home',
@@ -348,6 +399,7 @@ class GameScreen(Screen):
         if self._pending_spell_fetch_ready and self.waiting_for_counter_response:
             self._pending_spell_fetch_ready = False
             self.pending_spell_name = self.pending_spell_details.get('spell_name', 'your spell') if self.pending_spell_details else 'your spell'
+            self.pending_spell_family_name = self.pending_spell_details.get('spell_family_name', self.pending_spell_name) if self.pending_spell_details else self.pending_spell_name
             # Persistent prompt will be drawn in render() - no dialogue box
         
         # Clear waiting state when spell is resolved
@@ -364,10 +416,14 @@ class GameScreen(Screen):
                             last_log = log
                             break
                 
+                spell_family = getattr(self, 'pending_spell_family_name', spell_name)
+                spell_images = self._get_spell_icon_image(spell_family)
+                
                 if last_log and last_log.get('type') == 'spell_countered':
                     self.queue_or_show_notification({
                         'message': f"{spell_name} was countered by your opponent!\n\nYour cards were consumed but the spell had no effect.\nYou keep your turn.",
                         'actions': ['ok'],
+                        'images': spell_images,
                         'icon': "error",
                         'title': "Spell Countered"
                     })
@@ -375,10 +431,12 @@ class GameScreen(Screen):
                     self.queue_or_show_notification({
                         'message': f"{spell_name} was allowed by your opponent!\n\nThe spell has been executed successfully.",
                         'actions': ['ok'],
+                        'images': spell_images,
                         'icon': "magic",
                         'title': "Spell Executed"
                     })
                 self.pending_spell_name = None
+                self.pending_spell_family_name = None
                 self.pending_spell_details = None  # Clear cache when spell resolved
                 self._cached_castable_spells = None
                 self._pending_spell_fetch_ready = False
@@ -394,6 +452,14 @@ class GameScreen(Screen):
             from game.components.spells.spell_manager import SpellManager
             self._cached_spell_manager = SpellManager()
         return self._cached_spell_manager
+    
+    def _get_spell_icon_image(self, spell_name):
+        """Get a spell's icon image from the cached SpellManager. Returns list with icon or empty list."""
+        spell_manager = self._get_spell_manager()
+        family = spell_manager.get_family_by_name(spell_name)
+        if family and family.icon_img:
+            return [family.icon_img]
+        return []
     
     def _fetch_pending_spell_async(self, is_caster=False):
         """Fetch pending spell details in a background thread to avoid blocking the game loop."""
@@ -457,6 +523,134 @@ class GameScreen(Screen):
         else:
             self._cached_castable_spells = []
     
+    def _load_battle_modifier_icons(self):
+        """Pre-load battle modifier icons at startup."""
+        import os
+        icon_dir = settings.SPELL_ICON_IMG_DIR
+        icon_size = settings.BATTLE_MODIFIER_ICON_SIZE
+        modifier_types = {
+            'Civil War': 'civil_war.png',
+            'Peasant War': 'peasant_war.png',
+            'Blitzkrieg': 'blitzkrieg.png',
+        }
+        for modifier_name, filename in modifier_types.items():
+            icon_path = os.path.join(icon_dir, filename)
+            if os.path.exists(icon_path):
+                img = pygame.image.load(icon_path).convert_alpha()
+                img = pygame.transform.smoothscale(img, (icon_size, icon_size))
+                self._battle_modifier_icons[modifier_name] = img
+    
+    def _draw_battle_modifier_icons(self):
+        """Draw active battle modifier icons below the resource scroll and track hover."""
+        if not self.state.game or not self.state.game.battle_modifier:
+            self._hovered_battle_modifier = None
+            return
+        
+        modifiers = self.state.game.battle_modifier
+        if not isinstance(modifiers, list) or len(modifiers) == 0:
+            self._hovered_battle_modifier = None
+            return
+        
+        icon_size = settings.BATTLE_MODIFIER_ICON_SIZE
+        padding = settings.BATTLE_MODIFIER_ICON_PADDING
+        y_offset = settings.BATTLE_MODIFIER_ICON_Y_OFFSET
+        
+        # Position below the InfoScroll
+        start_x = settings.INFO_SCROLL_X
+        start_y = settings.INFO_SCROLL_Y + settings.INFO_SCROLL_HEIGHT + y_offset
+        
+        mx, my = pygame.mouse.get_pos()
+        self._hovered_battle_modifier = None
+        
+        for i, modifier in enumerate(modifiers):
+            modifier_type = modifier.get('type', '')
+            icon = self._battle_modifier_icons.get(modifier_type)
+            if icon:
+                x = start_x + i * (icon_size + padding)
+                self.window.blit(icon, (x, start_y))
+                
+                # Check hover
+                icon_rect = pygame.Rect(x, start_y, icon_size, icon_size)
+                if icon_rect.collidepoint(mx, my):
+                    self._hovered_battle_modifier = i
+    
+    def _draw_battle_modifier_hover_text(self):
+        """Draw hover text for battle modifier icons on top of everything."""
+        if self._hovered_battle_modifier is None or not self.state.game:
+            return
+        
+        modifiers = self.state.game.battle_modifier
+        if not isinstance(modifiers, list) or self._hovered_battle_modifier >= len(modifiers):
+            return
+        
+        modifier = modifiers[self._hovered_battle_modifier]
+        modifier_type = modifier.get('type', 'Unknown')
+        caster_id = modifier.get('caster_id')
+        caster_name = modifier.get('caster_name', 'Unknown')
+        
+        # Determine if caster is the current player
+        is_self = (caster_id == self.state.game.player_id)
+        who = "You" if is_self else caster_name
+        text_color = settings.STATE_BUTTON_TEXT_COLOR_ACTIVE if is_self else settings.STATE_BUTTON_TEXT_COLOR_PASSIVE
+        shadow_color = settings.STATE_BUTTON_TEXT_COLOR_SHADOW
+        
+        hover_text = f"{who} casted {modifier_type}"
+        text_surface = self._battle_modifier_font.render(hover_text, True, text_color)
+        shadow_surface = self._battle_modifier_font.render(hover_text, True, shadow_color)
+        text_rect = text_surface.get_rect()
+        
+        mx, my = pygame.mouse.get_pos()
+        # Position text to the right of the cursor (icons are on the left edge of the screen)
+        text_rect.midleft = (mx + 12 + 1, my - 1)
+        self.window.blit(shadow_surface, text_rect)
+        text_rect.midleft = (mx + 12, my)
+        self.window.blit(text_surface, text_rect)
+    
+    def check_battle_modifier_changes(self):
+        """Detect new battle modifiers and show notifications to the opponent."""
+        if not self.state.game:
+            return
+        
+        current_modifiers = self.state.game.battle_modifier
+        if not isinstance(current_modifiers, list):
+            current_modifiers = []
+        
+        previous_types = [m.get('type') for m in self._previous_battle_modifiers]
+        current_types = [m.get('type') for m in current_modifiers]
+        
+        # Detect newly added modifiers
+        if len(current_modifiers) > len(self._previous_battle_modifiers):
+            new_modifiers = current_modifiers[len(self._previous_battle_modifiers):]
+            for modifier in new_modifiers:
+                modifier_type = modifier.get('type', 'Unknown')
+                caster_name = modifier.get('caster_name', 'Opponent')
+                caster_id = modifier.get('caster_id')
+                
+                # Only notify if the caster is the opponent (not self)
+                if caster_id and caster_id != self.state.game.player_id:
+                    descriptions = {
+                        'Civil War': 'Each player selects two villagers of the same color for the next battle.',
+                        'Peasant War': 'Only villagers can be selected for the upcoming battle.',
+                        'Blitzkrieg': "The opponent's battle figure is selected by the caster."
+                    }
+                    desc = descriptions.get(modifier_type, 'A battle modifier is now active.')
+                    
+                    # Load icon for the notification
+                    icon_img = self._battle_modifier_icons.get(modifier_type)
+                    images = [icon_img] if icon_img else []
+                    
+                    self.queue_or_show_notification({
+                        'message': f"{caster_name} activated {modifier_type}!\n\n{desc}\n\nBoth players have 1 turn left.",
+                        'actions': ['ok'],
+                        'images': images,
+                        'icon': "magic",
+                        'title': f"{modifier_type}"
+                    })
+        
+        # Update tracked state
+        self._previous_battle_modifiers = list(current_modifiers)
+    
+
     def _show_counter_spell_dialogue(self):
         """Show dialogue asking player to counter or allow spell."""
         if not self.state.game or not self.state.game.pending_spell_id:
@@ -465,6 +659,10 @@ class GameScreen(Screen):
         # Use cached spell data and castable spells (no network request, no image loading)
         spell_data = self.pending_spell_details or {}
         spell_name = spell_data.get('spell_name', 'a spell')
+        spell_family_name = spell_data.get('spell_family_name', spell_name)
+        
+        # Get spell icon for the dialogue
+        spell_images = self._get_spell_icon_image(spell_family_name)
         
         # Use cached castable spells
         castable_spells = self._cached_castable_spells or []
@@ -481,6 +679,7 @@ class GameScreen(Screen):
         self.make_dialogue_box(
             message=message,
             actions=actions,
+            images=spell_images,
             icon="magic",
             title="Counter Spell?" if can_counter else "Allow Spell"
         )
@@ -905,6 +1104,9 @@ class GameScreen(Screen):
         
         from utils import spell_service
         
+        # Save spell data before clearing cache (needed for icon lookup)
+        spell_data = self.pending_spell_details or {}
+        
         result = spell_service.allow_spell(
             player_id=self.state.game.player_id,
             game_id=self.state.game.game_id,
@@ -914,23 +1116,44 @@ class GameScreen(Screen):
         if result.get('success'):
             self.need_to_respond_to_spell = False
             
+            # Clear spell cache immediately so next spell gets fresh data
+            self.pending_spell_details = None
+            self._cached_castable_spells = None
+            self._pending_spell_fetch_ready = False
+            
             # Update game state directly from response (no server call needed)
             if result.get('game'):
                 self.state.game.update_from_dict(result['game'])
+            
+            # Trigger start_turn so auto-fill fires
+            # (update_from_dict sets turn state, preventing update() from detecting the change)
+            if self.state.game.turn:
+                self.state.game._handle_start_turn()
+                # Clear stale opponent turn summary — we already show our own spell notification
+                self.state.game.pending_opponent_turn_summary = None
             
             # Show spell effect result
             spell_effect = result.get('spell_effect', {})
             effect_message = spell_effect.get('effect', 'Spell executed successfully')
             spell_name = spell_effect.get('spell_name', 'The spell')
             
+            # Get spell icon (use saved family name before cache was cleared)
+            spell_family = spell_data.get('spell_family_name', spell_name) if spell_data else spell_name
+            spell_images = self._get_spell_icon_image(spell_family)
+            
             self.queue_or_show_notification({
-                'message': f"You allowed {spell_name}.\n\n{effect_message}\n\nYou did not lose a turn.",
+                'message': f"You allowed {spell_name}.\n\n{effect_message}",
                 'actions': ['ok'],
+                'images': spell_images,
                 'icon': "magic",
                 'title': "Spell Allowed"
             })
         else:
             self.need_to_respond_to_spell = False
+            # Clear spell cache on error too
+            self.pending_spell_details = None
+            self._cached_castable_spells = None
+            self._pending_spell_fetch_ready = False
             self.queue_or_show_notification({
                 'message': f"Error: {result.get('message')}",
                 'actions': ['ok'],
@@ -1110,15 +1333,29 @@ class GameScreen(Screen):
         if result.get('success'):
             self.need_to_respond_to_spell = False
             
+            # Clear spell cache immediately so next spell gets fresh data
+            self.pending_spell_details = None
+            self._cached_castable_spells = None
+            self._pending_spell_fetch_ready = False
+            
             # Update game state directly from response (no server call needed)
             if result.get('game'):
                 self.state.game.update_from_dict(result['game'])
             
+            # Trigger start_turn so auto-fill fires
+            # (update_from_dict sets turn state, preventing update() from detecting the change)
+            if self.state.game.turn:
+                self.state.game._handle_start_turn()
+                # Clear stale opponent turn summary — we already show our own spell notification
+                self.state.game.pending_opponent_turn_summary = None
+            
             # Show result
             effect = result.get('effect', 'Spell countered!')
+            spell_images = self._get_spell_icon_image(spell.family.name)
             self.queue_or_show_notification({
                 'message': f"You countered with {spell.name}!\n\n{effect}\n\nYou did not lose a turn.",
                 'actions': ['ok'],
+                'images': spell_images,
                 'icon': "magic",
                 'title': "Spell Countered"
             })
@@ -1131,6 +1368,10 @@ class GameScreen(Screen):
                 'title': "Error"
             })
             self.need_to_respond_to_spell = False
+            # Clear spell cache on error too
+            self.pending_spell_details = None
+            self._cached_castable_spells = None
+            self._pending_spell_fetch_ready = False
     
     def _draw_infinite_hammer_prompt(self):
         """Draw a prominent prompt indicating Infinite Hammer mode is active."""
@@ -1273,6 +1514,9 @@ class GameScreen(Screen):
         for element in self.display_elements:
             element.draw()
 
+        # Draw active battle modifier icons below the resource scroll
+        self._draw_battle_modifier_icons()
+
         # Draw game-specific text (e.g., opponent name)
         #self.draw_text(self.state.game.opponent_name, settings.BLACK, settings.get_x(0.1), settings.get_x(0.1))
 
@@ -1328,6 +1572,9 @@ class GameScreen(Screen):
             # Draw selector
             self.counter_spell_selector.draw()
 
+        # Draw battle modifier hover text on top of everything
+        self._draw_battle_modifier_hover_text()
+
         # Update the display
         pygame.display.update()
 
@@ -1340,6 +1587,16 @@ class GameScreen(Screen):
         # Check if game exists (may be None after logout)
         if not self.state.game:
             return
+
+        # Handle click on locked battle button
+        if self.battle_button.locked and self.battle_button.locked_clicked:
+            self.battle_button.locked_clicked = False
+            if not self.dialogue_box:
+                self.queue_or_show_notification({
+                    'message': "The Battle Arena becomes available\nonce the battle phase begins.",
+                    'actions': ['ok'],
+                    'icon': 'magic',
+                })
 
         # Throttle updates to avoid constant re-rendering
         current_time = pygame.time.get_ticks()
