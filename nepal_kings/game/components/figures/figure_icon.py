@@ -871,6 +871,12 @@ class FieldFigureIcon(FigureIcon):
                 skills_to_display.append('buffs_allies')
             if hasattr(self.figure, 'blocks_bonus') and self.figure.blocks_bonus:
                 skills_to_display.append('blocks_bonus')
+            if hasattr(self.figure, 'cannot_defend') and self.figure.cannot_defend:
+                skills_to_display.append('cannot_defend')
+            if hasattr(self.figure, 'instant_charge') and self.figure.instant_charge:
+                skills_to_display.append('instant_charge')
+            if hasattr(self.figure, 'cannot_be_blocked') and self.figure.cannot_be_blocked:
+                skills_to_display.append('cannot_be_blocked')
             
             # Get skill icon size from the actual pre-scaled icons
             skill_icon_size = 0

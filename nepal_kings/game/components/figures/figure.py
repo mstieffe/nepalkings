@@ -70,6 +70,9 @@ class Figure:
         distance_attack: bool = False,  # Figure can attack from distance
         buffs_allies: bool = False,  # Figure provides buffs to allied figures
         blocks_bonus: bool = False,  # Figure blocks enemy bloodline bonus
+        cannot_defend: bool = False,  # Figure cannot defend other figures
+        instant_charge: bool = False,  # Figure charges instantly into battle
+        cannot_be_blocked: bool = False,  # Figure cannot be blocked when advancing
         description: str = "",
         id: Optional[int] = None,
         player_id: Optional[int] = None,
@@ -95,6 +98,9 @@ class Figure:
         self.distance_attack = distance_attack
         self.buffs_allies = buffs_allies
         self.blocks_bonus = blocks_bonus
+        self.cannot_defend = cannot_defend
+        self.instant_charge = instant_charge
+        self.cannot_be_blocked = cannot_be_blocked
         
         # Active enchantment effects on this figure
         self.active_enchantments = []  # List of dicts: {'spell_name': str, 'spell_icon': str, 'power_modifier': int}

@@ -613,6 +613,12 @@ class FigureDetailBox:
             skills_to_display.append(('buffs_allies', 'Buffs Allies'))
         if hasattr(self.figure, 'blocks_bonus') and self.figure.blocks_bonus:
             skills_to_display.append(('blocks_bonus', 'Blocks Bonus'))
+        if hasattr(self.figure, 'cannot_defend') and self.figure.cannot_defend:
+            skills_to_display.append(('cannot_defend', 'Cannot Defend'))
+        if hasattr(self.figure, 'instant_charge') and self.figure.instant_charge:
+            skills_to_display.append(('instant_charge', 'Instant Charge'))
+        if hasattr(self.figure, 'cannot_be_blocked') and self.figure.cannot_be_blocked:
+            skills_to_display.append(('cannot_be_blocked', 'Cannot Be Blocked'))
         
         print(f"[FIGURE_DETAIL] Skills to display: {skills_to_display}")
         
