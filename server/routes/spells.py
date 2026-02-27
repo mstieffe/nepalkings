@@ -7,6 +7,7 @@ from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, 
 from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
+import server_settings as settings
 
 spells = Blueprint('spells', __name__)
 
@@ -294,11 +295,12 @@ def allow_spell():
         if not spell_effect.get('sets_turns'):
             caster.turns_left -= 1
         
-        # Flip turn to other player
-        if game.turn_player_id == caster.id:
-            other_player = next((p for p in game.players if p.id != caster.id), None)
-            if other_player:
-                game.turn_player_id = other_player.id
+        # Flip turn to other player (unless the spell already set the turn explicitly)
+        if not spell_effect.get('turn_set'):
+            if game.turn_player_id == caster.id:
+                other_player = next((p for p in game.players if p.id != caster.id), None)
+                if other_player:
+                    game.turn_player_id = other_player.id
         
         db.session.commit()
         
@@ -444,6 +446,11 @@ def end_infinite_hammer():
         # Deactivate the spell
         active_hammer.is_active = False
         
+        # Decrement turns_left (Infinite Hammer consumes one turn)
+        player = Player.query.get(player_id)
+        if player and player.turns_left > 0:
+            player.turns_left -= 1
+        
         # Flip the turn to the opponent
         game = Game.query.get(game_id)
         if not game:
@@ -453,7 +460,6 @@ def end_infinite_hammer():
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
         
         # Create log entry
-        player = Player.query.get(player_id)
         user = User.query.get(player.user_id)
         username = user.username if user else f"Player {player_id}"
         
@@ -953,9 +959,10 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     invader_player.turns_left += 3
                     defender_player.turns_left += 3
                     
-                    # Reset ceasefire to start of round state
+                    # Activate ceasefire for 3 invader turns from NOW
                     game.ceasefire_active = True
-                    game.ceasefire_start_turn = 0  # Reset as if round just started
+                    # Record the invader's current turn index so ceasefire lasts exactly 3 more invader turns
+                    game.ceasefire_start_turn = settings.INITIAL_TURNS_INVADER - invader_player.turns_left
                     
                     print(f"[CEASEFIRE SPELL] Both players gained 3 turns. Invader: {invader_player.turns_left}, Defender: {defender_player.turns_left}")
                     
@@ -988,10 +995,14 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     old_invader.turns_left = 1
                     new_invader.turns_left = 1
                     
-                    print(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
-                    print(f"[INVADER SWAP] Both players' turns_left set to 1")
+                    # Invader starts next turn
+                    game.turn_player_id = new_invader.id
                     
-                    spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 1 turn left.'
+                    print(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
+                    print(f"[INVADER SWAP] Both players' turns_left set to 1. Invader starts next turn.")
+                    
+                    spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 1 turn left. The invader starts next turn.'
+                    spell_effect['turn_set'] = True
                     spell_effect['sets_turns'] = True
                     spell_effect['old_invader_id'] = old_invader_id
                     spell_effect['new_invader_id'] = new_invader.id
@@ -1012,30 +1023,58 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 else:
                     caster_name = caster.serialize()['username']
                     
+                    # Blitzkrieg: caster becomes the invader (if not already)
+                    if spell.spell_name == 'Blitzkrieg' and game.invader_player_id != caster.id:
+                        old_invader_id = game.invader_player_id
+                        game.invader_player_id = caster.id
+                        # Reassign invader/defender player references after swap
+                        invader_player = Player.query.get(caster.id)
+                        defender_player = next((p for p in game.players if p.id != caster.id), None)
+                        print(f"[BLITZKRIEG] Invader swapped from player {old_invader_id} to caster {caster.id}")
+                        spell_effect['invader_swapped'] = True
+                        spell_effect['old_invader_id'] = old_invader_id
+                        spell_effect['new_invader_id'] = caster.id
+                    
                     # Set both players' turns left to 1
                     invader_player.turns_left = 1
                     defender_player.turns_left = 1
+                    
+                    # Invader starts next turn
+                    game.turn_player_id = invader_player.id
+                    
+                    # Blitzkrieg: activate ceasefire immediately for the last turn
+                    # This prevents the defender from advancing or casting battle spells
+                    # Ceasefire will end automatically when both players reach 0 turns
+                    if spell.spell_name == 'Blitzkrieg':
+                        game.ceasefire_active = True
+                        # ceasefire_start_turn not needed — Blitzkrieg ceasefire uses
+                        # its own end condition (both players at 0 turns)
+                        print(f"[BLITZKRIEG] Ceasefire activated for last turn")
+                        spell_effect['ceasefire_activated'] = True
                     
                     # Initialize battle_modifier as list if needed (stackable modifiers)
                     if not isinstance(game.battle_modifier, list):
                         game.battle_modifier = []
                     
                     # Append this modifier (non-exclusive: can stack with others)
-                    game.battle_modifier.append({
+                    modifier_entry = {
                         'type': spell.spell_name,
                         'spell_id': spell.id,
                         'caster_id': caster.id,
                         'caster_name': caster_name
-                    })
+                    }
+                    
+                    game.battle_modifier.append(modifier_entry)
                     
                     # Spell-specific descriptions
                     descriptions = {
                         'Civil War': 'Each player selects two villagers of the same color for battle.',
                         'Peasant War': 'Only villagers can be selected for the upcoming battle.',
-                        'Blitzkrieg': "The opponent's battle figure is selected by the caster."
+                        'Blitzkrieg': f'{caster_name} is now the invader! The advancing figure cannot be blocked. Ceasefire is in effect after the battle.'
                     }
                     
-                    spell_effect['effect'] = f'{spell.spell_name} activated by {caster_name}! {descriptions[spell.spell_name]} Both players have 1 turn left.'
+                    spell_effect['effect'] = f'{spell.spell_name} activated by {caster_name}! {descriptions[spell.spell_name]} Both players have 1 turn left. The invader starts next turn.'
+                    spell_effect['turn_set'] = True
                     spell_effect['battle_modifier_added'] = spell.spell_name
                     spell_effect['caster_name'] = caster_name
                     spell_effect['sets_turns'] = True
@@ -1043,7 +1082,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Signal SQLAlchemy that the JSON column was mutated in place
                     flag_modified(game, 'battle_modifier')
                     
-                    print(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 1.")
+                    print(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 1. Invader starts next turn.")
                     print(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
             except Exception as e:
                 print(f"[{spell.spell_name.upper()}] ERROR: {str(e)}")

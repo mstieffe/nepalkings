@@ -422,6 +422,8 @@ class ScrollTextListShifter:
             skills_to_display.append(('instant_charge', 'Instant Charge'))
         if 'cannot_be_blocked' in text_dict and text_dict['cannot_be_blocked']:
             skills_to_display.append(('cannot_be_blocked', 'Cannot Be Blocked'))
+        if 'cannot_be_targeted' in text_dict and text_dict['cannot_be_targeted']:
+            skills_to_display.append(('cannot_be_targeted', 'Cannot Be Targeted'))
         
         if skills_to_display:
             # Draw divider line

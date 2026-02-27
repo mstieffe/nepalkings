@@ -25,6 +25,9 @@ class GameScreen(Screen):
         # Store reference to game_screen in state for button access
         self.state.parent_screen = self
 
+        # Track current game ID to detect game switches
+        self._current_game_id = None
+
         # Initialize figure manager
         self.figure_manager = FigureManager()
 
@@ -73,6 +76,7 @@ class GameScreen(Screen):
         self._battle_modifier_icons = {}
         self._load_battle_modifier_icons()
         self._previous_battle_modifiers = []  # Track for change detection / notifications
+        self._just_allowed_spell = False  # Flag to suppress duplicate notification after allowing a spell
         self._hovered_battle_modifier = None  # Index of currently hovered modifier (or None)
         self._battle_modifier_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
     
@@ -325,6 +329,12 @@ class GameScreen(Screen):
         if not self.state.game:
             return
         
+        # Detect game switch — reset stale state from previous game
+        current_id = getattr(self.state.game, 'game_id', None)
+        if current_id != self._current_game_id:
+            self._reset_game_screen_state()
+            self._current_game_id = current_id
+        
         # Check if subscreen changed - if so, deselect all cards
         if self.previous_subscreen != self.state.subscreen:
             self.main_hand.deselect_all_cards()
@@ -342,11 +352,27 @@ class GameScreen(Screen):
         # Check for opponent turn notification (includes Forced Deal and Dump Cards details)
         self.check_opponent_turn_notification()
         
-        # Check for ceasefire ended notification
-        self.check_ceasefire_ended_notification()
-        
         # Check for Infinite Hammer mode activation
         self.check_infinite_hammer_activation()
+        
+        # Check for battle modifier changes
+        self.check_battle_modifier_changes()
+        
+        # Check for advance/battle state
+        self.check_forced_advance()
+        self.check_own_advance_notification()
+        self.check_opponent_advance_notification()
+        self.check_defender_selection_needed()
+        self.check_waiting_for_defender_pick()
+        self.check_battle_ready()
+        
+        # Check for fold outcome and auto-proceed (polling detection for waiting player)
+        self.check_fold_result()
+        self.check_auto_proceed_to_battle()
+        
+        # Check for ceasefire ended notification AFTER action results
+        # so it appears after the success message of the action that caused it
+        self.check_ceasefire_ended_notification()
         
         # Check for pending counter spell state
         self.check_counter_spell_state()
@@ -371,6 +397,57 @@ class GameScreen(Screen):
             else:
                 elem.update(self.state.game)
     
+    def _reset_game_screen_state(self):
+        """Reset all transient game screen state when switching to a different game."""
+        # Clear pending notifications and dialogue box
+        self.pending_notifications = []
+        self.dialogue_box = None
+        
+        # Reset counter spell state
+        self.waiting_for_counter_response = False
+        self.need_to_respond_to_spell = False
+        self.pending_spell_details = None
+        self.counter_spell_selector = None
+        self._cached_castable_spells = None
+        self._pending_spell_fetch_ready = False
+        
+        # Reset battle modifier tracking
+        self._previous_battle_modifiers = []
+        self._hovered_battle_modifier = None
+        
+        # Reset field screen's defender selection mode
+        field_screen = self.subscreens.get('field')
+        if field_screen:
+            field_screen.defender_selection_mode = False
+            field_screen._reset_defender_selectable()
+            field_screen.figure_detail_box = None
+            field_screen.dialogue_box = None
+            field_screen.figure_pending_defender_selection = None
+        
+        # Reset waiting for defender pick state
+        if self.state.game:
+            self.state.game.pending_waiting_for_defender_pick = False
+            self.state.game.waiting_for_defender_pick_shown = False
+            self.state.game.pending_battle_ready = False
+            self.state.game.battle_ready_shown = False
+            # Reset Civil War second pick state
+            self.state.game.civil_war_awaiting_second = False
+            self.state.game.civil_war_defender_second = False
+            self.state.game.civil_war_required_color = None
+            # Reset fold/battle decision state
+            self.state.game.waiting_for_battle_decision = False
+            self.state.game.pending_fold_result = False
+            self.state.game.fold_result_shown = False
+            self.state.game.auto_proceed_to_battle = False
+        
+        # Re-lock battle button
+        self.battle_button.locked = True
+        
+        # Reset subscreen tracking
+        self.previous_subscreen = None
+        
+        print(f"[GAME_SCREEN] State reset for new game {self._current_game_id}")
+
     def check_counter_spell_state(self):
         """Check if player needs to respond to counter spell or is waiting for opponent."""
         if not self.state.game:
@@ -627,25 +704,31 @@ class GameScreen(Screen):
                 caster_id = modifier.get('caster_id')
                 
                 # Only notify if the caster is the opponent (not self)
+                # AND we didn't just allow this spell (which already showed its own notification)
                 if caster_id and caster_id != self.state.game.player_id:
-                    descriptions = {
-                        'Civil War': 'Each player selects two villagers of the same color for the next battle.',
-                        'Peasant War': 'Only villagers can be selected for the upcoming battle.',
-                        'Blitzkrieg': "The opponent's battle figure is selected by the caster."
-                    }
-                    desc = descriptions.get(modifier_type, 'A battle modifier is now active.')
-                    
-                    # Load icon for the notification
-                    icon_img = self._battle_modifier_icons.get(modifier_type)
-                    images = [icon_img] if icon_img else []
-                    
-                    self.queue_or_show_notification({
-                        'message': f"{caster_name} activated {modifier_type}!\n\n{desc}\n\nBoth players have 1 turn left.",
-                        'actions': ['ok'],
-                        'images': images,
-                        'icon': "magic",
-                        'title': f"{modifier_type}"
-                    })
+                    # Skip if we just came from allowing this spell
+                    # (the _handle_counter_spell_allow already showed a notification)
+                    if hasattr(self, '_just_allowed_spell') and self._just_allowed_spell:
+                        self._just_allowed_spell = False
+                    else:
+                        descriptions = {
+                            'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 1 turn left. The invader starts next turn.',
+                            'Peasant War': 'Only villagers can be selected for the battle. Both players have 1 turn left. The invader starts next turn.',
+                            'Blitzkrieg': "The advancing figure cannot be blocked. Both players have 1 turn left. The invader starts next turn. During the last turn ceasefire is active."
+                        }
+                        desc = descriptions.get(modifier_type, 'A battle modifier is now active.')
+                        
+                        # Load icon for the notification
+                        icon_img = self._battle_modifier_icons.get(modifier_type)
+                        images = [icon_img] if icon_img else []
+                        
+                        self.queue_or_show_notification({
+                            'message': f"{caster_name} activated {modifier_type}!\n\n{desc}",
+                            'actions': ['ok'],
+                            'images': images,
+                            'icon': "magic",
+                            'title': f"{modifier_type}"
+                        })
         
         # Update tracked state
         self._previous_battle_modifiers = list(current_modifiers)
@@ -905,7 +988,24 @@ class GameScreen(Screen):
                     card_img = card.make_icon(self.window, self.state.game, 0, 0)
                     images.append(card_img.front_img)
             
-            # Load spell icon if this is a spell action (and not Forced Deal/Dump Cards with cards)
+            # Special handling for Poison with affected figure
+            elif (action_type == 'spell' and spell_name == 'Poison' and 
+                  action.get('affects_player') and action.get('target_figure_id')):
+                import os
+                spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon', 'poisson_portion.png'))
+                if os.path.exists(spell_icon_path):
+                    spell_icon_img = pygame.image.load(spell_icon_path)
+                    images.append(spell_icon_img)
+                # Find figure icon for the affected figure
+                target_figure_id = action.get('target_figure_id')
+                field_screen = self.subscreens.get('field')
+                if field_screen:
+                    for icon in getattr(field_screen, 'figure_icons', []):
+                        if icon.figure.id == target_figure_id:
+                            images.append(icon)
+                            break
+            
+            # Load spell icon if this is a spell action (and not Forced Deal/Dump Cards/Poison with cards)
             elif action_type == 'spell' and action.get('spell_icon'):
                 import os
                 spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon'))
@@ -929,10 +1029,22 @@ class GameScreen(Screen):
                     action_icon_img = pygame.image.load(action_icon_path)
                     images.append(action_icon_img)
             
-            # Special handling for explosion - show destroyed figure name prominently
+            # Special handling for explosion - show bomb icon and destroyed figure name prominently
             if action_type == 'explosion':
+                import os
+                bomb_icon_path = os.path.join('img', 'spells', 'icons', 'bomb.png')
+                if os.path.exists(bomb_icon_path):
+                    bomb_icon_img = pygame.image.load(bomb_icon_path)
+                    images.append(bomb_icon_img)
                 destroyed_figure = action.get('destroyed_figure', 'a figure')
                 message = f"{opponent_name} cast Explosion!\n\nYour {destroyed_figure} was destroyed.\n\nIt's your turn now!"
+                message_after = None
+                icon = "error"
+            # Special handling for Poison on player's figure
+            elif (action_type == 'spell' and spell_name == 'Poison' and 
+                  action.get('affects_player') and action.get('target_figure_name')):
+                target_name = action.get('target_figure_name')
+                message = f"{opponent_name} cast Poison!\n\nYour {target_name} was poisoned (-6 power).\n\nIt's your turn now!"
                 message_after = None
                 icon = "error"
             else:
@@ -1014,6 +1126,1053 @@ class GameScreen(Screen):
             self.state.game.infinite_hammer_active = False
             self.state.game.infinite_hammer_dialogue_shown = False
     
+    def check_forced_advance(self):
+        """Check if invader must advance (turns_left == 0) and show forced advance dialogue."""
+        if not self.state.game or not self.state.game.turn:
+            return
+        
+        # Only force advance if: invader, 0 turns left, ceasefire not active, 
+        # no active advance already, and dialogue not already shown
+        if (self.state.game.invader and 
+            self.state.game.current_player.get('turns_left', 0) == 0 and
+            not self.state.game.ceasefire_active and
+            not self.state.game.advancing_figure_id and
+            not self.state.game.forced_advance_dialogue_shown):
+            
+            # Check if ANY figure can actually advance
+            can_any_advance = self._check_any_figure_can_advance()
+            
+            if not can_any_advance:
+                # No figure can advance — auto-lose the battle
+                self.state.game.forced_advance_dialogue_shown = True
+                self._handle_cannot_advance_loss()
+                return
+            
+            self.state.game.pending_forced_advance = True
+            self.state.game.forced_advance_dialogue_shown = True
+            
+            # Show notification dialogue
+            import os
+            icon_path = os.path.join('img', 'figures', 'state_icons', 'charge.png')
+            images = []
+            if os.path.exists(icon_path):
+                advance_img = pygame.image.load(icon_path).convert_alpha()
+                images.append(advance_img)
+            
+            self.queue_or_show_notification({
+                'message': "All turns used up!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance.",
+                'actions': ['ok'],
+                'images': images if images else None,
+                'icon': None if images else "info",
+                'title': "Battle Time"
+            })
+    
+    def _check_any_figure_can_advance(self):
+        """Check if any of the player's figures can be advanced given current modifiers."""
+        field_screen = self.subscreens.get('field')
+        if not field_screen or not hasattr(field_screen, 'categorized_figures'):
+            return True  # Assume yes if we can't check
+        
+        own_figures = field_screen.categorized_figures.get('self', {})
+        all_own_figures = []
+        for field_type, fig_list in own_figures.items():
+            all_own_figures.extend(fig_list)
+        
+        if not all_own_figures:
+            return False
+        
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        
+        # Check if opponent's advancing figure has cannot_be_blocked
+        # (would block counter-advance for all figures)
+        if self.state.game.advancing_figure_id and self.state.game.advancing_player_id != self.state.game.player_id:
+            for fig in all_own_figures:
+                if hasattr(fig, 'id') and fig.id == self.state.game.advancing_figure_id:
+                    if hasattr(fig, 'cannot_be_blocked') and fig.cannot_be_blocked:
+                        return False
+        
+        # Blitzkrieg: defender cannot counter-advance
+        if 'Blitzkrieg' in modifier_types:
+            if (self.state.game.advancing_figure_id and 
+                self.state.game.advancing_player_id != self.state.game.player_id):
+                return False
+        
+        for fig in all_own_figures:
+            # Skip figures that cannot attack
+            if hasattr(fig, 'cannot_attack') and fig.cannot_attack:
+                continue
+            
+            # Peasant War / Civil War: only village figures can advance
+            if 'Peasant War' in modifier_types or 'Civil War' in modifier_types:
+                figure_field = getattr(fig.family, 'field', None) if hasattr(fig, 'family') else None
+                if figure_field != 'village':
+                    continue
+            
+            # This figure can advance
+            return True
+        
+        return False
+    
+    def _handle_cannot_advance_loss(self):
+        """Handle the case where the player cannot advance any figure — auto-lose."""
+        from utils.game_service import cannot_advance_loss
+        result = cannot_advance_loss(self.state.game.game_id, self.state.game.player_id)
+        
+        if result.get('success'):
+            winner = result.get('winner', 'Opponent')
+            points = result.get('points', 10)
+            
+            # Update game state from response
+            if result.get('game'):
+                self.state.game.update_from_dict(result['game'])
+            
+            # Reset all battle state (includes suppress_next_turn_summary)
+            self._reset_battle_state()
+            
+            new_round = self.state.game.current_round
+            
+            # Mark fold result as shown so check_fold_result() doesn't double-show
+            self.state.game.fold_result_shown = True
+            
+            self.queue_or_show_notification({
+                'message': (f"You have no figures that can advance!\n\n"
+                           f"{winner} wins {points} points and is now the invader.\n\n"
+                           f"Round {new_round} begins. It's your turn!"),
+                'actions': ['ok'],
+                'icon': 'magic',
+                'title': "Defeat"
+            })
+        else:
+            error_msg = result.get('message', 'Unknown error')
+            print(f"[GAME_SCREEN] Auto-loss failed: {error_msg}")
+    
+    def _check_any_defender_selectable(self):
+        """Check if any of the opponent's figures can be selected as a defender."""
+        field_screen = self.subscreens.get('field')
+        if not field_screen or not hasattr(field_screen, 'categorized_figures'):
+            return True  # Assume yes if we can't check
+        
+        opponent_figures = field_screen.categorized_figures.get('opponent', {})
+        all_opponent_figures = []
+        for field_type, fig_list in opponent_figures.items():
+            all_opponent_figures.extend(fig_list)
+        
+        if not all_opponent_figures:
+            return False
+        
+        # Get advancing figure for cannot_be_blocked check
+        advancing_figure = None
+        if self.state.game.advancing_figure_id:
+            for fig in getattr(field_screen, 'figures', []):
+                if fig.id == self.state.game.advancing_figure_id:
+                    advancing_figure = fig
+                    break
+        
+        advancing_cannot_be_blocked = (
+            advancing_figure and 
+            hasattr(advancing_figure, 'cannot_be_blocked') and 
+            advancing_figure.cannot_be_blocked
+        )
+        
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        has_blitzkrieg = 'Blitzkrieg' in modifier_types
+        village_only = 'Peasant War' in modifier_types or 'Civil War' in modifier_types
+        skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
+        
+        eligible = []
+        for fig in all_opponent_figures:
+            if hasattr(fig, 'cannot_defend') and fig.cannot_defend:
+                continue
+            if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
+                continue
+            if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
+                continue
+            eligible.append(fig)
+        
+        if not eligible:
+            return False
+        
+        # Check must_be_attacked constraint
+        if not skip_must_be_attacked:
+            must_be_attacked = [f for f in eligible if hasattr(f, 'must_be_attacked') and f.must_be_attacked]
+            if must_be_attacked:
+                return True  # At least one must_be_attacked figure exists
+        
+        return len(eligible) > 0
+    
+    def _handle_defender_no_figures_loss(self):
+        """Handle the case where the defender has no valid figures — defender auto-loses."""
+        from utils.game_service import defender_no_figures_loss
+        result = defender_no_figures_loss(self.state.game.game_id, self.state.game.player_id)
+        
+        if result.get('success'):
+            loser = result.get('loser', 'Opponent')
+            points = result.get('points', 10)
+            
+            # Update game state from response
+            if result.get('game'):
+                self.state.game.update_from_dict(result['game'])
+            
+            # Reset all battle state
+            self._reset_battle_state()
+            
+            new_round = self.state.game.current_round
+            
+            # Mark fold result as shown so check_fold_result() doesn't double-show
+            self.state.game.fold_result_shown = True
+            
+            self.queue_or_show_notification({
+                'message': (f"{loser} has no valid figures for battle!\n\n"
+                           f"You win {points} points.\n\n"
+                           f"You are now the invader.\n\n"
+                           f"Round {new_round} begins. It's your turn!"),
+                'actions': ['ok'],
+                'icon': 'magic',
+                'title': "Victory!"
+            })
+        else:
+            error_msg = result.get('message', 'Unknown error')
+            print(f"[GAME_SCREEN] Defender auto-loss failed: {error_msg}")
+    
+    def _get_battle_modifier_info(self):
+        """Get battle modifier summary text and icon images for notification dialogues."""
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        if not modifiers:
+            return "", []
+        
+        modifier_texts = []
+        modifier_images = []
+        for mod in modifiers:
+            mod_type = mod.get('type', 'Unknown')
+            icon_img = self._battle_modifier_icons.get(mod_type)
+            if icon_img:
+                modifier_images.append(icon_img)
+            if mod_type == 'Peasant War':
+                modifier_texts.append("Peasant War: Only village figures can be selected for battle.")
+            elif mod_type == 'Blitzkrieg':
+                modifier_texts.append("Blitzkrieg: The advancing figure cannot be blocked. Ceasefire is active during the last turn.")
+            elif mod_type == 'Civil War':
+                modifier_texts.append("Civil War: Each player selects two village figures of the same color for battle.")
+        
+        text = "\n".join(modifier_texts)
+        return text, modifier_images
+
+    def check_own_advance_notification(self):
+        """Check if Blitzkrieg combine-advance-and-select is needed.
+        For normal advances, the persistent prompt replaces the dialogue."""
+        if not self.state.game or not self.state.game.pending_own_advance_notification:
+            return
+        
+        figure_name = self.state.game.own_advance_figure_name or "your figure"
+        
+        # Check active battle modifiers
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        has_blitzkrieg = 'Blitzkrieg' in modifier_types
+        
+        # Blitzkrieg: combine advance notification with defender selection into one dialogue
+        # (Under Blitzkrieg the turn stays with the invader, so they need a single combined dialogue)
+        if has_blitzkrieg:
+            self.state.game.pending_own_advance_notification = False
+            # Pre-empt the separate defender selection dialogue
+            self.state.game.pending_defender_selection = True
+            self.state.game.defender_selection_dialogue_shown = True
+            
+            # Gather icons (include second CW figure if present)
+            images = []
+            if self.state.game.advancing_figure_id:
+                field_screen = self.subscreens.get('field')
+                if field_screen:
+                    for icon in getattr(field_screen, 'figure_icons', []):
+                        if hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id:
+                            images.append(icon)
+                        if (self.state.game.advancing_figure_id_2 and
+                            hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id_2):
+                            images.append(icon)
+            modifier_text, modifier_icons = self._get_battle_modifier_info()
+            images.extend(modifier_icons)
+            
+            message = (f"You advanced {figure_name} toward battle!\n\n"
+                       f"Blitzkrieg is active — your opponent cannot counter-advance.\n\n"
+                       f"Select one of your opponent's figures to face {figure_name} in battle.")
+            
+            self.queue_or_show_notification({
+                'message': message,
+                'actions': ['got it!'],
+                'images': images if images else None,
+                'icon': None if images else "info",
+                'title': "Blitzkrieg Advance"
+            })
+            return
+        
+        # For normal/Civil War/Peasant War advances: no dialogue needed.
+        # The persistent prompt (YOUR FIGURE ADVANCING) already shows the status.
+        self.state.game.pending_own_advance_notification = False
+
+    def check_opponent_advance_notification(self):
+        """Check if opponent advanced a figure and show notification."""
+        if not self.state.game or not self.state.game.pending_advance_notification:
+            return
+        
+        # Check if advancing figure has cannot_be_blocked
+        advancing_fig = None
+        advancing_icon = None
+        has_cannot_be_blocked = False
+        advancing_description = "a figure"
+        if self.state.game.advancing_figure_id:
+            field_screen = self.subscreens.get('field')
+            if field_screen:
+                for fig in getattr(field_screen, 'figures', []):
+                    if fig.id == self.state.game.advancing_figure_id:
+                        advancing_fig = fig
+                        has_cannot_be_blocked = hasattr(fig, 'cannot_be_blocked') and fig.cannot_be_blocked
+                        # Build anonymous description: field type + card count
+                        field_type = getattr(fig.family, 'field', 'unknown') if hasattr(fig, 'family') else 'unknown'
+                        card_count = len(fig.cards) if hasattr(fig, 'cards') else '?'
+                        advancing_description = f"a {field_type} figure with {card_count} cards"
+                        break
+                # Find the advancing figure's FieldFigureIcon for display
+                for icon in getattr(field_screen, 'figure_icons', []):
+                    if hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id:
+                        advancing_icon = icon
+                        break
+        
+        # Always show the charge_opponent icon (not the hidden field icon)
+        images = []
+        import os
+        icon_path = os.path.join('img', 'figures', 'state_icons', 'charge_opponent.png')
+        if os.path.exists(icon_path):
+            advance_img = pygame.image.load(icon_path).convert_alpha()
+            images.append(advance_img)
+        
+        # Check for battle modifiers
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        
+        # Add battle modifier icons
+        modifier_text, modifier_icons = self._get_battle_modifier_info()
+        images.extend(modifier_icons)
+        
+        # Build message with prominent modifier context
+        # Message before images: "Your opponent advanced..."
+        # Message after images: options/instructions
+        message_after = None
+        if 'Blitzkrieg' in modifier_types and not has_cannot_be_blocked:
+            title = "Blitzkrieg — Opponent Advancing"
+            message = f"Your opponent advanced {advancing_description}!"
+            message_after = (f"Blitzkrieg is active — you cannot counter-advance.\n\n"
+                       f"Spend your turn on something else. The opponent will select your battle figure.")
+        elif has_cannot_be_blocked:
+            title = "Opponent Advancing"
+            message = f"Your opponent advanced {advancing_description}!"
+            message_after = (f"This figure cannot be blocked — you cannot counter-advance.\n\n"
+                       f"Spend your turn on something else (e.g. build figures, cast spells, or manage your hand). "
+                       f"After your turn, the opponent will select one of your figures to face them in battle.")
+            if modifier_text:
+                message_after += f"\n\n{modifier_text}"
+        elif 'Civil War' in modifier_types:
+            title = "Civil War — Opponent Advancing"
+            message = f"Your opponent advanced {advancing_description}!"
+            message_after = (f"Civil War is active — you may counter-advance with up to two village figures of the same color, "
+                       f"or spend your turn normally and the opponent will select your battle figures.")
+        elif 'Peasant War' in modifier_types:
+            title = "Peasant War — Opponent Advancing"
+            message = f"Your opponent advanced {advancing_description}!"
+            message_after = (f"Peasant War is active — only village figures may be used for battle.\n\n"
+                       f"You can counter-advance with a village figure, or spend your turn normally "
+                       f"and the opponent will select your battle figure.")
+        else:
+            title = "Opponent Advancing"
+            message = f"Your opponent advanced {advancing_description}!"
+            message_after = (f"You have two options:\n"
+                       f"• Counter-advance: select one of your own figures on the field and advance it. "
+                       f"Your figure will face the opponent's figure in battle.\n"
+                       f"• Spend your turn normally (build figures, cast spells, etc.). "
+                       f"The opponent will then choose which of your figures faces them in battle.")
+            if modifier_text:
+                message_after += f"\n\n{modifier_text}"
+        
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'images': images if images else None,
+            'icon': None if images else "info",
+            'title': title,
+            'message_after_images': message_after
+        })
+        
+        self.state.game.pending_advance_notification = False
+
+    def check_defender_selection_needed(self):
+        """Check if the advancing player's turn returned and they need to select a defender."""
+        if not self.state.game or not self.state.game.pending_defender_selection:
+            return
+        
+        # Don't re-queue if dialogue was already shown
+        if self.state.game.defender_selection_dialogue_shown:
+            return
+        
+        # Check if any opponent figure is selectable before showing dialogue
+        # If none are eligible, the defender auto-loses
+        if not self._check_any_defender_selectable():
+            self.state.game.defender_selection_dialogue_shown = True
+            self._handle_defender_no_figures_loss()
+            return
+        
+        # Find the advancing figure name(s) and icon(s)
+        advancing_figure_name = "your figure"
+        advancing_icons = []
+        if self.state.game.advancing_figure_id:
+            field_screen = self.subscreens.get('field')
+            if field_screen:
+                for fig in getattr(field_screen, 'figures', []):
+                    if fig.id == self.state.game.advancing_figure_id:
+                        advancing_figure_name = fig.name
+                        break
+                # Find the FieldFigureIcon(s) for display
+                for icon in getattr(field_screen, 'figure_icons', []):
+                    if hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id:
+                        advancing_icons.append(icon)
+                    if (self.state.game.advancing_figure_id_2 and
+                        hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id_2):
+                        advancing_icons.append(icon)
+                        advancing_figure_name = "your figures"
+        
+        images = []
+        if advancing_icons:
+            images.extend(advancing_icons)
+        else:
+            import os
+            icon_path = os.path.join('img', 'figures', 'state_icons', 'charge.png')
+            if os.path.exists(icon_path):
+                advance_img = pygame.image.load(icon_path).convert_alpha()
+                images.append(advance_img)
+        
+        # Build message with battle modifier context
+        base_msg = f"Your opponent did not counter-advance.\n\nSelect one of your opponent's figures to face {advancing_figure_name} in battle."
+        
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        
+        if 'Peasant War' in modifier_types:
+            base_msg += "\n\nPeasant War is active — you may only select village figures."
+        elif 'Civil War' in modifier_types:
+            base_msg += "\n\nCivil War is active — you may only select village figures."
+        
+        modifier_text, modifier_icons = self._get_battle_modifier_info()
+        images.extend(modifier_icons)
+        
+        self.queue_or_show_notification({
+            'message': base_msg,
+            'actions': ['got it!'],
+            'images': images if images else None,
+            'icon': None if images else "info",
+            'title': "Select Opponent's Defender"
+        })
+        
+        # Prevent re-queuing on subsequent update cycles
+        self.state.game.defender_selection_dialogue_shown = True
+
+    def _handle_forced_advance_dialogue_response(self):
+        """Handle response from forced advance confirmation — switch to field screen."""
+        self.state.subscreen = 'field'
+    
+    def check_waiting_for_defender_pick(self):
+        """Check if defender (Player B) should be notified that opponent is picking their battle figure.
+        Instead of a click-through dialogue, we just activate the persistent 'BATTLE INCOMING' prompt."""
+        if not self.state.game or not self.state.game.pending_waiting_for_defender_pick:
+            return
+        
+        # Don't re-activate if already shown
+        if self.state.game.waiting_for_defender_pick_shown:
+            return
+        
+        # Activate persistent prompt directly (no click-through dialogue)
+        self.state.game.waiting_for_defender_pick_shown = True
+    
+    def check_battle_ready(self):
+        """Check if both advancing and defending figures are set — battle is ready to begin.
+        Sequential flow: invader (advancing player) decides first, then defender."""
+        if not self.state.game or not self.state.game.pending_battle_ready:
+            return
+        
+        # Don't re-queue if already shown
+        if self.state.game.battle_ready_shown:
+            return
+        
+        is_advancing = (self.state.game.advancing_player_id == self.state.game.player_id)
+        
+        # Find the advancing and defending figure icons from the field screen
+        advancing_icons = []
+        defending_icons = []
+        field_screen = self.subscreens.get('field')
+        if field_screen:
+            for icon in getattr(field_screen, 'figure_icons', []):
+                if icon.figure.id == self.state.game.advancing_figure_id:
+                    advancing_icons.append(icon)
+                if self.state.game.advancing_figure_id_2 and icon.figure.id == self.state.game.advancing_figure_id_2:
+                    advancing_icons.append(icon)
+                if icon.figure.id == self.state.game.defending_figure_id:
+                    defending_icons.append(icon)
+                if self.state.game.defending_figure_id_2 and icon.figure.id == self.state.game.defending_figure_id_2:
+                    defending_icons.append(icon)
+        
+        # Own figures always on the left, with "vs." separator between groups
+        # Create a "vs." text surface at the target image height to avoid distortion
+        target_height = settings.DIALOGUE_BOX_IMG_HEIGHT
+        vs_font_size = max(12, target_height // 3)
+        vs_font = pygame.font.Font(settings.FONT_PATH, vs_font_size)
+        vs_font.set_bold(True)
+        vs_text = vs_font.render("vs.", True, settings.TITLE_TEXT_COLOR)
+        # Create transparent surface at target height with text centered
+        vs_surface = pygame.Surface((vs_text.get_width() + settings.SMALL_SPACER_X * 2, target_height), pygame.SRCALPHA)
+        vs_x = (vs_surface.get_width() - vs_text.get_width()) // 2
+        vs_y = (target_height - vs_text.get_height()) // 2
+        vs_surface.blit(vs_text, (vs_x, vs_y))
+        
+        if is_advancing:
+            images = advancing_icons + [vs_surface] + defending_icons
+        else:
+            images = defending_icons + [vs_surface] + advancing_icons
+        
+        # Build description of opponent's figure(s) for the message
+        opponent_figure_desc = ""
+        if field_screen:
+            opponent_fig_ids = []
+            if is_advancing:
+                # Invader's opponent is the defender
+                opponent_fig_ids.append(self.state.game.defending_figure_id)
+                if self.state.game.defending_figure_id_2:
+                    opponent_fig_ids.append(self.state.game.defending_figure_id_2)
+            else:
+                # Defender's opponent is the invader
+                opponent_fig_ids.append(self.state.game.advancing_figure_id)
+                if self.state.game.advancing_figure_id_2:
+                    opponent_fig_ids.append(self.state.game.advancing_figure_id_2)
+            
+            fig_descs = []
+            for fig_id in opponent_fig_ids:
+                for fig in getattr(field_screen, 'figures', []):
+                    if fig.id == fig_id:
+                        field_type = getattr(fig.family, 'field', 'unknown') if hasattr(fig, 'family') else 'unknown'
+                        card_count = len(fig.cards) if hasattr(fig, 'cards') else '?'
+                        fig_descs.append(f"a {field_type} figure with {card_count} cards")
+                        break
+            if fig_descs:
+                opponent_figure_desc = f"\n\nYour opponent's figure: {', and '.join(fig_descs)}."
+        
+        if is_advancing:
+            # --- Invader sees fight/fold dialogue immediately ---
+            self.battle_button.locked = False
+            
+            message = ("Both battle figures have been selected!\n\n"
+                       "You are the attacker."
+                       f"{opponent_figure_desc}\n\n"
+                       "Do you want to fight or fold?")
+            
+            self.queue_or_show_notification({
+                'message': message,
+                'actions': ['to battle!', 'fold'],
+                'images': images if images else None,
+                'icon': None if images else 'magic',
+                'title': "Battle Phase Begins"
+            })
+            
+            if field_screen:
+                field_screen.defender_selection_mode = False
+                field_screen._reset_defender_selectable()
+            
+            self.state.game.battle_ready_shown = True
+        else:
+            # --- Defender: wait for invader's decision first ---
+            decisions = self.state.game.battle_decisions or {}
+            invader_decided = decisions.get(str(self.state.game.advancing_player_id)) == 'battle'
+            
+            if not invader_decided:
+                # Invader hasn't decided yet — waiting prompt is drawn in draw()
+                return
+            
+            # Invader chose to fight — now show fight/fold dialogue to defender
+            self.battle_button.locked = False
+            
+            message = ("Both battle figures have been selected!\n\n"
+                       "You are the defender.\n\n"
+                       "The invader has chosen to fight."
+                       f"{opponent_figure_desc}\n\n"
+                       "Do you want to fight or fold?")
+            
+            self.queue_or_show_notification({
+                'message': message,
+                'actions': ['to battle!', 'fold'],
+                'images': images if images else None,
+                'icon': None if images else 'magic',
+                'title': "Battle Phase Begins"
+            })
+            
+            if field_screen:
+                field_screen.defender_selection_mode = False
+                field_screen._reset_defender_selectable()
+            
+            self.state.game.battle_ready_shown = True
+    
+    def _submit_battle_decision(self, decision):
+        """Submit a battle decision (battle or fold) to the server and handle the response."""
+        from utils.game_service import battle_decision
+        result = battle_decision(self.state.game.game_id, self.state.game.player_id, decision)
+        
+        if not result.get('success'):
+            print(f"[GAME_SCREEN] Battle decision failed: {result.get('message')}")
+            return
+        
+        if result.get('resolved'):
+            outcome = result.get('outcome')
+            if outcome == 'battle':
+                # Both chose to fight — proceed to battle screen
+                if result.get('game'):
+                    self.state.game.update_from_dict(result['game'])
+                self.state.subscreen = 'battle'
+            elif outcome == 'fold_win':
+                # One player folded
+                if result.get('game'):
+                    self.state.game.update_from_dict(result['game'])
+                self._reset_battle_state()
+                
+                winner = result.get('winner', 'Opponent')
+                loser = result.get('loser', 'You')
+                points = result.get('points', 10)
+                new_round = self.state.game.current_round
+                
+                if self.state.game.fold_winner_id == self.state.game.player_id:
+                    title = "Victory!"
+                    message = (f"{loser} has folded!\n\n"
+                               f"You win {points} points.\n\n"
+                               f"You are now the invader.\n\n"
+                               f"Round {new_round} begins. It's your turn!")
+                else:
+                    title = "Defeat"
+                    message = (f"You have folded.\n\n"
+                               f"{winner} wins {points} points and is now the invader.\n\n"
+                               f"Round {new_round} begins. It's your turn!")
+                
+                self.state.game.fold_result_shown = True
+                self.queue_or_show_notification({
+                    'message': message,
+                    'actions': ['ok'],
+                    'icon': 'magic',
+                    'title': title
+                })
+        else:
+            # Waiting for opponent's decision (invader chose battle, waiting for defender)
+            self.state.game.waiting_for_battle_decision = True
+
+    def _reset_battle_state(self):
+        """Reset all battle-related state after fold or loss."""
+        self.state.game.pending_battle_ready = False
+        self.state.game.battle_ready_shown = False
+        self.state.game.pending_forced_advance = False
+        self.state.game.forced_advance_dialogue_shown = False
+        self.state.game.pending_defender_selection = False
+        self.state.game.defender_selection_dialogue_shown = False
+        self.state.game.pending_waiting_for_defender_pick = False
+        self.state.game.waiting_for_defender_pick_shown = False
+        # Suppress the next turn notification since battle/fold result was already shown
+        self.state.game.suppress_next_turn_summary = True
+        self.state.game.civil_war_awaiting_second = False
+        self.state.game.civil_war_defender_second = False
+        self.state.game.civil_war_required_color = None
+        self.state.game.waiting_for_battle_decision = False
+        self.state.game.auto_proceed_to_battle = False
+        self._previous_battle_modifiers = []
+        
+        self.battle_button.locked = True
+        
+        field_screen = self.subscreens.get('field')
+        if field_screen:
+            field_screen.defender_selection_mode = False
+            field_screen._reset_defender_selectable()
+            field_screen.load_figures()
+
+    def check_fold_result(self):
+        """Check if a fold outcome was detected via polling (for the waiting player)."""
+        if not self.state.game or not self.state.game.pending_fold_result:
+            return
+        if self.state.game.fold_result_shown:
+            return
+        
+        self._reset_battle_state()
+        
+        fold_outcome = self.state.game.fold_outcome
+        fold_winner_id = self.state.game.fold_winner_id
+        new_round = self.state.game.current_round
+        opponent_name = self.state.game.opponent_name or "Opponent"
+        
+        if fold_outcome != 'fold_win':
+            return
+        
+        if fold_winner_id == self.state.game.player_id:
+            title = "Victory!"
+            message = (f"{opponent_name} has folded!\n\n"
+                       f"You win 10 points.\n\n"
+                       f"You are now the invader.\n\n"
+                       f"Round {new_round} begins. It's your turn!")
+        else:
+            title = "Defeat"
+            message = (f"{opponent_name} wins 10 points and is now the invader.\n\n"
+                       f"Round {new_round} begins. It's your turn!")
+        
+        self.state.game.fold_result_shown = True
+        self.state.game.pending_fold_result = False
+        
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'icon': 'magic',
+            'title': title
+        })
+
+    def check_auto_proceed_to_battle(self):
+        """Check if both players chose battle (detected via polling for the waiting player)."""
+        if not self.state.game or not self.state.game.auto_proceed_to_battle:
+            return
+        
+        self.state.game.auto_proceed_to_battle = False
+        self.state.subscreen = 'battle'
+
+    def _handle_battle_ready_response(self):
+        """Handle response from battle-ready notification — switch to battle screen."""
+        self.state.subscreen = 'battle'
+    
+    def _draw_forced_advance_prompt(self):
+        """Draw a persistent prompt indicating player must advance a figure."""
+        # Create prompt text
+        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
+        prompt_text = "BATTLE TIME"
+        prompt_surface = target_prompt_font.render(prompt_text, True, (255, 200, 100))  # Orange
+        
+        # Create instruction text
+        cancel_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        instruction_text = "Select a figure on the field and advance it toward battle"
+        instruction_surface = cancel_font.render(instruction_text, True, (255, 230, 150))  # Light orange
+        
+        # Create background box for better visibility
+        text_width = max(prompt_surface.get_width(), instruction_surface.get_width())
+        text_height = prompt_surface.get_height() + instruction_surface.get_height() + 10
+        padding = 20
+        
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+        
+        # Draw semi-transparent black background
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+        
+        # Draw orange border for emphasis
+        pygame.draw.rect(self.window, (255, 200, 100), box_rect, 4)
+        
+        # Draw main prompt text centered in box
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+        
+        # Draw instruction text below
+        instruction_x = box_rect.centerx - instruction_surface.get_width() // 2
+        instruction_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(instruction_surface, (instruction_x, instruction_y))
+        
+        # Add pulsing effect to main prompt
+        pulse_alpha = int(128 + 127 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+        pulse_surface = prompt_surface.copy()
+        pulse_surface.set_alpha(pulse_alpha)
+        self.window.blit(pulse_surface, (text_x, text_y))
+    
+    def _draw_own_advance_waiting_prompt(self):
+        """Draw a persistent prompt showing the advancing player is waiting for opponent."""
+        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        
+        # Include active modifier name in prompt header
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        if 'Civil War' in modifier_types:
+            prompt_text = "YOUR FIGURE ADVANCING (Civil War)"
+        elif 'Peasant War' in modifier_types:
+            prompt_text = "YOUR FIGURE ADVANCING (Peasant War)"
+        else:
+            prompt_text = "YOUR FIGURE ADVANCING"
+        prompt_surface = target_prompt_font.render(prompt_text, True, (100, 255, 150))  # Green
+        
+        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        figure_name = self.state.game.own_advance_figure_name or "your figure"
+        detail_text = f"Waiting for opponent's reaction to {figure_name}"
+        detail_surface = detail_font.render(detail_text, True, (180, 255, 200))  # Light green
+        
+        text_width = max(prompt_surface.get_width(), detail_surface.get_width())
+        text_height = prompt_surface.get_height() + detail_surface.get_height() + 10
+        padding = 20
+        
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+        
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+        
+        pygame.draw.rect(self.window, (100, 255, 150), box_rect, 4)
+        
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+        
+        detail_x = box_rect.centerx - detail_surface.get_width() // 2
+        detail_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(detail_surface, (detail_x, detail_y))
+    
+    def _draw_opponent_advance_prompt(self):
+        """Draw a prompt showing opponent has advanced a figure."""
+        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        
+        # Include active modifier name in prompt header
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        
+        # Check if advancing figure has cannot_be_blocked
+        has_cannot_be_blocked = False
+        if self.state.game.advancing_figure_id:
+            field_screen = self.subscreens.get('field')
+            if field_screen:
+                for fig in getattr(field_screen, 'figures', []):
+                    if fig.id == self.state.game.advancing_figure_id:
+                        has_cannot_be_blocked = hasattr(fig, 'cannot_be_blocked') and fig.cannot_be_blocked
+                        break
+        
+        if 'Blitzkrieg' in modifier_types:
+            prompt_text = "OPPONENT ADVANCING (Blitzkrieg)"
+        elif 'Civil War' in modifier_types:
+            prompt_text = "OPPONENT ADVANCING (Civil War)"
+        elif 'Peasant War' in modifier_types:
+            prompt_text = "OPPONENT ADVANCING (Peasant War)"
+        else:
+            prompt_text = "OPPONENT ADVANCING"
+        prompt_surface = target_prompt_font.render(prompt_text, True, (255, 200, 100))  # Orange
+        
+        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        if 'Blitzkrieg' in modifier_types:
+            detail_text = "Blitzkrieg — you cannot counter-advance"
+        elif has_cannot_be_blocked:
+            detail_text = "Cannot be blocked — spend your turn on something else"
+        elif 'Civil War' in modifier_types:
+            detail_text = "Counter-advance with up to two village figures (same color)"
+        elif 'Peasant War' in modifier_types:
+            detail_text = "Counter-advance with a village figure or spend your turn"
+        else:
+            detail_text = "Counter-advance or spend your turn on something else"
+        detail_surface = detail_font.render(detail_text, True, (255, 230, 150))  # Light orange
+        
+        text_width = max(prompt_surface.get_width(), detail_surface.get_width())
+        text_height = prompt_surface.get_height() + detail_surface.get_height() + 10
+        padding = 20
+        
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+        
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+        
+        pygame.draw.rect(self.window, (255, 200, 100), box_rect, 4)
+        
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+        
+        detail_x = box_rect.centerx - detail_surface.get_width() // 2
+        detail_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(detail_surface, (detail_x, detail_y))
+
+    def _draw_waiting_for_defender_pick_prompt(self):
+        """Draw a persistent prompt for the defender waiting for opponent to pick their battle figure."""
+        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        prompt_text = "BATTLE INCOMING"
+        prompt_surface = target_prompt_font.render(prompt_text, True, (255, 150, 150))  # Red-ish
+
+        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        # Check if Blitzkrieg prevented counter-advance
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        if 'Blitzkrieg' in modifier_types:
+            detail_text = "Blitzkrieg prevented counter-advance — opponent is selecting your battle figure"
+        else:
+            detail_text = "Opponent is selecting which of your figures faces them in battle"
+        detail_surface = detail_font.render(detail_text, True, (255, 200, 200))  # Light red
+
+        text_width = max(prompt_surface.get_width(), detail_surface.get_width())
+        text_height = prompt_surface.get_height() + detail_surface.get_height() + 10
+        padding = 20
+
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+
+        pygame.draw.rect(self.window, (255, 150, 150), box_rect, 4)
+
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+
+        detail_x = box_rect.centerx - detail_surface.get_width() // 2
+        detail_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(detail_surface, (detail_x, detail_y))
+
+        # Add pulsing effect
+        pulse_alpha = int(128 + 127 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+        pulse_surface = prompt_surface.copy()
+        pulse_surface.set_alpha(pulse_alpha)
+        self.window.blit(pulse_surface, (text_x, text_y))
+
+    def _draw_waiting_for_battle_decision_prompt(self):
+        """Draw a persistent prompt while waiting for opponent's battle/fold decision."""
+        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        is_advancing = (self.state.game.advancing_player_id == self.state.game.player_id)
+        
+        if is_advancing:
+            prompt_text = "WAITING FOR DEFENDER"
+            detail_text = "You chose to fight — waiting for the defender to decide"
+        else:
+            prompt_text = "WAITING FOR INVADER"
+            detail_text = "The invader is deciding whether to fight or fold"
+        
+        prompt_surface = target_prompt_font.render(prompt_text, True, (200, 200, 100))  # Yellow-ish
+
+        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        detail_surface = detail_font.render(detail_text, True, (220, 220, 150))  # Light yellow
+
+        text_width = max(prompt_surface.get_width(), detail_surface.get_width())
+        text_height = prompt_surface.get_height() + detail_surface.get_height() + 10
+        padding = 20
+
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+
+        pygame.draw.rect(self.window, (200, 200, 100), box_rect, 4)
+
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+
+        detail_x = box_rect.centerx - detail_surface.get_width() // 2
+        detail_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(detail_surface, (detail_x, detail_y))
+
+        # Add pulsing effect
+        pulse_alpha = int(128 + 127 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+        pulse_surface = prompt_surface.copy()
+        pulse_surface.set_alpha(pulse_alpha)
+        self.window.blit(pulse_surface, (text_x, text_y))
+
+    def _draw_select_defender_prompt(self):
+        """Draw a persistent prompt for the advancing player to select an opponent's defender."""
+        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
+        prompt_text = "SELECT OPPONENT'S DEFENDER"
+        prompt_surface = target_prompt_font.render(prompt_text, True, (100, 200, 255))  # Blue
+
+        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        
+        # Build detail text based on active battle modifiers and must_be_attacked
+        detail_text = "Go to the field and select an opponent figure to face your advance"
+        
+        # Check active battle modifiers
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        
+        if 'Peasant War' in modifier_types:
+            detail_text = "Peasant War active — select an opponent's village figure"
+        elif 'Civil War' in modifier_types:
+            detail_text = "Civil War active — select an opponent's village figure"
+        else:
+            # Check if must_be_attacked constraint applies
+            field_screen = self.subscreens.get('field')
+            has_must_be_attacked = False
+            if field_screen:
+                for fig in getattr(field_screen, 'figures', []):
+                    if (fig.player_id != self.state.game.player_id and
+                        hasattr(fig, 'must_be_attacked') and fig.must_be_attacked and
+                        not (hasattr(fig, 'cannot_defend') and fig.cannot_defend) and
+                        not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted)):
+                        has_must_be_attacked = True
+                        break
+            if has_must_be_attacked:
+                detail_text = "Select a figure with 'Must Be Attacked' first"
+            else:
+                detail_text = "Select any opponent figure on the field"
+        
+        detail_surface = detail_font.render(detail_text, True, (180, 220, 255))  # Light blue
+
+        text_width = max(prompt_surface.get_width(), detail_surface.get_width())
+        text_height = prompt_surface.get_height() + detail_surface.get_height() + 10
+        padding = 20
+
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+
+        pygame.draw.rect(self.window, (100, 200, 255), box_rect, 4)
+
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+
+        detail_x = box_rect.centerx - detail_surface.get_width() // 2
+        detail_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(detail_surface, (detail_x, detail_y))
+
+        # Pulsing effect
+        pulse_alpha = int(128 + 127 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+        pulse_surface = prompt_surface.copy()
+        pulse_surface.set_alpha(pulse_alpha)
+        self.window.blit(pulse_surface, (text_x, text_y))
+
     def _handle_infinite_hammer_esc(self, events):
         """Handle ESC key press during Infinite Hammer mode to prompt for turn end confirmation."""
         for event in events:
@@ -1120,6 +2279,10 @@ class GameScreen(Screen):
             self.pending_spell_details = None
             self._cached_castable_spells = None
             self._pending_spell_fetch_ready = False
+            
+            # Mark that we just allowed a spell so check_battle_modifier_changes
+            # doesn't show a duplicate notification for the same modifier
+            self._just_allowed_spell = True
             
             # Update game state directly from response (no server call needed)
             if result.get('game'):
@@ -1492,6 +2655,7 @@ class GameScreen(Screen):
             cannot_defend=matched_family_figure.cannot_defend if matched_family_figure else False,
             instant_charge=matched_family_figure.instant_charge if matched_family_figure else False,
             cannot_be_blocked=matched_family_figure.cannot_be_blocked if matched_family_figure else False,
+            cannot_be_targeted=matched_family_figure.cannot_be_targeted if matched_family_figure else False,
         )
         
         # Apply enchantments if present
@@ -1560,9 +2724,58 @@ class GameScreen(Screen):
         if self.state.game and self.state.game.infinite_hammer_active:
             self._draw_infinite_hammer_prompt()
         
+        # Draw forced advance prompt (invader must advance)
+        if (self.state.game and self.state.game.pending_forced_advance and 
+            self.state.game.forced_advance_dialogue_shown and not self.dialogue_box):
+            self._draw_forced_advance_prompt()
+        
+        # Draw own advance waiting prompt (advancing player waiting for opponent's reaction)
+        if (self.state.game and self.state.game.advancing_figure_id and
+            self.state.game.advancing_player_id == self.state.game.player_id and
+            not self.state.game.turn and not self.state.game.defending_figure_id):
+            self._draw_own_advance_waiting_prompt()
+        
+        # Draw opponent advance prompt (opponent advanced, your turn to respond: counter-advance or spend turn)
+        # Shows only for the non-advancing player when it's their turn and before counter-advance
+        if (self.state.game and self.state.game.advancing_figure_id and 
+            self.state.game.advancing_player_id != self.state.game.player_id and
+            self.state.game.turn and not self.state.game.pending_forced_advance and
+            not self.state.game.defending_figure_id):
+            self._draw_opponent_advance_prompt()
+        
+        # Draw waiting for defender pick prompt (defender finished turn, opponent is choosing battle figure)
+        if (self.state.game and self.state.game.advancing_figure_id and
+            self.state.game.advancing_player_id != self.state.game.player_id and
+            not self.state.game.turn and not self.state.game.defending_figure_id and
+            self.state.game.waiting_for_defender_pick_shown):
+            self._draw_waiting_for_defender_pick_prompt()
+        
+        # Draw defender selection prompt for advancing player (pick opponent's figure)
+        # Don't draw if field screen is already in defender_selection_mode (it draws its own)
+        field_screen = self.subscreens.get('field')
+        defender_selecting = field_screen and getattr(field_screen, 'defender_selection_mode', False)
+        if (self.state.game and self.state.game.pending_defender_selection and
+            self.state.game.defender_selection_dialogue_shown and
+            not self.dialogue_box and not defender_selecting):
+            self._draw_select_defender_prompt()
+        
         # Draw counter spell waiting prompt if active
         if self.waiting_for_counter_response:
             self._draw_counter_spell_waiting_prompt()
+        
+        # Draw waiting for battle decision prompt if active
+        if self.state.game and not self.dialogue_box:
+            # Suppress waiting prompts if fold outcome detected (fold supersedes waiting)
+            fold_active = (self.state.game.fold_outcome or self.state.game.pending_fold_result)
+            if self.state.game.waiting_for_battle_decision and not fold_active:
+                # Invader chose battle, waiting for defender's decision
+                self._draw_waiting_for_battle_decision_prompt()
+            elif (self.state.game.pending_battle_ready and
+                  not self.state.game.battle_ready_shown and
+                  self.state.game.advancing_player_id != self.state.game.player_id and
+                  not fold_active):
+                # Defender waiting for invader to decide first
+                self._draw_waiting_for_battle_decision_prompt()
         
         # Draw counter spell selector on top of everything if active
         if self.counter_spell_selector:
@@ -1585,7 +2798,25 @@ class GameScreen(Screen):
 
     def update(self, events):
         """Update the game screen and all relevant components."""
+        # During defender selection or forced advance, block subscreen changes from button clicks
+        # super().update() calls button.update() which can change state.subscreen
+        field_screen = self.subscreens.get('field')
+        block_subscreen_change = (
+            self.state.game and (
+                (self.state.game.pending_forced_advance and self.state.game.forced_advance_dialogue_shown) or
+                (self.state.game.pending_defender_selection and 
+                 self.state.game.defender_selection_dialogue_shown and
+                 field_screen and field_screen.defender_selection_mode)
+            )
+        )
+        
+        if block_subscreen_change:
+            saved_subscreen = self.state.subscreen
+        
         super().update()
+        
+        if block_subscreen_change:
+            self.state.subscreen = saved_subscreen
 
         # Check if game exists (may be None after logout)
         if not self.state.game:
@@ -1628,6 +2859,33 @@ class GameScreen(Screen):
                 # Handle Infinite Hammer end confirmation
                 elif response == 'yes' and self.state.game and self.state.game.infinite_hammer_active:
                     self._end_infinite_hammer_mode()
+                # Handle forced advance 'got it!' response — switch to field screen
+                elif (response == 'got it!' and self.state.game and 
+                      self.state.game.pending_forced_advance):
+                    self._handle_forced_advance_dialogue_response()
+                # Handle defender selection 'got it!' response — switch to field screen
+                elif (response == 'got it!' and self.state.game and
+                      self.state.game.pending_defender_selection):
+                    self.state.subscreen = 'field'
+                    field_screen = self.subscreens.get('field')
+                    if field_screen:
+                        field_screen.defender_selection_mode = True
+                        field_screen._update_defender_selectable()
+                    self.state.game.defender_selection_dialogue_shown = True
+                # Handle battle ready 'to battle!' response — submit battle decision
+                elif (response == 'to battle!' and self.state.game and
+                      self.state.game.pending_battle_ready):
+                    self.dialogue_box = None
+                    self._submit_battle_decision('battle')
+                    self.show_next_queued_notification()
+                    return
+                # Handle battle ready 'fold' response — submit fold decision
+                elif (response == 'fold' and self.state.game and
+                      self.state.game.pending_battle_ready):
+                    self.dialogue_box = None
+                    self._submit_battle_decision('fold')
+                    self.show_next_queued_notification()
+                    return
                 self.dialogue_box = None  # Close dialogue box
                 # Show next queued notification if any
                 self.show_next_queued_notification()
@@ -1654,6 +2912,48 @@ class GameScreen(Screen):
                     # Player selected a spell to counter with
                     self.counter_spell_selector = None
                     self._cast_counter_spell(result)
+            return
+        
+        # During forced advance, only allow field screen access
+        if self.state.game and self.state.game.pending_forced_advance:
+            # Block screen-changing buttons (handled by GameButton clicks)
+            # Force subscreen to field
+            if self.state.subscreen != 'field':
+                self.state.subscreen = 'field'
+            # Still allow field screen interaction
+            super().handle_events(events)
+            if not self.state.game:
+                return
+            if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
+                self.subscreens[self.state.subscreen].handle_events(events)
+            return
+        
+        # During defender selection, only allow field screen access
+        field_screen = self.subscreens.get('field')
+        if (self.state.game and self.state.game.pending_defender_selection and
+            self.state.game.defender_selection_dialogue_shown and
+            field_screen and field_screen.defender_selection_mode):
+            if self.state.subscreen != 'field':
+                self.state.subscreen = 'field'
+            super().handle_events(events)
+            if not self.state.game:
+                return
+            if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
+                self.subscreens[self.state.subscreen].handle_events(events)
+            return
+        
+        # During Civil War second figure selection, only allow field screen access
+        # Player must pick a second figure or skip — no builds, spells, pickups, etc.
+        if (self.state.game and 
+            (getattr(self.state.game, 'civil_war_awaiting_second', False) or
+             getattr(self.state.game, 'civil_war_defender_second', False))):
+            if self.state.subscreen != 'field':
+                self.state.subscreen = 'field'
+            super().handle_events(events)
+            if not self.state.game:
+                return
+            if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
+                self.subscreens[self.state.subscreen].handle_events(events)
             return
         
         # For caster waiting for response, allow view actions but show error for game actions

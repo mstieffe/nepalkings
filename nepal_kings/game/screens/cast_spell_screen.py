@@ -59,7 +59,7 @@ class CastSpellScreen(SubScreen):
         if real_cards is None:
             self.make_dialogue_box(
                 message="Could not find all required cards in your hand.",
-                actions=['got it!'],
+                actions=['ok'],
                 icon="error",
                 title="Casting Failed"
             )
@@ -221,9 +221,9 @@ class CastSpellScreen(SubScreen):
                         self.make_dialogue_box(
                             message=message_text,
                             actions=['ok'],
-                        icon="magic",
-                        title="Spell Cast"
-                    )
+                            icon="magic",
+                            title="Spell Cast"
+                        )
             
             # Clear selections
             self.selected_spell_family = None
@@ -237,7 +237,7 @@ class CastSpellScreen(SubScreen):
             error_msg = result.get('message', 'Unknown error')
             self.make_dialogue_box(
                 message=f"Failed to cast spell: {error_msg}",
-                actions=['got it!'],
+                actions=['ok'],
                 icon="error",
                 title="Casting Failed"
             )
@@ -373,6 +373,8 @@ class CastSpellScreen(SubScreen):
             selected_spell = self.scroll_text_list_shifter.get_current_selected()
             if selected_spell and self.game.ceasefire_active and not selected_spell.possible_during_ceasefire:
                 self.confirm_button.disabled = True
+            elif selected_spell and getattr(self.game, 'advancing_figure_id', None) and selected_spell.family.type == 'tactics':
+                self.confirm_button.disabled = True
             else:
                 self.confirm_button.disabled = False
         else:
@@ -461,12 +463,8 @@ class CastSpellScreen(SubScreen):
                     # User cancelled
                     self.dialogue_box = None
                 
-                elif response == 'got it!':
-                    # Error message acknowledged
-                    self.dialogue_box = None
-                
-                elif response == 'ok':
-                    # Info message acknowledged
+                elif response in ('got it!', 'ok'):
+                    # Error/info message acknowledged
                     self.dialogue_box = None
             return  # Don't process other events when dialogue is active
         
@@ -554,7 +552,7 @@ class CastSpellScreen(SubScreen):
                                 )
                     
                     elif self.confirm_button.collide() and self.confirm_button.disabled:
-                        # Check if disabled due to ceasefire or not being player's turn
+                        # Check if disabled due to ceasefire, advance, or not being player's turn
                         if self.scroll_text_list_shifter:
                             selected_spell = self.scroll_text_list_shifter.get_current_selected()
                             if selected_spell and self.game.ceasefire_active and not selected_spell.possible_during_ceasefire:
@@ -564,11 +562,18 @@ class CastSpellScreen(SubScreen):
                                     icon="ceasefire_passive",
                                     title="Ceasefire Active"
                                 )
+                            elif selected_spell and getattr(self.game, 'advancing_figure_id', None) and selected_spell.family.type == 'tactics':
+                                self.make_dialogue_box(
+                                    message="Battle spells cannot be cast while a figure is advancing.\n\nThe battle conditions are already set.",
+                                    actions=['ok'],
+                                    icon="error",
+                                    title="Advance Active"
+                                )
                             else:
                                 # Inform user it's not their turn
                                 self.make_dialogue_box(
                                     message="You can only cast spells on your turn.",
-                                    actions=['got it!'],
+                                    actions=['ok'],
                                     icon="error",
                                     title="Not Your Turn"
                                 )
@@ -576,7 +581,7 @@ class CastSpellScreen(SubScreen):
                             # Inform user it's not their turn
                             self.make_dialogue_box(
                                 message="You can only cast spells on your turn.",
-                                actions=['got it!'],
+                                actions=['ok'],
                                 icon="error",
                                 title="Not Your Turn"
                             )

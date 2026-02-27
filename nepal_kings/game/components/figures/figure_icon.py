@@ -13,6 +13,7 @@ class FigureIcon:
     _suit_icon_cache = {}  # Cache for suit icons
     _skill_icon_cache = {}  # Cache for skill icons
     _broken_icon_cache = {}  # Cache for broken state icon
+    _advance_icon_cache = {}  # Cache for advance state icons
     
     @classmethod
     def _load_base_glow_images(cls):
@@ -614,6 +615,16 @@ class FieldFigureIcon(FigureIcon):
         # Check if figure has resource deficits
         self.has_deficit = self._check_resource_deficit(resources_data)
         
+        # Load advance state icons (charge.png for own, charge_opponent.png for opponent)
+        self.advance_icon = self._load_advance_icon(is_own=True)
+        self.advance_icon_big = self._load_advance_icon(is_own=True, is_big=True)
+        self.advance_icon_opponent = self._load_advance_icon(is_own=False)
+        self.advance_icon_opponent_big = self._load_advance_icon(is_own=False, is_big=True)
+        
+        # Defender selection greyed-out state (set by field_screen during defender selection)
+        self.defender_selectable = True
+        self.in_defender_selection_mode = False
+        
         # Initialize glow effects and images (with larger glows for castle figures)
         self.load_glow_effects()
         self._initialize_images(self.family, x, y)
@@ -709,51 +720,73 @@ class FieldFigureIcon(FigureIcon):
 
         # Draw the figure icon
         if self.is_visible:
-            # For visible figures: use colored glows (dark for default/clicked, bright for hover)
+            # Check if greyed out for defender selection (still interactive, uses grey icons)
+            greyed_out = hasattr(self, 'defender_selectable') and not self.defender_selectable
+            
+            # Choose icon/frame images based on greyed-out state
+            icon_normal = self.icon_gray_img if greyed_out else self.icon_img
+            icon_big = self.icon_gray_img_big if greyed_out else self.icon_img_big
+            frame_normal = self.frame_closed_img if greyed_out else self.frame_img
+            frame_big = self.frame_closed_img_big if greyed_out else self.frame_img_big
+            glow_default = self.glow_black if greyed_out else self.glow_yellow_dark
+            glow_hover = self.glow_white_big if greyed_out else self.glow_yellow_big
+            glow_click_big = self.glow_black if greyed_out else self.glow_yellow_dark_big
+            
             if is_default_state:
                 # Default state: dark colored glow
-                glow_rect = self.glow_yellow_dark.get_rect(center=(self.x, self.y + shadow_offset_y))
-                self.window.blit(self.glow_yellow_dark, glow_rect.topleft)
+                glow_rect = glow_default.get_rect(center=(self.x, self.y + shadow_offset_y))
+                self.window.blit(glow_default, glow_rect.topleft)
                 # Draw icon and frame
-                self.window.blit(self.icon_img, self.rect_icon.topleft)
-                self.window.blit(self.frame_img, self.rect_frame.topleft)
+                self.window.blit(icon_normal, self.rect_icon.topleft)
+                self.window.blit(frame_normal, self.rect_frame.topleft)
             elif self.hovered and not is_mouse_pressed:
-                # Hovered (not clicked): bright colored glow with big icon
-                glow_rect = self.glow_yellow_big.get_rect(center=(self.x, self.y + shadow_offset_y))
-                self.window.blit(self.glow_yellow_big, glow_rect.topleft)
-                self.window.blit(self.icon_img_big, self.rect_icon_big.topleft)
-                self.window.blit(self.frame_img_big, self.rect_frame_big.topleft)
+                # Hovered (not clicked): bright glow with big icon
+                glow_rect = glow_hover.get_rect(center=(self.x, self.y + shadow_offset_y))
+                self.window.blit(glow_hover, glow_rect.topleft)
+                self.window.blit(icon_big, self.rect_icon_big.topleft)
+                self.window.blit(frame_big, self.rect_frame_big.topleft)
             elif self.clicked:
-                # Clicked state: dark colored glow with big icon
+                # Clicked state: dark glow with big icon
                 if is_mouse_pressed and self.hovered:
                     # Being pressed: use normal size with dark glow
-                    glow_rect = self.glow_yellow_dark.get_rect(center=(self.x, self.y + shadow_offset_y))
-                    self.window.blit(self.glow_yellow_dark, glow_rect.topleft)
-                    self.window.blit(self.icon_img, self.rect_icon.topleft)
-                    self.window.blit(self.frame_img, self.rect_frame.topleft)
+                    glow_rect = glow_default.get_rect(center=(self.x, self.y + shadow_offset_y))
+                    self.window.blit(glow_default, glow_rect.topleft)
+                    self.window.blit(icon_normal, self.rect_icon.topleft)
+                    self.window.blit(frame_normal, self.rect_frame.topleft)
                 else:
                     # Clicked but not being pressed: big size with dark glow
-                    glow_rect = self.glow_yellow_dark_big.get_rect(center=(self.x, self.y + shadow_offset_y))
-                    self.window.blit(self.glow_yellow_dark_big, glow_rect.topleft)
-                    self.window.blit(self.icon_img_big, self.rect_icon_big.topleft)
-                    self.window.blit(self.frame_img_big, self.rect_frame_big.topleft)
+                    glow_rect = glow_click_big.get_rect(center=(self.x, self.y + shadow_offset_y))
+                    self.window.blit(glow_click_big, glow_rect.topleft)
+                    self.window.blit(icon_big, self.rect_icon_big.topleft)
+                    self.window.blit(frame_big, self.rect_frame_big.topleft)
         else:
             # For hidden figures: white glow for hover, black otherwise
+            # Check if greyed out for defender selection
+            greyed_out_hidden = hasattr(self, 'defender_selectable') and not self.defender_selectable
             is_big_state = self.hovered and not is_mouse_pressed
             
-            if is_big_state:
-                # Hovered: white glow
-                glow_img = self.glow_white_big
-                glow_rect = glow_img.get_rect(center=(self.x, self.y + shadow_offset_y))
-            else:
-                # Default: black glow
+            if greyed_out_hidden:
+                # Non-selectable hidden figure: use greyscale hidden frame
                 glow_img = self.glow_black
                 glow_rect = glow_img.get_rect(center=(self.x, self.y + shadow_offset_y))
-            self.window.blit(glow_img, glow_rect.topleft)
-            
-            frame_img = self.frame_hidden_img_big if is_big_state else self.frame_hidden_img
-            frame_rect = frame_img.get_rect(center=(self.x, self.y))
-            self.window.blit(frame_img, frame_rect.topleft)
+                self.window.blit(glow_img, glow_rect.topleft)
+                frame_img = self.frame_hidden_grey_img_big if is_big_state else self.frame_hidden_grey_img
+                frame_rect = frame_img.get_rect(center=(self.x, self.y))
+                self.window.blit(frame_img, frame_rect.topleft)
+            else:
+                if is_big_state:
+                    # Hovered: white glow
+                    glow_img = self.glow_white_big
+                    glow_rect = glow_img.get_rect(center=(self.x, self.y + shadow_offset_y))
+                else:
+                    # Default: black glow
+                    glow_img = self.glow_black
+                    glow_rect = glow_img.get_rect(center=(self.x, self.y + shadow_offset_y))
+                self.window.blit(glow_img, glow_rect.topleft)
+                
+                frame_img = self.frame_hidden_img_big if is_big_state else self.frame_hidden_img
+                frame_rect = frame_img.get_rect(center=(self.x, self.y))
+                self.window.blit(frame_img, frame_rect.topleft)
         
         # Draw broken state icon if figure has resource deficits (only for visible figures)
         if self.is_visible and self.has_deficit:
@@ -769,6 +802,45 @@ class FieldFigureIcon(FigureIcon):
                 broken_x = frame_rect.left
                 broken_y = frame_rect.top
                 self.window.blit(broken_icon, (broken_x, broken_y))
+
+        # Draw advance overlay icon if this figure is advancing or defending
+        # Show for both visible and hidden figures (including Civil War second picks)
+        # Skip if show_advance_overlay is explicitly disabled (e.g. in dialogue boxes)
+        if self.game and getattr(self, 'show_advance_overlay', True):
+            advancing_id = getattr(self.game, 'advancing_figure_id', None)
+            advancing_id_2 = getattr(self.game, 'advancing_figure_id_2', None)
+            defending_id = getattr(self.game, 'defending_figure_id', None)
+            defending_id_2 = getattr(self.game, 'defending_figure_id_2', None)
+            
+            is_advancing = (advancing_id == self.figure.id) or (advancing_id_2 == self.figure.id)
+            is_defending = (defending_id == self.figure.id) or (defending_id_2 == self.figure.id)
+            
+            if is_advancing or is_defending:
+                if self.is_visible:
+                    is_big_for_advance = (not (is_mouse_pressed and self.hovered)) and (self.clicked or self.hovered)
+                    frame_rect = self.rect_frame_big if is_big_for_advance else self.rect_frame
+                else:
+                    # For hidden figures, compute frame rect from hidden frame
+                    is_big_state = self.hovered and not is_mouse_pressed
+                    frame_img_adv = self.frame_hidden_img_big if is_big_state else self.frame_hidden_img
+                    frame_rect = frame_img_adv.get_rect(center=(self.x, self.y))
+                    is_big_for_advance = is_big_state
+                
+                # Determine if it's own or opponent figure
+                is_own = (self.figure.player_id == self.game.player_id)
+                if is_big_for_advance:
+                    advance_icon = self.advance_icon_big if is_own else self.advance_icon_opponent_big
+                else:
+                    advance_icon = self.advance_icon if is_own else self.advance_icon_opponent
+                
+                if advance_icon:
+                    # Own figures: top-right corner; opponent figures: top-left corner
+                    if is_own:
+                        adv_x = frame_rect.right - advance_icon.get_width()
+                    else:
+                        adv_x = frame_rect.left
+                    adv_y = frame_rect.top
+                    self.window.blit(advance_icon, (adv_x, adv_y))
 
         # Draw figure name and cards together in a box
         self.draw_figure_info()
@@ -831,7 +903,38 @@ class FieldFigureIcon(FigureIcon):
                     if icon:
                         enchantment_icons.append(icon)
         
-        # Only show power/suit/skills for visible figures
+        # Only show power/suit for visible figures; show skills for both
+        # Get skill icons for current state (needed for both visible and hidden)
+        skill_icon_dict = self.skill_icons_big if is_big_state else self.skill_icons
+        
+        # Collect skill icons to display (for both visible and hidden figures)
+        skills_to_display = []
+        if hasattr(self.figure, 'cannot_attack') and self.figure.cannot_attack:
+            skills_to_display.append('cannot_attack')
+        if hasattr(self.figure, 'must_be_attacked') and self.figure.must_be_attacked:
+            skills_to_display.append('must_be_attacked')
+        if hasattr(self.figure, 'rest_after_attack') and self.figure.rest_after_attack:
+            skills_to_display.append('rest_after_attack')
+        if hasattr(self.figure, 'distance_attack') and self.figure.distance_attack:
+            skills_to_display.append('distance_attack')
+        if hasattr(self.figure, 'buffs_allies') and self.figure.buffs_allies:
+            skills_to_display.append('buffs_allies')
+        if hasattr(self.figure, 'blocks_bonus') and self.figure.blocks_bonus:
+            skills_to_display.append('blocks_bonus')
+        if hasattr(self.figure, 'cannot_defend') and self.figure.cannot_defend:
+            skills_to_display.append('cannot_defend')
+        if hasattr(self.figure, 'instant_charge') and self.figure.instant_charge:
+            skills_to_display.append('instant_charge')
+        if hasattr(self.figure, 'cannot_be_blocked') and self.figure.cannot_be_blocked:
+            skills_to_display.append('cannot_be_blocked')
+        if hasattr(self.figure, 'cannot_be_targeted') and self.figure.cannot_be_targeted:
+            skills_to_display.append('cannot_be_targeted')
+        
+        # Get skill icon size from the actual pre-scaled icons
+        skill_icon_size = 0
+        if skills_to_display and skills_to_display[0] in skill_icon_dict:
+            skill_icon_size = skill_icon_dict[skills_to_display[0]].get_height()
+        
         if self.is_visible:
             # Calculate power display
             base_power = self.figure.get_value()
@@ -854,35 +957,6 @@ class FieldFigureIcon(FigureIcon):
             suit_icon = self.suit_icon_big if is_big_state else self.suit_icon
             icon_size = suit_icon.get_height() if suit_icon else int(20 * scale_factor)
             
-            # Get skill icons for current state
-            skill_icon_dict = self.skill_icons_big if is_big_state else self.skill_icons
-            
-            # Collect skill icons to display
-            skills_to_display = []
-            if hasattr(self.figure, 'cannot_attack') and self.figure.cannot_attack:
-                skills_to_display.append('cannot_attack')
-            if hasattr(self.figure, 'must_be_attacked') and self.figure.must_be_attacked:
-                skills_to_display.append('must_be_attacked')
-            if hasattr(self.figure, 'rest_after_attack') and self.figure.rest_after_attack:
-                skills_to_display.append('rest_after_attack')
-            if hasattr(self.figure, 'distance_attack') and self.figure.distance_attack:
-                skills_to_display.append('distance_attack')
-            if hasattr(self.figure, 'buffs_allies') and self.figure.buffs_allies:
-                skills_to_display.append('buffs_allies')
-            if hasattr(self.figure, 'blocks_bonus') and self.figure.blocks_bonus:
-                skills_to_display.append('blocks_bonus')
-            if hasattr(self.figure, 'cannot_defend') and self.figure.cannot_defend:
-                skills_to_display.append('cannot_defend')
-            if hasattr(self.figure, 'instant_charge') and self.figure.instant_charge:
-                skills_to_display.append('instant_charge')
-            if hasattr(self.figure, 'cannot_be_blocked') and self.figure.cannot_be_blocked:
-                skills_to_display.append('cannot_be_blocked')
-            
-            # Get skill icon size from the actual pre-scaled icons
-            skill_icon_size = 0
-            if skills_to_display and skills_to_display[0] in skill_icon_dict:
-                skill_icon_size = skill_icon_dict[skills_to_display[0]].get_height()
-            
             # Calculate total width of info row: power + bonus + enchantment + suit + skills + enchantment icons
             info_row_width = power_surface.get_width()
             if bonus_surface:
@@ -902,21 +976,36 @@ class FieldFigureIcon(FigureIcon):
             # Calculate box width
             box_width = max(text_surface.get_width(), info_row_width) + 2 * padding
         else:
-            # For hidden figures, show only enchantments if any
-            if has_enchantments:
-                # Calculate width for enchantment info
-                enchant_row_width = 0
-                if enchantment_modifier_surface:
-                    enchant_row_width = enchantment_modifier_surface.get_width()
-                if enchantment_icons:
-                    if enchant_row_width > 0:
-                        enchant_row_width += element_spacing
-                    enchant_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
+            # For hidden figures, show skills and enchantments
+            has_info = skills_to_display or has_enchantments
+            if has_info:
+                # Calculate width for info row: skills + enchantment modifier + enchantment icons
+                hidden_info_row_width = 0
                 
-                box_width = max(text_surface.get_width(), enchant_row_width) + 2 * padding
-                info_height = max(default_icon_size, enchantment_modifier_surface.get_height() if enchantment_modifier_surface else 0) + 2 * padding
+                # Add skill icons width
+                if skills_to_display and skill_icon_size > 0:
+                    hidden_info_row_width += len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
+                
+                # Add enchantment modifier
+                if has_enchantments and enchantment_modifier_surface:
+                    if hidden_info_row_width > 0:
+                        hidden_info_row_width += element_spacing
+                    hidden_info_row_width += enchantment_modifier_surface.get_width()
+                
+                # Add enchantment icons
+                if has_enchantments and enchantment_icons:
+                    if hidden_info_row_width > 0:
+                        hidden_info_row_width += element_spacing
+                    hidden_info_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
+                
+                box_width = max(text_surface.get_width(), hidden_info_row_width) + 2 * padding
+                info_height = max(
+                    skill_icon_size if skill_icon_size > 0 else 0,
+                    default_icon_size if enchantment_icons else 0,
+                    enchantment_modifier_surface.get_height() if enchantment_modifier_surface else 0
+                ) + 2 * padding
             else:
-                # No enchantments, only show name
+                # No skills or enchantments, only show name
                 box_width = text_surface.get_width() + 2 * padding
                 info_height = 0
         
@@ -1047,25 +1136,42 @@ class FieldFigureIcon(FigureIcon):
                     self.window.blit(enchant_icon, (current_x, icon_y))
                     current_x += enchant_icon.get_width()
         
-        # Draw enchantments for hidden figures
-        elif not self.is_visible and has_enchantments:
-            # Calculate vertical center for the enchantment row
+        # Draw skills and enchantments for hidden figures
+        elif not self.is_visible and (skills_to_display or has_enchantments):
+            # Calculate vertical center for the info row
             info_center_y = text_bg_rect.bottom + info_height // 2
             
-            # Calculate enchantment row width
-            enchant_row_width = 0
-            if enchantment_modifier_surface:
-                enchant_row_width = enchantment_modifier_surface.get_width()
-            if enchantment_icons:
-                if enchant_row_width > 0:
-                    enchant_row_width += element_spacing
-                enchant_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
+            # Calculate total row width for centering
+            hidden_info_row_width = 0
+            if skills_to_display and skill_icon_size > 0:
+                hidden_info_row_width += len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
+            if has_enchantments and enchantment_modifier_surface:
+                if hidden_info_row_width > 0:
+                    hidden_info_row_width += element_spacing
+                hidden_info_row_width += enchantment_modifier_surface.get_width()
+            if has_enchantments and enchantment_icons:
+                if hidden_info_row_width > 0:
+                    hidden_info_row_width += element_spacing
+                hidden_info_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
             
             # Start from left side of the row
-            current_x = self.x - enchant_row_width // 2
+            current_x = self.x - hidden_info_row_width // 2
+            
+            # Draw skill icons
+            if skills_to_display:
+                for i, skill_key in enumerate(skills_to_display):
+                    if i > 0:
+                        current_x += element_spacing
+                    if skill_key in skill_icon_dict:
+                        skill_icon = skill_icon_dict[skill_key]
+                        skill_y = info_center_y - skill_icon.get_height() // 2
+                        self.window.blit(skill_icon, (current_x, skill_y))
+                        current_x += skill_icon.get_width()
             
             # Draw enchantment modifier
-            if enchantment_modifier_surface:
+            if has_enchantments and enchantment_modifier_surface:
+                if skills_to_display:
+                    current_x += element_spacing
                 enchant_y = info_center_y - enchantment_modifier_surface.get_height() // 2
                 # Draw outline (black) in 4 directions
                 if enchantment_modifier_outline:
@@ -1076,8 +1182,8 @@ class FieldFigureIcon(FigureIcon):
                 current_x += enchantment_modifier_surface.get_width()
             
             # Draw enchantment spell icons
-            if enchantment_icons:
-                if enchantment_modifier_surface:
+            if has_enchantments and enchantment_icons:
+                if enchantment_modifier_surface or skills_to_display:
                     current_x += element_spacing
                 for i, enchant_icon in enumerate(enchantment_icons):
                     if i > 0:
@@ -1091,7 +1197,8 @@ class FieldFigureIcon(FigureIcon):
         Override update to include hover detection and interaction for cards.
         Only allow hovering for visible figures.
         """
-        self.hovered = self.collide() and self.is_visible  # Check if the icon is hovered and visible
+        # Allow hovering for visible figures always; for hidden figures only during defender selection
+        self.hovered = self.collide() and (self.is_visible or self.in_defender_selection_mode)
 
     def _initialize_images(self, fig_fam, x, y) -> None:
         """
@@ -1111,12 +1218,21 @@ class FieldFigureIcon(FigureIcon):
         self.frame_img = self._scale_frame(fig_fam.frame_img, scale_factor)
         self.frame_closed_img = self._scale_frame(fig_fam.frame_closed_img, scale_factor)
         self.frame_hidden_img = self._scale_frame(fig_fam.frame_hidden_img, scale_factor)
+        # Greyscale hidden frames for non-selectable hidden figures
+        if hasattr(fig_fam, 'frame_hidden_greyscale_img') and fig_fam.frame_hidden_greyscale_img:
+            self.frame_hidden_grey_img = self._scale_frame(fig_fam.frame_hidden_greyscale_img, scale_factor)
+        else:
+            self.frame_hidden_grey_img = self.frame_hidden_img
 
         self.icon_img_big = self._scale_icon(fig_fam.icon_img, big_scale_factor)
         self.icon_gray_img_big = self._scale_icon(fig_fam.icon_gray_img, big_scale_factor)
         self.frame_img_big = self._scale_frame(fig_fam.frame_img, big_scale_factor)
         self.frame_closed_img_big = self._scale_frame(fig_fam.frame_closed_img, big_scale_factor)
         self.frame_hidden_img_big = self._scale_frame(fig_fam.frame_hidden_img, big_scale_factor)
+        if hasattr(fig_fam, 'frame_hidden_greyscale_img') and fig_fam.frame_hidden_greyscale_img:
+            self.frame_hidden_grey_img_big = self._scale_frame(fig_fam.frame_hidden_greyscale_img, big_scale_factor)
+        else:
+            self.frame_hidden_grey_img_big = self.frame_hidden_img_big
 
         offset_y = settings.get_y(0.005) if is_castle else settings.get_y(0.00)
         self.set_position(x, y, -settings.get_x(0.00), offset_y)
@@ -1224,6 +1340,26 @@ class FieldFigureIcon(FigureIcon):
             print(f"[FIELD_ICON] Failed to load broken icon: {e}")
         return None
     
+    def _load_advance_icon(self, is_own=True, is_big=False):
+        """Load the advance state icon overlay (charge.png for own, charge_opponent.png for opponent)."""
+        try:
+            filename = 'charge.png' if is_own else 'charge_opponent.png'
+            if filename not in self._advance_icon_cache:
+                icon_path = f'img/figures/state_icons/{filename}'
+                self._advance_icon_cache[filename] = pygame.image.load(icon_path).convert_alpha()
+            
+            advance_img = self._advance_icon_cache[filename]
+            # Size to fit in top corner of icon (same size as broken icon)
+            base_size = int(settings.FIELD_ICON_WIDTH * 0.25)
+            if is_big:
+                icon_size = int(base_size * self.icon_scale_factor)
+            else:
+                icon_size = base_size
+            return pygame.transform.smoothscale(advance_img, (icon_size, icon_size))
+        except Exception as e:
+            print(f"[FIELD_ICON] Failed to load advance icon: {e}")
+        return None
+    
     def draw_icon(self, x: int, y: int, width: int, height: int) -> None:
         """
         Draw the figure icon with full details (power, skills, enchantments) for dialogue boxes.
@@ -1237,8 +1373,13 @@ class FieldFigureIcon(FigureIcon):
         # Temporarily set position and draw in default state
         old_hovered = self.hovered
         old_clicked = self.clicked
+        old_visible = self.is_visible
         self.hovered = False
         self.clicked = False
+        # Only reveal hidden opponent figures if the player has All Seeing Eye active.
+        # Own figures (already is_visible=True) are unaffected.
+        if not self.is_visible and self.game and hasattr(self.game, 'has_active_all_seeing_eye'):
+            self.is_visible = self.game.has_active_all_seeing_eye()
         
         # Calculate center position from top-left and dimensions
         center_x = x + width // 2
@@ -1250,6 +1391,7 @@ class FieldFigureIcon(FigureIcon):
         # Restore original state
         self.hovered = old_hovered
         self.clicked = old_clicked
+        self.is_visible = old_visible
     
     def _check_resource_deficit(self, resources_data=None):
         """Check if this figure has any required resources that are in deficit."""

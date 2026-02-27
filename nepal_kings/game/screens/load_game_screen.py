@@ -84,7 +84,7 @@ class LoadGameScreen(Screen):
             if button.collide():
                 # Set the action to load the game and open a dialogue box
                 self.set_action("load_game", button.text, "open")
-                self.make_dialogue_box(f'Do you want to load the game {button.text}?', actions=["yes", "no"])
+                self.make_dialogue_box(f'Do you want to load the game {button.text}?', actions=["yes", "cancel"], title="Load Game")
                 print(f"Selected game: {button.text}")
 
     def handle_game_loading(self):
@@ -101,7 +101,7 @@ class LoadGameScreen(Screen):
             else:
                 print("Game not found")
                 self.state.set_msg("Game not found")
-        elif self.state.action["status"] == 'no':
+        elif self.state.action["status"] == 'cancel':
             print("Game load cancelled")
 
         # Reset action to ensure further interactions are possible

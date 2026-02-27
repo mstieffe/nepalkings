@@ -100,16 +100,16 @@ class NewGameScreen(Screen):
         for button, user in zip(self.challenge_buttons, self.possible_opponents):
             if button.collide():
                 self.set_action("new_game_challenge", user, "open")
-                self.make_dialogue_box(f'Do you want to start a game with {button.text}?', actions=["accept", "reject"])
+                self.make_dialogue_box(f'Do you want to start a game with {button.text}?', actions=["accept", "reject"], title="Challenge Player")
 
         # Handle accepting or removing open challenges
         for button, challenge in zip(self.open_challenge_buttons, self.open_challenges):
             if button.collide():
                 if challenge in self.user['challenges_issued']:
-                    self.make_dialogue_box(f'You have challenged {button.text} at {challenge["date"]}')
+                    self.make_dialogue_box(f'You have challenged {button.text} at {challenge["date"]}', actions=['ok'], title="Challenge Pending")
                 else:
                     self.set_action("accept_game_challenge", challenge, "open")
-                    self.make_dialogue_box(f'Do you want to accept a game with {button.text}?', actions=["accept", "reject"])
+                    self.make_dialogue_box(f'Do you want to accept a game with {button.text}?', actions=["accept", "reject"], title="Accept Challenge")
 
     def handle_create_challenge(self, opponent_name):
         """Create a new challenge and handle potential errors."""

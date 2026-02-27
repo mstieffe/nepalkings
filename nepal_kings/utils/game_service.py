@@ -57,3 +57,75 @@ def remove_challenge(challenge_id):
         return response.json()
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to remove challenge: {str(e)}"}
+
+
+def advance_figure(game_id, player_id, figure_id):
+    """Advance a figure toward battle."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/advance_figure',
+            json={'game_id': game_id, 'player_id': player_id, 'figure_id': figure_id}
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to advance figure: {str(e)}"}
+
+
+def select_defender(game_id, player_id, figure_id):
+    """Select a defending figure against the opponent's advancing figure."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/select_defender',
+            json={'game_id': game_id, 'player_id': player_id, 'figure_id': figure_id}
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to select defender: {str(e)}"}
+
+
+def skip_civil_war_second(game_id, player_id, context='advance'):
+    """Skip selecting a second Civil War figure."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/skip_civil_war_second',
+            json={'game_id': game_id, 'player_id': player_id, 'context': context}
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to skip: {str(e)}"}
+
+
+def battle_decision(game_id, player_id, decision):
+    """Submit a battle decision (fight or fold)."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/battle_decision',
+            json={'game_id': game_id, 'player_id': player_id, 'decision': decision}
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to submit battle decision: {str(e)}"}
+
+
+def cannot_advance_loss(game_id, player_id):
+    """Report that the player cannot advance any figure and auto-loses the battle."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/cannot_advance_loss',
+            json={'game_id': game_id, 'player_id': player_id}
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to process auto-loss: {str(e)}"}
+
+
+def defender_no_figures_loss(game_id, player_id):
+    """Report that the defender has no valid figures for battle — defender auto-loses."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/defender_no_figures_loss',
+            json={'game_id': game_id, 'player_id': player_id}
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to process defender auto-loss: {str(e)}"}

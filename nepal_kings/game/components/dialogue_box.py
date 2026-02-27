@@ -57,8 +57,10 @@ class DialogueBox:
                     self.after_lines.append('')
         self.after_lines_surfaces = [self.font.render(line, True, settings.MSG_TEXT_COLOR) for line in self.after_lines]
 
-        # Separate drawable objects from plain images
-        self.scaled_images, self.drawable_objects = self.process_images()
+        # Process images into ordered list preserving original sequence
+        self.ordered_items = self.process_images()
+        has_surfaces = any(t == 'surface' for t, _ in self.ordered_items)
+        has_drawables = any(t == 'drawable' for t, _ in self.ordered_items)
 
         # Calculate the title height
         self.title_height = self.title_font.get_height() + settings.SMALL_SPACER_Y if self.title else 0
@@ -67,12 +69,12 @@ class DialogueBox:
         self.text_height = len(self.lines) * (self.font.get_height() + settings.SMALL_SPACER_Y)
         self.after_text_height = len(self.after_lines) * (self.font.get_height() + settings.SMALL_SPACER_Y) if self.after_lines else 0
         self.button_height = (settings.MENU_BUTTON_HEIGHT + 2 * settings.SMALL_SPACER_Y) if self.actions else 0
-        self.img_height = settings.DIALOGUE_BOX_IMG_HEIGHT if self.scaled_images else 0
-        self.drawable_object_height = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT if self.drawable_objects else 0
+        self.img_height = settings.DIALOGUE_BOX_IMG_HEIGHT if has_surfaces else 0
+        self.drawable_object_height = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT if has_drawables else 0
         # Negative spacing to reduce gap between text and icon (counteracts SMALL_SPACER_Y from line calculation)
-        self.img_spacing = -settings.SMALL_SPACER_Y // 2 if self.scaled_images or self.drawable_objects else 0
-        # Add moderate spacing below images/objects to separate from after-text (applies to BOTH scaled_images and drawable_objects)
-        self.drawable_bottom_spacing = int(settings.SMALL_SPACER_Y * 1.5) if (self.scaled_images or self.drawable_objects) else 0
+        self.img_spacing = -settings.SMALL_SPACER_Y // 2 if self.ordered_items else 0
+        # Add moderate spacing below images/objects to separate from after-text
+        self.drawable_bottom_spacing = int(settings.SMALL_SPACER_Y * 1.5) if self.ordered_items else 0
         self.box_height = (self.title_height + self.text_height + self.img_height + self.drawable_object_height +
                            self.img_spacing + self.drawable_bottom_spacing + self.after_text_height + self.button_height + settings.SMALL_SPACER_Y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y)
 
@@ -98,9 +100,9 @@ class DialogueBox:
             self.buttons = []
 
     def process_images(self):
-        """Separate pygame.Surface images and drawable objects, scaling the surfaces."""
-        scaled_images = []
-        drawable_objects = []
+        """Process images into an ordered list of (type, item) tuples, preserving original sequence.
+        Surfaces are scaled; drawable objects are kept as-is."""
+        ordered = []
 
         for img in self.images:
             if isinstance(img, pygame.Surface):
@@ -108,12 +110,12 @@ class DialogueBox:
                 img_width, img_height = img.get_size()
                 scale_ratio = settings.DIALOGUE_BOX_IMG_HEIGHT / img_height
                 new_width = int(img_width * scale_ratio)
-                scaled_images.append(pygame.transform.smoothscale(img, (new_width, settings.DIALOGUE_BOX_IMG_HEIGHT)))
+                scaled = pygame.transform.smoothscale(img, (new_width, settings.DIALOGUE_BOX_IMG_HEIGHT))
+                ordered.append(('surface', scaled))
             elif hasattr(img, "draw_icon"):
-                # Identify objects with a draw_icon method
-                drawable_objects.append(img)
+                ordered.append(('drawable', img))
 
-        return scaled_images, drawable_objects
+        return ordered
 
     def scale_icon(self, icon):
         """Scale the provided icon to fit the dialogue box."""
@@ -156,15 +158,19 @@ class DialogueBox:
         # Calculate image_y position (needed for after_lines even if no images)
         image_y = current_y + len(self.lines_surfaces) * (self.font.get_height() + settings.SMALL_SPACER_Y) + self.img_spacing
 
-        # Draw scaled images horizontally
-        if self.scaled_images or self.drawable_objects:
+        # Draw images/objects horizontally in original order
+        if self.ordered_items:
             # Calculate maximum available width for images (leave margin on sides)
             max_images_width = settings.DIALOGUE_BOX_WIDTH - 2 * settings.SMALL_SPACER_X
             
-            # Calculate total number of items and their widths
-            num_images = len(self.scaled_images) + len(self.drawable_objects)
-            image_widths = [img.get_width() for img in self.scaled_images] + \
-                          [settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT] * len(self.drawable_objects)
+            # Calculate widths for each item in order
+            num_images = len(self.ordered_items)
+            image_widths = []
+            for item_type, item in self.ordered_items:
+                if item_type == 'surface':
+                    image_widths.append(item.get_width())
+                else:
+                    image_widths.append(settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
             
             # Calculate natural total width with normal spacing
             natural_total_width = sum(image_widths) + (num_images - 1) * settings.SMALL_SPACER_X
@@ -175,44 +181,34 @@ class DialogueBox:
                 # Images fit normally - use natural spacing
                 image_x_start = self.rect.centerx - natural_total_width // 2
                 
-                # Draw scaled pygame.Surface images
-                for img in self.scaled_images:
-                    self.window.blit(img, (image_x_start, image_y))
-                    image_x_start += img.get_width() + settings.SMALL_SPACER_X
-
-                # Draw objects with a custom draw_icon method
-                for obj in self.drawable_objects:
-                    obj.draw_icon(image_x_start, image_y, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
-                    image_x_start += settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT + settings.SMALL_SPACER_X
+                for item_type, item in self.ordered_items:
+                    if item_type == 'surface':
+                        self.window.blit(item, (image_x_start, image_y))
+                        image_x_start += item.get_width() + settings.SMALL_SPACER_X
+                    else:
+                        item.draw_icon(image_x_start, image_y, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
+                        image_x_start += settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT + settings.SMALL_SPACER_X
             else:
                 # Images need to overlap - calculate dynamic spacing
-                total_images_width = sum(image_widths)
-                
                 if num_images == 1:
-                    # Single image - center it
                     spacing = 0
                     image_x_start = self.rect.centerx - image_widths[0] // 2
                 else:
-                    # Multiple images - distribute with overlap across max width
-                    # Calculate spacing (may be negative for overlap)
                     spacing = (max_images_width - image_widths[-1]) / (num_images - 1)
-                    # Start position so images span max_images_width centered
                     image_x_start = self.rect.centerx - max_images_width // 2
                 
-                # Draw all images with calculated spacing
-                all_images = list(self.scaled_images) + list(self.drawable_objects)
-                for i, item in enumerate(all_images):
+                for i, (item_type, item) in enumerate(self.ordered_items):
                     x_pos = image_x_start + i * spacing
                     
-                    if isinstance(item, pygame.Surface):
+                    if item_type == 'surface':
                         self.window.blit(item, (x_pos, image_y))
                     else:
-                        # Drawable object
                         item.draw_icon(x_pos, image_y, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
 
         # Draw message_after_images text if provided
         if self.after_lines_surfaces:
-            after_text_y = image_y + max(self.img_height, self.drawable_object_height) + self.drawable_bottom_spacing
+            content_height = max(self.img_height, self.drawable_object_height) if self.ordered_items else 0
+            after_text_y = image_y + content_height + self.drawable_bottom_spacing
             for i, line_surface in enumerate(self.after_lines_surfaces):
                 line_y = after_text_y + i * (self.font.get_height() + settings.SMALL_SPACER_Y)
                 line_rect = line_surface.get_rect(center=(self.rect.centerx, line_y))
