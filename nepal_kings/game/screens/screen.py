@@ -58,9 +58,9 @@ class Screen:
         text_rect.topleft = (x, y)
         self.window.blit(text_obj, text_rect)
 
-    def make_dialogue_box(self, message, actions=None):
+    def make_dialogue_box(self, message, actions=None, title=""):
         """Create a dialogue box with specified message and actions."""
-        self.dialogue_box = DialogueBox(self.window, message, actions=actions)
+        self.dialogue_box = DialogueBox(self.window, message, actions=actions, title=title)
 
     def reset_action(self):
         """Reset the current action state."""

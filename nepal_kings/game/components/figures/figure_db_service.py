@@ -218,6 +218,7 @@ class FigureDbService:
                 cannot_defend=matched_family_figure.cannot_defend if matched_family_figure else False,
                 instant_charge=matched_family_figure.instant_charge if matched_family_figure else False,
                 cannot_be_blocked=matched_family_figure.cannot_be_blocked if matched_family_figure else False,
+                cannot_be_targeted=matched_family_figure.cannot_be_targeted if matched_family_figure else False,
                 id=figure_data['id'],
                 player_id=figure_data.get('player_id'),
             )

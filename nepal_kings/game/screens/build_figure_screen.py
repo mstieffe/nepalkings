@@ -232,17 +232,17 @@ class BuildFigureScreen(SubScreen):
                     self.create_figure_in_db(selected_figure)
 
                     self.make_dialogue_box(
-                        message="Figure created successfully!",
-                        actions=['ok'],
+                        message="Your new figure has been placed on the field.",
+                        actions=['to field'],
                         icon="figure",
-                        title="Figure created!"
+                        title="Figure Built"
                     )
 
-                elif response in ['cancel', 'got it!']:
-                    self.dialogue_box = None
-                elif response == 'ok':
+                elif response == 'to field':
                     self.dialogue_box = None
                     self.state.subscreen = "field"
+                elif response in ['cancel', 'got it!', 'ok']:
+                    self.dialogue_box = None
 
         else:
 
@@ -251,22 +251,26 @@ class BuildFigureScreen(SubScreen):
 
                     # Handle confirm button only if a figure is selected
                     if selected_figure and self.confirm_button.collide() and not self.confirm_button.disabled:
-                        #self.create_figure_in_db(selected_figure)
 
-                        # get figure family button of selected figure
-                        internal_color = self.color_mapping.get(self.color, self.color)
-                        for button in self.figure_family_buttons[internal_color]:
-                            if button.family == selected_figure.family:
-                                selected_family_button = button
-                                break
+                        # Create a FieldFigureIcon for the selected figure (without bonus)
+                        from game.components.figures.figure_icon import FieldFigureIcon
+                        figure_icon = FieldFigureIcon(
+                            self.window,
+                            self.game,
+                            selected_figure,
+                            is_visible=True,
+                            x=0,
+                            y=0,
+                            all_player_figures=[selected_figure],
+                            resources_data={}
+                        )
+                        figure_icon.show_advance_overlay = False
 
-                        #print("Selected Figure:", selected_figure)
-                        #print("Selected Family Button:", selected_family_button)
-
+                        images = [figure_icon]
                         self.make_dialogue_box(
                             message="Do you want to build this figure?",
                             actions=['yes', 'cancel'],
-                            images=[selected_family_button],
+                            images=images,
                             icon="question",
                             title="Create Figure",
 
@@ -275,7 +279,7 @@ class BuildFigureScreen(SubScreen):
                     elif selected_figure and self.confirm_button.collide() and self.confirm_button.disabled:
                         self.make_dialogue_box(
                             message="You can only build figures on your turn.",
-                            actions=['got it!'],
+                            actions=['ok'],
                             icon="error",
                             title="Not Your Turn"
                         )

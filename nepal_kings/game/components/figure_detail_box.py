@@ -117,13 +117,21 @@ class FigureDetailBox:
         is_maharaja = 'Maharaja' in self.figure.name
         
         if is_own_figure and self.game.turn:
+            # Check if player is in forced advance mode (turns_left == 0)
+            is_forced_advance = (
+                self.game.invader and
+                self.game.current_player.get('turns_left', 0) == 0 and
+                not self.game.ceasefire_active and
+                not self.game.advancing_figure_id
+            )
+            
             # Add upgrade action if figure can be upgraded AND upgrade card is available
             if (hasattr(self.figure, 'upgrade_family_name') and self.figure.upgrade_family_name 
                 and self.upgrade_card_available):
                 actions.append('Upgrade')
             
-            # Add charge action (formerly "move")
-            actions.append('Charge')
+            # Add advance action
+            actions.append('Advance')
             
             # Add pick up action if not a Maharaja
             if not is_maharaja:
@@ -141,10 +149,70 @@ class FigureDetailBox:
             button.disabled = False
             button.disabled_reason = None
             
-            # Check if charge button should be disabled due to ceasefire
-            if action == 'Charge' and self.game.ceasefire_active:
+            # Check if advance button should be disabled due to ceasefire
+            if action == 'Advance' and self.game.ceasefire_active:
                 button.disabled = True
                 button.disabled_reason = 'ceasefire'
+            
+            # Check if upgrade/pick up should be disabled during forced advance
+            if action in ('Upgrade', 'Pick up') and is_forced_advance:
+                button.disabled = True
+                button.disabled_reason = 'forced_advance'
+            
+            # Check if advance button should be disabled due to cannot_attack
+            if action == 'Advance' and hasattr(self.figure, 'cannot_attack') and self.figure.cannot_attack:
+                button.disabled = True
+                button.disabled_reason = 'cannot_attack'
+            
+            # Check if advance button should be disabled because opponent's advancing figure has cannot_be_blocked
+            # (This means we can't counter-advance against it)
+            if (action == 'Advance' and self.game.advancing_figure_id and
+                self.game.advancing_player_id != self.game.player_id):
+                # Opponent has advanced — check if their figure has cannot_be_blocked
+                advancing_fig = None
+                if hasattr(self, 'all_figures') and self.all_figures:
+                    for fig in self.all_figures:
+                        if fig.id == self.game.advancing_figure_id:
+                            advancing_fig = fig
+                            break
+                if advancing_fig and hasattr(advancing_fig, 'cannot_be_blocked') and advancing_fig.cannot_be_blocked:
+                    button.disabled = True
+                    button.disabled_reason = 'cannot_be_blocked'
+            
+            # Check battle modifier restrictions on the Advance button
+            if action == 'Advance' and not button.disabled:
+                modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
+                modifier_types = [m.get('type') for m in modifiers]
+                
+                # Blitzkrieg: defender (non-advancing player) cannot counter-advance
+                if 'Blitzkrieg' in modifier_types:
+                    if (self.game.advancing_figure_id and
+                        self.game.advancing_player_id != self.game.player_id):
+                        button.disabled = True
+                        button.disabled_reason = 'blitzkrieg'
+                
+                # Peasant War / Civil War: only village figures can advance
+                if 'Peasant War' in modifier_types or 'Civil War' in modifier_types:
+                    figure_field = getattr(self.figure.family, 'field', None) if hasattr(self.figure, 'family') else None
+                    if figure_field != 'village':
+                        button.disabled = True
+                        if 'Peasant War' in modifier_types:
+                            button.disabled_reason = 'peasant_war'
+                        else:
+                            button.disabled_reason = 'civil_war'
+                
+                # Civil War second pick: must match the color of the first figure
+                if 'Civil War' in modifier_types and not button.disabled:
+                    if hasattr(self.game, 'civil_war_awaiting_second') and self.game.civil_war_awaiting_second:
+                        required_color = getattr(self.game, 'civil_war_required_color', None)
+                        figure_color = getattr(self.figure.family, 'color', None) if hasattr(self.figure, 'family') else None
+                        if required_color and figure_color != required_color:
+                            button.disabled = True
+                            button.disabled_reason = 'civil_war_wrong_color'
+                        # Also disable if this figure is already the first advance pick
+                        if self.figure.id == self.game.advancing_figure_id:
+                            button.disabled = True
+                            button.disabled_reason = 'civil_war_already_selected'
             
             buttons.append(button)
 
@@ -619,6 +687,8 @@ class FigureDetailBox:
             skills_to_display.append(('instant_charge', 'Instant Charge'))
         if hasattr(self.figure, 'cannot_be_blocked') and self.figure.cannot_be_blocked:
             skills_to_display.append(('cannot_be_blocked', 'Cannot Be Blocked'))
+        if hasattr(self.figure, 'cannot_be_targeted') and self.figure.cannot_be_targeted:
+            skills_to_display.append(('cannot_be_targeted', 'Cannot Be Targeted'))
         
         print(f"[FIGURE_DETAIL] Skills to display: {skills_to_display}")
         

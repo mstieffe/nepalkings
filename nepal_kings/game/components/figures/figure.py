@@ -22,6 +22,7 @@ class FigureFamily:
         build_position: Optional[tuple] = None,
         description: str = "",
         field: Optional[str] = None,
+        frame_hidden_greyscale_img: pygame.Surface = None,
     ):
         self.name = name
         self.color = color
@@ -32,6 +33,7 @@ class FigureFamily:
         self.frame_img = frame_img
         self.frame_closed_img = frame_closed_img
         self.frame_hidden_img = frame_hidden_img
+        self.frame_hidden_greyscale_img = frame_hidden_greyscale_img
         self.glow_img = glow_img
         self.build_position = build_position
         self.description = description
@@ -73,6 +75,7 @@ class Figure:
         cannot_defend: bool = False,  # Figure cannot defend other figures
         instant_charge: bool = False,  # Figure charges instantly into battle
         cannot_be_blocked: bool = False,  # Figure cannot be blocked when advancing
+        cannot_be_targeted: bool = False,  # Figure cannot be selected for battle (advance or defend)
         description: str = "",
         id: Optional[int] = None,
         player_id: Optional[int] = None,
@@ -101,6 +104,7 @@ class Figure:
         self.cannot_defend = cannot_defend
         self.instant_charge = instant_charge
         self.cannot_be_blocked = cannot_be_blocked
+        self.cannot_be_targeted = cannot_be_targeted
         
         # Active enchantment effects on this figure
         self.active_enchantments = []  # List of dicts: {'spell_name': str, 'spell_icon': str, 'power_modifier': int}

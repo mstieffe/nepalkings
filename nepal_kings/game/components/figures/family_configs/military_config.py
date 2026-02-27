@@ -170,7 +170,8 @@ military_dict_list = [
                 requires={'warrior_black': 1, 'material_black': 6},
                 cannot_attack=True,  # Walls are defensive and cannot attack
                 cannot_defend=True,  # Walls cannot defend other figures
-                buffs_allies=True  # Walls provide buffs to allied figures under attack
+                buffs_allies=True,  # Walls provide buffs to allied figures under attack
+                cannot_be_targeted=True  # Walls cannot be selected for battle
             )
         ]
     },

@@ -57,6 +57,7 @@ SKILL_ICON_IMG_PATH_DICT = {
     'cannot_defend': 'img/figures/state_icons/cannot_defend.png',
     'instant_charge': 'img/figures/state_icons/instant_charge.png',
     'cannot_be_blocked': 'img/figures/state_icons/cannot_be_blocked.png',
+    'cannot_be_targeted': 'img/figures/state_icons/cannot_be_targeted.png',
 }
 
 # SCOREBORD SCROLL

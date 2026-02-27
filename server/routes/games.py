@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
 import random
-from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure
+from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry
 from game_service.deck_manager import DeckManager
 
 import server_settings as settings
@@ -11,25 +11,46 @@ games = Blueprint('games', __name__)
 def _check_and_update_ceasefire(game):
     """
     Check if ceasefire should end and update game state accordingly.
-    Ceasefire lasts for 3 invader turns. Returns True if ceasefire ended this turn.
+    Ceasefire lasts for 3 invader turns normally.
+    Blitzkrieg ceasefire ends when both players have 0 turns left.
+    Returns True if ceasefire ended this check.
     """
     if not game.ceasefire_active:
         return False
     
-    # Get invader player
+    # Blitzkrieg ceasefire: ends when both players have 0 turns left
+    # (so the invader can then do the forced advance)
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+    if has_blitzkrieg:
+        all_zero = all(p.turns_left <= 0 for p in game.players)
+        if all_zero:
+            print(f"[CEASEFIRE] Blitzkrieg ceasefire ending (both players at 0 turns)")
+            game.ceasefire_active = False
+            game.ceasefire_start_turn = None
+            db.session.commit()
+            return True
+        else:
+            # Blitzkrieg ceasefire still active — skip the normal turn-based check
+            return False
+    
+    # Normal ceasefire: lasts for 3 invader turns
+    # ceasefire_start_turn stores the invader's "turn index" when ceasefire began
+    # (i.e. INITIAL_TURNS_INVADER - invader.turns_left at ceasefire start)
     invader_player = Player.query.get(game.invader_player_id)
     if not invader_player:
         return False
     
     # Calculate how many invader turns have passed since ceasefire started
     current_turn = settings.INITIAL_TURNS_INVADER - invader_player.turns_left
-    turns_since_start = current_turn - (game.ceasefire_start_turn or 0)
+    ceasefire_start = game.ceasefire_start_turn if game.ceasefire_start_turn is not None else 0
+    invader_turns_during_ceasefire = current_turn - ceasefire_start
     
-    print(f"[CEASEFIRE] Current turn: {current_turn}, Start turn: {game.ceasefire_start_turn}, Turns passed: {turns_since_start}")
+    print(f"[CEASEFIRE] Current turn index: {current_turn}, Ceasefire start index: {ceasefire_start}, Invader turns during ceasefire: {invader_turns_during_ceasefire}")
     
     # Ceasefire ends after 3 invader turns
-    if turns_since_start >= 3:
-        print(f"[CEASEFIRE] Ceasefire ending (3 turns passed)")
+    if invader_turns_during_ceasefire >= 3:
+        print(f"[CEASEFIRE] Ceasefire ending (3 invader turns passed)")
         game.ceasefire_active = False
         game.ceasefire_start_turn = None
         db.session.commit()
@@ -480,6 +501,27 @@ def _get_opponent_turn_summary(game, current_player_id):
             action_data['message'] = f'Cast Dump Cards - you drew {len(action_data["new_cards"])} new cards'
             print(f"[DUMP_CARDS_SERVER] Serialized {len(action_data['new_cards'])} cards for notification")
         
+        elif spell_name == 'Poison':
+            # Check if the poisoned figure belongs to the current player
+            from models import ActiveSpell
+            poison_spell = ActiveSpell.query.filter(
+                ActiveSpell.game_id == game.id,
+                ActiveSpell.spell_name.like('%Poison%'),
+                ActiveSpell.player_id == opponent.id,
+                ActiveSpell.target_figure_id.isnot(None)
+            ).order_by(ActiveSpell.id.desc()).first()
+            
+            if poison_spell and poison_spell.target_figure_id:
+                target_figure = Figure.query.get(poison_spell.target_figure_id)
+                if target_figure and target_figure.player_id == current_player_id:
+                    target_name = (poison_spell.effect_data or {}).get('target_figure_name', target_figure.name)
+                    action_data['affects_player'] = True
+                    action_data['target_figure_name'] = target_name
+                    action_data['target_figure_id'] = poison_spell.target_figure_id
+                    action_data['message'] = f'Cast Poison on your {target_name} (-6 power)'
+                else:
+                    action_data['message'] = f'Cast Poison on their own figure'
+        
         elif spell_name == 'Explosion':
             action_data['affects_player'] = True
             action_data['details'] = 'A figure might have been destroyed'
@@ -525,6 +567,9 @@ def get_game():
 
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 400
+
+        # Check if Blitzkrieg ceasefire should end (runs on every poll)
+        _check_and_update_ceasefire(game)
 
         return jsonify({
             'game': game.serialize()
@@ -945,3 +990,688 @@ def update_points():
         return jsonify({'success': False, 'message': f"Failed to update points: {str(e)}"}), 400
 
 
+@games.route('/advance_figure', methods=['POST'])
+def advance_figure():
+    """
+    Player advances a figure toward battle. This sets the advancing figure
+    on the game and flips the turn to the opponent. Does NOT consume a turn.
+    In Civil War, each player selects up to 2 village figures of the same color.
+    """
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+        figure_id = data['figure_id']
+
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+        # Validate it's this player's turn
+        if game.turn_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Not your turn'}), 400
+
+        # Clear stale fold/battle decision state from previous battle phase
+        if game.fold_outcome or game.battle_confirmed or game.battle_decisions:
+            game.fold_outcome = None
+            game.fold_winner_id = None
+            game.battle_confirmed = False
+            game.battle_decisions = None
+
+        # Validate ceasefire is not active
+        if game.ceasefire_active:
+            return jsonify({'success': False, 'message': 'Cannot advance during ceasefire'}), 400
+
+        # Validate figure belongs to this player
+        figure = Figure.query.get(figure_id)
+        if not figure or figure.player_id != player_id:
+            return jsonify({'success': False, 'message': 'Figure not found or not yours'}), 400
+
+        # Check battle modifiers
+        modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+        has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+
+        # Determine if this is a counter-advance (opponent already advanced)
+        is_counter_advance = (game.advancing_figure_id is not None and 
+                              game.advancing_player_id != player_id)
+
+        civil_war_need_second = False
+        civil_war_color = None
+        is_second_pick = False
+
+        if has_civil_war:
+            # Civil War: each player selects up to 2 village figures of the same color
+            if is_counter_advance:
+                # Defending player's counter-advance picks
+                if game.defending_figure_id and game.defending_figure_id_2:
+                    return jsonify({'success': False, 'message': 'You already have 2 defending figures'}), 400
+                
+                if game.defending_figure_id and not game.defending_figure_id_2:
+                    # Prevent selecting the same figure twice
+                    if figure_id == game.defending_figure_id:
+                        return jsonify({'success': False, 'message': 'This figure is already selected'}), 400
+                    # Second counter-advance pick — validate same color
+                    first_figure = Figure.query.get(game.defending_figure_id)
+                    if first_figure and first_figure.color != figure.color:
+                        return jsonify({'success': False, 'message': 'Second figure must be the same color as the first'}), 400
+                    game.defending_figure_id_2 = figure_id
+                    is_second_pick = True
+                else:
+                    # First counter-advance pick
+                    game.defending_figure_id = figure_id
+                    # Check if there's another eligible village figure of same color
+                    eligible_seconds = Figure.query.filter(
+                        Figure.player_id == player_id,
+                        Figure.id != figure_id,
+                        Figure.field == 'village',
+                        Figure.color == figure.color
+                    ).all()
+                    if eligible_seconds:
+                        civil_war_need_second = True
+                        civil_war_color = figure.color
+            else:
+                # Advancing player's picks
+                if game.advancing_figure_id and game.advancing_figure_id_2 and game.advancing_player_id == player_id:
+                    return jsonify({'success': False, 'message': 'You already have 2 advancing figures'}), 400
+                
+                if game.advancing_figure_id and game.advancing_player_id == player_id and not game.advancing_figure_id_2:
+                    # Prevent selecting the same figure twice
+                    if figure_id == game.advancing_figure_id:
+                        return jsonify({'success': False, 'message': 'This figure is already selected'}), 400
+                    # Second advance pick — validate same color
+                    first_figure = Figure.query.get(game.advancing_figure_id)
+                    if first_figure and first_figure.color != figure.color:
+                        return jsonify({'success': False, 'message': 'Second figure must be the same color as the first'}), 400
+                    game.advancing_figure_id_2 = figure_id
+                    is_second_pick = True
+                else:
+                    # First advance pick
+                    game.advancing_figure_id = figure_id
+                    game.advancing_player_id = player_id
+                    # Check if there's another eligible village figure of same color
+                    eligible_seconds = Figure.query.filter(
+                        Figure.player_id == player_id,
+                        Figure.id != figure_id,
+                        Figure.field == 'village',
+                        Figure.color == figure.color
+                    ).all()
+                    if eligible_seconds:
+                        civil_war_need_second = True
+                        civil_war_color = figure.color
+        else:
+            # Normal (non-Civil War) flow
+            if game.advancing_figure_id and game.advancing_player_id == player_id:
+                return jsonify({'success': False, 'message': 'You already have a figure advancing'}), 400
+            
+            if is_counter_advance:
+                game.defending_figure_id = figure_id
+            else:
+                game.advancing_figure_id = figure_id
+                game.advancing_player_id = player_id
+
+        # Determine turn flip behavior
+        if civil_war_need_second:
+            # Don't flip turn — player needs to pick a second figure
+            print(f"[ADVANCE] Civil War — waiting for second figure pick (color: {civil_war_color})")
+        elif has_blitzkrieg and not is_counter_advance:
+            # Blitzkrieg: invader keeps the turn, goes to defender selection immediately
+            print(f"[ADVANCE] Blitzkrieg active — turn stays with invader for defender selection")
+        else:
+            # Normal: flip turn to opponent (advance does NOT consume a turn)
+            other_player = game.players[0] if game.players[0].id != player_id else game.players[1]
+            game.turn_player_id = other_player.id
+
+        # Create log entry
+        user = User.query.get(player.user_id)
+        username = user.username if user else f"Player {player_id}"
+        action_type = 'counter_advance' if is_counter_advance else 'advance'
+        pick_suffix = " (2nd Civil War pick)" if is_second_pick else ""
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left,
+            message=f"{username} advanced {figure.name} toward battle.{pick_suffix}",
+            author=username,
+            type=action_type
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'is_counter_advance': is_counter_advance,
+            'civil_war_need_second': civil_war_need_second,
+            'civil_war_color': civil_war_color,
+            'is_second_pick': is_second_pick,
+            'figure_name': figure.name,
+            'game': game.serialize()
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f"Failed to advance figure: {str(e)}"}), 400
+
+
+@games.route('/select_defender', methods=['POST'])
+def select_defender():
+    """
+    The advancing player selects a defending figure from the OPPONENT's figures.
+    Used after the opponent spent their turn without counter-advancing.
+    The advancing player picks which opponent figure will face the advance.
+    """
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+        figure_id = data['figure_id']
+
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        # There must be an active advance
+        if not game.advancing_figure_id:
+            return jsonify({'success': False, 'message': 'No advancing figure in play'}), 400
+
+        # The caller must be the advancing player (they pick the opponent's defender)
+        if game.advancing_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Only the advancing player can select the defender'}), 400
+
+        # Validate figure belongs to the OPPONENT (not the advancing player)
+        figure = Figure.query.get(figure_id)
+        if not figure:
+            return jsonify({'success': False, 'message': 'Figure not found'}), 400
+        if figure.player_id == player_id:
+            return jsonify({'success': False, 'message': 'You must select an opponent\'s figure, not your own'}), 400
+        
+        # Check battle modifiers for Civil War
+        modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+        
+        civil_war_need_second = False
+        civil_war_color = None
+        is_second_pick = False
+        
+        if has_civil_war:
+            if game.defending_figure_id and not game.defending_figure_id_2:
+                # Prevent selecting the same figure twice
+                if figure_id == game.defending_figure_id:
+                    return jsonify({'success': False, 'message': 'This figure is already selected'}), 400
+                # Second defender pick — validate same color
+                first_defender = Figure.query.get(game.defending_figure_id)
+                if first_defender and first_defender.color != figure.color:
+                    return jsonify({'success': False, 'message': 'Second defender must be the same color as the first'}), 400
+                game.defending_figure_id_2 = figure_id
+                is_second_pick = True
+            else:
+                # First defender pick
+                game.defending_figure_id = figure_id
+                # Check if there's another eligible opponent village figure of same color
+                opponent_id = figure.player_id
+                eligible_seconds = Figure.query.filter(
+                    Figure.player_id == opponent_id,
+                    Figure.id != figure_id,
+                    Figure.field == 'village',
+                    Figure.color == figure.color
+                ).all()
+                if eligible_seconds:
+                    civil_war_need_second = True
+                    civil_war_color = figure.color
+        else:
+            game.defending_figure_id = figure_id
+        
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'figure_name': figure.name,
+            'civil_war_need_second': civil_war_need_second,
+            'civil_war_color': civil_war_color,
+            'is_second_pick': is_second_pick,
+            'game': game.serialize()
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f"Failed to select defender: {str(e)}"}), 400
+
+
+@games.route('/skip_civil_war_second', methods=['POST'])
+def skip_civil_war_second():
+    """
+    Player skips selecting a second Civil War figure.
+    Flips the turn to the opponent (or proceeds with defender selection).
+    """
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+        context = data.get('context', 'advance')  # 'advance' or 'defender'
+
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+        # Validate it's this player's turn
+        if game.turn_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Not your turn'}), 400
+
+        # Only flip turn for advance context (defender gets to respond)
+        # For defender selection context, turn stays with invader for fight/fold
+        if context == 'advance':
+            other_player = game.players[0] if game.players[0].id != player_id else game.players[1]
+            game.turn_player_id = other_player.id
+
+        # Log
+        user = User.query.get(player.user_id)
+        username = user.username if user else f"Player {player_id}"
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left,
+            message=f"{username} chose to fight with only one figure (Civil War).",
+            author=username,
+            type='civil_war_skip'
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        print(f"[CIVIL_WAR] {username} skipped second pick ({context}). Turn flipped.")
+
+        return jsonify({
+            'success': True,
+            'game': game.serialize()
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f"Failed to skip: {str(e)}"}), 400
+
+
+@games.route('/cannot_advance_loss', methods=['POST'])
+def cannot_advance_loss():
+    """
+    Handle the case where a player cannot advance any figure (e.g., all figures
+    restricted by battle modifiers). The player automatically loses the battle.
+    Clears battle state and starts a new round.
+    """
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+        # Validate it's this player's turn
+        if game.turn_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Not your turn'}), 400
+
+        # Get player info for logging
+        user = User.query.get(player.user_id)
+        username = user.username if user else f"Player {player_id}"
+
+        # Get opponent
+        opponent = next((p for p in game.players if p.id != player_id), None)
+        opponent_user = User.query.get(opponent.user_id) if opponent else None
+        opponent_name = opponent_user.username if opponent_user else "Opponent"
+
+        # Award points to winner (same as fold)
+        opponent.points += 10
+
+        # Log the auto-loss
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left,
+            message=f"{username} could not advance any figure and loses the battle. {opponent_name} wins 10 points!",
+            author="System",
+            type='auto_loss'
+        )
+        db.session.add(log_entry)
+
+        # Clear battle state
+        game.advancing_figure_id = None
+        game.advancing_figure_id_2 = None
+        game.advancing_player_id = None
+        game.defending_figure_id = None
+        game.defending_figure_id_2 = None
+        game.battle_modifier = []
+        game.battle_decisions = None
+        game.battle_confirmed = False
+        # Set fold outcome so opponent detects it via polling
+        game.fold_outcome = 'fold_win'
+        game.fold_winner_id = opponent.id
+
+        # Start new round — swap invader role
+        old_invader_id = game.invader_player_id
+        new_invader = next((p for p in game.players if p.id != old_invader_id), None)
+        if new_invader:
+            game.invader_player_id = new_invader.id
+
+        # Reset turns for both players
+        for p in game.players:
+            if p.id == game.invader_player_id:
+                p.turns_left = settings.INITIAL_TURNS_INVADER
+            else:
+                p.turns_left = settings.INITIAL_TURNS_DEFENDER
+
+        # Increment round
+        game.current_round += 1
+
+        # Set turn to new invader
+        game.turn_player_id = game.invader_player_id
+
+        # Ceasefire starts at beginning of each new round (3 invader turns)
+        game.ceasefire_active = True
+        game.ceasefire_start_turn = 0
+
+        db.session.commit()
+
+        print(f"[AUTO_LOSS] {username} cannot advance — loses battle. Round {game.current_round} starts. New invader: {game.invader_player_id}")
+
+        return jsonify({
+            'success': True,
+            'loser': username,
+            'winner': opponent_name,
+            'points': 10,
+            'game': game.serialize()
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f"Failed to process auto-loss: {str(e)}"}), 400
+
+
+@games.route('/defender_no_figures_loss', methods=['POST'])
+def defender_no_figures_loss():
+    """
+    Handle the case where the defender has no valid figures for battle selection.
+    Called by the invader when they enter defender selection mode and find no selectable
+    opponent figures. The defender automatically loses the battle.
+    Clears battle state and starts a new round.
+    """
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']  # The invader calling this
+
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+        # Validate it's this player's turn (the invader)
+        if game.turn_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Not your turn'}), 400
+
+        # Validate this is the advancing player
+        if game.advancing_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Only the advancing player can report this'}), 400
+
+        # Get invader info
+        user = User.query.get(player.user_id)
+        username = user.username if user else f"Player {player_id}"
+
+        # Get defender (opponent) info
+        opponent = next((p for p in game.players if p.id != player_id), None)
+        opponent_user = User.query.get(opponent.user_id) if opponent else None
+        opponent_name = opponent_user.username if opponent_user else "Opponent"
+
+        # Award points to winner (same as fold)
+        player.points += 10
+
+        # Log the auto-loss for the defender
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=opponent.id,
+            round_number=game.current_round,
+            turn_number=opponent.turns_left if opponent else 0,
+            message=f"{opponent_name} has no valid battle figures and loses the battle. {username} wins 10 points!",
+            author="System",
+            type='auto_loss'
+        )
+        db.session.add(log_entry)
+
+        # Clear battle state
+        game.advancing_figure_id = None
+        game.advancing_figure_id_2 = None
+        game.advancing_player_id = None
+        game.defending_figure_id = None
+        game.defending_figure_id_2 = None
+        game.battle_modifier = []
+        game.battle_decisions = None
+        game.battle_confirmed = False
+        # Set fold outcome so opponent detects it via polling
+        game.fold_outcome = 'fold_win'
+        game.fold_winner_id = player.id
+
+        # Start new round — swap invader role
+        old_invader_id = game.invader_player_id
+        new_invader = next((p for p in game.players if p.id != old_invader_id), None)
+        if new_invader:
+            game.invader_player_id = new_invader.id
+
+        # Reset turns for both players
+        for p in game.players:
+            if p.id == game.invader_player_id:
+                p.turns_left = settings.INITIAL_TURNS_INVADER
+            else:
+                p.turns_left = settings.INITIAL_TURNS_DEFENDER
+
+        # Increment round
+        game.current_round += 1
+
+        # Set turn to new invader
+        game.turn_player_id = game.invader_player_id
+
+        # Ceasefire starts at beginning of each new round
+        game.ceasefire_active = True
+        game.ceasefire_start_turn = 0
+
+        db.session.commit()
+
+        print(f"[DEFENDER_NO_FIGURES] {opponent_name} has no valid figures — loses battle. Round {game.current_round} starts. New invader: {game.invader_player_id}")
+
+        return jsonify({
+            'success': True,
+            'loser': opponent_name,
+            'winner': username,
+            'points': 10,
+            'game': game.serialize()
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f"Failed to process defender auto-loss: {str(e)}"}), 400
+
+
+@games.route('/battle_decision', methods=['POST'])
+def battle_decision():
+    """
+    Record a player's battle decision (fight or fold), sequential order.
+    The invader (advancing player) decides first, then the defender.
+    - Invader folds: defender wins 10 points, new round, winner = invader, ceasefire starts
+    - Invader fights, defender folds: invader wins 10 points, new round, invader stays, ceasefire starts
+    - Both fight: battle_confirmed = True, proceed to battle screen
+    """
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+        decision = data['decision']  # 'battle' or 'fold'
+
+        if decision not in ('battle', 'fold'):
+            return jsonify({'success': False, 'message': 'Invalid decision. Must be "battle" or "fold".'}), 400
+
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+        is_advancing = (player_id == game.advancing_player_id)
+        decisions = dict(game.battle_decisions) if game.battle_decisions else {}
+
+        # Get player info
+        user = User.query.get(player.user_id)
+        username = user.username if user else f"Player {player_id}"
+        opponent = next((p for p in game.players if p.id != player_id), None)
+        opponent_user = User.query.get(opponent.user_id) if opponent else None
+        opponent_name = opponent_user.username if opponent_user else "Opponent"
+
+        # Log the decision
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left,
+            message=f"{username} chose to {'fight' if decision == 'battle' else 'fold'}.",
+            author="System",
+            type='battle_decision'
+        )
+        db.session.add(log_entry)
+
+        if is_advancing:
+            # --- Invader decides first ---
+            if decisions:
+                return jsonify({'success': False, 'message': 'Invader decision already recorded'}), 400
+
+            if decision == 'fold':
+                # Invader folds — defender (opponent) wins
+                winner_player = opponent
+                loser_player = player
+                winner_name = opponent_name
+                loser_name = username
+                return _resolve_fold(game, winner_player, loser_player, winner_name, loser_name)
+            else:
+                # Invader fights — record decision, wait for defender
+                decisions[str(player_id)] = 'battle'
+                game.battle_decisions = decisions
+                db.session.commit()
+                print(f"[BATTLE_DECISION] {username} (invader) chose to fight. Waiting for defender.")
+                return jsonify({
+                    'success': True,
+                    'resolved': False,
+                    'waiting': True
+                })
+        else:
+            # --- Defender decides second ---
+            advancing_id = str(game.advancing_player_id)
+            if decisions.get(advancing_id) != 'battle':
+                return jsonify({'success': False, 'message': 'Invader has not decided yet or already resolved'}), 400
+
+            if decision == 'fold':
+                # Defender folds — invader (advancing player) wins
+                invader_player = Player.query.get(game.advancing_player_id)
+                invader_user = User.query.get(invader_player.user_id)
+                winner_name = invader_user.username if invader_user else "Invader"
+                loser_name = username
+                return _resolve_fold(game, invader_player, player, winner_name, loser_name)
+            else:
+                # Both chose to fight — proceed to battle
+                game.battle_confirmed = True
+                game.battle_decisions = None
+
+                log_entry = LogEntry(
+                    game_id=game_id,
+                    player_id=None,
+                    round_number=game.current_round,
+                    turn_number=0,
+                    message="Both players chose to fight! Battle begins.",
+                    author="System",
+                    type='battle_start'
+                )
+                db.session.add(log_entry)
+                db.session.commit()
+                print(f"[BATTLE_DECISION] Both players chose battle. Proceeding to battle screen.")
+                return jsonify({
+                    'success': True,
+                    'resolved': True,
+                    'outcome': 'battle',
+                    'game': game.serialize()
+                })
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[BATTLE_DECISION] Error: {str(e)}")
+        return jsonify({'success': False, 'message': f"Failed to process battle decision: {str(e)}"}), 400
+
+
+def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
+    """Helper to resolve a fold: award points, reset round, start ceasefire."""
+    # Award points to winner
+    winner_player.points += 10
+
+    game.battle_decisions = None
+    game.fold_outcome = 'fold_win'
+    game.fold_winner_id = winner_player.id
+
+    log_entry = LogEntry(
+        game_id=game.id,
+        player_id=loser_player.id,
+        round_number=game.current_round,
+        turn_number=loser_player.turns_left,
+        message=f"{loser_name} folded. {winner_name} wins 10 points! A new round begins.",
+        author="System",
+        type='fold_win'
+    )
+    db.session.add(log_entry)
+
+    # Clear battle state
+    game.advancing_figure_id = None
+    game.advancing_figure_id_2 = None
+    game.advancing_player_id = None
+    game.defending_figure_id = None
+    game.defending_figure_id_2 = None
+    game.battle_modifier = []
+    game.battle_confirmed = False
+
+    # Winner becomes invader
+    game.invader_player_id = winner_player.id
+
+    # Round increases, turns reset, ceasefire starts
+    game.current_round += 1
+    for p in game.players:
+        if p.id == game.invader_player_id:
+            p.turns_left = settings.INITIAL_TURNS_INVADER
+        else:
+            p.turns_left = settings.INITIAL_TURNS_DEFENDER
+    game.turn_player_id = game.invader_player_id
+    game.ceasefire_active = True
+    game.ceasefire_start_turn = 0
+
+    db.session.commit()
+    print(f"[BATTLE_DECISION] {loser_name} folded. {winner_name} wins 10 points. Round {game.current_round} starts. New invader: {winner_player.id}")
+
+    return jsonify({
+        'success': True,
+        'resolved': True,
+        'outcome': 'fold_win',
+        'winner': winner_name,
+        'loser': loser_name,
+        'points': 10,
+        'game': game.serialize()
+    })

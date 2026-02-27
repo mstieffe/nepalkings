@@ -74,6 +74,44 @@ class Game:
         self.infinite_hammer_active = False
         self.infinite_hammer_dialogue_shown = False
 
+        # Advance/battle state tracking
+        self.advancing_figure_id = game_dict.get('advancing_figure_id')
+        self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
+        self.advancing_player_id = game_dict.get('advancing_player_id')
+        self.defending_figure_id = game_dict.get('defending_figure_id')
+        self.defending_figure_id_2 = game_dict.get('defending_figure_id_2')
+        self.pending_advance_notification = False  # True when opponent advance detected
+        self.pending_forced_advance = False  # True when invader must advance (0 turns)
+        self.forced_advance_dialogue_shown = False  # Track if forced advance dialogue was shown
+        self.pending_defender_selection = False  # True when advancing player must pick opponent's defender
+        self.defender_selection_dialogue_shown = False  # Track if defender selection dialogue was shown
+        self.pending_own_advance_notification = False  # True when advancing player should see own advance notification
+        self.own_advance_figure_name = None  # Name of the figure that the player advanced
+        self.pending_waiting_for_defender_pick = False  # True when defender is waiting for opponent to pick their battle figure
+        self.waiting_for_defender_pick_shown = False  # Track if notification was shown
+        self.pending_battle_ready = False  # True when both advancing and defending figures are set
+        self.battle_ready_shown = False  # Track if battle-ready notification was shown
+        self.pending_battle_ready = False  # True when both advancing and defending figures are set
+        self.battle_ready_shown = False  # Track if battle ready notification was shown
+
+        # Civil War second figure selection tracking
+        self.civil_war_awaiting_second = False  # True when waiting for second advance figure
+        self.civil_war_defender_second = False  # True when waiting for second defender figure
+        self.civil_war_required_color = None  # 'offensive' or 'defensive' — required color for second pick
+
+        # Battle decision tracking (fold/battle)
+        self.battle_decisions = game_dict.get('battle_decisions')
+        self.battle_confirmed = game_dict.get('battle_confirmed', False)
+        self.fold_outcome = game_dict.get('fold_outcome')
+        self.fold_winner_id = game_dict.get('fold_winner_id')
+        self.waiting_for_battle_decision = False  # True when waiting for opponent's decision
+        self.pending_fold_result = False  # True when fold outcome detected from polling
+        self.fold_result_shown = False  # Track if fold result notification was shown
+        self.auto_proceed_to_battle = False  # True when both chose battle (detected via polling)
+
+        # Suppress next turn notification after battle/fold (result dialogue already shown)
+        self.suppress_next_turn_summary = False
+
         # Initialize log entries and chat messages
         self.log_entries = []
         self.chat_messages = []
@@ -119,6 +157,7 @@ class Game:
                 self.pending_ceasefire_ended = True
 
             # Update spell-related state
+            previous_pending_spell_id = self.pending_spell_id
             self.pending_spell_id = game_dict.get('pending_spell_id')
             self.battle_modifier = game_dict.get('battle_modifier')
             self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
@@ -126,11 +165,99 @@ class Game:
             # Check if we're waiting for this player to counter
             if self.pending_spell_id and self.waiting_for_counter_player_id:
                 self.waiting_for_counter = (self.waiting_for_counter_player_id == self.player_id)
-                # TODO: Load pending spell details if needed
-                # self.pending_spell = spell_service.fetch_pending_spell(self.pending_spell_id)
             else:
                 self.waiting_for_counter = False
                 self.pending_spell = None
+
+            # Update advance/battle state
+            previous_advancing = self.advancing_figure_id
+            self.advancing_figure_id = game_dict.get('advancing_figure_id')
+            self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
+            self.advancing_player_id = game_dict.get('advancing_player_id')
+            self.defending_figure_id = game_dict.get('defending_figure_id')
+            self.defending_figure_id_2 = game_dict.get('defending_figure_id_2')
+            
+            # Detect opponent advance (new advance appeared and it's not ours)
+            # Use turn value from game_dict directly (self.turn is stale at this point)
+            is_now_our_turn = (game_dict.get('turn_player_id') == self.player_id)
+            if (self.advancing_figure_id and not previous_advancing and 
+                self.advancing_player_id != self.player_id and is_now_our_turn):
+                self.pending_advance_notification = True
+                # Advance notification replaces the normal opponent turn summary
+                self.pending_opponent_turn_summary = None
+            
+            # Detect: advancing player's turn returned without defender selected
+            # This means opponent spent their turn, now advancer must pick a defender
+            # Skip if Civil War second figure selection is pending (turn stays with invader)
+            if (self.advancing_figure_id and 
+                self.advancing_player_id == self.player_id and 
+                not self.defending_figure_id and 
+                self.turn and not self.pending_defender_selection and
+                not self.defender_selection_dialogue_shown and
+                not self.civil_war_awaiting_second):
+                self.pending_defender_selection = True
+
+            # Detect: defender's turn ended without counter-advance
+            # Opponent (advancing player) is now picking a defender from our figures
+            if (self.advancing_figure_id and
+                self.advancing_player_id != self.player_id and
+                not self.defending_figure_id and
+                not is_now_our_turn and
+                not self.pending_waiting_for_defender_pick and
+                not self.waiting_for_defender_pick_shown):
+                self.pending_waiting_for_defender_pick = True
+
+            # Detect: battle figures are set — battle is ready!
+            # For Civil War: need both advancing and defending figures (2nd IDs optional if no eligible second)
+            modifiers = self.battle_modifier if isinstance(self.battle_modifier, list) else []
+            has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+            
+            # Battle is ready when both sides have their figures set
+            battle_ready = (self.advancing_figure_id and self.defending_figure_id and
+                           not self.pending_battle_ready and not self.battle_ready_shown)
+            
+            # During Civil War, suppress premature battle_ready while a player
+            # is still picking their second figure.  The server keeps the turn
+            # with the picking player until they finish or skip, then flips it.
+            # So battle is only truly ready once the turn reaches the invader
+            # (advancing player), who decides fight/fold first.
+            if battle_ready and has_civil_war:
+                # Also suppress while our own client-side second-pick flags are set
+                if (self.civil_war_awaiting_second or self.civil_war_defender_second):
+                    battle_ready = False
+                # For the invader polling: if turn hasn't come back yet, defender
+                # is still picking
+                elif (self.advancing_player_id == self.player_id and
+                      not is_now_our_turn):
+                    battle_ready = False
+            
+            if battle_ready:
+                self.pending_battle_ready = True
+                print(f"[BATTLE_READY] Figures set: advancing={self.advancing_figure_id}/{self.advancing_figure_id_2}, defending={self.defending_figure_id}/{self.defending_figure_id_2}")
+
+            # Detect fold outcome from opponent's battle decision (polling detection)
+            previous_fold_outcome = self.fold_outcome
+            previous_battle_confirmed = self.battle_confirmed
+            self.battle_decisions = game_dict.get('battle_decisions')
+            self.battle_confirmed = game_dict.get('battle_confirmed', False)
+            self.fold_outcome = game_dict.get('fold_outcome')
+            self.fold_winner_id = game_dict.get('fold_winner_id')
+
+            # Reset fold tracking when server clears fold state (new round started)
+            if previous_fold_outcome and not self.fold_outcome:
+                self.fold_result_shown = False
+
+            # Detect new fold outcome (transition from None to set)
+            if self.fold_outcome and not previous_fold_outcome and not self.fold_result_shown:
+                self.pending_fold_result = True
+                self.waiting_for_battle_decision = False
+                print(f"[FOLD] Detected fold outcome: {self.fold_outcome}, winner: {self.fold_winner_id}")
+
+            # Detect both chose battle (transition from False to True)
+            if self.battle_confirmed and not previous_battle_confirmed and self.waiting_for_battle_decision:
+                self.auto_proceed_to_battle = True
+                self.waiting_for_battle_decision = False
+                print(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
 
             # Reinitialize current and opponent players
             for player_dict in self.players:
@@ -156,6 +283,13 @@ class Game:
             # Check if turn changed to current player - call start_turn endpoint
             elif not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
                 print(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
+                self._handle_start_turn()
+            
+            # Detect spell resolution: if our spell was pending and just resolved,
+            # and it's still our turn (e.g., Invader Swap keeps turn with caster),
+            # trigger _handle_start_turn for auto-fill since turn-change detection missed it
+            elif previous_pending_spell_id and not self.pending_spell_id and self.turn and previous_turn:
+                print(f"[SPELL_RESOLVED] Spell resolved while turn stayed with us. Calling start_turn for auto-fill...")
                 self._handle_start_turn()
             
             # Update previous turn player for next check
@@ -195,6 +329,19 @@ class Game:
         self.pending_spell_id = game_dict.get('pending_spell_id')
         self.battle_modifier = game_dict.get('battle_modifier')
         self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
+        
+        # Update advance/battle state
+        self.advancing_figure_id = game_dict.get('advancing_figure_id')
+        self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
+        self.advancing_player_id = game_dict.get('advancing_player_id')
+        self.defending_figure_id = game_dict.get('defending_figure_id')
+        self.defending_figure_id_2 = game_dict.get('defending_figure_id_2')
+        
+        # Update battle decision/fold state
+        self.battle_decisions = game_dict.get('battle_decisions')
+        self.battle_confirmed = game_dict.get('battle_confirmed', False)
+        self.fold_outcome = game_dict.get('fold_outcome')
+        self.fold_winner_id = game_dict.get('fold_winner_id')
         
         # Check if we're waiting for this player to counter
         if self.pending_spell_id and self.waiting_for_counter_player_id:
@@ -253,15 +400,34 @@ class Game:
                     print(f"[START_TURN] No auto-fill needed")
                 
                 # Store opponent turn summary for dialogue display
+                # But suppress it if an advance notification is pending (advance has its own notification)
+                # Also suppress after battle/fold resolution (result dialogue already shown)
+                # Exception: never suppress notifications that directly affect the player
+                # (e.g. Forced Deal card swap, Dump Cards, Poison on player's figure, Explosion)
                 opponent_turn_summary = data.get('opponent_turn_summary')
-                if opponent_turn_summary:
+                action_data = opponent_turn_summary.get('action', {}) if opponent_turn_summary and isinstance(opponent_turn_summary.get('action'), dict) else {}
+                affects_player = action_data.get('affects_player', False)
+                
+                if affects_player and opponent_turn_summary:
+                    # Always show notifications that directly affect the player's state
+                    print(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
+                    self.pending_opponent_turn_summary = opponent_turn_summary
+                elif self.suppress_next_turn_summary:
+                    print(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
+                    self.suppress_next_turn_summary = False
+                    self.pending_opponent_turn_summary = None
+                elif self.pending_advance_notification:
+                    print(f"[START_TURN] Suppressing opponent turn summary — advance notification pending")
+                elif self.pending_battle_ready:
+                    print(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
+                elif self.pending_fold_result or self.fold_outcome:
+                    print(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
+                elif opponent_turn_summary:
                     print(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
                     self.pending_opponent_turn_summary = opponent_turn_summary
                 else:
                     print(f"[START_TURN] No opponent turn summary")
                     self.pending_opponent_turn_summary = None
-                
-                # Forced Deal details are now included in opponent_turn_summary
         except Exception as e:
             print(f"Error in start_turn: {str(e)}")
 
@@ -389,6 +555,7 @@ class Game:
                 cannot_defend = matched_family_figure.cannot_defend if matched_family_figure and hasattr(matched_family_figure, 'cannot_defend') else False
                 instant_charge = matched_family_figure.instant_charge if matched_family_figure and hasattr(matched_family_figure, 'instant_charge') else False
                 cannot_be_blocked = matched_family_figure.cannot_be_blocked if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_blocked') else False
+                cannot_be_targeted = matched_family_figure.cannot_be_targeted if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_targeted') else False
 
                 figure = Figure(
                     name=figure_data['name'],
@@ -413,6 +580,7 @@ class Game:
                     cannot_defend=cannot_defend,
                     instant_charge=instant_charge,
                     cannot_be_blocked=cannot_be_blocked,
+                    cannot_be_targeted=cannot_be_targeted,
                 )
                 figures.append(figure)
 

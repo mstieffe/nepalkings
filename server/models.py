@@ -99,6 +99,19 @@ class Game(db.Model):
     battle_modifier = db.Column(db.JSON, nullable=True)  # Active battle modifications from tactics spells
     waiting_for_counter_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # Player who can counter
 
+    # Advance/battle state tracking
+    advancing_figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)  # Figure that advanced
+    advancing_figure_id_2 = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)  # Second figure (Civil War)
+    advancing_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # Player who advanced
+    defending_figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)  # Defender figure selected by opponent
+    defending_figure_id_2 = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)  # Second defender (Civil War)
+
+    # Battle decision tracking (fold/battle)
+    battle_decisions = db.Column(db.JSON, nullable=True)  # {str(player_id): 'battle'|'fold'}
+    battle_confirmed = db.Column(db.Boolean, nullable=False, default=False)  # True when both chose battle
+    fold_outcome = db.Column(db.String(20), nullable=True)  # 'fold_win' | 'fold_draw' | None
+    fold_winner_id = db.Column(db.Integer, nullable=True)  # Winner of fold (player_id)
+
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
@@ -117,6 +130,15 @@ class Game(db.Model):
             'pending_spell_id': self.pending_spell_id,
             'battle_modifier': self.battle_modifier,
             'waiting_for_counter_player_id': self.waiting_for_counter_player_id,
+            'advancing_figure_id': self.advancing_figure_id,
+            'advancing_figure_id_2': self.advancing_figure_id_2,
+            'advancing_player_id': self.advancing_player_id,
+            'defending_figure_id': self.defending_figure_id,
+            'defending_figure_id_2': self.defending_figure_id_2,
+            'battle_decisions': self.battle_decisions,
+            'battle_confirmed': self.battle_confirmed,
+            'fold_outcome': self.fold_outcome,
+            'fold_winner_id': self.fold_winner_id,
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],

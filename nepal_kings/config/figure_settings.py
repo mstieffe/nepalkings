@@ -6,6 +6,7 @@ FIGURE_ICON_GREYSCALE_IMG_DIR = 'img/figures/icons_greyscale/'
 FIGURE_FRAME_IMG_DIR = 'img/figures/frames/'
 FIGURE_FRAME_GREYSCALE_IMG_DIR = 'img/figures/frames_greyscale/'
 FIGURE_FRAME_HIDDEN_IMG_DIR = 'img/figures/frames_hidden/'
+FIGURE_FRAME_HIDDEN_GREYSCALE_IMG_DIR = 'img/figures/frames_hidden_greyscale/'
 FIGURE_GLOW_IMG_DIR = 'img/game_button/glow_rect/'
     
 

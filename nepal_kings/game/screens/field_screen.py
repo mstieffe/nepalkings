@@ -28,6 +28,11 @@ class FieldScreen(SubScreen):
         self.figure_detail_box = None  # Detail box for selected figure
         self.figure_pending_pickup = None  # Figure waiting for pickup confirmation
         self.figure_pending_upgrade = None  # Figure waiting for upgrade confirmation
+        self.figure_pending_defender_selection = None  # Figure waiting for defender selection confirmation
+        self._pending_advance_figure = None  # Figure waiting for advance confirmation
+        
+        # Defender selection mode flag (True when player needs to select defender vs opponent advance)
+        self.defender_selection_mode = False
         
         # Cache for opponent cards (for All Seeing Eye spell)
         self.opponent_card_cache = []  # List of pre-rotated card surfaces
@@ -53,6 +58,7 @@ class FieldScreen(SubScreen):
         self.cached_opponent_all_seeing_eye_status = None
         self.last_all_seeing_eye_check = 0
         self.all_seeing_eye_check_interval = 1000  # Check every 1 second instead of every frame
+        self._last_all_seeing_eye_status = None  # Track previous status for change detection
         
         # Load slot icons for compartment backgrounds
         self.slot_icons = self._load_slot_icons()
@@ -63,6 +69,10 @@ class FieldScreen(SubScreen):
         # Scale to match board title font size
         icon_size = settings.FIELD_BOARD_TITLE_FONT_SIZE
         self.all_seeing_eye_icon = pygame.transform.smoothscale(self.all_seeing_eye_icon, (icon_size, icon_size))
+
+        # Pre-load battle modifier icons for error dialogues
+        self._battle_modifier_icons = {}
+        self._load_battle_modifier_icons()
 
         self.init_field_compartments()
 
@@ -84,6 +94,28 @@ class FieldScreen(SubScreen):
                 hovered_icon = icon
             else:
                 icon.hovered = False
+
+    def _load_battle_modifier_icons(self):
+        """Pre-load battle modifier icons for use in error dialogues."""
+        import os
+        icon_dir = settings.SPELL_ICON_IMG_DIR
+        icon_size = settings.BATTLE_MODIFIER_ICON_SIZE
+        modifier_types = {
+            'Civil War': 'civil_war.png',
+            'Peasant War': 'peasant_war.png',
+            'Blitzkrieg': 'blitzkrieg.png',
+        }
+        for modifier_name, filename in modifier_types.items():
+            icon_path = os.path.join(icon_dir, filename)
+            if os.path.exists(icon_path):
+                img = pygame.image.load(icon_path).convert_alpha()
+                img = pygame.transform.smoothscale(img, (icon_size, icon_size))
+                self._battle_modifier_icons[modifier_name] = img
+
+    def _get_modifier_icon_images(self, modifier_name):
+        """Return a list with the modifier icon surface if available, else empty list."""
+        icon = self._battle_modifier_icons.get(modifier_name)
+        return [icon] if icon else []
 
     def _load_slot_icons(self):
         """Load and prepare slot icons for compartment backgrounds."""
@@ -189,7 +221,15 @@ class FieldScreen(SubScreen):
             figures_changed = current_figure_ids != self.last_figure_ids
             enchantments_changed = current_enchantment_state != self.last_enchantment_state
             
-            if figures_changed or enchantments_changed:
+            # Check if All Seeing Eye status changed (need to regenerate icons for visibility)
+            all_seeing_eye_changed = (self.cached_all_seeing_eye_status != self._last_all_seeing_eye_status)
+            
+            if figures_changed or enchantments_changed or all_seeing_eye_changed:
+                if all_seeing_eye_changed:
+                    print(f"[FIELD_SCREEN] All Seeing Eye status changed: {self._last_all_seeing_eye_status} -> {self.cached_all_seeing_eye_status}")
+                    # Clear icon cache for opponent figures to regenerate with new visibility
+                    self.icon_cache.clear()
+                    self._last_all_seeing_eye_status = self.cached_all_seeing_eye_status
                 if enchantments_changed:
                     print(f"[FIELD_SCREEN] Enchantments changed, regenerating icons")
                     print(f"[FIELD_SCREEN] Old: {self.last_enchantment_state}")
@@ -324,6 +364,8 @@ class FieldScreen(SubScreen):
                 # Auto-close: just close dialogue and continue to other event handling
                 self.dialogue_box = None
             elif response:
+                # Remember the current dialogue so we can detect if a new one was created
+                dialogue_before_response = self.dialogue_box
                 # Button clicked - process the response
                 if response == 'yes':
                     # Check if player is waiting for counter spell response
@@ -373,6 +415,113 @@ class FieldScreen(SubScreen):
                         for icon in self.figure_icons:
                             icon.clicked = False
                         self.figure_pending_pickup = None
+                    
+                    elif getattr(self, '_pending_advance_figure', None):
+                        # User confirmed advance
+                        figure = self._pending_advance_figure
+                        self._pending_advance_figure = None
+                        from utils.game_service import advance_figure
+                        result = advance_figure(
+                            self.game.game_id,
+                            self.game.player_id,
+                            figure.id
+                        )
+                        if result.get('success'):
+                            print(f"[FIELD] Advanced {figure.name} successfully")
+                            self.state.set_msg(f"Advanced {figure.name} toward battle!")
+                            # Update game state from response
+                            if result.get('game'):
+                                self.game.update_from_dict(result['game'])
+                            # Reload figures to refresh icons
+                            self.load_figures()
+                            
+                            # Check if Civil War needs a second figure
+                            if result.get('civil_war_need_second'):
+                                civil_war_color = result.get('civil_war_color', '')
+                                color_name = 'red' if civil_war_color == 'offensive' else 'black'
+                                self.game.civil_war_awaiting_second = True
+                                self.game.civil_war_required_color = civil_war_color
+                                cw_icons = self._get_modifier_icon_images('Civil War')
+                                self.make_dialogue_box(
+                                    message=f"Civil War! You may select a second village figure of the same color ({color_name}), or fight with only one figure.",
+                                    actions=['select second', 'skip'],
+                                    images=cw_icons if cw_icons else None,
+                                    icon="magic" if not cw_icons else None,
+                                    title="Civil War - Second Figure"
+                                )
+                            else:
+                                # Clear Civil War second pick state if it was active
+                                if hasattr(self.game, 'civil_war_awaiting_second'):
+                                    self.game.civil_war_awaiting_second = False
+                                    self.game.civil_war_required_color = None
+                                # Clear forced advance state if it was a forced advance
+                                if self.game.forced_advance_dialogue_shown:
+                                    self.game.pending_forced_advance = False
+                                # Trigger advance notification check (Blitzkrieg needs the combined dialogue)
+                                self.game.pending_own_advance_notification = True
+                                self.game.own_advance_figure_name = figure.name
+                        else:
+                            error_msg = result.get('message', 'Unknown error')
+                            print(f"[FIELD] Failed to advance: {error_msg}")
+                            self.make_dialogue_box(
+                                message=f"Cannot advance: {error_msg}",
+                                actions=['ok'],
+                                icon="error",
+                                title="Advance Failed"
+                            )
+
+                    elif self.figure_pending_defender_selection:
+                        # User confirmed defender selection
+                        target_figure = self.figure_pending_defender_selection
+                        from utils.game_service import select_defender
+                        result = select_defender(
+                            self.game.game_id,
+                            self.game.player_id,
+                            target_figure.id
+                        )
+                        
+                        if result.get('success'):
+                            # Update game state from response
+                            if result.get('game'):
+                                self.game.update_from_dict(result['game'])
+                            self.load_figures()
+                            
+                            # Check if Civil War needs a second defender
+                            if result.get('civil_war_need_second'):
+                                civil_war_color = result.get('civil_war_color', '')
+                                color_name = 'red' if civil_war_color == 'offensive' else 'black'
+                                self.game.civil_war_defender_second = True
+                                self.game.civil_war_required_color = civil_war_color
+                                cw_icons = self._get_modifier_icon_images('Civil War')
+                                self.make_dialogue_box(
+                                    message=f"Civil War! You may select a second opponent village figure of the same color ({color_name}), or proceed with only one.",
+                                    actions=['select second', 'skip'],
+                                    images=cw_icons if cw_icons else None,
+                                    icon="magic" if not cw_icons else None,
+                                    title="Civil War - Second Defender"
+                                )
+                                # Update selectable figures for second pick
+                                self._update_defender_selectable()
+                            else:
+                                # Done selecting — exit defender selection mode
+                                self.defender_selection_mode = False
+                                self._reset_defender_selectable()
+                                self.state.set_msg(f"Selected {target_figure.name} as opponent's defender.")
+                                self.game.pending_defender_selection = False
+                                # Clear Civil War defender state
+                                if hasattr(self.game, 'civil_war_defender_second'):
+                                    self.game.civil_war_defender_second = False
+                                    self.game.civil_war_required_color = None
+                        else:
+                            error_msg = result.get('message', 'Unknown error')
+                            self.make_dialogue_box(
+                                message=f"Failed to select defender: {error_msg}",
+                                actions=['ok'],
+                                icon="error",
+                                title="Error"
+                            )
+                        
+                        self.figure_pending_defender_selection = None
                     
                     elif self.figure_pending_upgrade:
                         # User confirmed upgrade
@@ -433,14 +582,52 @@ class FieldScreen(SubScreen):
                     # User cancelled action
                     self.figure_pending_pickup = None
                     self.figure_pending_upgrade = None
+                    self.figure_pending_defender_selection = None
+                    self._pending_advance_figure = None
                     # Keep the detail box open
                 
+                elif response == 'select second':
+                    # Civil War — player wants to pick a second figure
+                    # Just dismiss dialogue, the civil_war_awaiting_second / 
+                    # civil_war_defender_second flag stays set so they can pick
+                    pass
+                elif response == 'skip':
+                    # Civil War — player skips the second figure pick
+                    from utils.game_service import skip_civil_war_second
+                    if getattr(self.game, 'civil_war_awaiting_second', False):
+                        result = skip_civil_war_second(
+                            self.game.game_id, self.game.player_id, 'advance'
+                        )
+                        if result.get('success'):
+                            if result.get('game'):
+                                self.game.update_from_dict(result['game'])
+                        self.game.civil_war_awaiting_second = False
+                        self.game.civil_war_required_color = None
+                        # Clear forced advance state if it was a forced advance
+                        if self.game.forced_advance_dialogue_shown:
+                            self.game.pending_forced_advance = False
+                        # Trigger advance notification check (Blitzkrieg needs the combined dialogue)
+                        self.game.pending_own_advance_notification = True
+                        self.game.own_advance_figure_name = None
+                    elif getattr(self.game, 'civil_war_defender_second', False):
+                        result = skip_civil_war_second(
+                            self.game.game_id, self.game.player_id, 'defender'
+                        )
+                        if result.get('success'):
+                            if result.get('game'):
+                                self.game.update_from_dict(result['game'])
+                        self.game.civil_war_defender_second = False
+                        self.game.civil_war_required_color = None
+                        self.defender_selection_mode = False
+                        self._reset_defender_selectable()
+                        self.game.pending_defender_selection = False
                 elif response == 'ok' or response == 'got it!':
                     # Simple acknowledgment
                     pass
                 
-                # Close the dialogue box
-                self.dialogue_box = None
+                # Close the dialogue box (only if no new dialogue was created during response handling)
+                if self.dialogue_box is dialogue_before_response:
+                    self.dialogue_box = None
                 return  # Don't process other events when button was clicked
             else:
                 # Dialogue is still open, no response yet - block other events
@@ -449,6 +636,11 @@ class FieldScreen(SubScreen):
         # If in target selection mode, only allow figure selection
         if hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast:
             self._handle_target_selection(events)
+            return
+        
+        # If in defender selection mode, only allow selecting own figures as defender
+        if self.defender_selection_mode:
+            self._handle_defender_selection(events)
             return
         
         # Handle figure detail box events first (if open)
@@ -460,16 +652,137 @@ class FieldScreen(SubScreen):
                     # Deselect the figure
                     for icon in self.figure_icons:
                         icon.clicked = False
-                elif response == 'charge':
-                    # Handle charge action
-                    print(f"Charge action for {self.figure_detail_box.figure.name}")
-                elif response == 'disabled_charge_ceasefire':
-                    # Charge button clicked while disabled due to ceasefire
+                elif response == 'advance':
+                    # Show confirmation dialogue before advancing
+                    figure = self.figure_detail_box.figure
+                    self._pending_advance_figure = figure
+                    # Find the existing FieldFigureIcon (has correct bonus/enchantments)
+                    advance_icon = None
+                    for icon in self.figure_icons:
+                        if hasattr(icon, 'figure') and icon.figure.id == figure.id:
+                            advance_icon = icon
+                            break
+                    if not advance_icon:
+                        # Fallback: create a new icon if not found
+                        from game.components.figures.figure_icon import FieldFigureIcon
+                        advance_icon = FieldFigureIcon(
+                            self.window,
+                            self.game,
+                            figure,
+                            is_visible=True,
+                            x=0,
+                            y=0,
+                            all_player_figures=[figure],
+                            resources_data={}
+                        )
+                    advance_icon.show_advance_overlay = False
                     self.make_dialogue_box(
-                        message="You cannot charge figures with battle spells during ceasefire.\n\nWait for the ceasefire to end.",
+                        message=f"Do you want to advance {figure.name} toward battle?",
+                        actions=['yes', 'cancel'],
+                        images=[advance_icon],
+                        icon=None,
+                        title="Advance Figure"
+                    )
+                    # Close detail box
+                    self.figure_detail_box = None
+                    for icon in self.figure_icons:
+                        icon.clicked = False
+                elif response == 'disabled_advance_ceasefire':
+                    # Advance button clicked while disabled due to ceasefire
+                    # Check if it's a Blitzkrieg-induced ceasefire
+                    modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
+                    has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+                    if has_blitzkrieg:
+                        blitz_icons = self._get_modifier_icon_images('Blitzkrieg')
+                        self.make_dialogue_box(
+                            message="Blitzkrieg ceasefire is active during the last turn.\n\nNo one can advance until turns run out.",
+                            actions=['ok'],
+                            images=blitz_icons if blitz_icons else None,
+                            icon="error" if not blitz_icons else None,
+                            title="Blitzkrieg Ceasefire"
+                        )
+                    else:
+                        self.make_dialogue_box(
+                            message="You cannot advance figures during ceasefire.\n\nWait for the ceasefire to end.",
+                            actions=['ok'],
+                            icon="ceasefire_passive",
+                            title="Ceasefire Active"
+                        )
+                elif response == 'disabled_advance_cannot_attack':
+                    # Advance button clicked while disabled due to cannot_attack
+                    self.make_dialogue_box(
+                        message="This figure cannot attack and therefore cannot advance toward battle.",
                         actions=['ok'],
-                        icon="ceasefire_passive",
-                        title="Ceasefire Active"
+                        icon="error",
+                        title="Cannot Attack"
+                    )
+                elif response == 'disabled_advance_cannot_be_blocked':
+                    # Advance button clicked while disabled because opponent's advancing figure has cannot_be_blocked
+                    self.make_dialogue_box(
+                        message="The opponent's advancing figure cannot be blocked.\n\nYou cannot counter-advance against it.",
+                        actions=['ok'],
+                        icon="error",
+                        title="Cannot Be Blocked"
+                    )
+                elif response == 'disabled_advance_blitzkrieg':
+                    # Advance button clicked while disabled due to Blitzkrieg modifier
+                    blitz_icons = self._get_modifier_icon_images('Blitzkrieg')
+                    self.make_dialogue_box(
+                        message="Blitzkrieg is active!\n\nThe defending player cannot counter-advance.",
+                        actions=['ok'],
+                        images=blitz_icons if blitz_icons else None,
+                        icon="error" if not blitz_icons else None,
+                        title="Blitzkrieg"
+                    )
+                elif response == 'disabled_advance_peasant_war':
+                    # Advance button clicked while disabled due to Peasant War on non-village figure
+                    pw_icons = self._get_modifier_icon_images('Peasant War')
+                    self.make_dialogue_box(
+                        message="Peasant War is active!\n\nOnly village figures can advance during Peasant War.",
+                        actions=['ok'],
+                        images=pw_icons if pw_icons else None,
+                        icon="error" if not pw_icons else None,
+                        title="Peasant War"
+                    )
+                elif response == 'disabled_advance_civil_war':
+                    # Advance button clicked while disabled due to Civil War on non-village figure
+                    cw_icons = self._get_modifier_icon_images('Civil War')
+                    self.make_dialogue_box(
+                        message="Civil War is active!\n\nOnly village figures can advance during Civil War.",
+                        actions=['ok'],
+                        images=cw_icons if cw_icons else None,
+                        icon="error" if not cw_icons else None,
+                        title="Civil War"
+                    )
+                elif response in ('disabled_upgrade_forced_advance', 'disabled_pick up_forced_advance'):
+                    # Upgrade or Pick up clicked during forced advance
+                    self.make_dialogue_box(
+                        message="All turns used up!\n\nYou must advance a figure toward battle. You cannot pick up or upgrade figures right now.",
+                        actions=['ok'],
+                        icon="error",
+                        title="Battle Time"
+                    )
+                elif response == 'disabled_advance_civil_war_wrong_color':
+                    # Advance clicked on wrong-color figure during Civil War second pick
+                    required_color = getattr(self.game, 'civil_war_required_color', '')
+                    color_name = 'red' if required_color == 'offensive' else 'black'
+                    cw_icons = self._get_modifier_icon_images('Civil War')
+                    self.make_dialogue_box(
+                        message=f"Civil War requires a second village figure of the same color ({color_name}).",
+                        actions=['ok'],
+                        images=cw_icons if cw_icons else None,
+                        icon="error" if not cw_icons else None,
+                        title="Wrong Color"
+                    )
+                elif response == 'disabled_advance_civil_war_already_selected':
+                    # Advance clicked on already-selected figure during Civil War
+                    cw_icons = self._get_modifier_icon_images('Civil War')
+                    self.make_dialogue_box(
+                        message="This figure is already selected for battle. Choose a different figure.",
+                        actions=['ok'],
+                        images=cw_icons if cw_icons else None,
+                        icon="error" if not cw_icons else None,
+                        title="Already Selected"
                     )
                 elif response == 'upgrade':
                     # Handle upgrade action - show confirmation dialogue with upgrade card image
@@ -481,15 +794,17 @@ class FieldScreen(SubScreen):
                         card_img = CardImg(self.window, upgrade_card.suit, upgrade_card.rank)
                         self.make_dialogue_box(
                             f"Are you sure you want to upgrade {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}? This will cost you:",
-                            actions=['yes', 'no'],
-                            images=[card_img]
+                            actions=['yes', 'cancel'],
+                            images=[card_img],
+                            title="Upgrade Figure"
                         )
                 elif response == 'pick up':
                     # Handle pick up action - show confirmation dialogue
                     self.figure_pending_pickup = self.figure_detail_box.figure
                     self.make_dialogue_box(
                         f"Are you sure you want to pick up {self.figure_pending_pickup.name}? This will remove the figure from the field and return it to your hand.",
-                        actions=['yes', 'no']
+                        actions=['yes', 'cancel'],
+                        title="Pick Up Figure"
                     )
             # If response is 'close', we already handled it above
             # For other actions, keep the box open unless user clicks close/outside
@@ -521,16 +836,72 @@ class FieldScreen(SubScreen):
                     
                     # Open detail box if figure was just selected and is visible
                     if clicked_icon.clicked and not was_clicked and clicked_icon.is_visible:
-                        # Calculate resources once for efficiency
-                        resources_data = self.game.calculate_resources(self.figure_manager.families)
-                        
-                        self.figure_detail_box = FigureDetailBox(
-                            self.window,
-                            clicked_icon.figure,
-                            self.game,
-                            all_figures=self.figures,  # Pass cached figures to avoid server call
-                            resources_data=resources_data  # Pass pre-calculated resources
-                        )
+                        # During Civil War second-pick, skip detail box and go straight
+                        # to advance confirmation (no pickup/upgrade allowed)
+                        cw_second_pick = (getattr(self.game, 'civil_war_awaiting_second', False) or
+                                          getattr(self.game, 'civil_war_defender_second', False))
+                        if cw_second_pick:
+                            figure = clicked_icon.figure
+                            cw_icons = self._get_modifier_icon_images('Civil War')
+                            
+                            # Validate: must be a village figure
+                            figure_field = getattr(figure.family, 'field', None) if hasattr(figure, 'family') else None
+                            if figure_field != 'village':
+                                self.make_dialogue_box(
+                                    message="Civil War requires village figures only.",
+                                    actions=['ok'],
+                                    images=cw_icons if cw_icons else None,
+                                    icon="error" if not cw_icons else None,
+                                    title="Invalid Selection"
+                                )
+                                clicked_icon.clicked = False
+                            # Validate: must match required color
+                            elif getattr(self.game, 'civil_war_required_color', None):
+                                figure_color = getattr(figure.family, 'color', None) if hasattr(figure, 'family') else None
+                                if figure_color != self.game.civil_war_required_color:
+                                    color_name = 'red' if self.game.civil_war_required_color == 'offensive' else 'black'
+                                    self.make_dialogue_box(
+                                        message=f"Civil War requires a second village figure of the same color ({color_name}).",
+                                        actions=['ok'],
+                                        images=cw_icons if cw_icons else None,
+                                        icon="error" if not cw_icons else None,
+                                        title="Wrong Color"
+                                    )
+                                    clicked_icon.clicked = False
+                            # Validate: not already selected as first figure
+                            elif (figure.id == self.game.advancing_figure_id or
+                                  figure.id == self.game.defending_figure_id):
+                                self.make_dialogue_box(
+                                    message="This figure is already selected for battle. Choose a different figure.",
+                                    actions=['ok'],
+                                    images=cw_icons if cw_icons else None,
+                                    icon="error" if not cw_icons else None,
+                                    title="Already Selected"
+                                )
+                                clicked_icon.clicked = False
+                            else:
+                                # Valid selection — show confirmation
+                                self._pending_advance_figure = figure
+                                advance_icon = clicked_icon
+                                advance_icon.show_advance_overlay = False
+                                self.make_dialogue_box(
+                                    message=f"Select {figure.name} as your second Civil War figure?",
+                                    actions=['yes', 'cancel'],
+                                    images=[advance_icon] + (cw_icons if cw_icons else []),
+                                    icon=None,
+                                    title="Civil War - Second Figure"
+                                )
+                        else:
+                            # Calculate resources once for efficiency
+                            resources_data = self.game.calculate_resources(self.figure_manager.families)
+                            
+                            self.figure_detail_box = FigureDetailBox(
+                                self.window,
+                                clicked_icon.figure,
+                                self.game,
+                                all_figures=self.figures,  # Pass cached figures to avoid server call
+                                resources_data=resources_data  # Pass pre-calculated resources
+                            )
                     # Close detail box if figure was deselected
                     elif not clicked_icon.clicked:
                         self.figure_detail_box = None
@@ -584,6 +955,171 @@ class FieldScreen(SubScreen):
                     )
                     return
     
+    def _handle_defender_selection(self, events):
+        """Handle events when in defender selection mode — advancing player selects opponent's defender."""
+        # Determine active battle modifier restrictions
+        modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        has_peasant_war = 'Peasant War' in modifier_types
+        has_blitzkrieg = 'Blitzkrieg' in modifier_types
+        has_civil_war = 'Civil War' in modifier_types
+        village_only = has_peasant_war or has_civil_war
+        
+        for event in events:
+            if event.type == MOUSEBUTTONDOWN:
+                # Check which figure was clicked
+                clicked_icon = None
+                for icon in reversed(self.figure_icons):
+                    if icon.hovered:
+                        clicked_icon = icon
+                        break
+                
+                if clicked_icon:
+                    print(f"[DEFENDER_CLICK] Clicked: {clicked_icon.figure.name} (id={clicked_icon.figure.id}), defender_selectable={getattr(clicked_icon, 'defender_selectable', 'N/A')}, is_visible={clicked_icon.is_visible}")
+                    # Show error for non-selectable figures (works for both visible and hidden)
+                    if hasattr(clicked_icon, 'defender_selectable') and not clicked_icon.defender_selectable:
+                        reason = "This figure cannot be selected as a defender."
+                        title = "Cannot Select"
+                        images = []
+                        target_fig = clicked_icon.figure
+                        if target_fig.player_id == self.game.player_id:
+                            reason = "You must select one of your opponent's figures."
+                        elif village_only and hasattr(target_fig, 'family') and target_fig.family.field != 'village':
+                            active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
+                            reason = f"{active_mod} is active — only village figures can be selected."
+                            title = active_mod
+                            images = self._get_modifier_icon_images(active_mod)
+                        elif hasattr(target_fig, 'cannot_defend') and target_fig.cannot_defend:
+                            reason = f"{target_fig.name} cannot defend and cannot be selected for battle."
+                        elif hasattr(target_fig, 'cannot_be_targeted') and target_fig.cannot_be_targeted:
+                            reason = f"{target_fig.name} cannot be targeted by the opponent."
+                        elif not clicked_icon.is_visible:
+                            reason = "This hidden figure cannot be selected as a defender."
+                        elif hasattr(target_fig, 'must_be_attacked') and not target_fig.must_be_attacked:
+                            reason = "You must select a figure with the 'Must Be Attacked' trait first."
+                        self.make_dialogue_box(
+                            message=reason,
+                            actions=[],
+                            images=images if images else None,
+                            icon="error" if not images else None,
+                            title=title,
+                            auto_close_delay=2000
+                        )
+                        return
+                    
+                    target_figure = clicked_icon.figure
+                    
+                    # Must be an OPPONENT's figure (advancing player picks from opponent)
+                    if target_figure.player_id == self.game.player_id:
+                        self.make_dialogue_box(
+                            message="You must select one of your opponent's figures as the defender.",
+                            actions=[],
+                            icon="error",
+                            title="Invalid Selection",
+                            auto_close_delay=2000
+                        )
+                        return
+                    
+                    # Village-only restriction (Peasant War / Civil War)
+                    if village_only and hasattr(target_figure, 'family') and target_figure.family.field != 'village':
+                        active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
+                        mod_icons = self._get_modifier_icon_images(active_mod)
+                        self.make_dialogue_box(
+                            message=f"{active_mod} is active — only village figures can be selected for battle.",
+                            actions=[],
+                            images=mod_icons if mod_icons else None,
+                            icon="error" if not mod_icons else None,
+                            title=active_mod,
+                            auto_close_delay=2000
+                        )
+                        return
+                    
+                    # Check cannot_defend constraint (figure cannot be advanced against)
+                    if hasattr(target_figure, 'cannot_defend') and target_figure.cannot_defend:
+                        self.make_dialogue_box(
+                            message=f"{target_figure.name} cannot defend and cannot be selected for battle.",
+                            actions=[],
+                            icon="error",
+                            title="Cannot Defend",
+                            auto_close_delay=2000
+                        )
+                        return
+                    
+                    # Check cannot_be_targeted constraint (opponent cannot choose this figure)
+                    if hasattr(target_figure, 'cannot_be_targeted') and target_figure.cannot_be_targeted:
+                        self.make_dialogue_box(
+                            message=f"{target_figure.name} cannot be targeted by the opponent.",
+                            actions=[],
+                            icon="error",
+                            title="Cannot Be Targeted",
+                            auto_close_delay=2000
+                        )
+                        return
+                    
+                    # Check must_be_attacked constraint on opponent's eligible figures
+                    # Exclude figures with cannot_defend or cannot_be_targeted
+                    opponent_figures = [
+                        fig for fig in self.figures 
+                        if fig.player_id != self.game.player_id
+                        and not (hasattr(fig, 'cannot_defend') and fig.cannot_defend)
+                        and not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted)
+                    ]
+                    
+                    # Village-only filter for must_be_attacked check too
+                    if village_only:
+                        opponent_figures = [
+                            fig for fig in opponent_figures
+                            if hasattr(fig, 'family') and fig.family.field == 'village'
+                        ]
+                    
+                    # Check if advancing figure has cannot_be_blocked — if so, skip must_be_attacked
+                    advancing_figure = None
+                    if self.game.advancing_figure_id:
+                        for fig in self.figures:
+                            if fig.id == self.game.advancing_figure_id:
+                                advancing_figure = fig
+                                break
+                    
+                    advancing_cannot_be_blocked = (
+                        advancing_figure and 
+                        hasattr(advancing_figure, 'cannot_be_blocked') and 
+                        advancing_figure.cannot_be_blocked
+                    )
+                    
+                    # Blitzkrieg also skips must_be_attacked
+                    skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
+                    
+                    if not skip_must_be_attacked:
+                        must_be_attacked_figures = [
+                            fig for fig in opponent_figures
+                            if hasattr(fig, 'must_be_attacked') and fig.must_be_attacked
+                        ]
+                        must_be_attacked_ids = {fig.id for fig in must_be_attacked_figures}
+                        
+                        if must_be_attacked_figures and target_figure.id not in must_be_attacked_ids:
+                            figure_names = ', '.join(f.name for f in must_be_attacked_figures)
+                            self.make_dialogue_box(
+                                message=f"You must select a figure with the 'Must Be Attacked' trait.\n\nEligible figures: {figure_names}",
+                                actions=['ok'],
+                                icon="error",
+                                title="Invalid Selection"
+                            )
+                            return
+                    
+                    # Valid selection — show confirmation dialogue with figure icon
+                    self.figure_pending_defender_selection = target_figure
+                    if clicked_icon.is_visible:
+                        confirm_msg = f"Are you sure you want to select {target_figure.name} as the defender for battle?"
+                    else:
+                        confirm_msg = "Are you sure you want to select this hidden figure as the defender for battle?"
+                    self.make_dialogue_box(
+                        message=confirm_msg,
+                        actions=['yes', 'no'],
+                        images=[clicked_icon],
+                        title="Confirm Defender"
+                    )
+                    return
+
     def _apply_spell_to_target(self, target_figure):
         """
         Apply a pending spell cast to the selected target figure.
@@ -858,6 +1394,90 @@ class FieldScreen(SubScreen):
         pulse_surface.set_alpha(pulse_alpha)
         self.window.blit(pulse_surface, (text_x, text_y))
     
+    def _draw_defender_selection_prompt(self):
+        """Draw a prominent prompt asking the advancing player to select an opponent's defender."""
+        # Create prompt text
+        prompt_text = "SELECT OPPONENT'S DEFENDER"
+        prompt_surface = self.target_prompt_font.render(prompt_text, True, (100, 200, 255))  # Blue
+        
+        # Create instruction text
+        info_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        
+        # Check for must_be_attacked constraint on opponent's eligible figures
+        # Exclude figures with cannot_defend or cannot_be_targeted
+        opponent_figures = [
+            fig for fig in self.figures 
+            if fig.player_id != self.game.player_id
+            and not (hasattr(fig, 'cannot_defend') and fig.cannot_defend)
+            and not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted)
+        ]
+        
+        # Check if advancing figure has cannot_be_blocked — if so, skip must_be_attacked
+        advancing_figure = None
+        if self.game.advancing_figure_id:
+            for fig in self.figures:
+                if fig.id == self.game.advancing_figure_id:
+                    advancing_figure = fig
+                    break
+        
+        advancing_cannot_be_blocked = (
+            advancing_figure and 
+            hasattr(advancing_figure, 'cannot_be_blocked') and 
+            advancing_figure.cannot_be_blocked
+        )
+        
+        if advancing_cannot_be_blocked:
+            info_text = "Your figure cannot be blocked — select any opponent figure"
+        else:
+            must_be_attacked_figures = [
+                fig for fig in opponent_figures
+                if hasattr(fig, 'must_be_attacked') and fig.must_be_attacked
+            ]
+            if must_be_attacked_figures:
+                figure_names = ', '.join(f.name for f in must_be_attacked_figures)
+                info_text = f"Must select: {figure_names}"
+            else:
+                info_text = "Click one of your opponent's figures to face your advance"
+        
+        info_surface = info_font.render(info_text, True, (180, 220, 255))  # Light blue
+        
+        # Create background box
+        text_width = max(prompt_surface.get_width(), info_surface.get_width())
+        text_height = prompt_surface.get_height() + info_surface.get_height() + 10
+        padding = 20
+        
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding
+        )
+        
+        # Draw semi-transparent black background
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+        
+        # Draw blue border for emphasis
+        pygame.draw.rect(self.window, (100, 200, 255), box_rect, 4)
+        
+        # Draw main prompt text centered in box
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+        
+        # Draw info text below
+        info_x = box_rect.centerx - info_surface.get_width() // 2
+        info_y = text_y + prompt_surface.get_height() + 10
+        self.window.blit(info_surface, (info_x, info_y))
+        
+        # Add pulsing effect
+        pulse_alpha = int(128 + 127 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+        pulse_surface = prompt_surface.copy()
+        pulse_surface.set_alpha(pulse_alpha)
+        self.window.blit(pulse_surface, (text_x, text_y))
+
     def _force_immediate_redraw(self):
         """
         Force an immediate redraw of the field screen to show visual feedback.
@@ -1090,8 +1710,8 @@ class FieldScreen(SubScreen):
                             icon, icon_x, icon_y = hovered_item
                             icon.draw(icon_x, icon_y)
 
-        # Draw opponent's hand cards if All Seeing Eye is active
-        if self.game.has_active_all_seeing_eye():
+        # Draw opponent's hand cards if All Seeing Eye is active (use cached status)
+        if self.cached_all_seeing_eye_status:
             self._draw_opponent_hand_cards()
 
         # Note: Figure detail box is drawn in game_screen.py to ensure it's on top of hand cards
@@ -1099,3 +1719,103 @@ class FieldScreen(SubScreen):
         # Draw target selection prompt if in target selection mode
         if hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast:
             self._draw_target_selection_prompt()
+        
+        # Draw defender selection prompt if in defender selection mode
+        if self.defender_selection_mode:
+            self._draw_defender_selection_prompt()
+
+    def _update_defender_selectable(self):
+        """Mark figure icons as selectable/non-selectable for defender selection mode."""
+        # Get advancing figure to check cannot_be_blocked
+        advancing_figure = None
+        if self.game.advancing_figure_id:
+            for fig in self.figures:
+                if fig.id == self.game.advancing_figure_id:
+                    advancing_figure = fig
+                    break
+        
+        advancing_cannot_be_blocked = (
+            advancing_figure and 
+            hasattr(advancing_figure, 'cannot_be_blocked') and 
+            advancing_figure.cannot_be_blocked
+        )
+        
+        # Check active battle modifiers
+        modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        has_peasant_war = 'Peasant War' in modifier_types
+        has_blitzkrieg = 'Blitzkrieg' in modifier_types
+        has_civil_war = 'Civil War' in modifier_types
+        village_only = has_peasant_war or has_civil_war
+        
+        # Blitzkrieg acts like cannot_be_blocked for must_be_attacked purposes
+        skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
+        
+        # Determine which opponent figures are eligible
+        opponent_figures_eligible = []
+        for fig in self.figures:
+            if fig.player_id == self.game.player_id:
+                continue
+            if hasattr(fig, 'cannot_defend') and fig.cannot_defend:
+                continue
+            if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
+                continue
+            # Village-only restriction (Peasant War / Civil War)
+            if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
+                continue
+            # Civil War second pick: must match color of first defender
+            if has_civil_war and hasattr(self.game, 'civil_war_defender_second') and self.game.civil_war_defender_second:
+                required_color = getattr(self.game, 'civil_war_required_color', None)
+                if required_color and hasattr(fig, 'family') and fig.family.color != required_color:
+                    continue
+                # Exclude the figure already selected as first defender
+                if fig.id == self.game.defending_figure_id:
+                    continue
+            opponent_figures_eligible.append(fig)
+        
+        # must_be_attacked filtering — only consider village figures if village_only
+        must_be_attacked_figures = []
+        if not skip_must_be_attacked:
+            must_be_attacked_figures = [
+                fig for fig in opponent_figures_eligible
+                if hasattr(fig, 'must_be_attacked') and fig.must_be_attacked
+            ]
+        
+        # Build set of must_be_attacked figure IDs for reliable comparison
+        must_be_attacked_ids = {fig.id for fig in must_be_attacked_figures}
+        eligible_ids = {fig.id for fig in opponent_figures_eligible}
+        
+        print(f"[DEFENDER_SELECT] Advancing figure: {advancing_figure.name if advancing_figure else 'None'}, cannot_be_blocked: {advancing_cannot_be_blocked}")
+        print(f"[DEFENDER_SELECT] Battle modifiers: peasant_war={has_peasant_war}, blitzkrieg={has_blitzkrieg}, civil_war={has_civil_war}")
+        print(f"[DEFENDER_SELECT] Eligible opponent figures: {[(f.name, f.id, getattr(f, 'must_be_attacked', False)) for f in opponent_figures_eligible]}")
+        print(f"[DEFENDER_SELECT] Must-be-attacked figures: {[(f.name, f.id) for f in must_be_attacked_figures]}")
+        
+        for icon in self.figure_icons:
+            fig = icon.figure
+            # Enable defender selection mode on all icons (allows hidden figure hover)
+            icon.in_defender_selection_mode = True
+            
+            # Own figures are never selectable as defenders
+            if fig.player_id == self.game.player_id:
+                icon.defender_selectable = False
+                continue
+            
+            # Opponent figure must be in the eligible set (handles cannot_defend, cannot_be_targeted, village_only)
+            if fig.id not in eligible_ids:
+                icon.defender_selectable = False
+                continue
+            
+            # If must_be_attacked applies, only those figures are selectable
+            if must_be_attacked_ids and fig.id not in must_be_attacked_ids:
+                icon.defender_selectable = False
+                print(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) NOT selectable (must_be_attacked constraint)")
+                continue
+            
+            icon.defender_selectable = True
+            print(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) IS selectable")
+    
+    def _reset_defender_selectable(self):
+        """Reset all figure icons to selectable (normal state)."""
+        for icon in self.figure_icons:
+            icon.defender_selectable = True
+            icon.in_defender_selection_mode = False
