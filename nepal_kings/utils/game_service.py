@@ -129,3 +129,93 @@ def defender_no_figures_loss(game_id, player_id):
         return response.json()
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to process defender auto-loss: {str(e)}"}
+
+
+def finish_battle(game_id, player_id, total_diff):
+    """Submit the final battle result to the server for resolution."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/finish_battle',
+            json={'game_id': game_id, 'player_id': player_id, 'total_diff': total_diff}
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to finish battle: {str(e)}"}
+
+
+def play_battle_move(game_id, player_id, battle_move_id, call_figure_id=None):
+    """Play a battle move in the current battle round."""
+    try:
+        payload = {
+            'game_id': game_id,
+            'player_id': player_id,
+            'battle_move_id': battle_move_id,
+        }
+        if call_figure_id is not None:
+            payload['call_figure_id'] = call_figure_id
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/play_battle_move',
+            json=payload,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to play battle move: {str(e)}"}
+
+
+def get_battle_state(game_id, player_id):
+    """Poll the current 3-round battle state from the server."""
+    try:
+        response = requests.get(
+            f'{settings.SERVER_URL}/games/get_battle_state',
+            params={'game_id': game_id, 'player_id': player_id},
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to get battle state: {str(e)}"}
+
+
+def skip_battle_turn(game_id, player_id):
+    """Skip a battle turn when the player has no moves left to play."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/skip_battle_turn',
+            json={'game_id': game_id, 'player_id': player_id},
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to skip battle turn: {str(e)}"}
+
+
+def finish_battle_pick_card(game_id, player_id, picked_card_id=None, picked_card_type='main'):
+    """Winner picks one card from the returnable pool after battle."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/finish_battle_pick_card',
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'picked_card_id': picked_card_id,
+                'picked_card_type': picked_card_type,
+            }
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to pick card: {str(e)}"}
+
+
+def finish_battle_draw(game_id, player_id, choice, picked_card_id=None, picked_card_type='main'):
+    """Handle the defender's choice after a draw."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/finish_battle_draw',
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'choice': choice,
+                'picked_card_id': picked_card_id,
+                'picked_card_type': picked_card_type,
+            }
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to resolve draw: {str(e)}"}

@@ -37,6 +37,16 @@ class CastSpellScreen(SubScreen):
             "cast!"
         )
     
+    def reset_state(self):
+        """Reset all game-specific transient state.
+
+        Called by GameScreen._reset_game_screen_state() when switching games.
+        """
+        self.selected_spell_family = None
+        self.selected_spells = []
+        self.dialogue_box = None
+        print("[CastSpellScreen] State reset for game switch")
+
     def cast_spell_in_db(self, selected_spell):
         """
         Cast the selected spell using the spell service.
@@ -52,6 +62,16 @@ class CastSpellScreen(SubScreen):
                     title="Action Blocked"
                 )
                 return
+
+        # Check if battle is active
+        if hasattr(self.game, 'is_battle_active') and self.game.is_battle_active():
+            self.make_dialogue_box(
+                message="You cannot cast a spell while a battle is in progress.",
+                actions=['ok'],
+                icon="error",
+                title="Action Blocked"
+            )
+            return
         
         # Map dummy cards in the spell to real cards in the player's hand
         real_cards = self.map_spell_cards_to_hand(selected_spell)

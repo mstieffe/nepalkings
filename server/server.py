@@ -10,7 +10,7 @@ import logging
 #    sys.path.insert(0, project_root)
 
 import server_settings as settings
-from routes import games, challenges, auth, msg, figures, spells
+from routes import games, challenges, auth, msg, figures, spells, battle_shop
 
 games.settings = settings
 challenges.settings = settings
@@ -18,6 +18,7 @@ auth.settings = settings
 msg.settings = settings
 figures.settings = settings
 spells.settings = settings
+battle_shop.settings = settings
 
 app = Flask(__name__)
 
@@ -56,6 +57,7 @@ app.register_blueprint(auth, url_prefix='/auth')
 app.register_blueprint(msg, url_prefix='/msg')
 app.register_blueprint(figures, url_prefix='/figures')
 app.register_blueprint(spells, url_prefix='/spells')
+app.register_blueprint(battle_shop, url_prefix='/battle_shop')
 
 if __name__ == '__main__':
     try:

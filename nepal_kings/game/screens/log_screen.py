@@ -1,5 +1,6 @@
 import pygame
 from pygame.locals import *
+from datetime import datetime
 from config import settings
 from game.screens.sub_screen import SubScreen
 from utils.utils import InputField, Button
@@ -44,6 +45,16 @@ class LogScreen(SubScreen):
         # Initialize with the scrollbar at the bottom
         self.scroll_offset = self.calculate_max_scroll()
 
+    def reset_state(self):
+        """Reset all game-specific transient state.
+
+        Called by GameScreen._reset_game_screen_state() when switching games.
+        """
+        self.scroll_offset = self.calculate_max_scroll()
+        self.dragging = False
+        self.scrollbar_handle_color = self.scrollbar_handle_color_passive
+        print("[LogScreen] State reset for game switch")
+
     def init_ui_elements(self):
         """Initialize buttons, input fields, and other UI components."""
         super().init_sub_box_background(
@@ -52,9 +63,15 @@ class LogScreen(SubScreen):
 
         # Buttons for toggling log and chat
         self.buttons.extend([
-            self.make_button("Log", settings.MSG_LOG_BUTTON_X, settings.MSG_LOG_BUTTON_Y),
-            self.make_button("Chat", settings.MSG_CHAT_BUTTON_X, settings.MSG_CHAT_BUTTON_Y),
-            self.make_button("Send", settings.MSG_SEND_BUTTON_X, settings.MSG_SEND_BUTTON_Y),
+            self.make_button("Log", settings.MSG_LOG_BUTTON_X, settings.MSG_LOG_BUTTON_Y,
+                             button_img_active=settings.MSG_BUTTON_ACTIVE_IMG,
+                             button_img_inactive=settings.MSG_BUTTON_INACTIVE_IMG),
+            self.make_button("Chat", settings.MSG_CHAT_BUTTON_X, settings.MSG_CHAT_BUTTON_Y,
+                             button_img_active=settings.MSG_BUTTON_ACTIVE_IMG,
+                             button_img_inactive=settings.MSG_BUTTON_INACTIVE_IMG),
+            self.make_button("Send", settings.MSG_SEND_BUTTON_X, settings.MSG_SEND_BUTTON_Y,
+                             button_img_active=settings.MSG_SEND_BUTTON_ACTIVE_IMG,
+                             button_img_inactive=settings.MSG_SEND_BUTTON_INACTIVE_IMG),
         ])
         self.buttons[0].active = True
         self.buttons[1].active = True
@@ -104,25 +121,45 @@ class LogScreen(SubScreen):
             if button.text == "Send":
                 button.draw()
 
+    def _format_timestamp(self, iso_timestamp):
+        """Format an ISO timestamp into a user-friendly short format."""
+        try:
+            dt = datetime.fromisoformat(iso_timestamp)
+            now = datetime.utcnow()
+            if dt.date() == now.date():
+                return dt.strftime("Today %H:%M")
+            elif (now - dt).days == 1:
+                return dt.strftime("Yesterday %H:%M")
+            elif dt.year == now.year:
+                return dt.strftime("%b %d, %H:%M")
+            else:
+                return dt.strftime("%b %d %Y, %H:%M")
+        except (ValueError, TypeError):
+            return str(iso_timestamp)[:16]
+
     def calculate_rendered_lines(self, messages):
         """Calculate all rendered lines for the given messages."""
         rendered_lines = []
         max_width = settings.MSG_MAX_WIDTH - settings.MSG_TEXT_X
+        current_username = self.game.current_player.get('username', '') if self.game else ''
 
         for message in messages:
+            ts = self._format_timestamp(message.get('timestamp', ''))
             if 'author' in message:
-                bg_color = (
-                    settings.LOG_MSG_SELF_BG_COLOR if message['author'] == (self.game.current_player.get('username') if self.game else '')
-                    else settings.LOG_MSG_OPP_BG_COLOR
-                )
-                msg_content = f"[{message['timestamp'][:16]}] {message['message']}"
+                # Log entry — choose color based on type (battle vs build-up)
+                is_self = message['author'] == current_username
+                log_type = message.get('type', '')
+                if log_type in settings.BATTLE_LOG_TYPES:
+                    bg_color = settings.BATTLE_LOG_SELF_BG_COLOR if is_self else settings.BATTLE_LOG_OPP_BG_COLOR
+                else:
+                    bg_color = settings.LOG_MSG_SELF_BG_COLOR if is_self else settings.LOG_MSG_OPP_BG_COLOR
+                msg_content = f"[{ts}] {message['message']}"
             else:
+                # Chat message
                 sender = self.game.get_player_username(message['sender_id']) if self.game else 'Unknown'
-                bg_color = (
-                    settings.CHAT_MSG_SELF_BG_COLOR if sender == (self.game.current_player.get('username') if self.game else '')
-                    else settings.CHAT_MSG_OPP_BG_COLOR
-                )
-                msg_content = f"[{message['timestamp'][:16]}] {sender}: {message['message']}"
+                is_self = sender == current_username
+                bg_color = settings.CHAT_MSG_SELF_BG_COLOR if is_self else settings.CHAT_MSG_OPP_BG_COLOR
+                msg_content = f"[{ts}] {sender}: {message['message']}"
 
             # Wrap text and store lines with their corresponding background color
             wrapped_lines = self.wrap_text(msg_content, max_width)

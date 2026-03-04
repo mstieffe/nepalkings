@@ -18,7 +18,7 @@ class Hand:
         self.type = type
 
         self.cards = self.initialize_cards()
-        self.cards.sort(key=lambda card: card.rank)
+        self.cards.sort(key=lambda card: (1 if getattr(card, 'part_of_battle_move', False) else 0, card.rank))
 
         self.x = x
         self.y = y
@@ -78,7 +78,12 @@ class Hand:
         return slots
     
     def update_slot_positions(self):
-        """Dynamically position slots based on number of cards to maintain constant total width."""
+        """Dynamically position slots based on number of cards to maintain constant total width.
+        
+        Battle-move cards are sorted to the right but use the same uniform spacing
+        as all other cards — the total card count determines spacing, not the
+        normal/battle split.
+        """
         num_cards = len(self.cards)
         if num_cards == 0:
             return
@@ -91,14 +96,12 @@ class Hand:
             start_x = self.x + (total_width - settings.CARD_WIDTH) / 2
             spacing = 0
         else:
-            # Multiple cards: distribute evenly across full width
-            # First card at self.x, last card ends at self.x + total_width
-            # So last card starts at self.x + total_width - CARD_WIDTH
+            # All cards share the same spacing — battle-move cards are just
+            # sorted to the right, so there is no layout jump when a card
+            # gets assigned to a battle move.
             start_x = self.x
-            # Calculate spacing so cards span the full width
             spacing = (total_width - settings.CARD_WIDTH) / (num_cards - 1)
         
-        # Position and update rectangles for all active slots
         for i in range(num_cards):
             if i < len(self.card_slots):
                 slot = self.card_slots[i]
@@ -293,7 +296,8 @@ class Hand:
         """Update the game state."""
         self.game = game
         self.cards = self.initialize_cards()
-        self.cards.sort(key=lambda card: card.rank)
+        # Sort: normal cards by rank first, then battle-move cards by rank (shifted right)
+        self.cards.sort(key=lambda card: (1 if getattr(card, 'part_of_battle_move', False) else 0, card.rank))
 
         # Update slot positions based on number of cards
         self.update_slot_positions()
@@ -396,6 +400,15 @@ class Hand:
                                         actions=['ok'],
                                         icon="error"
                                     )
+                                # Block card changes during battle
+                                elif hasattr(self.game, 'is_battle_active') and self.game.is_battle_active():
+                                    self.dialogue_box = DialogueBox(
+                                        self.window,
+                                        title="Action Blocked",
+                                        message="You cannot change cards while a battle is in progress.",
+                                        actions=['ok'],
+                                        icon="error"
+                                    )
                                 else:
                                     self.handle_button_click()
 
@@ -413,8 +426,12 @@ class Hand:
                             break  # Found topmost card
                 
                 # Toggle clicked state only for the topmost card
+                # Skip cards reserved for battle moves — they cannot be selected
                 if clicked_slot:
-                    clicked_slot.clicked = not clicked_slot.clicked
+                    if getattr(clicked_slot.card, 'part_of_battle_move', False):
+                        pass  # Battle-move cards are not selectable
+                    else:
+                        clicked_slot.clicked = not clicked_slot.clicked
         
         # Update discard dialogue if in discard mode and a card selection changed
         if self.discard_mode:

@@ -79,7 +79,7 @@ def get_card_value(rank):
 CIVIL_WAR_CONFIG = {
     "name": "Civil War",
     "type": "tactics",
-    "description": "The upcoming battle is a civil war, where each player may choose two villagers of the same color to fight for them. Both players have 1 turn left. The invader starts next turn.",
+    "description": "The upcoming battle is a civil war, where each player may choose up to two villagers of the same color to fight for them. Both players have 2 turns left. The invader starts next turn.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "civil_war.png",
     "icon_gray_img": "civil_war.png",
@@ -103,7 +103,7 @@ CIVIL_WAR_CONFIG = {
 PEASANT_WAR_CONFIG = {
     "name": "Peasant War",
     "type": "tactics",
-    "description": "The upcoming battle is a peasant war, where only villagers can be selected for the battle. Both players have 1 turn left. The invader starts next turn.",
+    "description": "The upcoming battle is a peasant war, where only villagers can be selected for the battle. Both players have 2 turns left. The invader starts next turn.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "peasant_war.png",
     "icon_gray_img": "peasant_war.png",
@@ -126,7 +126,7 @@ PEASANT_WAR_CONFIG = {
 BLITZKRIEG_CONFIG = {
     "name": "Blitzkrieg",
     "type": "tactics",
-    "description": "You become the invader (if you are not already). The next advancing figure cannot be blocked, i.e. the defender can not counter advance. Both players have 1 turn left. The invader starts next turn. During the last turn ceasefire is active.",
+    "description": "You become the invader (if you are not already). The next advancing figure cannot be blocked, i.e. the defender can not counter advance. Both players have 2 turns left. The invader starts next turn. Ceasefire is active until the last turn.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "blitzkrieg.png",
     "icon_gray_img": "blitzkrieg.png",
@@ -148,7 +148,7 @@ BLITZKRIEG_CONFIG = {
 INVADER_SWAP_CONFIG = {
     "name": "Invader Swap",
     "type": "tactics",
-    "description": "The role of invader and defender will be swapped. Both players have 1 turn left. The invader starts next turn.",
+    "description": "The role of invader and defender will be swapped. Both players have 2 turns left. The invader starts next turn.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "invader_swap.png",
     "icon_gray_img": "invader_swap.png",

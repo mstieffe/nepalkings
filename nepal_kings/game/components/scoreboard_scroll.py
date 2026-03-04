@@ -26,6 +26,7 @@ class ScoreboardScroll:
         self.font_text = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SCROLL_FONT_SIZE)
         self.font_number = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SCROLL_NUMBER_FONT_SIZE)
         self.font_number.set_bold(True)
+        self.font_subtitle = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SUBTITLE_FONT_SIZE)
 
         # Load black and golden rectangle glow images
         self.rect_glow_black = pygame.image.load(settings.GLOW_RECT_IMG_PATH + 'black.png').convert_alpha()
@@ -98,19 +99,36 @@ class ScoreboardScroll:
         self.draw_transparent_line(horizontal_line_start, horizontal_line_end, settings.SCOREBOARD_CROSS_COLOR, settings.SCOREBOARD_CROSS_WIDTH, settings.SCOREBOARD_CROSS_ALPHA)
         self.draw_transparent_line(vertical_line_start, vertical_line_end, settings.SCOREBOARD_CROSS_COLOR, settings.SCOREBOARD_CROSS_WIDTH, settings.SCOREBOARD_CROSS_ALPHA)
 
-    def draw_cell(self, text, value, cell_x, cell_y, value_color=settings.SCOREBOARD_SCROLL_TEXT_COLOR):
-        """Draw the text and value in the specified cell."""
+    def draw_cell(self, text, value, cell_x, cell_y, value_color=settings.SCOREBOARD_SCROLL_TEXT_COLOR,
+                  subtitle=None, subtitle_color=None, y_offset=0, text_spacing=None):
+        """Draw the text and value in the specified cell.
+
+        :param subtitle: optional smaller text drawn below the main label (e.g. "(battle)").
+        :param y_offset: extra pixels to push the value centre downward (used for top-row cells).
+        :param text_spacing: gap between title bottom and value top.  Defaults to SCOREBOARD_CELL_TEXT_SPACING.
+        """
+        if text_spacing is None:
+            text_spacing = settings.SCOREBOARD_CELL_TEXT_SPACING
+
         # Render the text and value
         text_obj = self.font_text.render(text, True, settings.SCOREBOARD_SCROLL_TEXT_COLOR)
         value_obj = self.font_number.render(str(value), True, value_color)
 
-        # Center the text horizontally
+        # Centre text horizontally
         text_rect = text_obj.get_rect(centerx=cell_x + self.cell_width // 2)
-        # Center the value both horizontally and vertically
-        value_rect = value_obj.get_rect(center=(cell_x + self.cell_width // 2, cell_y + self.cell_height // 2))
+        # Centre the value horizontally; push down from cell centre by y_offset
+        value_rect = value_obj.get_rect(center=(cell_x + self.cell_width // 2,
+                                                cell_y + self.cell_height // 2 + y_offset))
 
-        # Position the text slightly above the number
-        text_rect.y = value_rect.y - settings.SCOREBOARD_CELL_TEXT_SPACING - text_rect.height
+        # Position the title above the value with the given spacing (consistent for every cell in the row)
+        text_rect.y = value_rect.y - text_spacing - text_rect.height
+
+        # Draw subtitle between title and value if present (no title shift — keeps alignment)
+        if subtitle:
+            sub_obj = self.font_subtitle.render(subtitle, True, subtitle_color or (220, 60, 60))
+            sub_rect = sub_obj.get_rect(centerx=cell_x + self.cell_width // 2)
+            sub_rect.y = text_rect.bottom + 1
+            self.window.blit(sub_obj, sub_rect)
 
         self.window.blit(text_obj, text_rect)
         self.window.blit(value_obj, value_rect)
@@ -126,9 +144,23 @@ class ScoreboardScroll:
 
     def draw_msg(self):
         """Render the scoreboard content."""
-        # Draw each cell's content
-        self.draw_cell("Turns Left", self.text_dict.get("turns_left", ""), self.x, self.y)
-        self.draw_cell("Round", self.text_dict.get("round", ""), self.x + self.cell_width, self.y)
+        # Top-row cells share offset + subtitle spacing so labels & values stay aligned
+        top_offset = settings.SCOREBOARD_CELL_VALUE_OFFSET
+        top_spacing = settings.SCOREBOARD_CELL_SUBTITLE_SPACING
+
+        # During an active battle, show battle turns with a "(battle)" subtitle
+        in_battle = getattr(self.game, 'in_battle_phase', False) if self.game else False
+        if in_battle:
+            battle_turns = getattr(self.game, 'battle_turns_left', 0)
+            self.draw_cell("Turns Left", battle_turns, self.x, self.y,
+                           subtitle="(battle)", subtitle_color=(220, 60, 60),
+                           y_offset=top_offset, text_spacing=top_spacing)
+        else:
+            self.draw_cell("Turns Left", self.text_dict.get("turns_left", ""), self.x, self.y,
+                           subtitle="(build-up)", subtitle_color=(90, 115, 150),
+                           y_offset=top_offset, text_spacing=top_spacing)
+        self.draw_cell("Round", self.text_dict.get("round", ""), self.x + self.cell_width, self.y,
+                       y_offset=top_offset, text_spacing=top_spacing)
         self.draw_cell("You", self.text_dict.get("your_score", ""), self.x, self.y + self.cell_height, settings.COLOR_GREEN)
         self.draw_cell("Opponent", self.text_dict.get("opponent_score", ""), self.x + self.cell_width, self.y + self.cell_height, settings.COLOR_RED)
 

@@ -57,4 +57,21 @@ CHAT_MSG_SELF_BG_COLOR = (120, 60, 26)  # Background for chat messages
 CHAT_MSG_OPP_BG_COLOR = (83, 12, 2)  # Background for chat messages
 MSG_BG_TRANSPARENCY = 200
 
+# Battle-phase log entry colors (distinct from build-up)
+BATTLE_LOG_SELF_BG_COLOR = (120, 40, 100)  # Purple-ish for own battle moves
+BATTLE_LOG_OPP_BG_COLOR = (80, 25, 90)   # Darker purple for opponent battle moves
+
+# Battle-related log types (used to pick battle colors)
+BATTLE_LOG_TYPES = {
+    'battle_move', 'battle_skip', 'battle_start', 'battle_decision',
+    'battle_win', 'battle_draw', 'auto_loss', 'deficit_loss', 'fold_win',
+    'advance', 'counter_advance', 'civil_war_skip',
+}
+
+# Chat/Log button images (same style as build figure color buttons)
+MSG_BUTTON_ACTIVE_IMG = 'img/button/confirm/turkis.png'
+MSG_BUTTON_INACTIVE_IMG = 'img/button/confirm/turkis_dark.png'
+MSG_SEND_BUTTON_ACTIVE_IMG = 'img/button/confirm/green.png'
+MSG_SEND_BUTTON_INACTIVE_IMG = 'img/button/confirm/grey.png'
+
 

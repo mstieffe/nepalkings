@@ -54,6 +54,31 @@ class CardImg():
     def draw_front_bright(self, x, y):
         self.window.blit(self.front_img, (x, y))
 
+    def draw_front_battle_move(self, x, y):
+        """Draw card with a grey overlay/border and a battle icon in the top-left corner."""
+        self.window.blit(self.front_img, (x, y))
+        if not hasattr(self, '_battle_move_overlay'):
+            w = self.front_img.get_width()
+            h = self.front_img.get_height()
+            self._battle_move_overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+            self._battle_move_overlay.fill((40, 40, 40, 140))  # Dark grey tint overlay
+            # Grey border
+            pygame.draw.rect(self._battle_move_overlay, (100, 100, 100, 220),
+                             (0, 0, w, h), 3)
+
+        # Battle move icon in top-left (drawn UNDER the overlay)
+        if not hasattr(self, '_battle_move_sword'):
+            icon_size = int(self.front_img.get_width() * 0.35)
+            if 'battle_sword' not in self._card_image_cache:
+                self._card_image_cache['battle_sword'] = pygame.image.load(
+                    'img/figures/state_icons/charge_opponent.png').convert_alpha()
+            self._battle_move_sword = pygame.transform.smoothscale(
+                self._card_image_cache['battle_sword'], (icon_size, icon_size))
+        self.window.blit(self._battle_move_sword, (x + 3, y + 3))
+
+        # Overlay on top of everything
+        self.window.blit(self._battle_move_overlay, (x, y))
+
     def draw_back_bright(self, x, y):
         self.window.blit(self.back_img, (x, y))
     

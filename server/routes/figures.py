@@ -30,6 +30,7 @@ def create_figure():
         produces = data.get('produces', {})
         requires = data.get('requires', {})
         cards = data.get('cards', [])
+        instant_charge_advance = data.get('instant_charge_advance', False)
 
         if settings.DEBUG_ENABLED:
             with open(settings.DEBUG_LOG_PATH, 'a') as f:
@@ -93,9 +94,85 @@ def create_figure():
 
         # flip turn player id only if Infinite Hammer is not active
         game = Game.query.get(game_id)
+        other_player = game.players[0] if game.players[0].id != player_id else game.players[1]
+
+        # Handle instant charge advance (build + advance in one action)
+        instant_charge_result = None
+        if instant_charge_advance:
+            # Validate: ceasefire must not be active
+            if game.ceasefire_active:
+                instant_charge_result = {'success': False, 'message': 'Cannot advance during ceasefire'}
+            # Validate: no existing advance by this player
+            elif game.advancing_figure_id and game.advancing_player_id == player_id:
+                instant_charge_result = {'success': False, 'message': 'You already have a figure advancing'}
+            else:
+                # Check resource deficit on newly built figure
+                all_figures = Figure.query.filter_by(player_id=player_id, game_id=game_id).all()
+                total_produces = {}
+                total_requires = {}
+                for fig in all_figures:
+                    if fig.produces:
+                        for res, amount in fig.produces.items():
+                            total_produces[res] = total_produces.get(res, 0) + amount
+                    if fig.requires:
+                        for res, amount in fig.requires.items():
+                            total_requires[res] = total_requires.get(res, 0) + amount
+                has_deficit = False
+                if figure.requires:
+                    for resource_name in figure.requires:
+                        if total_requires.get(resource_name, 0) > total_produces.get(resource_name, 0):
+                            has_deficit = True
+                            break
+                if has_deficit:
+                    instant_charge_result = {'success': False, 'message': 'This figure has a resource deficit and cannot advance toward battle.'}
+                else:
+                    # Determine if this is a counter-advance
+                    is_counter_advance = (game.advancing_figure_id is not None and
+                                          game.advancing_player_id != player_id)
+
+                    # Check battle modifier restrictions
+                    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+                    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+                    has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+
+                    if has_blitzkrieg and is_counter_advance:
+                        instant_charge_result = {'success': False, 'message': 'Blitzkrieg: defender cannot counter-advance'}
+                    elif (has_civil_war or any(m.get('type') == 'Peasant War' for m in modifiers)) and field != 'village':
+                        instant_charge_result = {'success': False, 'message': 'Only village figures can advance with this battle modifier'}
+                    else:
+                        # Set the advancing/defending figure
+                        if is_counter_advance:
+                            game.defending_figure_id = figure.id
+                            # Counter-advance consumes a turn
+                            player.turns_left -= 1
+                        else:
+                            game.advancing_figure_id = figure.id
+                            game.advancing_player_id = player_id
+                            # Mirror normal advance turn management (see games.py advance_figure)
+                            game.invader_player_id = player_id
+                            player.turns_left = 0
+                            other_player.turns_left = 1
+                        ic_user = User.query.get(player.user_id)
+                        ic_username = ic_user.username if ic_user else f"Player {player_id}"
+                        action_type = 'counter_advance' if is_counter_advance else 'advance'
+                        advance_log = LogEntry(
+                            game_id=game_id,
+                            player_id=player_id,
+                            round_number=game.current_round,
+                            turn_number=player.turns_left,
+                            message=f"{ic_username} built and instantly charged {name} toward battle.",
+                            author=ic_username,
+                            type=action_type
+                        )
+                        db.session.add(advance_log)
+                        instant_charge_result = {
+                            'success': True,
+                            'is_counter_advance': is_counter_advance,
+                        }
+
         if not has_infinite_hammer and game.turn_player_id == player_id:
-            game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
-        
+            game.turn_player_id = other_player.id
+
         # Track action for Infinite Hammer if active
         if has_infinite_hammer:
             # Expire session to ensure we get the latest ActiveSpell data
@@ -147,7 +224,16 @@ def create_figure():
         if settings.DEBUG_ENABLED:
             with open(settings.DEBUG_LOG_PATH, 'a') as f:
                 f.write(f"[SERVER] Returning serialized figure: produces={serialized.get('produces')}, requires={serialized.get('requires')}\n")
-        return jsonify({'success': True, 'message': 'Figure created successfully', 'figure': serialized})
+
+        response_data = {'success': True, 'message': 'Figure created successfully', 'figure': serialized}
+
+        # Include instant charge advance result if requested
+        if instant_charge_result is not None:
+            response_data['instant_charge'] = instant_charge_result
+            # Include updated game state so client can update
+            response_data['game'] = game.serialize()
+
+        return jsonify(response_data)
 
     except Exception as e:
         db.session.rollback()

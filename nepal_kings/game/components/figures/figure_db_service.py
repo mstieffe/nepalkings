@@ -56,13 +56,14 @@ class FigureDbService:
         return FigureDbService._create_figure_instance(figure_data, family, cards)
 
     @staticmethod
-    def save_figure(figure: Figure, player_id: int, game_id: int) -> Dict:
+    def save_figure(figure: Figure, player_id: int, game_id: int, instant_charge_advance: bool = False) -> Dict:
         """
         Save a figure to the server.
 
         :param figure: The Figure object.
         :param player_id: Player ID.
         :param game_id: Game ID.
+        :param instant_charge_advance: If True, also advance the figure immediately after creation.
         """
         # Prepare card-role mapping
         serialized_cards = [
@@ -103,7 +104,8 @@ class FigureDbService:
             upgrade_family_name=upgrade_family_name,
             produces=produces,
             requires=requires,
-            cards=serialized_cards
+            cards=serialized_cards,
+            instant_charge_advance=instant_charge_advance
         )
 
     @staticmethod

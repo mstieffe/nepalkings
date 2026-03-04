@@ -46,14 +46,24 @@ class BuildFigureScreen(SubScreen):
             "create!"
         )
 
-    def create_figure_in_db(self, selected_figure):
-        """Insert the selected figure into the database."""
+    def reset_state(self):
+        """Reset all game-specific transient state.
+
+        Called by GameScreen._reset_game_screen_state() when switching games.
+        """
+        self.selected_figure_family = None
+        self.selected_figures = []
+        self.dialogue_box = None
+        print("[BuildFigureScreen] State reset for game switch")
+
+    def create_figure_in_db(self, selected_figure, instant_charge_advance=False):
+        """Insert the selected figure into the database. Returns the server response dict."""
         # Map dummy cards in the figure to real cards in the player's hand
         real_cards = self.map_figure_cards_to_hand(selected_figure)
 
         if real_cards is None:
             print(f"Failed to create figure: Could not find all cards in the player's hand.")
-            return
+            return {'success': False, 'message': 'Could not find all cards in hand'}
 
         # Update the selected figure with real cards
         selected_figure.cards = real_cards
@@ -71,7 +81,8 @@ class BuildFigureScreen(SubScreen):
         response = FigureDbService.save_figure(
             figure=selected_figure,
             player_id=self.game.player_id,
-            game_id=self.game.game_id
+            game_id=self.game.game_id,
+            instant_charge_advance=instant_charge_advance
         )
 
         if response.get('success'):
@@ -79,18 +90,60 @@ class BuildFigureScreen(SubScreen):
         else:
             print(f"Failed to create figure: {response.get('message', 'Unknown error')}")
 
-        # make log messsage
-        #self.game.add_log_entry(round_number, turn_number, message, self.current_player.get('username', 'Player'), 'card_change')
-        self.game.add_log_entry(
-            self.game.current_round,
-            self.game.current_player.get('turns_left', 0) ,
-            f"{self.game.current_player.get('username', 'Player')} created a {selected_figure.family.field} figure with {len(selected_figure.cards)} cards",
-            self.game.current_player.get('username', 'Player'),
-            'figure_created'
-        )
-
         self.game.update()
 
+        return response
+
+    def _can_instant_charge_advance(self, figure):
+        """
+        Check if a figure with instant_charge can actually advance right now.
+        Returns (can_advance, is_counter, reason) tuple.
+        - can_advance: True if advancing is possible
+        - is_counter: True if this would be a counter-advance
+        - reason: Short description of why not (if can_advance is False)
+        """
+        if not getattr(figure, 'instant_charge', False):
+            return False, False, 'no_instant_charge'
+
+        game = self.game
+
+        # Cannot advance during ceasefire
+        if game.ceasefire_active:
+            return False, False, 'ceasefire'
+
+        # Check if there's already an advance in progress by this player
+        if game.advancing_figure_id and game.advancing_player_id == game.player_id:
+            return False, False, 'already_advancing'
+
+        # Determine if this would be a counter-advance
+        is_counter = (game.advancing_figure_id is not None and
+                      game.advancing_player_id != game.player_id)
+
+        # Check battle modifiers
+        modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+
+        # Blitzkrieg: defender cannot counter-advance
+        if 'Blitzkrieg' in modifier_types and is_counter:
+            return False, True, 'blitzkrieg'
+
+        # Peasant War / Civil War: only village figures can advance
+        if 'Peasant War' in modifier_types or 'Civil War' in modifier_types:
+            fig_field = getattr(figure.family, 'field', None) if hasattr(figure, 'family') else None
+            if fig_field != 'village':
+                return False, is_counter, 'village_only'
+
+        # cannot_attack check
+        if getattr(figure, 'cannot_attack', False):
+            return False, is_counter, 'cannot_attack'
+
+        # cannot_be_blocked check (opponent's advancing figure)
+        if is_counter and game.advancing_figure_id:
+            # We can't check the opponent's figure properties client-side easily here,
+            # but the server will validate. Allow the attempt.
+            pass
+
+        return True, is_counter, None
 
 
     def init_scroll_test_list_shifter(self):
@@ -227,6 +280,17 @@ class BuildFigureScreen(SubScreen):
                                 title="Action Blocked"
                             )
                             return
+
+                    # Check if battle is active
+                    if hasattr(self.game, 'is_battle_active') and self.game.is_battle_active():
+                        self.dialogue_box = None
+                        self.make_dialogue_box(
+                            message="You cannot build a figure while a battle is in progress.",
+                            actions=['ok'],
+                            icon="error",
+                            title="Action Blocked"
+                        )
+                        return
                     
                     print("Creating figure...")
                     self.create_figure_in_db(selected_figure)
@@ -237,6 +301,78 @@ class BuildFigureScreen(SubScreen):
                         icon="figure",
                         title="Figure Built"
                     )
+
+                elif response in ('build + advance', 'build + counter'):
+                    # Check if player is waiting for counter spell response
+                    if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
+                        if self.state.parent_screen.waiting_for_counter_response:
+                            self.dialogue_box = None
+                            self.make_dialogue_box(
+                                message="You cannot build a figure while waiting for opponent's response to your spell.",
+                                actions=['ok'],
+                                icon="error",
+                                title="Action Blocked"
+                            )
+                            return
+
+                    print("Creating figure with instant charge advance...")
+                    build_result = self.create_figure_in_db(selected_figure, instant_charge_advance=True)
+
+                    if not build_result or not build_result.get('success'):
+                        error_msg = build_result.get('message', 'Unknown error') if build_result else 'Build failed'
+                        self.make_dialogue_box(
+                            message=f"Failed to build figure: {error_msg}",
+                            actions=['ok'],
+                            icon="error",
+                            title="Build Failed"
+                        )
+                        return
+
+                    # Update game state from the combined response
+                    if build_result.get('game'):
+                        self.game.update_from_dict(build_result['game'])
+
+                    # Check the instant_charge result from the combined response
+                    charge_result = build_result.get('instant_charge', {})
+                    action_word = "counter-advanced" if response == 'build + counter' else "advanced"
+                    fig_name = selected_figure.name
+
+                    if charge_result.get('success'):
+                        # Check if Civil War needs a second figure
+                        if charge_result.get('civil_war_need_second'):
+                            civil_war_color = charge_result.get('civil_war_color', '')
+                            color_name = 'red' if civil_war_color == 'offensive' else 'black'
+                            self.game.civil_war_awaiting_second = True
+                            self.game.civil_war_required_color = civil_war_color
+                            self.make_dialogue_box(
+                                message=f"{fig_name} has been built and {action_word} toward battle!\n\nCivil War! You may select a second village figure of the same color ({color_name}).",
+                                actions=['to field'],
+                                icon="figure",
+                                title="Instant Charge!"
+                            )
+                        else:
+                            # Clear Civil War state
+                            if hasattr(self.game, 'civil_war_awaiting_second'):
+                                self.game.civil_war_awaiting_second = False
+                                self.game.civil_war_required_color = None
+                            # Trigger advance notification
+                            self.game.pending_own_advance_notification = True
+                            self.game.own_advance_figure_name = fig_name
+                            self.make_dialogue_box(
+                                message=f"{fig_name} has been built and {action_word} toward battle!",
+                                actions=['to field'],
+                                icon="figure",
+                                title="Instant Charge!"
+                            )
+                    else:
+                        # Advance failed but figure was still built
+                        error_msg = charge_result.get('message', 'Advance conditions not met')
+                        self.make_dialogue_box(
+                            message=f"Figure was built successfully, but could not advance:\n\n{error_msg}",
+                            actions=['to field'],
+                            icon="error",
+                            title="Advance Failed"
+                        )
 
                 elif response == 'to field':
                     self.dialogue_box = None
@@ -267,13 +403,36 @@ class BuildFigureScreen(SubScreen):
                         figure_icon.show_advance_overlay = False
 
                         images = [figure_icon]
+                        actions = ['yes', 'cancel']
+                        message = "Do you want to build this figure?"
+                        message_after = None
+
+                        # Check if figure has instant_charge and can advance
+                        can_charge, is_counter, _ = self._can_instant_charge_advance(selected_figure)
+                        if can_charge:
+                            # Load the instant_charge skill icon
+                            import os
+                            from config.info_scroll_settings import SKILL_ICON_IMG_PATH_DICT
+                            icon_path = SKILL_ICON_IMG_PATH_DICT.get('instant_charge', '')
+                            if icon_path and os.path.exists(icon_path):
+                                charge_icon = pygame.image.load(icon_path).convert_alpha()
+                                images.append(charge_icon)
+
+                            if is_counter:
+                                charge_action = 'build + counter'
+                                message_after = "This figure has Instant Charge and can counter-advance immediately after being built!"
+                            else:
+                                charge_action = 'build + advance'
+                                message_after = "This figure has Instant Charge and can advance toward battle immediately after being built!"
+                            actions = ['yes', charge_action, 'cancel']
+
                         self.make_dialogue_box(
-                            message="Do you want to build this figure?",
-                            actions=['yes', 'cancel'],
+                            message=message,
+                            actions=actions,
                             images=images,
                             icon="question",
                             title="Create Figure",
-
+                            message_after_images=message_after,
                         )
                         #print("making dialogue box")
                     elif selected_figure and self.confirm_button.collide() and self.confirm_button.disabled:

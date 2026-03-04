@@ -109,8 +109,30 @@ class Game:
         self.fold_result_shown = False  # Track if fold result notification was shown
         self.auto_proceed_to_battle = False  # True when both chose battle (detected via polling)
 
+        # Battle moves phase tracking
+        self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')  # {player_id: True}
+        self.battle_moves_phase = False  # True when player is in mandatory battle moves selection
+        self.battle_moves_ready = False  # True when this player has confirmed their moves
+        self.waiting_for_opponent_battle_moves = False  # True when waiting for opponent to confirm
+        self.both_battle_moves_ready = False  # True when both confirmed (proceed to battle)
+
+        # Battle phase (active 3-round battle) tracking — client-side only
+        self.in_battle_phase = False       # True while the 3-round battle is active
+        self.battle_turns_left = 0         # Player's remaining battle turns (starts at 3)
+
+        # Server-authoritative battle round tracking
+        self.battle_round = game_dict.get('battle_round', 0)  # current battle round (0-2)
+        self.battle_turn_player_id = game_dict.get('battle_turn_player_id')  # whose turn in battle
+
         # Suppress next turn notification after battle/fold (result dialogue already shown)
         self.suppress_next_turn_summary = False
+
+        # Battle reconnect flag — True until the client has checked for active battle on first poll
+        self.battle_reconnect_pending = True
+
+        # Post-battle side card draw notification
+        self.pending_post_battle_side_cards = None  # [{suit, rank}, ...] for current player
+        self._post_battle_side_cards_round = 0  # Round for which notification was already shown
 
         # Initialize log entries and chat messages
         self.log_entries = []
@@ -186,10 +208,15 @@ class Game:
                 # Advance notification replaces the normal opponent turn summary
                 self.pending_opponent_turn_summary = None
             
+            # Skip advance/defender detection while battle is confirmed or in progress
+            # (prevents stale flags from re-triggering after battle resolution)
+            battle_active = game_dict.get('battle_confirmed', False) or self.in_battle_phase
+
             # Detect: advancing player's turn returned without defender selected
             # This means opponent spent their turn, now advancer must pick a defender
             # Skip if Civil War second figure selection is pending (turn stays with invader)
-            if (self.advancing_figure_id and 
+            if (not battle_active and
+                self.advancing_figure_id and 
                 self.advancing_player_id == self.player_id and 
                 not self.defending_figure_id and 
                 self.turn and not self.pending_defender_selection and
@@ -199,7 +226,8 @@ class Game:
 
             # Detect: defender's turn ended without counter-advance
             # Opponent (advancing player) is now picking a defender from our figures
-            if (self.advancing_figure_id and
+            if (not battle_active and
+                self.advancing_figure_id and
                 self.advancing_player_id != self.player_id and
                 not self.defending_figure_id and
                 not is_now_our_turn and
@@ -213,7 +241,8 @@ class Game:
             has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
             
             # Battle is ready when both sides have their figures set
-            battle_ready = (self.advancing_figure_id and self.defending_figure_id and
+            battle_ready = (not battle_active and
+                           self.advancing_figure_id and self.defending_figure_id and
                            not self.pending_battle_ready and not self.battle_ready_shown)
             
             # During Civil War, suppress premature battle_ready while a player
@@ -243,6 +272,10 @@ class Game:
             self.fold_outcome = game_dict.get('fold_outcome')
             self.fold_winner_id = game_dict.get('fold_winner_id')
 
+            # Update server-authoritative battle round tracking
+            self.battle_round = game_dict.get('battle_round', 0)
+            self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
+
             # Reset fold tracking when server clears fold state (new round started)
             if previous_fold_outcome and not self.fold_outcome:
                 self.fold_result_shown = False
@@ -258,6 +291,16 @@ class Game:
                 self.auto_proceed_to_battle = True
                 self.waiting_for_battle_decision = False
                 print(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
+
+            # Detect opponent confirmed battle moves while we are waiting
+            previous_bm_confirmed = self.battle_moves_confirmed
+            self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
+            if (self.waiting_for_opponent_battle_moves and
+                    self.battle_moves_confirmed and
+                    len(self.battle_moves_confirmed) >= 2):
+                self.both_battle_moves_ready = True
+                self.waiting_for_opponent_battle_moves = False
+                print(f"[BATTLE_MOVES] Both players confirmed battle moves — proceed to battle")
 
             # Reinitialize current and opponent players
             for player_dict in self.players:
@@ -294,6 +337,17 @@ class Game:
             
             # Update previous turn player for next check
             self.previous_turn_player_id = self.turn_player_id
+
+            # Detect post-battle side card draw
+            post_battle = game_dict.get('post_battle_drawn_cards')
+            if (post_battle and self.player_id and
+                    str(self.player_id) in post_battle and
+                    self.current_round != self._post_battle_side_cards_round):
+                my_cards = post_battle[str(self.player_id)]
+                if my_cards:
+                    self.pending_post_battle_side_cards = my_cards
+                    self._post_battle_side_cards_round = self.current_round
+                    print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
 
             # Update logs and chats
             self.update_logs()
@@ -340,8 +394,13 @@ class Game:
         # Update battle decision/fold state
         self.battle_decisions = game_dict.get('battle_decisions')
         self.battle_confirmed = game_dict.get('battle_confirmed', False)
+        self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
+        
+        # Update battle round tracking
+        self.battle_round = game_dict.get('battle_round', 0)
+        self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
         
         # Check if we're waiting for this player to counter
         if self.pending_spell_id and self.waiting_for_counter_player_id:
@@ -365,6 +424,17 @@ class Game:
         
         # Update previous turn player for next check
         self.previous_turn_player_id = self.turn_player_id
+
+        # Detect post-battle side card draw
+        post_battle = game_dict.get('post_battle_drawn_cards')
+        if (post_battle and self.player_id and
+                str(self.player_id) in post_battle and
+                self.current_round != self._post_battle_side_cards_round):
+            my_cards = post_battle[str(self.player_id)]
+            if my_cards:
+                self.pending_post_battle_side_cards = my_cards
+                self._post_battle_side_cards_round = self.current_round
+                print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
 
         # Update logs and chats
         self.update_logs()
@@ -456,6 +526,7 @@ class Game:
                 in_deck=c.get('in_deck', True),
                 deck_position=c.get('deck_position'),
                 part_of_figure=c.get('part_of_figure', False),
+                part_of_battle_move=c.get('part_of_battle_move', False),
                 type=c.get('type')  # Include the card type
             )
             for c in self.main_cards
@@ -474,6 +545,7 @@ class Game:
                 in_deck=c.get('in_deck', True),
                 deck_position=c.get('deck_position'),
                 part_of_figure=c.get('part_of_figure', False),
+                part_of_battle_move=c.get('part_of_battle_move', False),
                 type=c.get('type')  # Include the card type
             )
             for c in self.side_cards
@@ -687,6 +759,22 @@ class Game:
             print(f"Error checking for Infinite Hammer: {str(e)}")
             return False
 
+    def is_battle_active(self) -> bool:
+        """Return True while a battle is actually in progress (confirmed → resolution).
+
+        When active, players should not be able to change cards, build figures,
+        manipulate figures (pickup/upgrade), or cast spells.  Screen navigation
+        remains allowed.
+
+        Note: the advance/defender-selection phase (advancing_figure_id set but
+        battle not yet confirmed) is NOT considered battle-active — players must
+        still be free to act during that phase.
+        """
+        return bool(
+            self.battle_moves_phase
+            or self.battle_confirmed
+        )
+
     def has_opponent_cast_all_seeing_eye(self) -> bool:
         """
         Check if opponent has an active "All Seeing Eye" spell.
@@ -854,12 +942,6 @@ class Game:
 
             # Update the game state after a successful response
             new_cards = response.json().get('new_cards', [])
-
-            # Log the card change action
-            round_number = self.current_round
-            turn_number = self.current_player.get('turns_left', 0)  # Example: Remaining turns
-            message = f"{self.current_player.get('username', 'Player')} changed {len(cards)} {card_type} card(s)."
-            self.add_log_entry(round_number, turn_number, message, self.current_player.get('username', 'Player'), 'card_change')
 
             self.update()
 
