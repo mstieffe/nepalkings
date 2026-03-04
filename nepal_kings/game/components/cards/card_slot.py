@@ -107,14 +107,24 @@ class CardSlot():
 
     def draw_content(self):
         if self.content:
-            if self.clicked:
+            # Cards reserved for a battle move are drawn with a special overlay
+            # and cannot be clicked/selected
+            is_battle = self.card and getattr(self.card, 'part_of_battle_move', False)
+
+            if is_battle:
+                self.content.draw_front_battle_move(self.x, self.y)
+            elif self.clicked:
                 y = self.y-settings.TINY_SPACER_Y
+                if self.hovered or self.clicked:
+                    self.content.draw_front_bright(self.x, y)
+                else:
+                    self.content.draw_front(self.x, y)
             else:
                 y = self.y
-            if self.hovered or self.clicked:
-                self.content.draw_front_bright(self.x, y)
-            else:
-                self.content.draw_front(self.x, y)
+                if self.hovered:
+                    self.content.draw_front_bright(self.x, y)
+                else:
+                    self.content.draw_front(self.x, y)
             #if self.clicked:
             #    self.content.draw_front_bright(self.x, self.y-settings.TINY_SPACER_Y)
         """

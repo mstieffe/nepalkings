@@ -991,17 +991,17 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Swap invader
                     game.invader_player_id = new_invader.id
                     
-                    # Set both players' turns left to 1
-                    old_invader.turns_left = 1
-                    new_invader.turns_left = 1
+                    # Set both players' turns left to 2
+                    old_invader.turns_left = 2
+                    new_invader.turns_left = 2
                     
                     # Invader starts next turn
                     game.turn_player_id = new_invader.id
                     
                     print(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
-                    print(f"[INVADER SWAP] Both players' turns_left set to 1. Invader starts next turn.")
+                    print(f"[INVADER SWAP] Both players' turns_left set to 2. Invader starts next turn.")
                     
-                    spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 1 turn left. The invader starts next turn.'
+                    spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 2 turns left. The invader starts next turn.'
                     spell_effect['turn_set'] = True
                     spell_effect['sets_turns'] = True
                     spell_effect['old_invader_id'] = old_invader_id
@@ -1035,9 +1035,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         spell_effect['old_invader_id'] = old_invader_id
                         spell_effect['new_invader_id'] = caster.id
                     
-                    # Set both players' turns left to 1
-                    invader_player.turns_left = 1
-                    defender_player.turns_left = 1
+                    # Set both players' turns left to 2
+                    invader_player.turns_left = 2
+                    defender_player.turns_left = 2
                     
                     # Invader starts next turn
                     game.turn_player_id = invader_player.id
@@ -1073,7 +1073,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         'Blitzkrieg': f'{caster_name} is now the invader! The advancing figure cannot be blocked. Ceasefire is in effect after the battle.'
                     }
                     
-                    spell_effect['effect'] = f'{spell.spell_name} activated by {caster_name}! {descriptions[spell.spell_name]} Both players have 1 turn left. The invader starts next turn.'
+                    spell_effect['effect'] = f'{spell.spell_name} activated by {caster_name}! {descriptions[spell.spell_name]} Both players have 2 turns left. The invader starts next turn.'
                     spell_effect['turn_set'] = True
                     spell_effect['battle_modifier_added'] = spell.spell_name
                     spell_effect['caster_name'] = caster_name
@@ -1082,7 +1082,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Signal SQLAlchemy that the JSON column was mutated in place
                     flag_modified(game, 'battle_modifier')
                     
-                    print(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 1. Invader starts next turn.")
+                    print(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 2. Invader starts next turn.")
                     print(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
             except Exception as e:
                 print(f"[{spell.spell_name.upper()}] ERROR: {str(e)}")

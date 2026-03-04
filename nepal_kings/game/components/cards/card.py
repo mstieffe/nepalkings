@@ -2,7 +2,7 @@ from game.components.cards.card_img import CardImg
 from config import settings
 
 class Card:
-    def __init__(self, rank, suit, value, id=None, game_id=None, player_id=None, in_deck=None, deck_position=None, part_of_figure=None, type=None, role=None):
+    def __init__(self, rank, suit, value, id=None, game_id=None, player_id=None, in_deck=None, deck_position=None, part_of_figure=None, part_of_battle_move=None, type=None, role=None):
         """
         Initialize a Card instance.
 
@@ -15,6 +15,7 @@ class Card:
         :param in_deck: (Optional) Boolean indicating if the card is in the deck.
         :param deck_position: (Optional) The position of the card in the deck.
         :param part_of_figure: (Optional) Boolean indicating if the card is part of a figure.
+        :param part_of_battle_move: (Optional) Boolean indicating if the card is reserved for a battle move.
         """
         self.rank = rank
         self.suit = suit
@@ -27,6 +28,7 @@ class Card:
         self.in_deck = in_deck
         self.deck_position = deck_position
         self.part_of_figure = part_of_figure
+        self.part_of_battle_move = part_of_battle_move
 
         self.type = type  # Store the card type ('main' or 'side')
         self.role = role  # Store the role ('key', 'upgrade', 'number')
@@ -56,6 +58,7 @@ class Card:
             'in_deck': self.in_deck,
             'deck_position': self.deck_position,
             'part_of_figure': self.part_of_figure,
+            'part_of_battle_move': self.part_of_battle_move,
             'type': self.type,  # Include the type in serialization
             'role': self.role  # Include the role in serialization
         }

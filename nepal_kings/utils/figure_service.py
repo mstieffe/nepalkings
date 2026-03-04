@@ -19,7 +19,7 @@ def fetch_figure(figure_id):
         raise Exception(f"Failed to fetch figure: {response.json().get('message', 'Unknown error')}")
     return response.json().get('figure', {})
 
-def create_figure(player_id, game_id, family_name, field, color, name, suit, description, upgrade_family_name, produces, requires, cards):
+def create_figure(player_id, game_id, family_name, field, color, name, suit, description, upgrade_family_name, produces, requires, cards, instant_charge_advance=False):
     """
     Create a new figure on the server.
     :param player_id: ID of the player creating the figure.
@@ -34,6 +34,7 @@ def create_figure(player_id, game_id, family_name, field, color, name, suit, des
     :param produces: Dictionary of resources produced by the figure.
     :param requires: Dictionary of resources required by the figure.
     :param cards: List of cards used in the figure (with their roles).
+    :param instant_charge_advance: If True, also advance the figure immediately after creation.
     """
     data = {
         'player_id': player_id,
@@ -47,7 +48,8 @@ def create_figure(player_id, game_id, family_name, field, color, name, suit, des
         'upgrade_family_name': upgrade_family_name,
         'produces': produces,
         'requires': requires,
-        'cards': cards
+        'cards': cards,
+        'instant_charge_advance': instant_charge_advance
     }
     response = requests.post(f'{settings.SERVER_URL}/figures/create_figure', json=data)
     if response.status_code != 200:

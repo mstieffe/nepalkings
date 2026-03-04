@@ -76,6 +76,32 @@ class FieldScreen(SubScreen):
 
         self.init_field_compartments()
 
+    def reset_state(self):
+        """Reset all game-specific transient state.
+
+        Called by GameScreen._reset_game_screen_state() when switching games.
+        """
+        self.figures = []
+        self.figure_icons = []
+        self.icon_cache = {}
+        self.last_figure_ids = set()
+        self.last_enchantment_state = {}
+        self.last_player_id = None
+        self.figure_detail_box = None
+        self.figure_pending_pickup = None
+        self.figure_pending_upgrade = None
+        self.figure_pending_defender_selection = None
+        self._pending_advance_figure = None
+        self.defender_selection_mode = False
+        self.opponent_card_cache = []
+        self.last_opponent_card_ids = set()
+        self.cached_all_seeing_eye_status = None
+        self.cached_opponent_all_seeing_eye_status = None
+        self._last_all_seeing_eye_status = None
+        self.dialogue_box = None
+        self._reset_defender_selectable()
+        print("[FieldScreen] State reset for game switch")
+
     def update(self, game):
         """Update the game state and load figures."""
         super().update(game)
@@ -340,6 +366,7 @@ class FieldScreen(SubScreen):
                     else:
                         # Update cached icon with new figure reference (in case enchantments changed)
                         self.icon_cache[figure.id].figure = figure
+                        self.icon_cache[figure.id].game = self.game
                         # Update visibility and recalculate battle bonus for cached icon
                         self.icon_cache[figure.id].is_visible = is_visible
                         self.icon_cache[figure.id].battle_bonus_received = self.icon_cache[figure.id]._calculate_battle_bonus_received(figures_list)
@@ -379,6 +406,17 @@ class FieldScreen(SubScreen):
                                 title="Action Blocked"
                             )
                             return
+
+                    # Check if battle is active
+                    if hasattr(self.game, 'is_battle_active') and self.game.is_battle_active():
+                        self.dialogue_box = None
+                        self.make_dialogue_box(
+                            message="You cannot pickup or upgrade figures while a battle is in progress.",
+                            actions=['ok'],
+                            icon="error",
+                            title="Action Blocked"
+                        )
+                        return
                     
                     # Check which action is pending
                     if self.figure_pending_pickup:
@@ -481,13 +519,34 @@ class FieldScreen(SubScreen):
                         )
                         
                         if result.get('success'):
-                            # Update game state from response
-                            if result.get('game'):
-                                self.game.update_from_dict(result['game'])
-                            self.load_figures()
-                            
+                            # Check if this was a deficit auto-loss
+                            if result.get('deficit_loss'):
+                                # Defender's figure had a deficit — they auto-lose
+                                deficit_fig_name = result.get('deficit_figure_name', 'Unknown')
+                                winner = result.get('winner', 'You')
+                                points = result.get('points', 10)
+                                # Update game state from response
+                                if result.get('game'):
+                                    self.game.update_from_dict(result['game'])
+                                self.load_figures()
+                                self.defender_selection_mode = False
+                                self._reset_defender_selectable()
+                                self.game.pending_defender_selection = False
+                                # Clear Civil War state
+                                if hasattr(self.game, 'civil_war_defender_second'):
+                                    self.game.civil_war_defender_second = False
+                                    self.game.civil_war_required_color = None
+                                # Mark fold result as shown so check_fold_result() doesn't double-show
+                                self.game.fold_result_shown = True
+                                new_round = self.game.current_round
+                                self.make_dialogue_box(
+                                    message=f"Opponent's {deficit_fig_name} has a resource deficit and cannot fight!\n\n{winner} wins {points} points.\n\nRound {new_round} begins.",
+                                    actions=['ok'],
+                                    icon="magic",
+                                    title="Resource Deficit — Victory!"
+                                )
                             # Check if Civil War needs a second defender
-                            if result.get('civil_war_need_second'):
+                            elif result.get('civil_war_need_second'):
                                 civil_war_color = result.get('civil_war_color', '')
                                 color_name = 'red' if civil_war_color == 'offensive' else 'black'
                                 self.game.civil_war_defender_second = True
@@ -503,7 +562,10 @@ class FieldScreen(SubScreen):
                                 # Update selectable figures for second pick
                                 self._update_defender_selectable()
                             else:
-                                # Done selecting — exit defender selection mode
+                                # Normal success — update and exit defender mode
+                                if result.get('game'):
+                                    self.game.update_from_dict(result['game'])
+                                self.load_figures()
                                 self.defender_selection_mode = False
                                 self._reset_defender_selectable()
                                 self.state.set_msg(f"Selected {target_figure.name} as opponent's defender.")
@@ -695,7 +757,7 @@ class FieldScreen(SubScreen):
                     if has_blitzkrieg:
                         blitz_icons = self._get_modifier_icon_images('Blitzkrieg')
                         self.make_dialogue_box(
-                            message="Blitzkrieg ceasefire is active during the last turn.\n\nNo one can advance until turns run out.",
+                            message="Blitzkrieg ceasefire is active.\n\nNo one can advance until ceasefire ends.",
                             actions=['ok'],
                             images=blitz_icons if blitz_icons else None,
                             icon="error" if not blitz_icons else None,
@@ -757,7 +819,7 @@ class FieldScreen(SubScreen):
                 elif response in ('disabled_upgrade_forced_advance', 'disabled_pick up_forced_advance'):
                     # Upgrade or Pick up clicked during forced advance
                     self.make_dialogue_box(
-                        message="All turns used up!\n\nYou must advance a figure toward battle. You cannot pick up or upgrade figures right now.",
+                        message="Last turn!\n\nYou must advance a figure toward battle. You cannot pick up or upgrade figures right now.",
                         actions=['ok'],
                         icon="error",
                         title="Battle Time"
@@ -783,6 +845,22 @@ class FieldScreen(SubScreen):
                         images=cw_icons if cw_icons else None,
                         icon="error" if not cw_icons else None,
                         title="Already Selected"
+                    )
+                elif response == 'disabled_advance_resource_deficit':
+                    # Advance clicked on a figure with resource deficit
+                    self.make_dialogue_box(
+                        message="This figure has a resource deficit and cannot advance toward battle.\n\nEnsure your figures' resource requirements are met before advancing.",
+                        actions=['ok'],
+                        icon="error",
+                        title="Resource Deficit"
+                    )
+                elif response and response.startswith('disabled_') and response.endswith('_battle_active'):
+                    # Any action disabled because a battle is in progress
+                    self.make_dialogue_box(
+                        message="You cannot perform this action while a battle is in progress.",
+                        actions=['ok'],
+                        icon="error",
+                        title="Action Blocked"
                     )
                 elif response == 'upgrade':
                     # Handle upgrade action - show confirmation dialogue with upgrade card image
@@ -877,6 +955,16 @@ class FieldScreen(SubScreen):
                                     images=cw_icons if cw_icons else None,
                                     icon="error" if not cw_icons else None,
                                     title="Already Selected"
+                                )
+                                clicked_icon.clicked = False
+                            # Validate: no resource deficit
+                            elif getattr(clicked_icon, 'has_deficit', False):
+                                self.make_dialogue_box(
+                                    message="This figure has a resource deficit and cannot advance toward battle.",
+                                    actions=['ok'],
+                                    images=cw_icons if cw_icons else None,
+                                    icon="error" if not cw_icons else None,
+                                    title="Resource Deficit"
                                 )
                                 clicked_icon.clicked = False
                             else:

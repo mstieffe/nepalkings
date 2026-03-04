@@ -109,12 +109,22 @@ class Game(db.Model):
     # Battle decision tracking (fold/battle)
     battle_decisions = db.Column(db.JSON, nullable=True)  # {str(player_id): 'battle'|'fold'}
     battle_confirmed = db.Column(db.Boolean, nullable=False, default=False)  # True when both chose battle
+    battle_moves_confirmed = db.Column(db.JSON, nullable=True)  # {str(player_id): True} — tracks who confirmed battle moves
     fold_outcome = db.Column(db.String(20), nullable=True)  # 'fold_win' | 'fold_draw' | None
     fold_winner_id = db.Column(db.Integer, nullable=True)  # Winner of fold (player_id)
+
+    # 3-round battle phase tracking
+    battle_round = db.Column(db.Integer, nullable=False, default=0)  # current battle round (0-2)
+    battle_turn_player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=True)  # whose turn in battle
+    battle_skipped_rounds = db.Column(db.JSON, nullable=True)  # {str(player_id): [round_indices]} — tracks skipped rounds
+
+    # Post-battle side card draw — {str(player_id): [{suit, rank}, ...]}
+    post_battle_drawn_cards = db.Column(db.JSON, nullable=True)
 
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
+    battle_moves = db.relationship('BattleMove', backref='game', lazy=True, foreign_keys='BattleMove.game_id')
 
 
     def serialize(self):
@@ -137,13 +147,19 @@ class Game(db.Model):
             'defending_figure_id_2': self.defending_figure_id_2,
             'battle_decisions': self.battle_decisions,
             'battle_confirmed': self.battle_confirmed,
+            'battle_moves_confirmed': self.battle_moves_confirmed,
             'fold_outcome': self.fold_outcome,
             'fold_winner_id': self.fold_winner_id,
+            'battle_round': self.battle_round,
+            'battle_turn_player_id': self.battle_turn_player_id,
+            'battle_skipped_rounds': self.battle_skipped_rounds,
+            'post_battle_drawn_cards': self.post_battle_drawn_cards,
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],
             'log_entries': [entry.serialize() for entry in self.log_entries],
-            'chat_messages': [message.serialize() for message in self.chat_messages]
+            'chat_messages': [message.serialize() for message in self.chat_messages],
+            'battle_moves': [move.serialize() for move in self.battle_moves]
         }
 
 
@@ -201,6 +217,7 @@ class MainCard(db.Model):
     in_deck = db.Column(db.Boolean, default=True)  # Tracks if the card is still in the deck
     deck_position = db.Column(db.Integer, nullable=True)  # Optional: track deck order
     part_of_figure = db.Column(db.Boolean, default=False)  # New: Is this card part of a figure?
+    part_of_battle_move = db.Column(db.Boolean, default=False)  # Is this card reserved for a battle move?
 
     def serialize(self):
         """
@@ -215,7 +232,8 @@ class MainCard(db.Model):
             'player_id': self.player_id,
             'in_deck': self.in_deck,
             'deck_position': self.deck_position,
-            'part_of_figure': self.part_of_figure
+            'part_of_figure': self.part_of_figure,
+            'part_of_battle_move': self.part_of_battle_move
         }
 
 
@@ -229,6 +247,7 @@ class SideCard(db.Model):
     in_deck = db.Column(db.Boolean, default=True)
     deck_position = db.Column(db.Integer, nullable=True)
     part_of_figure = db.Column(db.Boolean, default=False)  # New: Is this card part of a figure?
+    part_of_battle_move = db.Column(db.Boolean, default=False)  # Is this card reserved for a battle move?
 
     def serialize(self):
         """
@@ -243,7 +262,8 @@ class SideCard(db.Model):
             'player_id': self.player_id,
             'in_deck': self.in_deck,
             'deck_position': self.deck_position,
-            'part_of_figure': self.part_of_figure
+            'part_of_figure': self.part_of_figure,
+            'part_of_battle_move': self.part_of_battle_move
         }
 
 
@@ -414,3 +434,55 @@ class ActiveSpell(db.Model):
             'effect_data': self.effect_data,
             'created_at': self.created_at.isoformat(),
         }
+
+
+class BattleMove(db.Model):
+    """A purchased battle move for a player in a game."""
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False)
+    player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)
+    family_name = db.Column(db.String(50), nullable=False)  # e.g. 'Call Villager', 'Block', 'Dagger'
+    card_id = db.Column(db.Integer, nullable=False)  # ID of the reserved card
+    card_type = db.Column(db.String(10), nullable=False)  # 'main' or 'side'
+    suit = db.Column(db.String(20), nullable=False)
+    rank = db.Column(db.String(5), nullable=False)
+    value = db.Column(db.Integer, nullable=False)    # Double Dagger: second card info (nullable for normal moves)
+    card_id_b = db.Column(db.Integer, nullable=True)
+    card_type_b = db.Column(db.String(10), nullable=True)
+    suit_b = db.Column(db.String(20), nullable=True)
+    value_a = db.Column(db.Integer, nullable=True)
+    value_b = db.Column(db.Integer, nullable=True)
+    played_round = db.Column(db.Integer, nullable=True)  # None=in hand, 0/1/2=played in that battle round
+    call_figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)  # figure called
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relationships
+    player = db.relationship('Player', backref='battle_moves', foreign_keys=[player_id])
+
+    def serialize(self):
+        data = {
+            'id': self.id,
+            'game_id': self.game_id,
+            'player_id': self.player_id,
+            'family_name': self.family_name,
+            'card_id': self.card_id,
+            'card_type': self.card_type,
+            'suit': self.suit,
+            'rank': self.rank,
+            'value': self.value,
+        }
+        # Include Double Dagger extra fields when present
+        if self.card_id_b is not None:
+            data['card_id_b'] = self.card_id_b
+            data['card_type_b'] = self.card_type_b
+        if self.suit_b is not None:
+            data['suit_b'] = self.suit_b
+        if self.value_a is not None:
+            data['value_a'] = self.value_a
+        if self.value_b is not None:
+            data['value_b'] = self.value_b
+        if self.played_round is not None:
+            data['played_round'] = self.played_round
+        if self.call_figure_id is not None:
+            data['call_figure_id'] = self.call_figure_id
+        return data

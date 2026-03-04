@@ -117,10 +117,10 @@ class FigureDetailBox:
         is_maharaja = 'Maharaja' in self.figure.name
         
         if is_own_figure and self.game.turn:
-            # Check if player is in forced advance mode (turns_left == 0)
+            # Check if player is in forced advance mode (turns_left <= 1)
+            # Any player (invader OR defender) on their last turn must advance
             is_forced_advance = (
-                self.game.invader and
-                self.game.current_player.get('turns_left', 0) == 0 and
+                self.game.current_player.get('turns_left', 0) <= 1 and
                 not self.game.ceasefire_active and
                 not self.game.advancing_figure_id
             )
@@ -153,6 +153,11 @@ class FigureDetailBox:
             if action == 'Advance' and self.game.ceasefire_active:
                 button.disabled = True
                 button.disabled_reason = 'ceasefire'
+
+            # Disable all actions during battle
+            if not button.disabled and hasattr(self.game, 'is_battle_active') and self.game.is_battle_active():
+                button.disabled = True
+                button.disabled_reason = 'battle_active'
             
             # Check if upgrade/pick up should be disabled during forced advance
             if action in ('Upgrade', 'Pick up') and is_forced_advance:
@@ -181,6 +186,11 @@ class FigureDetailBox:
             
             # Check battle modifier restrictions on the Advance button
             if action == 'Advance' and not button.disabled:
+                # Check resource deficit — figures with deficit cannot advance
+                if self.has_any_deficit:
+                    button.disabled = True
+                    button.disabled_reason = 'resource_deficit'
+
                 modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
                 modifier_types = [m.get('type') for m in modifiers]
                 

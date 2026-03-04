@@ -15,6 +15,7 @@ from game.screens.field_screen import FieldScreen
 from game.screens.cast_spell_screen import CastSpellScreen
 from game.screens.tutorial_screen import TutorialScreen
 from game.screens.battle_screen import BattleScreen
+from game.screens.battle_shop_screen import BattleShopScreen
 from game.components.figures.figure_manager import FigureManager
 
 
@@ -27,6 +28,10 @@ class GameScreen(Screen):
 
         # Track current game ID to detect game switches
         self._current_game_id = None
+
+        # Unread chat message tracking
+        self._last_seen_chat_count = 0
+        self._badge_font = pygame.font.Font(settings.FONT_PATH, int(0.015 * settings.SCREEN_HEIGHT))
 
         # Initialize figure manager
         self.figure_manager = FigureManager()
@@ -52,6 +57,7 @@ class GameScreen(Screen):
             'log': LogScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Log-Book'),
             'tutorial': TutorialScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Tutorial'),
             'battle': BattleScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Arena'),
+            'battle_shop': BattleShopScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Shop'),
         }
         
         # Track previous subscreen to detect changes
@@ -247,7 +253,7 @@ class GameScreen(Screen):
         self.game_buttons.append(field_button)
 
         # Log button (switches to the log subscreen)
-        field_button = GameButton(
+        self.log_button = GameButton(
             self.window, 
             'view_log',
             'letter', 
@@ -263,7 +269,7 @@ class GameScreen(Screen):
             subscreen='log',
             track_turn = False
         )
-        self.game_buttons.append(field_button)
+        self.game_buttons.append(self.log_button)
 
         # Tutorial button (switches to the tutorial subscreen)
         tutorial_button = GameButton(
@@ -305,6 +311,25 @@ class GameScreen(Screen):
         )
         self.game_buttons.append(self.battle_button)
 
+        # Battle shop button (switches to the battle shop subscreen)
+        battle_shop_button = GameButton(
+            self.window, 
+            'view_battle_shop',
+            'battleshop', 
+            'plain',
+            settings.BATTLE_SHOP_BUTTON_X, settings.BATTLE_SHOP_BUTTON_Y,
+            settings.BATTLE_SHOP_BUTTON_WIDTH,
+            settings.BATTLE_SHOP_BUTTON_WIDTH,
+            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.BATTLE_SHOP_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='battle shop!',
+            subscreen='battle_shop',
+            track_turn = False
+        )
+        self.game_buttons.append(battle_shop_button)
+
         home_button = GameButton(
             self.window, 
             'home',
@@ -339,6 +364,12 @@ class GameScreen(Screen):
         if self.previous_subscreen != self.state.subscreen:
             self.main_hand.deselect_all_cards()
             self.side_hand.deselect_all_cards()
+            # Re-lock the battle button when leaving battle/battle_shop
+            if self.previous_subscreen in ('battle', 'battle_shop') and self.state.subscreen == 'field':
+                self.battle_button.locked = True
+            # Mark chats as read when opening the log screen
+            if self.state.subscreen == 'log' and self.state.game and self.state.game.chat_messages:
+                self._last_seen_chat_count = len(self.state.game.chat_messages)
             self.previous_subscreen = self.state.subscreen
         
         # Skip full server poll while defender is actively responding to counter spell
@@ -348,6 +379,9 @@ class GameScreen(Screen):
         
         # Check for auto-fill notification
         self.check_auto_fill_notification()
+        
+        # Check for post-battle side card draw notification
+        self.check_post_battle_side_cards()
         
         # Check for opponent turn notification (includes Forced Deal and Dump Cards details)
         self.check_opponent_turn_notification()
@@ -369,6 +403,10 @@ class GameScreen(Screen):
         # Check for fold outcome and auto-proceed (polling detection for waiting player)
         self.check_fold_result()
         self.check_auto_proceed_to_battle()
+        self.check_battle_moves_ready()
+        
+        # Reconnect: detect active battle on server that the client missed
+        self.check_battle_reconnect()
         
         # Check for ceasefire ended notification AFTER action results
         # so it appears after the success message of the action that caused it
@@ -396,6 +434,10 @@ class GameScreen(Screen):
                 elem.update(self.state.game, families=self.figure_manager.families)
             else:
                 elem.update(self.state.game)
+
+        # Keep marking chats as read while on the log screen
+        if self.state.subscreen == 'log' and self.state.game and self.state.game.chat_messages:
+            self._last_seen_chat_count = len(self.state.game.chat_messages)
     
     def _reset_game_screen_state(self):
         """Reset all transient game screen state when switching to a different game."""
@@ -414,15 +456,14 @@ class GameScreen(Screen):
         # Reset battle modifier tracking
         self._previous_battle_modifiers = []
         self._hovered_battle_modifier = None
+        self._just_allowed_spell = False
         
-        # Reset field screen's defender selection mode
-        field_screen = self.subscreens.get('field')
-        if field_screen:
-            field_screen.defender_selection_mode = False
-            field_screen._reset_defender_selectable()
-            field_screen.figure_detail_box = None
-            field_screen.dialogue_box = None
-            field_screen.figure_pending_defender_selection = None
+        # ── Reset ALL subscreens ──
+        # Each subscreen has a reset_state() that clears its game-specific
+        # transient state (pending actions, dialogue boxes, selections, etc.)
+        for name, subscreen in self.subscreens.items():
+            if hasattr(subscreen, 'reset_state'):
+                subscreen.reset_state()
         
         # Reset waiting for defender pick state
         if self.state.game:
@@ -439,12 +480,36 @@ class GameScreen(Screen):
             self.state.game.pending_fold_result = False
             self.state.game.fold_result_shown = False
             self.state.game.auto_proceed_to_battle = False
+            # Reset battle moves phase state
+            self.state.game.battle_moves_phase = False
+            self.state.game.battle_moves_ready = False
+            self.state.game.waiting_for_opponent_battle_moves = False
+            self.state.game.both_battle_moves_ready = False
+            # Reset active battle phase state
+            self.state.game.in_battle_phase = False
+            self.state.game.battle_turns_left = 0
         
         # Re-lock battle button
         self.battle_button.locked = True
+
+        # Reset unread chat counter
+        self._last_seen_chat_count = 0
+        
+        # Reset subscreen to default (field) so stale battle/shop view doesn't persist
+        self.state.subscreen = 'field'
         
         # Reset subscreen tracking
         self.previous_subscreen = None
+        
+        # Reset hand discard mode
+        if hasattr(self, 'main_hand'):
+            self.main_hand.deselect_all_cards()
+            if hasattr(self.main_hand, 'discard_mode'):
+                self.main_hand.discard_mode = False
+        if hasattr(self, 'side_hand'):
+            self.side_hand.deselect_all_cards()
+            if hasattr(self.side_hand, 'discard_mode'):
+                self.side_hand.discard_mode = False
         
         print(f"[GAME_SCREEN] State reset for new game {self._current_game_id}")
 
@@ -712,9 +777,9 @@ class GameScreen(Screen):
                         self._just_allowed_spell = False
                     else:
                         descriptions = {
-                            'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 1 turn left. The invader starts next turn.',
-                            'Peasant War': 'Only villagers can be selected for the battle. Both players have 1 turn left. The invader starts next turn.',
-                            'Blitzkrieg': "The advancing figure cannot be blocked. Both players have 1 turn left. The invader starts next turn. During the last turn ceasefire is active."
+                            'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 2 turns left. The invader starts next turn.',
+                            'Peasant War': 'Only villagers can be selected for the battle. Both players have 2 turns left. The invader starts next turn.',
+                            'Blitzkrieg': "The advancing figure cannot be blocked. Both players have 2 turns left. The invader starts next turn. Ceasefire is active until the last turn."
                         }
                         desc = descriptions.get(modifier_type, 'A battle modifier is now active.')
                         
@@ -805,6 +870,38 @@ class GameScreen(Screen):
         # Clear the notification
         self.state.game.pending_auto_fill = None
     
+    def check_post_battle_side_cards(self):
+        """Check for post-battle side card draw notification and show dialogue."""
+        if not self.state.game or not self.state.game.pending_post_battle_side_cards:
+            return
+
+        cards_data = self.state.game.pending_post_battle_side_cards
+        count = len(cards_data)
+        if count == 0:
+            self.state.game.pending_post_battle_side_cards = None
+            return
+
+        message = f"New round! You drew {count} side card{'s' if count > 1 else ''}."
+
+        # Create card images from the cards data
+        from game.components.cards.card_img import CardImg
+        card_images = []
+        for card_data in cards_data:
+            card_img = CardImg(self.window, card_data['suit'], card_data['rank'])
+            card_images.append(card_img.front_img)
+
+        # Queue or show dialogue
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'images': card_images,
+            'icon': "loot",
+            'title': "Side Cards Drawn"
+        })
+
+        # Clear the notification
+        self.state.game.pending_post_battle_side_cards = None
+
     def check_opponent_turn_notification(self):
         """Check for opponent turn summary and show dialogue if needed."""
         if not self.state.game or not self.state.game.pending_opponent_turn_summary:
@@ -1127,14 +1224,14 @@ class GameScreen(Screen):
             self.state.game.infinite_hammer_dialogue_shown = False
     
     def check_forced_advance(self):
-        """Check if invader must advance (turns_left == 0) and show forced advance dialogue."""
+        """Check if player must advance (turns_left <= 1) and show forced advance dialogue."""
         if not self.state.game or not self.state.game.turn:
             return
         
-        # Only force advance if: invader, 0 turns left, ceasefire not active, 
-        # no active advance already, and dialogue not already shown
-        if (self.state.game.invader and 
-            self.state.game.current_player.get('turns_left', 0) == 0 and
+        # Force advance when: 1 or fewer turns left, ceasefire not active,
+        # no active advance already, and dialogue not already shown.
+        # Any player (invader or defender) on their last turn must advance.
+        if (self.state.game.current_player.get('turns_left', 0) <= 1 and
             not self.state.game.ceasefire_active and
             not self.state.game.advancing_figure_id and
             not self.state.game.forced_advance_dialogue_shown):
@@ -1160,7 +1257,7 @@ class GameScreen(Screen):
                 images.append(advance_img)
             
             self.queue_or_show_notification({
-                'message': "All turns used up!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance.",
+                'message': "Last turn!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance.",
                 'actions': ['ok'],
                 'images': images if images else None,
                 'icon': None if images else "info",
@@ -1198,9 +1295,17 @@ class GameScreen(Screen):
                 self.state.game.advancing_player_id != self.state.game.player_id):
                 return False
         
+        # Get icon cache for deficit checks
+        icon_cache = getattr(field_screen, 'icon_cache', {})
+        
         for fig in all_own_figures:
             # Skip figures that cannot attack
             if hasattr(fig, 'cannot_attack') and fig.cannot_attack:
+                continue
+            
+            # Skip figures with resource deficit (check from icon cache)
+            icon = icon_cache.get(fig.id)
+            if icon and getattr(icon, 'has_deficit', False):
                 continue
             
             # Peasant War / Civil War: only village figures can advance
@@ -1352,7 +1457,7 @@ class GameScreen(Screen):
             if mod_type == 'Peasant War':
                 modifier_texts.append("Peasant War: Only village figures can be selected for battle.")
             elif mod_type == 'Blitzkrieg':
-                modifier_texts.append("Blitzkrieg: The advancing figure cannot be blocked. Ceasefire is active during the last turn.")
+                modifier_texts.append("Blitzkrieg: The advancing figure cannot be blocked. Ceasefire is active until the last turn.")
             elif mod_type == 'Civil War':
                 modifier_texts.append("Civil War: Each player selects two village figures of the same color for battle.")
         
@@ -1594,12 +1699,57 @@ class GameScreen(Screen):
     
     def check_battle_ready(self):
         """Check if both advancing and defending figures are set — battle is ready to begin.
-        Sequential flow: invader (advancing player) decides first, then defender."""
+        Sequential flow: invader (advancing player) decides first, then defender.
+        Handles reconnect: skips dialogue if server already has our decision or battle_confirmed."""
         if not self.state.game or not self.state.game.pending_battle_ready:
             return
         
         # Don't re-queue if already shown
         if self.state.game.battle_ready_shown:
+            return
+        
+        # ── Reconnect guard: battle already confirmed on server ──
+        if self.state.game.battle_confirmed:
+            self.state.game.battle_ready_shown = True
+            self.state.game.pending_battle_ready = False
+
+            bmc = self.state.game.battle_moves_confirmed or {}
+            player_ids = [str(p['id']) for p in self.state.game.players]
+            both_moves_ready = all(bmc.get(pid) for pid in player_ids)
+            my_moves_ready = bmc.get(str(self.state.game.player_id))
+
+            if both_moves_ready:
+                # Both players already confirmed moves — go straight to battle
+                self.battle_button.locked = False
+                self.state.subscreen = 'battle'
+                print("[BATTLE_READY] Reconnect: both moves confirmed — entering battle screen")
+            elif my_moves_ready:
+                # We confirmed but opponent hasn't — go to battle shop in waiting mode
+                self.battle_button.locked = False
+                self.state.game.battle_moves_phase = True
+                self.state.game.battle_moves_ready = True
+                self.state.game.waiting_for_opponent_battle_moves = True
+                self.state.subscreen = 'battle_shop'
+                shop = self.subscreens.get('battle_shop')
+                if shop:
+                    shop._load_bought_moves()
+                    shop._battle_moves_confirmed = True
+                    shop._waiting_for_opponent = True
+                print("[BATTLE_READY] Reconnect: our moves confirmed — waiting for opponent")
+            else:
+                # Neither confirmed yet — enter battle shop normally
+                self.battle_button.locked = False
+                self.state.game.auto_proceed_to_battle = True
+                print("[BATTLE_READY] Reconnect: battle confirmed, moves not yet selected")
+            return
+        
+        # ── Reconnect guard: we already submitted our decision ──
+        decisions = self.state.game.battle_decisions or {}
+        my_decision = decisions.get(str(self.state.game.player_id))
+        if my_decision == 'battle':
+            self.state.game.battle_ready_shown = True
+            self.state.game.waiting_for_battle_decision = True
+            print("[BATTLE_READY] Reconnect: our decision already recorded — resuming wait")
             return
         
         is_advancing = (self.state.game.advancing_player_id == self.state.game.player_id)
@@ -1724,15 +1874,19 @@ class GameScreen(Screen):
         
         if not result.get('success'):
             print(f"[GAME_SCREEN] Battle decision failed: {result.get('message')}")
+            # Reconnect fallback: if server rejects because our decision was
+            # already recorded, resume waiting for the opponent's decision
+            if decision == 'battle':
+                self.state.game.waiting_for_battle_decision = True
             return
         
         if result.get('resolved'):
             outcome = result.get('outcome')
             if outcome == 'battle':
-                # Both chose to fight — proceed to battle screen
+                # Both chose to fight — go to battle shop for move selection
                 if result.get('game'):
                     self.state.game.update_from_dict(result['game'])
-                self.state.subscreen = 'battle'
+                self._enter_battle_moves_phase()
             elif outcome == 'fold_win':
                 # One player folded
                 if result.get('game'):
@@ -1784,6 +1938,14 @@ class GameScreen(Screen):
         self.state.game.civil_war_required_color = None
         self.state.game.waiting_for_battle_decision = False
         self.state.game.auto_proceed_to_battle = False
+        # Reset battle moves phase state
+        self.state.game.battle_moves_phase = False
+        self.state.game.battle_moves_ready = False
+        self.state.game.waiting_for_opponent_battle_moves = False
+        self.state.game.both_battle_moves_ready = False
+        # Reset active battle phase state
+        self.state.game.in_battle_phase = False
+        self.state.game.battle_turns_left = 0
         self._previous_battle_modifiers = []
         
         self.battle_button.locked = True
@@ -1838,7 +2000,67 @@ class GameScreen(Screen):
             return
         
         self.state.game.auto_proceed_to_battle = False
+        self._enter_battle_moves_phase()
+
+    def _enter_battle_moves_phase(self):
+        """Transition both players into the battle shop for mandatory battle-move selection."""
+        self.state.game.battle_moves_phase = True
+        self.state.game.battle_moves_ready = False
+        self.state.game.waiting_for_opponent_battle_moves = False
+        self.state.game.both_battle_moves_ready = False
+        self.state.subscreen = 'battle_shop'
+
+        # Reload bought moves in the battle shop screen
+        shop = self.subscreens.get('battle_shop')
+        if shop:
+            shop._load_bought_moves()
+
+        # Show instruction notification
+        self.queue_or_show_notification({
+            'message': "Both warriors chose to fight!\n\n"
+                       "Select 3 battle moves before the battle begins.\n"
+                       "Press 'Ready!' when done.",
+            'actions': ['got it!'],
+            'icon': 'magic',
+            'title': 'Prepare for Battle'
+        })
+
+    def check_battle_moves_ready(self):
+        """Check if both players have confirmed their battle moves (polling detection)."""
+        if not self.state.game or not self.state.game.both_battle_moves_ready:
+            return
+
+        self.state.game.both_battle_moves_ready = False
+        self.state.game.battle_moves_phase = False
         self.state.subscreen = 'battle'
+
+    def check_battle_reconnect(self):
+        """Detect an active 3-round battle on the server that the client isn't showing.
+
+        On reconnect (logout/login), all client-side battle flags are reset.
+        If the server still has battle_confirmed + battle_turn_player_id set
+        (i.e. the battle is in progress), route straight to the battle screen.
+        """
+        if not self.state.game:
+            return
+        if not getattr(self.state.game, 'battle_reconnect_pending', False):
+            return
+        # Only check once per login
+        self.state.game.battle_reconnect_pending = False
+
+        # Already on the battle screen — nothing to do
+        if self.state.subscreen == 'battle':
+            return
+
+        # Server indicators for an active 3-round battle
+        if (self.state.game.battle_confirmed and
+                self.state.game.battle_turn_player_id is not None and
+                not self.state.game.in_battle_phase):
+            print("[BATTLE_RECONNECT] Detected active battle on server — entering battle screen")
+            self.battle_button.locked = False
+            self.state.game.in_battle_phase = True
+            self.state.game.battle_turns_left = 3  # will be synced by battle screen poll
+            self.state.subscreen = 'battle'
 
     def _handle_battle_ready_response(self):
         """Handle response from battle-ready notification — switch to battle screen."""
@@ -2669,6 +2891,39 @@ class GameScreen(Screen):
         
         return figure
 
+    def _draw_unread_chat_badge(self):
+        """Draw a red circle with unread message count on the log button."""
+        if not self.state.game or not self.state.game.chat_messages:
+            return
+        # Only count opponent messages (not our own)
+        current_player_id = self.state.game.player_id
+        opponent_messages = [m for m in self.state.game.chat_messages if m.get('sender_id') != current_player_id]
+        total_opponent = len(opponent_messages)
+        # Count how many opponent messages existed when we last opened the log
+        seen_opponent = 0
+        if self._last_seen_chat_count > 0:
+            # We stored total chat count; recount opponent msgs up to that point
+            all_msgs = self.state.game.chat_messages
+            for i, m in enumerate(all_msgs):
+                if i >= self._last_seen_chat_count:
+                    break
+                if m.get('sender_id') != current_player_id:
+                    seen_opponent += 1
+        unread = total_opponent - seen_opponent
+        if unread <= 0 or self.state.subscreen == 'log':
+            return
+        # Draw red circle badge at top-right of log button
+        badge_radius = int(0.006 * settings.SCREEN_WIDTH)
+        badge_x = self.log_button.rect_symbol.right - badge_radius // 2
+        badge_y = self.log_button.rect_symbol.top + badge_radius // 2
+        pygame.draw.circle(self.window, (220, 40, 40), (badge_x, badge_y), badge_radius)
+        pygame.draw.circle(self.window, (255, 255, 255), (badge_x, badge_y), badge_radius, 2)
+        # Draw count text
+        count_text = str(min(unread, 99))
+        text_surface = self._badge_font.render(count_text, True, (255, 255, 255))
+        text_rect = text_surface.get_rect(center=(badge_x, badge_y))
+        self.window.blit(text_surface, text_rect)
+
     def render(self):
         """Render the game screen, buttons, and active subscreen."""
         self.window.fill(settings.BACKGROUND_COLOR)
@@ -2704,13 +2959,24 @@ class GameScreen(Screen):
         # Render any general elements (e.g., dialogue box) from the parent class
         super().render()
 
+        # Draw unread chat badge on top of log button
+        self._draw_unread_chat_badge()
+
         # Render figure detail box on top of everything (if open)
-        if (self.state.subscreen == 'field' and 
+        if (self.state.subscreen in ('field', 'battle') and 
             self.state.subscreen in self.subscreens and 
             self.subscreens[self.state.subscreen] and
             hasattr(self.subscreens[self.state.subscreen], 'figure_detail_box') and
             self.subscreens[self.state.subscreen].figure_detail_box):
             self.subscreens[self.state.subscreen].figure_detail_box.draw()
+        
+        # Render battle move detail box on top of everything (if open)
+        if (self.state.subscreen in ('battle_shop', 'battle') and 
+            self.state.subscreen in self.subscreens and 
+            self.subscreens[self.state.subscreen] and
+            hasattr(self.subscreens[self.state.subscreen], 'battle_move_detail_box') and
+            self.subscreens[self.state.subscreen].battle_move_detail_box):
+            self.subscreens[self.state.subscreen].battle_move_detail_box.draw()
         
         # Render dialogue box on top of everything (if open)
         if (self.state.subscreen == 'field' and 
@@ -2806,7 +3072,8 @@ class GameScreen(Screen):
                 (self.state.game.pending_forced_advance and self.state.game.forced_advance_dialogue_shown) or
                 (self.state.game.pending_defender_selection and 
                  self.state.game.defender_selection_dialogue_shown and
-                 field_screen and field_screen.defender_selection_mode)
+                 field_screen and field_screen.defender_selection_mode) or
+                (self.state.game.battle_moves_phase)
             )
         )
         

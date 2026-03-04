@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
+from sqlalchemy.orm.attributes import flag_modified
 import random
-from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry
+from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, BattleMove, ActiveSpell
 from game_service.deck_manager import DeckManager
 
 import server_settings as settings
@@ -11,28 +12,29 @@ games = Blueprint('games', __name__)
 def _check_and_update_ceasefire(game):
     """
     Check if ceasefire should end and update game state accordingly.
-    Ceasefire lasts for 3 invader turns normally.
-    Blitzkrieg ceasefire ends when both players have 0 turns left.
+    Universal rule: ceasefire always ends when the invader has <= 1 turn left
+    (so forced advance can trigger at turns_left == 1).
+    Normal ceasefire also has a 3-invader-turns duration limit.
     Returns True if ceasefire ended this check.
     """
     if not game.ceasefire_active:
         return False
     
-    # Blitzkrieg ceasefire: ends when both players have 0 turns left
-    # (so the invader can then do the forced advance)
+    # Universal ceasefire end: invader is on their last turn and needs to advance
+    invader = Player.query.get(game.invader_player_id)
+    if invader and invader.turns_left <= 1:
+        print(f"[CEASEFIRE] Ceasefire ending (invader has {invader.turns_left} turn(s) left — must advance)")
+        game.ceasefire_active = False
+        game.ceasefire_start_turn = None
+        db.session.commit()
+        return True
+    
+    # Blitzkrieg ceasefire: handled by universal check above
     modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
     has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
     if has_blitzkrieg:
-        all_zero = all(p.turns_left <= 0 for p in game.players)
-        if all_zero:
-            print(f"[CEASEFIRE] Blitzkrieg ceasefire ending (both players at 0 turns)")
-            game.ceasefire_active = False
-            game.ceasefire_start_turn = None
-            db.session.commit()
-            return True
-        else:
-            # Blitzkrieg ceasefire still active — skip the normal turn-based check
-            return False
+        # Blitzkrieg ceasefire stays active until universal check fires
+        return False
     
     # Normal ceasefire: lasts for 3 invader turns
     # ceasefire_start_turn stores the invader's "turn index" when ceasefire began
@@ -1031,6 +1033,10 @@ def advance_figure():
         if not figure or figure.player_id != player_id:
             return jsonify({'success': False, 'message': 'Figure not found or not yours'}), 400
 
+        # Check resource deficit — figures with deficit cannot advance or counter-advance
+        if _check_figure_resource_deficit(figure, player_id, game.id):
+            return jsonify({'success': False, 'message': 'This figure has a resource deficit and cannot advance toward battle.', 'reason': 'resource_deficit'}), 400
+
         # Check battle modifiers
         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
         has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
@@ -1115,6 +1121,18 @@ def advance_figure():
                 game.advancing_player_id = player_id
 
         # Determine turn flip behavior
+        other_player = game.players[0] if game.players[0].id != player_id else game.players[1]
+
+        if is_counter_advance:
+            # Counter-advance consumes a turn
+            player.turns_left -= 1
+        elif not is_second_pick:
+            # First advance — advancing player becomes invader
+            game.invader_player_id = player_id
+            # Advancing player's turns exhausted; opponent gets 1 turn to counter-advance
+            player.turns_left = 0
+            other_player.turns_left = 1
+
         if civil_war_need_second:
             # Don't flip turn — player needs to pick a second figure
             print(f"[ADVANCE] Civil War — waiting for second figure pick (color: {civil_war_color})")
@@ -1122,8 +1140,7 @@ def advance_figure():
             # Blitzkrieg: invader keeps the turn, goes to defender selection immediately
             print(f"[ADVANCE] Blitzkrieg active — turn stays with invader for defender selection")
         else:
-            # Normal: flip turn to opponent (advance does NOT consume a turn)
-            other_player = game.players[0] if game.players[0].id != player_id else game.players[1]
+            # Normal: flip turn to opponent
             game.turn_player_id = other_player.id
 
         # Create log entry
@@ -1225,7 +1242,21 @@ def select_defender():
                     civil_war_color = figure.color
         else:
             game.defending_figure_id = figure_id
-        
+
+        # Check if the selected defender has a resource deficit.
+        # The invader can pick deficit figures (can't tell if it's a bluff),
+        # but if the figure truly has a deficit, the defender auto-loses.
+        defender_owner_id = figure.player_id
+        if _check_figure_resource_deficit(figure, defender_owner_id, game.id):
+            # Defender's figure has a deficit — defender auto-loses the battle
+            invader_player = Player.query.get(player_id)
+            defender_player = Player.query.get(defender_owner_id)
+            invader_user = User.query.get(invader_player.user_id)
+            defender_user = User.query.get(defender_player.user_id)
+            invader_name = invader_user.username if invader_user else f"Player {player_id}"
+            defender_name = defender_user.username if defender_user else f"Player {defender_owner_id}"
+            return _resolve_deficit_loss(game, invader_player, defender_player, invader_name, defender_name, figure.name)
+
         db.session.commit()
 
         return jsonify({
@@ -1533,6 +1564,16 @@ def battle_decision():
             return jsonify({'success': False, 'message': 'Player not found'}), 404
 
         is_advancing = (player_id == game.advancing_player_id)
+
+        # Guard: battle already confirmed — no new decisions allowed
+        if game.battle_confirmed:
+            return jsonify({
+                'success': True,
+                'resolved': True,
+                'outcome': 'battle',
+                'game': game.serialize()
+            })
+
         decisions = dict(game.battle_decisions) if game.battle_decisions else {}
 
         # Get player info
@@ -1620,6 +1661,88 @@ def battle_decision():
         return jsonify({'success': False, 'message': f"Failed to process battle decision: {str(e)}"}), 400
 
 
+def _check_figure_resource_deficit(figure, player_id, game_id):
+    """Check if a figure has a resource deficit (requires more than produced by the player's figures)."""
+    if not figure.requires:
+        return False
+
+    # Calculate total produces and requires across ALL of this player's figures
+    all_figures = Figure.query.filter_by(player_id=player_id, game_id=game_id).all()
+    total_produces = {}
+    total_requires = {}
+    for fig in all_figures:
+        if fig.produces:
+            for res, amount in fig.produces.items():
+                total_produces[res] = total_produces.get(res, 0) + amount
+        if fig.requires:
+            for res, amount in fig.requires.items():
+                total_requires[res] = total_requires.get(res, 0) + amount
+
+    # Check if any resource THIS figure requires is in deficit
+    for resource_name in figure.requires:
+        total_req = total_requires.get(resource_name, 0)
+        total_prod = total_produces.get(resource_name, 0)
+        if total_req > total_prod:
+            return True
+    return False
+
+
+def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_name, figure_name):
+    """Resolve an auto-loss due to a figure having resource deficit in battle."""
+    winner_player.points += 10
+
+    game.battle_decisions = None
+    game.fold_outcome = 'fold_win'
+    game.fold_winner_id = winner_player.id
+
+    log_entry = LogEntry(
+        game_id=game.id,
+        player_id=loser_player.id,
+        round_number=game.current_round,
+        turn_number=loser_player.turns_left,
+        message=f"{loser_name}'s {figure_name} has a resource deficit and cannot fight. {winner_name} wins 10 points!",
+        author="System",
+        type='deficit_loss'
+    )
+    db.session.add(log_entry)
+
+    # Clear battle state
+    game.advancing_figure_id = None
+    game.advancing_figure_id_2 = None
+    game.advancing_player_id = None
+    game.defending_figure_id = None
+    game.defending_figure_id_2 = None
+    game.battle_modifier = []
+    game.battle_confirmed = False
+
+    # Winner becomes invader
+    game.invader_player_id = winner_player.id
+
+    # Round increases, turns reset, ceasefire starts
+    game.current_round += 1
+    for p in game.players:
+        if p.id == game.invader_player_id:
+            p.turns_left = settings.INITIAL_TURNS_INVADER
+        else:
+            p.turns_left = settings.INITIAL_TURNS_DEFENDER
+    game.turn_player_id = game.invader_player_id
+    game.ceasefire_active = True
+    game.ceasefire_start_turn = 0
+
+    db.session.commit()
+    print(f"[DEFICIT_LOSS] {loser_name}'s {figure_name} has resource deficit. {winner_name} wins 10 points. Round {game.current_round} starts.")
+
+    return jsonify({
+        'success': True,
+        'deficit_loss': True,
+        'deficit_figure_name': figure_name,
+        'winner': winner_name,
+        'loser': loser_name,
+        'points': 10,
+        'game': game.serialize()
+    })
+
+
 def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
     """Helper to resolve a fold: award points, reset round, start ceasefire."""
     # Award points to winner
@@ -1674,4 +1797,879 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
         'loser': loser_name,
         'points': 10,
         'game': game.serialize()
+    })
+
+
+# ────────────────────── battle resolution ─────────────────────────
+
+def _compute_figure_base_power(figure):
+    """Compute a figure's base power on the server side.
+
+    Castle figures (Maharaja / King) always return 15.
+    All others return the sum of their card values.
+    """
+    if figure.field == 'castle':
+        return 15
+    card_assocs = CardToFigure.query.filter_by(figure_id=figure.id).all()
+    total = 0
+    for assoc in card_assocs:
+        if assoc.card_type == 'main':
+            card = MainCard.query.get(assoc.card_id)
+        else:
+            card = SideCard.query.get(assoc.card_id)
+        if card:
+            total += card.value
+    return total
+
+
+def _collect_battle_move_cards(game_id):
+    """Collect all cards reserved for battle moves in a game.
+
+    Returns (cards_list, battle_moves) where cards_list is a list of
+    (card_obj, card_type_str) tuples and battle_moves is the queryset.
+    """
+    moves = BattleMove.query.filter_by(game_id=game_id).all()
+    cards = []
+    for bm in moves:
+        # Primary card
+        if bm.card_type == 'side':
+            card = SideCard.query.get(bm.card_id)
+        else:
+            card = MainCard.query.get(bm.card_id)
+        if card:
+            cards.append((card, bm.card_type))
+
+        # Second card (Double Dagger)
+        if bm.card_id_b is not None:
+            ct_b = bm.card_type_b or 'main'
+            if ct_b == 'side':
+                card_b = SideCard.query.get(bm.card_id_b)
+            else:
+                card_b = MainCard.query.get(bm.card_id_b)
+            if card_b:
+                cards.append((card_b, ct_b))
+    return cards, moves
+
+
+def _destroy_figure_and_collect_cards(figure):
+    """Delete a figure and return its cards as a list of (card_obj, type_str).
+
+    Does NOT return cards to deck yet — caller decides what happens with them.
+    """
+    card_assocs = CardToFigure.query.filter_by(figure_id=figure.id).all()
+    cards = []
+    for assoc in card_assocs:
+        if assoc.card_type == 'main':
+            card = MainCard.query.get(assoc.card_id)
+        else:
+            card = SideCard.query.get(assoc.card_id)
+        if card:
+            card.part_of_figure = False
+            cards.append((card, assoc.card_type))
+
+    # Delete associations and the figure
+    CardToFigure.query.filter_by(figure_id=figure.id).delete()
+    db.session.delete(figure)
+    return cards
+
+
+def _clear_battle_state(game):
+    """Reset all battle / advance state on the game after resolution."""
+    game.advancing_figure_id = None
+    game.advancing_figure_id_2 = None
+    game.advancing_player_id = None
+    game.defending_figure_id = None
+    game.defending_figure_id_2 = None
+    game.battle_modifier = []
+    game.battle_confirmed = False
+    game.battle_decisions = None
+    game.battle_moves_confirmed = None
+    game.fold_outcome = None
+    game.fold_winner_id = None
+    game.battle_round = 0
+    game.battle_turn_player_id = None
+    game.battle_skipped_rounds = None
+
+
+def _deactivate_all_spells(game):
+    """Deactivate all active spells in a game (post-battle cleanup)."""
+    active = ActiveSpell.query.filter_by(game_id=game.id, is_active=True).all()
+    for spell in active:
+        spell.is_active = False
+
+
+def _delete_all_battle_moves(game_id):
+    """Remove all BattleMove rows for a game."""
+    BattleMove.query.filter_by(game_id=game_id).delete()
+
+
+def _serialize_battle_card(card, card_type):
+    """Create a serialisable dict for a card involved in the battle."""
+    data = card.serialize() if hasattr(card, 'serialize') else {}
+    data['card_type'] = card_type
+    return data
+
+
+def _start_new_round(game, winner_player):
+    """Bump round counter, set invader, reset turns, start ceasefire, draw 2 side cards per player."""
+    game.invader_player_id = winner_player.id
+    game.current_round += 1
+    for p in game.players:
+        if p.id == game.invader_player_id:
+            p.turns_left = settings.INITIAL_TURNS_INVADER
+        else:
+            p.turns_left = settings.INITIAL_TURNS_DEFENDER
+    game.turn_player_id = game.invader_player_id
+    game.ceasefire_active = True
+    game.ceasefire_start_turn = 0
+
+    # Draw 2 side cards per player for the new round
+    drawn_cards_map = {}
+    for p in game.players:
+        try:
+            cards = DeckManager.draw_cards_from_deck(game, p, 2, 'side')
+            drawn_cards_map[str(p.id)] = [
+                {'suit': c.suit.value, 'rank': c.rank.value}
+                for c in cards
+            ]
+            print(f"[NEW_ROUND] Player {p.id} drew 2 side cards: {drawn_cards_map[str(p.id)]}")
+        except ValueError:
+            # Not enough side cards in deck
+            drawn_cards_map[str(p.id)] = []
+            print(f"[NEW_ROUND] Player {p.id}: no side cards available in deck")
+    game.post_battle_drawn_cards = drawn_cards_map
+
+
+# ─────────────────── 3-round battle turn management ───────────────────
+
+@games.route('/play_battle_move', methods=['POST'])
+def play_battle_move():
+    """Record a player playing one battle move in the current battle round.
+
+    Expects JSON: {
+        game_id, player_id, battle_move_id,
+        call_figure_id (optional) — ID of the called figure
+    }
+
+    The endpoint:
+    1. Validates it's the player's turn in the battle.
+    2. Marks the BattleMove.played_round = current battle_round.
+    3. Stores call_figure_id if provided.
+    4. Switches battle_turn to the other player.
+    5. If both have now played in this round, advances to next round
+       (turn goes back to invader).
+    """
+    data = request.json
+    game_id = data.get('game_id')
+    player_id = data.get('player_id')
+    battle_move_id = data.get('battle_move_id')
+    call_figure_id = data.get('call_figure_id')
+
+    if not game_id or not player_id or not battle_move_id:
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    game = Game.query.get(game_id)
+    if not game:
+        return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    # Verify battle is active (battle_confirmed must be True)
+    if not game.battle_confirmed:
+        return jsonify({'success': False, 'message': 'Battle is not active'}), 400
+
+    # Verify it's this player's battle turn
+    if game.battle_turn_player_id != player_id:
+        return jsonify({'success': False,
+                        'message': "It is not your turn in the battle"}), 400
+
+    # Look up the battle move
+    move = BattleMove.query.get(battle_move_id)
+    if not move:
+        return jsonify({'success': False, 'message': 'Battle move not found'}), 404
+    if move.game_id != game_id or move.player_id != player_id:
+        return jsonify({'success': False, 'message': 'Move does not belong to this player/game'}), 400
+    if move.played_round is not None:
+        return jsonify({'success': False, 'message': 'Move has already been played'}), 400
+
+    # Play the move
+    move.played_round = game.battle_round
+    if call_figure_id:
+        move.call_figure_id = call_figure_id
+
+    # Remove the card(s) from the player's hand so they can't be
+    # accidentally sacrificed / auto-removed while the battle continues.
+    # The card stays in the DB (in_deck=True) for post-battle resolution.
+    if move.card_type == 'side':
+        card = SideCard.query.get(move.card_id)
+    else:
+        card = MainCard.query.get(move.card_id)
+    if card:
+        card.in_deck = True
+
+    # Double Dagger second card
+    if move.card_id_b is not None:
+        ct_b = move.card_type_b or 'main'
+        if ct_b == 'side':
+            card_b = SideCard.query.get(move.card_id_b)
+        else:
+            card_b = MainCard.query.get(move.card_id_b)
+        if card_b:
+            card_b.in_deck = True
+
+    # Determine the other player
+    other_player = None
+    for p in game.players:
+        if p.id != player_id:
+            other_player = p
+            break
+
+    if not other_player:
+        return jsonify({'success': False, 'message': 'Opponent not found'}), 500
+
+    # Check if the other player has already played in this round
+    other_played = BattleMove.query.filter_by(
+        game_id=game_id,
+        player_id=other_player.id,
+        played_round=game.battle_round,
+    ).first()
+
+    if other_played:
+        # Both have played this round — advance to next round (if not last)
+        if game.battle_round < 2:
+            game.battle_round += 1
+        # Turn goes back to invader for the next round
+        game.battle_turn_player_id = game.invader_player_id
+    else:
+        # Switch turn to the other player
+        game.battle_turn_player_id = other_player.id
+
+    db.session.commit()
+
+    # Log the battle move
+    player = Player.query.get(player_id)
+    user = User.query.get(player.user_id) if player else None
+    username = user.username if user else f"Player {player_id}"
+    log_entry = LogEntry(
+        game_id=game_id,
+        player_id=player_id,
+        round_number=game.current_round,
+        turn_number=move.played_round + 1,
+        message=f"{username} played {move.family_name} (power {move.value}) in battle round {move.played_round + 1}.",
+        author=username,
+        type='battle_move'
+    )
+    db.session.add(log_entry)
+    db.session.commit()
+
+    print(f"[BATTLE_MOVE] Player {player_id} played move {battle_move_id} "
+          f"in round {move.played_round}. Next turn: {game.battle_turn_player_id}, "
+          f"battle_round: {game.battle_round}")
+
+    return jsonify({
+        'success': True,
+        'battle_round': game.battle_round,
+        'battle_turn_player_id': game.battle_turn_player_id,
+        'game': game.serialize(),
+    })
+
+
+@games.route('/get_battle_state', methods=['GET'])
+def get_battle_state():
+    """Return the current 3-round battle state for polling.
+
+    Query params: game_id, player_id
+
+    Returns: battle_round, battle_turn_player_id, all battle moves
+    (with played_round showing which are played and where).
+    For opponent's unplayed moves, family_name is hidden.
+    """
+    game_id = request.args.get('game_id', type=int)
+    player_id = request.args.get('player_id', type=int)
+
+    if not game_id or not player_id:
+        return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+    game = Game.query.get(game_id)
+    if not game:
+        return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    # Get all battle moves for this game
+    all_moves = BattleMove.query.filter_by(game_id=game_id).all()
+
+    player_moves = []
+    opponent_moves = []
+    for m in all_moves:
+        s = m.serialize()
+        if m.player_id == player_id:
+            player_moves.append(s)
+        else:
+            if m.played_round is not None:
+                # Opponent's played move — reveal it
+                opponent_moves.append(s)
+            else:
+                # Opponent's unplayed move — hide details
+                opponent_moves.append({
+                    'id': m.id,
+                    'player_id': m.player_id,
+                    'played_round': None,
+                })
+
+    return jsonify({
+        'success': True,
+        'battle_round': game.battle_round,
+        'battle_turn_player_id': game.battle_turn_player_id,
+        'invader_player_id': game.invader_player_id,
+        'player_moves': player_moves,
+        'opponent_moves': opponent_moves,
+        'battle_skipped_rounds': game.battle_skipped_rounds or {},
+    })
+
+
+@games.route('/skip_battle_turn', methods=['POST'])
+def skip_battle_turn():
+    """Auto-skip a player's battle turn when they have no moves left.
+
+    Expects JSON: { game_id, player_id }
+
+    Records a skip for the current battle_round and advances the turn/round
+    the same way play_battle_move does.
+    """
+    data = request.json
+    game_id = data.get('game_id')
+    player_id = data.get('player_id')
+
+    if not game_id or not player_id:
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    game = Game.query.get(game_id)
+    if not game:
+        return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    if not game.battle_confirmed:
+        return jsonify({'success': False, 'message': 'Battle is not active'}), 400
+
+    if game.battle_turn_player_id != player_id:
+        return jsonify({'success': False, 'message': 'It is not your turn in the battle'}), 400
+
+    # Record the skip
+    skipped = game.battle_skipped_rounds or {}
+    pid_key = str(player_id)
+    if pid_key not in skipped:
+        skipped[pid_key] = []
+    if game.battle_round not in skipped[pid_key]:
+        skipped[pid_key].append(game.battle_round)
+    game.battle_skipped_rounds = skipped
+    flag_modified(game, 'battle_skipped_rounds')
+
+    # Determine the other player
+    other_player = None
+    for p in game.players:
+        if p.id != player_id:
+            other_player = p
+            break
+
+    if not other_player:
+        return jsonify({'success': False, 'message': 'Opponent not found'}), 500
+
+    # Check if the other player has already played (or skipped) in this round
+    other_played = BattleMove.query.filter_by(
+        game_id=game_id,
+        player_id=other_player.id,
+        played_round=game.battle_round,
+    ).first()
+    other_skipped = str(other_player.id) in skipped and game.battle_round in skipped[str(other_player.id)]
+
+    if other_played or other_skipped:
+        # Both have played/skipped this round — advance to next round
+        if game.battle_round < 2:
+            game.battle_round += 1
+        game.battle_turn_player_id = game.invader_player_id
+    else:
+        # Switch turn to the other player
+        game.battle_turn_player_id = other_player.id
+
+    db.session.commit()
+
+    # Log the battle skip
+    player_obj = Player.query.get(player_id)
+    user = User.query.get(player_obj.user_id) if player_obj else None
+    username = user.username if user else f"Player {player_id}"
+    skip_round = skipped[pid_key][-1]
+    log_entry = LogEntry(
+        game_id=game_id,
+        player_id=player_id,
+        round_number=game.current_round,
+        turn_number=skip_round + 1,
+        message=f"{username} skipped battle round {skip_round + 1} (no moves left).",
+        author=username,
+        type='battle_skip'
+    )
+    db.session.add(log_entry)
+    db.session.commit()
+
+    print(f"[BATTLE_SKIP] Player {player_id} skipped round {skipped[pid_key][-1]}. "
+          f"Next turn: {game.battle_turn_player_id}, battle_round: {game.battle_round}")
+
+    return jsonify({
+        'success': True,
+        'battle_round': game.battle_round,
+        'battle_turn_player_id': game.battle_turn_player_id,
+        'battle_skipped_rounds': game.battle_skipped_rounds or {},
+        'game': game.serialize(),
+    })
+
+
+@games.route('/finish_battle', methods=['POST'])
+def finish_battle():
+    """Resolve a 3-round battle and return result + returnable cards.
+
+    Expects JSON: {
+        game_id, player_id,
+        player_played: [{id, family_name, value, ...}, ...],  # 3 played moves
+        total_diff: int   # total power diff (positive = player wins)
+    }
+
+    The endpoint:
+    1. Validates the game / players / state.
+    2. Determines outcome (win / lose / draw).
+    3. For win/lose: awards points = loser-figure base power to winner,
+       destroys loser figure, collects all battle-move + figure cards.
+    4. Returns the list of returnable cards so the winner can pick one.
+    5. For draw: returns draw options for the defender.
+    """
+    data = request.json
+    game_id = data.get('game_id')
+    player_id = data.get('player_id')
+    total_diff = data.get('total_diff', 0)  # positive = player wins
+
+    if not game_id or not player_id:
+        return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+    game = Game.query.get(game_id)
+    if not game:
+        return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    player = Player.query.filter_by(id=player_id, game_id=game_id).first()
+    if not player:
+        return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+    other_player = [p for p in game.players if p.id != player_id][0]
+
+    # Idempotency: if battle was already resolved by the other client
+    # (figures destroyed, fold_winner_id set), return the cached result.
+    adv_figure = Figure.query.get(game.advancing_figure_id) if game.advancing_figure_id else None
+    def_figure = Figure.query.get(game.defending_figure_id) if game.defending_figure_id else None
+
+    if (not adv_figure or not def_figure) and game.fold_winner_id:
+        print(f"[FINISH_BATTLE] Battle already resolved for game {game_id} (figure destroyed)")
+        winner_id = game.fold_winner_id
+        if winner_id == player_id:
+            outcome = 'win'
+        else:
+            outcome = 'lose'
+
+        # For winners, collect returnable cards (battle move + orphaned figure cards)
+        returnable_cards = []
+        if outcome == 'win':
+            bm_cards, _ = _collect_battle_move_cards(game_id)
+            orphaned_main = MainCard.query.filter_by(
+                game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
+            ).all()
+            orphaned_side = SideCard.query.filter_by(
+                game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
+            ).all()
+            all_cards = bm_cards + [(c, 'main') for c in orphaned_main] + [(c, 'side') for c in orphaned_side]
+            returnable_cards = [_serialize_battle_card(c, ct) for c, ct in all_cards]
+
+        other_user = User.query.get(other_player.user_id)
+        other_name = other_user.username if other_user else f"Player {other_player.id}"
+        player_user_inner = User.query.get(player.user_id)
+        player_name_inner = player_user_inner.username if player_user_inner else f"Player {player_id}"
+
+        return jsonify({
+            'success': True,
+            'outcome': outcome,
+            'already_resolved': True,
+            'winner_player_id': winner_id,
+            'winner_name': player_name_inner if outcome == 'win' else other_name,
+            'loser_name': other_name if outcome == 'win' else player_name_inner,
+            'returnable_cards': returnable_cards,
+            'game': game.serialize(),
+        })
+
+    if not adv_figure or not def_figure:
+        return jsonify({'success': False, 'message': 'Battle figures not found'}), 400
+
+    # Determine who the invader/defender is
+    is_invader = (game.invader_player_id == player_id)
+
+    if is_invader:
+        player_figure = adv_figure
+        opponent_figure = def_figure
+        winner_player = player if total_diff > 0 else other_player
+        loser_player = other_player if total_diff > 0 else player
+        winner_figure = player_figure if total_diff > 0 else opponent_figure
+        loser_figure = opponent_figure if total_diff > 0 else player_figure
+    else:
+        player_figure = def_figure
+        opponent_figure = adv_figure
+        winner_player = player if total_diff > 0 else other_player
+        loser_player = other_player if total_diff > 0 else player
+        winner_figure = player_figure if total_diff > 0 else opponent_figure
+        loser_figure = opponent_figure if total_diff > 0 else player_figure
+
+    # Get user names
+    winner_user = User.query.get(winner_player.user_id)
+    loser_user = User.query.get(loser_player.user_id)
+    winner_name = winner_user.username if winner_user else f"Player {winner_player.id}"
+    loser_name = loser_user.username if loser_user else f"Player {loser_player.id}"
+
+    player_user = User.query.get(player.user_id)
+    player_name = player_user.username if player_user else f"Player {player_id}"
+
+    # Collect battle move cards (from BOTH players)
+    bm_cards, bm_records = _collect_battle_move_cards(game_id)
+
+    if total_diff == 0:
+        # ──── DRAW ────
+        # Defender gets to choose: destroy opponent figure, 10 pts, or pick a card
+        # Determine who the defender is
+        defender_player_id = None
+        for p in game.players:
+            if p.id != game.invader_player_id:
+                defender_player_id = p.id
+                break
+
+        # Serialize the battle move cards so the client can show them
+        returnable_cards = [_serialize_battle_card(c, ct) for c, ct in bm_cards]
+
+        return jsonify({
+            'success': True,
+            'outcome': 'draw',
+            'total_diff': 0,
+            'defender_player_id': defender_player_id,
+            'returnable_cards': returnable_cards,
+            'game': game.serialize(),
+        })
+
+    else:
+        # ──── WIN / LOSE ────
+        points_awarded = _compute_figure_base_power(loser_figure)
+        winner_player.points += points_awarded
+
+        # Destroy loser's figure — collect its cards
+        figure_cards = _destroy_figure_and_collect_cards(loser_figure)
+
+        # Clear the destroyed figure's reference on the game
+        if game.advancing_figure_id and loser_figure.id == game.advancing_figure_id:
+            game.advancing_figure_id = None
+        if game.defending_figure_id and loser_figure.id == game.defending_figure_id:
+            game.defending_figure_id = None
+
+        db.session.flush()
+
+        # All returnable cards = figure cards + battle move cards
+        all_returnable = figure_cards + bm_cards
+        returnable_cards = [_serialize_battle_card(c, ct) for c, ct in all_returnable]
+
+        # Log
+        log_entry = LogEntry(
+            game_id=game.id,
+            player_id=winner_player.id,
+            round_number=game.current_round,
+            turn_number=winner_player.turns_left,
+            message=(
+                f"{winner_name} wins the battle! {loser_name}'s "
+                f"{loser_figure.name} is destroyed. "
+                f"{winner_name} earns {points_awarded} points."
+            ),
+            author="System",
+            type='battle_win'
+        )
+        db.session.add(log_entry)
+
+        # Store the winner so the second client can retrieve the result
+        game.fold_winner_id = winner_player.id
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'outcome': 'win',
+            'winner_player_id': winner_player.id,
+            'loser_player_id': loser_player.id,
+            'winner_name': winner_name,
+            'loser_name': loser_name,
+            'points_awarded': points_awarded,
+            'destroyed_figure_name': loser_figure.name,
+            'total_diff': total_diff,
+            'returnable_cards': returnable_cards,
+            'game': game.serialize(),
+        })
+
+
+@games.route('/finish_battle_pick_card', methods=['POST'])
+def finish_battle_pick_card():
+    """Winner picks one card from the returnable pool, rest go to deck.
+
+    Expects JSON: {
+        game_id, player_id,
+        picked_card_id: int | null,    # ID of the chosen card (null = skip)
+        picked_card_type: 'main'|'side'
+    }
+
+    This also triggers the full post-battle cleanup.
+    """
+    data = request.json
+    game_id = data.get('game_id')
+    player_id = data.get('player_id')
+    picked_card_id = data.get('picked_card_id')
+    picked_card_type = data.get('picked_card_type', 'main')
+
+    if not game_id or not player_id:
+        return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+    game = Game.query.get(game_id)
+    if not game:
+        return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    player = Player.query.filter_by(id=player_id, game_id=game_id).first()
+    if not player:
+        return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+    # Idempotency: if battle state was already cleaned up, just return success
+    if not game.advancing_figure_id and not game.defending_figure_id and not game.battle_confirmed:
+        print(f"[FINISH_BATTLE_PICK] Already cleaned up for game {game_id}, returning success")
+        return jsonify({
+            'success': True,
+            'message': 'Battle already resolved.',
+            'game': game.serialize(),
+        })
+
+    # Collect ALL battle move cards (in case finish_battle didn't return them yet)
+    bm_cards, bm_records = _collect_battle_move_cards(game_id)
+
+    # If winner picked a card, give it to them
+    if picked_card_id:
+        if picked_card_type == 'side':
+            picked = SideCard.query.get(picked_card_id)
+        else:
+            picked = MainCard.query.get(picked_card_id)
+        if picked and picked.game_id == game_id:
+            picked.player_id = player_id
+            picked.in_deck = False
+            picked.part_of_figure = False
+            picked.part_of_battle_move = False
+
+    # Return remaining battle-move cards to deck
+    main_to_deck = []
+    side_to_deck = []
+    for card, ct in bm_cards:
+        if picked_card_id and card.id == picked_card_id:
+            continue  # already assigned to winner
+        card.part_of_battle_move = False
+        if isinstance(card, MainCard):
+            main_to_deck.append(card)
+        elif isinstance(card, SideCard):
+            side_to_deck.append(card)
+
+    # Also return any remaining figure cards that are orphaned
+    # (figure was already destroyed in finish_battle, but cards may still
+    #  be floating with part_of_figure=False and no player_id)
+    orphaned_main = MainCard.query.filter_by(
+        game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
+    ).all()
+    orphaned_side = SideCard.query.filter_by(
+        game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
+    ).all()
+    for c in orphaned_main:
+        if picked_card_id and c.id == picked_card_id:
+            continue
+        main_to_deck.append(c)
+    for c in orphaned_side:
+        if picked_card_id and c.id == picked_card_id:
+            continue
+        side_to_deck.append(c)
+
+    if main_to_deck:
+        DeckManager.return_cards_to_deck(main_to_deck)
+    if side_to_deck:
+        DeckManager.return_cards_to_deck(side_to_deck)
+
+    # Delete all battle move records
+    _delete_all_battle_moves(game_id)
+
+    # Deactivate all spells
+    _deactivate_all_spells(game)
+
+    # Read the actual winner BEFORE _clear_battle_state clears fold_winner_id
+    winner_id = game.fold_winner_id
+    winner = Player.query.get(winner_id) if winner_id else player
+    if not winner or winner.game_id != game_id:
+        winner = player  # fallback
+
+    # Clear battle state (this resets fold_winner_id to None)
+    _clear_battle_state(game)
+
+    # Start a new round — battle winner becomes invader
+    _start_new_round(game, winner)
+
+    db.session.commit()
+    print(f"[FINISH_BATTLE] Card picked. Post-battle cleanup done. Round {game.current_round} starts. Winner/invader={winner.id}")
+
+    return jsonify({
+        'success': True,
+        'message': 'Battle resolved. New round started.',
+        'game': game.serialize(),
+    })
+
+
+@games.route('/finish_battle_draw', methods=['POST'])
+def finish_battle_draw():
+    """Handle the defender's choice after a draw.
+
+    Expects JSON: {
+        game_id, player_id,   (must be the defender)
+        choice: 'destroy' | 'points' | 'pick_card',
+        picked_card_id: int | null,      (only if choice == 'pick_card')
+        picked_card_type: 'main'|'side'  (only if choice == 'pick_card')
+    }
+    """
+    data = request.json
+    game_id = data.get('game_id')
+    player_id = data.get('player_id')
+    choice = data.get('choice')
+    picked_card_id = data.get('picked_card_id')
+    picked_card_type = data.get('picked_card_type', 'main')
+
+    if not game_id or not player_id or not choice:
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    game = Game.query.get(game_id)
+    if not game:
+        return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    player = Player.query.filter_by(id=player_id, game_id=game_id).first()
+    if not player:
+        return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+    other_player = [p for p in game.players if p.id != player_id][0]
+
+    player_user = User.query.get(player.user_id)
+    other_user = User.query.get(other_player.user_id)
+    player_name = player_user.username if player_user else f"Player {player_id}"
+    other_name = other_user.username if other_user else f"Player {other_player.id}"
+
+    # Determine opponent's figure (the invader's figure, since player is defender)
+    opponent_figure = Figure.query.get(game.advancing_figure_id) if game.advancing_figure_id else None
+
+    result_msg = ""
+
+    if choice == 'destroy':
+        # Destroy the opponent's battle figure
+        if opponent_figure:
+            figure_name = opponent_figure.name
+            figure_cards = _destroy_figure_and_collect_cards(opponent_figure)
+            # Return figure cards to deck
+            main_fc = [c for c, ct in figure_cards if isinstance(c, MainCard)]
+            side_fc = [c for c, ct in figure_cards if isinstance(c, SideCard)]
+            if main_fc:
+                DeckManager.return_cards_to_deck(main_fc)
+            if side_fc:
+                DeckManager.return_cards_to_deck(side_fc)
+            game.advancing_figure_id = None
+            result_msg = f"{player_name} chose to destroy {other_name}'s {figure_name}!"
+        else:
+            result_msg = f"Draw — no figure to destroy."
+
+    elif choice == 'points':
+        # Award 10 points to the defender
+        player.points += 10
+        result_msg = f"{player_name} chose 10 points from the draw."
+
+    elif choice == 'pick_card':
+        # Pick one card from the battle move cards
+        if picked_card_id:
+            if picked_card_type == 'side':
+                picked = SideCard.query.get(picked_card_id)
+            else:
+                picked = MainCard.query.get(picked_card_id)
+            if picked and picked.game_id == game_id:
+                picked.player_id = player_id
+                picked.in_deck = False
+                picked.part_of_figure = False
+                picked.part_of_battle_move = False
+                result_msg = f"{player_name} picked a card from the battle."
+        if not result_msg:
+            result_msg = f"{player_name} chose to pick a card but none was selected."
+
+    else:
+        return jsonify({'success': False, 'message': f'Invalid choice: {choice}'}), 400
+
+    # Return remaining battle-move cards to deck
+    bm_cards, bm_records = _collect_battle_move_cards(game_id)
+    main_to_deck = []
+    side_to_deck = []
+    for card, ct in bm_cards:
+        if choice == 'pick_card' and picked_card_id and card.id == picked_card_id:
+            continue
+        card.part_of_battle_move = False
+        if isinstance(card, MainCard):
+            main_to_deck.append(card)
+        elif isinstance(card, SideCard):
+            side_to_deck.append(card)
+
+    # Also return orphaned (destroyed) figure cards
+    orphaned_main = MainCard.query.filter_by(
+        game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
+    ).all()
+    orphaned_side = SideCard.query.filter_by(
+        game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
+    ).all()
+    for c in orphaned_main:
+        if choice == 'pick_card' and picked_card_id and c.id == picked_card_id:
+            continue
+        main_to_deck.append(c)
+    for c in orphaned_side:
+        if choice == 'pick_card' and picked_card_id and c.id == picked_card_id:
+            continue
+        side_to_deck.append(c)
+
+    if main_to_deck:
+        DeckManager.return_cards_to_deck(main_to_deck)
+    if side_to_deck:
+        DeckManager.return_cards_to_deck(side_to_deck)
+
+    # Delete all battle move records
+    _delete_all_battle_moves(game_id)
+
+    # Deactivate all spells
+    _deactivate_all_spells(game)
+
+    # Clear battle state
+    _clear_battle_state(game)
+
+    # Log
+    log_entry = LogEntry(
+        game_id=game.id,
+        player_id=player_id,
+        round_number=game.current_round,
+        turn_number=player.turns_left,
+        message=result_msg,
+        author="System",
+        type='battle_draw'
+    )
+    db.session.add(log_entry)
+
+    # Start a new round — defender (the choosing player) becomes invader
+    _start_new_round(game, player)
+
+    db.session.commit()
+    print(f"[FINISH_BATTLE_DRAW] {result_msg} Round {game.current_round} starts.")
+
+    return jsonify({
+        'success': True,
+        'outcome': 'draw',
+        'choice': choice,
+        'message': result_msg,
+        'game': game.serialize(),
     })

@@ -74,7 +74,7 @@ class DialogueBox:
         # Negative spacing to reduce gap between text and icon (counteracts SMALL_SPACER_Y from line calculation)
         self.img_spacing = -settings.SMALL_SPACER_Y // 2 if self.ordered_items else 0
         # Add moderate spacing below images/objects to separate from after-text
-        self.drawable_bottom_spacing = int(settings.SMALL_SPACER_Y * 1.5) if self.ordered_items else 0
+        self.drawable_bottom_spacing = int(settings.SMALL_SPACER_Y * 3) if self.ordered_items else 0
         self.box_height = (self.title_height + self.text_height + self.img_height + self.drawable_object_height +
                            self.img_spacing + self.drawable_bottom_spacing + self.after_text_height + self.button_height + settings.SMALL_SPACER_Y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y)
 

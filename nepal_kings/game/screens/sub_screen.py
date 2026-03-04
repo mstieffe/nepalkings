@@ -104,9 +104,9 @@ class SubScreen:
         self.window.blit(text_obj, text_rect)
 
 
-    def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None):
+    def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message and actions."""
-        self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay)
+        self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
 
     def make_scroll_text_list_shifter(self, text_list, x, y, scroll_height=None):
         """Create a scroll text list shifter."""

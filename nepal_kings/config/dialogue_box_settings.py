@@ -25,9 +25,19 @@ DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT = {
     'question': pygame.image.load('img/dialogue_box/icons/question_mark.png'),
     'success': pygame.image.load('img/dialogue_box/icons/success.png'),
     'victory': pygame.image.load('img/dialogue_box/icons/victory.png'),
+    'defeat': pygame.image.load('img/dialogue_box/icons/defeat.png'),
+    'draw': pygame.image.load('img/dialogue_box/icons/draw.png'),
     'loot': pygame.image.load('img/dialogue_box/icons/loot.png'),
     'figure': pygame.image.load('img/dialogue_box/icons/figure.png'),
     'magic': pygame.image.load('img/dialogue_box/icons/magic.png'),
     'ceasefire_passive': pygame.image.load('img/status_icons/ceasefire_passive.png'),
     'ceasefire_active': pygame.image.load('img/status_icons/ceasefire_active.png'),
+    'dices': pygame.image.load('img/dialogue_box/icons/dices.png'),
+}
+
+# Large icons for dialogue box content display
+DIALOGUE_BOX_LARGE_ICON_DICT = {
+    'victory': pygame.image.load('img/dialogue_box/icons/victory.png'),
+    'defeat': pygame.image.load('img/dialogue_box/icons/defeat.png'),
+    'draw': pygame.image.load('img/dialogue_box/icons/draw.png'),
 }
