@@ -143,7 +143,62 @@ class BuildFigureScreen(SubScreen):
             # but the server will validate. Allow the attempt.
             pass
 
+        # Resource deficit check: simulate adding this figure to the player's
+        # existing figures and check if it would create a deficit on any
+        # resource it requires.  If so, the figure cannot advance after build.
+        if figure.requires:
+            resources = game.calculate_resources(self.figure_manager.families)
+            sim_produces = dict(resources.get('produces', {}))
+            sim_requires = dict(resources.get('requires', {}))
+            for res, amt in (figure.produces or {}).items():
+                sim_produces[res] = sim_produces.get(res, 0) + amt
+            for res, amt in figure.requires.items():
+                sim_requires[res] = sim_requires.get(res, 0) + amt
+            for res in figure.requires:
+                if sim_requires.get(res, 0) > sim_produces.get(res, 0):
+                    return False, is_counter, 'resource_deficit'
+
         return True, is_counter, None
+
+    def _check_build_causes_deficit(self, figure):
+        """
+        Check if building this figure would cause any NEW resource deficits.
+        Returns (warning_string, deficit_resource_names) if deficits would occur,
+        or (None, []) if safe.
+        """
+        if not figure.requires and not figure.produces:
+            return None, []
+
+        resources = self.game.calculate_resources(self.figure_manager.families)
+        cur_produces = resources.get('produces', {})
+        cur_requires = resources.get('requires', {})
+
+        # Simulate adding the new figure
+        sim_produces = dict(cur_produces)
+        sim_requires = dict(cur_requires)
+        for res, amt in (figure.produces or {}).items():
+            sim_produces[res] = sim_produces.get(res, 0) + amt
+        for res, amt in (figure.requires or {}).items():
+            sim_requires[res] = sim_requires.get(res, 0) + amt
+
+        # Find resources that would be in deficit AFTER building
+        new_deficits = []
+        for res in sim_requires:
+            was_deficit = cur_requires.get(res, 0) > cur_produces.get(res, 0)
+            will_deficit = sim_requires[res] > sim_produces.get(res, 0)
+            if will_deficit and not was_deficit:
+                new_deficits.append(res)
+
+        if not new_deficits:
+            return None, []
+
+        res_list = ", ".join(new_deficits)
+        return (
+            f"Warning: Building this figure will cause a deficit in: {res_list}.\n"
+            f"All figures requiring these resources will be non-functional "
+            f"(cannot advance or fight).",
+            new_deficits
+        )
 
 
     def init_scroll_test_list_shifter(self):
@@ -269,6 +324,16 @@ class BuildFigureScreen(SubScreen):
                 
                 print("Response:", response)
                 if response == 'yes':
+                    # Block regular build during forced advance
+                    if getattr(self.game, 'pending_forced_advance', False):
+                        self.dialogue_box = None
+                        self.make_dialogue_box(
+                            message="You must advance a figure this turn.\n\nUse 'build + advance' with an Instant Charge figure, or go to the field and advance an existing figure.",
+                            actions=['ok'],
+                            icon="error",
+                            title="Must Advance"
+                        )
+                        return
                     # Check if player is waiting for counter spell response
                     if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
                         if self.state.parent_screen.waiting_for_counter_response:
@@ -407,8 +472,25 @@ class BuildFigureScreen(SubScreen):
                         message = "Do you want to build this figure?"
                         message_after = None
 
+                        # Check if building this figure would cause resource deficits
+                        deficit_warning, deficit_resources = self._check_build_causes_deficit(selected_figure)
+
+                        # Load resource icons for any deficit resources
+                        if deficit_resources:
+                            import os
+                            from config.info_scroll_settings import RESOURCE_ICON_IMG_PATH_DICT
+                            for res_name in deficit_resources:
+                                res_icon_path = RESOURCE_ICON_IMG_PATH_DICT.get(res_name, '')
+                                if res_icon_path and os.path.exists(res_icon_path):
+                                    res_icon = pygame.image.load(res_icon_path).convert_alpha()
+                                    images.append(res_icon)
+
                         # Check if figure has instant_charge and can advance
-                        can_charge, is_counter, _ = self._can_instant_charge_advance(selected_figure)
+                        can_charge, is_counter, charge_reason = self._can_instant_charge_advance(selected_figure)
+
+                        # During forced advance, only show build+advance (not regular build)
+                        is_forced_advance = getattr(self.game, 'pending_forced_advance', False)
+
                         if can_charge:
                             # Load the instant_charge skill icon
                             import os
@@ -424,15 +506,39 @@ class BuildFigureScreen(SubScreen):
                             else:
                                 charge_action = 'build + advance'
                                 message_after = "This figure has Instant Charge and can advance toward battle immediately after being built!"
-                            actions = ['yes', charge_action, 'cancel']
+
+                            if is_forced_advance:
+                                # Only allow build+advance during forced advance
+                                actions = [charge_action, 'cancel']
+                                message = "You must advance this turn.\nBuild and advance this figure?"
+                            else:
+                                actions = ['yes', charge_action, 'cancel']
+                        elif is_forced_advance:
+                            if charge_reason == 'resource_deficit':
+                                # Figure has instant charge but would have resource deficit
+                                self.make_dialogue_box(
+                                    message="This figure would have a resource deficit after being built and cannot advance toward battle.\n\nBuild a different figure or go to the field and advance an existing figure.",
+                                    actions=['ok'],
+                                    icon="error",
+                                    title="Resource Deficit"
+                                )
+                                return
+                            # Forced advance but figure has no instant charge — block build
+                            self.make_dialogue_box(
+                                message="You must advance a figure this turn.\n\nThis figure does not have Instant Charge — go to the field and advance an existing figure instead.",
+                                actions=['ok'],
+                                icon="error",
+                                title="Must Advance"
+                            )
+                            return
 
                         self.make_dialogue_box(
                             message=message,
                             actions=actions,
                             images=images,
-                            icon="question",
-                            title="Create Figure",
-                            message_after_images=message_after,
+                            icon="warning" if deficit_warning else "question",
+                            title="Resource Deficit Warning" if deficit_warning else "Create Figure",
+                            message_after_images=(deficit_warning + "\n\n" + message_after) if (deficit_warning and message_after) else (deficit_warning or message_after),
                         )
                         #print("making dialogue box")
                     elif selected_figure and self.confirm_button.collide() and self.confirm_button.disabled:

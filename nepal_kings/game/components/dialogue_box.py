@@ -71,11 +71,13 @@ class DialogueBox:
         self.button_height = (settings.MENU_BUTTON_HEIGHT + 2 * settings.SMALL_SPACER_Y) if self.actions else 0
         self.img_height = settings.DIALOGUE_BOX_IMG_HEIGHT if has_surfaces else 0
         self.drawable_object_height = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT if has_drawables else 0
+        # Images and drawables are drawn side-by-side, so use the taller of the two (not sum)
+        self.content_height = max(self.img_height, self.drawable_object_height) if self.ordered_items else 0
         # Negative spacing to reduce gap between text and icon (counteracts SMALL_SPACER_Y from line calculation)
         self.img_spacing = -settings.SMALL_SPACER_Y // 2 if self.ordered_items else 0
-        # Add moderate spacing below images/objects to separate from after-text
+        # Add spacing below images/objects to separate from after-text or buttons
         self.drawable_bottom_spacing = int(settings.SMALL_SPACER_Y * 3) if self.ordered_items else 0
-        self.box_height = (self.title_height + self.text_height + self.img_height + self.drawable_object_height +
+        self.box_height = (self.title_height + self.text_height + self.content_height +
                            self.img_spacing + self.drawable_bottom_spacing + self.after_text_height + self.button_height + settings.SMALL_SPACER_Y + settings.DIALOGUE_BOX_TEXT_MARGIN_Y)
 
         # Calculate the position of the box to make sure it's in the center
@@ -207,8 +209,7 @@ class DialogueBox:
 
         # Draw message_after_images text if provided
         if self.after_lines_surfaces:
-            content_height = max(self.img_height, self.drawable_object_height) if self.ordered_items else 0
-            after_text_y = image_y + content_height + self.drawable_bottom_spacing
+            after_text_y = image_y + self.content_height + self.drawable_bottom_spacing
             for i, line_surface in enumerate(self.after_lines_surfaces):
                 line_y = after_text_y + i * (self.font.get_height() + settings.SMALL_SPACER_Y)
                 line_rect = line_surface.get_rect(center=(self.rect.centerx, line_y))

@@ -12,39 +12,55 @@ games = Blueprint('games', __name__)
 def _check_and_update_ceasefire(game):
     """
     Check if ceasefire should end and update game state accordingly.
-    Universal rule: ceasefire always ends when the invader has <= 1 turn left
-    (so forced advance can trigger at turns_left == 1).
-    Normal ceasefire also has a 3-invader-turns duration limit.
+    Normal ceasefire: ends when invader has <= 1 turn left OR after 3 invader turns.
+    Blitzkrieg ceasefire: ends when the *defender* has <= 1 turn left, so the
+    invader gets to advance first while the defender still has turns remaining.
     Returns True if ceasefire ended this check.
     """
     if not game.ceasefire_active:
         return False
     
-    # Universal ceasefire end: invader is on their last turn and needs to advance
     invader = Player.query.get(game.invader_player_id)
-    if invader and invader.turns_left <= 1:
+    if not invader:
+        return False
+
+    # Determine if Blitzkrieg ceasefire is in effect
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+
+    if has_blitzkrieg:
+        # Blitzkrieg ceasefire ends when the DEFENDER is on their last turn,
+        # giving the invader the chance to advance first.
+        # No invader safety net here — since turns alternate and invader goes
+        # first, defender reaches turns_left=1 one step BEFORE the invader's
+        # last turn, so ceasefire will always end in time.
+        defender = next(
+            (p for p in game.players if p.id != game.invader_player_id), None
+        )
+        if defender and defender.turns_left <= 1:
+            print(f"[CEASEFIRE] Blitzkrieg ceasefire ending (defender has {defender.turns_left} turn(s) left)")
+            game.ceasefire_active = False
+            game.ceasefire_start_turn = None
+            db.session.commit()
+            return True
+        return False
+
+    # ── Normal ceasefire ──
+
+    # Universal end: invader is on their last turn and needs to advance
+    if invader.turns_left <= 1:
         print(f"[CEASEFIRE] Ceasefire ending (invader has {invader.turns_left} turn(s) left — must advance)")
         game.ceasefire_active = False
         game.ceasefire_start_turn = None
         db.session.commit()
         return True
     
-    # Blitzkrieg ceasefire: handled by universal check above
-    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-    has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
-    if has_blitzkrieg:
-        # Blitzkrieg ceasefire stays active until universal check fires
-        return False
-    
     # Normal ceasefire: lasts for 3 invader turns
     # ceasefire_start_turn stores the invader's "turn index" when ceasefire began
     # (i.e. INITIAL_TURNS_INVADER - invader.turns_left at ceasefire start)
-    invader_player = Player.query.get(game.invader_player_id)
-    if not invader_player:
-        return False
     
     # Calculate how many invader turns have passed since ceasefire started
-    current_turn = settings.INITIAL_TURNS_INVADER - invader_player.turns_left
+    current_turn = settings.INITIAL_TURNS_INVADER - invader.turns_left
     ceasefire_start = game.ceasefire_start_turn if game.ceasefire_start_turn is not None else 0
     invader_turns_during_ceasefire = current_turn - ceasefire_start
     
@@ -1021,6 +1037,8 @@ def advance_figure():
         if game.fold_outcome or game.battle_confirmed or game.battle_decisions:
             game.fold_outcome = None
             game.fold_winner_id = None
+            game.auto_loss_reason = None
+            game.auto_loss_detail = None
             game.battle_confirmed = False
             game.battle_decisions = None
 
@@ -1045,6 +1063,10 @@ def advance_figure():
         # Determine if this is a counter-advance (opponent already advanced)
         is_counter_advance = (game.advancing_figure_id is not None and 
                               game.advancing_player_id != player_id)
+
+        # Blitzkrieg: defender cannot counter-advance
+        if has_blitzkrieg and is_counter_advance:
+            return jsonify({'success': False, 'message': 'Blitzkrieg: defender cannot counter-advance'}), 400
 
         civil_war_need_second = False
         civil_war_color = None
@@ -1071,12 +1093,17 @@ def advance_figure():
                     # First counter-advance pick
                     game.defending_figure_id = figure_id
                     # Check if there's another eligible village figure of same color
+                    # Exclude figures with resource deficit (they can't advance)
                     eligible_seconds = Figure.query.filter(
                         Figure.player_id == player_id,
                         Figure.id != figure_id,
                         Figure.field == 'village',
                         Figure.color == figure.color
                     ).all()
+                    eligible_seconds = [
+                        f for f in eligible_seconds
+                        if not _check_figure_resource_deficit(f, player_id, game.id)
+                    ]
                     if eligible_seconds:
                         civil_war_need_second = True
                         civil_war_color = figure.color
@@ -1100,12 +1127,17 @@ def advance_figure():
                     game.advancing_figure_id = figure_id
                     game.advancing_player_id = player_id
                     # Check if there's another eligible village figure of same color
+                    # Exclude figures with resource deficit (they can't advance)
                     eligible_seconds = Figure.query.filter(
                         Figure.player_id == player_id,
                         Figure.id != figure_id,
                         Figure.field == 'village',
                         Figure.color == figure.color
                     ).all()
+                    eligible_seconds = [
+                        f for f in eligible_seconds
+                        if not _check_figure_resource_deficit(f, player_id, game.id)
+                    ]
                     if eligible_seconds:
                         civil_war_need_second = True
                         civil_war_color = figure.color
@@ -1137,8 +1169,12 @@ def advance_figure():
             # Don't flip turn — player needs to pick a second figure
             print(f"[ADVANCE] Civil War — waiting for second figure pick (color: {civil_war_color})")
         elif has_blitzkrieg and not is_counter_advance:
-            # Blitzkrieg: invader keeps the turn, goes to defender selection immediately
-            print(f"[ADVANCE] Blitzkrieg active — turn stays with invader for defender selection")
+            # Blitzkrieg: give defender their last turn (build, etc.) before
+            # the invader selects which defender figure to fight.
+            # Counter-advance is blocked separately, so the defender can only
+            # do non-advance actions on this turn.
+            print(f"[ADVANCE] Blitzkrieg active — defender gets last turn before defender selection")
+            game.turn_player_id = other_player.id
         else:
             # Normal: flip turn to opponent
             game.turn_player_id = other_player.id
@@ -1378,41 +1414,24 @@ def cannot_advance_loss():
         )
         db.session.add(log_entry)
 
-        # Clear battle state
-        game.advancing_figure_id = None
-        game.advancing_figure_id_2 = None
-        game.advancing_player_id = None
-        game.defending_figure_id = None
-        game.defending_figure_id_2 = None
-        game.battle_modifier = []
-        game.battle_decisions = None
-        game.battle_confirmed = False
         # Set fold outcome so opponent detects it via polling
         game.fold_outcome = 'fold_win'
         game.fold_winner_id = opponent.id
+        game.auto_loss_reason = 'no_figures_to_advance'
+        game.auto_loss_detail = username  # The loser's name
 
-        # Start new round — swap invader role
-        old_invader_id = game.invader_player_id
-        new_invader = next((p for p in game.players if p.id != old_invader_id), None)
-        if new_invader:
-            game.invader_player_id = new_invader.id
+        # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
+        _delete_all_battle_moves(game_id)
+        _deactivate_all_spells(game)
+        _clear_battle_state(game)
+        # Restore fold state that _clear_battle_state just cleared
+        game.fold_outcome = 'fold_win'
+        game.fold_winner_id = opponent.id
+        game.auto_loss_reason = 'no_figures_to_advance'
+        game.auto_loss_detail = username
 
-        # Reset turns for both players
-        for p in game.players:
-            if p.id == game.invader_player_id:
-                p.turns_left = settings.INITIAL_TURNS_INVADER
-            else:
-                p.turns_left = settings.INITIAL_TURNS_DEFENDER
-
-        # Increment round
-        game.current_round += 1
-
-        # Set turn to new invader
-        game.turn_player_id = game.invader_player_id
-
-        # Ceasefire starts at beginning of each new round (3 invader turns)
-        game.ceasefire_active = True
-        game.ceasefire_start_turn = 0
+        # Start new round — opponent (winner) becomes invader, draws side cards
+        _start_new_round(game, opponent)
 
         db.session.commit()
 
@@ -1484,41 +1503,24 @@ def defender_no_figures_loss():
         )
         db.session.add(log_entry)
 
-        # Clear battle state
-        game.advancing_figure_id = None
-        game.advancing_figure_id_2 = None
-        game.advancing_player_id = None
-        game.defending_figure_id = None
-        game.defending_figure_id_2 = None
-        game.battle_modifier = []
-        game.battle_decisions = None
-        game.battle_confirmed = False
         # Set fold outcome so opponent detects it via polling
         game.fold_outcome = 'fold_win'
         game.fold_winner_id = player.id
+        game.auto_loss_reason = 'no_defender_figures'
+        game.auto_loss_detail = opponent_name  # The loser's name
 
-        # Start new round — swap invader role
-        old_invader_id = game.invader_player_id
-        new_invader = next((p for p in game.players if p.id != old_invader_id), None)
-        if new_invader:
-            game.invader_player_id = new_invader.id
+        # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
+        _delete_all_battle_moves(game_id)
+        _deactivate_all_spells(game)
+        _clear_battle_state(game)
+        # Restore fold state that _clear_battle_state just cleared
+        game.fold_outcome = 'fold_win'
+        game.fold_winner_id = player.id
+        game.auto_loss_reason = 'no_defender_figures'
+        game.auto_loss_detail = opponent_name
 
-        # Reset turns for both players
-        for p in game.players:
-            if p.id == game.invader_player_id:
-                p.turns_left = settings.INITIAL_TURNS_INVADER
-            else:
-                p.turns_left = settings.INITIAL_TURNS_DEFENDER
-
-        # Increment round
-        game.current_round += 1
-
-        # Set turn to new invader
-        game.turn_player_id = game.invader_player_id
-
-        # Ceasefire starts at beginning of each new round
-        game.ceasefire_active = True
-        game.ceasefire_start_turn = 0
+        # Start new round — invader (winner) stays invader, draws side cards
+        _start_new_round(game, player)
 
         db.session.commit()
 
@@ -1694,6 +1696,8 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
     game.battle_decisions = None
     game.fold_outcome = 'fold_win'
     game.fold_winner_id = winner_player.id
+    game.auto_loss_reason = 'resource_deficit'
+    game.auto_loss_detail = figure_name  # The figure with the deficit
 
     log_entry = LogEntry(
         game_id=game.id,
@@ -1706,28 +1710,18 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
     )
     db.session.add(log_entry)
 
-    # Clear battle state
-    game.advancing_figure_id = None
-    game.advancing_figure_id_2 = None
-    game.advancing_player_id = None
-    game.defending_figure_id = None
-    game.defending_figure_id_2 = None
-    game.battle_modifier = []
-    game.battle_confirmed = False
+    # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
+    _delete_all_battle_moves(game.id)
+    _deactivate_all_spells(game)
+    _clear_battle_state(game)
+    # Restore fold state that _clear_battle_state just cleared
+    game.fold_outcome = 'fold_win'
+    game.fold_winner_id = winner_player.id
+    game.auto_loss_reason = 'resource_deficit'
+    game.auto_loss_detail = figure_name
 
-    # Winner becomes invader
-    game.invader_player_id = winner_player.id
-
-    # Round increases, turns reset, ceasefire starts
-    game.current_round += 1
-    for p in game.players:
-        if p.id == game.invader_player_id:
-            p.turns_left = settings.INITIAL_TURNS_INVADER
-        else:
-            p.turns_left = settings.INITIAL_TURNS_DEFENDER
-    game.turn_player_id = game.invader_player_id
-    game.ceasefire_active = True
-    game.ceasefire_start_turn = 0
+    # Start new round — winner becomes invader, draws side cards
+    _start_new_round(game, winner_player)
 
     db.session.commit()
     print(f"[DEFICIT_LOSS] {loser_name}'s {figure_name} has resource deficit. {winner_name} wins 10 points. Round {game.current_round} starts.")
@@ -1751,6 +1745,8 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
     game.battle_decisions = None
     game.fold_outcome = 'fold_win'
     game.fold_winner_id = winner_player.id
+    game.auto_loss_reason = 'fold'
+    game.auto_loss_detail = loser_name  # The player who folded
 
     log_entry = LogEntry(
         game_id=game.id,
@@ -1763,28 +1759,18 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
     )
     db.session.add(log_entry)
 
-    # Clear battle state
-    game.advancing_figure_id = None
-    game.advancing_figure_id_2 = None
-    game.advancing_player_id = None
-    game.defending_figure_id = None
-    game.defending_figure_id_2 = None
-    game.battle_modifier = []
-    game.battle_confirmed = False
+    # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
+    _delete_all_battle_moves(game.id)
+    _deactivate_all_spells(game)
+    _clear_battle_state(game)
+    # Restore fold state that _clear_battle_state just cleared
+    game.fold_outcome = 'fold_win'
+    game.fold_winner_id = winner_player.id
+    game.auto_loss_reason = 'fold'
+    game.auto_loss_detail = loser_name
 
-    # Winner becomes invader
-    game.invader_player_id = winner_player.id
-
-    # Round increases, turns reset, ceasefire starts
-    game.current_round += 1
-    for p in game.players:
-        if p.id == game.invader_player_id:
-            p.turns_left = settings.INITIAL_TURNS_INVADER
-        else:
-            p.turns_left = settings.INITIAL_TURNS_DEFENDER
-    game.turn_player_id = game.invader_player_id
-    game.ceasefire_active = True
-    game.ceasefire_start_turn = 0
+    # Start new round — winner becomes invader, draws side cards
+    _start_new_round(game, winner_player)
 
     db.session.commit()
     print(f"[BATTLE_DECISION] {loser_name} folded. {winner_name} wins 10 points. Round {game.current_round} starts. New invader: {winner_player.id}")
@@ -1886,6 +1872,8 @@ def _clear_battle_state(game):
     game.battle_moves_confirmed = None
     game.fold_outcome = None
     game.fold_winner_id = None
+    game.auto_loss_reason = None
+    game.auto_loss_detail = None
     game.battle_round = 0
     game.battle_turn_player_id = None
     game.battle_skipped_rounds = None
@@ -2285,6 +2273,8 @@ def finish_battle():
         player_user_inner = User.query.get(player.user_id)
         player_name_inner = player_user_inner.username if player_user_inner else f"Player {player_id}"
 
+        saved = game.last_battle_result or {}
+
         return jsonify({
             'success': True,
             'outcome': outcome,
@@ -2292,12 +2282,48 @@ def finish_battle():
             'winner_player_id': winner_id,
             'winner_name': player_name_inner if outcome == 'win' else other_name,
             'loser_name': other_name if outcome == 'win' else player_name_inner,
+            'points_awarded': saved.get('points_awarded', 0),
+            'destroyed_figure_name': saved.get('destroyed_figure_name', 'figure'),
+            'destroyed_figure_family': saved.get('destroyed_figure_family', ''),
             'returnable_cards': returnable_cards,
             'game': game.serialize(),
         })
 
     if not adv_figure or not def_figure:
-        return jsonify({'success': False, 'message': 'Battle figures not found'}), 400
+        # Battle already fully resolved by the other client (figures destroyed,
+        # fold_winner_id cleared by new-round cleanup).  Return a safe
+        # already-resolved response so the second client can show the result.
+        saved = game.last_battle_result or {}
+
+        player_user_fb = User.query.get(player.user_id)
+        player_name_fb = player_user_fb.username if player_user_fb else f"Player {player_id}"
+        other_user_fb = User.query.get(other_player.user_id)
+        other_name_fb = other_user_fb.username if other_user_fb else f"Player {other_player.id}"
+
+        # Use saved result if available, otherwise infer from invader status
+        if saved:
+            winner_id = saved.get('winner_player_id')
+            outcome = 'win' if winner_id == player_id else 'lose'
+        elif game.invader_player_id == player_id:
+            outcome = 'win'
+            winner_id = player_id
+        else:
+            outcome = 'lose'
+            winner_id = game.invader_player_id
+
+        return jsonify({
+            'success': True,
+            'outcome': outcome,
+            'already_resolved': True,
+            'winner_player_id': winner_id,
+            'winner_name': saved.get('winner_name') or (player_name_fb if outcome == 'win' else other_name_fb),
+            'loser_name': saved.get('loser_name') or (other_name_fb if outcome == 'win' else player_name_fb),
+            'points_awarded': saved.get('points_awarded', 0),
+            'destroyed_figure_name': saved.get('destroyed_figure_name', 'figure'),
+            'destroyed_figure_family': saved.get('destroyed_figure_family', ''),
+            'returnable_cards': [],
+            'game': game.serialize(),
+        })
 
     # Determine who the invader/defender is
     is_invader = (game.invader_player_id == player_id)
@@ -2354,16 +2380,47 @@ def finish_battle():
     else:
         # ──── WIN / LOSE ────
         points_awarded = _compute_figure_base_power(loser_figure)
+
+        # Civil War: determine loser's second figure and add its power too
+        loser_figure_2 = None
+        if is_invader:
+            # loser is defender → loser_figure_2 is defending_figure_id_2
+            loser_fig_2_id = game.defending_figure_id_2 if total_diff > 0 else game.advancing_figure_id_2
+        else:
+            # loser is invader → loser_figure_2 is advancing_figure_id_2
+            loser_fig_2_id = game.advancing_figure_id_2 if total_diff > 0 else game.defending_figure_id_2
+        if loser_fig_2_id:
+            loser_figure_2 = Figure.query.get(loser_fig_2_id)
+        if loser_figure_2:
+            points_awarded += _compute_figure_base_power(loser_figure_2)
+
         winner_player.points += points_awarded
 
         # Destroy loser's figure — collect its cards
         figure_cards = _destroy_figure_and_collect_cards(loser_figure)
+
+        # Destroy loser's second CW figure if present
+        if loser_figure_2:
+            figure_cards += _destroy_figure_and_collect_cards(loser_figure_2)
+
+        # Build destroyed figure description (may include second figure)
+        destroyed_name = loser_figure.name
+        destroyed_family = loser_figure.family_name
+        if loser_figure_2:
+            destroyed_name += f" & {loser_figure_2.name}"
+            destroyed_family += f" & {loser_figure_2.family_name}"
 
         # Clear the destroyed figure's reference on the game
         if game.advancing_figure_id and loser_figure.id == game.advancing_figure_id:
             game.advancing_figure_id = None
         if game.defending_figure_id and loser_figure.id == game.defending_figure_id:
             game.defending_figure_id = None
+        # Clear second figure references for the loser
+        if loser_figure_2:
+            if game.advancing_figure_id_2 and loser_figure_2.id == game.advancing_figure_id_2:
+                game.advancing_figure_id_2 = None
+            if game.defending_figure_id_2 and loser_figure_2.id == game.defending_figure_id_2:
+                game.defending_figure_id_2 = None
 
         db.session.flush()
 
@@ -2379,7 +2436,7 @@ def finish_battle():
             turn_number=winner_player.turns_left,
             message=(
                 f"{winner_name} wins the battle! {loser_name}'s "
-                f"{loser_figure.name} is destroyed. "
+                f"{destroyed_name} is destroyed. "
                 f"{winner_name} earns {points_awarded} points."
             ),
             author="System",
@@ -2389,6 +2446,17 @@ def finish_battle():
 
         # Store the winner so the second client can retrieve the result
         game.fold_winner_id = winner_player.id
+
+        # Persist battle result for the second client (survives _clear_battle_state)
+        game.last_battle_result = {
+            'winner_player_id': winner_player.id,
+            'loser_player_id': loser_player.id,
+            'winner_name': winner_name,
+            'loser_name': loser_name,
+            'points_awarded': points_awarded,
+            'destroyed_figure_name': destroyed_name,
+            'destroyed_figure_family': destroyed_family,
+        }
 
         db.session.commit()
 
@@ -2400,7 +2468,8 @@ def finish_battle():
             'winner_name': winner_name,
             'loser_name': loser_name,
             'points_awarded': points_awarded,
-            'destroyed_figure_name': loser_figure.name,
+            'destroyed_figure_name': destroyed_name,
+            'destroyed_figure_family': destroyed_family,
             'total_diff': total_diff,
             'returnable_cards': returnable_cards,
             'game': game.serialize(),
@@ -2561,13 +2630,15 @@ def finish_battle_draw():
 
     # Determine opponent's figure (the invader's figure, since player is defender)
     opponent_figure = Figure.query.get(game.advancing_figure_id) if game.advancing_figure_id else None
+    opponent_figure_2 = Figure.query.get(game.advancing_figure_id_2) if game.advancing_figure_id_2 else None
 
     result_msg = ""
 
     if choice == 'destroy':
-        # Destroy the opponent's battle figure
+        # Destroy the opponent's battle figure(s)
+        destroyed_names = []
         if opponent_figure:
-            figure_name = opponent_figure.name
+            destroyed_names.append(opponent_figure.name)
             figure_cards = _destroy_figure_and_collect_cards(opponent_figure)
             # Return figure cards to deck
             main_fc = [c for c, ct in figure_cards if isinstance(c, MainCard)]
@@ -2577,7 +2648,19 @@ def finish_battle_draw():
             if side_fc:
                 DeckManager.return_cards_to_deck(side_fc)
             game.advancing_figure_id = None
-            result_msg = f"{player_name} chose to destroy {other_name}'s {figure_name}!"
+        if opponent_figure_2:
+            destroyed_names.append(opponent_figure_2.name)
+            figure_cards_2 = _destroy_figure_and_collect_cards(opponent_figure_2)
+            main_fc2 = [c for c, ct in figure_cards_2 if isinstance(c, MainCard)]
+            side_fc2 = [c for c, ct in figure_cards_2 if isinstance(c, SideCard)]
+            if main_fc2:
+                DeckManager.return_cards_to_deck(main_fc2)
+            if side_fc2:
+                DeckManager.return_cards_to_deck(side_fc2)
+            game.advancing_figure_id_2 = None
+        if destroyed_names:
+            fig_names = " & ".join(destroyed_names)
+            result_msg = f"{player_name} chose to destroy {other_name}'s {fig_names}!"
         else:
             result_msg = f"Draw — no figure to destroy."
 

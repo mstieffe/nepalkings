@@ -121,6 +121,16 @@ class Game(db.Model):
     # Post-battle side card draw — {str(player_id): [{suit, rank}, ...]}
     post_battle_drawn_cards = db.Column(db.JSON, nullable=True)
 
+    # Persisted battle result so the second client can retrieve it after cleanup
+    # {winner_player_id, loser_player_id, winner_name, loser_name,
+    #  points_awarded, destroyed_figure_name, destroyed_figure_family}
+    last_battle_result = db.Column(db.JSON, nullable=True)
+
+    # Reason for auto-loss/fold so the waiting player knows WHY they won/lost
+    # e.g. 'no_figures_to_advance', 'no_defender_figures', 'resource_deficit', 'fold'
+    auto_loss_reason = db.Column(db.String(50), nullable=True)
+    auto_loss_detail = db.Column(db.String(200), nullable=True)  # e.g. figure name for deficit
+
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
@@ -150,10 +160,13 @@ class Game(db.Model):
             'battle_moves_confirmed': self.battle_moves_confirmed,
             'fold_outcome': self.fold_outcome,
             'fold_winner_id': self.fold_winner_id,
+            'auto_loss_reason': self.auto_loss_reason,
+            'auto_loss_detail': self.auto_loss_detail,
             'battle_round': self.battle_round,
             'battle_turn_player_id': self.battle_turn_player_id,
             'battle_skipped_rounds': self.battle_skipped_rounds,
             'post_battle_drawn_cards': self.post_battle_drawn_cards,
+            'last_battle_result': self.last_battle_result,
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],

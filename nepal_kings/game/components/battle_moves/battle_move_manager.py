@@ -42,7 +42,8 @@ class BattleMoveManager:
                 glow_green_img=glow_green_img,
                 glow_blue_img=glow_blue_img,
             )
-            self.families.append(family)
+            if not cfg.get('shop_hidden'):
+                self.families.append(family)
             self.families_by_name[family.name] = family
 
     def _load_image(self, path):

@@ -157,7 +157,10 @@ class StateButton:
                 self.clicked = False
 
             if self.track_turn:
-                if self.state.game.turn:
+                # During battle phase, track battle turn instead of build-up turn
+                if getattr(self.state.game, 'in_battle_phase', False) and self.state.game.battle_turn_player_id:
+                    self.active = self.state.game.battle_turn_player_id == self.state.game.player_id
+                elif self.state.game.turn:
                     self.active = True
                 else:
                     self.active = False

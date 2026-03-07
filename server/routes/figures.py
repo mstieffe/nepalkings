@@ -88,7 +88,16 @@ def create_figure():
         has_infinite_hammer = _has_active_infinite_hammer(player_id, game_id)
         
         if not has_infinite_hammer:
-            player.turns_left -= 1
+            # Skip build turn cost when doing instant charge counter-advance,
+            # because counter-advance already deducts its own turn (avoids -1).
+            # For instant charge advance (invader), turns_left is overwritten to 0 below.
+            is_ic_counter = False
+            if instant_charge_advance:
+                game_check = Game.query.get(game_id)
+                if game_check and game_check.advancing_figure_id and game_check.advancing_player_id != player_id:
+                    is_ic_counter = True
+            if not is_ic_counter:
+                player.turns_left -= 1
         
         db.session.commit()
 
@@ -152,6 +161,9 @@ def create_figure():
                             game.invader_player_id = player_id
                             player.turns_left = 0
                             other_player.turns_left = 1
+                            # Ensure turn flips to opponent for counter-advance window,
+                            # even if Infinite Hammer would normally keep the turn.
+                            game.turn_player_id = other_player.id
                         ic_user = User.query.get(player.user_id)
                         ic_username = ic_user.username if ic_user else f"Player {player_id}"
                         action_type = 'counter_advance' if is_counter_advance else 'advance'
@@ -175,6 +187,10 @@ def create_figure():
 
         # Track action for Infinite Hammer if active
         if has_infinite_hammer:
+            # Flush all pending changes (instant charge advance fields, turn flips,
+            # turns_left, etc.) to the DB BEFORE expiring, so they survive the
+            # expire_all() and are visible in subsequent reads / serialization.
+            db.session.flush()
             # Expire session to ensure we get the latest ActiveSpell data
             db.session.expire_all()
             
@@ -294,6 +310,8 @@ def update_figure():
         
         # Track action for Infinite Hammer if active
         if has_infinite_hammer:
+            # Flush pending changes before expiring so they persist in the DB
+            db.session.flush()
             # Expire session to ensure we get the latest ActiveSpell data
             db.session.expire_all()
             
@@ -438,6 +456,8 @@ def delete_figure():
         
         # Track action for Infinite Hammer if active
         if has_infinite_hammer:
+            # Flush pending changes before expiring so they persist in the DB
+            db.session.flush()
             # Expire session to ensure we get the latest ActiveSpell data
             db.session.expire_all()
             
@@ -545,6 +565,8 @@ def pickup_figure():
         
         # Track action for Infinite Hammer if active
         if has_infinite_hammer:
+            # Flush pending changes before expiring so they persist in the DB
+            db.session.flush()
             # Expire session to ensure we get the latest ActiveSpell data
             db.session.expire_all()
             
@@ -756,6 +778,8 @@ def upgrade_figure():
         
         # Track action for Infinite Hammer if active
         if has_infinite_hammer:
+            # Flush pending changes before expiring so they persist in the DB
+            db.session.flush()
             # Expire session to ensure we get the latest ActiveSpell data
             db.session.expire_all()
             

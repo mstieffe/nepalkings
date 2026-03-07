@@ -74,6 +74,7 @@ DOUBLE_DAGGER_CONFIG = {
     "frame_gray_img": "dagger.png",
     "glow_green_img": "green.png",
     "glow_blue_img": "blue.png",
+    "shop_hidden": True,  # Only created by combining two daggers during battle
 }
 
 ALL_BATTLE_MOVE_CONFIGS = [
