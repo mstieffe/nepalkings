@@ -458,6 +458,9 @@ class FieldScreen(SubScreen):
                         # User confirmed advance
                         figure = self._pending_advance_figure
                         self._pending_advance_figure = None
+                        # Restore advance overlay flag on all icons (was disabled for dialogue preview)
+                        for icon in self.figure_icons:
+                            icon.show_advance_overlay = True
                         from utils.game_service import advance_figure
                         result = advance_figure(
                             self.game.game_id,
@@ -646,6 +649,9 @@ class FieldScreen(SubScreen):
                     self.figure_pending_upgrade = None
                     self.figure_pending_defender_selection = None
                     self._pending_advance_figure = None
+                    # Restore advance overlay flag on all icons (was disabled for dialogue preview)
+                    for icon in self.figure_icons:
+                        icon.show_advance_overlay = True
                     # Keep the detail box open
                 
                 elif response == 'select second':
@@ -933,19 +939,18 @@ class FieldScreen(SubScreen):
                                     title="Invalid Selection"
                                 )
                                 clicked_icon.clicked = False
-                            # Validate: must match required color
-                            elif getattr(self.game, 'civil_war_required_color', None):
-                                figure_color = getattr(figure.family, 'color', None) if hasattr(figure, 'family') else None
-                                if figure_color != self.game.civil_war_required_color:
-                                    color_name = 'red' if self.game.civil_war_required_color == 'offensive' else 'black'
-                                    self.make_dialogue_box(
-                                        message=f"Civil War requires a second village figure of the same color ({color_name}).",
-                                        actions=['ok'],
-                                        images=cw_icons if cw_icons else None,
-                                        icon="error" if not cw_icons else None,
-                                        title="Wrong Color"
-                                    )
-                                    clicked_icon.clicked = False
+                            # Validate: must match required color (only reject on mismatch)
+                            elif (getattr(self.game, 'civil_war_required_color', None) and
+                                  (getattr(figure.family, 'color', None) if hasattr(figure, 'family') else None) != self.game.civil_war_required_color):
+                                color_name = 'red' if self.game.civil_war_required_color == 'offensive' else 'black'
+                                self.make_dialogue_box(
+                                    message=f"Civil War requires a second village figure of the same color ({color_name}).",
+                                    actions=['ok'],
+                                    images=cw_icons if cw_icons else None,
+                                    icon="error" if not cw_icons else None,
+                                    title="Wrong Color"
+                                )
+                                clicked_icon.clicked = False
                             # Validate: not already selected as first figure
                             elif (figure.id == self.game.advancing_figure_id or
                                   figure.id == self.game.defending_figure_id):

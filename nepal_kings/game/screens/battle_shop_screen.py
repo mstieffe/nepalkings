@@ -187,6 +187,17 @@ class BattleShopScreen(SubScreen):
                 self._slot_icon_cache[family.name] = pygame.transform.smoothscale(raw, (icon_w, icon_h))
                 self._slot_icon_cache[family.name + '_big'] = pygame.transform.smoothscale(raw, (icon_w_big, icon_h_big))
 
+        # Also cache hidden families (e.g. Double Dagger) for rendering existing moves
+        for name, family in self.battle_move_manager.families_by_name.items():
+            if name not in self._slot_frame_cache and family.frame_img:
+                raw = family.frame_img.convert_alpha()
+                self._slot_frame_cache[name] = pygame.transform.smoothscale(raw, (frame_w, frame_h))
+                self._slot_frame_cache[name + '_big'] = pygame.transform.smoothscale(raw, (frame_w_big, frame_h_big))
+            if name not in self._slot_icon_cache and family.icon_img:
+                raw = family.icon_img.convert_alpha()
+                self._slot_icon_cache[name] = pygame.transform.smoothscale(raw, (icon_w, icon_h))
+                self._slot_icon_cache[name + '_big'] = pygame.transform.smoothscale(raw, (icon_w_big, icon_h_big))
+
     def _init_slot_rotated_bg(self):
         """Create rotated (45°) diamond-shaped slot background surface."""
         sw = settings.BATTLE_SHOP_SLOT_WIDTH

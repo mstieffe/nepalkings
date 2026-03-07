@@ -73,6 +73,11 @@ class BattleScreen(SubScreen):
         self.opponent_figure_icon = None
         self.player_figure = None
         self.opponent_figure = None
+        # Civil-war second figures
+        self.player_figure_icon_2 = None
+        self.opponent_figure_icon_2 = None
+        self.player_figure_2 = None
+        self.opponent_figure_2 = None
 
         # ── slot rendering cache ──
         self._slot_diamond = self._make_diamond(
@@ -160,6 +165,10 @@ class BattleScreen(SubScreen):
         self.opponent_figure_icon = None
         self.player_figure = None
         self.opponent_figure = None
+        self.player_figure_icon_2 = None
+        self.opponent_figure_icon_2 = None
+        self.player_figure_2 = None
+        self.opponent_figure_2 = None
         self.battle_move_detail_box = None
         self.figure_detail_box = None
         self._player_figures = []
@@ -226,6 +235,15 @@ class BattleScreen(SubScreen):
                 raw = family.frame_img.convert_alpha()
                 self._slot_frame_cache[family.name] = pygame.transform.smoothscale(raw, (frame_s, frame_s))
 
+        # Also cache icons for hidden families (e.g. Double Dagger) used in round slots
+        for name, family in self.battle_move_manager.families_by_name.items():
+            if name not in self._slot_icon_cache and family.icon_img:
+                raw = family.icon_img.convert_alpha()
+                self._slot_icon_cache[name] = pygame.transform.smoothscale(raw, (icon_s, icon_s))
+            if name not in self._slot_frame_cache and family.frame_img:
+                raw = family.frame_img.convert_alpha()
+                self._slot_frame_cache[name] = pygame.transform.smoothscale(raw, (frame_s, frame_s))
+
         # Suit icons for round slots (smaller than panel icons)
         self._slot_suit_icon_cache = {}
         slot_suit_s = int(0.012 * settings.SCREEN_WIDTH)
@@ -270,6 +288,17 @@ class BattleScreen(SubScreen):
                 raw = family.frame_img.convert_alpha()
                 self._panel_frame_cache[family.name] = pygame.transform.smoothscale(raw, (frame_s, frame_s))
                 self._panel_frame_cache[family.name + '_big'] = pygame.transform.smoothscale(raw, (frame_s_big, frame_s_big))
+
+        # Also cache icons for hidden families (e.g. Double Dagger) used during battle
+        for name, family in self.battle_move_manager.families_by_name.items():
+            if name not in self._panel_icon_cache and family.icon_img:
+                raw = family.icon_img.convert_alpha()
+                self._panel_icon_cache[name] = pygame.transform.smoothscale(raw, (icon_s, icon_s))
+                self._panel_icon_cache[name + '_big'] = pygame.transform.smoothscale(raw, (icon_s_big, icon_s_big))
+            if name not in self._panel_frame_cache and family.frame_img:
+                raw = family.frame_img.convert_alpha()
+                self._panel_frame_cache[name] = pygame.transform.smoothscale(raw, (frame_s, frame_s))
+                self._panel_frame_cache[name + '_big'] = pygame.transform.smoothscale(raw, (frame_s_big, frame_s_big))
 
         # Suit icons for the panel label area (normal + big hover variants)
         suit_icon_s = int(0.016 * settings.SCREEN_WIDTH)
@@ -354,13 +383,19 @@ class BattleScreen(SubScreen):
         self._loaded_game_id = self.game.game_id
 
     def _load_battle_figures(self):
-        """Load the advancing and defending figures as FieldFigureIcons."""
+        """Load the advancing and defending figures as FieldFigureIcons.
+
+        Also loads Civil-War second figures (advancing_figure_id_2 /
+        defending_figure_id_2) when present.
+        """
         if not self.game:
             return
 
         families = self.figure_manager.families
         adv_id = self.game.advancing_figure_id
         def_id = self.game.defending_figure_id
+        adv_id_2 = getattr(self.game, 'advancing_figure_id_2', None)
+        def_id_2 = getattr(self.game, 'defending_figure_id_2', None)
 
         # Load player's figures and opponent's figures
         try:
@@ -380,25 +415,33 @@ class BattleScreen(SubScreen):
             opponent_battle_figures = opponent_figures
             player_fig_id = adv_id
             opponent_fig_id = def_id
+            player_fig_id_2 = adv_id_2
+            opponent_fig_id_2 = def_id_2
         else:
             # Player is the defender
             player_battle_figures = player_figures
             opponent_battle_figures = opponent_figures
             player_fig_id = def_id
             opponent_fig_id = adv_id
+            player_fig_id_2 = def_id_2
+            opponent_fig_id_2 = adv_id_2
 
         # Find the specific figures
         self.player_figure = None
+        self.player_figure_2 = None
         for fig in player_battle_figures:
             if fig.id == player_fig_id:
                 self.player_figure = fig
-                break
+            elif player_fig_id_2 and fig.id == player_fig_id_2:
+                self.player_figure_2 = fig
 
         self.opponent_figure = None
+        self.opponent_figure_2 = None
         for fig in opponent_battle_figures:
             if fig.id == opponent_fig_id:
                 self.opponent_figure = fig
-                break
+            elif opponent_fig_id_2 and fig.id == opponent_fig_id_2:
+                self.opponent_figure_2 = fig
 
         # Create FieldFigureIcons for rendering
         if self.player_figure:
@@ -411,6 +454,16 @@ class BattleScreen(SubScreen):
             )
             self.player_figure_icon.show_advance_overlay = False
 
+        if self.player_figure_2:
+            self.player_figure_icon_2 = FieldFigureIcon(
+                window=self.window,
+                game=self.game,
+                figure=self.player_figure_2,
+                is_visible=True,
+                all_player_figures=player_battle_figures,
+            )
+            self.player_figure_icon_2.show_advance_overlay = False
+
         if self.opponent_figure:
             self.opponent_figure_icon = FieldFigureIcon(
                 window=self.window,
@@ -420,6 +473,16 @@ class BattleScreen(SubScreen):
                 all_player_figures=opponent_battle_figures,
             )
             self.opponent_figure_icon.show_advance_overlay = False
+
+        if self.opponent_figure_2:
+            self.opponent_figure_icon_2 = FieldFigureIcon(
+                window=self.window,
+                game=self.game,
+                figure=self.opponent_figure_2,
+                is_visible=True,
+                all_player_figures=opponent_battle_figures,
+            )
+            self.opponent_figure_icon_2.show_advance_overlay = False
     # ────────────────── eligible figures for Call moves ──────────
 
     _RED_SUITS = {'Hearts', 'Diamonds'}
@@ -594,9 +657,15 @@ class BattleScreen(SubScreen):
         return bm_value
 
     def _get_figure_diff(self):
-        """Get figure power difference (player - opponent)."""
+        """Get figure power difference (player - opponent).
+
+        In Civil War both sides may have two figures; the total power
+        for each side is the sum of both figures' individual power.
+        """
         p_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
+        p_power += self._get_figure_total_power(self.player_figure_2, self.player_figure_icon_2)
         o_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
+        o_power += self._get_figure_total_power(self.opponent_figure_2, self.opponent_figure_icon_2)
         return p_power - o_power
 
     def _get_total_diff(self):
@@ -833,7 +902,8 @@ class BattleScreen(SubScreen):
         # Update figure icon hover state on mouse motion
         for event in events:
             if event.type == pygame.MOUSEMOTION:
-                for fig_icon in (self.player_figure_icon, self.opponent_figure_icon):
+                for fig_icon in (self.player_figure_icon, self.opponent_figure_icon,
+                                 self.player_figure_icon_2, self.opponent_figure_icon_2):
                     if fig_icon:
                         fig_icon.hovered = fig_icon.collide() and fig_icon.is_visible
                 break
@@ -841,7 +911,9 @@ class BattleScreen(SubScreen):
         # Figure icon click handling
         for fig_icon, fig_obj, fig_list in (
             (self.player_figure_icon, self.player_figure, self._player_figures),
+            (self.player_figure_icon_2, self.player_figure_2, self._player_figures),
             (self.opponent_figure_icon, self.opponent_figure, None),
+            (self.opponent_figure_icon_2, self.opponent_figure_2, None),
         ):
             if fig_icon:
                 fig_icon.handle_events(events)
@@ -1133,8 +1205,19 @@ class BattleScreen(SubScreen):
             f"You earn {pts} points.\n\n"
             f"Pick one card from the spoils."
         )
+
+        images = []
+
+        # Show destroyed opponent's figure icon with red X
+        fig_family_name = result.get('destroyed_figure_family', '')
+        destroyed_icon = self._make_destroyed_figure_icon(fig_family_name)
+        if destroyed_icon:
+            images.append(destroyed_icon)
+
         large_icon = settings.DIALOGUE_BOX_LARGE_ICON_DICT.get('victory')
-        images = [large_icon] if large_icon else []
+        if large_icon:
+            images.append(large_icon)
+
         self.make_dialogue_box(msg, actions=['pick card'], icon='victory', title="Victory!", images=images)
         self._dialogue_callback = self._on_victory_dialogue
 
@@ -1148,10 +1231,40 @@ class BattleScreen(SubScreen):
             f"Your {fig_name} is destroyed!\n"
             f"{winner} earns {pts} points."
         )
+
+        images = []
+
+        # Build destroyed-figure icon with red X overlay
+        fig_family_name = result.get('destroyed_figure_family', '')
+        destroyed_icon = self._make_destroyed_figure_icon(fig_family_name)
+        if destroyed_icon:
+            images.append(destroyed_icon)
+
         large_icon = settings.DIALOGUE_BOX_LARGE_ICON_DICT.get('defeat')
-        images = [large_icon] if large_icon else []
+        if large_icon:
+            images.append(large_icon)
+
         self.make_dialogue_box(msg, actions=['ok'], icon='defeat', title="Defeat", images=images)
         self._dialogue_callback = self._on_defeat_acknowledged
+
+    def _make_destroyed_figure_icon(self, family_name):
+        """Create a figure icon surface with a red X drawn over it."""
+        if not family_name:
+            return None
+        family = self.figure_manager.families.get(family_name)
+        if not family or not family.icon_img:
+            return None
+        # Start with a copy of the icon
+        size = settings.DIALOGUE_BOX_IMG_HEIGHT
+        raw = family.icon_img.convert_alpha()
+        icon = pygame.transform.smoothscale(raw, (size, size))
+        # Draw red X
+        margin = int(size * 0.12)
+        line_w = max(3, size // 16)
+        red = (220, 40, 40)
+        pygame.draw.line(icon, red, (margin, margin), (size - margin, size - margin), line_w)
+        pygame.draw.line(icon, red, (size - margin, margin), (margin, size - margin), line_w)
+        return icon
 
     def _show_draw_result(self, result):
         """Display draw dialogue — the defender gets to choose."""
@@ -1507,6 +1620,16 @@ class BattleScreen(SubScreen):
 
         # Clear all local battle state
         self.reset_state()
+
+        # Force battle shop to reload moves from server (they were deleted server-side)
+        parent = getattr(self.state, 'parent_screen', None)
+        if parent and hasattr(parent, 'subscreens'):
+            battle_shop = parent.subscreens.get('battle_shop')
+            if battle_shop:
+                battle_shop.bought_moves = []
+                battle_shop._loaded_game_id = None
+                battle_shop._battle_moves_confirmed = False
+                battle_shop._waiting_for_opponent = False
 
         # Switch subscreen
         self.state.subscreen = 'field'
@@ -1889,9 +2012,14 @@ class BattleScreen(SubScreen):
         self.window.blit(label_you, label_you.get_rect(centerx=panel_cx, top=py + 6))
 
         if self.player_figure_icon:
-            fig_cx = panel_cx
             fig_cy = settings.FIGURES_PLAYER_Y + int(0.10 * settings.SCREEN_HEIGHT)
-            self.player_figure_icon.draw(fig_cx, fig_cy)
+            if self.player_figure_icon_2:
+                # Civil War: draw two figures side-by-side with slight overlap
+                offset = int(0.03 * settings.SCREEN_WIDTH)
+                self.player_figure_icon.draw(panel_cx - offset, fig_cy)
+                self.player_figure_icon_2.draw(panel_cx + offset, fig_cy)
+            else:
+                self.player_figure_icon.draw(panel_cx, fig_cy)
 
         # ─── Power difference box (middle) ───
         diff = self._get_figure_diff()
@@ -1903,9 +2031,13 @@ class BattleScreen(SubScreen):
 
         # ─── Opponent figure (bottom) — label at bottom of sub-box ───
         if self.opponent_figure_icon:
-            fig_cx = panel_cx
             fig_cy = settings.FIGURES_OPPONENT_Y + int(0.10 * settings.SCREEN_HEIGHT)
-            self.opponent_figure_icon.draw(fig_cx, fig_cy)
+            if self.opponent_figure_icon_2:
+                offset = int(0.03 * settings.SCREEN_WIDTH)
+                self.opponent_figure_icon.draw(panel_cx - offset, fig_cy)
+                self.opponent_figure_icon_2.draw(panel_cx + offset, fig_cy)
+            else:
+                self.opponent_figure_icon.draw(panel_cx, fig_cy)
 
         opp_box_bottom = py + ph
         label_opp = self.font_normal.render("OPPONENT", True, settings.ROUNDS_LABEL_COLOR)
@@ -1913,7 +2045,8 @@ class BattleScreen(SubScreen):
 
         # Cursor hand on figure hover (main figures + round-panel sub-icons)
         fig_hovered = False
-        for fig_icon in (self.player_figure_icon, self.opponent_figure_icon):
+        for fig_icon in (self.player_figure_icon, self.opponent_figure_icon,
+                         self.player_figure_icon_2, self.opponent_figure_icon_2):
             if fig_icon and fig_icon.hovered:
                 fig_hovered = True
                 break
@@ -1981,9 +2114,11 @@ class BattleScreen(SubScreen):
         # --- Figures panel circles ---
         fig_cx = settings.FIGURES_PANEL_X + settings.FIGURES_PANEL_W // 2
         player_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
+        player_power += self._get_figure_total_power(self.player_figure_2, self.player_figure_icon_2)
         self._draw_power_circle(fig_cx, settings.POWER_CIRCLE_PLAYER_Y, player_power)
 
         opp_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
+        opp_power += self._get_figure_total_power(self.opponent_figure_2, self.opponent_figure_icon_2)
         self._draw_power_circle(fig_cx, settings.POWER_CIRCLE_OPPONENT_Y, opp_power)
 
         # --- Rounds panel circles (3 columns) ---
@@ -2262,19 +2397,23 @@ class BattleScreen(SubScreen):
 
         if self._all_moves_played():
             # ─── render a clickable "finish!" button ───
-            btn_w = int(0.10 * settings.SCREEN_WIDTH)
-            btn_h = int(0.045 * settings.SCREEN_HEIGHT)
-            btn_rect = pygame.Rect(cx - btn_w // 2, ty, btn_w, btn_h)
+            btn_w = settings.FINISH_BTN_W
+            btn_h = settings.FINISH_BTN_H
+            btn_rect = pygame.Rect(
+                settings.FINISH_BTN_X - btn_w // 2,
+                settings.FINISH_BTN_Y,
+                btn_w, btn_h
+            )
             self._finish_btn_rect = btn_rect
 
             mx, my = pygame.mouse.get_pos()
             self._finish_btn_hovered = btn_rect.collidepoint(mx, my)
 
-            bg_color = (200, 170, 60) if self._finish_btn_hovered else (180, 140, 40)
+            bg_color = settings.FINISH_BTN_HOVER_COLOR if self._finish_btn_hovered else settings.FINISH_BTN_COLOR
             pygame.draw.rect(self.window, bg_color, btn_rect, border_radius=6)
-            pygame.draw.rect(self.window, (250, 221, 0), btn_rect, 2, border_radius=6)
+            pygame.draw.rect(self.window, settings.FINISH_BTN_BORDER_COLOR, btn_rect, 2, border_radius=6)
 
-            txt = self.font_turn.render("finish!", True, (40, 20, 5))
+            txt = self.font_turn.render("finish!", True, settings.FINISH_BTN_TEXT_COLOR)
             self.window.blit(txt, txt.get_rect(center=btn_rect.center))
 
             if self._finish_btn_hovered:
@@ -2284,7 +2423,7 @@ class BattleScreen(SubScreen):
             self._finish_btn_hovered = False
 
             if self.is_player_turn:
-                text = "Your turn — select a battle move!"
+                text = "Your turn!"
                 color = settings.TURN_YOUR_COLOR
             else:
                 opp_name = self.game.opponent_name or "Opponent"
