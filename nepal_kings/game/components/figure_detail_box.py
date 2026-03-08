@@ -32,7 +32,7 @@ class FigureDetailBox:
         self.title_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_TITLE_DIALOGUE_BOX)
         self.title_font.set_bold(True)
         self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_DIALOGUE_BOX)
-        self.small_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_DIALOGUE_BOX - 4)
+        self.small_font = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_DIALOGUE_BOX * 0.87))
 
         # Create card images for the figure's cards
         card_width = int(settings.SCREEN_WIDTH * 0.05)
@@ -64,8 +64,8 @@ class FigureDetailBox:
         self.border_rect = self.rect.inflate(settings.DIALOGUE_BOX_BORDER_WIDTH, settings.DIALOGUE_BOX_BORDER_WIDTH)
 
         # Create X button for closing (top right corner)
-        close_button_size = 30
-        close_button_margin = 10
+        close_button_size = int(0.028 * settings.SCREEN_HEIGHT)
+        close_button_margin = int(0.009 * settings.SCREEN_HEIGHT)
         self.close_button_rect = pygame.Rect(
             self.rect.right - close_button_size - close_button_margin,
             self.rect.top + close_button_margin,
@@ -92,7 +92,13 @@ class FigureDetailBox:
 
         # Calculate battle bonus (do this once, not every frame)
         self.potential_battle_bonus = self._calculate_potential_battle_bonus()
-        
+
+        # Calculate buffs_allies bonus (do this once, not every frame)
+        self.buffs_allies_bonus = self._calculate_buffs_allies_bonus()
+
+        # Calculate buffs_allies_defence bonus (do this once, not every frame)
+        self.buffs_allies_defence_bonus = self._calculate_buffs_allies_defence_bonus()
+
         # Calculate resource deficits (do this once, not every frame)
         self.resource_deficits = self._calculate_resource_deficits()
         self.has_any_deficit = any(self.resource_deficits.values()) if self.resource_deficits else False
@@ -158,6 +164,11 @@ class FigureDetailBox:
             if not button.disabled and hasattr(self.game, 'is_battle_active') and self.game.is_battle_active():
                 button.disabled = True
                 button.disabled_reason = 'battle_active'
+
+            # Disable all actions when figure is resting after battle
+            if not button.disabled and self.figure.id in (getattr(self.game, 'resting_figure_ids', None) or []):
+                button.disabled = True
+                button.disabled_reason = 'resting'
             
             # Check if upgrade/pick up should be disabled during forced advance
             if action in ('Upgrade', 'Pick up') and is_forced_advance:
@@ -277,6 +288,45 @@ class FigureDetailBox:
                     print(f"[FIGURE_DETAIL] Failed to load skill icon {skill} from {path}: {e}")
         
         return icons
+    
+    def _load_advantage_suit_icon(self):
+        """Load the suit icon that this figure has an advantage over, sized for overlay on skill icon."""
+        from game.components.figures.family_configs.skill_config import get_advantage_suit
+        if not self.figure or not hasattr(self.figure, 'suit'):
+            return None
+        adv_suit = get_advantage_suit(getattr(self.figure, 'suit', None) or '')
+        if not adv_suit:
+            return None
+        # Slightly smaller than skill icon for centered overlay
+        icon_size = int(settings.FONT_SIZE_DIALOGUE_BOX * 1.2 * 0.85)
+        suit_file = adv_suit.lower() + '.png'
+        try:
+            suit_path = settings.SUIT_ICON_IMG_PATH + suit_file
+            suit_img = pygame.image.load(suit_path).convert_alpha()
+            return pygame.transform.smoothscale(suit_img, (icon_size, icon_size))
+        except Exception as e:
+            print(f"[FIGURE_DETAIL] Failed to load advantage suit icon '{suit_file}': {e}")
+            return None
+
+    def _load_own_suit_icon(self):
+        """Load the figure's OWN suit icon, sized for overlay on skill icon.
+
+        Used for skills with ``suit_self=True``.
+        """
+        if not self.figure or not hasattr(self.figure, 'suit'):
+            return None
+        own_suit = getattr(self.figure, 'suit', None) or ''
+        if not own_suit:
+            return None
+        icon_size = int(settings.FONT_SIZE_DIALOGUE_BOX * 1.2 * 0.55)
+        suit_file = own_suit.lower() + '.png'
+        try:
+            suit_path = settings.SUIT_ICON_IMG_PATH + suit_file
+            suit_img = pygame.image.load(suit_path).convert_alpha()
+            return pygame.transform.smoothscale(suit_img, (icon_size, icon_size))
+        except Exception as e:
+            print(f"[FIGURE_DETAIL] Failed to load own suit icon '{suit_file}': {e}")
+            return None
     
     def _load_enchantment_icon(self, icon_filename):
         """
@@ -425,6 +475,63 @@ class FigureDetailBox:
             # If anything fails, just return 0
             return 0
 
+    def _calculate_buffs_allies_bonus(self):
+        """Calculate the buffs_allies bonus this figure receives.
+
+        Only village figures can receive the buff.  The buff comes from
+        same-suit figures that have ``buffs_allies=True`` and are on the
+        same side (same player_id).  Each matching buffer adds +4.
+        """
+        try:
+            if not (hasattr(self.figure.family, 'field') and
+                    self.figure.family.field == 'village'):
+                return 0
+
+            if self.all_figures is not None:
+                all_figures = [fig for fig in self.all_figures
+                               if fig.player_id == self.figure.player_id]
+            else:
+                from game.components.figures.figure_manager import FigureManager
+                figure_manager = FigureManager()
+                families = figure_manager.families
+                all_figures = self.game.get_figures(families, is_opponent=False)
+
+            total = 0
+            for fig in all_figures:
+                if getattr(fig, 'buffs_allies', False) and fig.suit == self.figure.suit:
+                    total += 4
+            return total
+        except Exception:
+            return 0
+
+    def _calculate_buffs_allies_defence_bonus(self):
+        """Calculate the buffs_allies_defence bonus this figure could receive.
+
+        The bonus comes from same-side figures that have
+        ``buffs_allies_defence=True``.  Each matching buffer adds its
+        number_card value.  Applies to ALL figures, not just village.
+        Only active when defending, but shown as potential in detail box.
+        """
+        try:
+            if self.all_figures is not None:
+                all_figures = [fig for fig in self.all_figures
+                               if fig.player_id == self.figure.player_id]
+            else:
+                from game.components.figures.figure_manager import FigureManager
+                figure_manager = FigureManager()
+                families = figure_manager.families
+                all_figures = self.game.get_figures(families, is_opponent=False)
+
+            total = 0
+            for fig in all_figures:
+                if fig.id == self.figure.id:
+                    continue
+                if getattr(fig, 'buffs_allies_defence', False) and fig.number_card:
+                    total += fig.number_card.value
+            return total
+        except Exception:
+            return 0
+
     def _check_upgrade_card_available(self):
         """Check if the upgrade card required for this figure is in the player's hand."""
         if not hasattr(self.figure, 'upgrade_card') or not self.figure.upgrade_card:
@@ -534,7 +641,14 @@ class FigureDetailBox:
             self.window.blit(power_surface, (right_column_x, right_y))
             
             current_bonus_x = right_column_x + power_surface.get_width()
-            
+
+            # Display buffs_allies bonus (calculated once in __init__)
+            if self.buffs_allies_bonus > 0:
+                buff_text = f" +{self.buffs_allies_bonus}"
+                buff_surface = self.font.render(buff_text, True, settings.MSG_TEXT_COLOR)
+                self.window.blit(buff_surface, (current_bonus_x, right_y))
+                current_bonus_x += buff_surface.get_width()
+
             # Display potential battle bonus (calculated once in __init__)
             if self.potential_battle_bonus > 0:
                 bonus_text = f" (+{self.potential_battle_bonus})"
@@ -677,33 +791,21 @@ class FigureDetailBox:
             right_y += self.resource_icons[list(self.resource_icons.keys())[0]].get_height() + settings.SMALL_SPACER_Y * 1.5
 
         # Draw skills section
+        from game.components.figures.family_configs.skill_config import SKILL_KEYS, SKILL_DEFINITIONS as _SKILL_DEFS
         skills_to_display = []
-        
-        if hasattr(self.figure, 'cannot_attack') and self.figure.cannot_attack:
-            skills_to_display.append(('cannot_attack', 'Cannot Attack'))
-        if hasattr(self.figure, 'must_be_attacked') and self.figure.must_be_attacked:
-            skills_to_display.append(('must_be_attacked', 'Must Be Attacked'))
-        if hasattr(self.figure, 'rest_after_attack') and self.figure.rest_after_attack:
-            skills_to_display.append(('rest_after_attack', 'Rest After Attack'))
-        if hasattr(self.figure, 'distance_attack') and self.figure.distance_attack:
-            skills_to_display.append(('distance_attack', 'Distance Attack'))
-        if hasattr(self.figure, 'buffs_allies') and self.figure.buffs_allies:
-            skills_to_display.append(('buffs_allies', 'Buffs Allies'))
-        if hasattr(self.figure, 'blocks_bonus') and self.figure.blocks_bonus:
-            skills_to_display.append(('blocks_bonus', 'Blocks Bonus'))
-        if hasattr(self.figure, 'cannot_defend') and self.figure.cannot_defend:
-            skills_to_display.append(('cannot_defend', 'Cannot Defend'))
-        if hasattr(self.figure, 'instant_charge') and self.figure.instant_charge:
-            skills_to_display.append(('instant_charge', 'Instant Charge'))
-        if hasattr(self.figure, 'cannot_be_blocked') and self.figure.cannot_be_blocked:
-            skills_to_display.append(('cannot_be_blocked', 'Cannot Be Blocked'))
-        if hasattr(self.figure, 'cannot_be_targeted') and self.figure.cannot_be_targeted:
-            skills_to_display.append(('cannot_be_targeted', 'Cannot Be Targeted'))
+        if hasattr(self.figure, 'get_active_skills'):
+            skills_to_display = self.figure.get_active_skills()
+        else:
+            for key in SKILL_KEYS:
+                if getattr(self.figure, key, False):
+                    skills_to_display.append((key, _SKILL_DEFS[key]['name']))
         
         print(f"[FIGURE_DETAIL] Skills to display: {skills_to_display}")
         
         # Draw skills if any exist
-        if skills_to_display and right_y + self.font.get_height() + 20 <= max_content_y:
+        section_gap = int(0.018 * settings.SCREEN_HEIGHT)
+        boundary_margin = int(0.009 * settings.SCREEN_HEIGHT)
+        if skills_to_display and right_y + self.font.get_height() + section_gap <= max_content_y:
             # Draw horizontal divider line
             pygame.draw.line(
                 self.window,
@@ -728,7 +830,7 @@ class FigureDetailBox:
                     row_height = self.small_font.get_height()
                 
                 # Check if we have space for this skill
-                if right_y + row_height > max_content_y - 10:
+                if right_y + row_height > max_content_y - boundary_margin:
                     break  # Stop if we run out of space
                 
                 current_x = right_column_x + settings.SMALL_SPACER_X
@@ -736,8 +838,32 @@ class FigureDetailBox:
                 # Draw icon if available
                 if skill_key in self.skill_icons:
                     icon = self.skill_icons[skill_key]
+                    
+                    # Draw white glow behind skill icon
+                    glow_size = int(icon.get_width() * 1.5)
+                    glow_surface = pygame.Surface((glow_size, glow_size), pygame.SRCALPHA)
+                    glow_center = glow_size // 2
+                    glow_radius = glow_size // 2
+                    for r in range(glow_radius, 0, -1):
+                        alpha = int(120 * (1 - (r / glow_radius) ** 1.5))
+                        pygame.draw.circle(glow_surface, (255, 255, 255, alpha), (glow_center, glow_center), r)
+                    glow_x = current_x + (icon.get_width() - glow_size) // 2
+                    glow_y = right_y + (icon.get_height() - glow_size) // 2
+                    self.window.blit(glow_surface, (glow_x, glow_y))
+                    
+                    # Draw suit icon behind skill icon (background), centered
+                    if _SKILL_DEFS.get(skill_key, {}).get('suit_advantage', False):
+                        adv_icon = self._load_advantage_suit_icon()
+                        if adv_icon:
+                            adv_x = current_x + (icon.get_width() - adv_icon.get_width()) // 2
+                            adv_y = right_y + (icon.get_height() - adv_icon.get_height()) // 2
+                            self.window.blit(adv_icon, (adv_x, adv_y))
+                    # Draw skill icon on top
                     self.window.blit(icon, (current_x, right_y))
-                    current_x += icon.get_width() + settings.SMALL_SPACER_X // 2
+                    
+                    current_x += icon.get_width() + settings.SMALL_SPACER_X // 4
+                    
+                    current_x += settings.SMALL_SPACER_X // 4
                     
                     # Draw skill name next to icon
                     skill_text = self.small_font.render(skill_name, True, settings.MSG_TEXT_COLOR)
@@ -756,7 +882,7 @@ class FigureDetailBox:
 
         # Draw enchantments section if any active enchantments
         if hasattr(self.figure, 'active_enchantments') and self.figure.active_enchantments:
-            if right_y + self.font.get_height() + 20 <= max_content_y:
+            if right_y + self.font.get_height() + section_gap <= max_content_y:
                 # Draw horizontal divider line
                 pygame.draw.line(
                     self.window,
@@ -790,7 +916,7 @@ class FigureDetailBox:
                         row_height = self.small_font.get_height()
                     
                     # Check if we have space for this enchantment
-                    if right_y + row_height > max_content_y - 10:
+                    if right_y + row_height > max_content_y - boundary_margin:
                         break  # Stop if we run out of space
                     
                     current_x = right_column_x + settings.SMALL_SPACER_X
@@ -824,8 +950,9 @@ class FigureDetailBox:
 
         # Draw description if available and there's space
         if hasattr(self.figure.family, 'description') and self.figure.family.description:
-            # Check if we have at least 80 pixels for description (title + 1-2 lines)
-            if right_y + 80 <= max_content_y:
+            # Check if we have enough space for description (title + 1-2 lines)
+            desc_min_space = int(0.074 * settings.SCREEN_HEIGHT)
+            if right_y + desc_min_space <= max_content_y:
                 # Draw divider line
                 divider_y = right_y
                 pygame.draw.line(
@@ -873,6 +1000,22 @@ class FigureDetailBox:
                     self.window.blit(line_surface, (right_column_x + settings.SMALL_SPACER_X // 2, right_y))
                     right_y += line_height
 
+        # Draw resting status indicator (red text) if figure is resting
+        if self.figure.id in (getattr(self.game, 'resting_figure_ids', None) or []):
+            if right_y + self.font.get_height() + boundary_margin <= max_content_y:
+                # Draw divider line
+                pygame.draw.line(
+                    self.window,
+                    settings.COLOR_DIALOGUE_BOX_BORDER,
+                    (right_column_x, right_y),
+                    (right_column_x + self.right_column_width, right_y),
+                    2
+                )
+                right_y += settings.SMALL_SPACER_Y
+                resting_text = self.font.render("⏳ Resting this round", True, (220, 40, 40))
+                self.window.blit(resting_text, (right_column_x, right_y))
+                right_y += resting_text.get_height() + settings.SMALL_SPACER_Y
+
         # Draw buttons
         for button in self.buttons:
             button.draw()
@@ -894,7 +1037,7 @@ class FigureDetailBox:
         
         # Draw glow effect when hovered or clicked
         if glow_alpha > 0:
-            glow_radius = 20
+            glow_radius = int(0.018 * settings.SCREEN_HEIGHT)
             glow_surface = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
             pygame.draw.circle(glow_surface, (255, 100, 100, glow_alpha), (glow_radius, glow_radius), glow_radius)
             glow_pos = (
@@ -907,8 +1050,8 @@ class FigureDetailBox:
         pygame.draw.rect(self.window, bg_color, self.close_button_rect, border_radius=3)
         
         # Draw X with lines
-        margin = 8
-        line_width = 4 if self.close_button_hovered else 3
+        margin = max(4, self.close_button_rect.width // 4)
+        line_width = max(2, int(0.004 * settings.SCREEN_HEIGHT)) if self.close_button_hovered else max(2, int(0.003 * settings.SCREEN_HEIGHT))
         pygame.draw.line(
             self.window,
             x_color,

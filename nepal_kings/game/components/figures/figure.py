@@ -1,9 +1,9 @@
 from typing import List, Optional
 import pygame
-#from config import settings
 from game.components.cards.card import Card
 from game.components.figures.figure_icon import BuildFigureIcon
 from config import settings
+from game.components.figures.family_configs.skill_config import SKILL_KEYS, SKILL_DEFINITIONS
 
 class FigureFamily:
     """Represents a family of figures with shared attributes."""
@@ -71,11 +71,13 @@ class Figure:
         rest_after_attack: bool = False,  # Figure needs rest after attacking
         distance_attack: bool = False,  # Figure can attack from distance
         buffs_allies: bool = False,  # Figure provides buffs to allied figures
+        buffs_allies_defence: bool = False,  # Figure provides defence buff to allied figures
         blocks_bonus: bool = False,  # Figure blocks enemy bloodline bonus
         cannot_defend: bool = False,  # Figure cannot defend other figures
         instant_charge: bool = False,  # Figure charges instantly into battle
         cannot_be_blocked: bool = False,  # Figure cannot be blocked when advancing
         cannot_be_targeted: bool = False,  # Figure cannot be selected for battle (advance or defend)
+        override_base_power: Optional[int] = None,  # Fixed base power (overrides card sum)
         description: str = "",
         id: Optional[int] = None,
         player_id: Optional[int] = None,
@@ -94,17 +96,20 @@ class Figure:
         # Keep old 'resources' attribute for backward compatibility (alias to produces)
         self.resources = self.produces
         
-        # Combat behavior attributes
+        # Combat behavior attributes — stored both as individual flags
+        # (for direct access) and collected via get_active_skills() for display.
         self.cannot_attack = cannot_attack
         self.must_be_attacked = must_be_attacked
         self.rest_after_attack = rest_after_attack
         self.distance_attack = distance_attack
         self.buffs_allies = buffs_allies
+        self.buffs_allies_defence = buffs_allies_defence
         self.blocks_bonus = blocks_bonus
         self.cannot_defend = cannot_defend
         self.instant_charge = instant_charge
         self.cannot_be_blocked = cannot_be_blocked
         self.cannot_be_targeted = cannot_be_targeted
+        self.override_base_power = override_base_power
         
         # Active enchantment effects on this figure
         self.active_enchantments = []  # List of dicts: {'spell_name': str, 'spell_icon': str, 'power_modifier': int}
@@ -135,15 +140,14 @@ class Figure:
 
     def get_value(self) -> int:
         """Returns the base value of the figure (without enchantment modifiers).
-        
-        Special rule: Kings and Maharajas (castle figures) always have a base power of 15,
-        regardless of their key card values.
-        
+
+        If ``override_base_power`` is set (e.g. castle figures = 15), that
+        fixed value is returned.  Otherwise the sum of all card values is used.
+
         Enchantment modifiers (Poison/Boost) are displayed separately like battle bonuses.
         """
-        # Castle figures (Kings/Maharajas) have fixed power of 15
-        if hasattr(self.family, 'field') and self.family.field == 'castle':
-            return 15
+        if self.override_base_power is not None:
+            return self.override_base_power
         else:
             # All other figures: sum of card values
             return sum(card.value for card in self.cards)
@@ -209,6 +213,22 @@ class Figure:
     def get_total_enchantment_modifier(self) -> int:
         """Get the total power modification from all active enchantments."""
         return sum(e.get('power_modifier', 0) for e in self.active_enchantments)
+
+    def get_active_skills(self):
+        """Return list of (skill_key, display_name) for every active skill.
+        
+        Uses SKILL_KEYS ordering from skill_settings so display order is
+        consistent everywhere.
+        """
+        active = []
+        for key in SKILL_KEYS:
+            if getattr(self, key, False):
+                active.append((key, SKILL_DEFINITIONS[key]['name']))
+        return active
+
+    def get_active_skill_keys(self):
+        """Return list of skill keys that are active on this figure."""
+        return [key for key in SKILL_KEYS if getattr(self, key, False)]
 
     def __repr__(self):
         return f"Figure(name={self.name}, suit={self.suit}, family={self.family.name})"

@@ -11,6 +11,9 @@ class Game:
         self.game_id = game_dict['id']
         self.state = game_dict['state']
         self.date = game_dict['date']
+        self.limit = game_dict.get('limit', 45)
+        self.winner_player_id = game_dict.get('winner_player_id')
+        self.finished_at = game_dict.get('finished_at')
         self.players = game_dict.get('players', [])
         self.main_cards = game_dict.get('main_cards', [])
         self.side_cards = game_dict.get('side_cards', [])
@@ -106,6 +109,7 @@ class Game:
         self.fold_winner_id = game_dict.get('fold_winner_id')
         self.auto_loss_reason = game_dict.get('auto_loss_reason')
         self.auto_loss_detail = game_dict.get('auto_loss_detail')
+        self.resting_figure_ids = game_dict.get('resting_figure_ids', [])
         self.waiting_for_battle_decision = False  # True when waiting for opponent's decision
         self.pending_fold_result = False  # True when fold outcome detected from polling
         self.fold_result_shown = False  # Track if fold result notification was shown
@@ -128,6 +132,11 @@ class Game:
 
         # Suppress next turn notification after battle/fold (result dialogue already shown)
         self.suppress_next_turn_summary = False
+
+        # Game-over tracking
+        self.game_over = (self.state == 'finished')
+        self.pending_game_over = None  # Will be set to game_over dict when detected
+        self.game_over_shown = False  # Track if game-over dialogue was shown
 
         # Battle reconnect flag — True until the client has checked for active battle on first poll
         self.battle_reconnect_pending = True
@@ -163,12 +172,40 @@ class Game:
             self.game_id = game_dict['id']
             self.state = game_dict['state']
             self.date = game_dict['date']
+            self.limit = game_dict.get('limit', 45)
+            self.winner_player_id = game_dict.get('winner_player_id')
+            self.finished_at = game_dict.get('finished_at')
             self.players = game_dict.get('players', [])
             self.main_cards = game_dict.get('main_cards', [])
             self.side_cards = game_dict.get('side_cards', [])
             self.current_round = game_dict.get('current_round', 1)
             self.invader_player_id = game_dict.get('invader_player_id')
             self.turn_player_id = game_dict.get('turn_player_id')
+
+            # Detect game-over from server (opponent might have triggered it)
+            if self.state == 'finished' and not self.game_over and not self.game_over_shown:
+                self.game_over = True
+                # Build game_over info from server state
+                winner_player = None
+                loser_player = None
+                for p in self.players:
+                    if p['id'] == self.winner_player_id:
+                        winner_player = p
+                    else:
+                        loser_player = p
+                if winner_player and loser_player:
+                    self.pending_game_over = {
+                        'game_over': True,
+                        'winner_player_id': winner_player['id'],
+                        'loser_player_id': loser_player['id'],
+                        'winner_username': winner_player.get('username', ''),
+                        'loser_username': loser_player.get('username', ''),
+                        'winner_score': winner_player.get('points', 0),
+                        'loser_score': loser_player.get('points', 0),
+                        'gold_awarded': self.limit * 2,
+                        'limit': self.limit,
+                    }
+                    print(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
             
             # Update ceasefire tracking
             previous_ceasefire = self.ceasefire_active
@@ -299,6 +336,7 @@ class Game:
             self.fold_winner_id = game_dict.get('fold_winner_id')
             self.auto_loss_reason = game_dict.get('auto_loss_reason')
             self.auto_loss_detail = game_dict.get('auto_loss_detail')
+            self.resting_figure_ids = game_dict.get('resting_figure_ids', [])
 
             # Update server-authoritative battle round tracking
             self.battle_round = game_dict.get('battle_round', 0)
@@ -655,11 +693,13 @@ class Game:
                 rest_after_attack = matched_family_figure.rest_after_attack if matched_family_figure and hasattr(matched_family_figure, 'rest_after_attack') else False
                 distance_attack = matched_family_figure.distance_attack if matched_family_figure and hasattr(matched_family_figure, 'distance_attack') else False
                 buffs_allies = matched_family_figure.buffs_allies if matched_family_figure and hasattr(matched_family_figure, 'buffs_allies') else False
+                buffs_allies_defence = matched_family_figure.buffs_allies_defence if matched_family_figure and hasattr(matched_family_figure, 'buffs_allies_defence') else False
                 blocks_bonus = matched_family_figure.blocks_bonus if matched_family_figure and hasattr(matched_family_figure, 'blocks_bonus') else False
                 cannot_defend = matched_family_figure.cannot_defend if matched_family_figure and hasattr(matched_family_figure, 'cannot_defend') else False
                 instant_charge = matched_family_figure.instant_charge if matched_family_figure and hasattr(matched_family_figure, 'instant_charge') else False
                 cannot_be_blocked = matched_family_figure.cannot_be_blocked if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_blocked') else False
                 cannot_be_targeted = matched_family_figure.cannot_be_targeted if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_targeted') else False
+                override_base_power = matched_family_figure.override_base_power if matched_family_figure and hasattr(matched_family_figure, 'override_base_power') else None
 
                 figure = Figure(
                     name=figure_data['name'],
@@ -680,11 +720,13 @@ class Game:
                     rest_after_attack=rest_after_attack,
                     distance_attack=distance_attack,
                     buffs_allies=buffs_allies,
+                    buffs_allies_defence=buffs_allies_defence,
                     blocks_bonus=blocks_bonus,
                     cannot_defend=cannot_defend,
                     instant_charge=instant_charge,
                     cannot_be_blocked=cannot_be_blocked,
                     cannot_be_targeted=cannot_be_targeted,
+                    override_base_power=override_base_power,
                 )
                 figures.append(figure)
 
@@ -840,40 +882,63 @@ class Game:
     def calculate_resources(self, families: Dict[str, FigureFamily], is_opponent: bool = False) -> Dict[str, Dict[str, int]]:
         """
         Calculate total resources produced and required by all player figures.
+
+        Figures that have a resource deficit (they require a resource whose
+        total demand exceeds total supply) do NOT contribute their production.
+        The calculation is iterative: removing a deficit figure's production
+        may cause other figures to fall into deficit, and so on until stable.
         
         :param families: A dictionary mapping family names to FigureFamily instances.
         :param is_opponent: If True, calculate for opponent's figures instead of current player's
         :return: A dictionary with 'produces' and 'requires' keys, each containing resource totals
         """
         figures = self.get_figures(families, is_opponent=is_opponent)
-        total_produces = {}
-        total_requires = {}
         
         if settings.DEBUG_ENABLED:
             with open(settings.DEBUG_LOG_PATH, 'a') as f:
                 f.write(f"[CLIENT] Calculating resources for {len(figures)} figures\n")
                 for figure in figures:
                     f.write(f"[CLIENT] Figure: {figure.name}, produces: {figure.produces}, requires: {figure.requires}\n")
-        
+
+        # Total requires is always the sum across ALL figures (never changes)
+        total_requires = {}
         for figure in figures:
-            if figure.produces:
-                for resource_type, amount in figure.produces.items():
-                    if resource_type in total_produces:
-                        total_produces[resource_type] += amount
-                    else:
-                        total_produces[resource_type] = amount
-            
             if figure.requires:
                 for resource_type, amount in figure.requires.items():
-                    if resource_type in total_requires:
-                        total_requires[resource_type] += amount
-                    else:
-                        total_requires[resource_type] = amount
+                    total_requires[resource_type] = total_requires.get(resource_type, 0) + amount
+
+        # Iteratively exclude production from deficit figures until stable
+        excluded = set()  # indices of figures whose production is excluded
+        stable = False
+        while not stable:
+            stable = True
+            total_produces = {}
+            for i, figure in enumerate(figures):
+                if i in excluded:
+                    continue
+                if figure.produces:
+                    for resource_type, amount in figure.produces.items():
+                        total_produces[resource_type] = total_produces.get(resource_type, 0) + amount
+
+            # Check each non-excluded figure with requirements for deficit
+            for i, figure in enumerate(figures):
+                if i in excluded:
+                    continue
+                if not figure.requires:
+                    continue
+                for res_name in figure.requires:
+                    if total_requires.get(res_name, 0) > total_produces.get(res_name, 0):
+                        excluded.add(i)
+                        stable = False
+                        break
         
         if settings.DEBUG_ENABLED:
             with open(settings.DEBUG_LOG_PATH, 'a') as f:
                 f.write(f"[CLIENT] Total produces: {total_produces}\n")
                 f.write(f"[CLIENT] Total requires: {total_requires}\n")
+                if excluded:
+                    f.write(f"[CLIENT] Deficit figures excluded from production: "
+                            f"{[figures[i].name for i in excluded]}\n")
         return {'produces': total_produces, 'requires': total_requires}
 
     @staticmethod

@@ -48,6 +48,18 @@ with app.app_context():
     
     print("Creating database tables...")
     db.create_all()
+    
+    # Auto-migrate: add missing columns to existing tables
+    from sqlalchemy import inspect as sa_inspect, text
+    inspector = sa_inspect(db.engine)
+    if 'game' in inspector.get_table_names():
+        existing_cols = {c['name'] for c in inspector.get_columns('game')}
+        if 'resting_figure_ids' not in existing_cols:
+            print("  ↳ Adding 'resting_figure_ids' column to game table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE game ADD COLUMN resting_figure_ids JSON"))
+                conn.commit()
+    
     print("✅ Database initialized")
 
 # Register Blueprints

@@ -2,7 +2,8 @@ from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import random
-from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, BattleMove, ActiveSpell
+from datetime import datetime
+from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, BattleMove, ActiveSpell, GameResult
 from game_service.deck_manager import DeckManager
 
 import server_settings as settings
@@ -82,6 +83,98 @@ def _is_ceasefire_active(game_id):
     if not game:
         return False
     return game.ceasefire_active
+
+
+def _check_game_over(game):
+    """Check if any player has reached the game's point limit.
+
+    If a winner is found:
+    - Sets game.state = 'finished', game.winner_player_id, game.finished_at
+    - Awards gold to the winner (2 × limit), deducts limit from loser
+    - Creates a GameResult record for statistics
+    Returns a dict with game_over info if the game ended, or None.
+    """
+    if game.state == 'finished':
+        return None  # Already finished
+
+    limit = game.limit or settings.DEFAULT_GAME_LIMIT
+
+    winner_player = None
+    loser_player = None
+    for p in game.players:
+        if p.points >= limit:
+            winner_player = p
+            break
+
+    if not winner_player:
+        return None  # No winner yet
+
+    # Determine the loser
+    loser_player = [p for p in game.players if p.id != winner_player.id][0]
+
+    # Mark game as finished
+    game.state = 'finished'
+    game.winner_player_id = winner_player.id
+    game.finished_at = datetime.utcnow()
+
+    # Award gold: winner gets 2× limit, loser gets nothing (already bet their limit)
+    gold_awarded = limit * 2
+    winner_user = User.query.get(winner_player.user_id)
+    loser_user = User.query.get(loser_player.user_id)
+
+    if winner_user:
+        winner_user.gold += gold_awarded
+    if loser_user:
+        # Loser already "bet" their limit when the game started — no further deduction
+        pass
+
+    winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
+    loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
+
+    # Create GameResult record for statistics
+    result = GameResult(
+        game_id=game.id,
+        winner_user_id=winner_player.user_id,
+        loser_user_id=loser_player.user_id,
+        winner_username=winner_username,
+        loser_username=loser_username,
+        winner_score=winner_player.points,
+        loser_score=loser_player.points,
+        limit=limit,
+        gold_awarded=gold_awarded,
+        rounds_played=game.current_round,
+    )
+    db.session.add(result)
+
+    # Log the game result
+    log_entry = LogEntry(
+        game_id=game.id,
+        player_id=winner_player.id,
+        round_number=game.current_round,
+        turn_number=0,
+        message=f"🏆 {winner_username} wins the game with {winner_player.points} points! "
+                f"{loser_username} scored {loser_player.points}. "
+                f"{winner_username} earns {gold_awarded} gold.",
+        author="System",
+        type='game_over'
+    )
+    db.session.add(log_entry)
+
+    print(f"[GAME_OVER] Game {game.id} finished! Winner: {winner_username} ({winner_player.points}pts) "
+          f"Loser: {loser_username} ({loser_player.points}pts) Gold: {gold_awarded}")
+
+    return {
+        'game_over': True,
+        'winner_player_id': winner_player.id,
+        'loser_player_id': loser_player.id,
+        'winner_username': winner_username,
+        'loser_username': loser_username,
+        'winner_score': winner_player.points,
+        'loser_score': loser_player.points,
+        'gold_awarded': gold_awarded,
+        'limit': limit,
+    }
+
 
 def _check_and_fill_minimum_cards(game, player):
     """
@@ -682,12 +775,25 @@ def create_game():
         if not user1 or not user2:
             return jsonify({'success': False, 'message': 'One or both players do not exist'}), 400
 
+        # Get game limit from the challenge (gold bet)
+        game_limit = challenge.limit or settings.DEFAULT_GAME_LIMIT
+
+        # Deduct gold from both players (they bet the limit)
+        if user1.gold < game_limit:
+            return jsonify({'success': False, 'message': f'{user1.username} does not have enough gold ({user1.gold}/{game_limit})'}), 400
+        if user2.gold < game_limit:
+            return jsonify({'success': False, 'message': f'{user2.username} does not have enough gold ({user2.gold}/{game_limit})'}), 400
+
+        user1.gold -= game_limit
+        user2.gold -= game_limit
+
         # Create a new Game instance
         game = Game(
             current_round=1, 
             invader_player_id=None,
             ceasefire_active=True,
-            ceasefire_start_turn=0
+            ceasefire_start_turn=0,
+            limit=game_limit
         )
         db.session.add(game)
         db.session.commit()
@@ -1430,6 +1536,17 @@ def cannot_advance_loss():
         game.auto_loss_reason = 'no_figures_to_advance'
         game.auto_loss_detail = username
 
+        # ── Check game-over condition ──
+        game_over_info = _check_game_over(game)
+        if game_over_info:
+            db.session.commit()
+            return jsonify({
+                'success': True,
+                'outcome': 'auto_loss',
+                'game_over': game_over_info,
+                'game': game.serialize(),
+            })
+
         # Start new round — opponent (winner) becomes invader, draws side cards
         _start_new_round(game, opponent)
 
@@ -1518,6 +1635,17 @@ def defender_no_figures_loss():
         game.fold_winner_id = player.id
         game.auto_loss_reason = 'no_defender_figures'
         game.auto_loss_detail = opponent_name
+
+        # ── Check game-over condition ──
+        game_over_info = _check_game_over(game)
+        if game_over_info:
+            db.session.commit()
+            return jsonify({
+                'success': True,
+                'outcome': 'auto_loss',
+                'game_over': game_over_info,
+                'game': game.serialize(),
+            })
 
         # Start new round — invader (winner) stays invader, draws side cards
         _start_new_round(game, player)
@@ -1664,23 +1792,48 @@ def battle_decision():
 
 
 def _check_figure_resource_deficit(figure, player_id, game_id):
-    """Check if a figure has a resource deficit (requires more than produced by the player's figures)."""
+    """Check if a figure has a resource deficit (requires more than produced by the player's figures).
+
+    Figures that themselves have a deficit do NOT contribute their production,
+    so the check is iterative until stable.
+    """
     if not figure.requires:
         return False
 
     # Calculate total produces and requires across ALL of this player's figures
     all_figures = Figure.query.filter_by(player_id=player_id, game_id=game_id).all()
-    total_produces = {}
+
+    # Total requires is always the full sum
     total_requires = {}
     for fig in all_figures:
-        if fig.produces:
-            for res, amount in fig.produces.items():
-                total_produces[res] = total_produces.get(res, 0) + amount
         if fig.requires:
             for res, amount in fig.requires.items():
                 total_requires[res] = total_requires.get(res, 0) + amount
 
-    # Check if any resource THIS figure requires is in deficit
+    # Iteratively exclude production from deficit figures until stable
+    excluded = set()
+    stable = False
+    while not stable:
+        stable = True
+        total_produces = {}
+        for i, fig in enumerate(all_figures):
+            if i in excluded:
+                continue
+            if fig.produces:
+                for res, amount in fig.produces.items():
+                    total_produces[res] = total_produces.get(res, 0) + amount
+        for i, fig in enumerate(all_figures):
+            if i in excluded:
+                continue
+            if not fig.requires:
+                continue
+            for res_name in fig.requires:
+                if total_requires.get(res_name, 0) > total_produces.get(res_name, 0):
+                    excluded.add(i)
+                    stable = False
+                    break
+
+    # Check if the target figure's required resources are in deficit
     for resource_name in figure.requires:
         total_req = total_requires.get(resource_name, 0)
         total_prod = total_produces.get(resource_name, 0)
@@ -1719,6 +1872,17 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
     game.fold_winner_id = winner_player.id
     game.auto_loss_reason = 'resource_deficit'
     game.auto_loss_detail = figure_name
+
+    # ── Check game-over condition ──
+    game_over_info = _check_game_over(game)
+    if game_over_info:
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'deficit_loss': True,
+            'game_over': game_over_info,
+            'game': game.serialize()
+        })
 
     # Start new round — winner becomes invader, draws side cards
     _start_new_round(game, winner_player)
@@ -1769,6 +1933,18 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
     game.auto_loss_reason = 'fold'
     game.auto_loss_detail = loser_name
 
+    # ── Check game-over condition ──
+    game_over_info = _check_game_over(game)
+    if game_over_info:
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'resolved': True,
+            'outcome': 'fold_win',
+            'game_over': game_over_info,
+            'game': game.serialize()
+        })
+
     # Start new round — winner becomes invader, draws side cards
     _start_new_round(game, winner_player)
 
@@ -1788,14 +1964,23 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
 
 # ────────────────────── battle resolution ─────────────────────────
 
+# Override base power by field type (family-level config).
+# Figures whose ``field`` matches a key here use the fixed value
+# instead of summing their card values.
+_FIELD_OVERRIDE_BASE_POWER = {
+    'castle': 15,
+}
+
+
 def _compute_figure_base_power(figure):
     """Compute a figure's base power on the server side.
 
-    Castle figures (Maharaja / King) always return 15.
-    All others return the sum of their card values.
+    If the figure's field has an override (e.g. castle → 15), that fixed
+    value is returned.  Otherwise the sum of card values is used.
     """
-    if figure.field == 'castle':
-        return 15
+    override = _FIELD_OVERRIDE_BASE_POWER.get(figure.field)
+    if override is not None:
+        return override
     card_assocs = CardToFigure.query.filter_by(figure_id=figure.id).all()
     total = 0
     for assoc in card_assocs:
@@ -1910,6 +2095,9 @@ def _start_new_round(game, winner_player):
     game.turn_player_id = game.invader_player_id
     game.ceasefire_active = True
     game.ceasefire_start_turn = 0
+
+    # Clear resting figures — they have rested for the previous round
+    game.resting_figure_ids = None
 
     # Draw 2 side cards per player for the new round
     drawn_cards_map = {}
@@ -2458,9 +2646,16 @@ def finish_battle():
             'destroyed_figure_family': destroyed_family,
         }
 
+        # Check if someone reached the limit (will be finalized in pick_card)
+        game_over_info = None
+        for p in game.players:
+            if p.points >= (game.limit or settings.DEFAULT_GAME_LIMIT):
+                game_over_info = True
+                break
+
         db.session.commit()
 
-        return jsonify({
+        response = {
             'success': True,
             'outcome': 'win',
             'winner_player_id': winner_player.id,
@@ -2473,7 +2668,10 @@ def finish_battle():
             'total_diff': total_diff,
             'returnable_cards': returnable_cards,
             'game': game.serialize(),
-        })
+        }
+        if game_over_info:
+            response['game_over_pending'] = True
+        return jsonify(response)
 
 
 @games.route('/finish_battle_pick_card', methods=['POST'])
@@ -2579,8 +2777,24 @@ def finish_battle_pick_card():
     # Clear battle state (this resets fold_winner_id to None)
     _clear_battle_state(game)
 
+    # ── Check game-over condition before starting a new round ──
+    game_over_info = _check_game_over(game)
+    if game_over_info:
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'message': 'Game over!',
+            'game_over': game_over_info,
+            'game': game.serialize(),
+        })
+
     # Start a new round — battle winner becomes invader
     _start_new_round(game, winner)
+
+    # Set resting figures for the new round (from client — figures with rest_after_attack)
+    resting_ids = data.get('resting_figure_ids')
+    if resting_ids:
+        game.resting_figure_ids = resting_ids
 
     db.session.commit()
     print(f"[FINISH_BATTLE] Card picked. Post-battle cleanup done. Round {game.current_round} starts. Winner/invader={winner.id}")
@@ -2743,8 +2957,26 @@ def finish_battle_draw():
     )
     db.session.add(log_entry)
 
+    # ── Check game-over condition before starting a new round ──
+    game_over_info = _check_game_over(game)
+    if game_over_info:
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'outcome': 'draw',
+            'choice': choice,
+            'message': result_msg,
+            'game_over': game_over_info,
+            'game': game.serialize(),
+        })
+
     # Start a new round — defender (the choosing player) becomes invader
     _start_new_round(game, player)
+
+    # Set resting figures for the new round (from client — figures with rest_after_attack)
+    resting_ids = data.get('resting_figure_ids')
+    if resting_ids:
+        game.resting_figure_ids = resting_ids
 
     db.session.commit()
     print(f"[FINISH_BATTLE_DRAW] {result_msg} Round {game.current_round} starts.")
@@ -2756,3 +2988,40 @@ def finish_battle_draw():
         'message': result_msg,
         'game': game.serialize(),
     })
+
+
+@games.route('/game_results', methods=['GET'])
+def game_results():
+    """Get game results for a user (for statistics/ranking).
+    
+    Query params:
+        username: str — the player whose results to fetch
+        limit: int (optional) — max number of results (default 50)
+    """
+    try:
+        username = request.args.get('username')
+        max_results = request.args.get('limit', 50, type=int)
+
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+
+        results = GameResult.query.filter(
+            (GameResult.winner_user_id == user.id) | (GameResult.loser_user_id == user.id)
+        ).order_by(GameResult.finished_at.desc()).limit(max_results).all()
+
+        wins = sum(1 for r in results if r.winner_user_id == user.id)
+        losses = len(results) - wins
+        total_gold_won = sum(r.gold_awarded for r in results if r.winner_user_id == user.id)
+
+        return jsonify({
+            'success': True,
+            'username': username,
+            'gold': user.gold,
+            'wins': wins,
+            'losses': losses,
+            'total_gold_won': total_gold_won,
+            'results': [r.serialize() for r in results],
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error fetching results: {str(e)}'}), 400

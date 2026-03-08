@@ -2,6 +2,7 @@ import pygame
 from pygame.locals import *
 from collections import Counter
 from config import settings
+from game.components.figures.family_configs.skill_config import SKILL_KEYS
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
@@ -494,7 +495,7 @@ class BuildFigureScreen(SubScreen):
                         if can_charge:
                             # Load the instant_charge skill icon
                             import os
-                            from config.info_scroll_settings import SKILL_ICON_IMG_PATH_DICT
+                            from game.components.figures.family_configs.skill_config import SKILL_ICON_IMG_PATH_DICT
                             icon_path = SKILL_ICON_IMG_PATH_DICT.get('instant_charge', '')
                             if icon_path and os.path.exists(icon_path):
                                 charge_icon = pygame.image.load(icon_path).convert_alpha()
@@ -585,15 +586,7 @@ class BuildFigureScreen(SubScreen):
                                       "support": figure.get_battle_bonus(),
                                       "produces": figure.produces if figure.produces else None,
                                       "requires": figure.requires if figure.requires else None,
-                                      "cannot_attack": getattr(figure, 'cannot_attack', False),
-                                      "must_be_attacked": getattr(figure, 'must_be_attacked', False),
-                                      "rest_after_attack": getattr(figure, 'rest_after_attack', False),
-                                      "distance_attack": getattr(figure, 'distance_attack', False),
-                                      "buffs_allies": getattr(figure, 'buffs_allies', False),
-                                      "blocks_bonus": getattr(figure, 'blocks_bonus', False),
-                                      "cannot_defend": getattr(figure, 'cannot_defend', False),
-                                      "instant_charge": getattr(figure, 'instant_charge', False),
-                                      "cannot_be_blocked": getattr(figure, 'cannot_be_blocked', False),
+                                      **{k: getattr(figure, k, False) for k in SKILL_KEYS},
                                       "cards": figure.cards,
                                       "content": figure}
                                      for figure in figures]
@@ -611,15 +604,8 @@ class BuildFigureScreen(SubScreen):
                     "support": figure.get_battle_bonus(),
                     "produces": figure.produces if figure.produces else None,
                     "requires": figure.requires if figure.requires else None,
-                    "cannot_attack": getattr(figure, 'cannot_attack', False),
-                    "must_be_attacked": getattr(figure, 'must_be_attacked', False),
-                    "rest_after_attack": getattr(figure, 'rest_after_attack', False),
-                    "distance_attack": getattr(figure, 'distance_attack', False),
-                    "buffs_allies": getattr(figure, 'buffs_allies', False),
-                    "blocks_bonus": getattr(figure, 'blocks_bonus', False),
-                    "cannot_defend": getattr(figure, 'cannot_defend', False),
-                    "instant_charge": getattr(figure, 'instant_charge', False),
-                    "cannot_be_blocked": getattr(figure, 'cannot_be_blocked', False),
+                    **{k: getattr(figure, k, False) for k in SKILL_KEYS},
+                    "suit": suit,
                     "cards": self.get_given_cards(button.family, suit),
                     "missing_cards": self.get_missing_cards_converted_ZK(button.family, suit),
                     "content": None

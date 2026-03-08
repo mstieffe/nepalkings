@@ -24,5 +24,8 @@ NUM_MIN_SIDE_CARDS = 0
 INITIAL_TURNS_DEFENDER = 5
 INITIAL_TURNS_INVADER = 5
 
+# Game win condition
+DEFAULT_GAME_LIMIT = 45  # Default point threshold / gold bet to win
+
 
 

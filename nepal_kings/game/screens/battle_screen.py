@@ -79,6 +79,25 @@ class BattleScreen(SubScreen):
         self.player_figure_2 = None
         self.opponent_figure_2 = None
 
+        # Blocks-bonus: figures that auto-trigger to block opponent's support bonus
+        # Each is a Figure object (or None) from the player's/opponent's field
+        self.player_blocks_bonus_figure = None   # player's blocker → blocks opponent's bonus
+        self.opponent_blocks_bonus_figure = None  # opponent's blocker → blocks player's bonus
+
+        # Distance-attack: figures that auto-trigger to reduce opponent figure power
+        self.player_distance_attack_figure = None
+        self.opponent_distance_attack_figure = None
+        self._player_da_hit_battle = False   # True if player's DA already fired on battle fig
+        self._opponent_da_hit_battle = False  # True if opponent's DA already fired on battle fig
+
+        # Buffs-allies: figures that boost base power of same-suit village figures by +4
+        self.player_buffs_allies_figures = []   # list of Figure objects
+        self.opponent_buffs_allies_figures = []
+
+        # Buffs-allies-defence: figures that boost all allied figures when defending
+        self.player_buffs_allies_defence_figures = []
+        self.opponent_buffs_allies_defence_figures = []
+
         # ── slot rendering cache ──
         self._slot_diamond = self._make_diamond(
             settings.ROUNDS_SLOT_SIZE, settings.ROUNDS_SLOT_SIZE,
@@ -169,6 +188,16 @@ class BattleScreen(SubScreen):
         self.opponent_figure_icon_2 = None
         self.player_figure_2 = None
         self.opponent_figure_2 = None
+        self.player_blocks_bonus_figure = None
+        self.opponent_blocks_bonus_figure = None
+        self.player_distance_attack_figure = None
+        self.opponent_distance_attack_figure = None
+        self._player_da_hit_battle = False
+        self._opponent_da_hit_battle = False
+        self.player_buffs_allies_figures = []
+        self.opponent_buffs_allies_figures = []
+        self.player_buffs_allies_defence_figures = []
+        self.opponent_buffs_allies_defence_figures = []
         self.battle_move_detail_box = None
         self.figure_detail_box = None
         self._player_figures = []
@@ -483,6 +512,290 @@ class BattleScreen(SubScreen):
                 all_player_figures=opponent_battle_figures,
             )
             self.opponent_figure_icon_2.show_advance_overlay = False
+
+        # ── Detect blocks_bonus skill triggers ──
+        self._detect_blocks_bonus(player_battle_figures, opponent_battle_figures)
+
+        # ── Detect distance_attack skill triggers ──
+        self._detect_distance_attack(player_battle_figures, opponent_battle_figures)
+
+        # ── Detect buffs_allies skill triggers ──
+        self._detect_buffs_allies(player_battle_figures, opponent_battle_figures)
+
+        # ── Detect buffs_allies_defence skill triggers ──
+        self._detect_buffs_allies_defence(player_battle_figures, opponent_battle_figures)
+
+    # ────────────────── blocks_bonus detection ──────────────────
+
+    def _detect_blocks_bonus(self, player_figures, opponent_figures):
+        """Check if any field figure has blocks_bonus whose suit advantage
+        matches the opponent's battle figure.  If so, store it as a blocker
+        and mark the targeted figure icon's bonus as blocked."""
+        from game.components.figures.family_configs.skill_config import get_advantage_suit
+
+        self.player_blocks_bonus_figure = None
+        self.opponent_blocks_bonus_figure = None
+
+        # Battle figure IDs to exclude (they are already in battle)
+        battle_ids = set()
+        for fig in (self.player_figure, self.player_figure_2,
+                    self.opponent_figure, self.opponent_figure_2):
+            if fig:
+                battle_ids.add(fig.id)
+
+        # Collect opponent battle figure suits → icon mapping
+        opp_targets = []
+        if self.opponent_figure:
+            opp_targets.append((self.opponent_figure.suit, self.opponent_figure_icon))
+        if self.opponent_figure_2:
+            opp_targets.append((self.opponent_figure_2.suit, self.opponent_figure_icon_2))
+
+        # Player's blocker → blocks opponent's battle figure bonus
+        for opp_suit, opp_icon in opp_targets:
+            for fig in player_figures:
+                if fig.id in battle_ids:
+                    continue
+                if getattr(fig, 'blocks_bonus', False):
+                    # Skip figures with resource deficit
+                    if self._figure_has_deficit(fig):
+                        continue
+                    adv_suit = get_advantage_suit(fig.suit)
+                    if adv_suit and adv_suit == opp_suit:
+                        self.player_blocks_bonus_figure = fig
+                        if opp_icon:
+                            opp_icon.battle_bonus_blocked = True
+                        print(f"[BLOCKS_BONUS] Player's {fig.name} (suit={fig.suit}) blocks opponent's battle figure (suit={opp_suit}) bonus")
+                        break
+            if self.player_blocks_bonus_figure:
+                break
+
+        # Collect player battle figure suits → icon mapping
+        player_targets = []
+        if self.player_figure:
+            player_targets.append((self.player_figure.suit, self.player_figure_icon))
+        if self.player_figure_2:
+            player_targets.append((self.player_figure_2.suit, self.player_figure_icon_2))
+
+        # Opponent's blocker → blocks player's battle figure bonus
+        for player_suit, player_icon in player_targets:
+            for fig in opponent_figures:
+                if fig.id in battle_ids:
+                    continue
+                if getattr(fig, 'blocks_bonus', False):
+                    adv_suit = get_advantage_suit(fig.suit)
+                    if adv_suit and adv_suit == player_suit:
+                        self.opponent_blocks_bonus_figure = fig
+                        if player_icon:
+                            player_icon.battle_bonus_blocked = True
+                        print(f"[BLOCKS_BONUS] Opponent's {fig.name} (suit={fig.suit}) blocks player's battle figure (suit={player_suit}) bonus")
+                        break
+            if self.opponent_blocks_bonus_figure:
+                break
+
+    # ────────────────── distance_attack detection ───────────────
+
+    def _detect_distance_attack(self, player_figures, opponent_figures):
+        """Check if any field figure has distance_attack whose suit advantage
+        matches the opponent's battle figure(s).  If so, store it and apply
+        a power penalty on the targeted battle figure icons.
+
+        The distance attacker can only fire once per battle:
+        if it hits a battle figure here, it won't also hit called-in figures.
+        """
+        from game.components.figures.family_configs.skill_config import get_advantage_suit
+
+        self.player_distance_attack_figure = None
+        self.opponent_distance_attack_figure = None
+        self._player_da_hit_battle = False
+        self._opponent_da_hit_battle = False
+
+        # Battle figure IDs to exclude (they are already in battle)
+        battle_ids = set()
+        for fig in (self.player_figure, self.player_figure_2,
+                    self.opponent_figure, self.opponent_figure_2):
+            if fig:
+                battle_ids.add(fig.id)
+
+        # --- Player's distance attacker → penalises opponent's battle figures ---
+        opp_targets = []
+        if self.opponent_figure:
+            opp_targets.append((self.opponent_figure.suit, self.opponent_figure_icon))
+        if self.opponent_figure_2:
+            opp_targets.append((self.opponent_figure_2.suit, self.opponent_figure_icon_2))
+
+        for fig in player_figures:
+            if fig.id in battle_ids:
+                continue
+            if getattr(fig, 'distance_attack', False):
+                if self._figure_has_deficit(fig):
+                    continue
+                adv_suit = get_advantage_suit(fig.suit)
+                if not adv_suit:
+                    continue
+                # Store the attacker — it may fire on battle fig or call fig
+                self.player_distance_attack_figure = fig
+                penalty_value = fig.number_card.value if fig.number_card else 0
+                # Try to fire on a matching battle figure (consumes the shot)
+                for opp_suit, opp_icon in opp_targets:
+                    if adv_suit == opp_suit:
+                        self._player_da_hit_battle = True
+                        if opp_icon:
+                            opp_icon.distance_attack_penalty = penalty_value
+                        print(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
+                              f"reduces opponent's battle figure (suit={opp_suit}) by -{penalty_value}")
+                        break
+                if not self._player_da_hit_battle:
+                    print(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
+                          f"ready to fire on opponent's call figures (advantage over {adv_suit})")
+                break
+
+        # --- Opponent's distance attacker → penalises player's battle figures ---
+        player_targets = []
+        if self.player_figure:
+            player_targets.append((self.player_figure.suit, self.player_figure_icon))
+        if self.player_figure_2:
+            player_targets.append((self.player_figure_2.suit, self.player_figure_icon_2))
+
+        for fig in opponent_figures:
+            if fig.id in battle_ids:
+                continue
+            if getattr(fig, 'distance_attack', False):
+                adv_suit = get_advantage_suit(fig.suit)
+                if not adv_suit:
+                    continue
+                self.opponent_distance_attack_figure = fig
+                penalty_value = fig.number_card.value if fig.number_card else 0
+                for player_suit, player_icon in player_targets:
+                    if adv_suit == player_suit:
+                        self._opponent_da_hit_battle = True
+                        if player_icon:
+                            player_icon.distance_attack_penalty = penalty_value
+                        print(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
+                              f"reduces player's battle figure (suit={player_suit}) by -{penalty_value}")
+                        break
+                if not self._opponent_da_hit_battle:
+                    print(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
+                          f"ready to fire on player's call figures (advantage over {adv_suit})")
+                break
+
+    # ────────────────── buffs_allies detection ──────────────────
+
+    def _detect_buffs_allies(self, player_figures, opponent_figures):
+        """Find field figures with buffs_allies and apply +4 base power buff
+        to same-suit village battle figures / icons.
+
+        The buff is counted as base power (not a support bonus), so it is
+        NOT affected by blocks_bonus.
+        """
+        self.player_buffs_allies_figures = []
+        self.opponent_buffs_allies_figures = []
+
+        # Battle figure IDs (they sit on the field but are in battle)
+        battle_ids = set()
+        for fig in (self.player_figure, self.player_figure_2,
+                    self.opponent_figure, self.opponent_figure_2):
+            if fig:
+                battle_ids.add(fig.id)
+
+        # --- Player's buffers → buff player's own village battle figures ---
+        for fig in player_figures:
+            if fig.id in battle_ids:
+                continue
+            if getattr(fig, 'buffs_allies', False):
+                if self._figure_has_deficit(fig):
+                    continue
+                self.player_buffs_allies_figures.append(fig)
+
+        # Apply +4 to player's village battle figure icons with matching suit
+        if self.player_buffs_allies_figures:
+            for buff_fig in self.player_buffs_allies_figures:
+                for battle_fig, icon in [(self.player_figure, self.player_figure_icon),
+                                         (self.player_figure_2, self.player_figure_icon_2)]:
+                    if not battle_fig or not icon:
+                        continue
+                    if (hasattr(battle_fig.family, 'field') and
+                            battle_fig.family.field == 'village' and
+                            battle_fig.suit == buff_fig.suit):
+                        icon.buffs_allies_bonus = getattr(icon, 'buffs_allies_bonus', 0) + 4
+                        print(f"[BUFFS_ALLIES] Player's {buff_fig.name} buffs {battle_fig.name} +4")
+
+        # --- Opponent's buffers → buff opponent's own village battle figures ---
+        for fig in opponent_figures:
+            if fig.id in battle_ids:
+                continue
+            if getattr(fig, 'buffs_allies', False):
+                self.opponent_buffs_allies_figures.append(fig)
+
+        if self.opponent_buffs_allies_figures:
+            for buff_fig in self.opponent_buffs_allies_figures:
+                for battle_fig, icon in [(self.opponent_figure, self.opponent_figure_icon),
+                                         (self.opponent_figure_2, self.opponent_figure_icon_2)]:
+                    if not battle_fig or not icon:
+                        continue
+                    if (hasattr(battle_fig.family, 'field') and
+                            battle_fig.family.field == 'village' and
+                            battle_fig.suit == buff_fig.suit):
+                        icon.buffs_allies_bonus = getattr(icon, 'buffs_allies_bonus', 0) + 4
+                        print(f"[BUFFS_ALLIES] Opponent's {buff_fig.name} buffs {battle_fig.name} +4")
+
+    # ────────────────── buffs_allies_defence detection ──────────
+
+    def _detect_buffs_allies_defence(self, player_figures, opponent_figures):
+        """Find field figures with buffs_allies_defence.
+
+        Only active when the owner is DEFENDING (not invader).
+        Bonus = number_card.value, applied to ALL battle figure icons as
+        a support bonus (affected by blocks_bonus).
+        """
+        self.player_buffs_allies_defence_figures = []
+        self.opponent_buffs_allies_defence_figures = []
+
+        # Battle figure IDs (they sit on the field but are in battle)
+        battle_ids = set()
+        for fig in (self.player_figure, self.player_figure_2,
+                    self.opponent_figure, self.opponent_figure_2):
+            if fig:
+                battle_ids.add(fig.id)
+
+        # --- Player's defence buffers — only active when player is DEFENDING ---
+        if not self.player_is_invader:
+            for fig in player_figures:
+                if fig.id in battle_ids:
+                    continue
+                if getattr(fig, 'buffs_allies_defence', False):
+                    if self._figure_has_deficit(fig):
+                        continue
+                    self.player_buffs_allies_defence_figures.append(fig)
+
+            # Apply defence bonus to ALL player battle figure icons
+            if self.player_buffs_allies_defence_figures:
+                total_bonus = sum(
+                    bf.number_card.value for bf in self.player_buffs_allies_defence_figures
+                    if bf.number_card
+                )
+                for icon in (self.player_figure_icon, self.player_figure_icon_2):
+                    if icon:
+                        icon.buffs_allies_defence_bonus = total_bonus
+                        print(f"[BUFFS_ALLIES_DEFENCE] Player defence buff +{total_bonus}")
+
+        # --- Opponent's defence buffers — only active when opponent is DEFENDING ---
+        if self.player_is_invader:
+            for fig in opponent_figures:
+                if fig.id in battle_ids:
+                    continue
+                if getattr(fig, 'buffs_allies_defence', False):
+                    self.opponent_buffs_allies_defence_figures.append(fig)
+
+            if self.opponent_buffs_allies_defence_figures:
+                total_bonus = sum(
+                    bf.number_card.value for bf in self.opponent_buffs_allies_defence_figures
+                    if bf.number_card
+                )
+                for icon in (self.opponent_figure_icon, self.opponent_figure_icon_2):
+                    if icon:
+                        icon.buffs_allies_defence_bonus = total_bonus
+                        print(f"[BUFFS_ALLIES_DEFENCE] Opponent defence buff +{total_bonus}")
+
     # ────────────────── eligible figures for Call moves ──────────
 
     _RED_SUITS = {'Hearts', 'Diamonds'}
@@ -596,8 +909,10 @@ class BattleScreen(SubScreen):
         max_power = 0
         for fig in eligible:
             base = fig.get_value()
+            buffs = self._get_buffs_allies_bonus(fig, is_player=True)
+            defence = self._get_buffs_allies_defence_bonus(is_player=True)
             bonus = bm_value if fig.suit == bm_suit else 0
-            total = base + bonus
+            total = base + buffs + defence + bonus
             if total > max_power:
                 max_power = total
         return max_power
@@ -605,13 +920,28 @@ class BattleScreen(SubScreen):
     # ────────────────── power calculations ─────────────────────
 
     def _get_figure_total_power(self, figure, figure_icon):
-        """Get total power of a figure including base value, bonus, and enchantments."""
+        """Get total power of a figure including base value, bonus, and enchantments.
+        If the figure's bonus is blocked (blocks_bonus skill), the bonus is excluded.
+        Distance-attack penalty (if any) is subtracted from the total.
+        Buffs-allies bonus is added as base power (unaffected by blocks_bonus).
+        Buffs-allies-defence bonus is a support bonus (affected by blocks_bonus).
+        """
         if not figure:
             return 0
         base = figure.get_value()
+        # buffs_allies bonus (treated as base power, not affected by blocks_bonus)
+        buffs_bonus = getattr(figure_icon, 'buffs_allies_bonus', 0) if figure_icon else 0
         bonus = figure_icon.battle_bonus_received if figure_icon else 0
+        # buffs_allies_defence bonus (treated as support bonus, affected by blocks_bonus)
+        defence_bonus = getattr(figure_icon, 'buffs_allies_defence_bonus', 0) if figure_icon else 0
+        bonus += defence_bonus
+        # blocks_bonus negates the support bonus (including defence buff)
+        if figure_icon and getattr(figure_icon, 'battle_bonus_blocked', False):
+            bonus = 0
         enchant = figure.get_total_enchantment_modifier()
-        return base + bonus + enchant
+        # distance_attack penalty
+        dist_penalty = getattr(figure_icon, 'distance_attack_penalty', 0) if figure_icon else 0
+        return base + buffs_bonus + bonus + enchant - dist_penalty
 
     def _get_round_diff(self, round_idx):
         """Get the power difference for a specific round (player - opponent).
@@ -625,17 +955,61 @@ class BattleScreen(SubScreen):
         # Block zeroes the entire round
         if p.get('family_name') == 'Block' or o.get('family_name') == 'Block':
             return 0
-        p_val = self._get_move_effective_power(p)
-        o_val = self._get_move_effective_power(o)
+        p_val = self._get_move_effective_power(p, is_player=True, round_idx=round_idx)
+        o_val = self._get_move_effective_power(o, is_player=False, round_idx=round_idx)
         return p_val - o_val
 
-    def _get_move_effective_power(self, move):
+    def _get_da_call_round(self, for_player_da):
+        """Return the first round index where a distance attacker fires on
+        an opponent's called-in figure, or None.
+
+        ``for_player_da=True``  → player's DA targets opponent's call figs.
+        ``for_player_da=False`` → opponent's DA targets player's call figs.
+
+        Returns None if the DA already fired on a battle figure or if no
+        matching call figure exists in any round.
+        """
+        if for_player_da:
+            if self._player_da_hit_battle:
+                return None  # already consumed on battle fig
+            attacker = self.player_distance_attack_figure
+            played = self.opponent_played  # opponent's moves have their call figs
+        else:
+            if self._opponent_da_hit_battle:
+                return None
+            attacker = self.opponent_distance_attack_figure
+            played = self.player_played
+
+        if not attacker:
+            return None
+
+        from game.components.figures.family_configs.skill_config import get_advantage_suit
+        adv_suit = get_advantage_suit(attacker.suit)
+        if not adv_suit:
+            return None
+
+        for r in range(3):
+            move = played[r]
+            if not move:
+                continue
+            call_fig = move.get('_call_figure')
+            if call_fig and (call_fig.suit or '').lower() == adv_suit.lower():
+                return r
+        return None
+
+    def _get_move_effective_power(self, move, is_player=None, round_idx=None):
         """Get effective power of a played move including Call-figure bonus.
 
         - Block → 0
-        - Call + suit match → figure_base_power + BM value
-        - Call + suit mismatch → figure_base_power only (BM nullified)
+        - Call + suit match → figure_base_power + buffs_allies + defence_buff + BM value
+        - Call + suit mismatch → figure_base_power + buffs_allies + defence_buff only
         - No call figure → BM value
+
+        Distance-attack penalty is applied only once per battle: if the DA
+        already fired on a battle figure it won't fire again on a call
+        figure; otherwise it fires on the first matching call figure only.
+        Buffs-allies bonus is added as base power for village call figures.
+        Buffs-allies-defence bonus applies to ALL call figures when defending.
         """
         if not move:
             return 0
@@ -651,10 +1025,52 @@ class BattleScreen(SubScreen):
             fig_power = call_fig.get_value()
             fig_suit = (call_fig.suit or '').lower()
             bm_suit = (move.get('suit', '') or '').lower()
+
+            # Buffs-allies bonus: +4 per matching buffer for village call figs
+            buffs_bonus = self._get_buffs_allies_bonus(call_fig, is_player)
+
+            # Buffs-allies-defence bonus: applies to ALL call figs when defending
+            defence_bonus = self._get_buffs_allies_defence_bonus(is_player)
+
+            # Distance-attack penalty on the called-in figure (once per battle)
+            distance_penalty = 0
+            if is_player is not None and round_idx is not None:
+                da_round = self._get_da_call_round(for_player_da=not is_player)
+                if da_round == round_idx:
+                    attacker = (self.opponent_distance_attack_figure if is_player
+                                else self.player_distance_attack_figure)
+                    if attacker:
+                        distance_penalty = attacker.number_card.value if attacker.number_card else 0
+
             if fig_suit == bm_suit:
-                return fig_power + bm_value
-            return fig_power
+                return fig_power + buffs_bonus + defence_bonus + bm_value - distance_penalty
+            return fig_power + buffs_bonus + defence_bonus - distance_penalty
         return bm_value
+
+    def _get_buffs_allies_bonus(self, figure, is_player):
+        """Return the total buffs_allies bonus for a figure.
+        Only village figures can be buffed. Each matching buffer adds +4.
+        """
+        if not figure or is_player is None:
+            return 0
+        if not (hasattr(figure.family, 'field') and figure.family.field == 'village'):
+            return 0
+        buffers = self.player_buffs_allies_figures if is_player else self.opponent_buffs_allies_figures
+        bonus = 0
+        for buff_fig in buffers:
+            if buff_fig.suit == figure.suit:
+                bonus += 4
+        return bonus
+
+    def _get_buffs_allies_defence_bonus(self, is_player):
+        """Return the total buffs_allies_defence bonus.
+        Applies to ALL figures when the owner is defending.
+        """
+        if is_player is None:
+            return 0
+        buffers = (self.player_buffs_allies_defence_figures if is_player
+                   else self.opponent_buffs_allies_defence_figures)
+        return sum(bf.number_card.value for bf in buffers if bf.number_card)
 
     def _get_figure_diff(self):
         """Get figure power difference (player - opponent).
@@ -1328,16 +1744,32 @@ class BattleScreen(SubScreen):
         else:
             self._finalise_winner_pick(None, None)
 
+    def _collect_resting_figure_ids(self):
+        """Return list of figure IDs that need to rest after this battle."""
+        resting = []
+        for fig in (self.player_figure, self.opponent_figure,
+                     getattr(self, 'player_figure_2', None),
+                     getattr(self, 'opponent_figure_2', None)):
+            if fig and getattr(fig, 'rest_after_attack', False):
+                resting.append(fig.id)
+        return resting or None
+
     def _finalise_winner_pick(self, card_id, card_type):
         """Call the server to pick a card and do post-battle cleanup."""
+        resting_ids = self._collect_resting_figure_ids()
         result = game_service.finish_battle_pick_card(
             self.game.game_id,
             self.game.player_id,
             picked_card_id=card_id,
             picked_card_type=card_type or 'main',
+            resting_figure_ids=resting_ids,
         )
         if result.get('success') and result.get('game'):
             self.game.update_from_dict(result['game'])
+        # Check if this battle ended the game
+        if result.get('game_over'):
+            self.game.pending_game_over = result['game_over']
+            self.game.game_over = True
         self._reset_after_battle()
 
     # ─── defeat callback ───
@@ -1368,13 +1800,18 @@ class BattleScreen(SubScreen):
             return
 
         # For 'destroy' and 'points' — call server immediately
+        resting_ids = self._collect_resting_figure_ids()
         result = game_service.finish_battle_draw(
             self.game.game_id,
             self.game.player_id,
             choice=choice,
+            resting_figure_ids=resting_ids,
         )
         if result.get('success') and result.get('game'):
             self.game.update_from_dict(result['game'])
+        if result.get('game_over'):
+            self.game.pending_game_over = result['game_over']
+            self.game.game_over = True
         self._reset_after_battle()
 
     def _show_draw_card_pick(self):
@@ -1398,9 +1835,13 @@ class BattleScreen(SubScreen):
             choice='pick_card',
             picked_card_id=picked_id,
             picked_card_type=picked_type,
+            resting_figure_ids=self._collect_resting_figure_ids(),
         )
         if result.get('success') and result.get('game'):
             self.game.update_from_dict(result['game'])
+        if result.get('game_over'):
+            self.game.pending_game_over = result['game_over']
+            self.game.game_over = True
         self._reset_after_battle()
 
     def _on_draw_wait_acknowledged(self, response):
@@ -1633,6 +2074,11 @@ class BattleScreen(SubScreen):
 
         # Switch subscreen
         self.state.subscreen = 'field'
+
+        # Check for game-over after returning to field
+        if self.game and self.game.pending_game_over and not self.game.game_over_shown:
+            if parent and hasattr(parent, '_show_game_over_dialogue'):
+                parent._show_game_over_dialogue(self.game.pending_game_over)
 
     # ────────────────── gamble logic ───────────────────────────
 
@@ -1888,10 +2334,10 @@ class BattleScreen(SubScreen):
         super().draw()
 
         self._draw_battle_panel()
-        self._draw_figures_panel()
         # Clear round-panel figure icons before redrawing
         self._round_fig_icons = []
         self._round_fig_hovered_idx = None
+        self._draw_figures_panel()
         self._draw_rounds_panel()
         # Update hover state for round-panel figure icons
         self._update_round_fig_hover()
@@ -1991,47 +2437,116 @@ class BattleScreen(SubScreen):
         py = settings.FIGURES_PANEL_Y
         pw = settings.FIGURES_PANEL_W
         ph = settings.FIGURES_PANEL_H
-        gap = 4
+        gap = int(0.005 * settings.SCREEN_HEIGHT)
 
-        # Sub-box boundaries based on diff box position
-        diff_area_top = settings.FIGURES_DIFF_Y - 24
-        diff_area_bot = settings.FIGURES_DIFF_Y + settings.FIGURES_DIFF_H + 8
+        # ─── Centre the diff area in the panel for perfect symmetry ───
+        diff_margin_top = int(0.03 * settings.SCREEN_HEIGHT)
+        diff_margin_bot = int(0.01 * settings.SCREEN_HEIGHT)
+        diff_h_total = diff_margin_top + settings.FIGURES_DIFF_H + diff_margin_bot
+        panel_mid = py + ph // 2
+        diff_area_top = panel_mid - diff_h_total // 2
+        diff_area_bot = panel_mid + diff_h_total // 2
+        actual_diff_y = diff_area_top + diff_margin_top
 
-        # Player sub-box (top)
-        self._draw_panel_sub_box(px, py, pw, diff_area_top - gap - py)
+        # Player sub-box (top) — same height as opponent sub-box
+        player_box_h = diff_area_top - gap - py
+        self._draw_panel_sub_box(px, py, pw, player_box_h)
         # Diff sub-box (middle)
         self._draw_panel_sub_box(px, diff_area_top, pw, diff_area_bot - diff_area_top)
         # Opponent sub-box (bottom)
         opp_y = diff_area_bot + gap
-        self._draw_panel_sub_box(px, opp_y, pw, py + ph - opp_y)
+        opp_box_h = (py + ph) - opp_y
+        self._draw_panel_sub_box(px, opp_y, pw, opp_box_h)
 
         panel_cx = px + pw // 2
 
-        # ─── Player figure (top) ───
-        label_you = self.font_normal.render("YOU", True, settings.ROUNDS_LABEL_COLOR)
-        self.window.blit(label_you, label_you.get_rect(centerx=panel_cx, top=py + 6))
+        # ─── Rotated labels on left outside border ───
+        label_color = (90, 70, 50)  # darker color for brighter background
+        label_you = self.font_normal.render("YOU", True, label_color)
+        label_you_rot = pygame.transform.rotate(label_you, 90)
+        label_you_rect = label_you_rot.get_rect(
+            right=px - 2,
+            centery=py + player_box_h // 2,
+        )
+        self.window.blit(label_you_rot, label_you_rect)
+
+        # ─── Player figure (top) — centred in player sub-box ───
+        # Estimate the total visual extent below the figure centre:
+        # frame half-height + info box (name + power/suit row)
+        frame_half = settings.FIELD_ICON_WIDTH * 0.45 * settings.FRAME_FIGURE_SCALE / 2
+        info_box_est = int(0.04 * settings.SCREEN_HEIGHT)  # name row + info row
+        fig_visual_below = frame_half + info_box_est
+
+        # Collect player support figures (blocker / distance attacker / buffer)
+        player_support = []
+        if self.player_blocks_bonus_figure:
+            player_support.append(('blocks_bonus', self.player_blocks_bonus_figure))
+        if self.player_distance_attack_figure and self._player_da_hit_battle:
+            player_support.append(('distance_attack', self.player_distance_attack_figure))
+        # Add buffs_allies figures that buff the player's battle figure
+        for buff_fig in self.player_buffs_allies_figures:
+            for bf in (self.player_figure, self.player_figure_2):
+                if (bf and hasattr(bf.family, 'field') and
+                        bf.family.field == 'village' and bf.suit == buff_fig.suit):
+                    player_support.append(('buffs_allies', buff_fig))
+                    break
+        # Add buffs_allies_defence figures (active when player is defending)
+        for buff_fig in self.player_buffs_allies_defence_figures:
+            player_support.append(('buffs_allies_defence', buff_fig))
 
         if self.player_figure_icon:
-            fig_cy = settings.FIGURES_PLAYER_Y + int(0.10 * settings.SCREEN_HEIGHT)
+            if player_support:
+                # With support figures: shift battle figure down so they fit at top
+                circle_space = settings.POWER_CIRCLE_RADIUS * 2 + int(0.01 * settings.SCREEN_HEIGHT)
+                fig_cy = (py + player_box_h) - int(fig_visual_below) - circle_space + int(0.02 * settings.SCREEN_HEIGHT)
+                support_y = py + int(player_box_h * 0.12)
+            else:
+                fig_cy = py + int(player_box_h * 0.42)
             if self.player_figure_icon_2:
-                # Civil War: draw two figures side-by-side with slight overlap
                 offset = int(0.03 * settings.SCREEN_WIDTH)
                 self.player_figure_icon.draw(panel_cx - offset, fig_cy)
                 self.player_figure_icon_2.draw(panel_cx + offset, fig_cy)
             else:
                 self.player_figure_icon.draw(panel_cx, fig_cy)
 
+            # Draw player support figures at top of sub-box
+            if player_support:
+                self._draw_support_figures(player_support, panel_cx, support_y, pw, is_player=True)
+
         # ─── Power difference box (middle) ───
         diff = self._get_figure_diff()
         self._draw_diff_box(
-            panel_cx, settings.FIGURES_DIFF_Y,
+            panel_cx, actual_diff_y,
             settings.FIGURES_DIFF_W, settings.FIGURES_DIFF_H,
             diff, label="Figure Clash (start)",
         )
 
-        # ─── Opponent figure (bottom) — label at bottom of sub-box ───
+        # ─── Opponent figure (bottom) — centred in opponent sub-box ───
+        # Collect opponent support figures (blocker / distance attacker / buffer)
+        opp_support = []
+        if self.opponent_blocks_bonus_figure:
+            opp_support.append(('blocks_bonus', self.opponent_blocks_bonus_figure))
+        if self.opponent_distance_attack_figure and self._opponent_da_hit_battle:
+            opp_support.append(('distance_attack', self.opponent_distance_attack_figure))
+        # Add buffs_allies figures that buff the opponent's battle figure
+        for buff_fig in self.opponent_buffs_allies_figures:
+            for bf in (self.opponent_figure, self.opponent_figure_2):
+                if (bf and hasattr(bf.family, 'field') and
+                        bf.family.field == 'village' and bf.suit == buff_fig.suit):
+                    opp_support.append(('buffs_allies', buff_fig))
+                    break
+        # Add buffs_allies_defence figures (active when opponent is defending)
+        for buff_fig in self.opponent_buffs_allies_defence_figures:
+            opp_support.append(('buffs_allies_defence', buff_fig))
+
         if self.opponent_figure_icon:
-            fig_cy = settings.FIGURES_OPPONENT_Y + int(0.10 * settings.SCREEN_HEIGHT)
+            if opp_support:
+                # With support figures: shift figure up so they fit at bottom
+                circle_space = settings.POWER_CIRCLE_RADIUS * 2 + int(0.01 * settings.SCREEN_HEIGHT)
+                fig_cy = opp_y + circle_space + int(frame_half)
+                support_y = (opp_y + opp_box_h) - int(player_box_h * 0.12)
+            else:
+                fig_cy = opp_y + opp_box_h // 2
             if self.opponent_figure_icon_2:
                 offset = int(0.03 * settings.SCREEN_WIDTH)
                 self.opponent_figure_icon.draw(panel_cx - offset, fig_cy)
@@ -2039,9 +2554,17 @@ class BattleScreen(SubScreen):
             else:
                 self.opponent_figure_icon.draw(panel_cx, fig_cy)
 
-        opp_box_bottom = py + ph
-        label_opp = self.font_normal.render("OPPONENT", True, settings.ROUNDS_LABEL_COLOR)
-        self.window.blit(label_opp, label_opp.get_rect(centerx=panel_cx, bottom=opp_box_bottom - 6))
+            # Draw opponent support figures at bottom of sub-box
+            if opp_support:
+                self._draw_support_figures(opp_support, panel_cx, support_y, pw, is_player=False)
+
+        label_opp = self.font_normal.render("OPPONENT", True, label_color)
+        label_opp_rot = pygame.transform.rotate(label_opp, 90)
+        label_opp_rect = label_opp_rot.get_rect(
+            right=px - 2,
+            centery=opp_y + opp_box_h // 2,
+        )
+        self.window.blit(label_opp_rot, label_opp_rect)
 
         # Cursor hand on figure hover (main figures + round-panel sub-icons)
         fig_hovered = False
@@ -2055,6 +2578,386 @@ class BattleScreen(SubScreen):
         if fig_hovered and not self.battle_move_detail_box and not self.figure_detail_box:
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
 
+    def _draw_support_figures(self, support_list, panel_cx, support_y, pw, is_player):
+        """Draw N support figure icons, evenly spaced in the panel."""
+        if not support_list:
+            return
+        n = len(support_list)
+        if n == 1:
+            positions = [panel_cx]
+        else:
+            max_spread = int(pw * 0.20)
+            step = min(max_spread * 2 // (n - 1), int(pw * 0.40) // max(n - 1, 1))
+            total = step * (n - 1)
+            positions = [panel_cx - total // 2 + i * step for i in range(n)]
+        for pos_x, (skill_key, fig) in zip(positions, support_list):
+            if skill_key == 'blocks_bonus':
+                self._draw_blocker_icon(pos_x, support_y, fig, is_player=is_player)
+            elif skill_key == 'distance_attack':
+                self._draw_distance_attack_icon(pos_x, support_y, fig, is_player=is_player)
+            elif skill_key == 'buffs_allies':
+                self._draw_buffs_allies_icon(pos_x, support_y, fig, is_player=is_player)
+            elif skill_key == 'buffs_allies_defence':
+                self._draw_buffs_allies_defence_icon(pos_x, support_y, fig, is_player=is_player)
+
+    def _draw_blocker_icon(self, cx, cy, blocker_fig, is_player=True):
+        """Draw a small figure icon for a blocks_bonus support figure.
+
+        Similar style to _draw_slot_figure_icons but placed in the figures
+        panel.  Shows the blocker's frame+icon with a small 'Blocks Bonus'
+        label and the skill icon.
+        """
+        sw = settings.ROUNDS_SLOT_SIZE
+        fig_s = int(sw * 0.45)
+        frame_s = int(fig_s * 1.3)
+        mx, my = pygame.mouse.get_pos()
+        any_modal = self.battle_move_detail_box or self.figure_detail_box
+
+        hit_rect = pygame.Rect(cx - frame_s // 2, cy - frame_s // 2, frame_s, frame_s)
+        is_hovered = hit_rect.collidepoint(mx, my) and not any_modal
+
+        # Register for click → open FigureDetailBox
+        self._round_fig_icons.append({
+            'figure': blocker_fig, 'rect': hit_rect,
+            'is_player': is_player, 'round': -1,
+            'source': 'blocks_bonus', 'hovered': is_hovered,
+        })
+
+        # Enlarge on hover
+        r_fig_s = int(fig_s * 1.2) if is_hovered else fig_s
+        r_frame_s = int(frame_s * 1.2) if is_hovered else frame_s
+
+        # Scale frame + icon
+        frame_raw = getattr(blocker_fig.family, 'frame_img', None)
+        icon_raw = getattr(blocker_fig.family, 'icon_img', None)
+        if not icon_raw:
+            return
+
+        icon_scaled = pygame.transform.smoothscale(icon_raw, (r_fig_s, r_fig_s))
+        if is_hovered:
+            bright = pygame.Surface(icon_scaled.get_size(), pygame.SRCALPHA)
+            bright.fill((40, 40, 40, 0))
+            icon_scaled.blit(bright, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+
+        self.window.blit(icon_scaled, icon_scaled.get_rect(center=(cx, cy)))
+        if frame_raw:
+            frame_scaled = pygame.transform.smoothscale(frame_raw, (r_frame_s, r_frame_s))
+            self.window.blit(frame_scaled, frame_scaled.get_rect(center=(cx, cy)))
+
+        # Small info label to the RIGHT of the icon, vertically centered:
+        # combined skill+suit icon + "Blocks Bonus" text
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS, get_advantage_suit
+        skill_icon_path = SKILL_DEFINITIONS.get('blocks_bonus', {}).get('icon', '')
+        info_color = (100, 230, 100) if is_player else (255, 100, 100)
+        label_txt = self.font_small.render("Blocks Bonus", True, info_color)
+        label_h = label_txt.get_height() + 4
+
+        # Build a combined skill icon with suit icon behind it (same overlay pattern as info row)
+        combined_ico = None
+        adv_suit = get_advantage_suit(blocker_fig.suit)
+        cache_key = f'_blocker_combined_icon_{label_h}_{adv_suit}'
+        if not hasattr(self, cache_key):
+            try:
+                # Load skill icon
+                raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                # Load suit icon and draw behind skill icon at 85% size
+                combined = pygame.Surface((label_h, label_h), pygame.SRCALPHA)
+                if adv_suit:
+                    suit_path = settings.SUIT_ICON_IMG_PATH + adv_suit.lower() + '.png'
+                    raw_suit = pygame.image.load(suit_path).convert_alpha()
+                    suit_s = int(label_h * 0.85)
+                    suit_scaled = pygame.transform.smoothscale(raw_suit, (suit_s, suit_s))
+                    combined.blit(suit_scaled, ((label_h - suit_s) // 2, (label_h - suit_s) // 2))
+                combined.blit(skill_scaled, (0, 0))
+                setattr(self, cache_key, combined)
+            except Exception:
+                setattr(self, cache_key, None)
+        combined_ico = getattr(self, cache_key)
+
+        ico_w = (combined_ico.get_width() + 3) if combined_ico else 0
+        total_label_w = ico_w + label_txt.get_width() + 8
+        info_h = label_h + 2
+
+        # Position: overlaid on the support figure icon, at the bottom of the icon
+        info_x = cx - total_label_w // 2
+        info_y = cy + r_frame_s // 2 - info_h
+
+        info_bg = pygame.Surface((total_label_w, info_h), pygame.SRCALPHA)
+        info_bg.fill((40, 25, 10, 180))
+        self.window.blit(info_bg, (info_x, info_y))
+
+        draw_x = info_x + 4
+        if combined_ico:
+            self.window.blit(combined_ico, (draw_x, info_y + (info_h - combined_ico.get_height()) // 2))
+            draw_x += combined_ico.get_width() + 3
+        self.window.blit(label_txt, (draw_x, info_y + (info_h - label_txt.get_height()) // 2))
+
+    def _draw_distance_attack_icon(self, cx, cy, attacker_fig, is_player=True):
+        """Draw a small figure icon for a distance_attack support figure.
+
+        Same visual style as _draw_blocker_icon but with 'Distance -N' label
+        (N = figure's number card value) and the distance_attack skill icon.
+        """
+        sw = settings.ROUNDS_SLOT_SIZE
+        fig_s = int(sw * 0.45)
+        frame_s = int(fig_s * 1.3)
+        mx, my = pygame.mouse.get_pos()
+        any_modal = self.battle_move_detail_box or self.figure_detail_box
+
+        hit_rect = pygame.Rect(cx - frame_s // 2, cy - frame_s // 2, frame_s, frame_s)
+        is_hovered = hit_rect.collidepoint(mx, my) and not any_modal
+
+        # Register for click → open FigureDetailBox
+        self._round_fig_icons.append({
+            'figure': attacker_fig, 'rect': hit_rect,
+            'is_player': is_player, 'round': -1,
+            'source': 'distance_attack', 'hovered': is_hovered,
+        })
+
+        # Enlarge on hover
+        r_fig_s = int(fig_s * 1.2) if is_hovered else fig_s
+        r_frame_s = int(frame_s * 1.2) if is_hovered else frame_s
+
+        # Scale frame + icon
+        frame_raw = getattr(attacker_fig.family, 'frame_img', None)
+        icon_raw = getattr(attacker_fig.family, 'icon_img', None)
+        if not icon_raw:
+            return
+
+        icon_scaled = pygame.transform.smoothscale(icon_raw, (r_fig_s, r_fig_s))
+        if is_hovered:
+            bright = pygame.Surface(icon_scaled.get_size(), pygame.SRCALPHA)
+            bright.fill((40, 40, 40, 0))
+            icon_scaled.blit(bright, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+
+        self.window.blit(icon_scaled, icon_scaled.get_rect(center=(cx, cy)))
+        if frame_raw:
+            frame_scaled = pygame.transform.smoothscale(frame_raw, (r_frame_s, r_frame_s))
+            self.window.blit(frame_scaled, frame_scaled.get_rect(center=(cx, cy)))
+
+        # Info label: combined skill+suit icon + "Distance -N"
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS, get_advantage_suit
+        skill_icon_path = SKILL_DEFINITIONS.get('distance_attack', {}).get('icon', '')
+        info_color = (100, 230, 100) if is_player else (255, 100, 100)
+        penalty_val = attacker_fig.number_card.value if attacker_fig.number_card else 0
+        label_txt = self.font_small.render(f"Distance -{penalty_val}", True, info_color)
+        label_h = label_txt.get_height() + 4
+
+        # Build combined skill icon with suit icon behind it
+        combined_ico = None
+        adv_suit = get_advantage_suit(attacker_fig.suit)
+        cache_key = f'_distance_combined_icon_{label_h}_{adv_suit}'
+        if not hasattr(self, cache_key):
+            try:
+                raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                combined = pygame.Surface((label_h, label_h), pygame.SRCALPHA)
+                if adv_suit:
+                    suit_path = settings.SUIT_ICON_IMG_PATH + adv_suit.lower() + '.png'
+                    raw_suit = pygame.image.load(suit_path).convert_alpha()
+                    suit_s = int(label_h * 0.85)
+                    suit_scaled = pygame.transform.smoothscale(raw_suit, (suit_s, suit_s))
+                    combined.blit(suit_scaled, ((label_h - suit_s) // 2, (label_h - suit_s) // 2))
+                combined.blit(skill_scaled, (0, 0))
+                setattr(self, cache_key, combined)
+            except Exception:
+                setattr(self, cache_key, None)
+        combined_ico = getattr(self, cache_key)
+
+        ico_w = (combined_ico.get_width() + 3) if combined_ico else 0
+        total_label_w = ico_w + label_txt.get_width() + 8
+        info_h = label_h + 2
+
+        # Position: overlaid on the support figure icon, at the bottom
+        info_x = cx - total_label_w // 2
+        info_y = cy + r_frame_s // 2 - info_h
+
+        info_bg = pygame.Surface((total_label_w, info_h), pygame.SRCALPHA)
+        info_bg.fill((40, 25, 10, 180))
+        self.window.blit(info_bg, (info_x, info_y))
+
+        draw_x = info_x + 4
+        if combined_ico:
+            self.window.blit(combined_ico, (draw_x, info_y + (info_h - combined_ico.get_height()) // 2))
+            draw_x += combined_ico.get_width() + 3
+        self.window.blit(label_txt, (draw_x, info_y + (info_h - label_txt.get_height()) // 2))
+
+    def _draw_buffs_allies_icon(self, cx, cy, buff_fig, is_player=True):
+        """Draw a small figure icon for a buffs_allies support figure.
+
+        Same visual style as _draw_blocker_icon but with 'Buffs +4' label
+        and the buffs_allies skill icon.
+        """
+        sw = settings.ROUNDS_SLOT_SIZE
+        fig_s = int(sw * 0.45)
+        frame_s = int(fig_s * 1.3)
+        mx, my = pygame.mouse.get_pos()
+        any_modal = self.battle_move_detail_box or self.figure_detail_box
+
+        hit_rect = pygame.Rect(cx - frame_s // 2, cy - frame_s // 2, frame_s, frame_s)
+        is_hovered = hit_rect.collidepoint(mx, my) and not any_modal
+
+        self._round_fig_icons.append({
+            'figure': buff_fig, 'rect': hit_rect,
+            'is_player': is_player, 'round': -1,
+            'source': 'buffs_allies', 'hovered': is_hovered,
+        })
+
+        r_fig_s = int(fig_s * 1.2) if is_hovered else fig_s
+        r_frame_s = int(frame_s * 1.2) if is_hovered else frame_s
+
+        frame_raw = getattr(buff_fig.family, 'frame_img', None)
+        icon_raw = getattr(buff_fig.family, 'icon_img', None)
+        if not icon_raw:
+            return
+
+        icon_scaled = pygame.transform.smoothscale(icon_raw, (r_fig_s, r_fig_s))
+        if is_hovered:
+            bright = pygame.Surface(icon_scaled.get_size(), pygame.SRCALPHA)
+            bright.fill((40, 40, 40, 0))
+            icon_scaled.blit(bright, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+
+        self.window.blit(icon_scaled, icon_scaled.get_rect(center=(cx, cy)))
+        if frame_raw:
+            frame_scaled = pygame.transform.smoothscale(frame_raw, (r_frame_s, r_frame_s))
+            self.window.blit(frame_scaled, frame_scaled.get_rect(center=(cx, cy)))
+
+        # Info label: skill icon (with suit behind if suit_self) + "Buffs +4"
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS
+        skill_icon_path = SKILL_DEFINITIONS.get('buffs_allies', {}).get('icon', '')
+        suit_self = SKILL_DEFINITIONS.get('buffs_allies', {}).get('suit_self', False)
+        info_color = (100, 230, 100) if is_player else (255, 100, 100)
+        label_txt = self.font_small.render("Buffs +4", True, info_color)
+        label_h = label_txt.get_height() + 4
+
+        # Build skill icon + suit icon side by side if suit_self, else skill only
+        if suit_self:
+            own_suit = getattr(buff_fig, 'suit', '') or ''
+            cache_key = f'_buffs_allies_icon_{label_h}_{own_suit.lower()}'
+            if not hasattr(self, cache_key):
+                try:
+                    raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                    skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                    if own_suit:
+                        suit_path = settings.SUIT_ICON_IMG_PATH + own_suit.lower() + '.png'
+                        raw_suit = pygame.image.load(suit_path).convert_alpha()
+                        suit_s = int(label_h * 0.85)
+                        suit_scaled = pygame.transform.smoothscale(raw_suit, (suit_s, suit_s))
+                        gap = 2
+                        combined_w = label_h + gap + suit_s
+                        combined = pygame.Surface((combined_w, label_h), pygame.SRCALPHA)
+                        combined.blit(skill_scaled, (0, 0))
+                        combined.blit(suit_scaled, (label_h + gap, (label_h - suit_s) // 2))
+                    else:
+                        combined = skill_scaled
+                    setattr(self, cache_key, combined)
+                except Exception:
+                    setattr(self, cache_key, None)
+            skill_ico = getattr(self, cache_key)
+        else:
+            cache_key = f'_buffs_allies_icon_{label_h}'
+            if not hasattr(self, cache_key):
+                try:
+                    raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                    skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                    setattr(self, cache_key, skill_scaled)
+                except Exception:
+                    setattr(self, cache_key, None)
+            skill_ico = getattr(self, cache_key)
+
+        ico_w = (skill_ico.get_width() + 3) if skill_ico else 0
+        total_label_w = ico_w + label_txt.get_width() + 8
+        info_h = label_h + 2
+
+        info_x = cx - total_label_w // 2
+        info_y = cy + r_frame_s // 2 - info_h
+
+        info_bg = pygame.Surface((total_label_w, info_h), pygame.SRCALPHA)
+        info_bg.fill((40, 25, 10, 180))
+        self.window.blit(info_bg, (info_x, info_y))
+
+        draw_x = info_x + 4
+        if skill_ico:
+            self.window.blit(skill_ico, (draw_x, info_y + (info_h - skill_ico.get_height()) // 2))
+            draw_x += skill_ico.get_width() + 3
+        self.window.blit(label_txt, (draw_x, info_y + (info_h - label_txt.get_height()) // 2))
+
+    def _draw_buffs_allies_defence_icon(self, cx, cy, buff_fig, is_player=True):
+        """Draw a small figure icon for a buffs_allies_defence support figure.
+
+        Same visual style as _draw_buffs_allies_icon but with 'Defence +N'
+        label and the buffs_allies_defence skill icon.
+        """
+        sw = settings.ROUNDS_SLOT_SIZE
+        fig_s = int(sw * 0.45)
+        frame_s = int(fig_s * 1.3)
+        mx, my = pygame.mouse.get_pos()
+        any_modal = self.battle_move_detail_box or self.figure_detail_box
+
+        hit_rect = pygame.Rect(cx - frame_s // 2, cy - frame_s // 2, frame_s, frame_s)
+        is_hovered = hit_rect.collidepoint(mx, my) and not any_modal
+
+        self._round_fig_icons.append({
+            'figure': buff_fig, 'rect': hit_rect,
+            'is_player': is_player, 'round': -1,
+            'source': 'buffs_allies_defence', 'hovered': is_hovered,
+        })
+
+        r_fig_s = int(fig_s * 1.2) if is_hovered else fig_s
+        r_frame_s = int(frame_s * 1.2) if is_hovered else frame_s
+
+        frame_raw = getattr(buff_fig.family, 'frame_img', None)
+        icon_raw = getattr(buff_fig.family, 'icon_img', None)
+        if not icon_raw:
+            return
+
+        icon_scaled = pygame.transform.smoothscale(icon_raw, (r_fig_s, r_fig_s))
+        if is_hovered:
+            bright = pygame.Surface(icon_scaled.get_size(), pygame.SRCALPHA)
+            bright.fill((40, 40, 40, 0))
+            icon_scaled.blit(bright, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+
+        self.window.blit(icon_scaled, icon_scaled.get_rect(center=(cx, cy)))
+        if frame_raw:
+            frame_scaled = pygame.transform.smoothscale(frame_raw, (r_frame_s, r_frame_s))
+            self.window.blit(frame_scaled, frame_scaled.get_rect(center=(cx, cy)))
+
+        # Info label: skill icon + "Defence +N"
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS
+        skill_icon_path = SKILL_DEFINITIONS.get('buffs_allies_defence', {}).get('icon', '')
+        bonus_val = buff_fig.number_card.value if getattr(buff_fig, 'number_card', None) else 0
+        info_color = (100, 230, 100) if is_player else (255, 100, 100)
+        label_txt = self.font_small.render(f"Defence +{bonus_val}", True, info_color)
+        label_h = label_txt.get_height() + 4
+
+        cache_key = f'_buffs_allies_defence_icon_{label_h}'
+        if not hasattr(self, cache_key):
+            try:
+                raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                setattr(self, cache_key, skill_scaled)
+            except Exception:
+                setattr(self, cache_key, None)
+        skill_ico = getattr(self, cache_key)
+
+        ico_w = (skill_ico.get_width() + 3) if skill_ico else 0
+        total_label_w = ico_w + label_txt.get_width() + 8
+        info_h = label_h + 2
+
+        info_x = cx - total_label_w // 2
+        info_y = cy + r_frame_s // 2 - info_h
+
+        info_bg = pygame.Surface((total_label_w, info_h), pygame.SRCALPHA)
+        info_bg.fill((40, 25, 10, 180))
+        self.window.blit(info_bg, (info_x, info_y))
+
+        draw_x = info_x + 4
+        if skill_ico:
+            self.window.blit(skill_ico, (draw_x, info_y + (info_h - skill_ico.get_height()) // 2))
+            draw_x += skill_ico.get_width() + 3
+        self.window.blit(label_txt, (draw_x, info_y + (info_h - label_txt.get_height()) // 2))
+
     # ──────────── (3) Rounds Panel (centre) ────────────────────
 
     def _draw_rounds_panel(self):
@@ -2063,11 +2966,16 @@ class BattleScreen(SubScreen):
         py = settings.ROUNDS_PANEL_Y
         pw = settings.ROUNDS_PANEL_W
         ph = settings.ROUNDS_PANEL_H
-        gap = 4
+        gap = int(0.005 * settings.SCREEN_HEIGHT)
 
-        # Sub-box boundaries based on diff box position
-        diff_area_top = settings.ROUNDS_DIFF_Y - 24
-        diff_area_bot = settings.ROUNDS_DIFF_Y + settings.ROUNDS_DIFF_H + 8
+        # Use the same centred diff area as the figures panel for alignment
+        diff_margin_top = int(0.03 * settings.SCREEN_HEIGHT)
+        diff_margin_bot = int(0.01 * settings.SCREEN_HEIGHT)
+        diff_h_total = diff_margin_top + settings.FIGURES_DIFF_H + diff_margin_bot
+        panel_mid = py + ph // 2
+        diff_area_top = panel_mid - diff_h_total // 2
+        diff_area_bot = panel_mid + diff_h_total // 2
+        actual_diff_y = diff_area_top + diff_margin_top
 
         # Player sub-box (top) — includes round labels + player slots
         self._draw_panel_sub_box(px, py, pw, diff_area_top - gap - py)
@@ -2097,7 +3005,7 @@ class BattleScreen(SubScreen):
             rd = self._get_round_diff(r)
             lbl_color = settings.ROUNDS_LABEL_ACTIVE_COLOR if is_current else settings.ROUNDS_LABEL_COLOR
             self._draw_diff_box(
-                col_cx, settings.ROUNDS_DIFF_Y,
+                col_cx, actual_diff_y,
                 settings.ROUNDS_DIFF_W, settings.ROUNDS_DIFF_H,
                 rd, label=f"Round {r + 1}", label_color=lbl_color,
             )
@@ -2112,14 +3020,32 @@ class BattleScreen(SubScreen):
     def _draw_all_power_circles(self):
         """Draw every power circle AFTER all panels so they sit on top."""
         # --- Figures panel circles ---
+        # Compute diff area boundaries (same logic as _draw_figures_panel)
+        py = settings.FIGURES_PANEL_Y
+        ph = settings.FIGURES_PANEL_H
+        gap = int(0.005 * settings.SCREEN_HEIGHT)
+        diff_margin_top = int(0.03 * settings.SCREEN_HEIGHT)
+        diff_margin_bot = int(0.01 * settings.SCREEN_HEIGHT)
+        diff_h_total = diff_margin_top + settings.FIGURES_DIFF_H + diff_margin_bot
+        panel_mid = py + ph // 2
+        diff_area_top = panel_mid - diff_h_total // 2
+        diff_area_bot = panel_mid + diff_h_total // 2
+        r = settings.POWER_CIRCLE_RADIUS
+
+        # Place circles inside their corresponding sub-boxes (near the diff area edge)
+        player_box_bottom = diff_area_top - gap
+        opp_box_top = diff_area_bot + gap
+        player_circle_y = player_box_bottom - r - int(0.005 * settings.SCREEN_HEIGHT)
+        opp_circle_y = opp_box_top + r + int(0.005 * settings.SCREEN_HEIGHT)
+
         fig_cx = settings.FIGURES_PANEL_X + settings.FIGURES_PANEL_W // 2
         player_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
         player_power += self._get_figure_total_power(self.player_figure_2, self.player_figure_icon_2)
-        self._draw_power_circle(fig_cx, settings.POWER_CIRCLE_PLAYER_Y, player_power)
+        self._draw_power_circle(fig_cx, player_circle_y, player_power)
 
         opp_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
         opp_power += self._get_figure_total_power(self.opponent_figure_2, self.opponent_figure_icon_2)
-        self._draw_power_circle(fig_cx, settings.POWER_CIRCLE_OPPONENT_Y, opp_power)
+        self._draw_power_circle(fig_cx, opp_circle_y, opp_power)
 
         # --- Rounds panel circles (3 columns) ---
         rpx = settings.ROUNDS_PANEL_X
@@ -2138,7 +3064,7 @@ class BattleScreen(SubScreen):
             p_val = None
             p_crossed = False
             if p_move:
-                p_val = self._get_move_effective_power(p_move)
+                p_val = self._get_move_effective_power(p_move, is_player=True, round_idx=r)
                 # If opponent played Block, player's value is crossed out
                 if o_move and o_move.get('family_name') == 'Block':
                     p_crossed = True
@@ -2146,7 +3072,7 @@ class BattleScreen(SubScreen):
             o_val = None
             o_crossed = False
             if o_move:
-                o_val = self._get_move_effective_power(o_move)
+                o_val = self._get_move_effective_power(o_move, is_player=False, round_idx=r)
                 # If player played Block, opponent's value is crossed out
                 if p_move and p_move.get('family_name') == 'Block':
                     o_crossed = True
@@ -2199,6 +3125,39 @@ class BattleScreen(SubScreen):
             call_fig = played_move.get('_call_figure')
             if call_fig and hasattr(call_fig, 'family') and hasattr(call_fig.family, 'icon_img'):
                 slot_figures.append((call_fig, 'call'))
+
+            # Add distance-attack figure on the OWNER's rounds panel
+            if is_player:
+                # Player's DA fires on opponent's call figs — show here
+                da_round = self._get_da_call_round(for_player_da=True)
+                da_fig = self.player_distance_attack_figure
+            else:
+                # Opponent's DA fires on player's call figs — show here
+                da_round = self._get_da_call_round(for_player_da=False)
+                da_fig = self.opponent_distance_attack_figure
+            if da_fig and da_round == r_index and hasattr(da_fig, 'family') and hasattr(da_fig.family, 'icon_img'):
+                slot_figures.append((da_fig, 'distance_attack'))
+
+            # Add buffs_allies figures on the OWNER's rounds panel
+            if call_fig and hasattr(call_fig, 'family') and hasattr(call_fig.family, 'field'):
+                if call_fig.family.field == 'village':
+                    buffs_list = (self.player_buffs_allies_figures if is_player
+                                  else self.opponent_buffs_allies_figures)
+                    for buff_fig in buffs_list:
+                        if (buff_fig.suit == call_fig.suit and
+                                hasattr(buff_fig, 'family') and
+                                hasattr(buff_fig.family, 'icon_img')):
+                            slot_figures.append((buff_fig, 'buffs_allies'))
+
+            # Add buffs_allies_defence figures on the OWNER's rounds panel
+            # Defence buff applies to ALL call figures when defending
+            if call_fig:
+                defence_list = (self.player_buffs_allies_defence_figures if is_player
+                                else self.opponent_buffs_allies_defence_figures)
+                for buff_fig in defence_list:
+                    if (hasattr(buff_fig, 'family') and
+                            hasattr(buff_fig.family, 'icon_img')):
+                        slot_figures.append((buff_fig, 'buffs_allies_defence'))
 
             # Draw all figure sub-icons for this slot (supports multiple)
             if slot_figures:
@@ -2257,7 +3216,7 @@ class BattleScreen(SubScreen):
 
         fig_s = int(sw * 0.55)
         frame_s = int(fig_s * 1.3)
-        spacing = 4
+        spacing = max(2, int(sw * 0.05))
         total_w = len(slot_figures) * frame_s + (len(slot_figures) - 1) * spacing
         start_x = cx - total_w // 2 + frame_s // 2  # centre of first icon
 
@@ -2265,10 +3224,11 @@ class BattleScreen(SubScreen):
             icon_cx = start_x + idx * (frame_s + spacing)
 
             # Y position: player above the slot, opponent below
+            icon_gap = max(4, int(sw * 0.2))
             if is_player:
-                icon_cy = slot_cy - sw // 2 - frame_s // 2 - 16
+                icon_cy = slot_cy - sw // 2 - frame_s // 2 - icon_gap
             else:
-                icon_cy = slot_cy + sw // 2 + frame_s // 2 + 16
+                icon_cy = slot_cy + sw // 2 + frame_s // 2 + icon_gap
 
             # Hit rect for hover / click (based on frame size)
             hit_rect = pygame.Rect(
@@ -2317,34 +3277,278 @@ class BattleScreen(SubScreen):
                                 frame_scaled.get_rect(center=(icon_cx, icon_cy)))
 
             # Small info box: suit icon + base power number — top-left of frame
-            fig_power = fig.get_value()
-            fig_suit_lower = (fig.suit or '').lower()
-            suit_ico = self._slot_suit_icon_cache.get(fig_suit_lower)
-            pwr_txt = self.font_small.render(str(fig_power), True, (255, 255, 255))
+            # Only shown for called figures; skill support figures don't need this.
+            if source == 'call':
+                fig_power = fig.get_value()
+                fig_suit_lower = (fig.suit or '').lower()
+                suit_ico = self._slot_suit_icon_cache.get(fig_suit_lower)
+                pwr_txt = self.font_small.render(str(fig_power), True, (255, 255, 255))
 
-            ico_w = (suit_ico.get_width() + 3) if suit_ico else 0
-            info_w = ico_w + pwr_txt.get_width() + 8
-            info_h = max(pwr_txt.get_height(),
-                         suit_ico.get_height() if suit_ico else 0) + 4
+                # Check if this call figure receives buffs_allies bonus
+                buffs_bonus_txt = None
+                if hasattr(fig, 'family') and hasattr(fig.family, 'field') and fig.family.field == 'village':
+                    buffs_list = (self.player_buffs_allies_figures if is_player
+                                  else self.opponent_buffs_allies_figures)
+                    total_buff = sum(4 for bf in buffs_list if bf.suit == fig.suit)
+                    if total_buff > 0:
+                        buffs_bonus_txt = self.font_small.render(
+                            f"+{total_buff}", True, (255, 255, 255))
 
-            # Position at top-left corner of the frame
-            info_x = icon_cx - r_frame_s // 2
-            info_y = icon_cy - r_frame_s // 2
+                # Check if this call figure receives buffs_allies_defence bonus
+                defence_bonus_txt = None
+                defence_list = (self.player_buffs_allies_defence_figures if is_player
+                                else self.opponent_buffs_allies_defence_figures)
+                if defence_list:
+                    total_def = sum(bf.number_card.value for bf in defence_list if bf.number_card)
+                    if total_def > 0:
+                        defence_bonus_txt = self.font_small.render(
+                            f"+{total_def}", True, (255, 255, 255))
 
-            info_rect = pygame.Rect(info_x, info_y, info_w, info_h)
-            info_bg = pygame.Surface((info_w, info_h), pygame.SRCALPHA)
-            info_bg.fill((40, 25, 10, 180))
-            self.window.blit(info_bg, info_rect.topleft)
+                # Check if this call figure is targeted by distance attack
+                da_penalty_txt = None
+                if r_index is not None:
+                    # is_player call fig → opponent's DA targets it
+                    da_round_opp = self._get_da_call_round(for_player_da=not is_player)
+                    if da_round_opp == r_index:
+                        attacker = (self.opponent_distance_attack_figure if is_player
+                                    else self.player_distance_attack_figure)
+                        if attacker:
+                            pen_val = attacker.number_card.value if attacker.number_card else 0
+                            if pen_val > 0:
+                                da_penalty_txt = self.font_small.render(
+                                    f" -{pen_val}", True, (255, 60, 60))
 
-            draw_x = info_rect.x + 4
-            if suit_ico:
+                ico_w = (suit_ico.get_width() + 3) if suit_ico else 0
+                buffs_w = buffs_bonus_txt.get_width() if buffs_bonus_txt else 0
+                defence_w = defence_bonus_txt.get_width() if defence_bonus_txt else 0
+                penalty_w = da_penalty_txt.get_width() if da_penalty_txt else 0
+                info_w = ico_w + pwr_txt.get_width() + buffs_w + defence_w + penalty_w + 8
+                info_h = max(pwr_txt.get_height(),
+                             suit_ico.get_height() if suit_ico else 0) + 4
+
+                # Position at top-left corner of the frame
+                info_x = icon_cx - r_frame_s // 2
+                info_y = icon_cy - r_frame_s // 2
+
+                info_rect = pygame.Rect(info_x, info_y, info_w, info_h)
+                info_bg = pygame.Surface((info_w, info_h), pygame.SRCALPHA)
+                info_bg.fill((40, 25, 10, 180))
+                self.window.blit(info_bg, info_rect.topleft)
+
+                draw_x = info_rect.x + 4
+                if suit_ico:
+                    self.window.blit(
+                        suit_ico,
+                        (draw_x, info_rect.centery - suit_ico.get_height() // 2))
+                    draw_x += suit_ico.get_width() + 3
                 self.window.blit(
-                    suit_ico,
-                    (draw_x, info_rect.centery - suit_ico.get_height() // 2))
-                draw_x += suit_ico.get_width() + 3
-            self.window.blit(
-                pwr_txt,
-                (draw_x, info_rect.centery - pwr_txt.get_height() // 2))
+                    pwr_txt,
+                    (draw_x, info_rect.centery - pwr_txt.get_height() // 2))
+                draw_x += pwr_txt.get_width()
+                if buffs_bonus_txt:
+                    self.window.blit(
+                        buffs_bonus_txt,
+                        (draw_x, info_rect.centery - buffs_bonus_txt.get_height() // 2))
+                    draw_x += buffs_bonus_txt.get_width()
+                if defence_bonus_txt:
+                    self.window.blit(
+                        defence_bonus_txt,
+                        (draw_x, info_rect.centery - defence_bonus_txt.get_height() // 2))
+                    draw_x += defence_bonus_txt.get_width()
+                if da_penalty_txt:
+                    self.window.blit(
+                        da_penalty_txt,
+                        (draw_x, info_rect.centery - da_penalty_txt.get_height() // 2))
+
+            # ─── Info tag label at the bottom of the icon ───
+            self._draw_slot_fig_tag(icon_cx, icon_cy, r_frame_s, fig, source, is_player)
+
+    def _draw_slot_fig_tag(self, icon_cx, icon_cy, r_frame_s, fig, source, is_player):
+        """Draw a small label tag at the bottom of a round-slot figure icon.
+
+        - 'call'                  → "Called"
+        - 'distance_attack'       → skill+suit icon + "Distance -N"
+        - 'blocks_bonus'          → skill+suit icon + "Blocks Bonus"
+        - 'buffs_allies'          → skill icon + "Buffs +4"
+        - 'buffs_allies_defence'  → skill icon + "Defence +N"
+        """
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS, get_advantage_suit
+
+        info_color = (100, 230, 100) if is_player else (255, 100, 100)
+
+        if source == 'call':
+            label_txt = self.font_small.render("Called", True, (210, 210, 210))
+            label_h = label_txt.get_height() + 4
+            tag_w = label_txt.get_width() + 8
+            tag_h = label_h + 2
+            tag_x = icon_cx - tag_w // 2
+            tag_y = icon_cy + r_frame_s // 2 - tag_h
+            tag_bg = pygame.Surface((tag_w, tag_h), pygame.SRCALPHA)
+            tag_bg.fill((40, 25, 10, 180))
+            self.window.blit(tag_bg, (tag_x, tag_y))
+            self.window.blit(label_txt,
+                             (tag_x + 4, tag_y + (tag_h - label_txt.get_height()) // 2))
+
+        elif source == 'distance_attack':
+            penalty_val = fig.number_card.value if getattr(fig, 'number_card', None) else 0
+            label_txt = self.font_small.render(f"Distance -{penalty_val}", True, info_color)
+            label_h = label_txt.get_height() + 4
+
+            # Build combined skill+suit icon (cached)
+            adv_suit = get_advantage_suit(fig.suit)
+            cache_key = f'_slot_da_tag_icon_{label_h}_{adv_suit}'
+            if not hasattr(self, cache_key):
+                skill_icon_path = SKILL_DEFINITIONS.get('distance_attack', {}).get('icon', '')
+                try:
+                    raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                    skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                    combined = pygame.Surface((label_h, label_h), pygame.SRCALPHA)
+                    if adv_suit:
+                        suit_path = settings.SUIT_ICON_IMG_PATH + adv_suit.lower() + '.png'
+                        raw_suit = pygame.image.load(suit_path).convert_alpha()
+                        suit_s = int(label_h * 0.85)
+                        suit_scaled = pygame.transform.smoothscale(raw_suit, (suit_s, suit_s))
+                        combined.blit(suit_scaled, ((label_h - suit_s) // 2, (label_h - suit_s) // 2))
+                    combined.blit(skill_scaled, (0, 0))
+                    setattr(self, cache_key, combined)
+                except Exception:
+                    setattr(self, cache_key, None)
+            combined_ico = getattr(self, cache_key)
+
+            ico_w = (combined_ico.get_width() + 3) if combined_ico else 0
+            tag_w = ico_w + label_txt.get_width() + 8
+            tag_h = label_h + 2
+            tag_x = icon_cx - tag_w // 2
+            tag_y = icon_cy + r_frame_s // 2 - tag_h
+            tag_bg = pygame.Surface((tag_w, tag_h), pygame.SRCALPHA)
+            tag_bg.fill((40, 25, 10, 180))
+            self.window.blit(tag_bg, (tag_x, tag_y))
+            dx = tag_x + 4
+            if combined_ico:
+                self.window.blit(combined_ico,
+                                 (dx, tag_y + (tag_h - combined_ico.get_height()) // 2))
+                dx += combined_ico.get_width() + 3
+            self.window.blit(label_txt,
+                             (dx, tag_y + (tag_h - label_txt.get_height()) // 2))
+
+        elif source == 'blocks_bonus':
+            label_txt = self.font_small.render("Blocks Bonus", True, info_color)
+            label_h = label_txt.get_height() + 4
+
+            adv_suit = get_advantage_suit(fig.suit)
+            cache_key = f'_slot_bb_tag_icon_{label_h}_{adv_suit}'
+            if not hasattr(self, cache_key):
+                skill_icon_path = SKILL_DEFINITIONS.get('blocks_bonus', {}).get('icon', '')
+                try:
+                    raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                    skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                    combined = pygame.Surface((label_h, label_h), pygame.SRCALPHA)
+                    if adv_suit:
+                        suit_path = settings.SUIT_ICON_IMG_PATH + adv_suit.lower() + '.png'
+                        raw_suit = pygame.image.load(suit_path).convert_alpha()
+                        suit_s = int(label_h * 0.85)
+                        suit_scaled = pygame.transform.smoothscale(raw_suit, (suit_s, suit_s))
+                        combined.blit(suit_scaled, ((label_h - suit_s) // 2, (label_h - suit_s) // 2))
+                    combined.blit(skill_scaled, (0, 0))
+                    setattr(self, cache_key, combined)
+                except Exception:
+                    setattr(self, cache_key, None)
+            combined_ico = getattr(self, cache_key)
+
+            ico_w = (combined_ico.get_width() + 3) if combined_ico else 0
+            tag_w = ico_w + label_txt.get_width() + 8
+            tag_h = label_h + 2
+            tag_x = icon_cx - tag_w // 2
+            tag_y = icon_cy + r_frame_s // 2 - tag_h
+            tag_bg = pygame.Surface((tag_w, tag_h), pygame.SRCALPHA)
+            tag_bg.fill((40, 25, 10, 180))
+            self.window.blit(tag_bg, (tag_x, tag_y))
+            dx = tag_x + 4
+            if combined_ico:
+                self.window.blit(combined_ico,
+                                 (dx, tag_y + (tag_h - combined_ico.get_height()) // 2))
+                dx += combined_ico.get_width() + 3
+            self.window.blit(label_txt,
+                             (dx, tag_y + (tag_h - label_txt.get_height()) // 2))
+
+        elif source == 'buffs_allies':
+            label_txt = self.font_small.render("Buffs +4", True, info_color)
+            label_h = label_txt.get_height() + 4
+
+            # Build skill icon + suit icon side by side (cached)
+            suit_self = SKILL_DEFINITIONS.get('buffs_allies', {}).get('suit_self', False)
+            own_suit = (getattr(fig, 'suit', '') or '').lower() if suit_self else ''
+            cache_key = f'_slot_ba_tag_icon_{label_h}_{own_suit}'
+            if not hasattr(self, cache_key):
+                skill_icon_path = SKILL_DEFINITIONS.get('buffs_allies', {}).get('icon', '')
+                try:
+                    raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                    skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                    if own_suit:
+                        suit_path = settings.SUIT_ICON_IMG_PATH + own_suit + '.png'
+                        raw_suit = pygame.image.load(suit_path).convert_alpha()
+                        suit_s = int(label_h * 0.85)
+                        suit_scaled = pygame.transform.smoothscale(raw_suit, (suit_s, suit_s))
+                        gap = 2
+                        combined_w = label_h + gap + suit_s
+                        combined = pygame.Surface((combined_w, label_h), pygame.SRCALPHA)
+                        combined.blit(skill_scaled, (0, 0))
+                        combined.blit(suit_scaled, (label_h + gap, (label_h - suit_s) // 2))
+                        setattr(self, cache_key, combined)
+                    else:
+                        setattr(self, cache_key, skill_scaled)
+                except Exception:
+                    setattr(self, cache_key, None)
+            skill_ico = getattr(self, cache_key)
+
+            ico_w = (skill_ico.get_width() + 3) if skill_ico else 0
+            tag_w = ico_w + label_txt.get_width() + 8
+            tag_h = label_h + 2
+            tag_x = icon_cx - tag_w // 2
+            tag_y = icon_cy + r_frame_s // 2 - tag_h
+            tag_bg = pygame.Surface((tag_w, tag_h), pygame.SRCALPHA)
+            tag_bg.fill((40, 25, 10, 180))
+            self.window.blit(tag_bg, (tag_x, tag_y))
+            dx = tag_x + 4
+            if skill_ico:
+                self.window.blit(skill_ico,
+                                 (dx, tag_y + (tag_h - skill_ico.get_height()) // 2))
+                dx += skill_ico.get_width() + 3
+            self.window.blit(label_txt,
+                             (dx, tag_y + (tag_h - label_txt.get_height()) // 2))
+
+        elif source == 'buffs_allies_defence':
+            bonus_val = fig.number_card.value if getattr(fig, 'number_card', None) else 0
+            label_txt = self.font_small.render(f"Defence +{bonus_val}", True, info_color)
+            label_h = label_txt.get_height() + 4
+
+            # Build combined skill icon (cached)
+            cache_key = f'_slot_bad_tag_icon_{label_h}'
+            if not hasattr(self, cache_key):
+                skill_icon_path = SKILL_DEFINITIONS.get('buffs_allies_defence', {}).get('icon', '')
+                try:
+                    raw_skill = pygame.image.load(skill_icon_path).convert_alpha()
+                    skill_scaled = pygame.transform.smoothscale(raw_skill, (label_h, label_h))
+                    setattr(self, cache_key, skill_scaled)
+                except Exception:
+                    setattr(self, cache_key, None)
+            skill_ico = getattr(self, cache_key)
+
+            ico_w = (skill_ico.get_width() + 3) if skill_ico else 0
+            tag_w = ico_w + label_txt.get_width() + 8
+            tag_h = label_h + 2
+            tag_x = icon_cx - tag_w // 2
+            tag_y = icon_cy + r_frame_s // 2 - tag_h
+            tag_bg = pygame.Surface((tag_w, tag_h), pygame.SRCALPHA)
+            tag_bg.fill((40, 25, 10, 180))
+            self.window.blit(tag_bg, (tag_x, tag_y))
+            dx = tag_x + 4
+            if skill_ico:
+                self.window.blit(skill_ico,
+                                 (dx, tag_y + (tag_h - skill_ico.get_height()) // 2))
+                dx += skill_ico.get_width() + 3
+            self.window.blit(label_txt,
+                             (dx, tag_y + (tag_h - label_txt.get_height()) // 2))
 
     def _update_round_fig_hover(self):
         """Set _round_fig_hovered_idx based on current mouse position."""

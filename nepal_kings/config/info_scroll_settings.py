@@ -47,18 +47,8 @@ SLOT_ICON_IMG_PATH_DICT = {
     'military': 'img/slot_icons/military.png',
 }
 
-SKILL_ICON_IMG_PATH_DICT = {
-    'cannot_attack': 'img/figures/state_icons/cannot_attack.png',
-    'must_be_attacked': 'img/figures/state_icons/must_be_attacked.png',
-    'rest_after_attack': 'img/figures/state_icons/hourglass.png',
-    'distance_attack': 'img/figures/state_icons/distance.png',
-    'buffs_allies': 'img/figures/state_icons/ally_buff.png',
-    'blocks_bonus': 'img/figures/state_icons/buff_removal.png',
-    'cannot_defend': 'img/figures/state_icons/cannot_defend.png',
-    'instant_charge': 'img/figures/state_icons/instant_charge.png',
-    'cannot_be_blocked': 'img/figures/state_icons/cannot_be_blocked.png',
-    'cannot_be_targeted': 'img/figures/state_icons/cannot_be_targeted.png',
-}
+# SKILL_ICON_IMG_PATH_DICT is now generated from SKILL_DEFINITIONS
+# in game/components/figures/family_configs/skill_config.py  (imported via settings.py)
 
 # SCOREBORD SCROLL
 SCOREBOARD_SCROLL_X = int(0.01 * SCREEN_WIDTH)

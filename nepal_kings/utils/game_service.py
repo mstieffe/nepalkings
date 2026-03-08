@@ -186,35 +186,41 @@ def skip_battle_turn(game_id, player_id):
         return {'success': False, 'message': f"Failed to skip battle turn: {str(e)}"}
 
 
-def finish_battle_pick_card(game_id, player_id, picked_card_id=None, picked_card_type='main'):
+def finish_battle_pick_card(game_id, player_id, picked_card_id=None, picked_card_type='main', resting_figure_ids=None):
     """Winner picks one card from the returnable pool after battle."""
     try:
+        payload = {
+            'game_id': game_id,
+            'player_id': player_id,
+            'picked_card_id': picked_card_id,
+            'picked_card_type': picked_card_type,
+        }
+        if resting_figure_ids:
+            payload['resting_figure_ids'] = resting_figure_ids
         response = requests.post(
             f'{settings.SERVER_URL}/games/finish_battle_pick_card',
-            json={
-                'game_id': game_id,
-                'player_id': player_id,
-                'picked_card_id': picked_card_id,
-                'picked_card_type': picked_card_type,
-            }
+            json=payload
         )
         return response.json()
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to pick card: {str(e)}"}
 
 
-def finish_battle_draw(game_id, player_id, choice, picked_card_id=None, picked_card_type='main'):
+def finish_battle_draw(game_id, player_id, choice, picked_card_id=None, picked_card_type='main', resting_figure_ids=None):
     """Handle the defender's choice after a draw."""
     try:
+        payload = {
+            'game_id': game_id,
+            'player_id': player_id,
+            'choice': choice,
+            'picked_card_id': picked_card_id,
+            'picked_card_type': picked_card_type,
+        }
+        if resting_figure_ids:
+            payload['resting_figure_ids'] = resting_figure_ids
         response = requests.post(
             f'{settings.SERVER_URL}/games/finish_battle_draw',
-            json={
-                'game_id': game_id,
-                'player_id': player_id,
-                'choice': choice,
-                'picked_card_id': picked_card_id,
-                'picked_card_type': picked_card_type,
-            }
+            json=payload
         )
         return response.json()
     except requests.RequestException as e:

@@ -12,6 +12,7 @@ from config.font_settings import *
 from config.button_settings import *
 from config.colour_settings import *
 from config.info_scroll_settings import *
+from game.components.figures.family_configs.skill_config import *
 from config.dialogue_box_settings import *
 from config.state_buttons_settings import *
 from config.msg_settings import *

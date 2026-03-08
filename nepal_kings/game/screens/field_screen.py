@@ -373,6 +373,33 @@ class FieldScreen(SubScreen):
                         self.icon_cache[figure.id].has_deficit = self.icon_cache[figure.id]._check_resource_deficit(resources)
                     self.figure_icons.append(self.icon_cache[figure.id])
 
+        # ── Apply buffs_allies bonus to village figure icons ──
+        # After all icons are created/updated, find figures with buffs_allies
+        # and apply +4 base power buff to same-suit village figures on the same side.
+        for category in ('self', 'opponent'):
+            all_figs = []
+            for field_type, figures in self.categorized_figures[category].items():
+                all_figs.extend(figures)
+            # Find buffer figures (with buffs_allies skill, no deficit)
+            buffers = [f for f in all_figs if getattr(f, 'buffs_allies', False)
+                       and f.id in self.icon_cache and not self.icon_cache[f.id].has_deficit]
+            if not buffers:
+                # Reset any stale buff on this side's village icons
+                for f in all_figs:
+                    if (f.id in self.icon_cache and hasattr(f.family, 'field')
+                            and f.family.field == 'village'):
+                        self.icon_cache[f.id].buffs_allies_bonus = 0
+                continue
+            for f in all_figs:
+                if f.id not in self.icon_cache:
+                    continue
+                icon = self.icon_cache[f.id]
+                if not (hasattr(f.family, 'field') and f.family.field == 'village'):
+                    icon.buffs_allies_bonus = 0
+                    continue
+                total_buff = sum(4 for bf in buffers if bf.suit == f.suit)
+                icon.buffs_allies_bonus = total_buff
+
     def handle_events(self, events):
         """Handle events for interacting with the field."""
         super().handle_events(events)
@@ -867,6 +894,14 @@ class FieldScreen(SubScreen):
                         actions=['ok'],
                         icon="error",
                         title="Action Blocked"
+                    )
+                elif response and response.startswith('disabled_') and response.endswith('_resting'):
+                    # Any action disabled because the figure is resting after battle
+                    self.make_dialogue_box(
+                        message="This figure is resting after battle and cannot act this round.\n\nIt will be available again next round.",
+                        actions=['ok'],
+                        icon="error",
+                        title="Figure Resting"
                     )
                 elif response == 'upgrade':
                     # Handle upgrade action - show confirmation dialogue with upgrade card image
@@ -1393,9 +1428,9 @@ class FieldScreen(SubScreen):
         
         # Starting position
         start_x = castle_comp.right + settings.FIELD_ICON_PADDING_X
-        start_y = castle_comp.top + 30
+        start_y = castle_comp.top + int(0.028 * settings.SCREEN_HEIGHT)
         
-        card_spacing = 3
+        card_spacing = max(1, int(0.003 * settings.SCREEN_HEIGHT))
         
         # Draw cached card surfaces
         current_y = start_y
@@ -1446,14 +1481,16 @@ class FieldScreen(SubScreen):
         prompt_surface = self.target_prompt_font.render(prompt_text, True, (255, 50, 50))  # Bright red
         
         # Create cancel instruction text
-        cancel_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        cancel_font = pygame.font.Font(settings.FONT_PATH, int(settings.FIELD_TITLE_FONT_SIZE * 0.9))
         cancel_text = "Press ESC to cancel"
         cancel_surface = cancel_font.render(cancel_text, True, (255, 255, 150))  # Light yellow
         
         # Create background box for better visibility
         text_width = max(prompt_surface.get_width(), cancel_surface.get_width())
-        text_height = prompt_surface.get_height() + cancel_surface.get_height() + 10
-        padding = 20
+        line_gap = int(0.009 * settings.SCREEN_HEIGHT)
+        text_height = prompt_surface.get_height() + cancel_surface.get_height() + line_gap
+        padding = int(0.018 * settings.SCREEN_HEIGHT)
+        border_w = max(2, int(0.004 * settings.SCREEN_HEIGHT))
         
         box_rect = pygame.Rect(
             (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
@@ -1469,7 +1506,7 @@ class FieldScreen(SubScreen):
         self.window.blit(background, box_rect.topleft)
         
         # Draw yellow border for emphasis
-        pygame.draw.rect(self.window, (255, 255, 0), box_rect, 4)
+        pygame.draw.rect(self.window, (255, 255, 0), box_rect, border_w)
         
         # Draw main prompt text centered in box
         text_x = box_rect.centerx - prompt_surface.get_width() // 2
@@ -1478,7 +1515,7 @@ class FieldScreen(SubScreen):
         
         # Draw cancel text below
         cancel_x = box_rect.centerx - cancel_surface.get_width() // 2
-        cancel_y = text_y + prompt_surface.get_height() + 10
+        cancel_y = text_y + prompt_surface.get_height() + line_gap
         self.window.blit(cancel_surface, (cancel_x, cancel_y))
         
         # Add pulsing effect to main prompt
@@ -1494,7 +1531,7 @@ class FieldScreen(SubScreen):
         prompt_surface = self.target_prompt_font.render(prompt_text, True, (100, 200, 255))  # Blue
         
         # Create instruction text
-        info_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        info_font = pygame.font.Font(settings.FONT_PATH, int(settings.FIELD_TITLE_FONT_SIZE * 0.9))
         
         # Check for must_be_attacked constraint on opponent's eligible figures
         # Exclude figures with cannot_defend or cannot_be_targeted
@@ -1535,9 +1572,11 @@ class FieldScreen(SubScreen):
         info_surface = info_font.render(info_text, True, (180, 220, 255))  # Light blue
         
         # Create background box
+        line_gap = int(0.009 * settings.SCREEN_HEIGHT)
         text_width = max(prompt_surface.get_width(), info_surface.get_width())
-        text_height = prompt_surface.get_height() + info_surface.get_height() + 10
-        padding = 20
+        text_height = prompt_surface.get_height() + info_surface.get_height() + line_gap
+        padding = int(0.018 * settings.SCREEN_HEIGHT)
+        border_w = max(2, int(0.004 * settings.SCREEN_HEIGHT))
         
         box_rect = pygame.Rect(
             (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
@@ -1553,7 +1592,7 @@ class FieldScreen(SubScreen):
         self.window.blit(background, box_rect.topleft)
         
         # Draw blue border for emphasis
-        pygame.draw.rect(self.window, (100, 200, 255), box_rect, 4)
+        pygame.draw.rect(self.window, (100, 200, 255), box_rect, border_w)
         
         # Draw main prompt text centered in box
         text_x = box_rect.centerx - prompt_surface.get_width() // 2
@@ -1562,7 +1601,7 @@ class FieldScreen(SubScreen):
         
         # Draw info text below
         info_x = box_rect.centerx - info_surface.get_width() // 2
-        info_y = text_y + prompt_surface.get_height() + 10
+        info_y = text_y + prompt_surface.get_height() + line_gap
         self.window.blit(info_surface, (info_x, info_y))
         
         # Add pulsing effect
@@ -1745,33 +1784,51 @@ class FieldScreen(SubScreen):
                     figures = self.categorized_figures[player][field]
 
                     if len(figures) > 0:
-                        # Calculate the y-position to center the icons in the compartment
-                        # Account for title space at the top
-                        icon_height = settings.FIELD_ICON_WIDTH
-                        title_space = settings.FIELD_TITLE_FONT_SIZE + 2 * settings.FIELD_TITLE_PADDING
-                        available_height = compartment.height - 2 * settings.FIELD_BORDER_WIDTH - title_space
+                        # Calculate the y-position to distribute icons in the compartment.
+                        #
+                        # The icon's y coordinate is the CENTER of the frame.
+                        # The frame extends frame_h/2 above and below that center.
+                        # Below, a name box + power row extends even further.
+                        # We reserve just enough top/bottom margin so the first
+                        # icon's frame top and the last icon's info box bottom
+                        # stay inside the compartment, then distribute centers
+                        # evenly across the remaining space.
+                        frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
+                        # The frame has ornamental corners — the visible figure
+                        # content is smaller than frame_h/2, so we can let the
+                        # decorative part overlap the title area slightly.
+                        top_margin = settings.FIGURE_ICON_HEIGHT * 0.42
+                        # Bottom margin: info box extends ~0.34*FIH + caption below center
+                        caption_font_size = settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE
+                        caption_h = int(caption_font_size * 2.6)
+                        bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
+
+                        title_space = settings.FIELD_TITLE_FONT_SIZE + settings.FIELD_TITLE_PADDING
+                        total_height = compartment.height - 2 * settings.FIELD_BORDER_WIDTH
                         
-                        # Calculate dynamic spacing to fit all figures within available height
+                        # Usable range for icon centers
+                        first_center = compartment.top + title_space + top_margin
+                        last_center = compartment.top + total_height - bottom_margin
+                        
                         if len(figures) == 1:
+                            icon_y_start = (first_center + last_center) / 2
                             icon_spacing = 0
-                            total_icons_height = icon_height
                         else:
-                            # Calculate total height with default spacing
-                            default_total_height = len(figures) * icon_height + (len(figures) - 1) * settings.FIELD_ICON_PADDING_Y
-                            
-                            # If it fits, use default spacing; otherwise, reduce spacing to fit
-                            if default_total_height <= available_height:
-                                icon_spacing = settings.FIELD_ICON_PADDING_Y
-                                total_icons_height = default_total_height
+                            # Default center-to-center spacing: the icon's visual
+                            # height (top_margin + bottom_margin ≈ frame visible area
+                            # + caption) plus a small gap between icons.
+                            default_spacing = top_margin + bottom_margin + settings.FIELD_ICON_PADDING_Y
+                            max_spacing = (last_center - first_center) / (len(figures) - 1)
+                            if max_spacing >= default_spacing:
+                                # Enough room — use default spacing and centre the group
+                                icon_spacing = default_spacing
+                                group_h = (len(figures) - 1) * icon_spacing
+                                offset = ((last_center - first_center) - group_h) / 2
+                                icon_y_start = first_center + offset
                             else:
-                                # Calculate reduced spacing to fit within available height
-                                # Formula: total_height = N * icon_height + (N-1) * spacing
-                                # Solving for spacing: spacing = (available_height - N * icon_height) / (N - 1)
-                                icon_spacing = (available_height - len(figures) * icon_height) / (len(figures) - 1)
-                                total_icons_height = available_height
-                        
-                        # Start position accounts for title space
-                        icon_y_start = compartment.top + title_space + (available_height - total_icons_height) // 2 + 0.5*settings.FIELD_ICON_WIDTH
+                                # Tight — spread evenly across available range
+                                icon_spacing = max_spacing
+                                icon_y_start = first_center
 
                         # Calculate positions and separate into layers: regular, selected, hovered
                         regular_positions = []
@@ -1781,7 +1838,7 @@ class FieldScreen(SubScreen):
                         for i, figure in enumerate(figures):
                             icon = self.icon_cache[figure.id]
                             icon_x = compartment.left + 0.5*settings.FIELD_ICON_WIDTH 
-                            icon_y = icon_y_start + i * (icon_height + icon_spacing)
+                            icon_y = icon_y_start + i * icon_spacing
                             
                             if icon.hovered:
                                 hovered_item = (icon, icon_x, icon_y)

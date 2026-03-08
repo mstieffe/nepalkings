@@ -605,6 +605,17 @@ class FieldFigureIcon(FigureIcon):
         # Load skill icons in both sizes
         self.skill_icons, self.skill_icons_big = self._load_skill_icons()
         
+        # Create skill glow in both sizes
+        base_size = int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8)
+        self.skill_glow = self._create_skill_glow(base_size)
+        self.skill_glow_big = self._create_skill_glow(int(base_size * self.icon_scale_factor))
+        
+        # Load advantage suit icon (for skills with suit_advantage)
+        self.advantage_suit_icon, self.advantage_suit_icon_big = self._load_advantage_suit_icons()
+        
+        # Load own suit icon (for skills with suit_self)
+        self.own_suit_icon, self.own_suit_icon_big = self._load_own_suit_icons()
+        
         # Load broken state icon in both sizes
         self.broken_icon = self._load_broken_icon()
         self.broken_icon_big = self._load_broken_icon(is_big=True)
@@ -624,6 +635,18 @@ class FieldFigureIcon(FigureIcon):
         # Defender selection greyed-out state (set by field_screen during defender selection)
         self.defender_selectable = True
         self.in_defender_selection_mode = False
+
+        # Blocks-bonus: when True the support bonus is negated (shown as red strikethrough)
+        self.battle_bonus_blocked = False
+
+        # Distance-attack: power penalty applied by an opponent's ranged attacker
+        self.distance_attack_penalty = 0
+
+        # Buffs-allies: base power bonus from allied buffers (e.g. +4)
+        self.buffs_allies_bonus = 0
+
+        # Buffs-allies-defence: support bonus from defending buffers (number card value)
+        self.buffs_allies_defence_bonus = 0
         
         # Initialize glow effects and images (with larger glows for castle figures)
         self.load_glow_effects()
@@ -720,8 +743,11 @@ class FieldFigureIcon(FigureIcon):
 
         # Draw the figure icon
         if self.is_visible:
-            # Check if greyed out for defender selection (still interactive, uses grey icons)
-            greyed_out = hasattr(self, 'defender_selectable') and not self.defender_selectable
+            # Check if greyed out for defender selection or resting after battle
+            is_resting = (hasattr(self, 'game') and self.game and
+                          hasattr(self, 'figure') and self.figure and
+                          self.figure.id in (getattr(self.game, 'resting_figure_ids', None) or []))
+            greyed_out = (hasattr(self, 'defender_selectable') and not self.defender_selectable) or is_resting
             
             # Choose icon/frame images based on greyed-out state
             icon_normal = self.icon_gray_img if greyed_out else self.icon_img
@@ -909,31 +935,30 @@ class FieldFigureIcon(FigureIcon):
         
         # Collect skill icons to display (for both visible and hidden figures)
         skills_to_display = []
-        if hasattr(self.figure, 'cannot_attack') and self.figure.cannot_attack:
-            skills_to_display.append('cannot_attack')
-        if hasattr(self.figure, 'must_be_attacked') and self.figure.must_be_attacked:
-            skills_to_display.append('must_be_attacked')
-        if hasattr(self.figure, 'rest_after_attack') and self.figure.rest_after_attack:
-            skills_to_display.append('rest_after_attack')
-        if hasattr(self.figure, 'distance_attack') and self.figure.distance_attack:
-            skills_to_display.append('distance_attack')
-        if hasattr(self.figure, 'buffs_allies') and self.figure.buffs_allies:
-            skills_to_display.append('buffs_allies')
-        if hasattr(self.figure, 'blocks_bonus') and self.figure.blocks_bonus:
-            skills_to_display.append('blocks_bonus')
-        if hasattr(self.figure, 'cannot_defend') and self.figure.cannot_defend:
-            skills_to_display.append('cannot_defend')
-        if hasattr(self.figure, 'instant_charge') and self.figure.instant_charge:
-            skills_to_display.append('instant_charge')
-        if hasattr(self.figure, 'cannot_be_blocked') and self.figure.cannot_be_blocked:
-            skills_to_display.append('cannot_be_blocked')
-        if hasattr(self.figure, 'cannot_be_targeted') and self.figure.cannot_be_targeted:
-            skills_to_display.append('cannot_be_targeted')
+        if hasattr(self.figure, 'get_active_skill_keys'):
+            skills_to_display = self.figure.get_active_skill_keys()
+        else:
+            from game.components.figures.family_configs.skill_config import SKILL_KEYS
+            skills_to_display = [k for k in SKILL_KEYS if getattr(self.figure, k, False)]
         
         # Get skill icon size from the actual pre-scaled icons
         skill_icon_size = 0
         if skills_to_display and skills_to_display[0] in skill_icon_dict:
             skill_icon_size = skill_icon_dict[skills_to_display[0]].get_height()
+        
+        # Get skill glow for current state
+        skill_glow = self.skill_glow_big if is_big_state else self.skill_glow
+        
+        # Determine which skills show a suit icon behind them
+        from game.components.figures.family_configs.skill_config import SKILL_DEFINITIONS as _SKILL_DEFS
+        adv_suit_icon = self.advantage_suit_icon_big if is_big_state else self.advantage_suit_icon
+        own_suit_icon = self.own_suit_icon_big if is_big_state else self.own_suit_icon
+        adv_suit_icon_size = adv_suit_icon.get_width() if adv_suit_icon else 0
+        suit_adv_skill_count = 0
+        if adv_suit_icon:
+            suit_adv_skill_count = sum(
+                1 for k in skills_to_display if _SKILL_DEFS.get(k, {}).get('suit_advantage', False)
+            )
         
         if self.is_visible:
             # Calculate power display
@@ -943,30 +968,60 @@ class FieldFigureIcon(FigureIcon):
             # Create power text
             power_text = f"{base_power}"
             power_surface = font.render(power_text, True, settings.SUIT_ICON_CAPTION_COLOR)
+
+            # Create buffs-allies bonus text if applicable (same color as base power)
+            buffs_allies_surface = None
+            buffs_allies_bonus = getattr(self, 'buffs_allies_bonus', 0)
+            if buffs_allies_bonus > 0:
+                buffs_allies_surface = font.render(f"+{buffs_allies_bonus}", True, settings.SUIT_ICON_CAPTION_COLOR)
+
+            # Create buffs-allies-defence bonus text if applicable (same color as base power)
+            defence_bonus_surface = None
+            defence_bonus = getattr(self, 'buffs_allies_defence_bonus', 0)
+            if defence_bonus > 0:
+                defence_bonus_surface = font.render(f"+{defence_bonus}", True, settings.SUIT_ICON_CAPTION_COLOR)
             
             # Create bonus text if applicable
             bonus_surface = None
             bonus_outline_surface = None
+            bonus_blocked = getattr(self, 'battle_bonus_blocked', False)
             if battle_bonus > 0:
                 bonus_text = f"(+{battle_bonus})"
                 # Create outline for better contrast
                 bonus_outline_surface = font.render(bonus_text, True, (0, 0, 0))
+                # Always green — the red strikethrough dash indicates it's blocked
                 bonus_surface = font.render(bonus_text, True, settings.COLOR_BATTLE_BONUS)
+            
+            # Create distance-attack penalty text if applicable
+            distance_penalty_surface = None
+            distance_penalty_outline = None
+            distance_penalty = getattr(self, 'distance_attack_penalty', 0)
+            if distance_penalty > 0:
+                dp_text = f"(-{distance_penalty})"
+                distance_penalty_outline = font.render(dp_text, True, (0, 0, 0))
+                distance_penalty_surface = font.render(dp_text, True, (255, 140, 40))  # orange
             
             # Get suit icon for current state
             suit_icon = self.suit_icon_big if is_big_state else self.suit_icon
-            icon_size = suit_icon.get_height() if suit_icon else int(20 * scale_factor)
+            icon_size = suit_icon.get_height() if suit_icon else int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8 * scale_factor)
             
-            # Calculate total width of info row: power + bonus + enchantment + suit + skills + enchantment icons
+            # Calculate total width of info row: power + buff + defence + bonus + distance penalty + enchantment + suit + skills + enchantment icons
             info_row_width = power_surface.get_width()
+            if buffs_allies_surface:
+                info_row_width += element_spacing + buffs_allies_surface.get_width()
+            if defence_bonus_surface:
+                info_row_width += element_spacing + defence_bonus_surface.get_width()
             if bonus_surface:
                 info_row_width += element_spacing + bonus_surface.get_width()
+            if distance_penalty_surface:
+                info_row_width += element_spacing + distance_penalty_surface.get_width()
             if has_enchantments and enchantment_modifier_surface:
                 info_row_width += element_spacing + enchantment_modifier_surface.get_width()
             if suit_icon:
                 info_row_width += element_spacing + icon_size
             if skills_to_display and skill_icon_size > 0:
-                info_row_width += element_spacing + (len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing)
+                skills_width = len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
+                info_row_width += element_spacing + skills_width
             if has_enchantments and enchantment_icons:
                 info_row_width += element_spacing + (len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing)
             
@@ -984,7 +1039,8 @@ class FieldFigureIcon(FigureIcon):
                 
                 # Add skill icons width
                 if skills_to_display and skill_icon_size > 0:
-                    hidden_info_row_width += len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
+                    skills_width = len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
+                    hidden_info_row_width += skills_width
                 
                 # Add enchantment modifier
                 if has_enchantments and enchantment_modifier_surface:
@@ -1080,6 +1136,20 @@ class FieldFigureIcon(FigureIcon):
             power_y = info_center_y - power_surface.get_height() // 2
             self.window.blit(power_surface, (current_x, power_y))
             current_x += power_surface.get_width()
+
+            # Draw buffs-allies bonus if applicable (same color as base power)
+            if buffs_allies_surface:
+                current_x += element_spacing
+                ba_y = info_center_y - buffs_allies_surface.get_height() // 2
+                self.window.blit(buffs_allies_surface, (current_x, ba_y))
+                current_x += buffs_allies_surface.get_width()
+
+            # Draw buffs-allies-defence bonus if applicable (same color as base power)
+            if defence_bonus_surface:
+                current_x += element_spacing
+                db_y = info_center_y - defence_bonus_surface.get_height() // 2
+                self.window.blit(defence_bonus_surface, (current_x, db_y))
+                current_x += defence_bonus_surface.get_width()
             
             # Draw bonus if applicable (with outline for better contrast)
             if bonus_surface:
@@ -1089,9 +1159,25 @@ class FieldFigureIcon(FigureIcon):
                 if bonus_outline_surface:
                     for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
                         self.window.blit(bonus_outline_surface, (current_x + offset_x, bonus_y + offset_y))
-                # Draw main green text on top
+                # Draw main text on top (red if blocked, green otherwise)
                 self.window.blit(bonus_surface, (current_x, bonus_y))
+                # Draw red strikethrough line if bonus is blocked
+                if bonus_blocked:
+                    strike_y = bonus_y + bonus_surface.get_height() // 2
+                    pygame.draw.line(self.window, (220, 60, 60),
+                                     (current_x - 1, strike_y),
+                                     (current_x + bonus_surface.get_width() + 1, strike_y), 2)
                 current_x += bonus_surface.get_width()
+            
+            # Draw distance-attack penalty if applicable (orange, with outline)
+            if distance_penalty_surface:
+                current_x += element_spacing
+                dp_y = info_center_y - distance_penalty_surface.get_height() // 2
+                if distance_penalty_outline:
+                    for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                        self.window.blit(distance_penalty_outline, (current_x + offset_x, dp_y + offset_y))
+                self.window.blit(distance_penalty_surface, (current_x, dp_y))
+                current_x += distance_penalty_surface.get_width()
             
             # Draw enchantment modifier if applicable (purple, with outline)
             if has_enchantments and enchantment_modifier_surface:
@@ -1123,6 +1209,17 @@ class FieldFigureIcon(FigureIcon):
                         skill_icon = skill_icon_dict[skill_key]
                         # No runtime scaling needed - use pre-scaled icon
                         skill_y = info_center_y - skill_icon.get_height() // 2
+                        # Draw white glow behind skill icon
+                        if skill_glow:
+                            glow_x = current_x + (skill_icon.get_width() - skill_glow.get_width()) // 2
+                            glow_y = skill_y + (skill_icon.get_height() - skill_glow.get_height()) // 2
+                            self.window.blit(skill_glow, (glow_x, glow_y))
+                        # Draw suit advantage icon behind skill icon (background), centered
+                        if adv_suit_icon and _SKILL_DEFS.get(skill_key, {}).get('suit_advantage', False):
+                            adv_x = current_x + (skill_icon.get_width() - adv_suit_icon.get_width()) // 2
+                            adv_y = skill_y + (skill_icon.get_height() - adv_suit_icon.get_height()) // 2
+                            self.window.blit(adv_suit_icon, (adv_x, adv_y))
+                        # Draw skill icon on top
                         self.window.blit(skill_icon, (current_x, skill_y))
                         current_x += skill_icon.get_width()
             
@@ -1165,6 +1262,17 @@ class FieldFigureIcon(FigureIcon):
                     if skill_key in skill_icon_dict:
                         skill_icon = skill_icon_dict[skill_key]
                         skill_y = info_center_y - skill_icon.get_height() // 2
+                        # Draw white glow behind skill icon
+                        if skill_glow:
+                            glow_x = current_x + (skill_icon.get_width() - skill_glow.get_width()) // 2
+                            glow_y = skill_y + (skill_icon.get_height() - skill_glow.get_height()) // 2
+                            self.window.blit(skill_glow, (glow_x, glow_y))
+                        # Draw suit advantage icon behind skill icon (background), centered
+                        if adv_suit_icon and _SKILL_DEFS.get(skill_key, {}).get('suit_advantage', False):
+                            adv_x = current_x + (skill_icon.get_width() - adv_suit_icon.get_width()) // 2
+                            adv_y = skill_y + (skill_icon.get_height() - adv_suit_icon.get_height()) // 2
+                            self.window.blit(adv_suit_icon, (adv_x, adv_y))
+                        # Draw skill icon on top
                         self.window.blit(skill_icon, (current_x, skill_y))
                         current_x += skill_icon.get_width()
             
@@ -1268,7 +1376,7 @@ class FieldFigureIcon(FigureIcon):
     
     def _load_skill_icons(self):
         """Load and scale skill icons for combat attributes in both normal and big sizes."""
-        from config.info_scroll_settings import SKILL_ICON_IMG_PATH_DICT
+        from game.components.figures.family_configs.skill_config import SKILL_ICON_IMG_PATH_DICT
         skill_icons_normal = {}
         skill_icons_big = {}
         
@@ -1293,6 +1401,71 @@ class FieldFigureIcon(FigureIcon):
         
         return skill_icons_normal, skill_icons_big
     
+    @staticmethod
+    def _create_skill_glow(size):
+        """Create a soft white radial glow surface for skill icons."""
+        glow_size = int(size * 1.5)
+        glow_surface = pygame.Surface((glow_size, glow_size), pygame.SRCALPHA)
+        center = glow_size // 2
+        radius = glow_size // 2
+        for r in range(radius, 0, -1):
+            alpha = int(120 * (1 - (r / radius) ** 1.5))
+            pygame.draw.circle(glow_surface, (255, 255, 255, alpha), (center, center), r)
+        return glow_surface
+    
+    def _load_advantage_suit_icons(self):
+        """Load the suit icon that this figure has an advantage over, sized to match skill icons."""
+        from game.components.figures.family_configs.skill_config import get_advantage_suit
+        adv_suit = get_advantage_suit(getattr(self.figure, 'suit', None) or '')
+        if not adv_suit:
+            return None, None
+        suit_file = adv_suit.lower() + '.png'
+        try:
+            cache_key = f'advantage_{suit_file}'
+            if cache_key not in self._suit_icon_cache:
+                suit_path = settings.SUIT_ICON_IMG_PATH + suit_file
+                self._suit_icon_cache[cache_key] = pygame.image.load(suit_path).convert_alpha()
+            suit_img = self._suit_icon_cache[cache_key]
+            # Slightly smaller than skill icon for centered overlay
+            base_size = int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8)
+            normal_size = int(base_size * 0.85)
+            big_size = int(normal_size * self.icon_scale_factor)
+            return (
+                pygame.transform.smoothscale(suit_img, (normal_size, normal_size)),
+                pygame.transform.smoothscale(suit_img, (big_size, big_size)),
+            )
+        except Exception as e:
+            print(f"[FIELD_ICON] Failed to load advantage suit icon '{suit_file}': {e}")
+            return None, None
+
+    def _load_own_suit_icons(self):
+        """Load the figure's OWN suit icon, sized to match skill icons.
+
+        Used for skills with ``suit_self=True`` (e.g. buffs_allies) where the
+        skill icon is overlaid on the owner's suit rather than the advantage
+        suit.
+        """
+        own_suit = getattr(self.figure, 'suit', None) or ''
+        if not own_suit:
+            return None, None
+        suit_file = own_suit.lower() + '.png'
+        try:
+            cache_key = f'own_{suit_file}'
+            if cache_key not in self._suit_icon_cache:
+                suit_path = settings.SUIT_ICON_IMG_PATH + suit_file
+                self._suit_icon_cache[cache_key] = pygame.image.load(suit_path).convert_alpha()
+            suit_img = self._suit_icon_cache[cache_key]
+            base_size = int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8)
+            normal_size = int(base_size * 0.85)
+            big_size = int(normal_size * self.icon_scale_factor)
+            return (
+                pygame.transform.smoothscale(suit_img, (normal_size, normal_size)),
+                pygame.transform.smoothscale(suit_img, (big_size, big_size)),
+            )
+        except Exception as e:
+            print(f"[FIELD_ICON] Failed to load own suit icon '{suit_file}': {e}")
+            return None, None
+
     def _load_enchantment_icon(self, icon_filename, is_big=False, target_size=None):
         """
         Load and scale an enchantment spell icon.

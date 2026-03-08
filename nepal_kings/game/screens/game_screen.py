@@ -422,6 +422,7 @@ class GameScreen(Screen):
         
         # Check for fold outcome and auto-proceed (polling detection for waiting player)
         self.check_fold_result()
+        self.check_game_over()
         self.check_auto_proceed_to_battle()
         self.check_battle_moves_ready()
         
@@ -1360,7 +1361,7 @@ class GameScreen(Screen):
         
         # No field figure can advance — check if any instant charge figure can be built
         build_screen = self.subscreens.get('build_figure')
-        if build_screen and hasattr(build_screen, 'figure_manager'):
+        if build_screen and hasattr(build_screen, 'figure_manager') and build_screen.game:
             for family in build_screen.figure_manager.families.values():
                 buildable = build_screen.get_figures_in_hand(family)
                 for fig in buildable:
@@ -1377,6 +1378,15 @@ class GameScreen(Screen):
         result = cannot_advance_loss(self.state.game.game_id, self.state.game.player_id)
         
         if result.get('success'):
+            # Check for game-over
+            if result.get('game_over'):
+                if result.get('game'):
+                    self.state.game.update_from_dict(result['game'])
+                self._reset_battle_state()
+                self.state.game.fold_result_shown = True
+                self._show_game_over_dialogue(result['game_over'])
+                return
+
             winner = result.get('winner', 'Opponent')
             points = result.get('points', 10)
             
@@ -1465,6 +1475,15 @@ class GameScreen(Screen):
         result = defender_no_figures_loss(self.state.game.game_id, self.state.game.player_id)
         
         if result.get('success'):
+            # Check for game-over
+            if result.get('game_over'):
+                if result.get('game'):
+                    self.state.game.update_from_dict(result['game'])
+                self._reset_battle_state()
+                self.state.game.fold_result_shown = True
+                self._show_game_over_dialogue(result['game_over'])
+                return
+
             loser = result.get('loser', 'Opponent')
             points = result.get('points', 10)
             
@@ -1944,6 +1963,12 @@ class GameScreen(Screen):
                 if result.get('game'):
                     self.state.game.update_from_dict(result['game'])
                 self._reset_battle_state()
+
+                # Check for game-over
+                if result.get('game_over'):
+                    self.state.game.fold_result_shown = True
+                    self._show_game_over_dialogue(result['game_over'])
+                    return
                 
                 winner = result.get('winner', 'Opponent')
                 loser = result.get('loser', 'You')
@@ -2084,6 +2109,61 @@ class GameScreen(Screen):
             'icon': 'magic',
             'title': title
         })
+
+    def check_game_over(self):
+        """Check if the game has ended (detected via polling or response)."""
+        if not self.state.game:
+            return
+        if self.state.game.game_over_shown:
+            return
+        if self.state.game.pending_game_over:
+            self._show_game_over_dialogue(self.state.game.pending_game_over)
+
+    def _show_game_over_dialogue(self, game_over_info):
+        """Show a game-over dialogue with the result and gold awarded."""
+        if self.state.game.game_over_shown:
+            return
+        self.state.game.game_over_shown = True
+        self.state.game.pending_game_over = game_over_info
+
+        winner_name = game_over_info.get('winner_username', 'Winner')
+        loser_name = game_over_info.get('loser_username', 'Loser')
+        winner_score = game_over_info.get('winner_score', 0)
+        loser_score = game_over_info.get('loser_score', 0)
+        gold_awarded = game_over_info.get('gold_awarded', 0)
+        limit = game_over_info.get('limit', 45)
+
+        is_winner = (game_over_info.get('winner_player_id') == self.state.game.player_id)
+
+        if is_winner:
+            title = "Victory!"
+            message = (
+                f"Congratulations! You won the game!\n\n"
+                f"Final Score: {winner_score} - {loser_score}\n"
+                f"Point Limit: {limit}\n\n"
+                f"You earned {gold_awarded} gold!"
+            )
+        else:
+            title = "Defeat"
+            message = (
+                f"{winner_name} has won the game.\n\n"
+                f"Final Score: {winner_score} - {loser_score}\n"
+                f"Point Limit: {limit}\n\n"
+                f"Better luck next time!"
+            )
+
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'icon': 'magic',
+            'title': title,
+        })
+
+    def _on_game_over_acknowledged(self, response=None):
+        """Handle game-over dialogue acknowledgement — return to game menu."""
+        print("[GAME_OVER] Player acknowledged — returning to game menu")
+        self.state.game = None
+        self.state.screen = 'game_menu'
 
     def check_auto_proceed_to_battle(self):
         """Check if both players chose battle (detected via polling for the waiting player)."""
@@ -2944,6 +3024,11 @@ class GameScreen(Screen):
                 break
         
         # Create Figure instance (no game_id parameter)
+        # Copy combat skill attributes from matched family figure
+        from game.components.figures.family_configs.skill_config import SKILL_KEYS
+        skill_kwargs = {k: getattr(matched_family_figure, k, False) if matched_family_figure else False
+                        for k in SKILL_KEYS}
+        override_base_power = getattr(matched_family_figure, 'override_base_power', None) if matched_family_figure else None
         figure = Figure(
             name=figure_data.get('name', ''),
             sub_name='',  # Not stored in DB
@@ -2958,17 +3043,8 @@ class GameScreen(Screen):
             description=figure_data.get('description', ''),
             id=figure_data.get('id'),
             player_id=figure_data.get('player_id'),
-            # Copy combat attributes from matched family figure if found
-            cannot_attack=matched_family_figure.cannot_attack if matched_family_figure else False,
-            must_be_attacked=matched_family_figure.must_be_attacked if matched_family_figure else False,
-            rest_after_attack=matched_family_figure.rest_after_attack if matched_family_figure else False,
-            distance_attack=matched_family_figure.distance_attack if matched_family_figure else False,
-            buffs_allies=matched_family_figure.buffs_allies if matched_family_figure else False,
-            blocks_bonus=matched_family_figure.blocks_bonus if matched_family_figure else False,
-            cannot_defend=matched_family_figure.cannot_defend if matched_family_figure else False,
-            instant_charge=matched_family_figure.instant_charge if matched_family_figure else False,
-            cannot_be_blocked=matched_family_figure.cannot_be_blocked if matched_family_figure else False,
-            cannot_be_targeted=matched_family_figure.cannot_be_targeted if matched_family_figure else False,
+            override_base_power=override_base_power,
+            **skill_kwargs,
         )
         
         # Apply enchantments if present
@@ -3334,6 +3410,12 @@ class GameScreen(Screen):
                     self.dialogue_box = None
                     self._submit_battle_decision('fold')
                     self.show_next_queued_notification()
+                    return
+                # Handle game-over acknowledgement — return to main menu
+                elif (response == 'ok' and self.state.game and
+                      self.state.game.game_over and self.state.game.game_over_shown):
+                    self.dialogue_box = None
+                    self._on_game_over_acknowledged()
                     return
                 self.dialogue_box = None  # Close dialogue box
                 # Show next queued notification if any

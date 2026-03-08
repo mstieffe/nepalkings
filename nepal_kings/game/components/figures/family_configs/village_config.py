@@ -152,8 +152,8 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The Himalaya Temple is a spiritual figure who provides you with protection against the bloodline bonus "
-            "of its counterpart, i.e., Spade Temple protecting against Heart and Cross Temple protecting against Diamond."
+            "The Himalaya Temple is a spiritual figure that blocks the support bonus of the opponent's battle figure "
+            "whose suit it has an advantage over, i.e., Spade Temple blocking Heart and Clubs Temple blocking Diamond."
         ),
         "icon_img": "shrine_black.png",
         "icon_gray_img": "shrine_black.png",
@@ -183,8 +183,8 @@ village_dict_list = [
         "color": "offensive",
         "field": "village",
         "description": (
-            "The Djungle Temple is a spiritual figure who provides you with protection against the bloodline bonus "
-            "of its counterpart, i.e., Heart Temple protecting against Cross and Diamond Temple protecting against Spade."
+            "The Djungle Temple is a spiritual figure that blocks the support bonus of the opponent's battle figure "
+            "whose suit it has an advantage over, i.e., Heart Temple blocking Clubs and Diamond Temple blocking Spade."
         ),
         "icon_img": "shrine_red.png",
         "icon_gray_img": "shrine_red.png",
@@ -285,14 +285,15 @@ village_dict_list = [
         "figures": lambda family, suit: [
             VillageFigure(
                 name="Carpenter",
-                sub_name=f"{suit} 6",
+                sub_name=f"{suit} {number}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
-                number_card=Card("6", suit, 6),
-                produces={'material_red': 6} if suit in ['Hearts', 'Diamonds'] else {'material_black': 6},
+                key_cards=[Card("2", suit, 2)],
+                number_card=Card(str(number), suit, number),
+                produces={'material_red': number} if suit in ['Hearts', 'Diamonds'] else {'material_black': number},
                 requires={'villager_red': 1},
             )
+            for number in [3, 4, 6]
         ]
     },
     # Stone Mason
@@ -301,7 +302,7 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The Stone Mason is an offensive figure producing stone required for constructing a wall or catapult. "
+            "The Stone Mason is a defensive figure producing stone required for constructing a wall or catapult. "
             "It generates stone equal to its number-card value."
         ),
         "icon_img": "stone_mason.png",
@@ -314,14 +315,15 @@ village_dict_list = [
         "figures": lambda family, suit: [
             VillageFigure(
                 name="Stone Mason",
-                sub_name=f"{suit} 6",
+                sub_name=f"{suit} {number}",
                 suit=suit,
                 family=family,
-                key_cards=[Card("2", suit, 2), Card("2", suit, 2)],
-                number_card=Card("6", suit, 6),
-                produces={'material_black': 6} if suit in ['Clubs', 'Spades'] else {'material_red': 6},
+                key_cards=[Card("2", suit, 2)],
+                number_card=Card(str(number), suit, number),
+                produces={'material_black': number} if suit in ['Clubs', 'Spades'] else {'material_red': number},
                 requires={'villager_black': 1},
             )
+            for number in [3, 4, 6]
         ]
     },
     # Himalaya Healer
@@ -330,7 +332,8 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The Himalaya Healer is a defensive figure supporting other villagers giving them a +4 boost. "
+            "The Himalaya Healer is a defensive figure that increases the base power of all village figures "
+            "with the same suit by +4."
         ),
         "icon_img": "himalaya_healer.png",
         "icon_gray_img": "himalaya_healer.png",
@@ -360,7 +363,8 @@ village_dict_list = [
         "color": "offensive",
         "field": "village",
         "description": (
-            "The Djungle Healer is an offensive figure supporting other villagers giving them a +4 boost. "
+            "The Djungle Healer is an offensive figure that increases the base power of all village figures "
+            "with the same suit by +4."
         ),
         "icon_img": "djungle_healer.png",
         "icon_gray_img": "djungle_healer.png",

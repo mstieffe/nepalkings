@@ -197,7 +197,10 @@ class FigureDbService:
                             upgrade_card = family_figure.upgrade_card
                         break
 
-            # Create the figure
+            # Create the figure — copy combat skills from matched family figure
+            from game.components.figures.family_configs.skill_config import SKILL_KEYS
+            skill_kwargs = {k: getattr(matched_family_figure, k, False) if matched_family_figure else False
+                            for k in SKILL_KEYS}
             figure = Figure(
                 name=figure_data['name'],
                 sub_name=figure_data.get('sub_name', ""),
@@ -210,19 +213,9 @@ class FigureDbService:
                 upgrade_family_name=figure_data.get('upgrade_family_name'),
                 produces=figure_data.get('produces', {}),
                 requires=figure_data.get('requires', {}),
-                # Copy combat attributes from matched family figure
-                cannot_attack=matched_family_figure.cannot_attack if matched_family_figure else False,
-                must_be_attacked=matched_family_figure.must_be_attacked if matched_family_figure else False,
-                rest_after_attack=matched_family_figure.rest_after_attack if matched_family_figure else False,
-                distance_attack=matched_family_figure.distance_attack if matched_family_figure else False,
-                buffs_allies=matched_family_figure.buffs_allies if matched_family_figure else False,
-                blocks_bonus=matched_family_figure.blocks_bonus if matched_family_figure else False,
-                cannot_defend=matched_family_figure.cannot_defend if matched_family_figure else False,
-                instant_charge=matched_family_figure.instant_charge if matched_family_figure else False,
-                cannot_be_blocked=matched_family_figure.cannot_be_blocked if matched_family_figure else False,
-                cannot_be_targeted=matched_family_figure.cannot_be_targeted if matched_family_figure else False,
                 id=figure_data['id'],
                 player_id=figure_data.get('player_id'),
+                **skill_kwargs,
             )
 
             return figure

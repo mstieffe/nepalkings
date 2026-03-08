@@ -16,6 +16,7 @@ class Challenge(db.Model):
   challenger_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   challenged_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default='Open')
+  limit = db.Column(db.Integer, nullable=False, default=45)  # Gold bet / win threshold
   date = db.Column(db.DateTime, default=datetime.utcnow)
 
   def serialize(self):
@@ -24,6 +25,7 @@ class Challenge(db.Model):
       'challenger_id': self.challenger_id,
       'challenged_id': self.challenged_id,
       'status': self.status.value,
+      'limit': self.limit,
       'date': self.date
     }
 
@@ -54,6 +56,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
+    gold = db.Column(db.Integer, nullable=False, default=100)  # Starting gold
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
                                         foreign_keys='Challenge.challenger_id')
     challenges_received = db.relationship('Challenge', backref='challenged', lazy=True,
@@ -63,6 +66,7 @@ class User(db.Model):
         return {
             'id': self.id,
             'username': self.username,
+            'gold': self.gold,
             'challenges_issued': [challenge.serialize() for challenge in self.challenges_issued],
             'challenges_received': [challenge.serialize() for challenge in self.challenges_received]
         }
@@ -81,8 +85,11 @@ class Game(db.Model):
         lazy=True,
         foreign_keys='Player.game_id'  # Specify the foreign key explicitly
     )
-    state = db.Column(db.String(20), nullable=False, default='open')
+    state = db.Column(db.String(20), nullable=False, default='open')  # 'open' | 'finished'
     date = db.Column(db.DateTime, default=datetime.utcnow)
+    limit = db.Column(db.Integer, nullable=False, default=45)  # Point threshold to win
+    winner_player_id = db.Column(db.Integer, nullable=True)  # Player who won the game
+    finished_at = db.Column(db.DateTime, nullable=True)  # When the game ended
     main_cards = db.relationship('MainCard', backref='game', lazy=True)
     side_cards = db.relationship('SideCard', backref='game', lazy=True)
 
@@ -131,6 +138,9 @@ class Game(db.Model):
     auto_loss_reason = db.Column(db.String(50), nullable=True)
     auto_loss_detail = db.Column(db.String(200), nullable=True)  # e.g. figure name for deficit
 
+    # Figures currently resting (rest_after_attack skill — cannot act for one round after battle)
+    resting_figure_ids = db.Column(db.JSON, nullable=True)  # list of figure IDs
+
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
@@ -142,6 +152,9 @@ class Game(db.Model):
             'id': self.id,
             'state': self.state,
             'date': self.date,
+            'limit': self.limit,
+            'winner_player_id': self.winner_player_id,
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
             'current_round': self.current_round,
             'invader_player_id': self.invader_player_id,
             'turn_player_id': self.turn_player_id,
@@ -167,6 +180,7 @@ class Game(db.Model):
             'battle_skipped_rounds': self.battle_skipped_rounds,
             'post_battle_drawn_cards': self.post_battle_drawn_cards,
             'last_battle_result': self.last_battle_result,
+            'resting_figure_ids': self.resting_figure_ids or [],
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],
@@ -499,3 +513,35 @@ class BattleMove(db.Model):
         if self.call_figure_id is not None:
             data['call_figure_id'] = self.call_figure_id
         return data
+
+
+class GameResult(db.Model):
+    """Persisted record of a finished game for statistics and ranking."""
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False)
+    winner_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    loser_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    winner_username = db.Column(db.String(80), nullable=False)
+    loser_username = db.Column(db.String(80), nullable=False)
+    winner_score = db.Column(db.Integer, nullable=False)
+    loser_score = db.Column(db.Integer, nullable=False)
+    limit = db.Column(db.Integer, nullable=False)  # The bet / point threshold
+    gold_awarded = db.Column(db.Integer, nullable=False)  # Gold given to winner (2 × limit)
+    rounds_played = db.Column(db.Integer, nullable=False)
+    finished_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'game_id': self.game_id,
+            'winner_user_id': self.winner_user_id,
+            'loser_user_id': self.loser_user_id,
+            'winner_username': self.winner_username,
+            'loser_username': self.loser_username,
+            'winner_score': self.winner_score,
+            'loser_score': self.loser_score,
+            'limit': self.limit,
+            'gold_awarded': self.gold_awarded,
+            'rounds_played': self.rounds_played,
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
+        }

@@ -116,7 +116,7 @@ class ScrollTextListShifter:
     
     def _load_skill_icons(self):
         """Load and scale skill icons for combat attributes."""
-        icon_size = int(settings.FONT_SIZE_DETAIL * 1.0)  # Match font size
+        icon_size = int(settings.FONT_SIZE_DETAIL * 1.4)  # Slightly larger than font size
         icons = {}
         
         if hasattr(settings, 'SKILL_ICON_IMG_PATH_DICT'):
@@ -403,27 +403,34 @@ class ScrollTextListShifter:
                 y += blank_line_height
 
         # SKILLS
+        from game.components.figures.family_configs.skill_config import SKILL_KEYS, SKILL_DEFINITIONS as _SKILL_DEFS
+        from game.components.figures.family_configs.skill_config import get_advantage_suit
         skills_to_display = []
-        if 'cannot_attack' in text_dict and text_dict['cannot_attack']:
-            skills_to_display.append(('cannot_attack', 'Cannot Attack'))
-        if 'must_be_attacked' in text_dict and text_dict['must_be_attacked']:
-            skills_to_display.append(('must_be_attacked', 'Must Be Attacked'))
-        if 'rest_after_attack' in text_dict and text_dict['rest_after_attack']:
-            skills_to_display.append(('rest_after_attack', 'Rest After Attack'))
-        if 'distance_attack' in text_dict and text_dict['distance_attack']:
-            skills_to_display.append(('distance_attack', 'Distance Attack'))
-        if 'buffs_allies' in text_dict and text_dict['buffs_allies']:
-            skills_to_display.append(('buffs_allies', 'Buffs Allies'))
-        if 'blocks_bonus' in text_dict and text_dict['blocks_bonus']:
-            skills_to_display.append(('blocks_bonus', 'Blocks Bonus'))
-        if 'cannot_defend' in text_dict and text_dict['cannot_defend']:
-            skills_to_display.append(('cannot_defend', 'Cannot Defend'))
-        if 'instant_charge' in text_dict and text_dict['instant_charge']:
-            skills_to_display.append(('instant_charge', 'Instant Charge'))
-        if 'cannot_be_blocked' in text_dict and text_dict['cannot_be_blocked']:
-            skills_to_display.append(('cannot_be_blocked', 'Cannot Be Blocked'))
-        if 'cannot_be_targeted' in text_dict and text_dict['cannot_be_targeted']:
-            skills_to_display.append(('cannot_be_targeted', 'Cannot Be Targeted'))
+        for key in SKILL_KEYS:
+            if key in text_dict and text_dict[key]:
+                skills_to_display.append((key, _SKILL_DEFS[key]['name']))
+        
+        # Load advantage suit icon if any skill uses suit_advantage
+        adv_suit_icon = None
+        figure_obj = text_dict.get('content')
+        suit_str = None
+        if figure_obj and hasattr(figure_obj, 'suit'):
+            suit_str = figure_obj.suit
+        elif text_dict.get('suit'):
+            suit_str = text_dict['suit']
+        if suit_str:
+            adv_suit = get_advantage_suit(suit_str or '')
+            if adv_suit:
+                # Slightly smaller than skill icon for centered overlay
+                skill_icon_size = int(settings.FONT_SIZE_DETAIL * 1.4)
+                icon_size = int(skill_icon_size * 0.85)
+                suit_file = adv_suit.lower() + '.png'
+                try:
+                    suit_path = settings.SUIT_ICON_IMG_PATH + suit_file
+                    suit_img = pygame.image.load(suit_path).convert_alpha()
+                    adv_suit_icon = pygame.transform.smoothscale(suit_img, (icon_size, icon_size))
+                except Exception:
+                    pass
         
         if skills_to_display:
             # Draw divider line
@@ -459,7 +466,27 @@ class ScrollTextListShifter:
                 # Draw icon if available
                 if skill_key in self.skill_icons:
                     icon = self.skill_icons[skill_key]
+                    
+                    # Draw white glow behind skill icon
+                    glow_size = int(icon.get_width() * 1.5)
+                    glow_surface = pygame.Surface((glow_size, glow_size), pygame.SRCALPHA)
+                    glow_center = glow_size // 2
+                    glow_radius = glow_size // 2
+                    for r in range(glow_radius, 0, -1):
+                        alpha = int(120 * (1 - (r / glow_radius) ** 1.5))
+                        pygame.draw.circle(glow_surface, (255, 255, 255, alpha), (glow_center, glow_center), r)
+                    glow_x = current_x + (icon.get_width() - glow_size) // 2
+                    glow_y = y + (icon.get_height() - glow_size) // 2
+                    self.window.blit(glow_surface, (glow_x, glow_y))
+                    
+                    # Draw suit icon behind skill icon (background), centered
+                    if adv_suit_icon and _SKILL_DEFS.get(skill_key, {}).get('suit_advantage', False):
+                        adv_x = current_x + (icon.get_width() - adv_suit_icon.get_width()) // 2
+                        adv_y = y + (icon.get_height() - adv_suit_icon.get_height()) // 2
+                        self.window.blit(adv_suit_icon, (adv_x, adv_y))
+                    # Draw skill icon on top (foreground)
                     self.window.blit(icon, (current_x, y))
+                    
                     current_x += icon.get_width() + 2
                     
                     # Draw skill name next to icon
