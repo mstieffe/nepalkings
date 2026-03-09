@@ -1,7 +1,7 @@
 # routes/auth.py
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, User
+from models import db, User, Player, Game
 from datetime import datetime
 import logging  # For logging errors instead of exposing them to the user
 
@@ -100,3 +100,39 @@ def heartbeat():
     except Exception as e:
         logging.error(f"Heartbeat failed: {e}")
         return jsonify({'success': False, 'message': 'Heartbeat failed'}), 500
+
+@auth.route('/get_rankings', methods=['GET'])
+def get_rankings():
+    """Return ranking data for all users: gold, total games, wins, losses."""
+    try:
+        users = User.query.all()
+        rankings = []
+        for user in users:
+            # Count finished games where this user was a player
+            player_entries = Player.query.filter_by(user_id=user.id).all()
+            total = 0
+            wins = 0
+            losses = 0
+            for p in player_entries:
+                game = Game.query.get(p.game_id)
+                if game and game.state == 'finished':
+                    total += 1
+                    if game.winner_player_id == p.id:
+                        wins += 1
+                    else:
+                        losses += 1
+            is_online = False
+            if user.last_active:
+                is_online = (datetime.utcnow() - user.last_active).total_seconds() < 60
+            rankings.append({
+                'username': user.username,
+                'gold': user.gold,
+                'total_games': total,
+                'wins': wins,
+                'losses': losses,
+                'is_online': is_online,
+            })
+        return jsonify({'success': True, 'rankings': rankings})
+    except Exception as e:
+        logging.error(f"Rankings failed: {e}")
+        return jsonify({'success': False, 'message': 'Failed to fetch rankings'}), 500

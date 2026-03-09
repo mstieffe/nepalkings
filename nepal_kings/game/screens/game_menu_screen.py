@@ -40,7 +40,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
         btn_x = (_SW - _btn_w) // 2
         title_h = self._title_surf.get_height() + settings.GAME_MENU_TITLE_PAD_BOTTOM
-        n_btns = 2
+        n_btns = 3
         content_h = title_h + n_btns * _btn_h + (n_btns - 1) * _btn_gap
         box_h = settings.GAME_MENU_BOX_PAD_TOP + content_h + settings.GAME_MENU_BOX_PAD_BOTTOM
         box_w = _btn_w + settings.GAME_MENU_BOX_PAD_X * 2
@@ -55,9 +55,11 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                                   "New Game", width=_btn_w, height=_btn_h)
         self.button_load = Button(self.window, btn_x, first_btn_y + _btn_h + _btn_gap,
                                   "Load Game", width=_btn_w, height=_btn_h)
+        self.button_rankings = Button(self.window, btn_x, first_btn_y + 2 * (_btn_h + _btn_gap),
+                                  "Rankings", width=_btn_w, height=_btn_h)
 
         # Apply custom button images
-        for btn in (self.button_new, self.button_load):
+        for btn in (self.button_new, self.button_load, self.button_rankings):
             btn.button_image = pygame.transform.smoothscale(
                 self._btn_img, (btn.rect.width, btn.rect.height))
             btn.button_image_small = pygame.transform.smoothscale(
@@ -71,7 +73,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             raw = pygame.image.load(settings.GAME_MENU_GLOW_DIR + colour + '.png').convert_alpha()
             self._menu_glows[colour] = pygame.transform.smoothscale(raw, (glow_w, glow_h))
 
-        self.menu_buttons += [self.button_new, self.button_load]
+        self.menu_buttons += [self.button_new, self.button_load, self.button_rankings]
 
         # ── Badge polling ───────────────────────────────────────────
         self._badge_timer = 0
@@ -134,7 +136,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         self.window.blit(self._title_surf, (title_x, title_y))
 
         # Menu buttons – custom draw with glow behind
-        for btn in (self.button_new, self.button_load):
+        for btn in (self.button_new, self.button_load, self.button_rankings):
             self._draw_menu_button(btn)
 
         # Badges
@@ -238,3 +240,6 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 pass
             self.state.screen = 'load_game'
             print("Load Game button clicked")
+        elif self.button_rankings.collide():
+            self.state.screen = 'rankings'
+            print("Rankings button clicked")

@@ -4,6 +4,10 @@ from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT
 GAME_MENU_BG_IMG_PATH   = 'img/background/menu_background.png'
 GAME_MENU_BTN_IMG_PATH  = 'img/menu_button/menu_button3.png'
 
+# ── Login screen ────────────────────────────────────────────────────
+LOGIN_BG_IMG_PATH       = 'img/background/menu_background_greyscale.png'
+LOGIN_BTN_IMG_PATH      = 'img/menu_button/menu_button2.png'
+
 # ── Menu-button layout ──────────────────────────────────────────────
 GAME_MENU_BTN_W         = int(0.22 * SCREEN_WIDTH)
 GAME_MENU_BTN_H         = int(0.07 * SCREEN_HEIGHT)

@@ -9,8 +9,12 @@ class Screen:
     def __init__(self, state):
         self.state = state
 
-        # Set up the display
-        self.window = pygame.display.set_mode((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        # Set up the display – reuse an existing surface if one exists
+        existing = pygame.display.get_surface()
+        if existing is not None:
+            self.window = existing
+        else:
+            self.window = pygame.display.set_mode((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
 
         # Set up the font
         self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE)

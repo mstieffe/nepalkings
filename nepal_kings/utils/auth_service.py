@@ -9,6 +9,15 @@ def send_heartbeat(username):
     except Exception:
         pass
 
+def fetch_rankings():
+    """Fetch the leaderboard data for all players."""
+    try:
+        response = requests.get(f'{settings.SERVER_URL}/auth/get_rankings', timeout=5)
+        response.raise_for_status()
+        return response.json().get('rankings', [])
+    except Exception:
+        return []
+
 def login(username, password):
     try:
         response = requests.post(f'{settings.SERVER_URL}/auth/login', data={'username': username, 'password': password})
