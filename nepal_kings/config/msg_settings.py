@@ -14,7 +14,7 @@ INPUTFIELD_HEIGHT = int(0.04 * SCREEN_HEIGHT)
 
 MSG_BACKGROUND_COLOR = (0, 0, 0)
 
-MSG_FONT_SIZE = int(0.025 * SCREEN_HEIGHT)
+MSG_FONT_SIZE = int(0.022 * SCREEN_HEIGHT)
 
 MSG_MAX_WIDTH = int(0.8 * SCREEN_WIDTH)
 MSG_MAX_HEIGHT = int(0.45 * SCREEN_HEIGHT)
@@ -38,28 +38,39 @@ MSG_TEXT_X = int(0.27 * SCREEN_WIDTH)
 MSG_TEXT_Y = int(0.10 * SCREEN_HEIGHT)
 
 MSG_BACKGROUND_COLOR = (30, 30, 30)  # General background color
-MSG_TEXT_COLOR = (255, 255, 255)  # Text color
-LOG_MSG_BG_COLOR = (50, 50, 150)  # Background for log messages
-CHAT_MSG_BG_COLOR = (50, 150, 50)  # Background for chat messages
+MSG_TEXT_COLOR = (220, 215, 200)  # Warm off-white text
+MSG_TIMESTAMP_COLOR = (160, 150, 130)  # Muted gold for timestamps
+MSG_SENDER_COLOR = (200, 180, 120)  # Warm gold for sender names
 
-SCROLLBAR_COLOR = (196, 130, 77)
-#SCROLLBAR_HANDLE_COLOR = (83, 12, 2)
-SCROLLBAR_HANDLE_COLOR_ACTIVE = (250, 170, 0)
-SCROLLBAR_HANDLE_COLOR_PASSIVE = (83, 12, 2)
-SCROLLBAR_HEIGHT = int(0.484 * SCREEN_HEIGHT)
-SCROLLBAR_WIDTH = int(0.005 * SCREEN_WIDTH)
-SCROLLBAR_X = int(0.858 * SCREEN_WIDTH)
-SCROLLBAR_Y = int(0.08795 * SCREEN_HEIGHT)
+# Message bubble styling
+MSG_BUBBLE_CORNER_R = int(0.006 * SCREEN_HEIGHT)
+MSG_BUBBLE_PAD_X = int(0.008 * SCREEN_WIDTH)
+MSG_BUBBLE_PAD_Y = int(0.003 * SCREEN_HEIGHT)
+MSG_BUBBLE_SPACING = int(0.004 * SCREEN_HEIGHT)
 
-LOG_MSG_OPP_BG_COLOR = (13, 56, 139)  # Background for log messages
-LOG_MSG_SELF_BG_COLOR = (13, 106, 51)  # Background for log messages
-CHAT_MSG_SELF_BG_COLOR = (120, 60, 26)  # Background for chat messages
-CHAT_MSG_OPP_BG_COLOR = (83, 12, 2)  # Background for chat messages
-MSG_BG_TRANSPARENCY = 200
+# Build-up phase log colors
+LOG_MSG_BG_COLOR = (50, 50, 150)  # Legacy
+LOG_MSG_SELF_BG_COLOR = (30, 55, 45)  # Muted dark green
+LOG_MSG_OPP_BG_COLOR = (35, 40, 60)  # Muted dark blue
+CHAT_MSG_BG_COLOR = (50, 150, 50)  # Legacy
+CHAT_MSG_SELF_BG_COLOR = (55, 40, 25)  # Warm dark brown
+CHAT_MSG_OPP_BG_COLOR = (45, 25, 30)  # Dark wine
 
 # Battle-phase log entry colors (distinct from build-up)
-BATTLE_LOG_SELF_BG_COLOR = (120, 40, 100)  # Purple-ish for own battle moves
-BATTLE_LOG_OPP_BG_COLOR = (80, 25, 90)   # Darker purple for opponent battle moves
+BATTLE_LOG_SELF_BG_COLOR = (50, 30, 50)  # Dark purple
+BATTLE_LOG_OPP_BG_COLOR = (40, 25, 45)  # Darker purple
+
+MSG_BG_TRANSPARENCY = 180
+
+# Scrollbar styling
+SCROLLBAR_COLOR = (50, 45, 40)  # Dark track
+SCROLLBAR_HANDLE_COLOR_ACTIVE = (180, 150, 80)  # Warm gold when dragging
+SCROLLBAR_HANDLE_COLOR_PASSIVE = (90, 80, 60)  # Muted warm handle
+SCROLLBAR_CORNER_R = int(0.003 * SCREEN_WIDTH)
+SCROLLBAR_HEIGHT = int(0.484 * SCREEN_HEIGHT)
+SCROLLBAR_WIDTH = int(0.006 * SCREEN_WIDTH)
+SCROLLBAR_X = int(0.858 * SCREEN_WIDTH)
+SCROLLBAR_Y = int(0.08795 * SCREEN_HEIGHT)
 
 # Battle-related log types (used to pick battle colors)
 BATTLE_LOG_TYPES = {
@@ -73,5 +84,30 @@ MSG_BUTTON_ACTIVE_IMG = 'img/button/confirm/turkis.png'
 MSG_BUTTON_INACTIVE_IMG = 'img/button/confirm/turkis_dark.png'
 MSG_SEND_BUTTON_ACTIVE_IMG = 'img/button/confirm/green.png'
 MSG_SEND_BUTTON_INACTIVE_IMG = 'img/button/confirm/grey.png'
+
+# Log screen toggle/send button styling (programmatic, dark-themed)
+LOG_BTN_W = int(0.07 * SCREEN_WIDTH)
+LOG_BTN_H = int(0.035 * SCREEN_HEIGHT)
+LOG_BTN_FONT_SIZE = int(0.022 * SCREEN_HEIGHT)
+LOG_BTN_CORNER_R = int(0.005 * SCREEN_HEIGHT)
+LOG_BTN_BG_CLR = (40, 38, 35, 160)
+LOG_BTN_BG_ACTIVE_CLR = (55, 50, 40, 200)
+LOG_BTN_BG_HOVER_CLR = (65, 58, 48, 200)
+LOG_BTN_BORDER_CLR = (90, 80, 60)
+LOG_BTN_BORDER_ACTIVE_CLR = (180, 160, 80)
+LOG_BTN_TEXT_CLR = (180, 175, 160)
+LOG_BTN_TEXT_ACTIVE_CLR = (250, 221, 0)
+LOG_BTN_BORDER_W = 1
+
+# Chat input field styling (dark-themed)
+LOG_INPUT_BG_CLR = (35, 33, 30, 200)
+LOG_INPUT_BG_ACTIVE_CLR = (45, 42, 38, 220)
+LOG_INPUT_BORDER_CLR = (80, 75, 60)
+LOG_INPUT_BORDER_ACTIVE_CLR = (180, 160, 80)
+LOG_INPUT_TEXT_CLR = (220, 215, 200)
+LOG_INPUT_PLACEHOLDER_CLR = (120, 115, 100)
+LOG_INPUT_CORNER_R = int(0.005 * SCREEN_HEIGHT)
+LOG_INPUT_FONT_SIZE = int(0.024 * SCREEN_HEIGHT)
+LOG_INPUT_H = int(0.038 * SCREEN_HEIGHT)
 
 

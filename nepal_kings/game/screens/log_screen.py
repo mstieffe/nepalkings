@@ -3,7 +3,118 @@ from pygame.locals import *
 from datetime import datetime
 from config import settings
 from game.screens.sub_screen import SubScreen
-from utils.utils import InputField, Button
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  _LogToggleButton – dark-themed programmatic toggle button
+# ═══════════════════════════════════════════════════════════════════
+
+class _LogToggleButton:
+    """Small dark-themed toggle button for Log / Chat filters."""
+
+    def __init__(self, window, x, y, text, active=False):
+        self.window = window
+        self.text = text
+        self.active = active
+        self.hovered = False
+        self.clicked = False
+        self.rect = pygame.Rect(x, y, settings.LOG_BTN_W, settings.LOG_BTN_H)
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.LOG_BTN_FONT_SIZE)
+        self._r = settings.LOG_BTN_CORNER_R
+
+    def collide(self):
+        return self.rect.collidepoint(pygame.mouse.get_pos())
+
+    def update(self):
+        self.hovered = self.collide()
+        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+
+    def draw(self):
+        if self.active:
+            bg = settings.LOG_BTN_BG_ACTIVE_CLR
+            bdr = settings.LOG_BTN_BORDER_ACTIVE_CLR
+            txt = settings.LOG_BTN_TEXT_ACTIVE_CLR
+        elif self.hovered:
+            bg = settings.LOG_BTN_BG_HOVER_CLR
+            bdr = settings.LOG_BTN_BORDER_ACTIVE_CLR
+            txt = settings.LOG_BTN_TEXT_ACTIVE_CLR
+        else:
+            bg = settings.LOG_BTN_BG_CLR
+            bdr = settings.LOG_BTN_BORDER_CLR
+            txt = settings.LOG_BTN_TEXT_CLR
+
+        surf = pygame.Surface((self.rect.w, self.rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg, surf.get_rect(), border_radius=self._r)
+        self.window.blit(surf, self.rect.topleft)
+        pygame.draw.rect(self.window, bdr, self.rect,
+                         settings.LOG_BTN_BORDER_W, border_radius=self._r)
+        text_surf = self.font.render(self.text, True, txt)
+        self.window.blit(text_surf, text_surf.get_rect(center=self.rect.center))
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  _LogInputField – dark-themed chat input
+# ═══════════════════════════════════════════════════════════════════
+
+class _LogInputField:
+    """Dark-themed input field for the log screen chat."""
+
+    def __init__(self, window, x, y, placeholder="", max_length=300):
+        self.window = window
+        self.content = ""
+        self.placeholder = placeholder
+        self.max_length = max_length
+        self.active = False
+        _w = int(0.54 * settings.SCREEN_WIDTH)
+        self.rect = pygame.Rect(x, y, _w, settings.LOG_INPUT_H)
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.LOG_INPUT_FONT_SIZE)
+        self._r = settings.LOG_INPUT_CORNER_R
+
+    def handle_event(self, event):
+        if event.type == MOUSEBUTTONDOWN:
+            self.active = self.rect.collidepoint(event.pos)
+        elif event.type == KEYDOWN and self.active:
+            if event.key == K_BACKSPACE:
+                self.content = self.content[:-1]
+            elif event.key not in (K_RETURN, K_ESCAPE, K_TAB):
+                if len(self.content) < self.max_length:
+                    self.content += event.unicode
+
+    def empty(self):
+        self.content = ""
+
+    def draw(self):
+        bg = settings.LOG_INPUT_BG_ACTIVE_CLR if self.active else settings.LOG_INPUT_BG_CLR
+        bdr = settings.LOG_INPUT_BORDER_ACTIVE_CLR if self.active else settings.LOG_INPUT_BORDER_CLR
+
+        surf = pygame.Surface((self.rect.w, self.rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg, surf.get_rect(), border_radius=self._r)
+        self.window.blit(surf, self.rect.topleft)
+        pygame.draw.rect(self.window, bdr, self.rect, 1, border_radius=self._r)
+
+        # Text or placeholder
+        if self.content:
+            text_surf = self.font.render(self.content, True, settings.LOG_INPUT_TEXT_CLR)
+        else:
+            text_surf = self.font.render(self.placeholder, True, settings.LOG_INPUT_PLACEHOLDER_CLR)
+        # Clip to rect
+        clip_w = self.rect.w - int(0.016 * settings.SCREEN_WIDTH)
+        text_area = text_surf.subsurface(
+            pygame.Rect(max(0, text_surf.get_width() - clip_w), 0,
+                        min(text_surf.get_width(), clip_w), text_surf.get_height())
+        )
+        tx = self.rect.x + int(0.008 * settings.SCREEN_WIDTH)
+        ty = self.rect.centery - text_area.get_height() // 2
+        self.window.blit(text_area, (tx, ty))
+
+        # Cursor
+        if self.active:
+            cursor_x = tx + min(text_surf.get_width(), clip_w) + 2
+            cy = self.rect.y + int(0.004 * settings.SCREEN_HEIGHT)
+            ch = self.rect.h - int(0.008 * settings.SCREEN_HEIGHT)
+            if (pygame.time.get_ticks() // 500) % 2 == 0:
+                pygame.draw.line(self.window, settings.LOG_INPUT_TEXT_CLR,
+                                 (cursor_x, cy), (cursor_x, cy + ch), 1)
 
 
 class LogScreen(SubScreen):
@@ -23,10 +134,10 @@ class LogScreen(SubScreen):
         self.scroll_step = 1  # Number of lines scrolled per step
 
         # Scrollbar attributes
-        self.scrollbar_color = settings.SCROLLBAR_COLOR
         self.scrollbar_handle_color_active = settings.SCROLLBAR_HANDLE_COLOR_ACTIVE
         self.scrollbar_handle_color_passive = settings.SCROLLBAR_HANDLE_COLOR_PASSIVE
         self.scrollbar_handle_color = self.scrollbar_handle_color_passive
+        self._scrollbar_r = settings.SCROLLBAR_CORNER_R
 
         self.scrollbar_rect = pygame.Rect(
             settings.SCROLLBAR_X,
@@ -55,30 +166,34 @@ class LogScreen(SubScreen):
         self.scrollbar_handle_color = self.scrollbar_handle_color_passive
         print("[LogScreen] State reset for game switch")
 
+    def update(self, game):
+        """Update toggle buttons and parent state."""
+        super().update(game)
+        for btn in self._toggle_buttons:
+            btn.update()
+
     def init_ui_elements(self):
         """Initialize buttons, input fields, and other UI components."""
         super().init_sub_box_background(
             settings.MSG_TEXT_BOX_X, settings.MSG_TEXT_BOX_Y, settings.MSG_TEXT_BOX_WIDTH, settings.MSG_TEXT_BOX_HEIGHT
         )
 
-        # Buttons for toggling log and chat
-        self.buttons.extend([
-            self.make_button("Log", settings.MSG_LOG_BUTTON_X, settings.MSG_LOG_BUTTON_Y,
-                             button_img_active=settings.MSG_BUTTON_ACTIVE_IMG,
-                             button_img_inactive=settings.MSG_BUTTON_INACTIVE_IMG),
-            self.make_button("Chat", settings.MSG_CHAT_BUTTON_X, settings.MSG_CHAT_BUTTON_Y,
-                             button_img_active=settings.MSG_BUTTON_ACTIVE_IMG,
-                             button_img_inactive=settings.MSG_BUTTON_INACTIVE_IMG),
-            self.make_button("Send", settings.MSG_SEND_BUTTON_X, settings.MSG_SEND_BUTTON_Y,
-                             button_img_active=settings.MSG_SEND_BUTTON_ACTIVE_IMG,
-                             button_img_inactive=settings.MSG_SEND_BUTTON_INACTIVE_IMG),
-        ])
-        self.buttons[0].active = True
-        self.buttons[1].active = True
+        # Dark-themed toggle buttons for Log / Chat
+        _btn_gap = int(0.006 * settings.SCREEN_HEIGHT)
+        self.btn_log = _LogToggleButton(
+            self.window, settings.MSG_LOG_BUTTON_X, settings.MSG_LOG_BUTTON_Y,
+            "Log", active=True)
+        self.btn_chat = _LogToggleButton(
+            self.window, settings.MSG_LOG_BUTTON_X,
+            settings.MSG_LOG_BUTTON_Y + settings.LOG_BTN_H + _btn_gap,
+            "Chat", active=True)
+        self.btn_send = _LogToggleButton(
+            self.window, settings.MSG_SEND_BUTTON_X, settings.MSG_SEND_BUTTON_Y,
+            "Send")
+        self._toggle_buttons = [self.btn_log, self.btn_chat, self.btn_send]
 
-
-        # Input field for chat messages
-        self.chat_input = InputField(
+        # Dark-themed chat input field
+        self.chat_input = _LogInputField(
             self.window,
             settings.MSG_INPUT_X,
             settings.MSG_INPUT_Y,
@@ -98,6 +213,12 @@ class LogScreen(SubScreen):
         max_scroll = max(0, len(rendered_lines) - self.max_lines_on_screen())
         self.scroll_offset = min(self.scroll_offset, max_scroll)
 
+        _SH = settings.SCREEN_HEIGHT
+        _bubble_r = settings.MSG_BUBBLE_CORNER_R
+        _pad_x = settings.MSG_BUBBLE_PAD_X
+        _pad_y = settings.MSG_BUBBLE_PAD_Y
+        _line_h = self.font.get_height() + settings.MSG_BUBBLE_SPACING
+
         y = settings.MSG_TEXT_Y
         max_y = settings.MSG_TEXT_Y + settings.MSG_MAX_HEIGHT
 
@@ -109,17 +230,23 @@ class LogScreen(SubScreen):
 
             text_surface = self.font.render(line, True, settings.MSG_TEXT_COLOR)
             text_rect = text_surface.get_rect(topleft=(settings.MSG_TEXT_X, y))
-            self.draw_transparent_background(self.window, bg_color, text_rect)
+
+            # Rounded bubble background
+            bubble_rect = text_rect.inflate(_pad_x * 2, _pad_y * 2)
+            bubble_surf = pygame.Surface((bubble_rect.w, bubble_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(bubble_surf,
+                             (*bg_color[:3], settings.MSG_BG_TRANSPARENCY),
+                             bubble_surf.get_rect(), border_radius=_bubble_r)
+            self.window.blit(bubble_surf, bubble_rect.topleft)
             self.window.blit(text_surface, text_rect.topleft)
 
-            y += self.font.get_height() + 5
+            y += _line_h + _pad_y
 
-        # Draw scrollbar and input field
+        # Draw scrollbar, input field, and toggle buttons
         self.draw_scrollbar()
         self.chat_input.draw()
-        for button in self.buttons:
-            if button.text == "Send":
-                button.draw()
+        for btn in self._toggle_buttons:
+            btn.draw()
 
     def _format_timestamp(self, iso_timestamp):
         """Format an ISO timestamp into a user-friendly short format."""
@@ -189,26 +316,25 @@ class LogScreen(SubScreen):
         for event in events:
             self.chat_input.handle_event(event)
 
-            if event.type == MOUSEBUTTONDOWN:
-                for button in self.buttons:
-                    if button.collide():
-                        button.active = not button.active
-                        if button.text == "Log":
-                            self.show_log = not self.show_log
-                        elif button.text == "Chat":
-                            self.show_chat = not self.show_chat
-                        elif button.text == "Send" and self.chat_input.content.strip():
-                            self.handle_send_message(self.chat_input.content.strip())
-                            self.chat_input.empty()
-                            button.active = False
+            if event.type == MOUSEBUTTONUP:
+                if self.btn_log.collide():
+                    self.btn_log.active = not self.btn_log.active
+                    self.show_log = self.btn_log.active
+                elif self.btn_chat.collide():
+                    self.btn_chat.active = not self.btn_chat.active
+                    self.show_chat = self.btn_chat.active
+                elif self.btn_send.collide() and self.chat_input.content.strip():
+                    self.handle_send_message(self.chat_input.content.strip())
+                    self.chat_input.empty()
 
+                # Release scrollbar drag
+                self.dragging = False
+                self.scrollbar_handle_color = self.scrollbar_handle_color_passive
+
+            elif event.type == MOUSEBUTTONDOWN:
                 if self.handle_rect.collidepoint(event.pos):
                     self.dragging = True
                     self.scrollbar_handle_color = self.scrollbar_handle_color_active
-
-            elif event.type == MOUSEBUTTONUP:
-                self.dragging = False
-                self.scrollbar_handle_color = self.scrollbar_handle_color_passive
 
             elif event.type == MOUSEMOTION and self.dragging:
                 self.handle_scrollbar_drag(event)
@@ -222,11 +348,20 @@ class LogScreen(SubScreen):
                 self.chat_input.empty()
 
     def draw_scrollbar(self):
-        """Draw the scrollbar and its handle."""
+        """Draw the scrollbar with rounded track and handle."""
         self.update_scrollbar_handle()
         if self.handle_rect.height > 0:
-            pygame.draw.rect(self.window, self.scrollbar_color, self.scrollbar_rect)
-            pygame.draw.rect(self.window, self.scrollbar_handle_color, self.handle_rect)
+            _r = self._scrollbar_r
+            # Track
+            track_surf = pygame.Surface((self.scrollbar_rect.w, self.scrollbar_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(track_surf, settings.SCROLLBAR_COLOR,
+                             track_surf.get_rect(), border_radius=_r)
+            self.window.blit(track_surf, self.scrollbar_rect.topleft)
+            # Handle
+            handle_surf = pygame.Surface((self.handle_rect.w, self.handle_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(handle_surf, self.scrollbar_handle_color,
+                             handle_surf.get_rect(), border_radius=_r)
+            self.window.blit(handle_surf, self.handle_rect.topleft)
 
 
     def update_scrollbar_handle(self):

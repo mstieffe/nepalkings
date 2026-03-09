@@ -1,6 +1,6 @@
 import pygame
 from config import settings
-from utils.utils import Button
+from game.components.dialogue_box import _DlgButton
 from game.components.cards.card_img import CardImg
 
 
@@ -61,7 +61,20 @@ class FigureDetailBox:
         self.y = y if y is not None else (settings.SCREEN_HEIGHT - self.height) // 2
 
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
-        self.border_rect = self.rect.inflate(settings.DIALOGUE_BOX_BORDER_WIDTH, settings.DIALOGUE_BOX_BORDER_WIDTH)
+        self.border_rect = self.rect.inflate(2, 2)
+
+        # Pre-render dim overlay and panel surface
+        _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+        self._overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
+        self._overlay.fill(settings.DIALOGUE_BOX_OVERLAY_CLR)
+        _corner_r = settings.DIALOGUE_BOX_CORNER_R
+        self._panel = pygame.Surface((self.rect.w, self.rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(self._panel, settings.DIALOGUE_BOX_BG_CLR,
+                         self._panel.get_rect(), border_radius=_corner_r)
+        pygame.draw.rect(self._panel, settings.DIALOGUE_BOX_BORDER_CLR,
+                         self._panel.get_rect(),
+                         settings.DIALOGUE_BOX_BORDER_WIDTH,
+                         border_radius=_corner_r)
 
         # Create X button for closing (top right corner)
         close_button_size = int(0.028 * settings.SCREEN_HEIGHT)
@@ -144,12 +157,19 @@ class FigureDetailBox:
                 actions.append('Pick up')
 
         # Create buttons vertically stacked from bottom
+        _btn_w = settings.DIALOGUE_BOX_BTN_W
+        _btn_h = settings.DIALOGUE_BOX_BTN_H
+        _btn_gap_y = int(0.008 * settings.SCREEN_HEIGHT)
+        button_x = self.rect.centerx - _btn_w // 2
+        button_y_start = self.rect.bottom - _btn_h - settings.SMALL_SPACER_Y
         for i, action in enumerate(reversed(actions)):
-            button = Button(
+            button = _DlgButton(
                 self.window,
                 button_x,
-                button_y_start - i * (settings.MENU_BUTTON_HEIGHT + settings.SMALL_SPACER_Y),
-                action
+                button_y_start - i * (_btn_h + _btn_gap_y),
+                action,
+                width=_btn_w,
+                height=_btn_h,
             )
             # Add disabled property to button
             button.disabled = False
@@ -551,34 +571,40 @@ class FigureDetailBox:
 
     def draw(self):
         """Draw the figure detail box with two-column layout."""
-        # Draw border
-        pygame.draw.rect(self.window, settings.COLOR_DIALOGUE_BOX_BORDER, self.border_rect)
+        # Dim overlay
+        self.window.blit(self._overlay, (0, 0))
 
-        # Draw background
-        pygame.draw.rect(self.window, settings.COLOR_DIALOGUE_BOX, self.rect)
+        # Panel
+        self.window.blit(self._panel, self.rect.topleft)
 
         # Calculate maximum Y position for content (leave space for buttons)
-        button_section_height = len(self.buttons) * (settings.MENU_BUTTON_HEIGHT + settings.SMALL_SPACER_Y)
+        _btn_h = settings.DIALOGUE_BOX_BTN_H
+        _btn_gap_y = int(0.008 * settings.SCREEN_HEIGHT)
+        button_section_height = len(self.buttons) * (_btn_h + _btn_gap_y)
         max_content_y = self.rect.bottom - button_section_height
 
-        current_y = self.rect.y + settings.SMALL_SPACER_Y
+        _SH = settings.SCREEN_HEIGHT
+        _SW = settings.SCREEN_WIDTH
+        current_y = self.rect.y + int(0.020 * _SH)
 
         # Draw title (figure name) - centered above both columns
         title_surface = self.title_font.render(self.figure.name, True, settings.TITLE_TEXT_COLOR)
         title_rect = title_surface.get_rect(centerx=self.rect.centerx, top=current_y)
         self.window.blit(title_surface, title_rect)
-        current_y += title_rect.height + settings.SMALL_SPACER_Y
+        current_y += title_rect.height + int(0.012 * _SH)
 
         # Draw divider line under title
         if current_y + 2 < max_content_y:
+            sep_x1 = self.rect.left + int(0.03 * _SW)
+            sep_x2 = self.rect.right - int(0.03 * _SW)
             pygame.draw.line(
                 self.window,
-                settings.COLOR_DIALOGUE_BOX_BORDER,
-                (self.rect.left + settings.SMALL_SPACER_X, current_y),
-                (self.rect.right - settings.SMALL_SPACER_X, current_y),
-                2
+                settings.DIALOGUE_BOX_SEP_CLR,
+                (sep_x1, current_y),
+                (sep_x2, current_y),
+                1
             )
-            current_y += settings.SMALL_SPACER_Y
+            current_y += int(0.012 * _SH)
 
         # Define column positions
         left_column_x = self.rect.left + settings.SMALL_SPACER_X
@@ -679,10 +705,10 @@ class FigureDetailBox:
             # Draw horizontal divider line
             pygame.draw.line(
                 self.window,
-                settings.COLOR_DIALOGUE_BOX_BORDER,
+                settings.DIALOGUE_BOX_SEP_CLR,
                 (right_column_x, right_y),
                 (right_column_x + self.right_column_width, right_y),
-                2
+                1
             )
             right_y += settings.SMALL_SPACER_Y
             
@@ -725,10 +751,10 @@ class FigureDetailBox:
             # Draw horizontal divider line
             pygame.draw.line(
                 self.window,
-                settings.COLOR_DIALOGUE_BOX_BORDER,
+                settings.DIALOGUE_BOX_SEP_CLR,
                 (right_column_x, right_y),
                 (right_column_x + self.right_column_width, right_y),
-                2
+                1
             )
             right_y += settings.SMALL_SPACER_Y
             
@@ -809,10 +835,10 @@ class FigureDetailBox:
             # Draw horizontal divider line
             pygame.draw.line(
                 self.window,
-                settings.COLOR_DIALOGUE_BOX_BORDER,
+                settings.DIALOGUE_BOX_SEP_CLR,
                 (right_column_x, right_y),
                 (right_column_x + self.right_column_width, right_y),
-                2
+                1
             )
             right_y += settings.SMALL_SPACER_Y
             
@@ -886,10 +912,10 @@ class FigureDetailBox:
                 # Draw horizontal divider line
                 pygame.draw.line(
                     self.window,
-                    settings.COLOR_DIALOGUE_BOX_BORDER,
+                    settings.DIALOGUE_BOX_SEP_CLR,
                     (right_column_x, right_y),
                     (right_column_x + self.right_column_width, right_y),
-                    2
+                    1
                 )
                 right_y += settings.SMALL_SPACER_Y
                 
@@ -957,10 +983,10 @@ class FigureDetailBox:
                 divider_y = right_y
                 pygame.draw.line(
                     self.window,
-                    settings.COLOR_DIALOGUE_BOX_BORDER,
+                    settings.DIALOGUE_BOX_SEP_CLR,
                     (right_column_x, divider_y),
                     (right_column_x + self.right_column_width, divider_y),
-                    2
+                    1
                 )
                 right_y += settings.SMALL_SPACER_Y
 
@@ -1006,10 +1032,10 @@ class FigureDetailBox:
                 # Draw divider line
                 pygame.draw.line(
                     self.window,
-                    settings.COLOR_DIALOGUE_BOX_BORDER,
+                    settings.DIALOGUE_BOX_SEP_CLR,
                     (right_column_x, right_y),
                     (right_column_x + self.right_column_width, right_y),
-                    2
+                    1
                 )
                 right_y += settings.SMALL_SPACER_Y
                 resting_text = self.font.render("⏳ Resting this round", True, (220, 40, 40))
@@ -1021,25 +1047,24 @@ class FigureDetailBox:
             button.draw()
         
         # Draw X button in top right corner with hover/click effects
-        # Determine colors based on state
         if self.close_button_clicked:
-            bg_color = (150, 150, 150)  # Darker gray when clicked
-            x_color = (255, 100, 100)  # Bright red when clicked
-            glow_alpha = 180
+            bg_color = (60, 50, 45, 220)
+            x_color = (255, 100, 100)
+            glow_alpha = 140
         elif self.close_button_hovered:
-            bg_color = (200, 200, 200)  # Light gray when hovered
-            x_color = (255, 50, 50)  # Red when hovered
-            glow_alpha = 120
+            bg_color = (55, 50, 45, 200)
+            x_color = (255, 80, 80)
+            glow_alpha = 90
         else:
-            bg_color = settings.COLOR_DIALOGUE_BOX_BORDER
-            x_color = settings.TITLE_TEXT_COLOR
+            bg_color = (40, 38, 35, 180)
+            x_color = settings.DIALOGUE_BOX_MSG_TEXT_CLR
             glow_alpha = 0
         
         # Draw glow effect when hovered or clicked
         if glow_alpha > 0:
             glow_radius = int(0.018 * settings.SCREEN_HEIGHT)
             glow_surface = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
-            pygame.draw.circle(glow_surface, (255, 100, 100, glow_alpha), (glow_radius, glow_radius), glow_radius)
+            pygame.draw.circle(glow_surface, (220, 180, 120, glow_alpha), (glow_radius, glow_radius), glow_radius)
             glow_pos = (
                 self.close_button_rect.centerx - glow_radius,
                 self.close_button_rect.centery - glow_radius
@@ -1047,7 +1072,9 @@ class FigureDetailBox:
             self.window.blit(glow_surface, glow_pos)
         
         # Draw button background
-        pygame.draw.rect(self.window, bg_color, self.close_button_rect, border_radius=3)
+        btn_bg = pygame.Surface((self.close_button_rect.w, self.close_button_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(btn_bg, bg_color, btn_bg.get_rect(), border_radius=4)
+        self.window.blit(btn_bg, self.close_button_rect.topleft)
         
         # Draw X with lines
         margin = max(4, self.close_button_rect.width // 4)

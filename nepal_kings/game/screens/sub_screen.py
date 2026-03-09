@@ -43,26 +43,45 @@ class SubScreen:
                              button_img_active=button_img_active, button_img_inactive=button_img_inactive)
 
     def draw_title(self):
-        """Draw the title of the sub screen."""
+        """Draw the title of the sub screen with dark-theme styling."""
         if self.title:
-            # Render the title text
-            title_text = self.title_font.render(self.title, True, settings.SUB_SCREEN_TITLE_COLOR)
-            title_rect = title_text.get_rect(center=(settings.SUB_SCREEN_TITLE_X, settings.SUB_SCREEN_TITLE_Y))
+            _SH = settings.SCREEN_HEIGHT
+            _pad = settings.SUB_SCREEN_TITLE_PADDING
+            _corner_r = settings.SUB_SCREEN_TITLE_CORNER_R
 
-            # Draw the background rectangle
+            # Render gold title text
+            title_text = self.title_font.render(self.title, True,
+                                               settings.SUB_SCREEN_TITLE_COLOR)
+            title_rect = title_text.get_rect(
+                center=(settings.SUB_SCREEN_TITLE_X, settings.SUB_SCREEN_TITLE_Y))
+
+            # Background rect with padding
             bg_rect = pygame.Rect(
-                title_rect.left - settings.SUB_SCREEN_TITLE_PADDING,
-                title_rect.top - settings.SUB_SCREEN_TITLE_PADDING,
-                title_rect.width + 2 * settings.SUB_SCREEN_TITLE_PADDING,
-                title_rect.height + 2 * settings.SUB_SCREEN_TITLE_PADDING
+                title_rect.left - _pad * 2,
+                title_rect.top - _pad,
+                title_rect.width + 4 * _pad,
+                title_rect.height + 2 * _pad + int(0.006 * _SH)  # extra for separator
             )
-            pygame.draw.rect(self.window, settings.SUB_SCREEN_TITLE_BG_COLOR, bg_rect)
 
-            # Draw the border
-            pygame.draw.rect(self.window, settings.SUB_SCREEN_TITLE_BORDER_COLOR, bg_rect, settings.SUB_SCREEN_TITLE_BORDER_WIDTH)
+            # Semi-transparent dark panel
+            panel = pygame.Surface((bg_rect.w, bg_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(panel, settings.SUB_SCREEN_TITLE_BG_COLOR,
+                             panel.get_rect(), border_radius=_corner_r)
+            pygame.draw.rect(panel, settings.SUB_SCREEN_TITLE_BORDER_COLOR,
+                             panel.get_rect(),
+                             settings.SUB_SCREEN_TITLE_BORDER_WIDTH,
+                             border_radius=_corner_r)
+            self.window.blit(panel, bg_rect.topleft)
 
-            # Draw the title text
+            # Title text
             self.window.blit(title_text, title_rect)
+
+            # Thin separator line below title
+            sep_y = bg_rect.bottom - int(0.005 * _SH)
+            sep_margin = int(0.008 * settings.SCREEN_WIDTH)
+            pygame.draw.line(self.window, settings.SUB_SCREEN_TITLE_SEP_CLR,
+                             (bg_rect.left + sep_margin, sep_y),
+                             (bg_rect.right - sep_margin, sep_y), 1)
 
             
 

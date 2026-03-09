@@ -185,6 +185,7 @@ class MenuScreenMixin:
             self.dialogue_box.draw()
         for ib in self._icon_buttons:
             ib.draw()
+        self._draw_logout_dialogue()
 
     def _draw_gold(self):
         """Gold icon + amount with a background box (upper-left)."""
@@ -228,16 +229,45 @@ class MenuScreenMixin:
 
     def _handle_icon_events(self, event):
         """Handle MOUSEBUTTONUP for icon buttons.  Returns True if handled."""
+        # If logout dialogue is active, route all events to it
+        if hasattr(self, '_logout_dialogue') and self._logout_dialogue:
+            self._update_logout_dialogue([event])
+            return True
         if event.type == pygame.MOUSEBUTTONUP:
             if self._icon_home.collide():
                 self.state.screen = 'game_menu'
                 return True
             if self._icon_logout.collide():
-                self.state.screen = 'login'
-                self.reset_action()
-                self.state.user = None
-                self.state.user_dict = None
-                self.state.game = None
-                self.state.set_msg('Logged out')
+                # Show confirmation dialogue instead of instant logout
+                from game.components.dialogue_box import DialogueBox
+                self._logout_dialogue = DialogueBox(
+                    self.window,
+                    'Are you sure you want to log out?',
+                    actions=['yes', 'no'],
+                    icon='question',
+                    title='Logout'
+                )
                 return True
         return False
+
+    def _update_logout_dialogue(self, events):
+        """Process the logout confirmation dialogue. Returns True if active."""
+        if not hasattr(self, '_logout_dialogue') or self._logout_dialogue is None:
+            return False
+        response = self._logout_dialogue.update(events)
+        if response == 'yes':
+            self._logout_dialogue = None
+            self.state.screen = 'login'
+            self.reset_action()
+            self.state.user = None
+            self.state.user_dict = None
+            self.state.game = None
+            self.state.set_msg('Logged out')
+        elif response is not None:  # 'no' or any other response
+            self._logout_dialogue = None
+        return True
+
+    def _draw_logout_dialogue(self):
+        """Draw the logout confirmation dialogue if active."""
+        if hasattr(self, '_logout_dialogue') and self._logout_dialogue:
+            self._logout_dialogue.draw()

@@ -1008,20 +1008,9 @@ class GameScreen(Screen):
                     resources_data={}
                 )
                 
-                # Load invader/defender icon based on player's actual role
-                # IMPORTANT: Logic is inverted in the icon naming
-                # is_invader=True (offensive/red) -> show invader_passive.png
-                # is_invader=False (defensive/black) -> show invader_active.png
+                # Build images list - only the maharaja icon
                 import os
-                invader_icon_name = 'invader_passive.png' if is_invader else 'invader_active.png'
-                invader_icon_path = os.path.join('img', 'status_icons', invader_icon_name)
-                
-                # Build images list - maharaja_icon will be drawn by DialogueBox via draw_icon()
-                # Don't manually scale the invader icon - let DialogueBox handle sizing
                 images = [maharaja_icon]
-                if os.path.exists(invader_icon_path):
-                    invader_img = pygame.image.load(invader_icon_path)
-                    images.append(invader_img)
                 
                 print(f"[WELCOME_MSG] Showing dialogue with {len(images)} images")
                 
@@ -1037,7 +1026,7 @@ class GameScreen(Screen):
                     'actions': ['ok'],
                     'images': images,
                     'message_after_images': turn_status,
-                    'icon': "loot",
+                    'icon': "welcome",
                     'title': "Game Started"
                 })
             
