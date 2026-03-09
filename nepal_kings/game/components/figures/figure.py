@@ -77,6 +77,7 @@ class Figure:
         instant_charge: bool = False,  # Figure charges instantly into battle
         cannot_be_blocked: bool = False,  # Figure cannot be blocked when advancing
         cannot_be_targeted: bool = False,  # Figure cannot be selected for battle (advance or defend)
+        checkmate: bool = False,  # If this figure dies the owner loses the game
         override_base_power: Optional[int] = None,  # Fixed base power (overrides card sum)
         description: str = "",
         id: Optional[int] = None,
@@ -109,6 +110,7 @@ class Figure:
         self.instant_charge = instant_charge
         self.cannot_be_blocked = cannot_be_blocked
         self.cannot_be_targeted = cannot_be_targeted
+        self.checkmate = checkmate
         self.override_base_power = override_base_power
         
         # Active enchantment effects on this figure

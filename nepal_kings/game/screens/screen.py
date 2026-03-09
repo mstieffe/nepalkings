@@ -14,6 +14,7 @@ class Screen:
 
         # Set up the font
         self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE)
+        self._msg_font = pygame.font.Font(settings.FONT_PATH, int(0.022 * settings.SCREEN_HEIGHT))
 
         # Set clock
         self.clock = pygame.time.Clock()
@@ -45,11 +46,19 @@ class Screen:
         return [Button(self.window, settings.get_x(x), settings.get_y(y + 0.1 * i), text, width=width, height=height) for i, text in enumerate(button_names)]
 
     def draw_msg(self):
-        """Render any messages to the screen."""
-        starting_y_position = settings.get_y(0.0)
-        for line, _ in self.state.message_lines:
-            line_y_position = starting_y_position + (self.state.message_lines.index((line, _)) * settings.MESSAGE_SPACING)
-            self.draw_text(line, settings.MSG_TEXT_COLOR, settings.get_x(0.25), line_y_position)
+        """Render messages at bottom-centre of the screen."""
+        if not self.state.message_lines:
+            return
+        line_h = self._msg_font.get_height()
+        spacing = int(0.008 * settings.SCREEN_HEIGHT)
+        n = len(self.state.message_lines)
+        total_h = n * line_h + (n - 1) * spacing
+        base_y = settings.SCREEN_HEIGHT - int(0.06 * settings.SCREEN_HEIGHT) - total_h
+        cx = settings.SCREEN_WIDTH // 2
+        for i, (line, _) in enumerate(self.state.message_lines):
+            surf = self._msg_font.render(line, True, settings.MSG_TEXT_COLOR)
+            rect = surf.get_rect(centerx=cx, y=base_y + i * (line_h + spacing))
+            self.window.blit(surf, rect)
 
     def draw_text(self, text, color, x, y):
         """Draw text to the screen."""

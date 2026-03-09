@@ -2,6 +2,7 @@
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, User
+from datetime import datetime
 import logging  # For logging errors instead of exposing them to the user
 
 auth = Blueprint('auth', __name__)
@@ -74,9 +75,28 @@ def login():
         if not user or not check_password_hash(user.password_hash, password):
             return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
 
+        user.last_active = datetime.utcnow()
+        db.session.commit()
+
         serialized_user = user.serialize()
 
         return jsonify({'success': True, 'message': 'Login successful', 'user': serialized_user})
     except Exception as e:
         logging.error(f"Login failed: {e}")
         return jsonify({'success': False, 'message': 'Login failed. Please try again later.'}), 500
+
+@auth.route('/heartbeat', methods=['POST'])
+def heartbeat():
+    try:
+        username = request.form.get('username')
+        if not username:
+            return jsonify({'success': False, 'message': 'Missing username'}), 400
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        user.last_active = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"Heartbeat failed: {e}")
+        return jsonify({'success': False, 'message': 'Heartbeat failed'}), 500

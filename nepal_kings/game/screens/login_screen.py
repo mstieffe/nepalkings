@@ -34,7 +34,7 @@ class LoginScreen(Screen):
             self.draw_text('Loading...', settings.MENU_TEXT_COLOR_HEADER, settings.SCREEN_WIDTH * 0.1, settings.SCREEN_HEIGHT * 0.5)
 
         super().render()
-        pygame.display.update()
+
 
     def handle_login(self):
         self.loading = True

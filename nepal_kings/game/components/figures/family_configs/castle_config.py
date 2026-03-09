@@ -52,7 +52,8 @@ castle_dict_list = [
                 family=family,
                 key_cards=[Card("K", suit, 4)],
                 override_base_power=16,
-                produces={'villager_black': 3, 'warrior_black': 2}
+                produces={'villager_black': 3, 'warrior_black': 2},
+                checkmate=True
             )
         ]
     },
@@ -105,7 +106,8 @@ castle_dict_list = [
                 family=family,
                 key_cards=[Card("K", suit, 4)],
                 override_base_power=16,
-                produces={'villager_red': 3, 'warrior_red': 2}
+                produces={'villager_red': 3, 'warrior_red': 2},
+                checkmate=True
             )
         ]
     }

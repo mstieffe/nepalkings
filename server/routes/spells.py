@@ -3,7 +3,8 @@ Server-side spell routes for handling spell casting, countering, and management.
 """
 
 from flask import Blueprint, request, jsonify
-from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User
+from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult
+from datetime import datetime
 from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
@@ -153,7 +154,8 @@ def cast_spell():
                 'success': True,
                 'message': f'{spell_name} cast successfully',
                 'game': game.serialize(),
-                'spell_effect': spell_effect
+                'spell_effect': spell_effect,
+                **(({'game_over': spell_effect['game_over']} ) if 'game_over' in spell_effect else {})
             }), 200
             
     except Exception as e:
@@ -311,7 +313,8 @@ def allow_spell():
             'message': f'{pending_spell.spell_name} executed. Spell was allowed.',
             'game': game.serialize(),
             'spell_effect': spell_effect,
-            'no_turn_lost': True
+            'no_turn_lost': True,
+            **(({'game_over': spell_effect['game_over']} ) if 'game_over' in spell_effect else {})
         }), 200
         
     except Exception as e:
@@ -828,14 +831,14 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 spell_effect['effect'] = 'Target figure not found'
                 spell_effect['error'] = 'Invalid target'
             else:
-                # Check if trying to cast Explosion on a Maharaja
-                if 'Explosion' in spell.spell_name and target_figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']:
-                    spell_effect['effect'] = 'Explosion cannot be cast on Maharajas'
-                    spell_effect['error'] = 'Invalid target: Maharajas are immune to Explosion'
+                # Check if target figure has checkmate (immune to all spells)
+                if getattr(target_figure, 'checkmate', False):
+                    spell_effect['effect'] = f'{target_figure.name} is immune to spells (Checkmate)'
+                    spell_effect['error'] = 'Invalid target: Checkmate figures are immune to spells'
                     db.session.commit()
                     return jsonify({
                         'success': False, 
-                        'message': 'Explosion cannot be cast on Maharajas!',
+                        'message': f'{target_figure.name} is immune to spells!',
                         'spell_effect': spell_effect
                     }), 400
                 
@@ -894,6 +897,56 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         destroyed_figure_owner_id = target_figure.player_id
                         card_count = len(main_card_ids) + len(side_card_ids)
                         
+                        # Check checkmate before deleting the figure
+                        checkmate_game_over = None
+                        if getattr(target_figure, 'checkmate', False) and game.state != 'finished':
+                            loser_player = Player.query.get(target_figure.player_id)
+                            winner_player = [p for p in game.players if p.id != loser_player.id][0]
+                            stake = game.stake or settings.DEFAULT_GAME_STAKE
+                            gold_awarded = stake * 2
+                            game.state = 'finished'
+                            game.winner_player_id = winner_player.id
+                            game.finished_at = datetime.utcnow()
+                            winner_user = User.query.get(winner_player.user_id)
+                            loser_user = User.query.get(loser_player.user_id)
+                            if winner_user:
+                                winner_user.gold += gold_awarded
+                            winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
+                            loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
+                            game_result = GameResult(
+                                game_id=game.id,
+                                winner_user_id=winner_player.user_id,
+                                loser_user_id=loser_player.user_id,
+                                winner_username=winner_username,
+                                loser_username=loser_username,
+                                winner_score=winner_player.points,
+                                loser_score=loser_player.points,
+                                stake=stake,
+                                gold_awarded=gold_awarded,
+                                rounds_played=game.current_round,
+                            )
+                            db.session.add(game_result)
+                            checkmate_game_over = {
+                                'game_over': True,
+                                'reason': 'checkmate',
+                                'checkmate_figure_name': destroyed_figure_name,
+                                'winner_player_id': winner_player.id,
+                                'loser_player_id': loser_player.id,
+                                'winner_username': winner_username,
+                                'loser_username': loser_username,
+                                'winner_score': winner_player.points,
+                                'loser_score': loser_player.points,
+                                'gold_awarded': gold_awarded,
+                                'stake': stake,
+                            }
+                            checkmate_log = LogEntry(
+                                game_id=game.id, player_id=winner_player.id,
+                                round_number=game.current_round, turn_number=0,
+                                message=f"💀 CHECKMATE! {loser_username}'s {destroyed_figure_name} was destroyed by Explosion — {winner_username} wins!",
+                                author="System", type='game_over'
+                            )
+                            db.session.add(checkmate_log)
+                        
                         # Delete the figure
                         db.session.delete(target_figure)
                         db.session.flush()
@@ -901,6 +954,8 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         spell_effect['effect'] = f'Destroyed {destroyed_figure_name} ({card_count} cards returned to deck)'
                         spell_effect['destroyed_figure_name'] = destroyed_figure_name
                         spell_effect['card_count'] = card_count
+                        if checkmate_game_over:
+                            spell_effect['game_over'] = checkmate_game_over
                         
                         # Don't keep this spell active since the figure is destroyed
                         spell.is_active = False

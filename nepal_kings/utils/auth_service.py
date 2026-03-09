@@ -1,6 +1,14 @@
 import requests
 from config import settings
 
+def send_heartbeat(username):
+    """Ping the server to mark this user as online."""
+    try:
+        requests.post(f'{settings.SERVER_URL}/auth/heartbeat',
+                      data={'username': username}, timeout=3)
+    except Exception:
+        pass
+
 def login(username, password):
     try:
         response = requests.post(f'{settings.SERVER_URL}/auth/login', data={'username': username, 'password': password})

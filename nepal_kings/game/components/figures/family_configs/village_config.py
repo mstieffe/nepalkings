@@ -221,7 +221,7 @@ village_dict_list = [
         "icon_gray_img": "manufactory_black.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
-        "glow_img": "yellow.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[1],
         "figures": lambda family, suit: [
@@ -250,7 +250,7 @@ village_dict_list = [
         "icon_gray_img": "manufactory_red.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
-        "glow_img": "yellow.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[1],
         "figures": lambda family, suit: [
@@ -279,7 +279,7 @@ village_dict_list = [
         "icon_gray_img": "carpenter.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
-        "glow_img": "yellow.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[4],
         "figures": lambda family, suit: [
@@ -309,7 +309,7 @@ village_dict_list = [
         "icon_gray_img": "stone_mason.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
-        "glow_img": "yellow.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[4],
         "figures": lambda family, suit: [
@@ -339,7 +339,7 @@ village_dict_list = [
         "icon_gray_img": "himalaya_healer.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
-        "glow_img": "yellow.png",
+        "glow_img": "blue.png",
         "suits": SUITS_BLACK,
         "build_position": VILLAGE_POSITIONS[5],
         "figures": lambda family, suit: [
@@ -370,7 +370,7 @@ village_dict_list = [
         "icon_gray_img": "djungle_healer.png",
         "frame_img": "village2.png",
         "frame_closed_img": "village2.png",
-        "glow_img": "yellow.png",
+        "glow_img": "green.png",
         "suits": SUITS_RED,
         "build_position": VILLAGE_POSITIONS[5],
         "figures": lambda family, suit: [

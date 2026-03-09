@@ -16,6 +16,12 @@ class State:
         # Track pending spell cast that requires target selection
         self.pending_spell_cast = None  # Dict: {'spell': Spell, 'real_cards': List[Card]}
 
+        # ── Badge tracking (unread indicators) ──────────────────────
+        self._known_game_ids = None        # None = not yet initialised
+        self._known_challenge_ids = None   # None = not yet initialised
+        self.badge_new_games = 0           # count of unseen games
+        self.badge_new_challenges = 0      # count of unseen received challenges
+
 
     def set_msg(self, msg):
         lines = msg.split('\n')  # Split the message into lines

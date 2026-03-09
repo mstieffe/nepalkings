@@ -31,6 +31,8 @@ def create_figure():
         requires = data.get('requires', {})
         cards = data.get('cards', [])
         instant_charge_advance = data.get('instant_charge_advance', False)
+        cannot_be_blocked = data.get('cannot_be_blocked', False)
+        rest_after_attack = data.get('rest_after_attack', False)
 
         if settings.DEBUG_ENABLED:
             with open(settings.DEBUG_LOG_PATH, 'a') as f:
@@ -51,7 +53,9 @@ def create_figure():
             description=description,
             upgrade_family_name=upgrade_family_name,
             produces=produces,
-            requires=requires
+            requires=requires,
+            cannot_be_blocked=cannot_be_blocked,
+            rest_after_attack=rest_after_attack
         )
         if settings.DEBUG_ENABLED:
             with open(settings.DEBUG_LOG_PATH, 'a') as f:
@@ -144,11 +148,18 @@ def create_figure():
                     has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
                     has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
 
-                    if has_blitzkrieg and is_counter_advance:
+                    # Check if advancing figure has cannot_be_blocked
+                    if is_counter_advance and game.advancing_figure_id:
+                        adv_fig = Figure.query.get(game.advancing_figure_id)
+                        if adv_fig and adv_fig.cannot_be_blocked:
+                            instant_charge_result = {'success': False, 'message': 'Cannot counter-advance: opponent\'s figure cannot be blocked'}
+
+                    if instant_charge_result is None and has_blitzkrieg and is_counter_advance:
                         instant_charge_result = {'success': False, 'message': 'Blitzkrieg: defender cannot counter-advance'}
-                    elif (has_civil_war or any(m.get('type') == 'Peasant War' for m in modifiers)) and field != 'village':
+                    elif instant_charge_result is None and (has_civil_war or any(m.get('type') == 'Peasant War' for m in modifiers)) and field != 'village':
                         instant_charge_result = {'success': False, 'message': 'Only village figures can advance with this battle modifier'}
-                    else:
+
+                    if instant_charge_result is None:
                         # Set the advancing/defending figure
                         if is_counter_advance:
                             game.defending_figure_id = figure.id
@@ -707,6 +718,9 @@ def upgrade_figure():
         db.session.flush()
 
         # Create new upgraded figure
+        # Inherit cannot_be_blocked and rest_after_attack from the old figure, or accept from client override
+        new_cannot_be_blocked = data.get('cannot_be_blocked', figure.cannot_be_blocked)
+        new_rest_after_attack = data.get('rest_after_attack', figure.rest_after_attack)
         new_figure = Figure(
             player_id=player_id,
             game_id=game_id,
@@ -716,7 +730,9 @@ def upgrade_figure():
             name=new_figure_name,  # Use upgrade_family_name as the name
             suit=figure.suit,
             description=figure.description,
-            upgrade_family_name=None  # The upgraded figure may or may not have further upgrades
+            upgrade_family_name=None,  # The upgraded figure may or may not have further upgrades
+            cannot_be_blocked=new_cannot_be_blocked,
+            rest_after_attack=new_rest_after_attack
         )
         db.session.add(new_figure)
         db.session.flush()

@@ -13,7 +13,7 @@ from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.log_screen import LogScreen
 from game.screens.field_screen import FieldScreen
 from game.screens.cast_spell_screen import CastSpellScreen
-from game.screens.tutorial_screen import TutorialScreen
+from game.screens.guide_book_screen import GuideBookScreen
 from game.screens.battle_screen import BattleScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.components.figures.figure_manager import FigureManager
@@ -61,7 +61,7 @@ class GameScreen(Screen):
             'build_figure': BuildFigureScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Figure Builder'),
             'cast_spell': CastSpellScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Spell Book'),
             'log': LogScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Log-Book'),
-            'tutorial': TutorialScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Tutorial'),
+            'tutorial': GuideBookScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Guide Book'),
             'battle': BattleScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Arena'),
             'battle_shop': BattleShopScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Shop'),
         }
@@ -71,6 +71,7 @@ class GameScreen(Screen):
         
         # Queue for pending notifications (to avoid overwriting active dialogue boxes)
         self.pending_notifications = []
+        self._active_dialogue_type = None  # Track the type of the currently-displayed dialogue
         
         # Counter spell state
         self.waiting_for_counter_response = False  # True when caster is waiting
@@ -95,6 +96,7 @@ class GameScreen(Screen):
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
         from game.components.dialogue_box import DialogueBox
+        self._active_dialogue_type = None  # Clear — callers via queue_or_show set it after
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
     
     def queue_or_show_notification(self, notification_data):
@@ -104,13 +106,21 @@ class GameScreen(Screen):
             self.pending_notifications.append(notification_data)
         else:
             # No dialogue box - show immediately
-            self.make_dialogue_box(**notification_data)
+            data = dict(notification_data)
+            dialogue_type = data.pop('type', None)
+            self.make_dialogue_box(**data)
+            self._active_dialogue_type = dialogue_type
     
     def show_next_queued_notification(self):
         """Show the next queued notification if any exist."""
         if self.pending_notifications:
             notification_data = self.pending_notifications.pop(0)
-            self.make_dialogue_box(**notification_data)
+            data = dict(notification_data)
+            dialogue_type = data.pop('type', None)
+            self.make_dialogue_box(**data)
+            self._active_dialogue_type = dialogue_type
+        else:
+            self._active_dialogue_type = None
 
     def initialiaze_scoareboard_scroll(self):
         """Initialize resources for the info scroll."""
@@ -209,6 +219,80 @@ class GameScreen(Screen):
         self.game_buttons.extend(self.main_hand.buttons)
         self.game_buttons.extend(self.side_hand.buttons)
 
+        home_button = GameButton(
+            self.window, 
+            'home',
+            'home', 
+            'plain',
+            settings.HOME_BUTTON_X, settings.HOME_BUTTON_Y,
+            settings.HOME_BUTTON_WIDTH,
+            settings.HOME_BUTTON_WIDTH,
+            glow_width=settings.HOME_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.HOME_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.HOME_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='home menu!',
+            screen='game_menu',
+            track_turn = False
+        )
+        self.game_buttons.append(home_button)
+
+        # Tutorial button (switches to the tutorial subscreen)
+        tutorial_button = GameButton(
+            self.window, 
+            'view_tutorial',
+            'tutorial', 
+            'plain',
+            settings.TUTORIAL_BUTTON_X, settings.TUTORIAL_BUTTON_Y,
+            settings.TUTORIAL_BUTTON_WIDTH,
+            settings.TUTORIAL_BUTTON_WIDTH,
+            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.TUTORIAL_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='guide book',
+            subscreen='tutorial',
+            track_turn = False
+        )
+        self.game_buttons.append(tutorial_button)
+
+        # Log button (switches to the log subscreen)
+        self.log_button = GameButton(
+            self.window, 
+            'view_log',
+            'letter', 
+            'plain',
+            settings.LETTER_BUTTON_X, settings.LETTER_BUTTON_Y,
+            settings.LETTER_BUTTON_WIDTH,
+            settings.LETTER_BUTTON_WIDTH,
+            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.LETTER_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='view log!',
+            subscreen='log',
+            track_turn = False
+        )
+        self.game_buttons.append(self.log_button)
+
+        # Field button (switches to the field subscreen)
+        self.field_button = GameButton(
+            self.window, 
+            'view_field',
+            'map', 
+            'plain',
+            settings.FIELD_BUTTON_X, settings.FIELD_BUTTON_Y,
+            settings.FIELD_BUTTON_WIDTH,
+            settings.FIELD_BUTTON_WIDTH,
+            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
+            symbol_width_big=settings.FIELD_BUTTON_WIDTH_BIG,
+            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
+            state=self.state,
+            hover_text='view field!',
+            subscreen='field',
+            track_turn = False
+        )
+
         # Action button (for casting spells)
         action_button = GameButton(
             self.window, 
@@ -239,62 +323,9 @@ class GameScreen(Screen):
         )
         self.game_buttons.append(build_button)
 
-        # Field button (switches to the field subscreen)
-        self.field_button = GameButton(
-            self.window, 
-            'view_field',
-            'map', 
-            'plain',
-            settings.FIELD_BUTTON_X, settings.FIELD_BUTTON_Y,
-            settings.FIELD_BUTTON_WIDTH,
-            settings.FIELD_BUTTON_WIDTH,
-            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
-            symbol_width_big=settings.FIELD_BUTTON_WIDTH_BIG,
-            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
-            state=self.state,
-            hover_text='view field!',
-            subscreen='field',
-            track_turn = False
-        )
+
         self.game_buttons.append(self.field_button)
 
-        # Log button (switches to the log subscreen)
-        self.log_button = GameButton(
-            self.window, 
-            'view_log',
-            'letter', 
-            'plain',
-            settings.LETTER_BUTTON_X, settings.LETTER_BUTTON_Y,
-            settings.LETTER_BUTTON_WIDTH,
-            settings.LETTER_BUTTON_WIDTH,
-            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
-            symbol_width_big=settings.LETTER_BUTTON_WIDTH_BIG,
-            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
-            state=self.state,
-            hover_text='view log!',
-            subscreen='log',
-            track_turn = False
-        )
-        self.game_buttons.append(self.log_button)
-
-        # Tutorial button (switches to the tutorial subscreen)
-        tutorial_button = GameButton(
-            self.window, 
-            'view_tutorial',
-            'tutorial', 
-            'plain',
-            settings.TUTORIAL_BUTTON_X, settings.TUTORIAL_BUTTON_Y,
-            settings.TUTORIAL_BUTTON_WIDTH,
-            settings.TUTORIAL_BUTTON_WIDTH,
-            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
-            symbol_width_big=settings.TUTORIAL_BUTTON_WIDTH_BIG,
-            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
-            state=self.state,
-            hover_text='tutorial!',
-            subscreen='tutorial',
-            track_turn = False
-        )
-        self.game_buttons.append(tutorial_button)
 
         # Battle button (switches to the battle subscreen)
         # Inactive during normal round, only becomes active in battle phase
@@ -336,23 +367,7 @@ class GameScreen(Screen):
         )
         self.game_buttons.append(battle_shop_button)
 
-        home_button = GameButton(
-            self.window, 
-            'home',
-            'home', 
-            'plain',
-            settings.HOME_BUTTON_X, settings.HOME_BUTTON_Y,
-            settings.HOME_BUTTON_WIDTH,
-            settings.HOME_BUTTON_WIDTH,
-            glow_width=settings.HOME_BUTTON_GLOW_WIDTH,
-            symbol_width_big=settings.HOME_BUTTON_WIDTH_BIG,
-            glow_width_big=settings.HOME_BUTTON_GLOW_WIDTH_BIG,
-            state=self.state,
-            hover_text='home menu!',
-            screen='game_menu',
-            track_turn = False
-        )
-        self.game_buttons.append(home_button)
+
 
     def update_game(self):
         """Update the game state and related components."""
@@ -468,6 +483,7 @@ class GameScreen(Screen):
         # Clear pending notifications and dialogue box
         self.pending_notifications = []
         self.dialogue_box = None
+        self._active_dialogue_type = None
         
         # Reset counter spell state
         self.waiting_for_counter_response = False
@@ -1324,12 +1340,15 @@ class GameScreen(Screen):
         modifier_types = [m.get('type') for m in modifiers]
         
         # Check if opponent's advancing figure has cannot_be_blocked
-        # (would block counter-advance for all figures)
+        # (would block counter-advance for all figures, including instant_charge build+advance)
         if self.state.game.advancing_figure_id and self.state.game.advancing_player_id != self.state.game.player_id:
-            for fig in all_own_figures:
-                if hasattr(fig, 'id') and fig.id == self.state.game.advancing_figure_id:
-                    if hasattr(fig, 'cannot_be_blocked') and fig.cannot_be_blocked:
-                        return False
+            field_screen = self.subscreens.get('field')
+            if field_screen:
+                for fig in getattr(field_screen, 'figures', []):
+                    if hasattr(fig, 'id') and fig.id == self.state.game.advancing_figure_id:
+                        if hasattr(fig, 'cannot_be_blocked') and fig.cannot_be_blocked:
+                            return False
+                        break
         
         # Blitzkrieg: defender cannot counter-advance
         if 'Blitzkrieg' in modifier_types:
@@ -1453,6 +1472,8 @@ class GameScreen(Screen):
             if hasattr(fig, 'cannot_defend') and fig.cannot_defend:
                 continue
             if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
+                continue
+            if hasattr(fig, 'checkmate') and fig.checkmate:
                 continue
             if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
                 continue
@@ -2131,32 +2152,69 @@ class GameScreen(Screen):
         winner_score = game_over_info.get('winner_score', 0)
         loser_score = game_over_info.get('loser_score', 0)
         gold_awarded = game_over_info.get('gold_awarded', 0)
-        limit = game_over_info.get('limit', 45)
+        stake = game_over_info.get('stake', 45)
+        reason = game_over_info.get('reason', 'stake')
+        checkmate_figure_name = game_over_info.get('checkmate_figure_name', 'Maharaja')
 
         is_winner = (game_over_info.get('winner_player_id') == self.state.game.player_id)
 
+        # Pick the gold image to display (normal for victory, greyed with red cross for defeat)
         if is_winner:
-            title = "Victory!"
-            message = (
-                f"Congratulations! You won the game!\n\n"
-                f"Final Score: {winner_score} - {loser_score}\n"
-                f"Point Limit: {limit}\n\n"
-                f"You earned {gold_awarded} gold!"
-            )
+            gold_img_key = 'gold'
         else:
-            title = "Defeat"
-            message = (
-                f"{winner_name} has won the game.\n\n"
-                f"Final Score: {winner_score} - {loser_score}\n"
-                f"Point Limit: {limit}\n\n"
-                f"Better luck next time!"
-            )
+            gold_img_key = 'gold_lost'
+        gold_image = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT.get(gold_img_key)
+        images = [gold_image] if gold_image else []
+
+        if reason == 'checkmate':
+            # Checkmate-specific messaging
+            if is_winner:
+                title = "Checkmate!"
+                icon = 'victory'
+                message = (
+                    f"You destroyed {loser_name}'s {checkmate_figure_name}!\n\n"
+                    f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Stake: {stake} gold"
+                )
+                message_after = f"You earned {gold_awarded} gold!"
+            else:
+                title = "Checkmate!"
+                icon = 'defeat'
+                message = (
+                    f"Your {checkmate_figure_name} was destroyed!\n\n"
+                    f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Stake: {stake} gold"
+                )
+                message_after = f"You lost {stake} gold."
+        else:
+            # Standard stake-based game over
+            if is_winner:
+                title = "Victory!"
+                icon = 'victory'
+                message = (
+                    f"Congratulations! You won the game!\n\n"
+                    f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Stake: {stake} gold"
+                )
+                message_after = f"You earned {gold_awarded} gold!"
+            else:
+                title = "Defeat"
+                icon = 'defeat'
+                message = (
+                    f"{winner_name} has won the game.\n\n"
+                    f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Stake: {stake} gold"
+                )
+                message_after = f"You lost {stake} gold."
 
         self.queue_or_show_notification({
             'message': message,
             'actions': ['ok'],
-            'icon': 'magic',
+            'icon': icon,
             'title': title,
+            'images': images,
+            'message_after_images': message_after,
+            'type': 'game_over',
         })
 
     def _on_game_over_acknowledged(self, response=None):
@@ -2524,7 +2582,8 @@ class GameScreen(Screen):
                     if (fig.player_id != self.state.game.player_id and
                         hasattr(fig, 'must_be_attacked') and fig.must_be_attacked and
                         not (hasattr(fig, 'cannot_defend') and fig.cannot_defend) and
-                        not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted)):
+                        not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted) and
+                        not (hasattr(fig, 'checkmate') and fig.checkmate)):
                         has_must_be_attacked = True
                         break
             if has_must_be_attacked:
@@ -3182,7 +3241,6 @@ class GameScreen(Screen):
 
         # Check if game exists (may be None after logout)
         if not self.state.game:
-            pygame.display.update()
             return
 
         for element in self.display_elements:
@@ -3213,6 +3271,8 @@ class GameScreen(Screen):
 
         # Draw unread chat badge on top of log button
         self._draw_unread_chat_badge()
+
+        # ── Overlays drawn AFTER super().render() so they appear on top ──
 
         # Draw field & battle change badges
         self._draw_field_badge()
@@ -3259,23 +3319,20 @@ class GameScreen(Screen):
             self._draw_own_advance_waiting_prompt()
         
         # Draw opponent advance prompt (opponent advanced, your turn to respond: counter-advance or spend turn)
-        # Shows only for the non-advancing player when it's their turn and before counter-advance
         if (self.state.game and self.state.game.advancing_figure_id and 
             self.state.game.advancing_player_id != self.state.game.player_id and
             self.state.game.turn and not self.state.game.pending_forced_advance and
             not self.state.game.defending_figure_id):
             self._draw_opponent_advance_prompt()
         
-        # Draw waiting for defender pick prompt (defender finished turn, opponent is choosing battle figure)
+        # Draw waiting for defender pick prompt
         if (self.state.game and self.state.game.advancing_figure_id and
             self.state.game.advancing_player_id != self.state.game.player_id and
             not self.state.game.turn and not self.state.game.defending_figure_id and
             self.state.game.waiting_for_defender_pick_shown):
             self._draw_waiting_for_defender_pick_prompt()
         
-        # Draw defender selection prompt for advancing player (pick opponent's figure)
-        # Don't draw if field screen is already in defender_selection_mode (it draws its own)
-        # Only draw when it's the player's turn (turn must have returned from opponent)
+        # Draw defender selection prompt for advancing player
         field_screen = self.subscreens.get('field')
         defender_selecting = field_screen and getattr(field_screen, 'defender_selection_mode', False)
         if (self.state.game and self.state.game.pending_defender_selection and
@@ -3290,34 +3347,30 @@ class GameScreen(Screen):
         
         # Draw waiting for battle decision prompt if active
         if self.state.game and not self.dialogue_box:
-            # Suppress waiting prompts if fold outcome detected (fold supersedes waiting)
             fold_active = (self.state.game.fold_outcome or self.state.game.pending_fold_result)
             if self.state.game.waiting_for_battle_decision and not fold_active:
-                # Invader chose battle, waiting for defender's decision
                 self._draw_waiting_for_battle_decision_prompt()
             elif (self.state.game.pending_battle_ready and
                   not self.state.game.battle_ready_shown and
                   self.state.game.advancing_player_id != self.state.game.player_id and
                   not fold_active):
-                # Defender waiting for invader to decide first
                 self._draw_waiting_for_battle_decision_prompt()
         
         # Draw counter spell selector on top of everything if active
         if self.counter_spell_selector:
-            # Draw semi-transparent overlay
             overlay = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
             overlay.set_alpha(180)
             overlay.fill((0, 0, 0))
             self.window.blit(overlay, (0, 0))
-            
-            # Draw selector
             self.counter_spell_selector.draw()
 
         # Draw battle modifier hover text on top of everything
         self._draw_battle_modifier_hover_text()
 
-        # Update the display
-        pygame.display.update()
+    def draw_msg(self):
+        """Disable floating notifications on the game screen."""
+        pass
+
 
 
 
@@ -3413,8 +3466,9 @@ class GameScreen(Screen):
                     return
                 # Handle game-over acknowledgement — return to main menu
                 elif (response == 'ok' and self.state.game and
-                      self.state.game.game_over and self.state.game.game_over_shown):
+                      self.state.game.game_over and self._active_dialogue_type == 'game_over'):
                     self.dialogue_box = None
+                    self._active_dialogue_type = None
                     self._on_game_over_acknowledged()
                     return
                 self.dialogue_box = None  # Close dialogue box

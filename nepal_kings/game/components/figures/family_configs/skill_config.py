@@ -132,6 +132,14 @@ SKILL_DEFINITIONS = {
         'suit_self': False,
         'effects_battle': False,
     },
+    'checkmate': {
+        'name': 'Checkmate',
+        'description': 'If this figure dies you lose the game. This figure cannot be selected by the opponent for counter-advance. Immune to spells. This Figure is always visible to opponent. ',
+        'icon': 'img/figures/state_icons/checkmate.png',
+        'suit_advantage': False,
+        'suit_self': False,
+        'effects_battle': False,
+    },
 }
 
 # Ordered list of all skill keys (controls display order)

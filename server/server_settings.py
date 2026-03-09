@@ -25,7 +25,10 @@ INITIAL_TURNS_DEFENDER = 5
 INITIAL_TURNS_INVADER = 5
 
 # Game win condition
-DEFAULT_GAME_LIMIT = 45  # Default point threshold / gold bet to win
+DEFAULT_GAME_STAKE = 45  # Default gold stake / point threshold to win
+
+# New player starting gold
+INITIAL_GOLD = 100
 
 
 

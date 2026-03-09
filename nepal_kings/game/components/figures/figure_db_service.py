@@ -86,6 +86,8 @@ class FigureDbService:
         upgrade_family_name = figure.upgrade_family_name
         produces = figure.produces
         requires = figure.requires
+        cannot_be_blocked = getattr(figure, 'cannot_be_blocked', False)
+        rest_after_attack = getattr(figure, 'rest_after_attack', False)
 
         if settings.DEBUG_ENABLED:
             with open(settings.DEBUG_LOG_PATH, 'a') as f:
@@ -105,7 +107,9 @@ class FigureDbService:
             produces=produces,
             requires=requires,
             cards=serialized_cards,
-            instant_charge_advance=instant_charge_advance
+            instant_charge_advance=instant_charge_advance,
+            cannot_be_blocked=cannot_be_blocked,
+            rest_after_attack=rest_after_attack
         )
 
     @staticmethod

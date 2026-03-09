@@ -1,14 +1,63 @@
 import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
+from game.screens._menu_base import MenuScreenMixin, ListButton
 from game.core.game import Game
 from config import settings
-from utils.utils import Button
+from utils.utils import Button, InputField
 from utils.game_service import fetch_users, fetch_user, create_challenge, remove_challenge, create_game
 
-class NewGameScreen(Screen):
+_SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+
+DEFAULT_STAKE = 45
+DEFAULT_TURN_TIME = ''
+
+# Online-status dot
+_DOT_RADIUS    = int(0.006 * _SH)
+_DOT_ONLINE    = (60, 200, 80)
+_DOT_OFFLINE   = (120, 110, 100)
+
+# ── Overall box ─────────────────────────────────────────────────────
+_BOX_PAD    = int(0.025 * _SH)
+_BOX_X      = int(0.04 * _SW)
+_BOX_Y      = int(0.12 * _SH)
+_BOX_W      = int(0.92 * _SW)
+_BOX_BOTTOM = int(0.90 * _SH)
+_BOX_H      = _BOX_BOTTOM - _BOX_Y
+
+# ── Two-column list areas ──────────────────────────────────────────
+_COL1_X     = _BOX_X + int(0.02 * _SW)
+_COL2_X     = _BOX_X + int(0.48 * _SW)
+_COL_W      = int(0.40 * _SW)
+
+# Config panel lives in the bottom portion of the box
+_CONFIG_Y   = int(0.64 * _SH)
+
+# List viewport runs from headers+gap to just above config separator
+_LIST_TOP    = None   # computed in __init__ after font metrics
+_LIST_BOTTOM = _CONFIG_Y - int(0.010 * _SH)
+
+# Scrollbar
+_SCROLLBAR_W   = int(0.006 * _SW)
+_SCROLLBAR_CLR = (100, 95, 85, 180)
+_THUMB_CLR     = (200, 185, 150, 220)
+_THUMB_HOVER   = (240, 220, 170, 255)
+
+
+def _draw_panel(window, rect, corner_r=None):
+    r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
+    surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+    pygame.draw.rect(surf, settings.SUB_SCREEN_PANEL_BG_CLR, surf.get_rect(), border_radius=r)
+    window.blit(surf, rect.topleft)
+    pygame.draw.rect(window, settings.SUB_SCREEN_PANEL_BORDER_CLR, rect,
+                     settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
+
+
+class NewGameScreen(MenuScreenMixin, Screen):
     def __init__(self, state):
         super().__init__(state)
+        self.control_buttons = []
+        self._init_menu_chrome()
 
         self.users = []
         self.user = {}
@@ -16,12 +65,89 @@ class NewGameScreen(Screen):
         self.open_opponents = {}
         self.possible_opponents = []
 
-        # Buttons for challenges and possible opponents
         self.challenge_buttons = []
         self.open_challenge_buttons = []
+        self._selected_opponent = None
+
+        # Fonts
+        self._title_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_TITLE_FONT_SIZE)
+        self._title_font.set_bold(True)
+        self._title_surf = self._title_font.render('New Game', True, settings.SUB_SCREEN_TITLE_CLR)
+
+        self._header_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_HEADER_FONT_SIZE)
+        self._panel_font = pygame.font.Font(settings.FONT_PATH, settings.LIST_BTN_FONT_SIZE)
+
+        # Layout positions inside box
+        self._title_y = _BOX_Y + _BOX_PAD
+        title_bottom = self._title_y + self._title_surf.get_height() + int(0.010 * _SH)
+        self._hdr_y = title_bottom
+        self._list_top = self._hdr_y + self._header_font.get_height() + int(0.010 * _SH)
+        self._list_bottom = _LIST_BOTTOM
+
+        # Scroll state (one per column)
+        self._scroll_col1 = 0
+        self._scroll_col2 = 0
+        self._max_scroll_col1 = 0
+        self._max_scroll_col2 = 0
+        self._dragging_thumb = None  # 'col1' | 'col2' | None
+        self._drag_offset = 0
+
+        # ── Config panel widgets ────────────────────────────────────
+        field_x = _BOX_X + int(0.20 * _SW)
+        field_w = int(0.06 * _SW)
+        field_h = int(0.032 * _SH)
+        cfg_row1 = _CONFIG_Y + int(0.050 * _SH)
+        cfg_row2 = cfg_row1 + field_h + int(0.035 * _SH)
+
+        self.stake_field = InputField(
+            self.window, field_x, cfg_row1,
+            "Stake (gold)", str(DEFAULT_STAKE), False, False,
+            max_length=6, width=field_w, height=field_h)
+
+        self.time_field = InputField(
+            self.window, field_x, cfg_row2,
+            "Turn Time (min)", DEFAULT_TURN_TIME, False, False,
+            max_length=4, width=field_w, height=field_h)
+
+        # Smaller fonts for config-panel input fields
+        _cfg_font_sz  = int(0.022 * _SH)
+        _cfg_title_sz = int(0.018 * _SH)
+        for fld in (self.stake_field, self.time_field):
+            fld.font       = pygame.font.Font(settings.FONT_PATH, _cfg_font_sz)
+            fld.font_title = pygame.font.Font(settings.FONT_PATH, _cfg_title_sz)
+
+        self.no_time_limit = True
+        self._checkbox_size = int(0.022 * _SH)
+        self._checkbox_x = field_x + field_w + int(0.012 * _SW)
+        self._checkbox_y = cfg_row2 + (field_h - self._checkbox_size) // 2
+
+        # ── Send button (menu-button style) ─────────────────────────
+        _send_w = int(0.18 * _SW)
+        _send_h = int(0.055 * _SH)
+        _send_x = _BOX_X + int(0.54 * _SW)
+        _send_y = _CONFIG_Y + int(0.075 * _SH)
+        self.send_button = Button(
+            self.window, _send_x, _send_y,
+            "Send Challenge", width=_send_w, height=_send_h)
+
+        # Apply menu button image
+        raw_btn = pygame.image.load(settings.GAME_MENU_BTN_IMG_PATH).convert_alpha()
+        self.send_button.button_image = pygame.transform.smoothscale(
+            raw_btn, (_send_w, _send_h))
+        self.send_button.button_image_small = pygame.transform.smoothscale(
+            raw_btn, (int(_send_w * 0.95), int(_send_h * 0.95)))
+
+        # Glow behind button
+        glow_w = int(_send_w * settings.GAME_MENU_GLOW_W_FACTOR)
+        glow_h = int(_send_h * settings.GAME_MENU_GLOW_H_FACTOR)
+        self._send_glows = {}
+        for clr_name in ('yellow', 'white', 'orange'):
+            raw_g = pygame.image.load(settings.GAME_MENU_GLOW_DIR + clr_name + '.png').convert_alpha()
+            self._send_glows[clr_name] = pygame.transform.smoothscale(raw_g, (glow_w, glow_h))
+
+    # ── Data fetching ─────────────────────────────────────────────
 
     def update_all_challenge_buttons(self):
-        """Update the buttons for open challenges and possible opponents."""
         try:
             self.users = fetch_users(self.state.user_dict['username'])
             self.user = fetch_user(self.state.user_dict['username'])
@@ -31,62 +157,291 @@ class NewGameScreen(Screen):
 
         self.open_challenges = self.user['challenges_issued'] + self.user['challenges_received']
         self.open_opponents = {}
+        for ch in self.open_challenges:
+            opp_id = ch['challenger_id'] if ch['challenger_id'] != self.user['id'] else ch['challenged_id']
+            opp = next(u for u in self.users if u['id'] == opp_id)
+            self.open_opponents[ch['id']] = opp
 
-        # Prepare open opponents and possible opponents
-        for challenge in self.open_challenges:
-            opponent_id = challenge['challenger_id'] if challenge['challenger_id'] != self.user['id'] else challenge['challenged_id']
-            opponent = next(user for user in self.users if user['id'] == opponent_id)
-            self.open_opponents[challenge['id']] = opponent
+        self.possible_opponents = [u for u in self.users if u not in self.open_opponents.values()]
 
-        self.possible_opponents = [user for user in self.users if user not in self.open_opponents.values()]
+        # Sort: online first, then alphabetical
+        self.possible_opponents.sort(key=lambda u: (not u.get('is_online', False), u['username'].lower()))
 
-        # Create buttons for possible opponents and open challenges
-        self.challenge_buttons = self.make_buttons([user['username'] for user in self.possible_opponents], 0.1, 0.2)
-        self.open_challenge_buttons = self.make_buttons([opponent['username'] for opponent in self.open_opponents.values()], 0.5, 0.2)
+        btn_w = _COL_W - _SCROLLBAR_W - int(0.008 * _SW)
+        btn_h = settings.LIST_BTN_H
+        gap = int(0.008 * _SH)
+
+        self.challenge_buttons = []
+        for i, u in enumerate(self.possible_opponents):
+            y = self._list_top + i * (btn_h + gap)
+            btn = ListButton(self.window, _COL1_X, y, u['username'], width=btn_w, height=btn_h)
+            btn.is_online = u.get('is_online', False)
+            self.challenge_buttons.append(btn)
+
+        self.open_challenge_buttons = []
+        for i, opp in enumerate(self.open_opponents.values()):
+            y = self._list_top + i * (btn_h + gap)
+            btn = ListButton(self.window, _COL2_X, y, opp['username'], width=btn_w, height=btn_h)
+            btn.is_online = opp.get('is_online', False)
+            self.open_challenge_buttons.append(btn)
+
+        # Scroll limits
+        viewport_h = self._list_bottom - self._list_top
+        n1 = len(self.challenge_buttons)
+        n2 = len(self.open_challenge_buttons)
+        content1 = n1 * (btn_h + gap) - (gap if n1 else 0)
+        content2 = n2 * (btn_h + gap) - (gap if n2 else 0)
+        self._content_h_col1 = content1
+        self._content_h_col2 = content2
+        self._max_scroll_col1 = max(0, content1 - viewport_h)
+        self._max_scroll_col2 = max(0, content2 - viewport_h)
+        self._scroll_col1 = min(self._scroll_col1, self._max_scroll_col1)
+        self._scroll_col2 = min(self._scroll_col2, self._max_scroll_col2)
+
+    # ── Scroll helpers ────────────────────────────────────────────
+
+    def _viewport_h(self):
+        return self._list_bottom - self._list_top
+
+    def _thumb_rect(self, col):
+        scroll = self._scroll_col1 if col == 'col1' else self._scroll_col2
+        max_s = self._max_scroll_col1 if col == 'col1' else self._max_scroll_col2
+        content = getattr(self, f'_content_h_{col}', 0)
+        vp = self._viewport_h()
+        if max_s <= 0 or content <= 0:
+            return pygame.Rect(0, 0, 0, 0)
+        col_x = _COL1_X if col == 'col1' else _COL2_X
+        btn_w = _COL_W - _SCROLLBAR_W - int(0.008 * _SW)
+        track_x = col_x + btn_w + int(0.004 * _SW)
+        thumb_h = max(int(0.03 * _SH), int(vp * (vp / content)))
+        travel = vp - thumb_h
+        frac = scroll / max_s if max_s else 0
+        thumb_y = self._list_top + int(frac * travel)
+        return pygame.Rect(track_x, thumb_y, _SCROLLBAR_W, thumb_h)
+
+    def _track_rect(self, col):
+        col_x = _COL1_X if col == 'col1' else _COL2_X
+        btn_w = _COL_W - _SCROLLBAR_W - int(0.008 * _SW)
+        track_x = col_x + btn_w + int(0.004 * _SW)
+        return pygame.Rect(track_x, self._list_top, _SCROLLBAR_W, self._viewport_h())
+
+    def _needs_scroll(self, col):
+        content = getattr(self, f'_content_h_{col}', 0)
+        return content > self._viewport_h()
+
+    # ── Rendering ─────────────────────────────────────────────────
 
     def render(self):
-        """Render the New Game Screen and buttons."""
-        self.window.fill(settings.BACKGROUND_COLOR)
-        self.draw_text('Possible Opponents', settings.MENU_TEXT_COLOR_HEADER, settings.get_x(0.1), settings.get_y(0.1))
-        self.draw_text('Open Challenges', settings.MENU_TEXT_COLOR_HEADER, settings.get_x(0.5), settings.get_y(0.1))
+        self._draw_menu_chrome()
 
-        # Draw all buttons (for both challenges and possible opponents)
-        for button in self.challenge_buttons + self.open_challenge_buttons:
-            button.draw()
+        # Outer box
+        box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
+        _draw_panel(self.window, box_rect)
 
-        super().render()  # Render the dialogue box and control buttons
+        # Title (centred inside box)
+        tx = _BOX_X + (_BOX_W - self._title_surf.get_width()) // 2
+        self.window.blit(self._title_surf, (tx, self._title_y))
 
-        pygame.display.update()
+        # Column headers
+        hdr1 = self._header_font.render('Possible Opponents', True, settings.SUB_SCREEN_HEADER_CLR)
+        hdr2 = self._header_font.render('Open Challenges', True, settings.SUB_SCREEN_HEADER_CLR)
+        self.window.blit(hdr1, (_COL1_X, self._hdr_y))
+        self.window.blit(hdr2, (_COL2_X, self._hdr_y))
+
+        # Column 1 list
+        self._draw_scrollable_list(self.challenge_buttons, _COL1_X, self._scroll_col1, 'col1')
+        # Column 2 list
+        self._draw_scrollable_list(self.open_challenge_buttons, _COL2_X, self._scroll_col2, 'col2')
+
+        # Config panel separator + content
+        self._draw_config_panel()
+
+        self._draw_menu_overlay()
+
+    def _draw_scrollable_list(self, buttons, col_x, scroll, col_key):
+        if not buttons:
+            return
+
+        btn_h = settings.LIST_BTN_H
+        gap = int(0.008 * _SH)
+        clip = pygame.Rect(col_x, self._list_top, _COL_W, self._viewport_h())
+        self.window.set_clip(clip)
+
+        for i, btn in enumerate(buttons):
+            # Shift vertically by scroll
+            original_y = self._list_top + i * (btn_h + gap)
+            btn.rect.y = original_y - scroll
+            if btn.rect.bottom >= self._list_top and btn.rect.top <= self._list_bottom:
+                btn.draw()
+                # Online dot
+                dot_clr = _DOT_ONLINE if getattr(btn, 'is_online', False) else _DOT_OFFLINE
+                dot_x = btn.rect.x + int(0.012 * _SW)
+                dot_y = btn.rect.centery
+                pygame.draw.circle(self.window, dot_clr, (dot_x, dot_y), _DOT_RADIUS)
+
+        self.window.set_clip(None)
+
+        # Scrollbar
+        if self._needs_scroll(col_key):
+            track = self._track_rect(col_key)
+            ts = pygame.Surface((track.w, track.h), pygame.SRCALPHA)
+            ts.fill(_SCROLLBAR_CLR)
+            self.window.blit(ts, track.topleft)
+            thumb = self._thumb_rect(col_key)
+            mx, my = pygame.mouse.get_pos()
+            clr = _THUMB_HOVER if thumb.collidepoint(mx, my) or self._dragging_thumb == col_key else _THUMB_CLR
+            ths = pygame.Surface((thumb.w, thumb.h), pygame.SRCALPHA)
+            pygame.draw.rect(ths, clr, ths.get_rect(), border_radius=3)
+            self.window.blit(ths, thumb.topleft)
+
+    def _draw_config_panel(self):
+        # Separator
+        pygame.draw.line(self.window, settings.SUB_SCREEN_PANEL_BORDER_CLR,
+                         (_BOX_X + int(0.01 * _SW), _CONFIG_Y),
+                         (_BOX_X + _BOX_W - int(0.01 * _SW), _CONFIG_Y), 1)
+
+        if self._selected_opponent:
+            header = self._panel_font.render(
+                f"Challenge: {self._selected_opponent['username']}",
+                True, (220, 200, 100))
+            self.window.blit(header, (_COL1_X, _CONFIG_Y + int(0.025 * _SH)))
+
+            self.stake_field.draw()
+            self.time_field.draw()
+            self._draw_checkbox()
+            self._draw_send_button()
+        else:
+            hint = self._panel_font.render(
+                "Select an opponent to configure a challenge",
+                True, (140, 140, 140))
+            self.window.blit(hint, (_COL1_X, _CONFIG_Y + int(0.038 * _SH)))
+
+    def _draw_send_button(self):
+        """Draw the send-challenge button with menu-button glow."""
+        btn = self.send_button
+        is_disabled = hasattr(btn, 'disabled') and btn.disabled
+        if not is_disabled:
+            if btn.hovered and btn.clicked:
+                glow = self._send_glows['yellow']
+            elif btn.hovered and not btn.active:
+                glow = self._send_glows['white']
+            elif btn.active:
+                glow = self._send_glows['orange']
+            else:
+                glow = None
+            if glow:
+                gx = btn.rect.centerx - glow.get_width() // 2
+                gy = btn.rect.centery - glow.get_height() // 2
+                self.window.blit(glow, (gx, gy))
+        if btn.clicked:
+            img = btn.button_image_small
+            pos = img.get_rect(center=btn.rect.center).topleft
+        else:
+            img = btn.button_image
+            pos = btn.rect.topleft
+        self.window.blit(img, pos)
+        font = btn.font_small if btn.clicked else btn.font
+        text_surf = font.render(btn.text, True, btn.get_text_color())
+        self.window.blit(text_surf, text_surf.get_rect(center=btn.rect.center))
+
+    def _draw_checkbox(self):
+        box_rect = pygame.Rect(self._checkbox_x, self._checkbox_y,
+                               self._checkbox_size, self._checkbox_size)
+        pygame.draw.rect(self.window, (180, 180, 180), box_rect, 2)
+        if self.no_time_limit:
+            inner = box_rect.inflate(-6, -6)
+            pygame.draw.rect(self.window, (250, 170, 0), inner)
+        label = self._panel_font.render("No Limit", True, (200, 200, 200))
+        self.window.blit(label, (self._checkbox_x + self._checkbox_size + 8,
+                                 self._checkbox_y + (self._checkbox_size - label.get_height()) // 2))
+
+    # ── Update ────────────────────────────────────────────────────
 
     def update(self, events):
-        """Update the New Game Screen (without handling events)."""
-        super().update()  # Call the base class update for buttons and other components
+        super().update()
+        self._update_icon_buttons()
 
-        # Throttle challenge button updates to avoid frequent server requests
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:
             self.last_update_time = current_time
             self.update_all_challenge_buttons()
 
-        # Update buttons for challenges and possible opponents
-        for button in self.challenge_buttons + self.open_challenge_buttons:
-            button.update()
+        # Only update hover/click for visible buttons
+        for btn in self.challenge_buttons + self.open_challenge_buttons:
+            if btn.rect.bottom >= self._list_top and btn.rect.top <= self._list_bottom:
+                btn.update()
+            else:
+                btn.hovered = False
+                btn.clicked = False
+
+        if self._selected_opponent:
+            self.stake_field.update_color()
+            if not self.no_time_limit:
+                self.time_field.update_color()
+            self.send_button.update()
+
+    # ── Events ────────────────────────────────────────────────────
 
     def handle_events(self, events):
-        """Handle user input events, such as clicks."""
-        super().handle_events(events)  # Call the base class event handler for common interactions
+        super().handle_events(events)
 
         for event in events:
-            if event.type == MOUSEBUTTONDOWN:
-                self.handle_button_clicks()
+            if self._handle_icon_events(event):
+                continue
 
-        # Handle dialogue actions (for accepting/rejecting challenges)
-        if self.state.action["task"] == "new_game_challenge" and self.state.action["status"] != "open":
-            if self.state.action["status"] == 'accept':
-                opponent = self.state.action["content"]
-                self.handle_create_challenge(opponent['username'])
-            self.reset_action()
-        elif self.state.action["task"] == "accept_game_challenge" and self.state.action["status"] != "open":
+            if self._selected_opponent:
+                self.stake_field.handle_event(event)
+                if not self.no_time_limit:
+                    self.time_field.handle_event(event)
+
+            # Scroll wheel
+            if event.type == MOUSEWHEEL:
+                mx, my = pygame.mouse.get_pos()
+                scroll_step = int(0.04 * _SH)
+                # Which column?
+                col1_clip = pygame.Rect(_COL1_X, self._list_top, _COL_W, self._viewport_h())
+                col2_clip = pygame.Rect(_COL2_X, self._list_top, _COL_W, self._viewport_h())
+                if col1_clip.collidepoint(mx, my):
+                    self._scroll_col1 = max(0, min(self._max_scroll_col1,
+                                                   self._scroll_col1 - event.y * scroll_step))
+                elif col2_clip.collidepoint(mx, my):
+                    self._scroll_col2 = max(0, min(self._max_scroll_col2,
+                                                   self._scroll_col2 - event.y * scroll_step))
+
+            # Thumb dragging
+            if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                for col_key in ('col1', 'col2'):
+                    thumb = self._thumb_rect(col_key)
+                    if thumb.w and thumb.collidepoint(event.pos):
+                        self._dragging_thumb = col_key
+                        self._drag_offset = event.pos[1] - thumb.y
+                        break
+
+            if event.type == MOUSEBUTTONUP and event.button == 1:
+                self._dragging_thumb = None
+
+            if event.type == MOUSEMOTION and self._dragging_thumb:
+                col_key = self._dragging_thumb
+                track = self._track_rect(col_key)
+                thumb_h = self._thumb_rect(col_key).h
+                travel = track.h - thumb_h
+                max_s = self._max_scroll_col1 if col_key == 'col1' else self._max_scroll_col2
+                if travel > 0:
+                    new_top = event.pos[1] - self._drag_offset - track.y
+                    frac = max(0.0, min(1.0, new_top / travel))
+                    val = int(frac * max_s)
+                    if col_key == 'col1':
+                        self._scroll_col1 = val
+                    else:
+                        self._scroll_col2 = val
+
+            # Clicks
+            if not self.dialogue_box and event.type == MOUSEBUTTONUP and event.button == 1:
+                if not self._dragging_thumb:
+                    self._handle_clicks()
+
+        # Dialogue actions
+        if self.state.action["task"] == "accept_game_challenge" and self.state.action["status"] != "open":
             challenge = self.state.action["content"]
             if self.state.action["status"] == 'accept':
                 self.handle_create_game(challenge)
@@ -94,49 +449,115 @@ class NewGameScreen(Screen):
                 self.handle_remove_challenge(challenge['id'])
             self.reset_action()
 
-    def handle_button_clicks(self):
-        """Handle clicks on challenge and opponent buttons."""
-        # Handle challenge creation for possible opponents
-        for button, user in zip(self.challenge_buttons, self.possible_opponents):
-            if button.collide():
-                self.set_action("new_game_challenge", user, "open")
-                self.make_dialogue_box(f'Do you want to start a game with {button.text}?', actions=["accept", "reject"], title="Challenge Player")
+    def _handle_clicks(self):
+        # Checkbox
+        if self._selected_opponent:
+            label_w = self._panel_font.size("No Limit")[0] + self._checkbox_size + 8
+            click_rect = pygame.Rect(self._checkbox_x, self._checkbox_y,
+                                     label_w, self._checkbox_size)
+            if click_rect.collidepoint(pygame.mouse.get_pos()):
+                self.no_time_limit = not self.no_time_limit
+                if self.no_time_limit:
+                    self.time_field.deactivate()
+                    self.time_field.content = ''
+                    self.time_field.cursor_pos = 0
+                return
 
-        # Handle accepting or removing open challenges
-        for button, challenge in zip(self.open_challenge_buttons, self.open_challenges):
-            if button.collide():
-                if challenge in self.user['challenges_issued']:
-                    self.make_dialogue_box(f'You have challenged {button.text} at {challenge["date"]}', actions=['ok'], title="Challenge Pending")
+        # Send button
+        if self._selected_opponent and self.send_button.collide():
+            self._send_challenge()
+            return
+
+        # Opponent selection (only visible buttons)
+        for btn, user in zip(self.challenge_buttons, self.possible_opponents):
+            if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
+                    and btn.collide()):
+                self._selected_opponent = user
+                self.stake_field.content = str(DEFAULT_STAKE)
+                self.stake_field.cursor_pos = len(self.stake_field.content)
+                self.time_field.content = ''
+                self.time_field.cursor_pos = 0
+                self.no_time_limit = True
+                self.stake_field.activate()
+                self.time_field.deactivate()
+                return
+
+        # Open challenges (only visible buttons)
+        for btn, ch in zip(self.open_challenge_buttons, self.open_challenges):
+            if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
+                    and btn.collide()):
+                stake = ch.get('stake', 45)
+                turn_time = ch.get('turn_time_limit')
+                time_str = f"{turn_time // 60} min" if turn_time else "No Limit"
+                if ch in self.user['challenges_issued']:
+                    self.make_dialogue_box(
+                        f'You have challenged {btn.text} at {ch["date"]}\n\n'
+                        f'Stake: {stake} gold\nTurn Time: {time_str}',
+                        actions=['ok'], title="Challenge Pending")
                 else:
-                    self.set_action("accept_game_challenge", challenge, "open")
-                    self.make_dialogue_box(f'Do you want to accept a game with {button.text}?', actions=["accept", "reject"], title="Accept Challenge")
+                    self.set_action("accept_game_challenge", ch, "open")
+                    self.make_dialogue_box(
+                        f'Do you want to accept a game with {btn.text}?\n\n'
+                        f'Stake: {stake} gold\nTurn Time: {time_str}',
+                        actions=["accept", "reject"], title="Accept Challenge")
+                return
 
-    def handle_create_challenge(self, opponent_name):
-        """Create a new challenge and handle potential errors."""
-        response = create_challenge(self.state.user_dict['username'], opponent_name)
+    # ── Challenge submission ──────────────────────────────────────
+
+    def _send_challenge(self):
+        try:
+            stake = int(self.stake_field.content)
+        except (ValueError, TypeError):
+            self.state.set_msg("Stake must be a number")
+            return
+        if stake < 1:
+            self.state.set_msg("Stake must be at least 1 gold")
+            return
+
+        gold = self.user.get('gold', 0) if self.user else 0
+        if gold < stake:
+            self.state.set_msg(f"Not enough gold ({gold}/{stake})")
+            return
+
+        turn_time_limit = None
+        if not self.no_time_limit:
+            try:
+                minutes = int(self.time_field.content)
+                if minutes < 1:
+                    self.state.set_msg("Turn time must be at least 1 minute")
+                    return
+                turn_time_limit = minutes * 60
+            except (ValueError, TypeError):
+                self.state.set_msg("Turn time must be a number (minutes)")
+                return
+
+        opponent_name = self._selected_opponent['username']
+        self.handle_create_challenge(opponent_name, stake, turn_time_limit)
+        self._selected_opponent = None
+
+    # ── Actions ───────────────────────────────────────────────────
+
+    def handle_create_challenge(self, opponent_name, stake=45, turn_time_limit=None):
+        response = create_challenge(self.state.user_dict['username'], opponent_name, stake=stake, turn_time_limit=turn_time_limit)
         if response['success']:
             self.state.set_msg(f"Challenge sent to {opponent_name}")
         else:
             self.state.set_msg(response['message'])
 
     def handle_create_game(self, challenge):
-        """Create a new game and remove the challenge after successful game creation."""
         response = create_game(challenge['id'])
         if response['success'] and 'game' in response:
             self.state.game = Game(response['game'], self.state.user_dict)
-            self.handle_remove_challenge(challenge['id'])  # Remove the challenge after game creation
+            self.handle_remove_challenge(challenge['id'])
             self.state.screen = "game"
         else:
             self.state.set_msg(response['message'])
-            print(response['message'])
 
     def handle_remove_challenge(self, challenge_id):
-        """Remove a challenge and handle potential errors."""
         response = remove_challenge(challenge_id)
         if not response['success']:
             self.state.set_msg(response['message'])
 
     def reset_action(self):
-        """Reset the action status and clear dialogue interactions."""
         print(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
         self.state.action = {"task": None, "content": None, "status": None}

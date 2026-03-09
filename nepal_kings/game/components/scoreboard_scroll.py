@@ -40,9 +40,9 @@ class ScoreboardScroll:
         self.cell_width = self.width // 2
         self.cell_height = self.height // 2
 
-        # Adjust height for "limit" section
-        self.limit_section_height = settings.SCOREBOARD_LIMIT_SECTION_HEIGHT
-        self.cross_height = self.height - self.limit_section_height
+        # Adjust height for "stake" section
+        self.stake_section_height = settings.SCOREBOARD_LIMIT_SECTION_HEIGHT
+        self.cross_height = self.height - self.stake_section_height
 
         self.init_background()
 
@@ -56,7 +56,7 @@ class ScoreboardScroll:
                 'round': self.game.current_round,  # Assuming `self.game.round` exists
                 'your_score': self.game.current_player.get('points', 0),
                 'opponent_score': self.game.opponent_player.get('points', 0),
-                'limit': getattr(self.game, 'limit', 45),  # Fallback to 45 if 'limit' isn't defined
+                'stake': getattr(self.game, 'stake', 45),  # Fallback to 45 if 'stake' isn't defined
             }
         else:
             scoreboard_dict = {
@@ -66,7 +66,7 @@ class ScoreboardScroll:
                 'round': 0,
                 'your_score': 0,
                 'opponent_score': 0,
-                'limit': 45,
+                'stake': 45,
             }
         return scoreboard_dict
 
@@ -133,14 +133,14 @@ class ScoreboardScroll:
         self.window.blit(text_obj, text_rect)
         self.window.blit(value_obj, value_rect)
 
-    def draw_limit(self):
-        """Draw the limit value at the bottom of the scoreboard."""
-        limit_text = self.text_dict.get("limit", "")
-        limit_obj = self.font_col_names.render(f"{limit_text}", True, settings.SCOREBOARD_SCROLL_TEXT_COLOR)
+    def draw_stake(self):
+        """Draw the stake value at the bottom of the scoreboard."""
+        stake_text = self.text_dict.get("stake", "")
+        stake_obj = self.font_col_names.render(f"{stake_text}", True, settings.SCOREBOARD_SCROLL_TEXT_COLOR)
 
         # Position at the bottom center of the scoreboard
-        limit_rect = limit_obj.get_rect(center=(self.x + self.width // 2, self.y + self.height - self.limit_section_height // 2))
-        self.window.blit(limit_obj, limit_rect)
+        stake_rect = stake_obj.get_rect(center=(self.x + self.width // 2, self.y + self.height - self.stake_section_height // 2))
+        self.window.blit(stake_obj, stake_rect)
 
     def draw_msg(self):
         """Render the scoreboard content."""
@@ -164,8 +164,8 @@ class ScoreboardScroll:
         self.draw_cell("You", self.text_dict.get("your_score", ""), self.x, self.y + self.cell_height, settings.COLOR_GREEN)
         self.draw_cell("Opponent", self.text_dict.get("opponent_score", ""), self.x + self.cell_width, self.y + self.cell_height, settings.COLOR_RED)
 
-        # Draw the limit value
-        self.draw_limit()
+        # Draw the stake value
+        self.draw_stake()
 
     def draw(self):
         """Draw the background, cross, and message to the screen."""

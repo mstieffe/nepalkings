@@ -3,6 +3,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy_utils import ChoiceType
 import enum
 from datetime import datetime
+import server_settings as server_config
 
 db = SQLAlchemy()
 
@@ -16,7 +17,8 @@ class Challenge(db.Model):
   challenger_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   challenged_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default='Open')
-  limit = db.Column(db.Integer, nullable=False, default=45)  # Gold bet / win threshold
+  stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
+  turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
   date = db.Column(db.DateTime, default=datetime.utcnow)
 
   def serialize(self):
@@ -25,7 +27,8 @@ class Challenge(db.Model):
       'challenger_id': self.challenger_id,
       'challenged_id': self.challenged_id,
       'status': self.status.value,
-      'limit': self.limit,
+      'stake': self.stake,
+      'turn_time_limit': self.turn_time_limit,
       'date': self.date
     }
 
@@ -56,17 +59,22 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
-    gold = db.Column(db.Integer, nullable=False, default=100)  # Starting gold
+    gold = db.Column(db.Integer, nullable=False, default=server_config.INITIAL_GOLD)  # Starting gold
+    last_active = db.Column(db.DateTime, nullable=True)  # Heartbeat timestamp
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
                                         foreign_keys='Challenge.challenger_id')
     challenges_received = db.relationship('Challenge', backref='challenged', lazy=True,
                                           foreign_keys='Challenge.challenged_id')
 
     def serialize(self):
+        is_online = False
+        if self.last_active:
+            is_online = (datetime.utcnow() - self.last_active).total_seconds() < 60
         return {
             'id': self.id,
             'username': self.username,
             'gold': self.gold,
+            'is_online': is_online,
             'challenges_issued': [challenge.serialize() for challenge in self.challenges_issued],
             'challenges_received': [challenge.serialize() for challenge in self.challenges_received]
         }
@@ -87,7 +95,8 @@ class Game(db.Model):
     )
     state = db.Column(db.String(20), nullable=False, default='open')  # 'open' | 'finished'
     date = db.Column(db.DateTime, default=datetime.utcnow)
-    limit = db.Column(db.Integer, nullable=False, default=45)  # Point threshold to win
+    stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
+    turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
     winner_player_id = db.Column(db.Integer, nullable=True)  # Player who won the game
     finished_at = db.Column(db.DateTime, nullable=True)  # When the game ended
     main_cards = db.relationship('MainCard', backref='game', lazy=True)
@@ -152,7 +161,8 @@ class Game(db.Model):
             'id': self.id,
             'state': self.state,
             'date': self.date,
-            'limit': self.limit,
+            'stake': self.stake,
+            'turn_time_limit': self.turn_time_limit,
             'winner_player_id': self.winner_player_id,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
             'current_round': self.current_round,
@@ -208,6 +218,9 @@ class Player(db.Model):
     def serialize(self):
         user = User.query.get(self.user_id)
         username = user.username if user else None
+        is_online = False
+        if user and user.last_active:
+            is_online = (datetime.utcnow() - user.last_active).total_seconds() < 60
 
         # Query cards directly to avoid SQLAlchemy relationship caching issues
         main_hand_cards = MainCard.query.filter_by(
@@ -230,7 +243,8 @@ class Player(db.Model):
             'turns_left': self.turns_left,
             'points': self.points,
             'status': self.status,
-            'username': username
+            'username': username,
+            'is_online': is_online
         }
 
 
@@ -356,6 +370,9 @@ class Figure(db.Model):
     upgrade_family_name = db.Column(db.String(50), nullable=True)
     produces = db.Column(db.JSON, nullable=True)  # Resources produced
     requires = db.Column(db.JSON, nullable=True)  # Resources required
+    checkmate = db.Column(db.Boolean, default=False, nullable=False)  # If destroyed, owner loses
+    cannot_be_blocked = db.Column(db.Boolean, default=False, nullable=False)  # Cannot be counter-advanced when advancing
+    rest_after_attack = db.Column(db.Boolean, default=False, nullable=False)  # Must rest one round after battle
     cards = db.relationship('CardToFigure', backref='figure', lazy=True)
     date_created = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -373,6 +390,9 @@ class Figure(db.Model):
             'upgrade_family_name': self.upgrade_family_name,
             'produces': self.produces or {},
             'requires': self.requires or {},
+            'checkmate': self.checkmate,
+            'cannot_be_blocked': self.cannot_be_blocked,
+            'rest_after_attack': self.rest_after_attack,
             'cards': [card.serialize() for card in self.cards],
             'date_created': self.date_created.isoformat(),
         }
@@ -525,8 +545,8 @@ class GameResult(db.Model):
     loser_username = db.Column(db.String(80), nullable=False)
     winner_score = db.Column(db.Integer, nullable=False)
     loser_score = db.Column(db.Integer, nullable=False)
-    limit = db.Column(db.Integer, nullable=False)  # The bet / point threshold
-    gold_awarded = db.Column(db.Integer, nullable=False)  # Gold given to winner (2 × limit)
+    stake = db.Column(db.Integer, nullable=False)  # The gold stake / point threshold
+    gold_awarded = db.Column(db.Integer, nullable=False)  # Gold given to winner (2 × stake)
     rounds_played = db.Column(db.Integer, nullable=False)
     finished_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -540,7 +560,7 @@ class GameResult(db.Model):
             'loser_username': self.loser_username,
             'winner_score': self.winner_score,
             'loser_score': self.loser_score,
-            'limit': self.limit,
+            'stake': self.stake,
             'gold_awarded': self.gold_awarded,
             'rounds_played': self.rounds_played,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from models import db, User, Challenge
-# from config import settings
+import server_settings as settings
 
 challenges = Blueprint('challenges', __name__)
 
@@ -24,6 +24,9 @@ def create_challenge():
     try:
         challenger = request.form.get('challenger')
         opponent = request.form.get('opponent')
+        stake = request.form.get('stake', settings.DEFAULT_GAME_STAKE, type=int)
+        turn_time_limit_str = request.form.get('turn_time_limit', None)
+        turn_time_limit = int(turn_time_limit_str) if turn_time_limit_str else None
 
         # Checking if the challenger and opponent are valid users
         challenger_user = User.query.filter_by(username=challenger).first()
@@ -32,8 +35,22 @@ def create_challenge():
         if not challenger_user or not opponent_user:
             return jsonify({'success': False, 'message': 'Challenger or opponent does not exist'}), 400
 
+        # Validate stake
+        if stake < 1:
+            return jsonify({'success': False, 'message': 'Stake must be at least 1 gold'}), 400
+
+        # Check that the challenger has enough gold
+        if challenger_user.gold < stake:
+            return jsonify({'success': False, 'message': f'Not enough gold ({challenger_user.gold}/{stake})'}), 400
+
         # Creating a new challenge
-        challenge = Challenge(challenger=challenger_user, challenged=opponent_user, status='open')
+        challenge = Challenge(
+            challenger=challenger_user,
+            challenged=opponent_user,
+            status='open',
+            stake=stake,
+            turn_time_limit=turn_time_limit,
+        )
 
         db.session.add(challenge)
         db.session.commit()

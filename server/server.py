@@ -59,6 +59,13 @@ with app.app_context():
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE game ADD COLUMN resting_figure_ids JSON"))
                 conn.commit()
+    if 'user' in inspector.get_table_names():
+        existing_cols = {c['name'] for c in inspector.get_columns('user')}
+        if 'last_active' not in existing_cols:
+            print("  ↳ Adding 'last_active' column to user table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN last_active DATETIME"))
+                conn.commit()
     
     print("✅ Database initialized")
 

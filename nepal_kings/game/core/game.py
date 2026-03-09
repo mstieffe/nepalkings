@@ -11,7 +11,8 @@ class Game:
         self.game_id = game_dict['id']
         self.state = game_dict['state']
         self.date = game_dict['date']
-        self.limit = game_dict.get('limit', 45)
+        self.stake = game_dict.get('stake', 45)
+        self.turn_time_limit = game_dict.get('turn_time_limit')  # Seconds per turn (None = no limit)
         self.winner_player_id = game_dict.get('winner_player_id')
         self.finished_at = game_dict.get('finished_at')
         self.players = game_dict.get('players', [])
@@ -37,6 +38,7 @@ class Game:
         self.opponent_name = None
         self.current_player = None
         self.opponent_player = None
+        self.opponent_online = False
 
         user_id = user_dict.get('id')
 
@@ -48,6 +50,7 @@ class Game:
             else:
                 self.opponent_name = player_dict['username']
                 self.opponent_player = player_dict
+                self.opponent_online = player_dict.get('is_online', False)
 
         # Whether it is this player's turn
         # Initialize to False so first update() can detect if it's their turn
@@ -172,7 +175,7 @@ class Game:
             self.game_id = game_dict['id']
             self.state = game_dict['state']
             self.date = game_dict['date']
-            self.limit = game_dict.get('limit', 45)
+            self.stake = game_dict.get('stake', 45)
             self.winner_player_id = game_dict.get('winner_player_id')
             self.finished_at = game_dict.get('finished_at')
             self.players = game_dict.get('players', [])
@@ -194,16 +197,23 @@ class Game:
                     else:
                         loser_player = p
                 if winner_player and loser_player:
+                    # Determine game-over reason from last_battle_result
+                    last_result = game_dict.get('last_battle_result', {}) or {}
+                    checkmate_figure_name = last_result.get('checkmate_figure_name')
+                    reason = 'checkmate' if checkmate_figure_name else 'stake'
+                    
                     self.pending_game_over = {
                         'game_over': True,
+                        'reason': reason,
+                        'checkmate_figure_name': checkmate_figure_name,
                         'winner_player_id': winner_player['id'],
                         'loser_player_id': loser_player['id'],
                         'winner_username': winner_player.get('username', ''),
                         'loser_username': loser_player.get('username', ''),
                         'winner_score': winner_player.get('points', 0),
                         'loser_score': loser_player.get('points', 0),
-                        'gold_awarded': self.limit * 2,
-                        'limit': self.limit,
+                        'gold_awarded': self.stake * 2,
+                        'stake': self.stake,
                     }
                     print(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
             
@@ -699,6 +709,7 @@ class Game:
                 instant_charge = matched_family_figure.instant_charge if matched_family_figure and hasattr(matched_family_figure, 'instant_charge') else False
                 cannot_be_blocked = matched_family_figure.cannot_be_blocked if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_blocked') else False
                 cannot_be_targeted = matched_family_figure.cannot_be_targeted if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_targeted') else False
+                checkmate = figure_data.get('checkmate', False) or (matched_family_figure.checkmate if matched_family_figure and hasattr(matched_family_figure, 'checkmate') else False)
                 override_base_power = matched_family_figure.override_base_power if matched_family_figure and hasattr(matched_family_figure, 'override_base_power') else None
 
                 figure = Figure(
@@ -726,6 +737,7 @@ class Game:
                     instant_charge=instant_charge,
                     cannot_be_blocked=cannot_be_blocked,
                     cannot_be_targeted=cannot_be_targeted,
+                    checkmate=checkmate,
                     override_base_power=override_base_power,
                 )
                 figures.append(figure)

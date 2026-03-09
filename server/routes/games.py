@@ -86,28 +86,58 @@ def _is_ceasefire_active(game_id):
 
 
 def _check_game_over(game):
-    """Check if any player has reached the game's point limit.
+    """Check if any player has reached the game's point stake.
 
     If a winner is found:
     - Sets game.state = 'finished', game.winner_player_id, game.finished_at
-    - Awards gold to the winner (2 × limit), deducts limit from loser
+    - Awards gold to the winner (2 × stake)
     - Creates a GameResult record for statistics
     Returns a dict with game_over info if the game ended, or None.
     """
     if game.state == 'finished':
         return None  # Already finished
 
-    limit = game.limit or settings.DEFAULT_GAME_LIMIT
+    stake = game.stake or settings.DEFAULT_GAME_STAKE
 
     winner_player = None
     loser_player = None
     for p in game.players:
-        if p.points >= limit:
+        if p.points >= stake:
             winner_player = p
             break
 
     if not winner_player:
         return None  # No winner yet
+
+    return _finalize_game_over(game, winner_player, reason='stake')
+
+
+def _check_checkmate_loss(game, destroyed_figure):
+    """Check if a destroyed figure had checkmate — if so, its owner loses immediately.
+
+    Returns a game_over dict if checkmate triggers, or None.
+    Must be called BEFORE the figure is deleted from the session.
+    """
+    if game.state == 'finished':
+        return None
+    if not getattr(destroyed_figure, 'checkmate', False):
+        return None
+
+    # The owner of the checkmate figure loses
+    loser_player = Player.query.get(destroyed_figure.player_id)
+    winner_player = [p for p in game.players if p.id != loser_player.id][0]
+
+    return _finalize_game_over(game, winner_player, reason='checkmate',
+                               checkmate_figure_name=destroyed_figure.name)
+
+
+def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_name=None):
+    """Finalize a game-over: mark finished, award gold, create GameResult.
+
+    reason: 'stake' (point limit reached) or 'checkmate' (checkmate figure destroyed)
+    Returns a dict with game_over info.
+    """
+    stake = game.stake or settings.DEFAULT_GAME_STAKE
 
     # Determine the loser
     loser_player = [p for p in game.players if p.id != winner_player.id][0]
@@ -117,19 +147,33 @@ def _check_game_over(game):
     game.winner_player_id = winner_player.id
     game.finished_at = datetime.utcnow()
 
-    # Award gold: winner gets 2× limit, loser gets nothing (already bet their limit)
-    gold_awarded = limit * 2
+    # Award gold: winner gets 2× stake, loser gets nothing (already bet their stake)
+    gold_awarded = stake * 2
     winner_user = User.query.get(winner_player.user_id)
     loser_user = User.query.get(loser_player.user_id)
 
     if winner_user:
         winner_user.gold += gold_awarded
     if loser_user:
-        # Loser already "bet" their limit when the game started — no further deduction
+        # Loser already "bet" their stake when the game started — no further deduction
         pass
 
     winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
     loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
+
+    # Build log message
+    if reason == 'checkmate':
+        log_message = (
+            f"💀 CHECKMATE! {loser_username}'s {checkmate_figure_name} was destroyed — "
+            f"{winner_username} wins the game! "
+            f"{winner_username} earns {gold_awarded} gold."
+        )
+    else:
+        log_message = (
+            f"🏆 {winner_username} wins the game with {winner_player.points} points! "
+            f"{loser_username} scored {loser_player.points}. "
+            f"{winner_username} earns {gold_awarded} gold."
+        )
 
     # Create GameResult record for statistics
     result = GameResult(
@@ -140,7 +184,7 @@ def _check_game_over(game):
         loser_username=loser_username,
         winner_score=winner_player.points,
         loser_score=loser_player.points,
-        limit=limit,
+        stake=stake,
         gold_awarded=gold_awarded,
         rounds_played=game.current_round,
     )
@@ -152,19 +196,19 @@ def _check_game_over(game):
         player_id=winner_player.id,
         round_number=game.current_round,
         turn_number=0,
-        message=f"🏆 {winner_username} wins the game with {winner_player.points} points! "
-                f"{loser_username} scored {loser_player.points}. "
-                f"{winner_username} earns {gold_awarded} gold.",
+        message=log_message,
         author="System",
         type='game_over'
     )
     db.session.add(log_entry)
 
-    print(f"[GAME_OVER] Game {game.id} finished! Winner: {winner_username} ({winner_player.points}pts) "
+    print(f"[GAME_OVER] Game {game.id} finished ({reason})! Winner: {winner_username} ({winner_player.points}pts) "
           f"Loser: {loser_username} ({loser_player.points}pts) Gold: {gold_awarded}")
 
     return {
         'game_over': True,
+        'reason': reason,
+        'checkmate_figure_name': checkmate_figure_name,
         'winner_player_id': winner_player.id,
         'loser_player_id': loser_player.id,
         'winner_username': winner_username,
@@ -172,7 +216,51 @@ def _check_game_over(game):
         'winner_score': winner_player.points,
         'loser_score': loser_player.points,
         'gold_awarded': gold_awarded,
-        'limit': limit,
+        'stake': stake,
+    }
+
+
+def _build_game_over_info_from_finished(game):
+    """Reconstruct game_over info dict for a game already marked as finished.
+
+    Used when checkmate ended the game during finish_battle, but the
+    subsequent pick_card / draw endpoint still needs the game_over payload.
+    """
+    if game.state != 'finished' or game.winner_player_id is None:
+        return None
+
+    stake = game.stake or settings.DEFAULT_GAME_STAKE
+    gold_awarded = stake * 2
+
+    winner_player = Player.query.get(game.winner_player_id)
+    loser_player = [p for p in game.players if p.id != winner_player.id][0]
+
+    winner_user = User.query.get(winner_player.user_id)
+    loser_user = User.query.get(loser_player.user_id)
+
+    winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
+    loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
+
+    # Try to retrieve the checkmate figure name from last_battle_result
+    checkmate_figure_name = None
+    if game.last_battle_result and isinstance(game.last_battle_result, dict):
+        checkmate_figure_name = game.last_battle_result.get('checkmate_figure_name')
+
+    # Determine reason from checkmate_figure_name
+    reason = 'checkmate' if checkmate_figure_name else 'stake'
+
+    return {
+        'game_over': True,
+        'reason': reason,
+        'checkmate_figure_name': checkmate_figure_name,
+        'winner_player_id': winner_player.id,
+        'loser_player_id': loser_player.id,
+        'winner_username': winner_username,
+        'loser_username': loser_username,
+        'winner_score': winner_player.points,
+        'loser_score': loser_player.points,
+        'gold_awarded': gold_awarded,
+        'stake': stake,
     }
 
 
@@ -775,17 +863,17 @@ def create_game():
         if not user1 or not user2:
             return jsonify({'success': False, 'message': 'One or both players do not exist'}), 400
 
-        # Get game limit from the challenge (gold bet)
-        game_limit = challenge.limit or settings.DEFAULT_GAME_LIMIT
+        # Get game stake from the challenge (gold bet)
+        game_stake = challenge.stake or settings.DEFAULT_GAME_STAKE
 
-        # Deduct gold from both players (they bet the limit)
-        if user1.gold < game_limit:
-            return jsonify({'success': False, 'message': f'{user1.username} does not have enough gold ({user1.gold}/{game_limit})'}), 400
-        if user2.gold < game_limit:
-            return jsonify({'success': False, 'message': f'{user2.username} does not have enough gold ({user2.gold}/{game_limit})'}), 400
+        # Deduct gold from both players (they bet the stake)
+        if user1.gold < game_stake:
+            return jsonify({'success': False, 'message': f'{user1.username} does not have enough gold ({user1.gold}/{game_stake})'}), 400
+        if user2.gold < game_stake:
+            return jsonify({'success': False, 'message': f'{user2.username} does not have enough gold ({user2.gold}/{game_stake})'}), 400
 
-        user1.gold -= game_limit
-        user2.gold -= game_limit
+        user1.gold -= game_stake
+        user2.gold -= game_stake
 
         # Create a new Game instance
         game = Game(
@@ -793,7 +881,8 @@ def create_game():
             invader_player_id=None,
             ceasefire_active=True,
             ceasefire_start_turn=0,
-            limit=game_limit
+            stake=game_stake,
+            turn_time_limit=challenge.turn_time_limit
         )
         db.session.add(game)
         db.session.commit()
@@ -835,8 +924,9 @@ def create_game():
                     suit=maharaja_card.suit.value,
                     description="Djungle maharaja",
                     upgrade_family_name=None,
-                    produces={'villager_red': 2, 'warrior_red': 1},
-                    requires={}
+                    produces={'villager_red': 3, 'warrior_red': 2},
+                    requires={},
+                    checkmate=True
                 )
                 db.session.add(figure)
                 #db.session.flush() ##
@@ -863,8 +953,9 @@ def create_game():
                     suit=maharaja_card.suit.value,
                     description="Himalaya maharaja",
                     upgrade_family_name=None,
-                    produces={'villager_black': 2, 'warrior_black': 1},
-                    requires={}
+                    produces={'villager_black': 3, 'warrior_black': 2},
+                    requires={},
+                    checkmate=True
                 )
                 print(figure)
                 db.session.add(figure)
@@ -1170,6 +1261,12 @@ def advance_figure():
         is_counter_advance = (game.advancing_figure_id is not None and 
                               game.advancing_player_id != player_id)
 
+        # Cannot counter-advance if advancing figure has cannot_be_blocked
+        if is_counter_advance and game.advancing_figure_id:
+            advancing_fig = Figure.query.get(game.advancing_figure_id)
+            if advancing_fig and advancing_fig.cannot_be_blocked:
+                return jsonify({'success': False, 'message': 'Cannot counter-advance: opponent\'s figure cannot be blocked'}), 400
+
         # Blitzkrieg: defender cannot counter-advance
         if has_blitzkrieg and is_counter_advance:
             return jsonify({'success': False, 'message': 'Blitzkrieg: defender cannot counter-advance'}), 400
@@ -1349,6 +1446,10 @@ def select_defender():
         if figure.player_id == player_id:
             return jsonify({'success': False, 'message': 'You must select an opponent\'s figure, not your own'}), 400
         
+        # Check checkmate constraint (checkmate figures cannot be selected as defenders)
+        if getattr(figure, 'checkmate', False):
+            return jsonify({'success': False, 'message': f'{figure.name} has Checkmate and cannot be selected as a defender'}), 400
+        
         # Check battle modifiers for Civil War
         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
         has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
@@ -1526,6 +1627,9 @@ def cannot_advance_loss():
         game.auto_loss_reason = 'no_figures_to_advance'
         game.auto_loss_detail = username  # The loser's name
 
+        # Collect resting figure IDs BEFORE clearing battle state
+        resting_ids = _collect_resting_figure_ids(game)
+
         # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
         _delete_all_battle_moves(game_id)
         _deactivate_all_spells(game)
@@ -1549,6 +1653,10 @@ def cannot_advance_loss():
 
         # Start new round — opponent (winner) becomes invader, draws side cards
         _start_new_round(game, opponent)
+
+        # Set resting figures for the new round (server-side — figures with rest_after_attack)
+        if resting_ids:
+            game.resting_figure_ids = resting_ids
 
         db.session.commit()
 
@@ -1626,6 +1734,9 @@ def defender_no_figures_loss():
         game.auto_loss_reason = 'no_defender_figures'
         game.auto_loss_detail = opponent_name  # The loser's name
 
+        # Collect resting figure IDs BEFORE clearing battle state
+        resting_ids = _collect_resting_figure_ids(game)
+
         # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
         _delete_all_battle_moves(game_id)
         _deactivate_all_spells(game)
@@ -1649,6 +1760,10 @@ def defender_no_figures_loss():
 
         # Start new round — invader (winner) stays invader, draws side cards
         _start_new_round(game, player)
+
+        # Set resting figures for the new round (server-side — figures with rest_after_attack)
+        if resting_ids:
+            game.resting_figure_ids = resting_ids
 
         db.session.commit()
 
@@ -1863,6 +1978,9 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
     )
     db.session.add(log_entry)
 
+    # Collect resting figure IDs BEFORE clearing battle state
+    resting_ids = _collect_resting_figure_ids(game)
+
     # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
     _delete_all_battle_moves(game.id)
     _deactivate_all_spells(game)
@@ -1886,6 +2004,10 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
 
     # Start new round — winner becomes invader, draws side cards
     _start_new_round(game, winner_player)
+
+    # Set resting figures for the new round (server-side — figures with rest_after_attack)
+    if resting_ids:
+        game.resting_figure_ids = resting_ids
 
     db.session.commit()
     print(f"[DEFICIT_LOSS] {loser_name}'s {figure_name} has resource deficit. {winner_name} wins 10 points. Round {game.current_round} starts.")
@@ -1923,6 +2045,9 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
     )
     db.session.add(log_entry)
 
+    # Collect resting figure IDs BEFORE clearing battle state
+    resting_ids = _collect_resting_figure_ids(game)
+
     # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
     _delete_all_battle_moves(game.id)
     _deactivate_all_spells(game)
@@ -1947,6 +2072,10 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
 
     # Start new round — winner becomes invader, draws side cards
     _start_new_round(game, winner_player)
+
+    # Set resting figures for the new round (server-side — figures with rest_after_attack)
+    if resting_ids:
+        game.resting_figure_ids = resting_ids
 
     db.session.commit()
     print(f"[BATTLE_DECISION] {loser_name} folded. {winner_name} wins 10 points. Round {game.current_round} starts. New invader: {winner_player.id}")
@@ -2062,6 +2191,22 @@ def _clear_battle_state(game):
     game.battle_round = 0
     game.battle_turn_player_id = None
     game.battle_skipped_rounds = None
+
+
+def _collect_resting_figure_ids(game):
+    """Return list of figure IDs that have rest_after_attack and were in the battle.
+
+    MUST be called BEFORE _clear_battle_state, which wipes the advancing/defending IDs.
+    Checks all four possible battle participants (advancing × 2, defending × 2).
+    """
+    resting = []
+    for fig_id in (game.advancing_figure_id, game.advancing_figure_id_2,
+                   game.defending_figure_id, game.defending_figure_id_2):
+        if fig_id is not None:
+            fig = Figure.query.get(fig_id)
+            if fig and fig.rest_after_attack:
+                resting.append(fig_id)
+    return resting or None
 
 
 def _deactivate_all_spells(game):
@@ -2584,6 +2729,11 @@ def finish_battle():
 
         winner_player.points += points_awarded
 
+        # Check checkmate BEFORE destroying the figure (record is deleted after)
+        checkmate_game_over = _check_checkmate_loss(game, loser_figure)
+        if not checkmate_game_over and loser_figure_2:
+            checkmate_game_over = _check_checkmate_loss(game, loser_figure_2)
+
         # Destroy loser's figure — collect its cards
         figure_cards = _destroy_figure_and_collect_cards(loser_figure)
 
@@ -2644,14 +2794,18 @@ def finish_battle():
             'points_awarded': points_awarded,
             'destroyed_figure_name': destroyed_name,
             'destroyed_figure_family': destroyed_family,
+            'checkmate_figure_name': checkmate_game_over.get('checkmate_figure_name') if checkmate_game_over else None,
         }
 
-        # Check if someone reached the limit (will be finalized in pick_card)
+        # Check if someone reached the stake (will be finalized in pick_card)
         game_over_info = None
-        for p in game.players:
-            if p.points >= (game.limit or settings.DEFAULT_GAME_LIMIT):
-                game_over_info = True
-                break
+        if checkmate_game_over:
+            game_over_info = True  # Checkmate overrides — game ends at pick_card
+        else:
+            for p in game.players:
+                if p.points >= (game.stake or settings.DEFAULT_GAME_STAKE):
+                    game_over_info = True
+                    break
 
         db.session.commit()
 
@@ -2774,11 +2928,17 @@ def finish_battle_pick_card():
     if not winner or winner.game_id != game_id:
         winner = player  # fallback
 
+    # Collect resting figure IDs BEFORE clearing battle state
+    resting_ids = _collect_resting_figure_ids(game)
+
     # Clear battle state (this resets fold_winner_id to None)
     _clear_battle_state(game)
 
     # ── Check game-over condition before starting a new round ──
     game_over_info = _check_game_over(game)
+    if not game_over_info and game.state == 'finished':
+        # Game was already ended by checkmate during finish_battle
+        game_over_info = _build_game_over_info_from_finished(game)
     if game_over_info:
         db.session.commit()
         return jsonify({
@@ -2791,8 +2951,7 @@ def finish_battle_pick_card():
     # Start a new round — battle winner becomes invader
     _start_new_round(game, winner)
 
-    # Set resting figures for the new round (from client — figures with rest_after_attack)
-    resting_ids = data.get('resting_figure_ids')
+    # Set resting figures for the new round (server-side — figures with rest_after_attack)
     if resting_ids:
         game.resting_figure_ids = resting_ids
 
@@ -2851,8 +3010,12 @@ def finish_battle_draw():
     if choice == 'destroy':
         # Destroy the opponent's battle figure(s)
         destroyed_names = []
+        checkmate_game_over = None
         if opponent_figure:
             destroyed_names.append(opponent_figure.name)
+            # Check checkmate BEFORE destroying
+            if not checkmate_game_over:
+                checkmate_game_over = _check_checkmate_loss(game, opponent_figure)
             figure_cards = _destroy_figure_and_collect_cards(opponent_figure)
             # Return figure cards to deck
             main_fc = [c for c, ct in figure_cards if isinstance(c, MainCard)]
@@ -2864,6 +3027,9 @@ def finish_battle_draw():
             game.advancing_figure_id = None
         if opponent_figure_2:
             destroyed_names.append(opponent_figure_2.name)
+            # Check checkmate BEFORE destroying
+            if not checkmate_game_over:
+                checkmate_game_over = _check_checkmate_loss(game, opponent_figure_2)
             figure_cards_2 = _destroy_figure_and_collect_cards(opponent_figure_2)
             main_fc2 = [c for c, ct in figure_cards_2 if isinstance(c, MainCard)]
             side_fc2 = [c for c, ct in figure_cards_2 if isinstance(c, SideCard)]
@@ -2942,6 +3108,9 @@ def finish_battle_draw():
     # Deactivate all spells
     _deactivate_all_spells(game)
 
+    # Collect resting figure IDs BEFORE clearing battle state
+    resting_ids = _collect_resting_figure_ids(game)
+
     # Clear battle state
     _clear_battle_state(game)
 
@@ -2959,6 +3128,9 @@ def finish_battle_draw():
 
     # ── Check game-over condition before starting a new round ──
     game_over_info = _check_game_over(game)
+    if not game_over_info and game.state == 'finished':
+        # Game was already ended by checkmate during destroy choice
+        game_over_info = _build_game_over_info_from_finished(game)
     if game_over_info:
         db.session.commit()
         return jsonify({
@@ -2973,8 +3145,7 @@ def finish_battle_draw():
     # Start a new round — defender (the choosing player) becomes invader
     _start_new_round(game, player)
 
-    # Set resting figures for the new round (from client — figures with rest_after_attack)
-    resting_ids = data.get('resting_figure_ids')
+    # Set resting figures for the new round (server-side — figures with rest_after_attack)
     if resting_ids:
         game.resting_figure_ids = resting_ids
 

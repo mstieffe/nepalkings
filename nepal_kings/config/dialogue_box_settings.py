@@ -33,6 +33,8 @@ DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT = {
     'ceasefire_passive': pygame.image.load('img/status_icons/ceasefire_passive.png'),
     'ceasefire_active': pygame.image.load('img/status_icons/ceasefire_active.png'),
     'dices': pygame.image.load('img/dialogue_box/icons/dices.png'),
+    'gold': pygame.image.load('img/dialogue_box/icons/gold.png'),
+    'gold_lost': pygame.image.load('img/dialogue_box/icons/gold_lost.png'),
 }
 
 # Large icons for dialogue box content display

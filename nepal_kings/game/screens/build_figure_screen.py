@@ -140,9 +140,13 @@ class BuildFigureScreen(SubScreen):
 
         # cannot_be_blocked check (opponent's advancing figure)
         if is_counter and game.advancing_figure_id:
-            # We can't check the opponent's figure properties client-side easily here,
-            # but the server will validate. Allow the attempt.
-            pass
+            # Look up the opponent's advancing figure in the game's figures
+            if hasattr(game, 'figures') and game.figures:
+                for fig in game.figures:
+                    if hasattr(fig, 'id') and fig.id == game.advancing_figure_id:
+                        if getattr(fig, 'cannot_be_blocked', False):
+                            return False, True, 'cannot_be_blocked'
+                        break
 
         # Resource deficit check: simulate adding this figure to the player's
         # existing figures and check if it would create a deficit on any

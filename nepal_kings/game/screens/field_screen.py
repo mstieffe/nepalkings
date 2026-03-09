@@ -1052,17 +1052,17 @@ class FieldScreen(SubScreen):
                         break
                 
                 if clicked_icon:
-                    # Check if trying to cast Explosion on a Maharaja
+                    # Check if target figure has checkmate (immune to all spells)
                     pending = self.state.pending_spell_cast
                     selected_spell = pending['spell']
                     target_figure = clicked_icon.figure
                     
-                    if 'Explosion' in selected_spell.name and target_figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']:
+                    if hasattr(target_figure, 'checkmate') and target_figure.checkmate:
                         self.make_dialogue_box(
-                            message="Explosion cannot be cast on Maharajas!",
+                            message=f"{target_figure.name} is immune to spells!",
                             actions=[],
                             icon="error",
-                            title="Invalid Target",
+                            title="Immune to Spells",
                             auto_close_delay=2000
                         )
                         return
@@ -1121,6 +1121,8 @@ class FieldScreen(SubScreen):
                             reason = f"{target_fig.name} cannot defend and cannot be selected for battle."
                         elif hasattr(target_fig, 'cannot_be_targeted') and target_fig.cannot_be_targeted:
                             reason = f"{target_fig.name} cannot be targeted by the opponent."
+                        elif hasattr(target_fig, 'checkmate') and target_fig.checkmate:
+                            reason = f"{target_fig.name} has Checkmate and cannot be selected as a defender."
                         elif not clicked_icon.is_visible:
                             reason = "This hidden figure cannot be selected as a defender."
                         elif hasattr(target_fig, 'must_be_attacked') and not target_fig.must_be_attacked:
@@ -1184,13 +1186,25 @@ class FieldScreen(SubScreen):
                         )
                         return
                     
+                    # Check checkmate constraint (opponent cannot select checkmate figures)
+                    if hasattr(target_figure, 'checkmate') and target_figure.checkmate:
+                        self.make_dialogue_box(
+                            message=f"{target_figure.name} has Checkmate and cannot be selected as a defender.",
+                            actions=[],
+                            icon="error",
+                            title="Checkmate",
+                            auto_close_delay=2000
+                        )
+                        return
+                    
                     # Check must_be_attacked constraint on opponent's eligible figures
-                    # Exclude figures with cannot_defend or cannot_be_targeted
+                    # Exclude figures with cannot_defend, cannot_be_targeted, or checkmate
                     opponent_figures = [
                         fig for fig in self.figures 
                         if fig.player_id != self.game.player_id
                         and not (hasattr(fig, 'cannot_defend') and fig.cannot_defend)
                         and not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted)
+                        and not (hasattr(fig, 'checkmate') and fig.checkmate)
                     ]
                     
                     # Village-only filter for must_be_attacked check too
@@ -1346,6 +1360,10 @@ class FieldScreen(SubScreen):
                     title="Figure Destroyed",
                     images=[figure_icon]
                 )
+                # Check if Explosion triggered checkmate game-over
+                game_over_info = result.get('game_over')
+                if game_over_info:
+                    self.game.pending_game_over = game_over_info
             else:
                 self.make_dialogue_box(
                     message=f"{selected_spell.name} cast on {figure_name_display}!",
@@ -1618,8 +1636,6 @@ class FieldScreen(SubScreen):
         """
         # Redraw the field screen with updated icon states
         self.draw()
-        # Update only the display to show the changes immediately
-        pygame.display.update()
 
     def draw(self):
         """Draw the screen, including the field background and figure icons."""
@@ -1909,6 +1925,8 @@ class FieldScreen(SubScreen):
             if hasattr(fig, 'cannot_defend') and fig.cannot_defend:
                 continue
             if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
+                continue
+            if hasattr(fig, 'checkmate') and fig.checkmate:
                 continue
             # Village-only restriction (Peasant War / Civil War)
             if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
