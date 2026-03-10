@@ -51,6 +51,9 @@ _HINT_CLR    = (140, 130, 110)
 _CHECK_CLR   = (90, 200, 110)
 
 
+_DEFAULT_SERVER_URL = 'http://localhost:5000'
+
+
 # ── Persistence helpers ────────────────────────────────────────────
 def _load_saved():
     """Return (w, h) from config file, or None."""
@@ -65,12 +68,34 @@ def _load_saved():
     return None
 
 
-def _save_choice(w, h):
-    """Persist the chosen resolution."""
+def _load_server_url():
+    """Return the saved server URL, or None."""
+    try:
+        with open(_CFG_FILE, 'r') as f:
+            data = json.load(f)
+        url = data.get('server_url', '').strip()
+        if url:
+            return url
+    except Exception:
+        pass
+    return None
+
+
+def _save_choice(w, h, server_url=None):
+    """Persist the chosen resolution and server URL."""
     try:
         os.makedirs(_CFG_DIR, exist_ok=True)
+        # Merge with existing config to preserve other settings
+        existing = {}
+        if os.path.exists(_CFG_FILE):
+            with open(_CFG_FILE, 'r') as f:
+                existing = json.load(f)
+        existing['width'] = w
+        existing['height'] = h
+        if server_url is not None:
+            existing['server_url'] = server_url
         with open(_CFG_FILE, 'w') as f:
-            json.dump({'width': w, 'height': h}, f)
+            json.dump(existing, f, indent=2)
     except Exception:
         pass
 
@@ -222,9 +247,34 @@ def main():
         w, h = _pick_resolution()
         _save_choice(w, h)
 
+    # Server URL: CLI flag > env var > config file > default
+    server_url = None
+    for i, arg in enumerate(sys.argv):
+        if arg == '--server-url' and i + 1 < len(sys.argv):
+            server_url = sys.argv[i + 1]
+            break
+    if not server_url:
+        server_url = os.environ.get('SERVER_URL')
+    if not server_url:
+        server_url = _load_server_url()
+    if not server_url:
+        server_url = _DEFAULT_SERVER_URL
+
+    # Persist the server URL so it's remembered
+    _save_choice(w, h, server_url=server_url)
+
     # Set env vars BEFORE importing any config/game modules
     os.environ['NK_SCREEN_WIDTH']  = str(w)
     os.environ['NK_SCREEN_HEIGHT'] = str(h)
+    os.environ['SERVER_URL'] = server_url
+
+    # Ensure cwd is the nepal_kings directory so relative image paths resolve
+    # (also handles PyInstaller _MEIPASS for bundled apps)
+    import sys as _sys
+    if getattr(_sys, 'frozen', False):
+        os.chdir(_sys._MEIPASS)
+    else:
+        os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     # Now import the game — all config constants are derived from env vars
     from nepal_kings import Client

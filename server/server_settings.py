@@ -8,7 +8,7 @@ DB_URL = os.getenv('DB_URL', 'sqlite:///test.db')
 # Database management
 # Set to True to drop and recreate all tables on server startup (useful for schema changes)
 # WARNING: This will delete all data! Set to False for production.
-DROP_TABLES_ON_STARTUP = os.getenv('DROP_TABLES_ON_STARTUP', 'True').lower() == 'true'
+DROP_TABLES_ON_STARTUP = os.getenv('DROP_TABLES_ON_STARTUP', 'False').lower() == 'true'
 
 # Debug logging
 DEBUG_ENABLED = os.getenv('DEBUG_ENABLED', 'False').lower() == 'true'

@@ -1,5 +1,6 @@
 # server.py
 from flask import Flask
+from flask_cors import CORS
 from models import db
 import logging
 import signal
@@ -17,6 +18,7 @@ spells.settings = settings
 battle_shop.settings = settings
 
 app = Flask(__name__)
+CORS(app)  # Allow cross-origin requests from game clients
 
 # ── Logging configuration ──
 # Set up a proper logger so route files can use logging.info/warning/error
@@ -114,7 +116,7 @@ if __name__ == '__main__':
     try:
         with app.app_context():
             db.create_all()
-        app.run(host='localhost', port=5000)
+        app.run(host='0.0.0.0', port=5000)
     except Exception as e:
         print(f'Application failed to start, Error: {str(e)}')
 

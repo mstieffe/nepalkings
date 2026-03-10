@@ -270,10 +270,16 @@ class SettingsScreen(MenuScreenMixin, Screen):
 
     @staticmethod
     def _save_resolution(w, h):
-        """Write the chosen resolution to the user config directory."""
+        """Write the chosen resolution to the user config directory, preserving other settings."""
         try:
             os.makedirs(_CFG_DIR, exist_ok=True)
+            existing = {}
+            if os.path.exists(_CFG_FILE):
+                with open(_CFG_FILE, 'r') as f:
+                    existing = json.load(f)
+            existing['width'] = w
+            existing['height'] = h
             with open(_CFG_FILE, 'w') as f:
-                json.dump({'width': w, 'height': h}, f)
+                json.dump(existing, f, indent=2)
         except Exception:
             pass

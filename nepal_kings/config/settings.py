@@ -1,6 +1,17 @@
 
 # settings.py
 
+import os
+import sys
+
+# Base path for resource loading (handles PyInstaller bundles)
+if getattr(sys, 'frozen', False):
+    # Running as a PyInstaller bundle
+    RESOURCE_BASE = sys._MEIPASS
+else:
+    # Running from source — nepal_kings/ directory
+    RESOURCE_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 from config.screen_settings import *
 from config.build_screen_settings import *
 from config.game_settings import *
