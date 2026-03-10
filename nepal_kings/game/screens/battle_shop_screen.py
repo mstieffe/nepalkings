@@ -831,7 +831,7 @@ class BattleShopScreen(SubScreen):
         # Label with count — centred above the slots
         count = len(self.bought_moves)
         label = self.slot_label_font.render(f"Battle Moves ({count}/{max_moves})", True, settings.BATTLE_SHOP_TYPE_LABEL_COLOR)
-        label_rect = label.get_rect(centerx=box_cx, bottom=sy - int(0.02 * settings.SCREEN_HEIGHT))
+        label_rect = label.get_rect(centerx=box_cx, bottom=sy - int(0.04 * settings.SCREEN_HEIGHT))
         self.window.blit(label, label_rect)
 
         # Determine hover state

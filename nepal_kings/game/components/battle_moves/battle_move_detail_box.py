@@ -10,7 +10,7 @@ The figure selector (list-shifter) is shown in BOTH modes for Call moves.
 
 import pygame
 from config import settings
-from utils.utils import Button
+from game.components.dialogue_box import _DlgButton
 from game.components.cards.card_img import CardImg
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.arrow_button import ArrowButton
@@ -166,13 +166,24 @@ class BattleMoveDetailBox:
         self.y = (settings.SCREEN_HEIGHT - self.height) // 2
 
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
-        self.border_rect = self.rect.inflate(
-            settings.DIALOGUE_BOX_BORDER_WIDTH, settings.DIALOGUE_BOX_BORDER_WIDTH
-        )
+        self.border_rect = self.rect.inflate(2, 2)
 
-        # Close button (X) — top-right
-        cb_size = 30
-        cb_margin = 10
+        # Pre-render dim overlay and rounded panel (like FigureDetailBox)
+        _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+        self._overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
+        self._overlay.fill(settings.DIALOGUE_BOX_OVERLAY_CLR)
+        _corner_r = settings.DIALOGUE_BOX_CORNER_R
+        self._panel = pygame.Surface((self.rect.w, self.rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(self._panel, settings.DIALOGUE_BOX_BG_CLR,
+                         self._panel.get_rect(), border_radius=_corner_r)
+        pygame.draw.rect(self._panel, settings.DIALOGUE_BOX_BORDER_CLR,
+                         self._panel.get_rect(),
+                         settings.DIALOGUE_BOX_BORDER_WIDTH,
+                         border_radius=_corner_r)
+
+        # Close button (X) — top-right (sized like FigureDetailBox)
+        cb_size = int(0.028 * settings.SCREEN_HEIGHT)
+        cb_margin = int(0.009 * settings.SCREEN_HEIGHT)
         self.close_button_rect = pygame.Rect(
             self.rect.right - cb_size - cb_margin,
             self.rect.top + cb_margin,
@@ -189,8 +200,11 @@ class BattleMoveDetailBox:
         if is_battle_context:
             self._create_action_buttons(abs_btn_y)
         else:
-            btn_x = self.rect.centerx - settings.MENU_BUTTON_WIDTH // 2
-            self.return_button = Button(window, btn_x, abs_btn_y, "Return")
+            btn_w = settings.DIALOGUE_BOX_BTN_W
+            btn_h = settings.DIALOGUE_BOX_BTN_H
+            btn_x = self.rect.centerx - btn_w // 2
+            self.return_button = _DlgButton(window, btn_x, abs_btn_y, "Return",
+                                            width=btn_w, height=btn_h)
             self.return_button.disabled = False
 
         if self._has_fig_selector:
@@ -352,7 +366,7 @@ class BattleMoveDetailBox:
                 n = 2  # use! + gamble!
             y += n * (btn_h + btn_gap)
         else:
-            y += settings.MENU_BUTTON_HEIGHT
+            y += settings.DIALOGUE_BOX_BTN_H
 
         y += int(pad * 1.5)  # bottom padding
         return y, fig_cy_rel, dagger_cy_rel, btn_y_rel
@@ -472,9 +486,11 @@ class BattleMoveDetailBox:
     # ------------------------------------------------------------------ draw
     def draw(self):
         """Draw the detail box with fully dynamic vertical flow."""
-        # Border + background
-        pygame.draw.rect(self.window, settings.COLOR_DIALOGUE_BOX_BORDER, self.border_rect)
-        pygame.draw.rect(self.window, settings.COLOR_DIALOGUE_BOX, self.rect)
+        # Dim overlay behind the box
+        self.window.blit(self._overlay, (0, 0))
+
+        # Rounded panel
+        self.window.blit(self._panel, self.rect.topleft)
 
         pad = settings.SMALL_SPACER_Y
         cx = self.rect.centerx
@@ -486,8 +502,8 @@ class BattleMoveDetailBox:
         cur_y += title_surf.get_height() + pad // 2
 
         # ── Divider ──
-        pygame.draw.line(self.window, settings.COLOR_DIALOGUE_BOX_BORDER,
-                         (self.rect.left + pad, cur_y), (self.rect.right - pad, cur_y), 2)
+        pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR,
+                         (self.rect.left + pad, cur_y), (self.rect.right - pad, cur_y), 1)
         cur_y += int(pad * 1.4)
 
         # ── Family icon + frame ──
@@ -658,7 +674,7 @@ class BattleMoveDetailBox:
         cx = self.rect.centerx
 
         # Divider
-        pygame.draw.line(self.window, settings.COLOR_DIALOGUE_BOX_BORDER,
+        pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR,
                          (self.rect.left + pad, cur_y), (self.rect.right - pad, cur_y), 1)
         cur_y += pad
 
@@ -728,7 +744,7 @@ class BattleMoveDetailBox:
         cx = self.rect.centerx
 
         # Divider
-        pygame.draw.line(self.window, settings.COLOR_DIALOGUE_BOX_BORDER,
+        pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR,
                          (self.rect.left + pad, cur_y), (self.rect.right - pad, cur_y), 1)
         cur_y += pad
 
@@ -797,33 +813,51 @@ class BattleMoveDetailBox:
             y += surf.get_height() + 2
 
     def _draw_close_button(self):
+        """Draw styled X button matching FigureDetailBox look."""
+        _SH = settings.SCREEN_HEIGHT
         if self.close_button_clicked:
-            bg = (150, 150, 150)
-            xc = (255, 100, 100)
+            bg_color = (60, 50, 45, 220)
+            x_color = (255, 100, 100)
+            glow_alpha = 140
         elif self.close_button_hovered:
-            bg = (200, 200, 200)
-            xc = (255, 50, 50)
+            bg_color = (55, 50, 45, 200)
+            x_color = (255, 80, 80)
+            glow_alpha = 90
         else:
-            bg = settings.COLOR_DIALOGUE_BOX_BORDER
-            xc = settings.TITLE_TEXT_COLOR
+            bg_color = (40, 38, 35, 180)
+            x_color = settings.DIALOGUE_BOX_MSG_TEXT_CLR
+            glow_alpha = 0
 
-        # Hover glow
-        if self.close_button_hovered or self.close_button_clicked:
-            r = 20
-            glow = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-            alpha = 180 if self.close_button_clicked else 120
-            pygame.draw.circle(glow, (255, 100, 100, alpha), (r, r), r)
-            self.window.blit(glow, (self.close_button_rect.centerx - r, self.close_button_rect.centery - r))
+        # Warm glow behind when hovered/clicked
+        if glow_alpha > 0:
+            glow_radius = int(0.018 * _SH)
+            glow_surface = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surface, (220, 180, 120, glow_alpha),
+                               (glow_radius, glow_radius), glow_radius)
+            glow_pos = (
+                self.close_button_rect.centerx - glow_radius,
+                self.close_button_rect.centery - glow_radius
+            )
+            self.window.blit(glow_surface, glow_pos)
 
-        pygame.draw.rect(self.window, bg, self.close_button_rect, border_radius=3)
-        m = 8
-        lw = 4 if self.close_button_hovered else 3
-        pygame.draw.line(self.window, xc,
-                         (self.close_button_rect.left + m, self.close_button_rect.top + m),
-                         (self.close_button_rect.right - m, self.close_button_rect.bottom - m), lw)
-        pygame.draw.line(self.window, xc,
-                         (self.close_button_rect.right - m, self.close_button_rect.top + m),
-                         (self.close_button_rect.left + m, self.close_button_rect.bottom - m), lw)
+        # Rounded background
+        btn_bg = pygame.Surface(
+            (self.close_button_rect.w, self.close_button_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(btn_bg, bg_color, btn_bg.get_rect(), border_radius=4)
+        self.window.blit(btn_bg, self.close_button_rect.topleft)
+
+        # X lines
+        hovered = self.close_button_hovered or self.close_button_clicked
+        margin = max(4, self.close_button_rect.width // 4)
+        lw = max(2, int(0.004 * _SH)) if hovered else max(2, int(0.003 * _SH))
+        left, top = self.close_button_rect.topleft
+        right, bottom = self.close_button_rect.bottomright
+        pygame.draw.line(self.window, x_color,
+                         (left + margin, top + margin),
+                         (right - margin, bottom - margin), lw)
+        pygame.draw.line(self.window, x_color,
+                         (right - margin, top + margin),
+                         (left + margin, bottom - margin), lw)
 
     # --------------------------------------------------------------- events
     def update(self, events):

@@ -46,9 +46,13 @@ class ScrollTextListShifter:
         self._chevron_sz = settings.SCROLL_CHEVRON_SIZE
         self._chevron_lw = settings.SCROLL_CHEVRON_LINE_W
 
+        # Height reserved for navigation bar (chevrons + dots) at the bottom
+        self._nav_bar_h = int(0.055 * settings.SCREEN_HEIGHT)
+
         if scroll_rect is not None:
             panel_cx = scroll_rect.x + scroll_rect.width // 2
-            bar_y = scroll_rect.y + int(0.035 * settings.SCREEN_HEIGHT)
+            # Place nav bar near the bottom of the panel
+            bar_y = scroll_rect.y + scroll_rect.height - int(0.028 * settings.SCREEN_HEIGHT)
         else:
             panel_cx = self.x + settings.SCROLL_TEXT_MAX_WIDTH // 2
             bar_y = self.y - int(0.02 * settings.SCREEN_HEIGHT)
@@ -77,14 +81,17 @@ class ScrollTextListShifter:
         self._last_content_h = 0    # rendered height of current item (updated each draw)
 
         # Clip rect: area where text content should be visible
+        # Content fills from the top of the panel down to just above the nav bar
         if scroll_rect is not None:
-            nav_bar_h = int(0.055 * settings.SCREEN_HEIGHT)  # height reserved for nav bar at top
+            top_pad = int(0.012 * settings.SCREEN_HEIGHT)
             self._clip_rect = pygame.Rect(
                 scroll_rect.x + 4,
-                scroll_rect.y + nav_bar_h,
+                scroll_rect.y + top_pad,
                 scroll_rect.width - 8,
-                scroll_rect.height - nav_bar_h - 4
+                scroll_rect.height - top_pad - self._nav_bar_h
             )
+            # Content starts at the top of the clip area (overrides caller's y)
+            self.y = self._clip_rect.y + int(0.008 * settings.SCREEN_HEIGHT)
         else:
             self._clip_rect = None
 
@@ -220,7 +227,7 @@ class ScrollTextListShifter:
         """Draw the navigation bar, dot indicator, and clipped text content."""
         n = len(self.text_list)
 
-        # ---- Navigation bar (chevrons + dots) — always at top of panel ----
+        # ---- Navigation bar (chevrons + dots) — fixed at bottom of panel ----
         if n > self.num_texts_displayed:
             self._draw_chevron(self._left_x, self._arrow_y, 'left', self._left_hovered)
             self._draw_chevron(self._right_x, self._arrow_y, 'right', self._right_hovered)

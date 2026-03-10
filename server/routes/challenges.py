@@ -15,6 +15,7 @@ def remove_challenge():
         db.session.delete(challenge)
         db.session.commit()
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Failed to remove challenge, Error: {str(e)}'}), 400
     return jsonify({'success': True, 'message': 'Challenge removed'})
 
@@ -55,6 +56,7 @@ def create_challenge():
         db.session.add(challenge)
         db.session.commit()
     except Exception as e:
+        db.session.rollback()
         # In case there is an exception while adding the challenge
         return jsonify({'success': False, 'message': f'Failed to create challenge, Error: {str(e)}'}), 400
 
@@ -75,4 +77,5 @@ def open_challenges():
             'challenges': [challenge.serialize() for challenge in challenges]
         })
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400

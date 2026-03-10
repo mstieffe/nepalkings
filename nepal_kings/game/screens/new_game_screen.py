@@ -17,6 +17,10 @@ _DOT_RADIUS    = int(0.006 * _SH)
 _DOT_ONLINE    = (60, 200, 80)
 _DOT_OFFLINE   = (120, 110, 100)
 
+# NEW tag colours
+_NEW_TAG_BG  = (180, 140, 40)
+_NEW_TAG_TXT = (30, 28, 24)
+
 # ── Overall box ─────────────────────────────────────────────────────
 _BOX_PAD    = int(0.025 * _SH)
 _BOX_X      = int(0.04 * _SW)
@@ -76,6 +80,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
         self._header_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._panel_font = pygame.font.Font(settings.FONT_PATH, settings.LIST_BTN_FONT_SIZE)
+        self._tag_font = pygame.font.Font(settings.FONT_PATH, int(0.016 * _SH))
+        self._tag_font.set_bold(True)
 
         # Layout positions inside box
         self._title_y = _BOX_Y + _BOX_PAD
@@ -179,10 +185,11 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.challenge_buttons.append(btn)
 
         self.open_challenge_buttons = []
-        for i, opp in enumerate(self.open_opponents.values()):
+        for i, (ch_id, opp) in enumerate(self.open_opponents.items()):
             y = self._list_top + i * (btn_h + gap)
             btn = ListButton(self.window, _COL2_X, y, opp['username'], width=btn_w, height=btn_h)
             btn.is_online = opp.get('is_online', False)
+            btn.challenge_id = ch_id  # Store for NEW tag lookup
             self.open_challenge_buttons.append(btn)
 
         # Scroll limits
@@ -278,6 +285,20 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 dot_x = btn.rect.x + int(0.012 * _SW)
                 dot_y = btn.rect.centery
                 pygame.draw.circle(self.window, dot_clr, (dot_x, dot_y), _DOT_RADIUS)
+
+                # NEW tag (only for open challenges with a stored challenge_id)
+                ch_id = getattr(btn, 'challenge_id', None)
+                if ch_id is not None and ch_id in self.state._new_challenge_ids:
+                    tag_surf = self._tag_font.render('NEW', True, _NEW_TAG_TXT)
+                    tw, th = tag_surf.get_size()
+                    pad_x, pad_y = int(0.005 * _SW), int(0.002 * _SH)
+                    tag_x = btn.rect.right - tw - 2 * pad_x - int(0.008 * _SW)
+                    tag_y = btn.rect.centery - (th + 2 * pad_y) // 2
+                    tag_rect = pygame.Rect(tag_x, tag_y, tw + 2 * pad_x, th + 2 * pad_y)
+                    tag_bg = pygame.Surface((tag_rect.w, tag_rect.h), pygame.SRCALPHA)
+                    pygame.draw.rect(tag_bg, _NEW_TAG_BG, tag_bg.get_rect(), border_radius=4)
+                    self.window.blit(tag_bg, tag_rect.topleft)
+                    self.window.blit(tag_surf, (tag_rect.x + pad_x, tag_rect.y + pad_y))
 
         self.window.set_clip(None)
 

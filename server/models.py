@@ -29,7 +29,7 @@ class Challenge(db.Model):
       'status': self.status.value,
       'stake': self.stake,
       'turn_time_limit': self.turn_time_limit,
-      'date': self.date
+      'date': self.date.isoformat() if self.date else None
     }
 
 class Suit(enum.Enum):
@@ -160,7 +160,7 @@ class Game(db.Model):
         return {
             'id': self.id,
             'state': self.state,
-            'date': self.date,
+            'date': self.date.isoformat() if self.date else None,
             'stake': self.stake,
             'turn_time_limit': self.turn_time_limit,
             'winner_player_id': self.winner_player_id,

@@ -21,6 +21,13 @@ class State:
         self._known_challenge_ids = None   # None = not yet initialised
         self.badge_new_games = 0           # count of unseen games
         self.badge_new_challenges = 0      # count of unseen received challenges
+        self._new_game_ids = set()         # IDs of games that are "new" (for NEW tag)
+        self._new_challenge_ids = set()    # IDs of challenges that are "new"
+        self._last_seen_at = None          # ISO datetime str of previous session end
+
+        # ── Display info (set by launcher before window creation) ───
+        self.native_screen_w = 0           # real desktop width
+        self.native_screen_h = 0           # real desktop height
 
 
     def set_msg(self, msg):

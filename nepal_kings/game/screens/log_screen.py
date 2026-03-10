@@ -240,21 +240,30 @@ class LogScreen(SubScreen):
 
         # Render lines within the visible range
         visible_lines = rendered_lines[self.scroll_offset:self.scroll_offset + self.max_lines_on_screen()]
-        for bg_color, line, icon, indented in visible_lines:
+        for entry in visible_lines:
+            bg_color, line, icon, indented = entry[0], entry[1], entry[2], entry[3]
+            date_prefix = entry[4] if len(entry) > 4 else None
             if y + self.font.get_height() > max_y:
                 break
 
-            text_x = settings.MSG_TEXT_X + (_icon_offset if indented else 0)
-            text_surface = self.font.render(line, True, settings.MSG_TEXT_COLOR)
-            text_rect = text_surface.get_rect(topleft=(text_x, y))
+            text_x = settings.MSG_TEXT_X
 
-            # Rounded bubble background — extend left to cover icon area
-            if indented:
-                bubble_left = settings.MSG_TEXT_X - _pad_x
-                bubble_w = text_rect.right - bubble_left + _pad_x
+            if date_prefix and icon:
+                # Render: [date] [icon] message...
+                date_surface = self.font.render(date_prefix, True, settings.MSG_TEXT_COLOR)
+                msg_surface = self.font.render(line, True, settings.MSG_TEXT_COLOR)
+                date_w = date_surface.get_width()
+                icon_x_pos = text_x + date_w
+                msg_x_pos = icon_x_pos + _icon_offset
+                total_w = date_w + _icon_offset + msg_surface.get_width()
+                text_rect = pygame.Rect(text_x, y, total_w, date_surface.get_height())
             else:
-                bubble_left = text_rect.x - _pad_x
-                bubble_w = text_rect.width + _pad_x * 2
+                text_surface = self.font.render(line, True, settings.MSG_TEXT_COLOR)
+                text_rect = text_surface.get_rect(topleft=(text_x, y))
+
+            # Rounded bubble background
+            bubble_left = text_rect.x - _pad_x
+            bubble_w = text_rect.width + _pad_x * 2
             bubble_rect = pygame.Rect(bubble_left, text_rect.y - _pad_y,
                                       bubble_w, text_rect.height + _pad_y * 2)
             bubble_surf = pygame.Surface((bubble_rect.w, bubble_rect.h), pygame.SRCALPHA)
@@ -263,12 +272,14 @@ class LogScreen(SubScreen):
                              bubble_surf.get_rect(), border_radius=_bubble_r)
             self.window.blit(bubble_surf, bubble_rect.topleft)
 
-            # Draw icon on first line of message
-            if icon:
+            if date_prefix and icon:
+                # Blit date, icon, then message
+                self.window.blit(date_surface, (text_x, y))
                 icon_y = bubble_rect.centery - icon.get_height() // 2
-                self.window.blit(icon, (settings.MSG_TEXT_X, icon_y))
-
-            self.window.blit(text_surface, text_rect.topleft)
+                self.window.blit(icon, (icon_x_pos, icon_y))
+                self.window.blit(msg_surface, (msg_x_pos, y))
+            else:
+                self.window.blit(text_surface, text_rect.topleft)
 
             y += _line_h + _pad_y
 
@@ -329,13 +340,26 @@ class LogScreen(SubScreen):
                     bg_color = settings.BATTLE_LOG_SELF_BG_COLOR if is_self else settings.BATTLE_LOG_OPP_BG_COLOR
                 else:
                     bg_color = settings.LOG_MSG_SELF_BG_COLOR if is_self else settings.LOG_MSG_OPP_BG_COLOR
-                msg_content = f"[{ts}] {message['message']}"
                 icon = self._get_log_icon(message)
                 has_icon = icon is not None
-                wrap_w = max_width - _icon_offset if has_icon else max_width
-                wrapped_lines = self.wrap_text(msg_content, wrap_w)
-                for i, line in enumerate(wrapped_lines):
-                    rendered_lines.append((bg_color, line, icon if i == 0 else None, has_icon))
+                if has_icon:
+                    # Icon goes after the date: [date] [icon] message...
+                    date_prefix = f"[{ts}] "
+                    date_px = self.font.size(date_prefix)[0]
+                    first_wrap_w = max_width - date_px - _icon_offset
+                    msg_lines = self.wrap_text(message['message'], first_wrap_w)
+                    if not msg_lines:
+                        msg_lines = ['']
+                    # First line carries date_prefix and icon
+                    rendered_lines.append((bg_color, msg_lines[0], icon, False, date_prefix))
+                    # Subsequent wrapped lines — no icon, no indent
+                    for line in msg_lines[1:]:
+                        rendered_lines.append((bg_color, line, None, False, None))
+                else:
+                    msg_content = f"[{ts}] {message['message']}"
+                    wrapped_lines = self.wrap_text(msg_content, max_width)
+                    for line in wrapped_lines:
+                        rendered_lines.append((bg_color, line, None, False, None))
             else:
                 # Chat message
                 sender = self.game.get_player_username(message['sender_id']) if self.game else 'Unknown'
@@ -344,7 +368,7 @@ class LogScreen(SubScreen):
                 msg_content = f"[{ts}] {sender}: {message['message']}"
                 wrapped_lines = self.wrap_text(msg_content, max_width)
                 for line in wrapped_lines:
-                    rendered_lines.append((bg_color, line, None, False))
+                    rendered_lines.append((bg_color, line, None, False, None))
 
         return rendered_lines
     

@@ -538,6 +538,7 @@ def _validate_and_mark_spell_cards(player_id, cards_data):
         return True
         
     except Exception as e:
+        db.session.rollback()
         print(f"Error validating spell cards: {e}")
         return False
 
@@ -576,6 +577,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     card_data['type'] = 'side'
                     spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
+                db.session.rollback()
                 spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
                 spell_effect['error'] = str(e)
         
@@ -592,6 +594,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     card_data['type'] = 'main'
                     spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
+                db.session.rollback()
                 spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
                 spell_effect['error'] = str(e)
         
@@ -631,6 +634,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['current_total'] = main_hand_count
                     print(f"[FILL UP TO 10] Already at {main_hand_count} cards, no draw needed")
             except Exception as e:
+                db.session.rollback()
                 print(f"[FILL UP TO 10] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
                 spell_effect['error'] = str(e)
@@ -704,6 +708,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         card_data['type'] = 'side'
                         spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
+                db.session.rollback()
                 spell_effect['effect'] = f'Failed to dump cards: {str(e)}'
                 spell_effect['error'] = str(e)
         
@@ -793,6 +798,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         print(f"[FORCED DEAL] Spell effect prepared with {len(spell_effect['cards_given'])} cards given and {len(spell_effect['cards_received'])} cards received")
                         
             except Exception as e:
+                db.session.rollback()
                 spell_effect['effect'] = f'Failed to force deal: {str(e)}'
                 spell_effect['error'] = str(e)
                 print(f"[FORCED DEAL] EXCEPTION: {str(e)}")
@@ -965,7 +971,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                             game_id=game.id,
                             player_id=destroyed_figure_owner_id,
                             round_number=game.current_round,
-                            turn_number=game.current_turn,
+                            turn_number=game.current_round,
                             message=f"{destroyed_figure_name} was destroyed by Explosion spell ({card_count} cards returned to deck)",
                             author='system',
                             type='figure_destroyed'
@@ -973,6 +979,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         db.session.add(log_entry)
                         
                     except Exception as e:
+                        db.session.rollback()
                         spell_effect['effect'] = f'Failed to destroy figure: {str(e)}'
                         spell_effect['error'] = str(e)
                         spell.is_active = False
@@ -1026,6 +1033,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['invader_turns'] = invader_player.turns_left
                     spell_effect['defender_turns'] = defender_player.turns_left
             except Exception as e:
+                db.session.rollback()
                 print(f"[CEASEFIRE SPELL] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to activate ceasefire: {str(e)}'
                 spell_effect['error'] = str(e)
@@ -1063,6 +1071,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['new_invader_id'] = new_invader.id
                     spell_effect['invader_swapped'] = True
             except Exception as e:
+                db.session.rollback()
                 print(f"[INVADER SWAP] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to swap invader: {str(e)}'
                 spell_effect['error'] = str(e)
@@ -1140,6 +1149,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     print(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 2. Invader starts next turn.")
                     print(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
             except Exception as e:
+                db.session.rollback()
                 print(f"[{spell.spell_name.upper()}] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to activate {spell.spell_name}: {str(e)}'
                 spell_effect['error'] = str(e)

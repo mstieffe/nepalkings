@@ -1,5 +1,7 @@
 import pygame
 from pygame.locals import *
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from config import settings
@@ -148,8 +150,38 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
 
     # ── badge helpers ────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_date(date_str):
+        """Parse a date string from the server into a naive datetime object.
+
+        Handles ISO format (``2026-03-09T15:00:00``) as well as the HTTP‑date
+        format used by Flask's default JSON serializer
+        (``Mon, 09 Mar 2026 15:00:00 GMT``).
+        """
+        if not date_str:
+            return None
+        # Fast path — ISO formats (used by explicit .isoformat() calls)
+        for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f',
+                    '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f'):
+            try:
+                return datetime.strptime(date_str, fmt)
+            except (ValueError, TypeError):
+                continue
+        # Fallback — HTTP‑date / RFC 2822 (Flask's jsonify default for datetime)
+        try:
+            return parsedate_to_datetime(date_str).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            pass
+        return None
+
     def _poll_badges(self):
-        """Fetch game / challenge counts from the server and update badges."""
+        """Fetch game / challenge counts from the server and update badges.
+
+        On the very first poll after login, items whose date is newer than the
+        user's previous ``last_active`` are treated as unseen so the badge
+        correctly reflects changes that happened while the user was offline.
+        """
         username = self.state.user_dict.get('username') if self.state.user_dict else None
         if not username:
             return
@@ -157,28 +189,55 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         # Keep user marked as online
         send_heartbeat(username)
 
+        last_seen = self._parse_date(self.state._last_seen_at)
+
         try:
             # -- new games (accepted challenges that became games) --
             game_dicts = fetch_user_games(username)
             current_game_ids = {g['id'] for g in game_dicts}
             if self.state._known_game_ids is None:
-                # first poll — treat everything as already seen
-                self.state._known_game_ids = set(current_game_ids)
-                self.state.badge_new_games = 0
+                # First poll after login — check which games appeared while offline
+                if last_seen:
+                    new_ids = set()
+                    for g in game_dicts:
+                        dt = self._parse_date(str(g.get('date', '')))
+                        if dt and dt > last_seen:
+                            new_ids.add(g['id'])
+                    self.state.badge_new_games = len(new_ids)
+                    self.state._new_game_ids = set(new_ids)
+                    self.state._known_game_ids = current_game_ids - new_ids
+                else:
+                    # No previous session — treat everything as seen
+                    self.state._known_game_ids = set(current_game_ids)
+                    self.state._new_game_ids = set()
+                    self.state.badge_new_games = 0
             else:
                 new_ids = current_game_ids - self.state._known_game_ids
                 self.state.badge_new_games = len(new_ids)
+                self.state._new_game_ids = set(new_ids)
 
             # -- new challenges received --
             user = fetch_user(username)
             received = user.get('challenges_received', [])
             current_ch_ids = {c['id'] for c in received}
             if self.state._known_challenge_ids is None:
-                self.state._known_challenge_ids = set(current_ch_ids)
-                self.state.badge_new_challenges = 0
+                if last_seen:
+                    new_ch = set()
+                    for c in received:
+                        dt = self._parse_date(str(c.get('date', '')))
+                        if dt and dt > last_seen:
+                            new_ch.add(c['id'])
+                    self.state.badge_new_challenges = len(new_ch)
+                    self.state._new_challenge_ids = set(new_ch)
+                    self.state._known_challenge_ids = current_ch_ids - new_ch
+                else:
+                    self.state._known_challenge_ids = set(current_ch_ids)
+                    self.state._new_challenge_ids = set()
+                    self.state.badge_new_challenges = 0
             else:
                 new_ch = current_ch_ids - self.state._known_challenge_ids
                 self.state.badge_new_challenges = len(new_ch)
+                self.state._new_challenge_ids = set(new_ch)
         except Exception:
             pass  # network failure — keep previous counts
 

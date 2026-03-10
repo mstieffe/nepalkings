@@ -379,6 +379,7 @@ def get_figure():
         return jsonify({'success': True, 'figure': figure.serialize()})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Error retrieving figure: {str(e)}'}), 400
 
 
@@ -396,6 +397,7 @@ def get_figures():
         return jsonify({'success': True, 'figures': [figure.serialize() for figure in figures]})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Error retrieving figures: {str(e)}'}), 400
 
 

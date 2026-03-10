@@ -85,14 +85,90 @@ class SubScreen:
 
 
     def init_background(self):
-        """Initialize the background image."""
-        self.background = pygame.image.load(settings.SUB_SCREEN_BACKGROUND_IMG_PATH)
-        self.background = pygame.transform.smoothscale(self.background, (settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH, settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT))
+        """Build a programmatic parchment background with a thick decorative frame."""
+        w = settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH
+        h = settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT
+        r = settings.SUB_SCREEN_BG_CORNER_R
+        pad = settings.SUB_SCREEN_BG_PAD
+        bw = settings.SUB_SCREEN_BG_BORDER_W
+        frame = settings.SUB_SCREEN_BG_FRAME_W
+
+        panel = pygame.Surface((w, h), pygame.SRCALPHA)
+
+        # 1) Outer frame fill (thick brown band)
+        pygame.draw.rect(panel, settings.SUB_SCREEN_BG_FRAME_CLR,
+                         (0, 0, w, h), border_radius=r)
+
+        # 2) Slightly darker inner frame edge for bevel depth
+        pygame.draw.rect(panel, settings.SUB_SCREEN_BG_FRAME_INNER_CLR,
+                         (frame // 3, frame // 3,
+                          w - 2 * (frame // 3), h - 2 * (frame // 3)),
+                         border_radius=max(1, r - 2))
+
+        # 3) Parchment fill inside the frame
+        inner_r = max(1, r - 4)
+        pygame.draw.rect(panel, settings.SUB_SCREEN_BG_CLR,
+                         (frame, frame, w - 2 * frame, h - 2 * frame),
+                         border_radius=inner_r)
+
+        # 4) Subtle depth within parchment
+        pygame.draw.rect(panel, settings.SUB_SCREEN_BG_INNER_CLR,
+                         (frame + pad, frame + pad,
+                          w - 2 * (frame + pad), h - 2 * (frame + pad)),
+                         border_radius=max(1, inner_r - 2))
+
+        # 5) Dark edge line between frame and parchment
+        pygame.draw.rect(panel, settings.SUB_SCREEN_BG_FRAME_EDGE_CLR,
+                         (frame, frame, w - 2 * frame, h - 2 * frame),
+                         2, border_radius=inner_r)
+
+        # 6) Outer dark border
+        pygame.draw.rect(panel, settings.SUB_SCREEN_BG_BORDER_CLR,
+                         (0, 0, w, h), bw, border_radius=r)
+
+        self.background = panel
 
     def init_sub_box_background(self, x, y, width, height):
-        """Initialize the background image."""
-        self.sub_box_background = pygame.image.load(settings.SUB_BOX_BACKGROUND_IMG_PATH)
-        self.sub_box_background = pygame.transform.smoothscale(self.sub_box_background, (width, height))
+        """Build a programmatic warm orange-brown sub-box panel with dark frame."""
+        r = settings.SUB_BOX_BG_CORNER_R
+        pad = settings.SUB_BOX_BG_PAD
+        bw = settings.SUB_BOX_BG_BORDER_W
+        frame = settings.SUB_BOX_BG_FRAME_W
+
+        panel = pygame.Surface((width, height), pygame.SRCALPHA)
+
+        # 1) Dark frame band
+        pygame.draw.rect(panel, settings.SUB_BOX_BG_FRAME_CLR,
+                         (0, 0, width, height), border_radius=r)
+
+        # 2) Slightly darker inner frame edge
+        pygame.draw.rect(panel, settings.SUB_BOX_BG_FRAME_INNER_CLR,
+                         (frame // 3, frame // 3,
+                          width - 2 * (frame // 3), height - 2 * (frame // 3)),
+                         border_radius=max(1, r - 1))
+
+        # 3) Warm orange-brown fill inside the frame
+        inner_r = max(1, r - 2)
+        pygame.draw.rect(panel, settings.SUB_BOX_BG_CLR,
+                         (frame, frame, width - 2 * frame, height - 2 * frame),
+                         border_radius=inner_r)
+
+        # 4) Subtle depth within the fill
+        pygame.draw.rect(panel, settings.SUB_BOX_BG_INNER_CLR,
+                         (frame + pad, frame + pad,
+                          width - 2 * (frame + pad), height - 2 * (frame + pad)),
+                         border_radius=max(1, inner_r - 1))
+
+        # 5) Dark edge line at frame/fill boundary
+        pygame.draw.rect(panel, settings.SUB_BOX_BG_BORDER_CLR,
+                         (frame, frame, width - 2 * frame, height - 2 * frame),
+                         bw, border_radius=inner_r)
+
+        # 6) Outer border
+        pygame.draw.rect(panel, settings.SUB_BOX_BG_BORDER_CLR,
+                         (0, 0, width, height), bw, border_radius=r)
+
+        self.sub_box_background = panel
         self.sub_box_x = x
         self.sub_box_y = y
 

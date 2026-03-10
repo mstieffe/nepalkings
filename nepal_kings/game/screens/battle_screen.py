@@ -20,6 +20,7 @@ from game.components.figure_detail_box import FigureDetailBox
 from utils import battle_shop_service
 from utils import game_service
 from utils.utils import Button
+from game.components.dialogue_box import _DlgButton
 
 
 class BattleScreen(SubScreen):
@@ -1884,20 +1885,35 @@ class BattleScreen(SubScreen):
         card_h = settings.CARD_HEIGHT
         spacing = settings.SMALL_SPACER_X
         title_h = int(0.06 * settings.SCREEN_HEIGHT)
-        btn_h = settings.MENU_BUTTON_HEIGHT
+        label_h = int(0.03 * settings.SCREEN_HEIGHT)
+        btn_h = settings.DIALOGUE_BOX_BTN_H
         padding = settings.SMALL_SPACER_X
 
         cards_row_w = num * card_w + (num - 1) * spacing
         box_w = max(cards_row_w + 2 * padding, int(0.3 * settings.SCREEN_WIDTH))
-        box_h = title_h + card_h + spacing + btn_h + 2 * padding
+        box_h = title_h + card_h + label_h + spacing + btn_h + 2 * padding
         box_x = settings.CENTER_X - box_w // 2
         box_y = settings.CENTER_Y - box_h // 2
         self._card_picker_box_rect = pygame.Rect(box_x, box_y, box_w, box_h)
 
-        # Create confirm button (centred at bottom of box)
-        btn_x = settings.CENTER_X - settings.MENU_BUTTON_WIDTH // 2
+        # Pre-render overlay and rounded panel
+        _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+        self._card_picker_overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
+        self._card_picker_overlay.fill(settings.DIALOGUE_BOX_OVERLAY_CLR)
+        _corner_r = settings.DIALOGUE_BOX_CORNER_R
+        self._card_picker_panel = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        pygame.draw.rect(self._card_picker_panel, settings.DIALOGUE_BOX_BG_CLR,
+                         self._card_picker_panel.get_rect(), border_radius=_corner_r)
+        pygame.draw.rect(self._card_picker_panel, settings.DIALOGUE_BOX_BORDER_CLR,
+                         self._card_picker_panel.get_rect(),
+                         settings.DIALOGUE_BOX_BORDER_WIDTH, border_radius=_corner_r)
+
+        # Create themed confirm button (centred at bottom of box)
+        btn_w = settings.DIALOGUE_BOX_BTN_W
+        btn_x = settings.CENTER_X - btn_w // 2
         btn_y = box_y + box_h - btn_h - padding
-        self._card_picker_confirm_btn = Button(self.window, btn_x, btn_y, "Confirm")
+        self._card_picker_confirm_btn = _DlgButton(self.window, btn_x, btn_y, "Confirm",
+                                                   width=btn_w, height=btn_h)
         self._card_picker_confirm_btn.disabled = True
 
         # Pre-compute card rects
@@ -1912,16 +1928,12 @@ class BattleScreen(SubScreen):
         if not self._card_picker_active:
             return
 
-        # Semi-transparent full-screen overlay
-        overlay = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 150))
-        self.window.blit(overlay, (0, 0))
+        # Pre-rendered dim overlay
+        self.window.blit(self._card_picker_overlay, (0, 0))
 
         box = self._card_picker_box_rect
-        # Box background
-        pygame.draw.rect(self.window, settings.COLOR_DIALOGUE_BOX, box)
-        border = box.inflate(settings.DIALOGUE_BOX_BORDER_WIDTH, settings.DIALOGUE_BOX_BORDER_WIDTH)
-        pygame.draw.rect(self.window, settings.COLOR_DIALOGUE_BOX_BORDER, border, settings.DIALOGUE_BOX_BORDER_WIDTH)
+        # Pre-rendered rounded panel
+        self.window.blit(self._card_picker_panel, box.topleft)
 
         # Title
         title_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_TITLE_DIALOGUE_BOX)
@@ -1941,6 +1953,12 @@ class BattleScreen(SubScreen):
             self.window.blit(icon_surface, (title_rect.right + 6,
                                             title_rect.centery - icon_surface.get_height() // 2))
         self.window.blit(title_surf, title_rect)
+
+        # Separator below title
+        sep_y = title_rect.bottom + settings.SMALL_SPACER_Y // 2
+        pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR,
+                         (box.left + settings.SMALL_SPACER_X, sep_y),
+                         (box.right - settings.SMALL_SPACER_X, sep_y), 1)
 
         # Draw cards
         mx, my = pygame.mouse.get_pos()
@@ -1963,7 +1981,7 @@ class BattleScreen(SubScreen):
                 # Hovered: bright
                 card_img.draw_front_bright(rect.x, rect.y)
             else:
-                # Default: greyed out
+                # Default: slightly dimmed
                 card_img.draw_front(rect.x, rect.y)
 
             # Card label below
@@ -1971,27 +1989,25 @@ class BattleScreen(SubScreen):
             suit = entry['card_data'].get('suit', '?')
             rank = entry['card_data'].get('rank', '?')
             label = f"{rank} of {suit}"
-            label_color = (255, 255, 255) if (is_selected or is_hovered) else (140, 140, 140)
+            if is_selected:
+                label_color = settings.TITLE_TEXT_COLOR
+            elif is_hovered:
+                label_color = settings.DIALOGUE_BOX_BTN_TEXT_HOVER_CLR
+            else:
+                label_color = settings.DIALOGUE_BOX_MSG_TEXT_CLR
             label_surf = label_font.render(label, True, label_color)
             label_rect = label_surf.get_rect(centerx=rect.centerx, top=rect.bottom + 4)
             self.window.blit(label_surf, label_rect)
 
-        # Draw confirm button
+        # Draw themed confirm button
         btn = self._card_picker_confirm_btn
         if self._card_picker_selected is not None:
             btn.disabled = False
         else:
             btn.disabled = True
 
-        # Draw button with disabled state styling
-        if btn.disabled:
-            # Grey out the button
-            btn.draw()
-            grey_overlay = pygame.Surface((btn.rect.width, btn.rect.height), pygame.SRCALPHA)
-            grey_overlay.fill((0, 0, 0, 140))
-            self.window.blit(grey_overlay, btn.rect.topleft)
-        else:
-            btn.draw()
+        # Draw button (themed _DlgButton handles disabled styling internally)
+        btn.draw()
 
     def _handle_card_picker_events(self, events):
         """Handle events for the card picker overlay. Returns True if events were consumed."""

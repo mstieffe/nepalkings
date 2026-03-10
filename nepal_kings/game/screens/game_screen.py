@@ -20,8 +20,9 @@ from game.components.figures.figure_manager import FigureManager
 
 
 class GameScreen(Screen):
-    def __init__(self, state):
+    def __init__(self, state, progress_callback=None):
         super().__init__(state)
+        _report = progress_callback or (lambda f, l=None: None)
         
         # Store reference to game_screen in state for button access
         self.state.parent_screen = self
@@ -39,13 +40,16 @@ class GameScreen(Screen):
         self._battle_unseen_count = 0
         self._last_seen_battle_round = None  # (battle_round, battle_turn_player_id) snapshot
 
+        _report(0.05, 'Loading figures …')
         # Initialize figure manager
         self.figure_manager = FigureManager()
 
+        _report(0.12, 'Loading cards …')
         # Initialize hands for the game (main and side hands)
         self.main_hand = Hand(self.window, self.state.game, x=settings.MAIN_HAND_X, y=settings.MAIN_HAND_Y)
         self.side_hand = Hand(self.window, self.state.game, x=settings.SIDE_HAND_X, y=settings.SIDE_HAND_Y, type="side_card")
 
+        _report(0.20, 'Loading buttons …')
         # Initialize buttons and add to the game_buttons list
         self.initialize_buttons()
         self.initialize_state_buttons()
@@ -54,17 +58,28 @@ class GameScreen(Screen):
         self.initialiaze_scoareboard_scroll()
         self.initialize_info_scroll()
 
+        _report(0.30, 'Loading playing field …')
         # Define which screen is visible, allowing flexibility in switching between subscreens
-        #self.active_subscreen = 'build_figure'
-        self.subscreens = {
-            'field': FieldScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Playing Board'),
-            'build_figure': BuildFigureScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Figure Builder'),
-            'cast_spell': CastSpellScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Spell Book'),
-            'log': LogScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Log-Book'),
-            'tutorial': GuideBookScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Guide Book'),
-            'battle': BattleScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Arena'),
-            'battle_shop': BattleShopScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Shop'),
-        }
+        self.subscreens = {}
+        self.subscreens['field'] = FieldScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Playing Board')
+
+        _report(0.40, 'Loading figure builder …')
+        self.subscreens['build_figure'] = BuildFigureScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Figure Builder')
+
+        _report(0.50, 'Loading spell book …')
+        self.subscreens['cast_spell'] = CastSpellScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Spell Book')
+
+        _report(0.55, 'Loading log book …')
+        self.subscreens['log'] = LogScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Log-Book')
+
+        _report(0.60, 'Loading guide book …')
+        self.subscreens['tutorial'] = GuideBookScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Guide Book')
+
+        _report(0.70, 'Loading battle arena …')
+        self.subscreens['battle'] = BattleScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Arena')
+
+        _report(0.80, 'Loading battle shop …')
+        self.subscreens['battle_shop'] = BattleShopScreen(self.window, self.state, x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y, title='Battle Shop')
         
         # Track previous subscreen to detect changes
         self.previous_subscreen = None
@@ -81,10 +96,12 @@ class GameScreen(Screen):
         self._cached_castable_spells = None  # Cached castable spells for current pending spell
         self._pending_spell_fetch_ready = False  # Flag: background fetch completed
         
+        _report(0.88, 'Loading spells …')
         # Pre-create SpellManager so spell images are loaded at startup, not on first counter-spell
         from game.components.spells.spell_manager import SpellManager
         self._cached_spell_manager = SpellManager()
         
+        _report(0.94, 'Loading battle modifiers …')
         # Battle modifier icon cache (loaded once at init)
         self._battle_modifier_icons = {}
         self._load_battle_modifier_icons()

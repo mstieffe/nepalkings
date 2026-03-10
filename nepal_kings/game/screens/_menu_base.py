@@ -162,14 +162,21 @@ class MenuScreenMixin:
         self._gold_icon = pygame.transform.smoothscale(raw_gold, (sz, sz))
         self._gold_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_MENU_GOLD_FONT_SIZE)
 
-        # Icon buttons (top-right)
+        # Icon buttons (top-right): home | logout
         stone_sz = settings.GAME_MENU_ICON_STONE_SZ
+        gap      = settings.GAME_MENU_ICON_GAP
         logout_x = _SW - settings.GAME_MENU_ICON_RIGHT_MARGIN - stone_sz
-        home_x   = logout_x - settings.GAME_MENU_ICON_GAP - stone_sz
+        home_x   = logout_x - gap - stone_sz
 
         self._icon_home   = _MenuIconButton(self.window, home_x,   settings.GAME_MENU_ICON_TOP_Y, 'home',   'home')
         self._icon_logout = _MenuIconButton(self.window, logout_x, settings.GAME_MENU_ICON_TOP_Y, 'logout', 'logout')
-        self._icon_buttons = [self._icon_home, self._icon_logout]
+
+        # Settings icon (bottom-right)
+        settings_x = _SW - settings.GAME_MENU_ICON_RIGHT_MARGIN - stone_sz
+        settings_y = _SH - settings.GAME_MENU_ICON_RIGHT_MARGIN - stone_sz
+        self._icon_settings = _MenuIconButton(self.window, settings_x, settings_y, 'settings', 'settings')
+
+        self._icon_buttons = [self._icon_settings, self._icon_home, self._icon_logout]
 
     # ── draw helpers ────────────────────────────────────────────────
 
@@ -234,6 +241,9 @@ class MenuScreenMixin:
             self._update_logout_dialogue([event])
             return True
         if event.type == pygame.MOUSEBUTTONUP:
+            if self._icon_settings.collide():
+                self.state.screen = 'settings'
+                return True
             if self._icon_home.collide():
                 self.state.screen = 'game_menu'
                 return True

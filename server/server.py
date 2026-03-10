@@ -2,12 +2,8 @@
 from flask import Flask
 from models import db
 import logging
-
-#import os
-#import sys
-#project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-#if project_root not in sys.path:
-#    sys.path.insert(0, project_root)
+import signal
+import sys
 
 import server_settings as settings
 from routes import games, challenges, auth, msg, figures, spells, battle_shop
@@ -22,6 +18,16 @@ battle_shop.settings = settings
 
 app = Flask(__name__)
 
+# ── Logging configuration ──
+# Set up a proper logger so route files can use logging.info/warning/error
+# instead of print(), which avoids unbounded stdout buffer growth.
+logging.basicConfig(
+    level=logging.DEBUG if settings.DEBUG_ENABLED else logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S',
+)
+logger = logging.getLogger('nepalkings')
+
 # Disable Flask's default request logging
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)  # Only show errors, not every request
@@ -32,6 +38,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,
     'pool_recycle': 300,
+    'pool_size': 5,           # Max persistent connections
+    'max_overflow': 2,        # Extra connections beyond pool_size
+    'pool_timeout': 10,       # Seconds to wait for a connection before error
     'connect_args': {
         'timeout': 30,
         'check_same_thread': False  # Important for SQLite with Flask
@@ -69,6 +78,18 @@ with app.app_context():
     
     print("✅ Database initialized")
 
+# ── Session cleanup on every request teardown ──
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    """Ensure the DB session is properly closed after every request.
+    
+    This prevents leaked connections from accumulating over time,
+    which is the main cause of slow server shutdown.
+    """
+    if exception:
+        db.session.rollback()
+    db.session.remove()
+
 # Register Blueprints
 app.register_blueprint(games, url_prefix='/games')
 app.register_blueprint(challenges, url_prefix='/challenges')
@@ -79,6 +100,17 @@ app.register_blueprint(spells, url_prefix='/spells')
 app.register_blueprint(battle_shop, url_prefix='/battle_shop')
 
 if __name__ == '__main__':
+    def _graceful_shutdown(signum, frame):
+        """Handle SIGINT/SIGTERM quickly by closing the DB engine."""
+        print("\n🛑 Shutting down server...")
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+
     try:
         with app.app_context():
             db.create_all()

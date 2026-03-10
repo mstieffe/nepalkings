@@ -816,6 +816,13 @@ class FigureDetailBox:
             
             right_y += self.resource_icons[list(self.resource_icons.keys())[0]].get_height() + settings.SMALL_SPACER_Y * 1.5
 
+            # Draw deficit warning if any resource is in deficit
+            if has_any_deficit and right_y + self.small_font.get_height() <= max_content_y:
+                warn_color = (220, 60, 60)  # red
+                warn_surface = self.small_font.render("Resource deficit - figure cannot fight or produce", True, warn_color)
+                self.window.blit(warn_surface, (right_column_x + settings.SMALL_SPACER_X, right_y))
+                right_y += warn_surface.get_height() + settings.SMALL_SPACER_Y
+
         # Draw skills section
         from game.components.figures.family_configs.skill_config import SKILL_KEYS, SKILL_DEFINITIONS as _SKILL_DEFS
         skills_to_display = []

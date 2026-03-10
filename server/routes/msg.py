@@ -33,6 +33,7 @@ def add_log_entry():
         return jsonify({'success': True, 'message': 'Log entry added successfully', 'log_entry': log_entry.serialize()})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Failed to add log entry: {str(e)}'}), 400
 
 @msg.route('/get_log_entries', methods=['GET'])
@@ -48,6 +49,7 @@ def get_log_entries():
         return jsonify({'success': True, 'log_entries': [entry.serialize() for entry in log_entries]})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Failed to get log entries: {str(e)}'}), 400
 
 
@@ -72,6 +74,7 @@ def add_chat_message():
         return jsonify({'success': True, 'message': 'Chat message sent successfully', 'chat_message': chat_message.serialize()})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Failed to send chat message: {str(e)}'}), 400
 
 
@@ -88,4 +91,5 @@ def get_chat_messages():
         return jsonify({'success': True, 'chat_messages': [message.serialize() for message in chat_messages]})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Failed to get chat messages: {str(e)}'}), 400

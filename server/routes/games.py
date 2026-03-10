@@ -3,7 +3,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import random
 from datetime import datetime
-from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, BattleMove, ActiveSpell, GameResult
+from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
 from game_service.deck_manager import DeckManager
 
 import server_settings as settings
@@ -755,6 +755,7 @@ def get_games():
             'games': [game.serialize() for game in games]
         })
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
 
 
@@ -774,6 +775,7 @@ def get_game():
             'game': game.serialize()
         })
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
 
 
@@ -841,6 +843,7 @@ def start_turn():
         })
 
     except Exception as e:
+        db.session.rollback()
         print(f"[START_TURN] Exception occurred: {str(e)}")
         import traceback
         traceback.print_exc()
@@ -984,6 +987,7 @@ def create_game():
         })
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Failed to create game: {str(e)}'}), 400
 
 
@@ -993,14 +997,25 @@ def delete_game():
         game_id = request.form.get('game_id')
         game = Game.query.options(joinedload('players').joinedload('main_hand')).get(game_id)
 
-        # Delete all related cards (main and side)
-        cards = MainCard.query.filter_by(game_id=game.id).all()
-        for card in cards:
-            db.session.delete(card)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-        cards = SideCard.query.filter_by(game_id=game.id).all()
-        for card in cards:
-            db.session.delete(card)
+        # Delete all related records to avoid orphaned rows
+        BattleMove.query.filter_by(game_id=game.id).delete()
+        ActiveSpell.query.filter_by(game_id=game.id).delete()
+        GameResult.query.filter_by(game_id=game.id).delete()
+        LogEntry.query.filter_by(game_id=game.id).delete()
+        ChatMessage.query.filter_by(game_id=game.id).delete()
+
+        # Delete figures and their card-to-figure links
+        figures = Figure.query.filter_by(game_id=game.id).all()
+        for fig in figures:
+            CardToFigure.query.filter_by(figure_id=fig.id).delete()
+            db.session.delete(fig)
+
+        # Delete all related cards (main and side)
+        MainCard.query.filter_by(game_id=game.id).delete()
+        SideCard.query.filter_by(game_id=game.id).delete()
 
         # Delete all related players
         for player in game.players:
@@ -1012,6 +1027,7 @@ def delete_game():
         # Commit the changes to the database
         db.session.commit()
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
 
     return jsonify({'success': True, 'message': 'Game deleted successfully'})
@@ -1032,6 +1048,7 @@ def get_hand():
             'side_hand': [card.serialize() for card in side_cards]
         })
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
 
 
@@ -1059,6 +1076,7 @@ def draw_cards():
         })
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Failed to draw cards, Error: {str(e)}'}), 400
 
 
@@ -1085,6 +1103,7 @@ def return_cards():
             'message': 'Cards successfully returned to the deck'
         })
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Failed to return cards, Error: {str(e)}'}), 400
     
 @games.route('/change_cards', methods=['POST'])
@@ -1140,6 +1159,7 @@ def change_cards():
         return jsonify({'success': True, 'new_cards': [card.serialize() for card in new_cards], 'turns_left': player.turns_left})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f"Failed to change cards: {str(e)}"}), 400
 
 
@@ -1182,6 +1202,7 @@ def discard_cards():
         return jsonify({'success': True})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f"Failed to discard cards: {str(e)}"}), 400
 
 
@@ -1202,6 +1223,7 @@ def update_points():
         return jsonify({'success': True, 'points': player.points})
 
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f"Failed to update points: {str(e)}"}), 400
 
 
@@ -3205,4 +3227,5 @@ def game_results():
             'results': [r.serialize() for r in results],
         })
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'message': f'Error fetching results: {str(e)}'}), 400

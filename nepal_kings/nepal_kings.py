@@ -5,9 +5,11 @@ from game.screens.game_menu_screen import GameMenuScreen
 from game.screens.new_game_screen import NewGameScreen
 from game.screens.load_game_screen import LoadGameScreen
 from game.screens.ranking_screen import RankingScreen
+from game.screens.settings_screen import SettingsScreen
 from game.screens.game_screen import GameScreen
 from game.core.state import State
 from config import settings
+import os
 #import sys
 #import requests
 
@@ -18,6 +20,11 @@ class Client:
         self.running = True
 
         self.state = State()
+
+        # Capture native desktop resolution BEFORE creating the game window
+        _info = pygame.display.Info()
+        self.state.native_screen_w = _info.current_w
+        self.state.native_screen_h = _info.current_h
 
         # ── Loading screen with progress bar ────────────────────────
         _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
@@ -45,17 +52,20 @@ class Client:
         status_clr     = (200, 185, 150)
 
         # Screen constructors in load order
+        # weight = relative time cost (used for smooth progress)
         screen_steps = [
-            ('login',     'Loading login …',      LoginScreen),
-            ('game_menu', 'Loading menu …',        GameMenuScreen),
-            ('new_game',  'Loading new game …',    NewGameScreen),
-            ('load_game', 'Loading load game …',   LoadGameScreen),
-            ('rankings',  'Loading rankings …',    RankingScreen),
-            ('game',      'Loading game …',        GameScreen),
+            ('login',     'Loading login …',      LoginScreen,    1),
+            ('game_menu', 'Loading menu …',        GameMenuScreen, 1),
+            ('new_game',  'Loading new game …',    NewGameScreen,  1),
+            ('load_game', 'Loading load game …',   LoadGameScreen, 1),
+            ('rankings',  'Loading rankings …',    RankingScreen,  1),
+            ('settings',  'Loading settings …',    SettingsScreen, 1),
+            ('game',      'Loading game …',        GameScreen,    12),
         ]
-        total = len(screen_steps)
+        total_weight = sum(w for *_, w in screen_steps)
 
-        def draw_progress(step_index, label):
+        def draw_progress(fraction, label):
+            """Draw the progress bar.  fraction is 0.0 – 1.0."""
             surf = pygame.display.get_surface()
             surf.blit(bg, (0, 0))
             # Title
@@ -70,7 +80,7 @@ class Client:
             pygame.draw.rect(surf, bar_bg_clr,
                              (bar_x, bar_y, bar_w, bar_h), border_radius=4)
             # Bar fill
-            fill_w = int(bar_w * (step_index / total))
+            fill_w = int(bar_w * min(fraction, 1.0))
             if fill_w > 0:
                 pygame.draw.rect(surf, bar_fill_clr,
                                  (bar_x, bar_y, fill_w, bar_h), border_radius=4)
@@ -82,12 +92,25 @@ class Client:
             pygame.event.pump()
 
         self.screens = {}
-        for i, (key, label, cls) in enumerate(screen_steps):
-            draw_progress(i, label)
-            self.screens[key] = cls(self.state)
-            draw_progress(i + 1, label)
+        weight_done = 0
+        for key, label, cls, weight in screen_steps:
+            frac_start = weight_done / total_weight
+            frac_end = (weight_done + weight) / total_weight
+            draw_progress(frac_start, label)
 
-        draw_progress(total, 'Ready')
+            # For heavy screens, pass a sub-progress callback
+            if weight > 1:
+                def _sub_progress(sub_frac, sub_label, _s=frac_start, _e=frac_end, _lbl=label):
+                    f = _s + (_e - _s) * sub_frac
+                    draw_progress(f, sub_label or _lbl)
+                self.screens[key] = cls(self.state, progress_callback=_sub_progress)
+            else:
+                self.screens[key] = cls(self.state)
+
+            weight_done += weight
+            draw_progress(frac_end, label)
+
+        draw_progress(1.0, 'Ready')
 
     def get_events(self):
         return pygame.event.get()
@@ -107,13 +130,24 @@ class Client:
     def run(self):
         while self.running:
             print(self.state.screen)
-            if self.state.screen in self.screens:
+            if self.state.screen == 'restart':
+                self._restart_game()
+                return
+            elif self.state.screen in self.screens:
                 #if self.state.screen == 'new_game':
                 #    self.screens['new_game'].update_users()
                 #    self.screens['new_game'] = NewGameScreen(self.state)
                 self.run_screen(self.state.screen)
             else:
                 self.running = False
+
+    @staticmethod
+    def _restart_game():
+        """Restart the process so the new resolution takes effect."""
+        import sys as _sys
+        pygame.quit()
+        python = _sys.executable
+        os.execv(python, [python] + _sys.argv)
             #elif self.state.screen == 'new_game':
             #    self.screens['new_game'] = NewGameScreen(self.state)
 

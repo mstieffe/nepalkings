@@ -31,6 +31,9 @@ class InfoScroll:
 
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
 
+        # Fixed pill width so values stay aligned regardless of digit count
+        self._pill_min_w = self.font_text.size("00/00")[0] + 2 * settings.INFO_SCROLL_TEXT_PADDING
+
         # Build the dark semi-transparent background panel
         self._build_panel()
         self.preloaded_icons = self._preload_icons()
@@ -69,15 +72,21 @@ class InfoScroll:
                          width=settings.INFO_SCROLL_BORDER_WIDTH, border_radius=r)
 
     def _draw_text_with_background(self, text, color, x, y, has_deficit=False):
-        """Render text with a colored background pill, using red border if deficit."""
+        """Render text with a fixed-width colored background pill, text centred."""
         text_color = (255, 255, 255)
         text_obj = self.font_text.render(text, True, text_color)
-        text_rect = text_obj.get_rect(topleft=(x, y - text_obj.get_height() // 2))
+        text_h = text_obj.get_height()
+
+        # Use a fixed minimum pill width so all rows stay aligned
+        natural_w = text_obj.get_width() + 2 * settings.INFO_SCROLL_TEXT_PADDING
+        pill_w = max(natural_w, self._pill_min_w)
+        pill_h = text_h + 2 * settings.INFO_SCROLL_TEXT_PADDING
+
         bg_rect = pygame.Rect(
-            text_rect.x - settings.INFO_SCROLL_TEXT_PADDING,
-            text_rect.y - settings.INFO_SCROLL_TEXT_PADDING,
-            text_rect.width + 2 * settings.INFO_SCROLL_TEXT_PADDING,
-            text_rect.height + 2 * settings.INFO_SCROLL_TEXT_PADDING
+            x - settings.INFO_SCROLL_TEXT_PADDING,
+            y - text_h // 2 - settings.INFO_SCROLL_TEXT_PADDING,
+            pill_w,
+            pill_h
         )
 
         # Draw pill background with rounded corners
@@ -89,6 +98,8 @@ class InfoScroll:
         if has_deficit:
             pygame.draw.rect(self.window, settings.INFO_SCROLL_DEFICIT_BORDER_CLR, bg_rect, 2, border_radius=3)
 
+        # Centre text horizontally within the pill
+        text_rect = text_obj.get_rect(center=bg_rect.center)
         self.window.blit(text_obj, text_rect)
 
     def draw_msg(self):
@@ -126,8 +137,9 @@ class InfoScroll:
                 red_color = settings.INFO_SCROLL_RED_PILL_CLR
                 black_color = settings.INFO_SCROLL_BLACK_PILL_CLR
                 
-                # Adjust green text position slightly to the left
+                # Fixed column positions for consistent alignment
                 red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
+                black_text_x = red_text_x + self._pill_min_w + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_ICON_SPACING
                 
                 self._draw_text_with_background(
                     red_text, red_color,
@@ -137,7 +149,7 @@ class InfoScroll:
                 )
                 self._draw_text_with_background(
                     black_text, black_color,
-                    icon_x + 2 * settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_ICON_SPACING + settings.INFO_SCROLL_TEXT_MARGIN,
+                    black_text_x,
                     text_y,
                     has_deficit=black_deficit
                 )
@@ -158,8 +170,9 @@ class InfoScroll:
                 red_color = settings.INFO_SCROLL_RED_PILL_CLR
                 black_color = settings.INFO_SCROLL_BLACK_PILL_CLR
                 
-                # Adjust green text position slightly to the left
+                # Fixed column positions for consistent alignment
                 red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
+                black_text_x = red_text_x + self._pill_min_w + settings.INFO_SCROLL_TEXT_MARGIN
                 
                 self._draw_text_with_background(
                     red_text, red_color,
@@ -169,7 +182,7 @@ class InfoScroll:
                 )
                 self._draw_text_with_background(
                     black_text, black_color,
-                    icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN + settings.INFO_SCROLL_TEXT_PADDING * 10,
+                    black_text_x,
                     text_y,
                     has_deficit=black_deficit
                 )

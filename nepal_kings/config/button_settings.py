@@ -154,12 +154,12 @@ SCROLL_CHEVRON_HOVER_COLOR = (250, 221, 0)         # bright gold on hover
 SCROLL_CHEVRON_LINE_W = max(2, int(0.003 * SCREEN_HEIGHT))
 
 # Custom scroll panel (replaces scroll.png) — warm brown tone
-SCROLL_PANEL_BG_CLR = (62, 44, 28, 230)          # warm dark brown
-SCROLL_PANEL_BORDER_CLR = (140, 105, 55)         # muted gold border
+SCROLL_PANEL_BG_CLR = (75, 55, 36, 230)           # warm brown (sits on parchment)
+SCROLL_PANEL_BORDER_CLR = (120, 85, 42)           # warm brown border (echoes frame)
 SCROLL_PANEL_BORDER_WIDTH = 2
 SCROLL_PANEL_CORNER_R = int(0.008 * SCREEN_HEIGHT)
-SCROLL_PANEL_INNER_CLR = (52, 38, 24, 160)       # subtle inner shadow/gradient
-SCROLL_PANEL_PAD = int(0.006 * SCREEN_HEIGHT)     # inner padding
+SCROLL_PANEL_INNER_CLR = (62, 46, 30, 170)        # subtle inner depth
+SCROLL_PANEL_PAD = int(0.006 * SCREEN_HEIGHT)      # inner padding
 
 # Color toggle pill buttons (replaces image-based buttons)
 COLOR_TOGGLE_W = int(0.075 * SCREEN_WIDTH)

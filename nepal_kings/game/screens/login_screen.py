@@ -242,6 +242,15 @@ class LoginScreen(Screen):
         if response_data['success']:
             self.state.user_dict = response_data.get('user')
             self.state.game = None
+            # Store when the user was last online (for offline-aware badges)
+            self.state._last_seen_at = response_data.get('previous_last_active')
+            # Reset badge tracking so first poll uses _last_seen_at
+            self.state._known_game_ids = None
+            self.state._known_challenge_ids = None
+            self.state._new_game_ids = set()
+            self.state._new_challenge_ids = set()
+            self.state.badge_new_games = 0
+            self.state.badge_new_challenges = 0
             self.state.screen = "game_menu"
         else:
             self.field_username.empty()
@@ -256,6 +265,14 @@ class LoginScreen(Screen):
         if response_data['success']:
             self.state.user_dict = response_data.get('user')
             self.state.game = None
+            # New user — no previous session
+            self.state._last_seen_at = None
+            self.state._known_game_ids = None
+            self.state._known_challenge_ids = None
+            self.state._new_game_ids = set()
+            self.state._new_challenge_ids = set()
+            self.state.badge_new_games = 0
+            self.state.badge_new_challenges = 0
             self.state.screen = "game_menu"
         else:
             self.field_username.empty()

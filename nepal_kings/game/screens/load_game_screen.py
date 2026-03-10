@@ -1,5 +1,6 @@
 import pygame
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
@@ -28,11 +29,21 @@ _ROW_GAP     = int(0.006 * _SH)
 _HEADER_H    = int(0.040 * _SH)
 
 _COL_DEFS = [
-    ('Opponent',   0.00, 0.28),
-    ('Duration',   0.28, 0.28),
-    ('Stake',      0.56, 0.20),
-    ('Turn Limit', 0.76, 0.24),
+    ('Opponent',   0.00, 0.19),
+    ('Round',      0.19, 0.10),
+    ('Score',      0.29, 0.14),
+    ('Duration',   0.43, 0.17),
+    ('Stake',      0.60, 0.12),
+    ('Turn Limit', 0.72, 0.14),
+    ('',           0.86, 0.14),   # "your turn" / NEW column
 ]
+
+# NEW tag colours
+_NEW_TAG_BG  = (180, 140, 40)
+_NEW_TAG_TXT = (30, 28, 24)
+
+# "Your turn" tag colour
+_TURN_TAG_CLR = (90, 200, 110)
 
 # Scrollbar
 _SCROLLBAR_W   = int(0.006 * _SW)
@@ -55,9 +66,28 @@ def _draw_panel(window, rect, corner_r=None):
                      settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
 
 
+def _parse_date(date_str):
+    """Parse ISO or HTTP-date string into a naive datetime."""
+    if not date_str:
+        return None
+    for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f',
+                '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f'):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except (ValueError, TypeError):
+            continue
+    try:
+        return parsedate_to_datetime(date_str).replace(tzinfo=None)
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
 def _duration_str(date_str):
     try:
-        start = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+        start = _parse_date(str(date_str))
+        if not start:
+            return str(date_str)
         delta = datetime.now() - start
         days = delta.days
         hours = delta.seconds // 3600
@@ -96,6 +126,8 @@ class LoadGameScreen(MenuScreenMixin, Screen):
 
         self._hdr_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._cell_font = pygame.font.Font(settings.FONT_PATH, settings.LIST_BTN_FONT_SIZE)
+        self._tag_font = pygame.font.Font(settings.FONT_PATH, int(0.016 * _SH))
+        self._tag_font.set_bold(True)
 
         # Compute fixed layout positions inside the box
         self._title_render_y = _TITLE_Y
@@ -219,16 +251,42 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             txt_clr = settings.LIST_BTN_TEXT_HOVER_CLR if is_hover else settings.LIST_BTN_TEXT_CLR
             text_y = rect.y + (rect.h - self._cell_font.get_height()) // 2
 
+            # --- Build per-column text ---
+            my_score = game.current_player.get('points', 0) if game.current_player else 0
+            opp_score = game.opponent_player.get('points', 0) if game.opponent_player else 0
+
             cells = [
                 game.opponent_name or '—',
+                f"Rd {game.current_round}",
+                f"{my_score} – {opp_score}",
                 _duration_str(game.date),
                 f"{game.stake} gold",
-                f"{game.turn_time_limit // 60} min" if game.turn_time_limit else "No Limit",
+                f"{game.turn_time_limit // 60} min" if game.turn_time_limit else "No limit",
             ]
             for idx, text in enumerate(cells):
                 surf = self._cell_font.render(text, True, txt_clr)
                 x_off = cell_pad + (int(0.018 * _SW) if idx == 0 else 0)
                 self.window.blit(surf, (self._col_x(idx) + x_off, text_y))
+
+            # --- Status column (last): "Your turn" or "NEW" tag ---
+            status_x = self._col_x(len(_COL_DEFS) - 1) + cell_pad
+            is_my_turn = (game.turn_player_id == game.player_id)
+            is_new = game.game_id in self.state._new_game_ids
+
+            if is_new:
+                tag_text = 'NEW'
+                tag_surf = self._tag_font.render(tag_text, True, _NEW_TAG_TXT)
+                tw, th = tag_surf.get_size()
+                pad_x, pad_y = int(0.006 * _SW), int(0.003 * _SH)
+                tag_rect = pygame.Rect(status_x, rect.centery - (th + 2 * pad_y) // 2,
+                                       tw + 2 * pad_x, th + 2 * pad_y)
+                tag_bg = pygame.Surface((tag_rect.w, tag_rect.h), pygame.SRCALPHA)
+                pygame.draw.rect(tag_bg, _NEW_TAG_BG, tag_bg.get_rect(), border_radius=4)
+                self.window.blit(tag_bg, tag_rect.topleft)
+                self.window.blit(tag_surf, (tag_rect.x + pad_x, tag_rect.y + pad_y))
+            elif is_my_turn:
+                turn_surf = self._cell_font.render("Your turn", True, _TURN_TAG_CLR)
+                self.window.blit(turn_surf, (status_x, text_y))
 
             # Online dot next to opponent name
             dot_clr = _DOT_ONLINE if getattr(game, 'opponent_online', False) else _DOT_OFFLINE

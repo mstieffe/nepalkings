@@ -17,6 +17,7 @@ def get_users():
 
         return jsonify({'users': serialized_users})
     except Exception as e:
+        db.session.rollback()
         logging.error(f"Error fetching users: {e}")
         return jsonify({'success': False, 'message': 'An error occurred while fetching users'}), 500
 
@@ -33,6 +34,7 @@ def get_user():
 
         return jsonify({'success': True, 'user': serialized_user})
     except Exception as e:
+        db.session.rollback()
         logging.error(f"Error fetching user: {e}")
         return jsonify({'success': False, 'message': 'An error occurred while fetching the user'}), 500
 
@@ -57,6 +59,7 @@ def register():
 
         return jsonify({'success': True, 'message': 'Registration successful', 'user': serialized_user})
     except Exception as e:
+        db.session.rollback()
         logging.error(f"Registration failed: {e}")
         return jsonify({'success': False, 'message': 'Registration failed. Please try again later.'}), 500
 
@@ -75,13 +78,21 @@ def login():
         if not user or not check_password_hash(user.password_hash, password):
             return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
 
+        # Capture the previous last_active before updating (for offline-badge detection)
+        previous_last_active = user.last_active
         user.last_active = datetime.utcnow()
         db.session.commit()
 
         serialized_user = user.serialize()
 
-        return jsonify({'success': True, 'message': 'Login successful', 'user': serialized_user})
+        return jsonify({
+            'success': True,
+            'message': 'Login successful',
+            'user': serialized_user,
+            'previous_last_active': previous_last_active.isoformat() if previous_last_active else None,
+        })
     except Exception as e:
+        db.session.rollback()
         logging.error(f"Login failed: {e}")
         return jsonify({'success': False, 'message': 'Login failed. Please try again later.'}), 500
 
@@ -98,6 +109,7 @@ def heartbeat():
         db.session.commit()
         return jsonify({'success': True})
     except Exception as e:
+        db.session.rollback()
         logging.error(f"Heartbeat failed: {e}")
         return jsonify({'success': False, 'message': 'Heartbeat failed'}), 500
 
@@ -134,5 +146,6 @@ def get_rankings():
             })
         return jsonify({'success': True, 'rankings': rankings})
     except Exception as e:
+        db.session.rollback()
         logging.error(f"Rankings failed: {e}")
         return jsonify({'success': False, 'message': 'Failed to fetch rankings'}), 500
