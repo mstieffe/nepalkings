@@ -99,6 +99,51 @@ LOG_BTN_TEXT_CLR = (180, 175, 160)
 LOG_BTN_TEXT_ACTIVE_CLR = (250, 221, 0)
 LOG_BTN_BORDER_W = 1
 
+# Log entry icon settings
+LOG_ICON_SIZE = int(0.019 * SCREEN_HEIGHT)
+LOG_ICON_PAD = int(0.005 * SCREEN_WIDTH)
+
+# Map log entry type → icon image path
+LOG_ICON_TYPE_MAP = {
+    # Build phase
+    'card_changed': 'img/game_button/symbol/round_arrow_active.png',
+    'card_discard': 'img/game_button/symbol/round_arrow_active.png',
+    'figure_built': 'img/game_button/symbol/hammer_active.png',
+    'figure_pickup': 'img/game_button/symbol/hammer_active.png',
+    'figure_upgraded': 'img/game_button/symbol/hammer_active.png',
+    'figure_destroyed': 'img/game_button/symbol/hammer_active.png',
+    # Spells
+    'spell_cast': 'img/dialogue_box/icons/magic.png',
+    'spell_cast_pending': 'img/dialogue_box/icons/magic.png',
+    'spell_countered': 'img/dialogue_box/icons/magic.png',
+    'spell_allowed': 'img/dialogue_box/icons/magic.png',
+    'spell_end': 'img/dialogue_box/icons/magic.png',
+    # Battle
+    'battle_move': 'img/game_button/symbol/battle_active.png',
+    'battle_start': 'img/game_button/symbol/battle_active.png',
+    'battle_decision': 'img/game_button/symbol/battle_active.png',
+    'battle_skip': 'img/game_button/symbol/battle_active.png',
+    'battle_win': 'img/dialogue_box/icons/victory_small.png',
+    'battle_draw': 'img/dialogue_box/icons/draw.png',
+    'fold_win': 'img/dialogue_box/icons/victory_small.png',
+    'auto_loss': 'img/dialogue_box/icons/defeat_small.png',
+    'deficit_loss': 'img/dialogue_box/icons/defeat_small.png',
+    'advance': 'img/game_button/symbol/battle_active.png',
+    'counter_advance': 'img/game_button/symbol/battle_active.png',
+    'civil_war_skip': 'img/dialogue_box/icons/magic.png',
+    'game_over': 'img/dialogue_box/icons/gold.png',
+}
+
+# Battle move family name → specific icon (resolved for type='battle_move')
+LOG_BATTLE_MOVE_ICON_MAP = {
+    'Call Villager': 'img/battle/icons/village.png',
+    'Call Military': 'img/battle/icons/military.png',
+    'Call King': 'img/battle/icons/castle.png',
+    'Block': 'img/battle/icons/block.png',
+    'Dagger': 'img/battle/icons/dagger.png',
+    'Double Dagger': 'img/battle/icons/double_dagger.png',
+}
+
 # Chat input field styling (dark-themed)
 LOG_INPUT_BG_CLR = (35, 33, 30, 200)
 LOG_INPUT_BG_ACTIVE_CLR = (45, 42, 38, 220)

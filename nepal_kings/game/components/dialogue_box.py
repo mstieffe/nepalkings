@@ -128,27 +128,16 @@ class DialogueBox:
             original_icon = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT[icon]
             self.icon = self.scale_icon(original_icon)
 
-        # Wrap message
-        wrap_width = (settings.DIALOGUE_BOX_WIDTH - int(0.06 * _SW)) // max(1, self.font.size(' ')[0])
-        self.lines = []
-        for paragraph in self.message.split('\n'):
-            if paragraph.strip():
-                wrapped = textwrap.wrap(paragraph, width=wrap_width)
-                self.lines.extend(wrapped if wrapped else [''])
-            else:
-                self.lines.append('')
+        # Wrap message (pixel-based to prevent overflow)
+        _max_text_w = settings.DIALOGUE_BOX_WIDTH - int(0.08 * _SW)
+        self.lines = self._wrap_text(self.message, self.font, _max_text_w)
         self.lines_surfaces = [self.font.render(l, True,
                                settings.DIALOGUE_BOX_MSG_TEXT_CLR) for l in self.lines]
 
         # Wrap after-images text
         self.after_lines = []
         if self.message_after_images:
-            for paragraph in self.message_after_images.split('\n'):
-                if paragraph.strip():
-                    wrapped = textwrap.wrap(paragraph, width=wrap_width)
-                    self.after_lines.extend(wrapped if wrapped else [''])
-                else:
-                    self.after_lines.append('')
+            self.after_lines = self._wrap_text(self.message_after_images, self.font, _max_text_w)
         self.after_lines_surfaces = [self.font.render(l, True,
                                      settings.DIALOGUE_BOX_MSG_TEXT_CLR) for l in self.after_lines]
 
@@ -242,6 +231,28 @@ class DialogueBox:
         ratio = settings.DIALOGUE_BOX_ICON_HEIGHT / ih
         nw = int(iw * ratio)
         return pygame.transform.smoothscale(icon, (nw, settings.DIALOGUE_BOX_ICON_HEIGHT))
+
+    @staticmethod
+    def _wrap_text(text, font, max_width):
+        """Word-wrap *text* so no rendered line exceeds *max_width* pixels."""
+        lines = []
+        for paragraph in text.split('\n'):
+            if not paragraph.strip():
+                lines.append('')
+                continue
+            words = paragraph.split()
+            current_line = []
+            for word in words:
+                test_line = ' '.join(current_line + [word])
+                if font.size(test_line)[0] <= max_width:
+                    current_line.append(word)
+                else:
+                    if current_line:
+                        lines.append(' '.join(current_line))
+                    current_line = [word]
+            if current_line:
+                lines.append(' '.join(current_line))
+        return lines if lines else ['']
 
     # ── draw ────────────────────────────────────────────────────────
 

@@ -23,22 +23,16 @@ class InfoScroll:
         self.height = height
         self.title = title
         self.text_df = text_df
-        self.bg_img_path = bg_img_path
+        self.bg_img_path = bg_img_path  # kept for API compat, no longer used
 
         self.font_title = self._load_font(settings.INFO_SCROLL_FONT_SIZE, bold=True)
         self.font_col_names = self._load_font(settings.INFO_SCROLL_FONT_SIZE, italic=True)
         self.font_text = self._load_font(settings.INFO_SCROLL_FONT_SIZE)
 
-        self.rect_glow_black = self._load_scaled_image(
-            settings.GLOW_RECT_IMG_PATH + 'black.png', width * 1.2, height * 1.2
-        )
-        self.rect_glow_yellow = self._load_scaled_image(
-            settings.GLOW_RECT_IMG_PATH + 'yellow.png', width * 1.2, height * 1.2
-        )
-
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
 
-        self.background = self._load_scaled_image(bg_img_path, self.width, self.height)
+        # Build the dark semi-transparent background panel
+        self._build_panel()
         self.preloaded_icons = self._preload_icons()
 
     def _load_font(self, size, bold=False, italic=False):
@@ -64,9 +58,18 @@ class InfoScroll:
                     )
         return preloaded_icons
 
+    def _build_panel(self):
+        """Build the dark semi-transparent background panel surface."""
+        r = settings.INFO_SCROLL_CORNER_R
+        self._panel = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        pygame.draw.rect(self._panel, settings.INFO_SCROLL_BG_CLR,
+                         (0, 0, self.width, self.height), border_radius=r)
+        pygame.draw.rect(self._panel, settings.INFO_SCROLL_BORDER_CLR,
+                         (0, 0, self.width, self.height),
+                         width=settings.INFO_SCROLL_BORDER_WIDTH, border_radius=r)
+
     def _draw_text_with_background(self, text, color, x, y, has_deficit=False):
-        """Render text with a colored background, using red border if deficit."""
-        # Use bright white for all text
+        """Render text with a colored background pill, using red border if deficit."""
         text_color = (255, 255, 255)
         text_obj = self.font_text.render(text, True, text_color)
         text_rect = text_obj.get_rect(topleft=(x, y - text_obj.get_height() // 2))
@@ -76,22 +79,24 @@ class InfoScroll:
             text_rect.width + 2 * settings.INFO_SCROLL_TEXT_PADDING,
             text_rect.height + 2 * settings.INFO_SCROLL_TEXT_PADDING
         )
-        
-        # Draw background with original color
-        pygame.draw.rect(self.window, color, bg_rect)
-        
+
+        # Draw pill background with rounded corners
+        pill_surface = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(pill_surface, (*color, 220), (0, 0, bg_rect.width, bg_rect.height), border_radius=3)
+        self.window.blit(pill_surface, bg_rect.topleft)
+
         # Draw red border if deficit
         if has_deficit:
-            pygame.draw.rect(self.window, (220, 0, 0), bg_rect, 3)  # Darker red border, 3 pixels wide
-        
+            pygame.draw.rect(self.window, settings.INFO_SCROLL_DEFICIT_BORDER_CLR, bg_rect, 2, border_radius=3)
+
         self.window.blit(text_obj, text_rect)
 
     def draw_msg(self):
         """Render the title, table, and preloaded icons to the screen."""
         starting_y_position = self.y + settings.INFO_SCROLL_Y_TITLE_MARGIN
 
-        # Draw the title
-        text_obj = self.font_title.render(self.title, True, settings.INFO_SCROLL_TEXT_COLOR)
+        # Draw the title in gold
+        text_obj = self.font_title.render(self.title, True, settings.INFO_SCROLL_TITLE_COLOR)
         text_rect = text_obj.get_rect(centerx=self.x + self.width // 2, top=starting_y_position)
         self.window.blit(text_obj, text_rect)
         starting_y_position += settings.INFO_SCROLL_TITLE_SPACING
@@ -117,9 +122,9 @@ class InfoScroll:
                 red_deficit = row.get('red_deficit', False)
                 black_deficit = row.get('black_deficit', False)
                 
-                # Use darker green and blue colors
-                red_color = (0, 120, 0)  # Darker green for djungle/red suits
-                black_color = (0, 80, 180)  # Darker blue for himalaya/black suits
+                # Muted pill colours for dark theme
+                red_color = settings.INFO_SCROLL_RED_PILL_CLR
+                black_color = settings.INFO_SCROLL_BLACK_PILL_CLR
                 
                 # Adjust green text position slightly to the left
                 red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
@@ -149,9 +154,9 @@ class InfoScroll:
                 red_deficit = row.get('red_deficit', False)
                 black_deficit = row.get('black_deficit', False)
                 
-                # Use darker green and blue colors
-                red_color = (0, 120, 0)  # Darker green for djungle/red suits
-                black_color = (0, 80, 180)  # Darker blue for himalaya/black suits
+                # Muted pill colours for dark theme
+                red_color = settings.INFO_SCROLL_RED_PILL_CLR
+                black_color = settings.INFO_SCROLL_BLACK_PILL_CLR
                 
                 # Adjust green text position slightly to the left
                 red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
@@ -172,13 +177,18 @@ class InfoScroll:
             starting_y_position += settings.INFO_SCROLL_LINE_SPACING
 
     def draw(self):
-        """Draw the background and message to the screen."""
-        # Glow effect based on mouse hover
-        glow = self.rect_glow_yellow if self.collide() else self.rect_glow_black
-        self.window.blit(glow, (self.x - 0.1 * self.width, self.y - 0.1 * self.height))
+        """Draw the background panel and resource content."""
+        # Draw the dark semi-transparent panel
+        self.window.blit(self._panel, (self.x, self.y))
 
-        # Draw the background and the formatted message
-        self.window.blit(self.background, (self.x, self.y))
+        # Subtle gold highlight border on hover
+        if self.collide():
+            r = settings.INFO_SCROLL_CORNER_R
+            pygame.draw.rect(self.window, (250, 221, 0, 50),
+                             (self.x, self.y, self.width, self.height),
+                             width=2, border_radius=r)
+
+        # Draw the formatted resource data
         self.draw_msg()
 
     def collide(self):

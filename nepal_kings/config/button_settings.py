@@ -116,21 +116,68 @@ HOME_BUTTON_GLOW_WIDTH_BIG = int(0.07 * SCREEN_WIDTH)
 
 
 
-# ConfirmButton
-CONFIRM_BUTTON_IMG_PATH = 'img/button/confirm/confirm_button.png'
-CONFIRM_BUTTON_GLOW_DIR = 'img/glow/rect/'
+# ConfirmButton  (uses the same button art as the login menu)
+CONFIRM_BUTTON_IMG_PATH = 'img/menu_button/menu_button2.png'
+CONFIRM_BUTTON_IMG_DISABLED_PATH = 'img/menu_button/menu_button_greyscale.png'
+CONFIRM_BUTTON_GLOW_DIR = 'img/menu_button/glow/'
+CONFIRM_BUTTON_GLOW_W_FACTOR = 1.2
+CONFIRM_BUTTON_GLOW_H_FACTOR = 2.0
 CONFIRM_BUTTON_WIDTH = int(0.09 * SCREEN_WIDTH)
 CONFIRM_BUTTON_HEIGHT = int(0.04 * SCREEN_HEIGHT)
 
 CONFIRM_BUTTON_TEXT_COLOR_HOVERED = (20, 20, 20)
 CONFIRM_BUTTON_TEXT_COLOR_ACTIVE = (20, 20, 20)
 CONFIRM_BUTTON_TEXT_COLOR_PASSIVE = (240, 240, 240)
-CONFIRM_BUTTON_TEXT_COLOR_DISABLED = (60, 60, 60)
+CONFIRM_BUTTON_TEXT_COLOR_DISABLED = (160, 150, 140)
 
 CONFIRM_BUTTON_FONT_SIZE = int(0.03 * SCREEN_HEIGHT)
 CONFIRM_BUTTON_FONT_SIZE_SMALL = int(0.02 * SCREEN_HEIGHT)
 
 # ScrollTextListShifter
-SCROLL_TEXT_COLOR = (20, 20, 20)
-SCROLL_TEXT_MAX_WIDTH = int(0.11 * SCREEN_WIDTH)
+SCROLL_TEXT_COLOR = (240, 228, 205)             # warm cream on brown bg
+SCROLL_TEXT_TITLE_COLOR = (250, 221, 0)          # gold title
+SCROLL_TEXT_SECTION_COLOR = (220, 195, 155)      # muted warm for section headers
+SCROLL_TEXT_DIVIDER_COLOR = (140, 105, 65)       # warm brown divider
+SCROLL_TEXT_MAX_WIDTH = int(0.15 * SCREEN_WIDTH)  # wider to fill panel
+
+# Scroll font sizes (larger for readability)
+SCROLL_FONT_SIZE_TITLE = int(0.026 * SCREEN_HEIGHT)
+SCROLL_FONT_SIZE_BODY = int(0.022 * SCREEN_HEIGHT)
+SCROLL_FONT_SIZE_SMALL = int(0.019 * SCREEN_HEIGHT)
+SCROLL_ICON_SIZE = int(0.025 * SCREEN_HEIGHT)      # resource / check icons
+SCROLL_SKILL_ICON_SIZE = int(0.032 * SCREEN_HEIGHT) # skill icons (slightly larger)
+
+# Scroll chevron arrows (programmatic, replaces image-based arrows)
+SCROLL_CHEVRON_SIZE = int(0.014 * SCREEN_HEIGHT)   # half-size of the chevron
+SCROLL_CHEVRON_COLOR = (180, 155, 110)             # warm muted gold
+SCROLL_CHEVRON_HOVER_COLOR = (250, 221, 0)         # bright gold on hover
+SCROLL_CHEVRON_LINE_W = max(2, int(0.003 * SCREEN_HEIGHT))
+
+# Custom scroll panel (replaces scroll.png) — warm brown tone
+SCROLL_PANEL_BG_CLR = (62, 44, 28, 230)          # warm dark brown
+SCROLL_PANEL_BORDER_CLR = (140, 105, 55)         # muted gold border
+SCROLL_PANEL_BORDER_WIDTH = 2
+SCROLL_PANEL_CORNER_R = int(0.008 * SCREEN_HEIGHT)
+SCROLL_PANEL_INNER_CLR = (52, 38, 24, 160)       # subtle inner shadow/gradient
+SCROLL_PANEL_PAD = int(0.006 * SCREEN_HEIGHT)     # inner padding
+
+# Color toggle pill buttons (replaces image-based buttons)
+COLOR_TOGGLE_W = int(0.075 * SCREEN_WIDTH)
+COLOR_TOGGLE_H = int(0.035 * SCREEN_HEIGHT)
+COLOR_TOGGLE_CORNER_R = int(0.006 * SCREEN_HEIGHT)
+COLOR_TOGGLE_GAP = int(0.008 * SCREEN_WIDTH)
+COLOR_TOGGLE_FONT_SIZE = int(0.022 * SCREEN_HEIGHT)
+COLOR_TOGGLE_BG_CLR = (50, 38, 28, 180)           # dark brown
+COLOR_TOGGLE_BG_ACTIVE_CLR = (72, 52, 34, 220)    # lighter brown when active
+COLOR_TOGGLE_BG_HOVER_CLR = (80, 58, 38, 220)     # hover
+COLOR_TOGGLE_BORDER_CLR = (110, 85, 55)            # muted brown
+COLOR_TOGGLE_BORDER_ACTIVE_CLR = (200, 170, 70)    # gold when active (fallback)
+COLOR_TOGGLE_TEXT_CLR = (220, 210, 190)            # warm cream (readable on dark bg)
+COLOR_TOGGLE_TEXT_ACTIVE_CLR = (250, 221, 0)       # gold when active (fallback)
+
+# Per-colour accents for Djungle / Himalaya
+COLOR_TOGGLE_DJUNGLE_ACCENT = (80, 180, 80)        # green
+COLOR_TOGGLE_DJUNGLE_BG_ACTIVE = (35, 65, 35, 220) # dark green tint
+COLOR_TOGGLE_HIMALAYA_ACCENT = (80, 130, 210)      # blue
+COLOR_TOGGLE_HIMALAYA_BG_ACTIVE = (30, 45, 75, 220) # dark blue tint
 

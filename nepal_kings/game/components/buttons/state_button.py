@@ -89,13 +89,13 @@ class StateButton:
         self.clicked = False
         self.hovered = False
 
-        self.hover_text_active = hover_text_active  # Store the hover_text
-        self.hover_text_passive = hover_text_passive  # Store the hover_text
-        self.text_surface_active = self.font.render(self.hover_text_active, True, settings.STATE_BUTTON_TEXT_COLOR_ACTIVE)  # Prepare the text surface
-        self.text_surface_passive = self.font.render(self.hover_text_passive, True, settings.STATE_BUTTON_TEXT_COLOR_PASSIVE)  # Prepare the text surface
-        self.text_surface_shadow_active = self.font.render(self.hover_text_active, True, settings.STATE_BUTTON_TEXT_COLOR_SHADOW)  # Prepare the text surface
-        self.text_surface_shadow_passive = self.font.render(self.hover_text_passive, True, settings.STATE_BUTTON_TEXT_COLOR_SHADOW)  # Prepare the text surface
-        self.text_rect = self.text_surface_active.get_rect()  # Get the rectangle for positioning text
+        self.hover_text_active = hover_text_active
+        self.hover_text_passive = hover_text_passive
+
+        # Tooltip font (dedicated smaller size for pill)
+        self._tt_font = pygame.font.Font(settings.FONT_PATH, settings.TOOLTIP_FONT_SIZE)
+        self._tt_surf_active = self._tt_font.render(self.hover_text_active, True, settings.TOOLTIP_TEXT_COLOR)
+        self._tt_surf_passive = self._tt_font.render(self.hover_text_passive, True, settings.TOOLTIP_TEXT_COLOR)
 
         self.active = True
 
@@ -131,19 +131,47 @@ class StateButton:
                     self.window.blit(self.image_symbol_passive, self.rect_symbol.topleft)
     
     def draw_hover_text(self):
-        """Draw hover text on top of all buttons."""
-        if self.state.game and self.hovered:
-            mx, my = pygame.mouse.get_pos()
-            if self.active:
-                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.STATE_BUTTON_TEXT_SHIFT_Y -1)
-                self.window.blit(self.text_surface_shadow_active, self.text_rect)
-                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.STATE_BUTTON_TEXT_SHIFT_Y)
-                self.window.blit(self.text_surface_active, self.text_rect)
-            else:
-                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.STATE_BUTTON_TEXT_SHIFT_Y -1)
-                self.window.blit(self.text_surface_shadow_passive, self.text_rect)
-                self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.STATE_BUTTON_TEXT_SHIFT_Y)
-                self.window.blit(self.text_surface_passive, self.text_rect)
+        """Draw a styled tooltip pill anchored to the right of the icon."""
+        if not (self.state.game and self.hovered):
+            return
+
+        text_surf = self._tt_surf_active if self.active else self._tt_surf_passive
+        dot_clr = settings.TOOLTIP_DOT_ACTIVE_CLR if self.active else settings.TOOLTIP_DOT_PASSIVE_CLR
+
+        pad_x = settings.TOOLTIP_PAD_X
+        pad_y = settings.TOOLTIP_PAD_Y
+        dot_r = settings.TOOLTIP_DOT_RADIUS
+        dot_sp = settings.TOOLTIP_DOT_SPACING
+        corner_r = settings.TOOLTIP_CORNER_R
+
+        tw, th = text_surf.get_size()
+        pill_w = pad_x + dot_r * 2 + dot_sp + tw + pad_x
+        pill_h = th + pad_y * 2
+
+        # Anchor to the right of the icon centre
+        pill_x = self.x + settings.STATE_BUTTON_SYMBOL_WIDTH // 2 + settings.TOOLTIP_OFFSET_X
+        pill_y = self.y - pill_h // 2 + settings.TOOLTIP_OFFSET_Y
+
+        # Clamp to screen
+        pill_x = min(pill_x, settings.SCREEN_WIDTH - pill_w - 4)
+        pill_y = max(4, min(pill_y, settings.SCREEN_HEIGHT - pill_h - 4))
+
+        # Draw pill background
+        pill = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
+        pygame.draw.rect(pill, settings.TOOLTIP_BG_COLOR,
+                         (0, 0, pill_w, pill_h), border_radius=corner_r)
+        pygame.draw.rect(pill, settings.TOOLTIP_BORDER_COLOR,
+                         (0, 0, pill_w, pill_h),
+                         settings.TOOLTIP_BORDER_WIDTH, border_radius=corner_r)
+        self.window.blit(pill, (pill_x, pill_y))
+
+        # Draw status dot
+        dot_cx = pill_x + pad_x + dot_r
+        dot_cy = pill_y + pill_h // 2
+        pygame.draw.circle(self.window, dot_clr, (dot_cx, dot_cy), dot_r)
+
+        # Draw text
+        self.window.blit(text_surf, (pill_x + pad_x + dot_r * 2 + dot_sp, pill_y + pad_y))
 
     def update(self, state):
         self.state = state

@@ -8,6 +8,7 @@ from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
+from utils.utils import ColorTogglePill
 
 
 class BuildFigureScreen(SubScreen):
@@ -244,18 +245,15 @@ class BuildFigureScreen(SubScreen):
             self.figure_family_buttons[color] = buttons
 
     def init_color_buttons(self):
-        """Initialize color buttons."""
+        """Initialize colour toggle pill buttons."""
         colors = ['Djungle', 'Himalaya']
-        self.color_buttons = [
-            super(BuildFigureScreen, self).make_button(
-                color,
-                settings.BUILD_FIGURE_COLOR_BUTTON_X + settings.SUB_SCREEN_BUTTON_DELTA_X * i,
-                settings.BUILD_FIGURE_COLOR_BUTTON_Y,
-                button_img_active=settings.BUILD_FIGURE_COLOR_BUTTON_ACTIVE_IMG,
-                button_img_inactive=settings.BUILD_FIGURE_COLOR_BUTTON_INACTIVE_IMG
-            )
-            for i, color in enumerate(colors)
-        ]
+        start_x = settings.BUILD_FIGURE_COLOR_BUTTON_X
+        gap = settings.COLOR_TOGGLE_GAP
+        self.color_buttons = []
+        for i, color in enumerate(colors):
+            x = start_x + i * (settings.COLOR_TOGGLE_W + gap)
+            btn = ColorTogglePill(self.window, x, settings.BUILD_FIGURE_COLOR_BUTTON_Y, color)
+            self.color_buttons.append(btn)
         self.color_buttons[0].active = True
         self.buttons += self.color_buttons
 

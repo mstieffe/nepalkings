@@ -154,7 +154,10 @@ class FigureIcon:
                 text_surface = self.text_surface
                 text_rect = self.text_rect
 
-            # Calculate the rectangle for the background
+            # Draw background rectangle for text
+            padding = settings.FIGURE_NAME_PADDING
+            corner_r = settings.FIGURE_NAME_CORNER_R
+            shadow_off = settings.FIGURE_NAME_SHADOW_OFFSET
             bg_rect = pygame.Rect(
                 text_rect.x - padding,
                 text_rect.y - padding + y_offset,
@@ -162,11 +165,20 @@ class FigureIcon:
                 text_rect.height + 2 * padding
             )
 
+            # Drop shadow
+            shadow_rect = bg_rect.move(shadow_off, shadow_off)
+            shadow_surf = pygame.Surface((shadow_rect.w, shadow_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(shadow_surf, settings.FIGURE_NAME_SHADOW_COLOR,
+                             (0, 0, shadow_rect.w, shadow_rect.h), border_radius=corner_r)
+            self.window.blit(shadow_surf, shadow_rect.topleft)
+
             # Draw background on the main window surface
-            pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR, bg_rect)
+            pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR,
+                             bg_rect, border_radius=corner_r)
 
             # Draw frame on the main window surface
-            pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR, bg_rect, width=2)
+            pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR,
+                             bg_rect, width=2, border_radius=corner_r)
 
             # Draw text on the main window surface
             self.window.blit(text_surface, (text_rect.topleft[0], text_rect.topleft[1] + y_offset))
@@ -322,14 +334,26 @@ class FigureIcon:
 
         # Draw background rectangle for text
         padding = settings.FIGURE_NAME_PADDING
+        corner_r = settings.FIGURE_NAME_CORNER_R
+        shadow_off = settings.FIGURE_NAME_SHADOW_OFFSET
         bg_rect = pygame.Rect(
             text_rect.x - padding,
             text_rect.y - padding,
             text_rect.width + 2 * padding,
             text_rect.height + 2 * padding
         )
-        pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR, bg_rect)
-        pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR, bg_rect, width=2)
+
+        # Drop shadow
+        shadow_rect = bg_rect.move(shadow_off, shadow_off)
+        shadow_surf = pygame.Surface((shadow_rect.w, shadow_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(shadow_surf, settings.FIGURE_NAME_SHADOW_COLOR,
+                         (0, 0, shadow_rect.w, shadow_rect.h), border_radius=corner_r)
+        self.window.blit(shadow_surf, shadow_rect.topleft)
+
+        pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR,
+                         bg_rect, border_radius=corner_r)
+        pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR,
+                         bg_rect, width=2, border_radius=corner_r)
 
         # Draw the text
         self.window.blit(text_surface, text_rect.topleft)
@@ -747,7 +771,7 @@ class FieldFigureIcon(FigureIcon):
             is_resting = (hasattr(self, 'game') and self.game and
                           hasattr(self, 'figure') and self.figure and
                           self.figure.id in (getattr(self.game, 'resting_figure_ids', None) or []))
-            greyed_out = (hasattr(self, 'defender_selectable') and not self.defender_selectable) or is_resting
+            greyed_out = (hasattr(self, 'defender_selectable') and not self.defender_selectable) or is_resting or self.has_deficit
             
             # Choose icon/frame images based on greyed-out state
             icon_normal = self.icon_gray_img if greyed_out else self.icon_img
@@ -1083,6 +1107,9 @@ class FieldFigureIcon(FigureIcon):
         )
         
         # Create info background box (slightly darker) if visible or has enchantments
+        corner_r = settings.FIGURE_NAME_CORNER_R
+        shadow_off = settings.FIGURE_NAME_SHADOW_OFFSET
+
         if info_height > 0:
             info_bg_rect = pygame.Rect(
                 int(self.x - box_width // 2),
@@ -1091,34 +1118,59 @@ class FieldFigureIcon(FigureIcon):
                 int(info_height)
             )
             
-            # Calculate darker color for info section (more pronounced darkness)
-            darker_bg_color = tuple(max(0, int(c * 0.70)) for c in settings.FIGURE_NAME_BG_COLOR)
-            
-            # Draw backgrounds
-            pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR, text_bg_rect)
-            pygame.draw.rect(self.window, darker_bg_color, info_bg_rect)
-            
-            # Draw horizontal border between text and info sections
-            pygame.draw.line(
-                self.window, 
-                settings.FIGURE_NAME_FRAME_COLOR, 
-                (text_bg_rect.left, text_bg_rect.bottom), 
-                (text_bg_rect.right, text_bg_rect.bottom),
-                2
-            )
-            
-            # Draw outer frame around entire box
             total_bg_rect = pygame.Rect(
                 text_bg_rect.x,
                 text_bg_rect.y,
                 text_bg_rect.width,
                 text_bg_rect.height + info_bg_rect.height
             )
-            pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR, total_bg_rect, width=2)
+
+            # Drop shadow
+            shadow_rect = total_bg_rect.move(shadow_off, shadow_off)
+            shadow_surf = pygame.Surface((shadow_rect.w, shadow_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(shadow_surf, settings.FIGURE_NAME_SHADOW_COLOR,
+                             (0, 0, shadow_rect.w, shadow_rect.h), border_radius=corner_r)
+            self.window.blit(shadow_surf, shadow_rect.topleft)
+
+            # Name section background
+            name_surf = pygame.Surface((text_bg_rect.w, text_bg_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(name_surf, settings.FIGURE_NAME_BG_COLOR,
+                             (0, 0, text_bg_rect.w, text_bg_rect.h),
+                             border_top_left_radius=corner_r, border_top_right_radius=corner_r)
+            self.window.blit(name_surf, text_bg_rect.topleft)
+
+            # Info section background (darker parchment)
+            info_surf = pygame.Surface((info_bg_rect.w, info_bg_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(info_surf, settings.FIGURE_NAME_INFO_BG_COLOR,
+                             (0, 0, info_bg_rect.w, info_bg_rect.h),
+                             border_bottom_left_radius=corner_r, border_bottom_right_radius=corner_r)
+            self.window.blit(info_surf, info_bg_rect.topleft)
+            
+            # Soft separator line
+            pygame.draw.line(
+                self.window, 
+                settings.FIGURE_NAME_SEP_COLOR, 
+                (text_bg_rect.left + 2, text_bg_rect.bottom), 
+                (text_bg_rect.right - 2, text_bg_rect.bottom),
+                1
+            )
+            
+            # Outer border
+            pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR,
+                             total_bg_rect, width=2, border_radius=corner_r)
         else:
+            # Drop shadow
+            shadow_rect = text_bg_rect.move(shadow_off, shadow_off)
+            shadow_surf = pygame.Surface((shadow_rect.w, shadow_rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(shadow_surf, settings.FIGURE_NAME_SHADOW_COLOR,
+                             (0, 0, shadow_rect.w, shadow_rect.h), border_radius=corner_r)
+            self.window.blit(shadow_surf, shadow_rect.topleft)
+
             # Only draw text box for hidden figures
-            pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR, text_bg_rect)
-            pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR, text_bg_rect, width=2)
+            pygame.draw.rect(self.window, settings.FIGURE_NAME_BG_COLOR,
+                             text_bg_rect, border_radius=corner_r)
+            pygame.draw.rect(self.window, settings.FIGURE_NAME_FRAME_COLOR,
+                             text_bg_rect, width=2, border_radius=corner_r)
         
         # Draw text centered
         text_rect = text_surface.get_rect(center=(self.x, text_y))
@@ -1267,11 +1319,9 @@ class FieldFigureIcon(FigureIcon):
                             glow_x = current_x + (skill_icon.get_width() - skill_glow.get_width()) // 2
                             glow_y = skill_y + (skill_icon.get_height() - skill_glow.get_height()) // 2
                             self.window.blit(skill_glow, (glow_x, glow_y))
-                        # Draw suit advantage icon behind skill icon (background), centered
-                        if adv_suit_icon and _SKILL_DEFS.get(skill_key, {}).get('suit_advantage', False):
-                            adv_x = current_x + (skill_icon.get_width() - adv_suit_icon.get_width()) // 2
-                            adv_y = skill_y + (skill_icon.get_height() - adv_suit_icon.get_height()) // 2
-                            self.window.blit(adv_suit_icon, (adv_x, adv_y))
+                        # Hidden opponent figures: do NOT draw suit icons
+                        # (neither advantage suit nor own suit) to avoid
+                        # revealing faction information.
                         # Draw skill icon on top
                         self.window.blit(skill_icon, (current_x, skill_y))
                         current_x += skill_icon.get_width()

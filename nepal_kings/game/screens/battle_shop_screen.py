@@ -409,10 +409,6 @@ class BattleShopScreen(SubScreen):
                 if not self._is_locked:
                     self._handle_slot_click(event)
 
-        # Forward events to scroll text list shifter (arrow scrolling)
-        if self.scroll_text_list_shifter:
-            self.scroll_text_list_shifter.handle_events(events)
-
         # Update glow colors after events so scroll changes take effect immediately
         self._update_glow_colors()
 

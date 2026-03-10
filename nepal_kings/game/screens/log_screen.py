@@ -133,6 +133,20 @@ class LogScreen(SubScreen):
         self.font = pygame.font.Font(settings.FONT_PATH, settings.MSG_FONT_SIZE)
         self.scroll_step = 1  # Number of lines scrolled per step
 
+        # Preload log entry icons
+        self._log_icon_size = settings.LOG_ICON_SIZE
+        self._log_icon_pad = settings.LOG_ICON_PAD
+        self._log_icon_offset = self._log_icon_size + self._log_icon_pad
+        self._log_icons = {}
+        _all_paths = set(settings.LOG_ICON_TYPE_MAP.values()) | set(settings.LOG_BATTLE_MOVE_ICON_MAP.values())
+        for _path in _all_paths:
+            try:
+                _img = pygame.image.load(_path).convert_alpha()
+                _img = pygame.transform.smoothscale(_img, (self._log_icon_size, self._log_icon_size))
+                self._log_icons[_path] = _img
+            except Exception as _e:
+                print(f"[LogScreen] Failed to load icon: {_path} — {_e}")
+
         # Scrollbar attributes
         self.scrollbar_handle_color_active = settings.SCROLLBAR_HANDLE_COLOR_ACTIVE
         self.scrollbar_handle_color_passive = settings.SCROLLBAR_HANDLE_COLOR_PASSIVE
@@ -219,25 +233,41 @@ class LogScreen(SubScreen):
         _pad_y = settings.MSG_BUBBLE_PAD_Y
         _line_h = self.font.get_height() + settings.MSG_BUBBLE_SPACING
 
+        _icon_offset = self._log_icon_offset
+
         y = settings.MSG_TEXT_Y
         max_y = settings.MSG_TEXT_Y + settings.MSG_MAX_HEIGHT
 
         # Render lines within the visible range
         visible_lines = rendered_lines[self.scroll_offset:self.scroll_offset + self.max_lines_on_screen()]
-        for bg_color, line in visible_lines:
+        for bg_color, line, icon, indented in visible_lines:
             if y + self.font.get_height() > max_y:
                 break
 
+            text_x = settings.MSG_TEXT_X + (_icon_offset if indented else 0)
             text_surface = self.font.render(line, True, settings.MSG_TEXT_COLOR)
-            text_rect = text_surface.get_rect(topleft=(settings.MSG_TEXT_X, y))
+            text_rect = text_surface.get_rect(topleft=(text_x, y))
 
-            # Rounded bubble background
-            bubble_rect = text_rect.inflate(_pad_x * 2, _pad_y * 2)
+            # Rounded bubble background — extend left to cover icon area
+            if indented:
+                bubble_left = settings.MSG_TEXT_X - _pad_x
+                bubble_w = text_rect.right - bubble_left + _pad_x
+            else:
+                bubble_left = text_rect.x - _pad_x
+                bubble_w = text_rect.width + _pad_x * 2
+            bubble_rect = pygame.Rect(bubble_left, text_rect.y - _pad_y,
+                                      bubble_w, text_rect.height + _pad_y * 2)
             bubble_surf = pygame.Surface((bubble_rect.w, bubble_rect.h), pygame.SRCALPHA)
             pygame.draw.rect(bubble_surf,
                              (*bg_color[:3], settings.MSG_BG_TRANSPARENCY),
                              bubble_surf.get_rect(), border_radius=_bubble_r)
             self.window.blit(bubble_surf, bubble_rect.topleft)
+
+            # Draw icon on first line of message
+            if icon:
+                icon_y = bubble_rect.centery - icon.get_height() // 2
+                self.window.blit(icon, (settings.MSG_TEXT_X, icon_y))
+
             self.window.blit(text_surface, text_rect.topleft)
 
             y += _line_h + _pad_y
@@ -264,11 +294,30 @@ class LogScreen(SubScreen):
         except (ValueError, TypeError):
             return str(iso_timestamp)[:16]
 
+    def _get_log_icon(self, message):
+        """Return a pre-scaled icon surface for a log entry, or None."""
+        log_type = message.get('type', '')
+
+        # For battle_move, match the specific move family from message text
+        if log_type == 'battle_move':
+            msg_text = message.get('message', '')
+            # Check longer names first ("Double Dagger" before "Dagger")
+            for name in sorted(settings.LOG_BATTLE_MOVE_ICON_MAP, key=len, reverse=True):
+                if name in msg_text:
+                    return self._log_icons.get(settings.LOG_BATTLE_MOVE_ICON_MAP[name])
+
+        # Fall back to type-based mapping
+        icon_path = settings.LOG_ICON_TYPE_MAP.get(log_type)
+        if icon_path:
+            return self._log_icons.get(icon_path)
+        return None
+
     def calculate_rendered_lines(self, messages):
         """Calculate all rendered lines for the given messages."""
         rendered_lines = []
         max_width = settings.MSG_MAX_WIDTH - settings.MSG_TEXT_X
         current_username = self.game.current_player.get('username', '') if self.game else ''
+        _icon_offset = self._log_icon_offset
 
         for message in messages:
             ts = self._format_timestamp(message.get('timestamp', ''))
@@ -281,17 +330,21 @@ class LogScreen(SubScreen):
                 else:
                     bg_color = settings.LOG_MSG_SELF_BG_COLOR if is_self else settings.LOG_MSG_OPP_BG_COLOR
                 msg_content = f"[{ts}] {message['message']}"
+                icon = self._get_log_icon(message)
+                has_icon = icon is not None
+                wrap_w = max_width - _icon_offset if has_icon else max_width
+                wrapped_lines = self.wrap_text(msg_content, wrap_w)
+                for i, line in enumerate(wrapped_lines):
+                    rendered_lines.append((bg_color, line, icon if i == 0 else None, has_icon))
             else:
                 # Chat message
                 sender = self.game.get_player_username(message['sender_id']) if self.game else 'Unknown'
                 is_self = sender == current_username
                 bg_color = settings.CHAT_MSG_SELF_BG_COLOR if is_self else settings.CHAT_MSG_OPP_BG_COLOR
                 msg_content = f"[{ts}] {sender}: {message['message']}"
-
-            # Wrap text and store lines with their corresponding background color
-            wrapped_lines = self.wrap_text(msg_content, max_width)
-            for line in wrapped_lines:
-                rendered_lines.append((bg_color, line))
+                wrapped_lines = self.wrap_text(msg_content, max_width)
+                for line in wrapped_lines:
+                    rendered_lines.append((bg_color, line, None, False))
 
         return rendered_lines
     

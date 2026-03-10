@@ -18,7 +18,6 @@ class ScoreboardScroll:
         self.y = y
         self.width = width
         self.height = height
-        #self.text_dict = text_dict
         self.text_dict = self.make_text_dict()
         self.bg_img_path = bg_img_path
 

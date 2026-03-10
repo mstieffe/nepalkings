@@ -43,45 +43,43 @@ class SubScreen:
                              button_img_active=button_img_active, button_img_inactive=button_img_inactive)
 
     def draw_title(self):
-        """Draw the title of the sub screen with dark-theme styling."""
+        """Draw the title on an opaque brown badge."""
         if self.title:
-            _SH = settings.SCREEN_HEIGHT
             _pad = settings.SUB_SCREEN_TITLE_PADDING
             _corner_r = settings.SUB_SCREEN_TITLE_CORNER_R
+            _off = settings.SUB_SCREEN_TITLE_SHADOW_OFFSET
 
-            # Render gold title text
-            title_text = self.title_font.render(self.title, True,
+            # Measure title text
+            title_surf = self.title_font.render(self.title, True,
                                                settings.SUB_SCREEN_TITLE_COLOR)
-            title_rect = title_text.get_rect(
+            title_rect = title_surf.get_rect(
                 center=(settings.SUB_SCREEN_TITLE_X, settings.SUB_SCREEN_TITLE_Y))
 
-            # Background rect with padding
+            # Background badge rect with padding
             bg_rect = pygame.Rect(
                 title_rect.left - _pad * 2,
                 title_rect.top - _pad,
                 title_rect.width + 4 * _pad,
-                title_rect.height + 2 * _pad + int(0.006 * _SH)  # extra for separator
+                title_rect.height + 2 * _pad
             )
 
-            # Semi-transparent dark panel
-            panel = pygame.Surface((bg_rect.w, bg_rect.h), pygame.SRCALPHA)
-            pygame.draw.rect(panel, settings.SUB_SCREEN_TITLE_BG_COLOR,
-                             panel.get_rect(), border_radius=_corner_r)
-            pygame.draw.rect(panel, settings.SUB_SCREEN_TITLE_BORDER_COLOR,
-                             panel.get_rect(),
-                             settings.SUB_SCREEN_TITLE_BORDER_WIDTH,
+            # Opaque brown badge
+            pygame.draw.rect(self.window, settings.SUB_SCREEN_TITLE_BG_COLOR,
+                             bg_rect, border_radius=_corner_r)
+            pygame.draw.rect(self.window, settings.SUB_SCREEN_TITLE_BORDER_COLOR,
+                             bg_rect, settings.SUB_SCREEN_TITLE_BORDER_WIDTH,
                              border_radius=_corner_r)
-            self.window.blit(panel, bg_rect.topleft)
 
-            # Title text
-            self.window.blit(title_text, title_rect)
+            # Drop shadow text
+            shadow_surf = self.title_font.render(self.title, True,
+                                                settings.SUB_SCREEN_TITLE_SHADOW_COLOR)
+            shadow_rect = shadow_surf.get_rect(
+                center=(settings.SUB_SCREEN_TITLE_X + _off,
+                        settings.SUB_SCREEN_TITLE_Y + _off))
+            self.window.blit(shadow_surf, shadow_rect)
 
-            # Thin separator line below title
-            sep_y = bg_rect.bottom - int(0.005 * _SH)
-            sep_margin = int(0.008 * settings.SCREEN_WIDTH)
-            pygame.draw.line(self.window, settings.SUB_SCREEN_TITLE_SEP_CLR,
-                             (bg_rect.left + sep_margin, sep_y),
-                             (bg_rect.right - sep_margin, sep_y), 1)
+            # Gold title text
+            self.window.blit(title_surf, title_rect)
 
             
 
@@ -99,12 +97,34 @@ class SubScreen:
         self.sub_box_y = y
 
     def init_scroll_background(self, x, y, width, height):
-        """Initialize the background image."""
-        self.scroll_background = pygame.image.load(settings.SUB_BOX_SCROLL_BACKGROUND_IMG_PATH)
-        self.scroll_background = pygame.transform.smoothscale(self.scroll_background, (width, height))
+        """Build a warm brown programmatic scroll panel (replaces scroll.png)."""
         self.scroll_x = x
         self.scroll_y = y
+        self.scroll_w = width
+        self.scroll_h = height
         self.scroll_text_list = []
+
+        r = settings.SCROLL_PANEL_CORNER_R
+        pad = settings.SCROLL_PANEL_PAD
+        bw = settings.SCROLL_PANEL_BORDER_WIDTH
+
+        panel = pygame.Surface((width, height), pygame.SRCALPHA)
+
+        # Outer fill
+        pygame.draw.rect(panel, settings.SCROLL_PANEL_BG_CLR,
+                         (0, 0, width, height), border_radius=r)
+
+        # Subtle inner darker rect for depth
+        inner_rect = (pad, pad, width - 2 * pad, height - 2 * pad)
+        pygame.draw.rect(panel, settings.SCROLL_PANEL_INNER_CLR,
+                         inner_rect, border_radius=max(1, r - 2))
+
+        # Border
+        pygame.draw.rect(panel, settings.SCROLL_PANEL_BORDER_CLR,
+                         (0, 0, width, height),
+                         bw, border_radius=r)
+
+        self.scroll_background = panel
 
 
     def draw_msg(self):
@@ -129,16 +149,18 @@ class SubScreen:
 
     def make_scroll_text_list_shifter(self, text_list, x, y, scroll_height=None):
         """Create a scroll text list shifter."""
-        self.scroll_text_list_shifter = ScrollTextListShifter(self.window, text_list, x, y, scroll_height=scroll_height)
+        scroll_rect = None
+        if hasattr(self, 'scroll_x'):
+            scroll_rect = pygame.Rect(self.scroll_x, self.scroll_y, self.scroll_w, self.scroll_h)
+        self.scroll_text_list_shifter = ScrollTextListShifter(
+            self.window, text_list, x, y,
+            scroll_height=scroll_height, scroll_rect=scroll_rect
+        )
 
     def handle_events(self, events):
         """Handle events like mouse clicks and quit."""
-        pass
-        # Handle events for dialogue box
-        #if self.dialogue_box:
-        #    response = self.dialogue_box.update(events)
-        #    if response:
-        #        self.dialogue_box = None  # Close the dialogue box once action is taken
+        if self.scroll_text_list_shifter:
+            self.scroll_text_list_shifter.handle_events(events)
 
     def draw(self):
         """Render buttons, messages, and the dialogue box."""

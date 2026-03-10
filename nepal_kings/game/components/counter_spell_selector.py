@@ -9,7 +9,7 @@ import pygame
 from config import settings
 from game.components.arrow_button import ArrowButton
 from game.components.cards.card_img import CardImg
-from utils.utils import Button
+from game.components.dialogue_box import _DlgButton
 
 
 class CounterSpellSelector:
@@ -32,6 +32,7 @@ class CounterSpellSelector:
         self.y = y
         self.width = width
         self.height = height
+        self._created_at = pygame.time.get_ticks()  # grace period
         
         # Fonts
         self.title_font = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_DETAIL * 1.2))
@@ -64,7 +65,7 @@ class CounterSpellSelector:
             direction='right', is_active=True
         )
         
-        # Select and Cancel buttons
+        # Select and Cancel buttons (_DlgButton for themed look)
         button_width = settings.get_x(0.12)
         button_height = settings.get_y(0.04)
         button_spacing = settings.get_x(0.02)
@@ -74,7 +75,7 @@ class CounterSpellSelector:
         button_start_x = self.x + (self.width - total_button_width) // 2
         button_y = self.y + self.height - button_height - settings.get_y(0.02)
         
-        self.select_button = Button(
+        self.select_button = _DlgButton(
             self.window,
             x=button_start_x,
             y=button_y,
@@ -83,7 +84,7 @@ class CounterSpellSelector:
             height=button_height
         )
         
-        self.cancel_button = Button(
+        self.cancel_button = _DlgButton(
             self.window,
             x=button_start_x + button_width + button_spacing,
             y=button_y,
@@ -93,6 +94,9 @@ class CounterSpellSelector:
         )
         
         self.selected_spell = None  # Will be set when player clicks select button
+
+        # Build overlay + panel surfaces
+        self._build_overlay_and_panel()
     
     def initialize_card_imgs(self):
         """Initialize card images for spell cards."""
@@ -118,28 +122,30 @@ class CounterSpellSelector:
             self.current_index = (self.current_index + 1) % len(self.spell_options)
             self.last_shift_time = current_time
     
+    def _build_overlay_and_panel(self):
+        """Build the dark semi-transparent overlay and panel surfaces."""
+        sw, sh = self.window.get_size()
+        self._overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        self._overlay.fill(settings.DIALOGUE_BOX_OVERLAY_CLR)
+
+        corner_r = settings.DIALOGUE_BOX_CORNER_R
+        self._panel = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        pygame.draw.rect(self._panel, settings.DIALOGUE_BOX_BG_CLR,
+                         (0, 0, self.width, self.height), border_radius=corner_r)
+        pygame.draw.rect(self._panel, settings.DIALOGUE_BOX_BORDER_CLR,
+                         (0, 0, self.width, self.height),
+                         width=settings.DIALOGUE_BOX_BORDER_WIDTH, border_radius=corner_r)
+
     def draw(self):
-        """Draw the counter spell selector UI."""
+        """Draw the counter spell selector UI with dark-themed styling."""
         if not self.spell_options:
             return
         
-        # Draw background box with border (similar to dialogue box styling)
-        border_width = 8
-        border_color = (40, 40, 40)
-        background_color = (80, 80, 80)
-        
-        # Draw border
-        border_rect = pygame.Rect(
-            self.x - border_width,
-            self.y - border_width,
-            self.width + 2 * border_width,
-            self.height + 2 * border_width
-        )
-        pygame.draw.rect(self.window, border_color, border_rect)
-        
-        # Draw background
-        background_rect = pygame.Rect(self.x, self.y, self.width, self.height)
-        pygame.draw.rect(self.window, background_color, background_rect)
+        # Draw overlay behind the selector
+        self.window.blit(self._overlay, (0, 0))
+
+        # Draw the dark semi-transparent panel
+        self.window.blit(self._panel, (self.x, self.y))
         
         # Draw arrows if more than one option (center them vertically)
         if len(self.spell_options) > 1:
@@ -154,16 +160,24 @@ class CounterSpellSelector:
         content_padding_top = settings.get_y(0.03)
         current_y = self.y + content_padding_top
         
-        # Draw title
+        # Draw title in gold
         title_text = f"Counter Spell Option {self.current_index + 1}/{len(self.spell_options)}"
-        title_surface = self.title_font.render(title_text, True, settings.SCROLL_TEXT_COLOR)
+        title_surface = self.title_font.render(title_text, True, settings.TITLE_TEXT_COLOR)
         title_rect = title_surface.get_rect(midtop=(self.x + self.width // 2, current_y))
         self.window.blit(title_surface, title_rect)
         
-        current_y = title_rect.bottom + settings.get_y(0.01)
+        current_y = title_rect.bottom + settings.get_y(0.005)
+
+        # Draw separator line below title
+        sep_x1 = self.x + int(self.width * 0.1)
+        sep_x2 = self.x + int(self.width * 0.9)
+        sep_y = current_y
+        pygame.draw.line(self.window, settings.DIALOGUE_BOX_SEP_CLR, (sep_x1, sep_y), (sep_x2, sep_y), 1)
+
+        current_y = sep_y + settings.get_y(0.01)
         
-        # Draw spell name
-        spell_name_surface = self.spell_font.render(spell.name, True, settings.SCROLL_TEXT_COLOR)
+        # Draw spell name in warm off-white
+        spell_name_surface = self.spell_font.render(spell.name, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
         spell_name_rect = spell_name_surface.get_rect(midtop=(self.x + self.width // 2, current_y))
         self.window.blit(spell_name_surface, spell_name_rect)
         
@@ -195,17 +209,16 @@ class CounterSpellSelector:
                 
                 current_y += card_height + settings.get_y(0.01)
         
-        # Draw spell type and suit
+        # Draw spell type and suit in warm off-white
         type_text = f"{spell.family.type.title()} Spell ({spell.suit})"
-        type_surface = self.detail_font.render(type_text, True, settings.SCROLL_TEXT_COLOR)
+        type_surface = self.detail_font.render(type_text, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
         type_rect = type_surface.get_rect(midtop=(self.x + self.width // 2, current_y))
         self.window.blit(type_surface, type_rect)
         
         current_y = type_rect.bottom + settings.get_y(0.015)
         
-        # Draw description
+        # Draw description with word wrap
         if spell.family.description:
-            # Word wrap description
             words = spell.family.description.split()
             lines = []
             current_line = []
@@ -213,7 +226,7 @@ class CounterSpellSelector:
             
             for word in words:
                 test_line = ' '.join(current_line + [word])
-                test_surface = self.detail_font.render(test_line, True, settings.SCROLL_TEXT_COLOR)
+                test_surface = self.detail_font.render(test_line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
                 if test_surface.get_width() <= max_line_width:
                     current_line.append(word)
                 else:
@@ -226,12 +239,12 @@ class CounterSpellSelector:
             
             # Draw lines
             for line in lines[:3]:  # Limit to 3 lines
-                line_surface = self.detail_font.render(line, True, settings.SCROLL_TEXT_COLOR)
+                line_surface = self.detail_font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
                 line_rect = line_surface.get_rect(midtop=(self.x + self.width // 2, current_y))
                 self.window.blit(line_surface, line_rect)
                 current_y = line_rect.bottom + settings.get_y(0.005)
         
-        # Draw select and cancel buttons
+        # Draw themed select and cancel buttons
         self.select_button.draw()
         self.cancel_button.draw()
     
@@ -242,7 +255,11 @@ class CounterSpellSelector:
         :param events: List of pygame events
         :return: Selected spell object if player clicked select, 'CANCEL' if cancelled, None otherwise
         """
-        # Update button hover states first
+        # Grace period — ignore MOUSEBUTTONUP within 200ms of creation
+        if pygame.time.get_ticks() - self._created_at < 200:
+            return None
+
+        # Update button hover states
         self.select_button.update()
         self.cancel_button.update()
         if len(self.spell_options) > 1:
@@ -252,21 +269,19 @@ class CounterSpellSelector:
         # Handle arrow button clicks
         if len(self.spell_options) > 1:
             for event in events:
-                if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.type == pygame.MOUSEBUTTONUP:
                     if self.arrow_left_button.collide():
                         self.shift_left()
                     elif self.arrow_right_button.collide():
                         self.shift_right()
         
-        # Handle select and cancel buttons
+        # Handle select and cancel buttons (MOUSEBUTTONUP for consistency)
         for event in events:
-            if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.type == pygame.MOUSEBUTTONUP:
                 if self.select_button.collide():
-                    self.select_button.clicked = True
                     self.selected_spell = self.spell_options[self.current_index]['spell']
                     return self.selected_spell
                 elif self.cancel_button.collide():
-                    self.cancel_button.clicked = True
                     return 'CANCEL'
         
         # Handle keyboard shortcuts

@@ -29,7 +29,8 @@ class GameButton:
                  subscreen = None,
                  screen = None,
                  track_turn = True,
-                 locked = False):
+                 locked = False,
+                 tooltip_anchor = 'bottom'):
         self.window = window
         self.name = name
         self.x = x
@@ -42,6 +43,7 @@ class GameButton:
         self.subscreen_trigger = subscreen
         self.screen_trigger = screen
         self.track_turn = track_turn
+        self.tooltip_anchor = tooltip_anchor
 
         # Load images
         self.images = []
@@ -106,11 +108,11 @@ class GameButton:
         self.clicked = False
         self.hovered = False
 
-        self.hover_text = hover_text  # Store the hover_text
-        self.text_surface_active = self.font.render(self.hover_text, True, settings.GAME_BUTTON_TEXT_COLOR_ACTIVE)  # Prepare the text surface
-        self.text_surface_passive = self.font.render(self.hover_text, True, settings.GAME_BUTTON_TEXT_COLOR_PASSIVE)  # Prepare the text surface
-        self.text_surface_shadow = self.font.render(self.hover_text, True, settings.GAME_BUTTON_TEXT_COLOR_SHADOW)  # Prepare the text surface
-        self.text_rect = self.text_surface_active.get_rect()  # Get the rectangle for positioning text
+        self.hover_text = hover_text
+        # Tooltip pill surfaces
+        self._tt_font = pygame.font.Font(settings.FONT_PATH, settings.TOOLTIP_FONT_SIZE)
+        self._tt_surf = self._tt_font.render(self.hover_text, True, settings.TOOLTIP_TEXT_COLOR)
+        self._is_active_state = True  # tracked during draw for tooltip dot colour
 
     def collide(self):
         mx, my = pygame.mouse.get_pos()
@@ -121,19 +123,16 @@ class GameButton:
         if self.state.game:
             self.window.blit(self.image_stone, self.rect_stone.topleft)
             if self.locked:
-                # Locked buttons show passive icon but still show hover text
+                self._is_active_state = False
+                # Locked buttons show passive icon
                 if self.hovered:
                     self.window.blit(self.image_glow_white, self.rect_glow.topleft)
                     self.window.blit(self.image_symbol_passive_big, self.rect_symbol_big.topleft)
-                    mx, my = pygame.mouse.get_pos()
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.GAME_BUTTON_TEXT_SHIFT_Y -1)
-                    self.window.blit(self.text_surface_shadow, self.text_rect)
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.GAME_BUTTON_TEXT_SHIFT_Y)
-                    self.window.blit(self.text_surface_passive, self.text_rect)
                 else:
                     self.window.blit(self.image_glow_black, self.rect_glow.topleft)
                     self.window.blit(self.image_symbol_passive, self.rect_symbol.topleft)
             elif self.state.game.turn or not self.track_turn:
+                self._is_active_state = True
                 if self.hovered:
                     if self.clicked:
                         self.window.blit(self.image_glow_orange_big, self.rect_glow_big.topleft)
@@ -141,15 +140,11 @@ class GameButton:
                     else:
                         self.window.blit(self.image_glow_yellow, self.rect_glow.topleft)
                         self.window.blit(self.image_symbol_active_big, self.rect_symbol_big.topleft)
-                    mx, my = pygame.mouse.get_pos()
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.GAME_BUTTON_TEXT_SHIFT_Y -1)
-                    self.window.blit(self.text_surface_shadow, self.text_rect)
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.GAME_BUTTON_TEXT_SHIFT_Y)
-                    self.window.blit(self.text_surface_active, self.text_rect)
                 else:
                     self.window.blit(self.image_glow_black, self.rect_glow.topleft)
                     self.window.blit(self.image_symbol_active, self.rect_symbol.topleft)
             else:
+                self._is_active_state = False
                 if self.hovered:
                     if self.clicked:
                         self.window.blit(self.image_glow_black_big, self.rect_glow_big.topleft)
@@ -157,14 +152,49 @@ class GameButton:
                     else:
                         self.window.blit(self.image_glow_white, self.rect_glow.topleft)
                         self.window.blit(self.image_symbol_passive_big, self.rect_symbol_big.topleft)
-                    mx, my = pygame.mouse.get_pos()
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X +1, my - settings.GAME_BUTTON_TEXT_SHIFT_Y -1)
-                    self.window.blit(self.text_surface_shadow, self.text_rect)
-                    self.text_rect.center = (mx - settings.GAME_BUTTON_TEXT_SHIFT_X, my - settings.GAME_BUTTON_TEXT_SHIFT_Y)
-                    self.window.blit(self.text_surface_passive, self.text_rect)
                 else:
                     self.window.blit(self.image_glow_black, self.rect_glow.topleft)
                     self.window.blit(self.image_symbol_passive, self.rect_symbol.topleft)
+
+    def draw_hover_text(self):
+        """Draw a styled tooltip pill anchored relative to the button icon."""
+        if not (self.state.game and self.hovered):
+            return
+
+        text_surf = self._tt_surf
+
+        pad_x = settings.TOOLTIP_PAD_X
+        pad_y = settings.TOOLTIP_PAD_Y
+        corner_r = settings.TOOLTIP_CORNER_R
+
+        tw, th = text_surf.get_size()
+        pill_w = pad_x + tw + pad_x
+        pill_h = th + pad_y * 2
+
+        if self.tooltip_anchor == 'top-left':
+            # Right edge of pill touches icon's top-left corner
+            pill_x = self.rect_symbol.left - pill_w
+            pill_y = self.rect_symbol.top - pill_h // 2
+        else:
+            # 'bottom' — centred below the glow area
+            pill_x = self.x - pill_w // 2
+            pill_y = self.rect_glow.bottom + settings.TOOLTIP_OFFSET_Y
+
+        # Clamp to screen
+        pill_x = max(4, min(pill_x, settings.SCREEN_WIDTH - pill_w - 4))
+        pill_y = max(4, min(pill_y, settings.SCREEN_HEIGHT - pill_h - 4))
+
+        # Draw pill background
+        pill = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
+        pygame.draw.rect(pill, settings.TOOLTIP_BG_COLOR,
+                         (0, 0, pill_w, pill_h), border_radius=corner_r)
+        pygame.draw.rect(pill, settings.TOOLTIP_BORDER_COLOR,
+                         (0, 0, pill_w, pill_h),
+                         settings.TOOLTIP_BORDER_WIDTH, border_radius=corner_r)
+        self.window.blit(pill, (pill_x, pill_y))
+
+        # Draw text centred in the pill
+        self.window.blit(text_surf, (pill_x + pad_x, pill_y + pad_y))
 
     def update(self, state):
         self.state = state
@@ -442,6 +472,83 @@ class SubScreenButton:
         else:
             self.hovered = self.collide()
             self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+
+
+class ColorTogglePill:
+    """A programmatic pill-shaped toggle button (no image assets).
+
+    Compatible with the SubScreenButton interface used by SubScreen
+    (draw, update, collide, .active, .text, .hovered, .clicked).
+    """
+
+    # Small colour dot per label (faction hint)
+    _DOT_COLOR_MAP = {
+        'Djungle':  (80, 180, 80),   # green
+        'Himalaya': (80, 130, 210),   # blue
+    }
+
+    def __init__(self, window, x, y, text):
+        self.window = window
+        self.x = x
+        self.y = y
+        self.text = text
+        self.font = pygame.font.Font(settings.FONT_PATH, settings.COLOR_TOGGLE_FONT_SIZE)
+        self.font.set_bold(True)
+
+        self.rect = pygame.Rect(x, y, settings.COLOR_TOGGLE_W, settings.COLOR_TOGGLE_H)
+        self.corner_r = settings.COLOR_TOGGLE_CORNER_R
+
+        # Optional faction-colour dot
+        self._dot_clr = self._DOT_COLOR_MAP.get(text, None)
+        self._dot_r = max(3, int(0.006 * settings.SCREEN_HEIGHT))
+
+        self.hovered = False
+        self.clicked = False
+        self.active = False
+
+    # ---- interface -----
+    def collide(self):
+        return self.rect.collidepoint(pygame.mouse.get_pos())
+
+    def update(self):
+        self.hovered = self.collide()
+        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+
+    def draw(self):
+        r = self.corner_r
+        w, h = self.rect.size
+
+        # Pick colours (gold for active, warm cream for inactive)
+        if self.active:
+            bg = settings.COLOR_TOGGLE_BG_ACTIVE_CLR
+            border = settings.COLOR_TOGGLE_BORDER_ACTIVE_CLR
+            txt_clr = settings.COLOR_TOGGLE_TEXT_ACTIVE_CLR
+        elif self.hovered:
+            bg = settings.COLOR_TOGGLE_BG_HOVER_CLR
+            border = settings.COLOR_TOGGLE_BORDER_CLR
+            txt_clr = settings.COLOR_TOGGLE_TEXT_CLR
+        else:
+            bg = settings.COLOR_TOGGLE_BG_CLR
+            border = settings.COLOR_TOGGLE_BORDER_CLR
+            txt_clr = settings.COLOR_TOGGLE_TEXT_CLR
+
+        # Surface with per-pixel alpha for semi-transparent bg
+        pill = pygame.Surface((w, h), pygame.SRCALPHA)
+        pygame.draw.rect(pill, bg, (0, 0, w, h), border_radius=r)
+        pygame.draw.rect(pill, border, (0, 0, w, h), 2, border_radius=r)
+        self.window.blit(pill, self.rect.topleft)
+
+        # Text centred
+        txt_surf = self.font.render(self.text, True, txt_clr)
+        txt_rect = txt_surf.get_rect(center=self.rect.center)
+        self.window.blit(txt_surf, txt_rect)
+
+        # Faction colour dot to the left of the text
+        if self._dot_clr is not None:
+            dot_x = txt_rect.left - self._dot_r - 4
+            dot_y = self.rect.centery
+            pygame.draw.circle(self.window, self._dot_clr, (dot_x, dot_y), self._dot_r)
+
 
 class ControlButton(Button):
 

@@ -171,7 +171,7 @@ class Hand:
                                     glow_width_big=settings.HAND_BUTTON_GLOW_BIG_WIDTH,
                                     glow_shift=settings.HAND_BUTTON_GLOW_SHIFT,
                                     state=self.state,
-                                    hover_text='change cards!'))
+                                    hover_text='change cards'))
 
         return buttons
 
@@ -432,11 +432,10 @@ class Hand:
                         pass  # Battle-move cards are not selectable
                     else:
                         clicked_slot.clicked = not clicked_slot.clicked
+                        # Update discard dialogue when selection changes
+                        if self.discard_mode:
+                            self.update_discard_dialogue()
         
-        # Update discard dialogue if in discard mode and a card selection changed
-        if self.discard_mode:
-            self.update_discard_dialogue()
-
     def draw(self):
         """Draw elements on the window."""
         if self.game:

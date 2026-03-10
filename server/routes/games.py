@@ -1881,6 +1881,16 @@ def battle_decision():
                 game.battle_confirmed = True
                 game.battle_decisions = None
 
+                # Auto-fill both players' hands before entering battle shop
+                invader_player = Player.query.get(game.advancing_player_id)
+                defender_player = player  # current player is the defender
+                auto_fill_invader = _check_and_fill_minimum_cards(game, invader_player)
+                auto_fill_defender = _check_and_fill_minimum_cards(game, defender_player)
+                if auto_fill_invader:
+                    print(f"[BATTLE_DECISION] Auto-filled invader {invader_player.id}: {auto_fill_invader}")
+                if auto_fill_defender:
+                    print(f"[BATTLE_DECISION] Auto-filled defender {defender_player.id}: {auto_fill_defender}")
+
                 log_entry = LogEntry(
                     game_id=game_id,
                     player_id=None,

@@ -92,6 +92,9 @@ class GameScreen(Screen):
         self._just_allowed_spell = False  # Flag to suppress duplicate notification after allowing a spell
         self._hovered_battle_modifier = None  # Index of currently hovered modifier (or None)
         self._battle_modifier_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
+        self._spell_box_title_font = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SPELL_BOX_TITLE_FONT_SIZE)
+        self._spell_box_title_font.set_bold(True)
+        self._tooltip_font = pygame.font.Font(settings.FONT_PATH, settings.TOOLTIP_FONT_SIZE)
     
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
@@ -231,9 +234,10 @@ class GameScreen(Screen):
             symbol_width_big=settings.HOME_BUTTON_WIDTH_BIG,
             glow_width_big=settings.HOME_BUTTON_GLOW_WIDTH_BIG,
             state=self.state,
-            hover_text='home menu!',
+            hover_text='home menu',
             screen='game_menu',
-            track_turn = False
+            track_turn = False,
+            tooltip_anchor='top-left'
         )
         self.game_buttons.append(home_button)
 
@@ -252,7 +256,8 @@ class GameScreen(Screen):
             state=self.state,
             hover_text='guide book',
             subscreen='tutorial',
-            track_turn = False
+            track_turn = False,
+            tooltip_anchor='top-left'
         )
         self.game_buttons.append(tutorial_button)
 
@@ -269,9 +274,10 @@ class GameScreen(Screen):
             symbol_width_big=settings.LETTER_BUTTON_WIDTH_BIG,
             glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
             state=self.state,
-            hover_text='view log!',
+            hover_text='log book',
             subscreen='log',
-            track_turn = False
+            track_turn = False,
+            tooltip_anchor='top-left'
         )
         self.game_buttons.append(self.log_button)
 
@@ -288,9 +294,10 @@ class GameScreen(Screen):
             symbol_width_big=settings.FIELD_BUTTON_WIDTH_BIG,
             glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
             state=self.state,
-            hover_text='view field!',
+            hover_text='playing board',
             subscreen='field',
-            track_turn = False
+            track_turn = False,
+            tooltip_anchor='top-left'
         )
 
         # Action button (for casting spells)
@@ -318,7 +325,7 @@ class GameScreen(Screen):
             settings.BUILD_BUTTON_WIDTH,
             settings.BUILD_BUTTON_WIDTH,
             state=self.state,
-            hover_text='build figure!',
+            hover_text='build figure',
             subscreen='build_figure'
         )
         self.game_buttons.append(build_button)
@@ -341,10 +348,11 @@ class GameScreen(Screen):
             symbol_width_big=settings.BATTLE_BUTTON_WIDTH_BIG,
             glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
             state=self.state,
-            hover_text='battle!',
+            hover_text='battle arena',
             subscreen='battle',
             track_turn = False,
-            locked = True  # Locked until battle phase starts
+            locked = True,
+            tooltip_anchor='top-left'
         )
         self.game_buttons.append(self.battle_button)
 
@@ -361,9 +369,10 @@ class GameScreen(Screen):
             symbol_width_big=settings.BATTLE_SHOP_BUTTON_WIDTH_BIG,
             glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
             state=self.state,
-            hover_text='battle shop!',
+            hover_text='battle shop',
             subscreen='battle_shop',
-            track_turn = False
+            track_turn = False,
+            tooltip_anchor='top-left'
         )
         self.game_buttons.append(battle_shop_button)
 
@@ -733,7 +742,7 @@ class GameScreen(Screen):
                 self._battle_modifier_icons[modifier_name] = img
     
     def _draw_battle_modifier_icons(self):
-        """Draw active battle modifier icons below the resource scroll and track hover."""
+        """Draw active battle modifier icons inside a styled panel below the resource scroll."""
         if not self.state.game or not self.state.game.battle_modifier:
             self._hovered_battle_modifier = None
             return
@@ -744,30 +753,64 @@ class GameScreen(Screen):
             return
         
         icon_size = settings.BATTLE_MODIFIER_ICON_SIZE
-        padding = settings.BATTLE_MODIFIER_ICON_PADDING
-        y_offset = settings.BATTLE_MODIFIER_ICON_Y_OFFSET
-        
+        icon_pad = settings.BATTLE_MODIFIER_ICON_PADDING
+        box_pad = settings.BATTLE_SPELL_BOX_PADDING
+        corner_r = settings.BATTLE_SPELL_BOX_CORNER_R
+        title_margin = settings.BATTLE_SPELL_BOX_TITLE_MARGIN
+        title_spacing = settings.BATTLE_SPELL_BOX_TITLE_SPACING
+
+        # Render title
+        title_surf = self._spell_box_title_font.render(
+            'Battle Spells', True, settings.BATTLE_SPELL_BOX_TITLE_COLOR)
+
+        # Panel dimensions: width matches the resource box, height fits title + one row of icons
+        box_w = settings.INFO_SCROLL_WIDTH
+        title_h = title_surf.get_height()
+        box_h = title_margin + title_h + title_spacing + icon_size + box_pad
+
         # Position below the InfoScroll
-        start_x = settings.INFO_SCROLL_X
-        start_y = settings.INFO_SCROLL_Y + settings.INFO_SCROLL_HEIGHT + y_offset
-        
+        box_x = settings.INFO_SCROLL_X
+        box_y = (settings.INFO_SCROLL_Y + settings.INFO_SCROLL_HEIGHT
+                 + settings.BATTLE_SPELL_BOX_Y_OFFSET)
+
+        # Draw semi-transparent panel
+        panel = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        pygame.draw.rect(panel, settings.BATTLE_SPELL_BOX_BG_CLR,
+                         (0, 0, box_w, box_h), border_radius=corner_r)
+        pygame.draw.rect(panel, settings.BATTLE_SPELL_BOX_BORDER_CLR,
+                         (0, 0, box_w, box_h),
+                         settings.BATTLE_SPELL_BOX_BORDER_WIDTH,
+                         border_radius=corner_r)
+        self.window.blit(panel, (box_x, box_y))
+
+        # Draw title centred in the panel
+        title_rect = title_surf.get_rect(centerx=box_x + box_w // 2,
+                                         top=box_y + title_margin)
+        self.window.blit(title_surf, title_rect)
+
+        # Draw icons row
+        icons_y = box_y + title_margin + title_h + title_spacing
+        # Centre icons horizontally in the panel
+        total_icons_w = len(modifiers) * icon_size + (len(modifiers) - 1) * icon_pad
+        icons_start_x = box_x + (box_w - total_icons_w) // 2
+
         mx, my = pygame.mouse.get_pos()
         self._hovered_battle_modifier = None
-        
+
         for i, modifier in enumerate(modifiers):
             modifier_type = modifier.get('type', '')
             icon = self._battle_modifier_icons.get(modifier_type)
             if icon:
-                x = start_x + i * (icon_size + padding)
-                self.window.blit(icon, (x, start_y))
-                
+                x = icons_start_x + i * (icon_size + icon_pad)
+                self.window.blit(icon, (x, icons_y))
+
                 # Check hover
-                icon_rect = pygame.Rect(x, start_y, icon_size, icon_size)
+                icon_rect = pygame.Rect(x, icons_y, icon_size, icon_size)
                 if icon_rect.collidepoint(mx, my):
                     self._hovered_battle_modifier = i
     
     def _draw_battle_modifier_hover_text(self):
-        """Draw hover text for battle modifier icons on top of everything."""
+        """Draw a styled tooltip pill for the hovered battle modifier icon."""
         if self._hovered_battle_modifier is None or not self.state.game:
             return
         
@@ -780,23 +823,64 @@ class GameScreen(Screen):
         caster_id = modifier.get('caster_id')
         caster_name = modifier.get('caster_name', 'Unknown')
         
-        # Determine if caster is the current player
         is_self = (caster_id == self.state.game.player_id)
         who = "You" if is_self else caster_name
-        text_color = settings.STATE_BUTTON_TEXT_COLOR_ACTIVE if is_self else settings.STATE_BUTTON_TEXT_COLOR_PASSIVE
-        shadow_color = settings.STATE_BUTTON_TEXT_COLOR_SHADOW
-        
+        dot_clr = settings.TOOLTIP_DOT_ACTIVE_CLR if is_self else settings.TOOLTIP_DOT_PASSIVE_CLR
+
         hover_text = f"{who} casted {modifier_type}"
-        text_surface = self._battle_modifier_font.render(hover_text, True, text_color)
-        shadow_surface = self._battle_modifier_font.render(hover_text, True, shadow_color)
-        text_rect = text_surface.get_rect()
-        
-        mx, my = pygame.mouse.get_pos()
-        # Position text to the right of the cursor (icons are on the left edge of the screen)
-        text_rect.midleft = (mx + 12 + 1, my - 1)
-        self.window.blit(shadow_surface, text_rect)
-        text_rect.midleft = (mx + 12, my)
-        self.window.blit(text_surface, text_rect)
+
+        text_surf = self._tooltip_font.render(hover_text, True, settings.TOOLTIP_TEXT_COLOR)
+
+        pad_x = settings.TOOLTIP_PAD_X
+        pad_y = settings.TOOLTIP_PAD_Y
+        dot_r = settings.TOOLTIP_DOT_RADIUS
+        dot_sp = settings.TOOLTIP_DOT_SPACING
+        corner_r = settings.TOOLTIP_CORNER_R
+
+        tw, th = text_surf.get_size()
+        pill_w = pad_x + dot_r * 2 + dot_sp + tw + pad_x
+        pill_h = th + pad_y * 2
+
+        # Anchor to the right of the hovered icon
+        icon_size = settings.BATTLE_MODIFIER_ICON_SIZE
+        icon_pad = settings.BATTLE_MODIFIER_ICON_PADDING
+        box_pad = settings.BATTLE_SPELL_BOX_PADDING
+        box_x = settings.INFO_SCROLL_X
+        box_w = settings.INFO_SCROLL_WIDTH
+        box_y = (settings.INFO_SCROLL_Y + settings.INFO_SCROLL_HEIGHT
+                 + settings.BATTLE_SPELL_BOX_Y_OFFSET)
+        title_h = self._spell_box_title_font.get_height()
+        title_margin = settings.BATTLE_SPELL_BOX_TITLE_MARGIN
+        title_spacing = settings.BATTLE_SPELL_BOX_TITLE_SPACING
+        icons_y = box_y + title_margin + title_h + title_spacing
+
+        total_icons_w = len(modifiers) * icon_size + (len(modifiers) - 1) * icon_pad
+        icons_start_x = box_x + (box_w - total_icons_w) // 2
+        icon_x = icons_start_x + self._hovered_battle_modifier * (icon_size + icon_pad)
+
+        pill_x = icon_x + icon_size + settings.TOOLTIP_OFFSET_X
+        pill_y = icons_y + icon_size // 2 - pill_h // 2
+
+        # Clamp to screen
+        pill_x = min(pill_x, settings.SCREEN_WIDTH - pill_w - 4)
+        pill_y = max(4, min(pill_y, settings.SCREEN_HEIGHT - pill_h - 4))
+
+        # Draw pill
+        pill = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
+        pygame.draw.rect(pill, settings.TOOLTIP_BG_COLOR,
+                         (0, 0, pill_w, pill_h), border_radius=corner_r)
+        pygame.draw.rect(pill, settings.TOOLTIP_BORDER_COLOR,
+                         (0, 0, pill_w, pill_h),
+                         settings.TOOLTIP_BORDER_WIDTH, border_radius=corner_r)
+        self.window.blit(pill, (pill_x, pill_y))
+
+        # Status dot
+        dot_cx = pill_x + pad_x + dot_r
+        dot_cy = pill_y + pill_h // 2
+        pygame.draw.circle(self.window, dot_clr, (dot_cx, dot_cy), dot_r)
+
+        # Text
+        self.window.blit(text_surf, (pill_x + pad_x + dot_r * 2 + dot_sp, pill_y + pad_y))
     
     def check_battle_modifier_changes(self):
         """Detect new battle modifiers and show notifications to the opponent."""
