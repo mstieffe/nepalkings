@@ -129,11 +129,16 @@ def _pick_resolution():
     svr_btn_h = 58          # taller to fit label + URL
     gap   = 12
     res_start_y = 72
-    res_section_h = len(choices) * (btn_h + gap)
-    server_section_y = res_start_y + res_section_h + 20
-    server_section_h = 40 + len(_SERVER_PRESETS) * (svr_btn_h + gap)
-    # Start button (44px) + gap (16) + hint (~20px) + bottom padding (20)
-    ph = server_section_y + server_section_h + 44 + 16 + 20 + 20
+    # Trace exact same layout as the render loop:
+    # res section label + separator = 32px
+    res_btn_start = res_start_y + 32
+    res_btns_bottom = res_btn_start + len(choices) * (btn_h + gap)
+    svr_y = res_btns_bottom + 16
+    svr_btn_start_y = svr_y + 32
+    svr_btns_bottom = svr_btn_start_y + len(_SERVER_PRESETS) * (svr_btn_h + gap)
+    start_y = svr_btns_bottom + 16
+    # Start button (44) + gap (16) + hint text (~18) + bottom margin (14)
+    ph = start_y + 44 + 16 + 18 + 14
     win = pygame.display.set_mode((pw, ph))
     pygame.display.set_caption('Nepal Kings — Settings')
 
