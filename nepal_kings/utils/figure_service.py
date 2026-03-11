@@ -5,7 +5,7 @@ def fetch_figures(player_id):
     """
     Fetch all figures associated with a specific player from the server.
     """
-    response = requests.get(f'{settings.SERVER_URL}/figures/get_figures', params={'player_id': player_id})
+    response = requests.get(f'{settings.SERVER_URL}/figures/get_figures', params={'player_id': player_id}, timeout=10)
     if response.status_code != 200:
         raise Exception(f"Failed to fetch figures: {response.json().get('message', 'Unknown error')}")
     return response.json().get('figures', [])
@@ -14,7 +14,7 @@ def fetch_figure(figure_id):
     """
     Fetch a single figure by its ID.
     """
-    response = requests.get(f'{settings.SERVER_URL}/figures/get_figure', params={'figure_id': figure_id})
+    response = requests.get(f'{settings.SERVER_URL}/figures/get_figure', params={'figure_id': figure_id}, timeout=10)
     if response.status_code != 200:
         raise Exception(f"Failed to fetch figure: {response.json().get('message', 'Unknown error')}")
     return response.json().get('figure', {})
@@ -55,7 +55,7 @@ def create_figure(player_id, game_id, family_name, field, color, name, suit, des
         'cannot_be_blocked': cannot_be_blocked,
         'rest_after_attack': rest_after_attack
     }
-    response = requests.post(f'{settings.SERVER_URL}/figures/create_figure', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/figures/create_figure', json=data, timeout=10)
     if response.status_code != 200:
         raise Exception(f"Failed to create figure: {response.json().get('message', 'Unknown error')}")
     return response.json()
@@ -78,7 +78,7 @@ def update_figure(figure_id, name=None, suit=None, description=None, upgrade_fam
         'upgrade_family_name': upgrade_family_name,
         'cards': cards
     }
-    response = requests.post(f'{settings.SERVER_URL}/figures/update_figure', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/figures/update_figure', json=data, timeout=10)
     if response.status_code != 200:
         raise Exception(f"Failed to update figure: {response.json().get('message', 'Unknown error')}")
     return response.json()
@@ -88,7 +88,7 @@ def delete_figure(figure_id):
     Delete a figure by its ID.
     :param figure_id: ID of the figure to delete.
     """
-    response = requests.post(f'{settings.SERVER_URL}/figures/delete_figure', json={'figure_id': figure_id})
+    response = requests.post(f'{settings.SERVER_URL}/figures/delete_figure', json={'figure_id': figure_id}, timeout=10)
     if response.status_code != 200:
         raise Exception(f"Failed to delete figure: {response.json().get('message', 'Unknown error')}")
     return response.json()
@@ -105,7 +105,7 @@ def pickup_figure(figure_id, player_id, game_id):
         'player_id': player_id,
         'game_id': game_id
     }
-    response = requests.post(f'{settings.SERVER_URL}/figures/pickup_figure', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/figures/pickup_figure', json=data, timeout=10)
     if response.status_code != 200:
         raise Exception(f"Failed to pick up figure: {response.json().get('message', 'Unknown error')}")
     return response.json()
@@ -126,7 +126,7 @@ def upgrade_figure(figure_id, player_id, game_id, upgrade_card_id, upgrade_card_
         'upgrade_card_id': upgrade_card_id,
         'upgrade_card_type': upgrade_card_type
     }
-    response = requests.post(f'{settings.SERVER_URL}/figures/upgrade_figure', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/figures/upgrade_figure', json=data, timeout=10)
     if response.status_code != 200:
         raise Exception(f"Failed to upgrade figure: {response.json().get('message', 'Unknown error')}")
     return response.json()

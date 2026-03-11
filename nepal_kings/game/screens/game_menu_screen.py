@@ -8,6 +8,7 @@ from config import settings
 from utils.utils import Button
 from utils.game_service import fetch_user_games, fetch_user
 from utils.auth_service import send_heartbeat
+from utils.background_poller import BackgroundPoller
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -175,6 +176,14 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             pass
         return None
 
+    @staticmethod
+    def _bg_poll_badges(username):
+        """Thread-safe: heartbeat + fetch games/user."""
+        send_heartbeat(username)
+        games = fetch_user_games(username)
+        user = fetch_user(username)
+        return {'games': games, 'user': user}
+
     def _poll_badges(self):
         """Fetch game / challenge counts from the server and update badges.
 
@@ -186,14 +195,26 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if not username:
             return
 
-        # Keep user marked as online
-        send_heartbeat(username)
+        # Kick off background fetch
+        if not hasattr(self, '_badge_poller') or self._badge_poller is None:
+            self._badge_poller = BackgroundPoller(
+                self._bg_poll_badges, args=(username,))
+        if not self._badge_poller.busy:
+            self._badge_poller.poll(args=(username,))
+
+    def _apply_badge_data(self, data):
+        """Apply badge data fetched in background thread."""
+        if not data:
+            return
+        username = self.state.user_dict.get('username') if self.state.user_dict else None
+        if not username:
+            return
 
         last_seen = self._parse_date(self.state._last_seen_at)
 
         try:
-            # -- new games (accepted challenges that became games) --
-            game_dicts = fetch_user_games(username)
+            game_dicts = data['games']
+            user = data['user']
             current_game_ids = {g['id'] for g in game_dicts}
             if self.state._known_game_ids is None:
                 # First poll after login — check which games appeared while offline
@@ -217,7 +238,6 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.state._new_game_ids = set(new_ids)
 
             # -- new challenges received --
-            user = fetch_user(username)
             received = user.get('challenges_received', [])
             current_ch_ids = {c['id'] for c in received}
             if self.state._known_challenge_ids is None:
@@ -261,6 +281,10 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if now - self._badge_timer >= self._badge_interval:
             self._badge_timer = now
             self._poll_badges()
+
+        # Apply badge data when background fetch completes
+        if hasattr(self, '_badge_poller') and self._badge_poller and self._badge_poller.has_result():
+            self._apply_badge_data(self._badge_poller.result)
 
     def handle_events(self, events):
         """Handle button click events."""

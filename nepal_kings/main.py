@@ -53,6 +53,11 @@ _CHECK_CLR   = (90, 200, 110)
 
 _DEFAULT_SERVER_URL = 'http://localhost:5000'
 
+_SERVER_PRESETS = [
+    ('http://localhost:5000',                     'Local (dev)'),
+    ('https://nepalkings.pythonanywhere.com',     'PythonAnywhere'),
+]
+
 
 # ── Persistence helpers ────────────────────────────────────────────
 def _load_saved():
@@ -100,9 +105,12 @@ def _save_choice(w, h, server_url=None):
         pass
 
 
-# ── Resolution Picker UI ──────────────────────────────────────────
+# ── Resolution & Server Picker UI ─────────────────────────────────
 def _pick_resolution():
-    """Show a small themed dialog and return (width, height)."""
+    """Show a themed dialog for resolution + server selection.
+
+    Returns (width, height, server_url).
+    """
     pygame.init()
 
     # Detect native desktop resolution
@@ -116,16 +124,24 @@ def _pick_resolution():
         choices = [(_DEFAULT_W, _DEFAULT_H, f'{_DEFAULT_W} × {_DEFAULT_H}')]
 
     # ── Picker window geometry ──
-    pw, ph = 440, 120 + len(choices) * 56 + 80
+    pw = 480
+    btn_h = 44
+    gap   = 12
+    res_start_y = 72
+    res_section_h = len(choices) * (btn_h + gap)
+    server_section_y = res_start_y + res_section_h + 20
+    server_section_h = 40 + len(_SERVER_PRESETS) * (btn_h + gap)
+    ph = server_section_y + server_section_h + 80
     win = pygame.display.set_mode((pw, ph))
-    pygame.display.set_caption('Nepal Kings — Resolution')
+    pygame.display.set_caption('Nepal Kings — Settings')
 
-    # Fonts (system fallback — game font needs config which we haven't imported)
-    title_font = pygame.font.SysFont('Arial', 28, bold=True)
-    btn_font   = pygame.font.SysFont('Arial', 22)
-    hint_font  = pygame.font.SysFont('Arial', 16)
+    # Fonts
+    title_font   = pygame.font.SysFont('Arial', 28, bold=True)
+    section_font = pygame.font.SysFont('Arial', 20, bold=True)
+    btn_font     = pygame.font.SysFont('Arial', 22)
+    hint_font    = pygame.font.SysFont('Arial', 16)
 
-    # Pre-select the current native or saved resolution
+    # Pre-select saved resolution
     saved = _load_saved()
     selected_idx = None
     for i, (w, h, _) in enumerate(choices):
@@ -133,53 +149,48 @@ def _pick_resolution():
             selected_idx = i
             break
     if selected_idx is None:
-        # Default to largest that fits
         selected_idx = len(choices) - 1
 
-    btn_h = 44
-    gap   = 12
-    start_y = 72
+    # Pre-select saved server
+    saved_url = _load_server_url() or _DEFAULT_SERVER_URL
+    server_idx = None
+    for i, (url, _) in enumerate(_SERVER_PRESETS):
+        if saved_url.rstrip('/') == url.rstrip('/'):
+            server_idx = i
+            break
+    if server_idx is None:
+        server_idx = 0  # default to local
 
     clock = pygame.time.Clock()
     running = True
-    confirmed = False
 
     while running:
         win.fill(_BG)
-
-        # Title
-        title_surf = title_font.render('Select Resolution', True, _TITLE_CLR)
-        win.blit(title_surf, ((pw - title_surf.get_width()) // 2, 22))
-
         mx, my = pygame.mouse.get_pos()
 
-        # Resolution buttons
+        # ── Title ──
+        title_surf = title_font.render('Nepal Kings', True, _TITLE_CLR)
+        win.blit(title_surf, ((pw - title_surf.get_width()) // 2, 18))
+
+        # ── Resolution section ──
+        sec_lbl = section_font.render('Resolution', True, _TEXT_CLR)
+        win.blit(sec_lbl, (40, res_start_y - 2))
+        # thin separator line
+        pygame.draw.line(win, _BTN_BDR, (40, res_start_y + 24), (pw - 40, res_start_y + 24))
+        res_btn_start = res_start_y + 32
+
         btn_rects = []
         for i, (w, h, label) in enumerate(choices):
-            r = pygame.Rect(40, start_y + i * (btn_h + gap), pw - 80, btn_h)
+            r = pygame.Rect(40, res_btn_start + i * (btn_h + gap), pw - 80, btn_h)
             btn_rects.append(r)
-
             is_hover = r.collidepoint(mx, my)
             is_sel   = (i == selected_idx)
-
-            if is_sel:
-                bg = _BTN_BG_SEL
-                bdr = _BTN_BDR_SEL
-            elif is_hover:
-                bg = _BTN_BG_HOV
-                bdr = _BTN_BDR_HOV
-            else:
-                bg = _BTN_BG
-                bdr = _BTN_BDR
-
+            bg  = _BTN_BG_SEL if is_sel else (_BTN_BG_HOV if is_hover else _BTN_BG)
+            bdr = _BTN_BDR_SEL if is_sel else (_BTN_BDR_HOV if is_hover else _BTN_BDR)
             pygame.draw.rect(win, bg, r, border_radius=8)
             pygame.draw.rect(win, bdr, r, 2, border_radius=8)
-
-            # Label
             txt = btn_font.render(label, True, _TEXT_CLR)
             win.blit(txt, (r.x + 18, r.y + (r.h - txt.get_height()) // 2))
-
-            # Native indicator
             if w == native_w and h == native_h:
                 tag = hint_font.render('native', True, _CHECK_CLR)
                 win.blit(tag, (r.right - tag.get_width() - 14,
@@ -189,8 +200,35 @@ def _pick_resolution():
                 win.blit(dot, (r.right - dot.get_width() - 14,
                                r.y + (r.h - dot.get_height()) // 2))
 
-        # "Start Game" button
-        start_y_btn = start_y + len(choices) * (btn_h + gap) + 16
+        # ── Server section ──
+        svr_y = res_btn_start + len(choices) * (btn_h + gap) + 16
+        sec_lbl2 = section_font.render('Server', True, _TEXT_CLR)
+        win.blit(sec_lbl2, (40, svr_y))
+        pygame.draw.line(win, _BTN_BDR, (40, svr_y + 24), (pw - 40, svr_y + 24))
+        svr_btn_start = svr_y + 32
+
+        svr_rects = []
+        for i, (url, label) in enumerate(_SERVER_PRESETS):
+            r = pygame.Rect(40, svr_btn_start + i * (btn_h + gap), pw - 80, btn_h)
+            svr_rects.append(r)
+            is_hover = r.collidepoint(mx, my)
+            is_sel   = (i == server_idx)
+            bg  = _BTN_BG_SEL if is_sel else (_BTN_BG_HOV if is_hover else _BTN_BG)
+            bdr = _BTN_BDR_SEL if is_sel else (_BTN_BDR_HOV if is_hover else _BTN_BDR)
+            pygame.draw.rect(win, bg, r, border_radius=8)
+            pygame.draw.rect(win, bdr, r, 2, border_radius=8)
+            txt = btn_font.render(label, True, _TEXT_CLR)
+            win.blit(txt, (r.x + 18, r.y + (r.h - txt.get_height()) // 2))
+            # Show URL underneath the label
+            url_txt = hint_font.render(url, True, _HINT_CLR)
+            win.blit(url_txt, (r.x + 18, r.y + (r.h - url_txt.get_height()) // 2 + 14))
+            if is_sel:
+                dot = btn_font.render('●', True, _TITLE_CLR)
+                win.blit(dot, (r.right - dot.get_width() - 14,
+                               r.y + (r.h - dot.get_height()) // 2))
+
+        # ── "Start Game" button ──
+        start_y_btn = svr_btn_start + len(_SERVER_PRESETS) * (btn_h + gap) + 16
         start_rect = pygame.Rect(pw // 2 - 80, start_y_btn, 160, 44)
         start_hover = start_rect.collidepoint(mx, my)
         sbg = _BTN_BG_HOV if start_hover else _BTN_BG
@@ -217,35 +255,37 @@ def _pick_resolution():
                     pygame.quit()
                     sys.exit(0)
                 elif ev.key == pygame.K_RETURN:
-                    confirmed = True
                     running = False
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 for i, r in enumerate(btn_rects):
                     if r.collidepoint(ev.pos):
                         selected_idx = i
                         break
+                for i, r in enumerate(svr_rects):
+                    if r.collidepoint(ev.pos):
+                        server_idx = i
+                        break
                 if start_rect.collidepoint(ev.pos):
-                    confirmed = True
                     running = False
 
     chosen_w, chosen_h = choices[selected_idx][0], choices[selected_idx][1]
+    chosen_url = _SERVER_PRESETS[server_idx][0]
 
-    # Destroy the picker window (the game will create its own)
     pygame.display.quit()
-
-    return chosen_w, chosen_h
+    return chosen_w, chosen_h, chosen_url
 
 
 # ── Entry Point ────────────────────────────────────────────────────
 def main():
-    force_picker = '--pick-resolution' in sys.argv or '-r' in sys.argv
+    force_picker = ('--pick-resolution' in sys.argv or '-r' in sys.argv
+                    or '--settings' in sys.argv or '-s' in sys.argv)
 
     saved = _load_saved()
     if saved and not force_picker:
         w, h = saved
     else:
-        w, h = _pick_resolution()
-        _save_choice(w, h)
+        w, h, picked_url = _pick_resolution()
+        _save_choice(w, h, server_url=picked_url)
 
     # Server URL: CLI flag > env var > config file > default
     server_url = None
@@ -283,4 +323,13 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import traceback as _tb
+    _log = os.path.join(os.path.expanduser('~'), '.nepalkings', 'crash.log')
+    try:
+        main()
+    except Exception:
+        os.makedirs(os.path.dirname(_log), exist_ok=True)
+        with open(_log, 'a') as _f:
+            _f.write('\n--- crash ' + __import__('datetime').datetime.now().isoformat() + ' ---\n')
+            _tb.print_exc(file=_f)
+        raise

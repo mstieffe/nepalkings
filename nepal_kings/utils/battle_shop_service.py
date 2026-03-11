@@ -19,7 +19,7 @@ def buy_battle_move(game_id, player_id, family_name, card_id, card_type, suit, r
         'rank': rank,
         'value': value,
     }
-    response = requests.post(f'{settings.SERVER_URL}/battle_shop/buy_battle_move', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/battle_shop/buy_battle_move', json=data, timeout=10)
     if response.status_code != 200:
         return {'success': False, 'message': response.json().get('message', 'Unknown error')}
     return response.json()
@@ -35,7 +35,7 @@ def return_battle_move(game_id, player_id, battle_move_id):
         'player_id': player_id,
         'battle_move_id': battle_move_id,
     }
-    response = requests.post(f'{settings.SERVER_URL}/battle_shop/return_battle_move', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/battle_shop/return_battle_move', json=data, timeout=10)
     if response.status_code != 200:
         return {'success': False, 'message': response.json().get('message', 'Unknown error')}
     return response.json()
@@ -48,7 +48,8 @@ def get_battle_moves(game_id, player_id):
     """
     response = requests.get(
         f'{settings.SERVER_URL}/battle_shop/get_battle_moves',
-        params={'game_id': game_id, 'player_id': player_id}
+        params={'game_id': game_id, 'player_id': player_id},
+        timeout=10
     )
     if response.status_code != 200:
         return {'success': False, 'battle_moves': []}
@@ -64,7 +65,7 @@ def confirm_battle_moves(game_id, player_id):
         'game_id': game_id,
         'player_id': player_id,
     }
-    response = requests.post(f'{settings.SERVER_URL}/battle_shop/confirm_battle_moves', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/battle_shop/confirm_battle_moves', json=data, timeout=10)
     if response.status_code != 200:
         return {'success': False, 'message': response.json().get('message', 'Unknown error')}
     return response.json()
@@ -80,7 +81,7 @@ def gamble_battle_move(game_id, player_id, battle_move_id):
         'player_id': player_id,
         'battle_move_id': battle_move_id,
     }
-    response = requests.post(f'{settings.SERVER_URL}/battle_shop/gamble_battle_move', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/battle_shop/gamble_battle_move', json=data, timeout=10)
     if response.status_code != 200:
         return {'success': False, 'message': response.json().get('message', 'Unknown error')}
     return response.json()
@@ -97,7 +98,7 @@ def combine_battle_moves(game_id, player_id, move_id_a, move_id_b):
         'move_id_a': move_id_a,
         'move_id_b': move_id_b,
     }
-    response = requests.post(f'{settings.SERVER_URL}/battle_shop/combine_battle_moves', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/battle_shop/combine_battle_moves', json=data, timeout=10)
     if response.status_code != 200:
         return {'success': False, 'message': response.json().get('message', 'Unknown error')}
     return response.json()
@@ -113,7 +114,7 @@ def dismantle_battle_move(game_id, player_id, battle_move_id):
         'player_id': player_id,
         'battle_move_id': battle_move_id,
     }
-    response = requests.post(f'{settings.SERVER_URL}/battle_shop/dismantle_battle_move', json=data)
+    response = requests.post(f'{settings.SERVER_URL}/battle_shop/dismantle_battle_move', json=data, timeout=10)
     if response.status_code != 200:
         return {'success': False, 'message': response.json().get('message', 'Unknown error')}
     return response.json()

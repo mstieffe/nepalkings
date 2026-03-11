@@ -6,6 +6,7 @@ from game.core.game import Game
 from config import settings
 from utils.utils import Button, InputField
 from utils.game_service import fetch_users, fetch_user, create_challenge, remove_challenge, create_game
+from utils.background_poller import BackgroundPoller
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -168,6 +169,15 @@ class NewGameScreen(MenuScreenMixin, Screen):
             opp = next(u for u in self.users if u['id'] == opp_id)
             self.open_opponents[ch['id']] = opp
 
+    @staticmethod
+    def _bg_fetch_challenges(username):
+        """Thread-safe fetch of users + user data."""
+        users = fetch_users(username)
+        user = fetch_user(username)
+        return {'users': users, 'user': user}
+
+    def _rebuild_challenge_buttons(self):
+        """Rebuild challenge / opponent button lists from self.users / self.open_opponents."""
         self.possible_opponents = [u for u in self.users if u not in self.open_opponents.values()]
 
         # Sort: online first, then alphabetical
@@ -382,10 +392,33 @@ class NewGameScreen(MenuScreenMixin, Screen):
         super().update()
         self._update_icon_buttons()
 
+        # ── Non-blocking challenge polling (every 5s) ─────────
+        if not hasattr(self, '_challenge_poller'):
+            self._challenge_poller = None
         current_time = pygame.time.get_ticks()
-        if current_time - self.last_update_time >= self.update_interval:
+        if current_time - self.last_update_time >= 5000:
             self.last_update_time = current_time
-            self.update_all_challenge_buttons()
+            username = self.state.user_dict.get('username', '')
+            if self._challenge_poller is None:
+                self._challenge_poller = BackgroundPoller(
+                    self._bg_fetch_challenges, args=(username,))
+            if not self._challenge_poller.busy:
+                self._challenge_poller.poll(args=(username,))
+        # Apply result if ready
+        if hasattr(self, '_challenge_poller') and self._challenge_poller and self._challenge_poller.has_result():
+            data = self._challenge_poller.result
+            if data:
+                self.users = data['users']
+                self.user = data['user']
+                self.open_challenges = self.user['challenges_issued'] + self.user['challenges_received']
+                self.open_opponents = {}
+                for ch in self.open_challenges:
+                    opp_id = ch['challenger_id'] if ch['challenger_id'] != self.user['id'] else ch['challenged_id']
+                    opp = next((u for u in self.users if u['id'] == opp_id), None)
+                    if opp:
+                        self.open_opponents[ch['id']] = opp
+                self._rebuild_challenge_buttons()
+        # ──────────────────────────────────────────────────────
 
         # Only update hover/click for visible buttons
         for btn in self.challenge_buttons + self.open_challenge_buttons:

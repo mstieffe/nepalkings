@@ -30,6 +30,9 @@ class CastSpellScreen(SubScreen):
         self.selected_spell_family = None
         self.selected_spells = []
         
+        # Version tracking to avoid per-frame recalculation
+        self._last_game_data_version = -1
+        
         self.confirm_button = ConfirmButton(
             self.window,
             settings.CAST_SPELL_CONFIRM_BUTTON_X,
@@ -44,6 +47,7 @@ class CastSpellScreen(SubScreen):
         """
         self.selected_spell_family = None
         self.selected_spells = []
+        self._last_game_data_version = -1
         self.dialogue_box = None
         print("[CastSpellScreen] State reset for game switch")
 
@@ -400,8 +404,10 @@ class CastSpellScreen(SubScreen):
         else:
             self.confirm_button.disabled = False
         
-        # Update icon states based on available cards
-        self.update_spell_icon_states()
+        # Only recalculate spell states when game data actually changes
+        if self.game._game_data_version != self._last_game_data_version:
+            self._last_game_data_version = self.game._game_data_version
+            self.update_spell_icon_states()
         
         # Update all spell family buttons
         for button in self.spell_family_buttons:
@@ -493,8 +499,7 @@ class CastSpellScreen(SubScreen):
             button.handle_events(events)
             
             if button.clicked and button.family != self.selected_spell_family:
-                # New family selected - refresh game state first
-                self.game.update()
+                # New family selected - use already-cached game state
                 self.selected_spell_family = button.family
                 
                 # Get castable spells
@@ -556,8 +561,6 @@ class CastSpellScreen(SubScreen):
                         elif self.scroll_text_list_shifter:
                             selected_spell = self.scroll_text_list_shifter.get_current_selected()
                             if selected_spell:
-                                # Refresh game state before casting
-                                self.game.update()
                                 # Show confirmation dialogue with spell icon and spell cards
                                 counterable_text = " (counterable)" if selected_spell.counterable else ""
                                 # Include spell family icon first, then the cards being spent

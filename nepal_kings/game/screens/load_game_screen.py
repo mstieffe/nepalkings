@@ -7,6 +7,7 @@ from game.screens._menu_base import MenuScreenMixin
 from config import settings
 import requests
 from game.core.game import Game
+from utils.background_poller import BackgroundPoller
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -159,7 +160,8 @@ class LoadGameScreen(MenuScreenMixin, Screen):
     def _fetch_games(self):
         response = requests.get(
             f'{settings.SERVER_URL}/games/get_games',
-            params={'username': self.state.user_dict['username']})
+            params={'username': self.state.user_dict['username']},
+            timeout=10)
         if response.status_code != 200:
             return []
         game_dicts = response.json().get('games', [])
@@ -317,10 +319,26 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         super().update()
         self._update_icon_buttons()
 
+        # Non-blocking game list refresh (every 5s)
+        if not hasattr(self, '_games_poller'):
+            self._games_poller = None
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:
             self.last_update_time = current_time
-            self._refresh_games()
+            if self._games_poller is None:
+                self._games_poller = BackgroundPoller(self._fetch_games)
+            if not self._games_poller.busy:
+                self._games_poller.poll()
+        # Apply when ready
+        if hasattr(self, '_games_poller') and self._games_poller and self._games_poller.has_result():
+            new_games = self._games_poller.result
+            if new_games is not None:
+                self.games = new_games
+                n = len(self.games)
+                self._content_h = n * (_ROW_H + _ROW_GAP) - (_ROW_GAP if n else 0)
+                self._max_scroll = max(0, self._content_h - self._viewport_h)
+                self._scroll_y = min(self._scroll_y, self._max_scroll)
+                self._row_rects = []
 
         # Hover detection (only for visible, non-clipped rows)
         mx, my = pygame.mouse.get_pos()

@@ -1,6 +1,5 @@
 import pygame
 from pygame.locals import *
-import pandas as pd
 from game.screens.screen import Screen
 from config import settings
 #from game.components.card_img import CardImg
@@ -17,6 +16,8 @@ from game.screens.guide_book_screen import GuideBookScreen
 from game.screens.battle_screen import BattleScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.components.figures.figure_manager import FigureManager
+from utils.background_poller import BackgroundPoller
+from game.core.game import Game
 
 
 class GameScreen(Screen):
@@ -29,6 +30,10 @@ class GameScreen(Screen):
 
         # Track current game ID to detect game switches
         self._current_game_id = None
+
+        # ── Background game-state poller (non-blocking) ────────
+        self._game_poller = None  # Created on first update_game()
+        self.update_interval = 2000  # ms between polls (remote-friendly)
 
         # Unread chat message tracking
         self._last_seen_chat_count = 0
@@ -158,20 +163,13 @@ class GameScreen(Screen):
 
     def initialize_info_scroll(self):
         """Initialize merged info scroll with resources and slots (excluding castle)."""
-        info_df = pd.DataFrame({
-            'element': ['village', 'military', 'food', 'material', 'amor'],
-            'icon_img': [
-                settings.RESOURCE_ICON_IMG_PATH_DICT['villager_red_black'],
-                settings.RESOURCE_ICON_IMG_PATH_DICT['warrior_red_black'],
-                settings.RESOURCE_ICON_IMG_PATH_DICT['rice_meat'],
-                settings.RESOURCE_ICON_IMG_PATH_DICT['wood_stone'],
-                settings.RESOURCE_ICON_IMG_PATH_DICT['sword_shield'],
-            ],
-            'red': ["0/0", "0/0", "0/0", "0/0", "0/0"],
-            'black': ["0/0", "0/0", "0/0", "0/0", "0/0"],
-            'red_deficit': [False, False, False, False, False],
-            'black_deficit': [False, False, False, False, False],
-        })
+        info_data = [
+            {'element': 'village',  'icon_img': settings.RESOURCE_ICON_IMG_PATH_DICT['villager_red_black'], 'red': '0/0', 'black': '0/0', 'red_deficit': False, 'black_deficit': False},
+            {'element': 'military', 'icon_img': settings.RESOURCE_ICON_IMG_PATH_DICT['warrior_red_black'],  'red': '0/0', 'black': '0/0', 'red_deficit': False, 'black_deficit': False},
+            {'element': 'food',     'icon_img': settings.RESOURCE_ICON_IMG_PATH_DICT['rice_meat'],          'red': '0/0', 'black': '0/0', 'red_deficit': False, 'black_deficit': False},
+            {'element': 'material', 'icon_img': settings.RESOURCE_ICON_IMG_PATH_DICT['wood_stone'],         'red': '0/0', 'black': '0/0', 'red_deficit': False, 'black_deficit': False},
+            {'element': 'amor',     'icon_img': settings.RESOURCE_ICON_IMG_PATH_DICT['sword_shield'],       'red': '0/0', 'black': '0/0', 'red_deficit': False, 'black_deficit': False},
+        ]
         info_scroll = InfoScroll(
             self.window,
             settings.INFO_SCROLL_X,
@@ -179,7 +177,7 @@ class GameScreen(Screen):
             settings.INFO_SCROLL_WIDTH,
             settings.INFO_SCROLL_HEIGHT,
             'Resources',
-            info_df,
+            info_data,
             settings.INFO_SCROLL_BG_IMG_PATH)
         self.display_elements.append(info_scroll)
 
@@ -406,6 +404,9 @@ class GameScreen(Screen):
         if current_id != self._current_game_id:
             self._reset_game_screen_state()
             self._current_game_id = current_id
+            # Recreate poller for the new game
+            self._game_poller = BackgroundPoller(
+                Game.fetch_server_data, args=(current_id,))
         
         # Check if subscreen changed - if so, deselect all cards
         if self.previous_subscreen != self.state.subscreen:
@@ -432,7 +433,16 @@ class GameScreen(Screen):
         # Skip full server poll while defender is actively responding to counter spell
         # (they don't need fresh data while deciding, and the poll blocks the UI)
         if not self.need_to_respond_to_spell:
-            self.state.game.update()
+            # Non-blocking: kick off background fetch, apply when ready
+            if self._game_poller is None:
+                self._game_poller = BackgroundPoller(
+                    Game.fetch_server_data,
+                    args=(self.state.game.game_id,))
+            if self._game_poller.has_result():
+                self.state.game.apply_server_data(self._game_poller.result)
+            if not self._game_poller.busy:
+                self._game_poller.poll(
+                    args=(self.state.game.game_id,))
         
         # ── Badge tracking (field & battle) ──
         self._update_field_badge()
@@ -2731,36 +2741,32 @@ class GameScreen(Screen):
         return False
     
     def _end_infinite_hammer_mode(self):
-        """End Infinite Hammer mode and send request to server to flip turn."""
-        try:
-            import requests
-            from config import settings
-            
-            response = requests.post(
-                f'{settings.SERVER_URL}/spells/end_infinite_hammer',
-                json={
-                    'game_id': self.state.game.game_id,
-                    'player_id': self.state.game.player_id
-                }
-            )
-            
-            if response.status_code == 200:
-                # Success - clear client state
-                self.state.game.infinite_hammer_active = False
-                self.state.game.infinite_hammer_dialogue_shown = False
-                
-                # Update game state to reflect turn flip
-                self.state.game.update()
-                
-                print(f"[INFINITE_HAMMER] Mode ended successfully")
-            else:
-                error_msg = response.json().get('message', 'Unknown error')
-                print(f"[INFINITE_HAMMER] Failed to end mode: {error_msg}")
-                self.state.set_msg(f"Error ending Infinite Hammer: {error_msg}")
-        
-        except Exception as e:
-            print(f"[INFINITE_HAMMER] Error ending mode: {str(e)}")
-            self.state.set_msg(f"Error ending Infinite Hammer mode: {str(e)}")
+        """End Infinite Hammer mode — fire request in background thread."""
+        # Immediately clear client state so UI updates
+        self.state.game.infinite_hammer_active = False
+        self.state.game.infinite_hammer_dialogue_shown = False
+
+        import threading
+        game_id = self.state.game.game_id
+        player_id = self.state.game.player_id
+
+        def _do():
+            try:
+                import requests as _req
+                from config import settings as _s
+                resp = _req.post(
+                    f'{_s.SERVER_URL}/spells/end_infinite_hammer',
+                    json={'game_id': game_id, 'player_id': player_id},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    print("[INFINITE_HAMMER] Mode ended successfully")
+                else:
+                    print(f"[INFINITE_HAMMER] Failed: {resp.text}")
+            except Exception as e:
+                print(f"[INFINITE_HAMMER] Error: {e}")
+
+        threading.Thread(target=_do, daemon=True).start()
     
     def _handle_counter_spell_counter(self):
         """Handle player choosing to counter the spell."""
@@ -2830,10 +2836,10 @@ class GameScreen(Screen):
             if result.get('game'):
                 self.state.game.update_from_dict(result['game'])
             
-            # Trigger start_turn so auto-fill fires
+            # Trigger start_turn so auto-fill fires (non-blocking)
             # (update_from_dict sets turn state, preventing update() from detecting the change)
             if self.state.game.turn:
-                self.state.game._handle_start_turn()
+                self.state.game._start_turn_async()
                 # Clear stale opponent turn summary — we already show our own spell notification
                 self.state.game.pending_opponent_turn_summary = None
             
@@ -3047,10 +3053,10 @@ class GameScreen(Screen):
             if result.get('game'):
                 self.state.game.update_from_dict(result['game'])
             
-            # Trigger start_turn so auto-fill fires
+            # Trigger start_turn so auto-fill fires (non-blocking)
             # (update_from_dict sets turn state, preventing update() from detecting the change)
             if self.state.game.turn:
-                self.state.game._handle_start_turn()
+                self.state.game._start_turn_async()
                 # Clear stale opponent turn summary — we already show our own spell notification
                 self.state.game.pending_opponent_turn_summary = None
             
@@ -3503,7 +3509,12 @@ class GameScreen(Screen):
         # Throttle updates to avoid constant re-rendering
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:
+            self.last_update_time = current_time
             self.update_game()
+
+        # Lightweight per-frame hover detection for card hands
+        self.main_hand.update_hover()
+        self.side_hand.update_hover()
 
         # Update the active subscreen if necessary
         if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:

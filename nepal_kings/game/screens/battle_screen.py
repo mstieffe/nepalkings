@@ -21,6 +21,7 @@ from utils import battle_shop_service
 from utils import game_service
 from utils.utils import Button
 from game.components.dialogue_box import _DlgButton
+from utils.background_poller import BackgroundPoller
 
 
 class BattleScreen(SubScreen):
@@ -1119,9 +1120,28 @@ class BattleScreen(SubScreen):
         current_gid = getattr(game, 'game_id', None)
         if current_gid and current_gid != self._loaded_game_id:
             self._load_battle_data()
+            # (Re)create the background poller for this game
+            self._battle_poller = BackgroundPoller(
+                lambda gid, pid: game_service.get_battle_state(gid, pid),
+                args=(current_gid, game.player_id))
 
-        # Poll server for battle state changes (opponent moves, turn updates)
-        self._poll_battle_state()
+        # Non-blocking battle state poll (every ~1 s)
+        now = pygame.time.get_ticks()
+        if not hasattr(self, '_battle_poll_timer'):
+            self._battle_poll_timer = 0
+            self._battle_poller = None
+        if now - self._battle_poll_timer >= 1000:
+            self._battle_poll_timer = now
+            if self._battle_poller is None and game and game.game_id:
+                self._battle_poller = BackgroundPoller(
+                    lambda gid, pid: game_service.get_battle_state(gid, pid),
+                    args=(game.game_id, game.player_id))
+            if self._battle_poller and not self._battle_poller.busy:
+                self._battle_poller.poll(
+                    args=(game.game_id, game.player_id))
+        # Apply result when ready (non-blocking)
+        if self._battle_poller and self._battle_poller.has_result():
+            self._apply_battle_state(self._battle_poller.result)
 
         # Auto-skip: if it's our turn but we have no unused moves left
         self._check_auto_skip()
@@ -1130,14 +1150,16 @@ class BattleScreen(SubScreen):
         self._sync_battle_turns()
 
     def _poll_battle_state(self):
-        """Fetch the current battle state from the server and reconcile."""
+        """Fetch the current battle state from the server and reconcile (blocking legacy)."""
         if not self.game or not self.game.game_id:
             return
-
         result = game_service.get_battle_state(
             self.game.game_id, self.game.player_id)
+        self._apply_battle_state(result)
 
-        if not result.get('success'):
+    def _apply_battle_state(self, result):
+        """Apply fetched battle state data (main thread only)."""
+        if not result or not result.get('success'):
             return
 
         # Update round and turn from server

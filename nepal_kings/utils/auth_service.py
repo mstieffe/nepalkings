@@ -20,7 +20,7 @@ def fetch_rankings():
 
 def login(username, password):
     try:
-        response = requests.post(f'{settings.SERVER_URL}/auth/login', data={'username': username, 'password': password})
+        response = requests.post(f'{settings.SERVER_URL}/auth/login', data={'username': username, 'password': password}, timeout=10)
 
         # Check if the response indicates a failure due to wrong credentials (401 Unauthorized)
         if response.status_code == 401:
@@ -51,7 +51,7 @@ def login(username, password):
 
 def register(username, password):
     try:
-        response = requests.post(f'{settings.SERVER_URL}/auth/register', data={'username': username, 'password': password})
+        response = requests.post(f'{settings.SERVER_URL}/auth/register', data={'username': username, 'password': password}, timeout=10)
 
         # Check for username conflicts (409 Conflict)
         if response.status_code == 409:

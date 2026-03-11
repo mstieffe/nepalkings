@@ -1,0 +1,88 @@
+name: Build Installers
+
+on:
+  workflow_dispatch:          # Manual trigger from GitHub UI
+  push:
+    tags: ['v*']              # Auto-build on version tags (e.g. v0.1.0)
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false        # Don't cancel other builds if one fails
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: NepalKings-macOS
+          - os: windows-latest
+            artifact: NepalKings-Windows
+          - os: ubuntu-latest
+            artifact: NepalKings-Linux
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Linux needs SDL2 headers for Pygame to work
+      - name: Install Linux SDL2 dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyinstaller
+          pip install pygame==2.4.0 requests
+
+      # Use Python for the sed replacement — works identically on all platforms
+      - name: Patch default server URL
+        shell: python
+        run: |
+          import re, pathlib
+          p = pathlib.Path('nepal_kings/main.py')
+          txt = p.read_text(encoding='utf-8')
+          txt = re.sub(
+              r"^_DEFAULT_SERVER_URL = .*$",
+              "_DEFAULT_SERVER_URL = 'https://nepalkings.pythonanywhere.com'",
+              txt,
+              flags=re.MULTILINE,
+          )
+          p.write_text(txt, encoding='utf-8')
+          print('Patched default server URL')
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          cd nepal_kings
+          pyinstaller nepal_kings.spec --clean --noconfirm
+
+      # ── Upload artifacts per platform ──
+      - name: Package macOS .app
+        if: runner.os == 'macOS'
+        run: cd nepal_kings/dist && zip -r NepalKings-macOS.zip NepalKings.app
+
+      - name: Upload macOS artifact
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: nepal_kings/dist/NepalKings-macOS.zip
+
+      - name: Upload Windows artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: nepal_kings/dist/NepalKings.exe
+
+      - name: Upload Linux artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: nepal_kings/dist/NepalKings

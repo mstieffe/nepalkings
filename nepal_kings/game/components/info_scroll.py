@@ -1,5 +1,5 @@
 import pygame
-import pandas as pd
+from typing import List, Dict, Any
 
 from config import settings
 
@@ -13,7 +13,7 @@ class InfoScroll:
         width: int,
         height: int,
         title: str,
-        text_df: pd.DataFrame,
+        text_data: List[Dict[str, Any]],
         bg_img_path: str,
     ):
         self.window = window
@@ -22,7 +22,7 @@ class InfoScroll:
         self.width = width
         self.height = height
         self.title = title
-        self.text_df = text_df
+        self.text_data = text_data
         self.bg_img_path = bg_img_path  # kept for API compat, no longer used
 
         self.font_title = self._load_font(settings.INFO_SCROLL_FONT_SIZE, bold=True)
@@ -51,9 +51,9 @@ class InfoScroll:
         return pygame.transform.smoothscale(image, (int(width), int(height)))
 
     def _preload_icons(self):
-        """Preload and preprocess icons from the DataFrame."""
+        """Preload and preprocess icons from the data."""
         preloaded_icons = {}
-        for _, row in self.text_df.iterrows():
+        for row in self.text_data:
             for icon_type in ['icon_img_red', 'icon_img_black', 'icon_img']:
                 if icon_type in row and row[icon_type] not in preloaded_icons:
                     preloaded_icons[row[icon_type]] = self._load_scaled_image(
@@ -113,7 +113,7 @@ class InfoScroll:
         starting_y_position += settings.INFO_SCROLL_TITLE_SPACING
 
         # Draw rows with preloaded icons
-        for _, row in self.text_df.iterrows():
+        for row in self.text_data:
             icon_x = self.x + settings.INFO_SCROLL_ICON_MARGIN
             text_y = starting_y_position + (settings.INFO_SCROLL_ICON_SIZE // 2)
 
@@ -215,8 +215,8 @@ class InfoScroll:
             produces = resources_data.get('produces', {})
             requires = resources_data.get('requires', {})
             
-            # Update text_df with calculated resources
-            for idx, row in self.text_df.iterrows():
+            # Update text_data with calculated resources
+            for row in self.text_data:
                 element = row['element']
                 
                 # Map element names to resource keys (showing total_required/total_produced)
@@ -226,10 +226,10 @@ class InfoScroll:
                     black_req = requires.get('food_black', 0)
                     black_prod = produces.get('food_black', 0)
                     
-                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
-                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
-                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
-                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    row['red'] = f"{red_req}/{red_prod}"
+                    row['black'] = f"{black_req}/{black_prod}"
+                    row['red_deficit'] = red_req > red_prod
+                    row['black_deficit'] = black_req > black_prod
                     
                 elif element == 'amor':
                     red_req = requires.get('armor_red', 0)
@@ -237,10 +237,10 @@ class InfoScroll:
                     black_req = requires.get('armor_black', 0)
                     black_prod = produces.get('armor_black', 0)
                     
-                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
-                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
-                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
-                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    row['red'] = f"{red_req}/{red_prod}"
+                    row['black'] = f"{black_req}/{black_prod}"
+                    row['red_deficit'] = red_req > red_prod
+                    row['black_deficit'] = black_req > black_prod
                     
                 elif element == 'material':
                     red_req = requires.get('material_red', 0)
@@ -248,10 +248,10 @@ class InfoScroll:
                     black_req = requires.get('material_black', 0)
                     black_prod = produces.get('material_black', 0)
                     
-                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
-                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
-                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
-                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    row['red'] = f"{red_req}/{red_prod}"
+                    row['black'] = f"{black_req}/{black_prod}"
+                    row['red_deficit'] = red_req > red_prod
+                    row['black_deficit'] = black_req > black_prod
                     
                 elif element == 'village':
                     red_req = requires.get('villager_red', 0)
@@ -259,10 +259,10 @@ class InfoScroll:
                     black_req = requires.get('villager_black', 0)
                     black_prod = produces.get('villager_black', 0)
                     
-                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
-                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
-                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
-                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    row['red'] = f"{red_req}/{red_prod}"
+                    row['black'] = f"{black_req}/{black_prod}"
+                    row['red_deficit'] = red_req > red_prod
+                    row['black_deficit'] = black_req > black_prod
                     
                 elif element == 'military':
                     red_req = requires.get('warrior_red', 0)
@@ -270,8 +270,8 @@ class InfoScroll:
                     black_req = requires.get('warrior_black', 0)
                     black_prod = produces.get('warrior_black', 0)
                     
-                    self.text_df.at[idx, 'red'] = f"{red_req}/{red_prod}"
-                    self.text_df.at[idx, 'black'] = f"{black_req}/{black_prod}"
-                    self.text_df.at[idx, 'red_deficit'] = red_req > red_prod
-                    self.text_df.at[idx, 'black_deficit'] = black_req > black_prod
+                    row['red'] = f"{red_req}/{red_prod}"
+                    row['black'] = f"{black_req}/{black_prod}"
+                    row['red_deficit'] = red_req > red_prod
+                    row['black_deficit'] = black_req > black_prod
         

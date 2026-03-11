@@ -22,6 +22,15 @@ _IMG_DIR = os.path.join(_DIR, 'img')
 _CONFIG_DIR = os.path.join(_DIR, 'config')
 _GAME_DIR = os.path.join(_DIR, 'game')
 _UTILS_DIR = os.path.join(_DIR, 'utils')
+_ICON_DIR = os.path.join(_IMG_DIR, 'app_icon')
+
+# Platform-specific icon
+if sys.platform == 'darwin':
+    _ICON = os.path.join(_ICON_DIR, 'app_icon.icns')
+elif sys.platform == 'win32':
+    _ICON = os.path.join(_ICON_DIR, 'app_icon.ico')
+else:
+    _ICON = None
 
 # Collect all Python submodules so dynamic imports work
 hidden_imports = (
@@ -42,7 +51,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'numpy.testing'],
+    excludes=['tkinter', 'matplotlib', 'numpy', 'pandas', 'numpy.testing'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -62,15 +71,16 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,              # UPX can corrupt Pygame/SDL DLLs on Windows
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,  # Windowed app, no terminal
     disable_windowed_traceback=False,
-    argv_emulation=True,  # macOS: support dropping files onto icon
+    argv_emulation=False,  # MUST be False — True crashes on modern macOS
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=_ICON,
 )
 
 # macOS .app bundle
@@ -78,10 +88,11 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         exe,
         name='NepalKings.app',
-        icon=None,  # Add an .icns file path here when you have one
+        icon=_ICON,
         bundle_identifier='com.nepalkings.game',
         info_plist={
             'CFBundleShortVersionString': '0.1.0',
             'NSHighResolutionCapable': True,
+            'NSRequiresAquaSystemAppearance': False,
         },
     )

@@ -31,6 +31,11 @@ class Client:
         window = pygame.display.set_mode((_SW, _SH))
         pygame.display.set_caption(settings.SCREEN_CAPTION)
 
+        # Set window icon
+        _icon_path = os.path.join(os.path.dirname(__file__), 'img', 'app_icon', 'icon_128x128.png')
+        if os.path.exists(_icon_path):
+            pygame.display.set_icon(pygame.image.load(_icon_path))
+
         # Background – reuse the greyscale login background
         raw_bg = pygame.image.load(settings.LOGIN_BG_IMG_PATH).convert()
         bg = pygame.transform.smoothscale(raw_bg, (_SW, _SH))

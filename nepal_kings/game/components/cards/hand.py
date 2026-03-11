@@ -292,8 +292,29 @@ class Hand:
         
         return False
 
+    def update_hover(self):
+        """Lightweight per-frame hover detection for cards.
+
+        This should be called every frame so that card hover
+        visuals respond immediately to mouse movement.
+        """
+        # Reset all hover states
+        num_cards = len(self.cards)
+        for i in range(num_cards):
+            if i < len(self.card_slots):
+                self.card_slots[i].hovered = False
+
+        # Find topmost card under cursor (reverse order = top-most drawn last)
+        mouse_pos = pygame.mouse.get_pos()
+        for i in range(num_cards - 1, -1, -1):
+            if i < len(self.card_slots):
+                slot = self.card_slots[i]
+                if slot.card and slot.rec_card.collidepoint(mouse_pos):
+                    slot.hovered = True
+                    break
+
     def update(self, game):
-        """Update the game state."""
+        """Update the game state (called on throttled interval, not every frame)."""
         self.game = game
         self.cards = self.initialize_cards()
         # Sort: normal cards by rank first, then battle-move cards by rank (shifted right)
@@ -301,10 +322,6 @@ class Hand:
 
         # Update slot positions based on number of cards
         self.update_slot_positions()
-
-        # First pass: update all slots without hover (we'll handle hover separately)
-        for slot in self.card_slots:
-            slot.hovered = False  # Reset hover state
 
         # Assign cards to slots (only as many as we have cards)
         for i, card in enumerate(self.cards):
@@ -318,21 +335,6 @@ class Hand:
             self.card_slots[i].content = None
             self.card_slots[i].card = None
             self.card_slots[i].clicked = False
-        
-        # Handle hover detection - only the topmost card under the mouse should be hovered
-        # Iterate in reverse order (last card drawn is on top)
-        mouse_pos = pygame.mouse.get_pos()
-        hovered_slot = None
-        for i in range(len(self.cards) - 1, -1, -1):
-            if i < len(self.card_slots):
-                slot = self.card_slots[i]
-                if slot.card and slot.rec_card.collidepoint(mouse_pos):
-                    hovered_slot = slot
-                    break  # Found topmost card under mouse
-        
-        # Set hover state only for the topmost card
-        if hovered_slot:
-            hovered_slot.hovered = True
 
     def handle_events(self, events):
         """Handle game events."""

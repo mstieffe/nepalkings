@@ -1,4 +1,5 @@
 import requests
+import threading
 from config import settings
 from game.components.cards.card import Card
 from utils.msg_service import fetch_log_entries, add_log_entry, fetch_chat_messages, send_chat_message
@@ -33,6 +34,10 @@ class Game:
         self.pending_spell = None  # Will be loaded if needed
         self.waiting_for_counter = False
         self.active_spell_effects = []  # Will be loaded separately
+        self.cached_active_spells = []  # Populated by background poller
+        self.cached_figures_data = {}   # {player_id: [figure_dicts]} populated by background poller
+        self._figures_data_version = 0  # Bumped when cached_figures_data changes
+        self._game_data_version = 0     # Bumped when game dict (cards, state, etc.) changes
 
         self.player_id = None
         self.opponent_name = None
@@ -156,284 +161,369 @@ class Game:
         self.update_logs()
         self.update_chats()
 
-    def update(self):
-        """Update game state from the server."""
+        # Pre-load figures so the first render isn't empty
+        for player in self.players:
+            pid = player['id']
+            try:
+                self.cached_figures_data[pid] = fetch_figures(pid)
+            except Exception:
+                self.cached_figures_data[pid] = []
+        self._figures_data_version += 1
+
+        # Pre-load active spells
         try:
-            response = requests.get(f'{settings.SERVER_URL}/games/get_game', params={'game_id': self.game_id})
-            if response.status_code != 200:
-                print("Failed to update game")
-                return
+            from utils import spell_service
+            self.cached_active_spells = spell_service.fetch_active_spells(self.game_id)
+        except Exception:
+            pass
 
-            game_data = response.json()
-            game_dict = game_data.get('game')
+    # ── Network fetch (thread-safe, no mutations) ──────────────
 
+    @staticmethod
+    def fetch_server_data(game_id):
+        """Fetch game state + logs + chats from the server.
+
+        This method is safe to call from a background thread because it
+        does not mutate any Game instance — it only returns raw dicts.
+        Returns ``None`` on failure.
+        """
+        try:
+            resp = requests.get(
+                f'{settings.SERVER_URL}/games/get_game',
+                params={'game_id': game_id},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                print("Failed to fetch game")
+                return None
+
+            game_dict = resp.json().get('game')
             if not game_dict:
                 print("Game data not found in response")
-                return
+                return None
 
-            # Update game data
-            self.game_id = game_dict['id']
-            self.state = game_dict['state']
-            self.date = game_dict['date']
-            self.stake = game_dict.get('stake', 45)
-            self.winner_player_id = game_dict.get('winner_player_id')
-            self.finished_at = game_dict.get('finished_at')
-            self.players = game_dict.get('players', [])
-            self.main_cards = game_dict.get('main_cards', [])
-            self.side_cards = game_dict.get('side_cards', [])
-            self.current_round = game_dict.get('current_round', 1)
-            self.invader_player_id = game_dict.get('invader_player_id')
-            self.turn_player_id = game_dict.get('turn_player_id')
+            logs = []
+            chats = []
+            active_spells = []
+            figures_by_player = {}
+            try:
+                logs = fetch_log_entries(game_id)
+            except Exception as e:
+                print(f"BG: Failed to fetch log entries: {e}")
+            try:
+                chats = fetch_chat_messages(game_id)
+            except Exception as e:
+                print(f"BG: Failed to fetch chat messages: {e}")
+            try:
+                from utils import spell_service
+                active_spells = spell_service.fetch_active_spells(game_id)
+            except Exception as e:
+                print(f"BG: Failed to fetch active spells: {e}")
+            # Fetch figures for all players in the game
+            for player in game_dict.get('players', []):
+                pid = player['id']
+                try:
+                    figures_by_player[pid] = fetch_figures(pid)
+                except Exception as e:
+                    print(f"BG: Failed to fetch figures for player {pid}: {e}")
+                    figures_by_player[pid] = []
 
-            # Detect game-over from server (opponent might have triggered it)
-            if self.state == 'finished' and not self.game_over and not self.game_over_shown:
-                self.game_over = True
-                # Build game_over info from server state
-                winner_player = None
-                loser_player = None
-                for p in self.players:
-                    if p['id'] == self.winner_player_id:
-                        winner_player = p
-                    else:
-                        loser_player = p
-                if winner_player and loser_player:
-                    # Determine game-over reason from last_battle_result
-                    last_result = game_dict.get('last_battle_result', {}) or {}
-                    checkmate_figure_name = last_result.get('checkmate_figure_name')
-                    reason = 'checkmate' if checkmate_figure_name else 'stake'
-                    
-                    self.pending_game_over = {
-                        'game_over': True,
-                        'reason': reason,
-                        'checkmate_figure_name': checkmate_figure_name,
-                        'winner_player_id': winner_player['id'],
-                        'loser_player_id': loser_player['id'],
-                        'winner_username': winner_player.get('username', ''),
-                        'loser_username': loser_player.get('username', ''),
-                        'winner_score': winner_player.get('points', 0),
-                        'loser_score': loser_player.get('points', 0),
-                        'gold_awarded': self.stake * 2,
-                        'stake': self.stake,
-                    }
-                    print(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
-            
-            # Update ceasefire tracking
-            previous_ceasefire = self.ceasefire_active
-            self.ceasefire_active = game_dict.get('ceasefire_active', False)
-            self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
-            
-            # Detect ceasefire ending (transition from active to inactive)
-            if previous_ceasefire and not self.ceasefire_active:
-                print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
-                self.pending_ceasefire_ended = True
-
-            # Update spell-related state
-            previous_pending_spell_id = self.pending_spell_id
-            self.pending_spell_id = game_dict.get('pending_spell_id')
-            self.battle_modifier = game_dict.get('battle_modifier')
-            self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
-            
-            # Check if we're waiting for this player to counter
-            if self.pending_spell_id and self.waiting_for_counter_player_id:
-                self.waiting_for_counter = (self.waiting_for_counter_player_id == self.player_id)
-            else:
-                self.waiting_for_counter = False
-                self.pending_spell = None
-
-            # Update advance/battle state
-            previous_advancing = self.advancing_figure_id
-            self.advancing_figure_id = game_dict.get('advancing_figure_id')
-            self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
-            self.advancing_player_id = game_dict.get('advancing_player_id')
-            self.defending_figure_id = game_dict.get('defending_figure_id')
-            self.defending_figure_id_2 = game_dict.get('defending_figure_id_2')
-            
-            # Clear forced advance once an advance is underway
-            if self.pending_forced_advance and self.advancing_figure_id:
-                self.pending_forced_advance = False
-            
-            # Detect opponent advance (new advance appeared and it's not ours)
-            # Use turn value from game_dict directly (self.turn is stale at this point)
-            is_now_our_turn = (game_dict.get('turn_player_id') == self.player_id)
-            if (self.advancing_figure_id and not previous_advancing and 
-                self.advancing_player_id != self.player_id and is_now_our_turn):
-                self.pending_advance_notification = True
-                # Advance notification replaces the normal opponent turn summary
-                self.pending_opponent_turn_summary = None
-            # Civil War fallback: advance was detected on an earlier poll when it
-            # wasn't our turn (invader was picking second figure).  Now the turn
-            # just came to us — fire the advance notification we missed.
-            elif (self.advancing_figure_id and previous_advancing and
-                  self.advancing_player_id != self.player_id and
-                  is_now_our_turn and
-                  self.previous_turn_player_id != self.player_id and
-                  not self.pending_advance_notification and
-                  not self.defending_figure_id):
-                self.pending_advance_notification = True
-                self.pending_opponent_turn_summary = None
-            
-            # Skip advance/defender detection while battle is confirmed or in progress
-            # (prevents stale flags from re-triggering after battle resolution)
-            battle_active = game_dict.get('battle_confirmed', False) or self.in_battle_phase
-
-            # Check for Civil War modifier (needed for defender-pick guard below)
-            modifiers = self.battle_modifier if isinstance(self.battle_modifier, list) else []
-            has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
-
-            # Detect: advancing player's turn returned without defender selected
-            # This means opponent spent their turn, now advancer must pick a defender
-            # Skip if Civil War second figure selection is pending (turn stays with invader)
-            # Use is_now_our_turn (fresh from game_dict) instead of self.turn (stale)
-            # to avoid false positives right after build+advance with instant charge.
-            if (not battle_active and
-                self.advancing_figure_id and 
-                self.advancing_player_id == self.player_id and 
-                not self.defending_figure_id and 
-                is_now_our_turn and not self.pending_defender_selection and
-                not self.defender_selection_dialogue_shown and
-                not self.civil_war_awaiting_second):
-                self.pending_defender_selection = True
-
-            # Detect: defender's turn ended without counter-advance
-            # Opponent (advancing player) is now picking a defender from our figures.
-            # In Civil War, the invader's first advance keeps the turn with the
-            # invader (for second figure pick). Guard against premature detection
-            # by checking the defender's turns_left: if > 0, the defender hasn't
-            # had their turn yet (server set turns_left=1 on advance).
-            my_turns_left = next(
-                (p.get('turns_left', 0) for p in self.players
-                 if p['id'] == self.player_id), 0)
-            if (not battle_active and
-                self.advancing_figure_id and
-                self.advancing_player_id != self.player_id and
-                not self.defending_figure_id and
-                not is_now_our_turn and
-                not self.pending_waiting_for_defender_pick and
-                not self.waiting_for_defender_pick_shown and
-                not (has_civil_war and my_turns_left > 0)):
-                self.pending_waiting_for_defender_pick = True
-            
-            # Battle is ready when both sides have their figures set
-            battle_ready = (not battle_active and
-                           self.advancing_figure_id and self.defending_figure_id and
-                           not self.pending_battle_ready and not self.battle_ready_shown)
-            
-            # During Civil War, suppress premature battle_ready while a player
-            # is still picking their second figure.  The server keeps the turn
-            # with the picking player until they finish or skip, then flips it.
-            # So battle is only truly ready once the turn reaches the invader
-            # (advancing player), who decides fight/fold first.
-            if battle_ready and has_civil_war:
-                # Also suppress while our own client-side second-pick flags are set
-                if (self.civil_war_awaiting_second or self.civil_war_defender_second):
-                    battle_ready = False
-                # For the invader polling: if turn hasn't come back yet, defender
-                # is still picking
-                elif (self.advancing_player_id == self.player_id and
-                      not is_now_our_turn):
-                    battle_ready = False
-            
-            if battle_ready:
-                self.pending_battle_ready = True
-                print(f"[BATTLE_READY] Figures set: advancing={self.advancing_figure_id}/{self.advancing_figure_id_2}, defending={self.defending_figure_id}/{self.defending_figure_id_2}")
-
-            # Detect fold outcome from opponent's battle decision (polling detection)
-            previous_fold_outcome = self.fold_outcome
-            previous_battle_confirmed = self.battle_confirmed
-            self.battle_decisions = game_dict.get('battle_decisions')
-            self.battle_confirmed = game_dict.get('battle_confirmed', False)
-            self.fold_outcome = game_dict.get('fold_outcome')
-            self.fold_winner_id = game_dict.get('fold_winner_id')
-            self.auto_loss_reason = game_dict.get('auto_loss_reason')
-            self.auto_loss_detail = game_dict.get('auto_loss_detail')
-            self.resting_figure_ids = game_dict.get('resting_figure_ids', [])
-
-            # Update server-authoritative battle round tracking
-            self.battle_round = game_dict.get('battle_round', 0)
-            self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
-
-            # Reset fold tracking when server clears fold state (new round started)
-            if previous_fold_outcome and not self.fold_outcome:
-                self.fold_result_shown = False
-
-            # Detect new fold outcome (transition from None to set)
-            if self.fold_outcome and not previous_fold_outcome and not self.fold_result_shown:
-                self.pending_fold_result = True
-                self.waiting_for_battle_decision = False
-                print(f"[FOLD] Detected fold outcome: {self.fold_outcome}, winner: {self.fold_winner_id}")
-
-            # Detect both chose battle (transition from False to True)
-            if self.battle_confirmed and not previous_battle_confirmed and self.waiting_for_battle_decision:
-                self.auto_proceed_to_battle = True
-                self.waiting_for_battle_decision = False
-                print(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
-
-            # Detect opponent confirmed battle moves while we are waiting
-            previous_bm_confirmed = self.battle_moves_confirmed
-            self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
-            if (self.waiting_for_opponent_battle_moves and
-                    self.battle_moves_confirmed and
-                    len(self.battle_moves_confirmed) >= 2):
-                self.both_battle_moves_ready = True
-                self.waiting_for_opponent_battle_moves = False
-                print(f"[BATTLE_MOVES] Both players confirmed battle moves — proceed to battle")
-
-            # Reinitialize current and opponent players
-            for player_dict in self.players:
-                if player_dict['id'] == self.player_id:
-                    self.current_player = player_dict
-                else:
-                    self.opponent_name = player_dict['username']
-                    self.opponent_player = player_dict
-
-            # Update turn and invader status
-            previous_turn = self.turn
-            self.turn = True if self.turn_player_id == self.player_id else False
-            self.invader = True if self.invader_player_id == self.player_id else False
-
-            # Check for game start notification on first update (regardless of turn number)
-            if not self.game_start_notification_checked:
-                print(f"[GAME_START] First update - player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
-                print(f"[GAME_START] Checking for welcome message...")
-                self._handle_start_turn()  # This will check server-side if player has any logs yet
-                self.game_start_notification_checked = True
-                print(f"[GAME_START] Flag set to True after first check")
-            
-            # Check if turn changed to current player - call start_turn endpoint
-            elif not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
-                print(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
-                self._handle_start_turn()
-            
-            # Detect spell resolution: if our spell was pending and just resolved,
-            # and it's still our turn (e.g., Invader Swap keeps turn with caster),
-            # trigger _handle_start_turn for auto-fill since turn-change detection missed it
-            elif previous_pending_spell_id and not self.pending_spell_id and self.turn and previous_turn:
-                print(f"[SPELL_RESOLVED] Spell resolved while turn stayed with us. Calling start_turn for auto-fill...")
-                self._handle_start_turn()
-            
-            # Update previous turn player for next check
-            self.previous_turn_player_id = self.turn_player_id
-
-            # Detect post-battle side card draw
-            post_battle = game_dict.get('post_battle_drawn_cards')
-            if (post_battle and self.player_id and
-                    str(self.player_id) in post_battle and
-                    self.current_round != self._post_battle_side_cards_round):
-                my_cards = post_battle[str(self.player_id)]
-                if my_cards:
-                    self.pending_post_battle_side_cards = my_cards
-                    self._post_battle_side_cards_round = self.current_round
-                    print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
-
-            # Update logs and chats
-            self.update_logs()
-            self.update_chats()
-
+            return {
+                'game': game_dict,
+                'logs': logs,
+                'chats': chats,
+                'active_spells': active_spells,
+                'figures': figures_by_player,
+            }
         except Exception as e:
-            print(f"An error occurred: {str(e)}")
+            print(f"BG fetch error: {e}")
+            return None
+
+    # ── Apply fetched data (main thread only) ──────────────────
+
+    def apply_server_data(self, server_data):
+        """Apply pre-fetched server data to this Game instance.
+
+        *server_data* is the dict returned by ``fetch_server_data``.
+        """
+        if server_data is None:
+            return
+        game_dict = server_data['game']
+        self._apply_game_dict(game_dict)
+        self.log_entries = server_data.get('logs', self.log_entries)
+        self.chat_messages = server_data.get('chats', self.chat_messages)
+        self.cached_active_spells = server_data.get('active_spells', self.cached_active_spells)
+        new_figures = server_data.get('figures', self.cached_figures_data)
+        if new_figures is not self.cached_figures_data:
+            self.cached_figures_data = new_figures
+            self._figures_data_version += 1
+
+    def update(self):
+        """Update game state from the server (blocking / legacy path)."""
+        data = self.fetch_server_data(self.game_id)
+        if data:
+            self.apply_server_data(data)
+
+    def _apply_game_dict(self, game_dict):
+        """Apply a game dict to this instance (main-thread only)."""
+        self._game_data_version += 1
+        self.game_id = game_dict['id']
+        self.state = game_dict['state']
+        self.date = game_dict['date']
+        self.stake = game_dict.get('stake', 45)
+        self.winner_player_id = game_dict.get('winner_player_id')
+        self.finished_at = game_dict.get('finished_at')
+        self.players = game_dict.get('players', [])
+        self.main_cards = game_dict.get('main_cards', [])
+        self.side_cards = game_dict.get('side_cards', [])
+        self.current_round = game_dict.get('current_round', 1)
+        self.invader_player_id = game_dict.get('invader_player_id')
+        self.turn_player_id = game_dict.get('turn_player_id')
+
+        # Detect game-over from server (opponent might have triggered it)
+        if self.state == 'finished' and not self.game_over and not self.game_over_shown:
+            self.game_over = True
+            # Build game_over info from server state
+            winner_player = None
+            loser_player = None
+            for p in self.players:
+                if p['id'] == self.winner_player_id:
+                    winner_player = p
+                else:
+                    loser_player = p
+            if winner_player and loser_player:
+                # Determine game-over reason from last_battle_result
+                last_result = game_dict.get('last_battle_result', {}) or {}
+                checkmate_figure_name = last_result.get('checkmate_figure_name')
+                reason = 'checkmate' if checkmate_figure_name else 'stake'
+                
+                self.pending_game_over = {
+                    'game_over': True,
+                    'reason': reason,
+                    'checkmate_figure_name': checkmate_figure_name,
+                    'winner_player_id': winner_player['id'],
+                    'loser_player_id': loser_player['id'],
+                    'winner_username': winner_player.get('username', ''),
+                    'loser_username': loser_player.get('username', ''),
+                    'winner_score': winner_player.get('points', 0),
+                    'loser_score': loser_player.get('points', 0),
+                    'gold_awarded': self.stake * 2,
+                    'stake': self.stake,
+                }
+                print(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
+        
+        # Update ceasefire tracking
+        previous_ceasefire = self.ceasefire_active
+        self.ceasefire_active = game_dict.get('ceasefire_active', False)
+        self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
+        
+        # Detect ceasefire ending (transition from active to inactive)
+        if previous_ceasefire and not self.ceasefire_active:
+            print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
+            self.pending_ceasefire_ended = True
+
+        # Update spell-related state
+        previous_pending_spell_id = self.pending_spell_id
+        self.pending_spell_id = game_dict.get('pending_spell_id')
+        self.battle_modifier = game_dict.get('battle_modifier')
+        self.waiting_for_counter_player_id = game_dict.get('waiting_for_counter_player_id')
+        
+        # Check if we're waiting for this player to counter
+        if self.pending_spell_id and self.waiting_for_counter_player_id:
+            self.waiting_for_counter = (self.waiting_for_counter_player_id == self.player_id)
+        else:
+            self.waiting_for_counter = False
+            self.pending_spell = None
+
+        # Update advance/battle state
+        previous_advancing = self.advancing_figure_id
+        self.advancing_figure_id = game_dict.get('advancing_figure_id')
+        self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
+        self.advancing_player_id = game_dict.get('advancing_player_id')
+        self.defending_figure_id = game_dict.get('defending_figure_id')
+        self.defending_figure_id_2 = game_dict.get('defending_figure_id_2')
+        
+        # Clear forced advance once an advance is underway
+        if self.pending_forced_advance and self.advancing_figure_id:
+            self.pending_forced_advance = False
+        
+        # Detect opponent advance (new advance appeared and it's not ours)
+        # Use turn value from game_dict directly (self.turn is stale at this point)
+        is_now_our_turn = (game_dict.get('turn_player_id') == self.player_id)
+        if (self.advancing_figure_id and not previous_advancing and 
+            self.advancing_player_id != self.player_id and is_now_our_turn):
+            self.pending_advance_notification = True
+            # Advance notification replaces the normal opponent turn summary
+            self.pending_opponent_turn_summary = None
+        # Civil War fallback: advance was detected on an earlier poll when it
+        # wasn't our turn (invader was picking second figure).  Now the turn
+        # just came to us — fire the advance notification we missed.
+        elif (self.advancing_figure_id and previous_advancing and
+              self.advancing_player_id != self.player_id and
+              is_now_our_turn and
+              self.previous_turn_player_id != self.player_id and
+              not self.pending_advance_notification and
+              not self.defending_figure_id):
+            self.pending_advance_notification = True
+            self.pending_opponent_turn_summary = None
+        
+        # Skip advance/defender detection while battle is confirmed or in progress
+        # (prevents stale flags from re-triggering after battle resolution)
+        battle_active = game_dict.get('battle_confirmed', False) or self.in_battle_phase
+
+        # Check for Civil War modifier (needed for defender-pick guard below)
+        modifiers = self.battle_modifier if isinstance(self.battle_modifier, list) else []
+        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+        # Detect: advancing player's turn returned without defender selected
+        # This means opponent spent their turn, now advancer must pick a defender
+        # Skip if Civil War second figure selection is pending (turn stays with invader)
+        # Use is_now_our_turn (fresh from game_dict) instead of self.turn (stale)
+        # to avoid false positives right after build+advance with instant charge.
+        if (not battle_active and
+            self.advancing_figure_id and 
+            self.advancing_player_id == self.player_id and 
+            not self.defending_figure_id and 
+            is_now_our_turn and not self.pending_defender_selection and
+            not self.defender_selection_dialogue_shown and
+            not self.civil_war_awaiting_second):
+            self.pending_defender_selection = True
+
+        # Detect: defender's turn ended without counter-advance
+        # Opponent (advancing player) is now picking a defender from our figures.
+        # In Civil War, the invader's first advance keeps the turn with the
+        # invader (for second figure pick). Guard against premature detection
+        # by checking the defender's turns_left: if > 0, the defender hasn't
+        # had their turn yet (server set turns_left=1 on advance).
+        my_turns_left = next(
+            (p.get('turns_left', 0) for p in self.players
+             if p['id'] == self.player_id), 0)
+        if (not battle_active and
+            self.advancing_figure_id and
+            self.advancing_player_id != self.player_id and
+            not self.defending_figure_id and
+            not is_now_our_turn and
+            not self.pending_waiting_for_defender_pick and
+            not self.waiting_for_defender_pick_shown and
+            not (has_civil_war and my_turns_left > 0)):
+            self.pending_waiting_for_defender_pick = True
+        
+        # Battle is ready when both sides have their figures set
+        battle_ready = (not battle_active and
+                       self.advancing_figure_id and self.defending_figure_id and
+                       not self.pending_battle_ready and not self.battle_ready_shown)
+        
+        # During Civil War, suppress premature battle_ready while a player
+        # is still picking their second figure.  The server keeps the turn
+        # with the picking player until they finish or skip, then flips it.
+        # So battle is only truly ready once the turn reaches the invader
+        # (advancing player), who decides fight/fold first.
+        if battle_ready and has_civil_war:
+            # Also suppress while our own client-side second-pick flags are set
+            if (self.civil_war_awaiting_second or self.civil_war_defender_second):
+                battle_ready = False
+            # For the invader polling: if turn hasn't come back yet, defender
+            # is still picking
+            elif (self.advancing_player_id == self.player_id and
+                  not is_now_our_turn):
+                battle_ready = False
+        
+        if battle_ready:
+            self.pending_battle_ready = True
+            print(f"[BATTLE_READY] Figures set: advancing={self.advancing_figure_id}/{self.advancing_figure_id_2}, defending={self.defending_figure_id}/{self.defending_figure_id_2}")
+
+        # Detect fold outcome from opponent's battle decision (polling detection)
+        previous_fold_outcome = self.fold_outcome
+        previous_battle_confirmed = self.battle_confirmed
+        self.battle_decisions = game_dict.get('battle_decisions')
+        self.battle_confirmed = game_dict.get('battle_confirmed', False)
+        self.fold_outcome = game_dict.get('fold_outcome')
+        self.fold_winner_id = game_dict.get('fold_winner_id')
+        self.auto_loss_reason = game_dict.get('auto_loss_reason')
+        self.auto_loss_detail = game_dict.get('auto_loss_detail')
+        self.resting_figure_ids = game_dict.get('resting_figure_ids', [])
+
+        # Update server-authoritative battle round tracking
+        self.battle_round = game_dict.get('battle_round', 0)
+        self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
+
+        # Reset fold tracking when server clears fold state (new round started)
+        if previous_fold_outcome and not self.fold_outcome:
+            self.fold_result_shown = False
+
+        # Detect new fold outcome (transition from None to set)
+        if self.fold_outcome and not previous_fold_outcome and not self.fold_result_shown:
+            self.pending_fold_result = True
+            self.waiting_for_battle_decision = False
+            print(f"[FOLD] Detected fold outcome: {self.fold_outcome}, winner: {self.fold_winner_id}")
+
+        # Detect both chose battle (transition from False to True)
+        if self.battle_confirmed and not previous_battle_confirmed and self.waiting_for_battle_decision:
+            self.auto_proceed_to_battle = True
+            self.waiting_for_battle_decision = False
+            print(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
+
+        # Detect opponent confirmed battle moves while we are waiting
+        previous_bm_confirmed = self.battle_moves_confirmed
+        self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
+        if (self.waiting_for_opponent_battle_moves and
+                self.battle_moves_confirmed and
+                len(self.battle_moves_confirmed) >= 2):
+            self.both_battle_moves_ready = True
+            self.waiting_for_opponent_battle_moves = False
+            print(f"[BATTLE_MOVES] Both players confirmed battle moves — proceed to battle")
+
+        # Reinitialize current and opponent players
+        for player_dict in self.players:
+            if player_dict['id'] == self.player_id:
+                self.current_player = player_dict
+            else:
+                self.opponent_name = player_dict['username']
+                self.opponent_player = player_dict
+
+        # Update turn and invader status
+        previous_turn = self.turn
+        self.turn = True if self.turn_player_id == self.player_id else False
+        self.invader = True if self.invader_player_id == self.player_id else False
+
+        # Check for game start notification on first update (regardless of turn number)
+        if not self.game_start_notification_checked:
+            print(f"[GAME_START] First update - player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
+            print(f"[GAME_START] Checking for welcome message...")
+            self._start_turn_async()
+            self.game_start_notification_checked = True
+            print(f"[GAME_START] Flag set to True after first check")
+        
+        # Check if turn changed to current player - call start_turn endpoint
+        elif not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
+            print(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
+            self._start_turn_async()
+        
+        # Detect spell resolution: if our spell was pending and just resolved,
+        # and it's still our turn (e.g., Invader Swap keeps turn with caster),
+        # trigger _handle_start_turn for auto-fill since turn-change detection missed it
+        elif previous_pending_spell_id and not self.pending_spell_id and self.turn and previous_turn:
+            print(f"[SPELL_RESOLVED] Spell resolved while turn stayed with us. Calling start_turn for auto-fill...")
+            self._start_turn_async()
+        
+        # Update previous turn player for next check
+        self.previous_turn_player_id = self.turn_player_id
+
+        # Detect post-battle side card draw
+        post_battle = game_dict.get('post_battle_drawn_cards')
+        if (post_battle and self.player_id and
+                str(self.player_id) in post_battle and
+                self.current_round != self._post_battle_side_cards_round):
+            my_cards = post_battle[str(self.player_id)]
+            if my_cards:
+                self.pending_post_battle_side_cards = my_cards
+                self._post_battle_side_cards_round = self.current_round
+                print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
+
 
     def update_from_dict(self, game_dict):
         """Update game state directly from a dictionary (e.g., from spell service response)."""
+        self._game_data_version += 1
         # Update game data
         self.game_id = game_dict['id']
         self.state = game_dict['state']
@@ -516,9 +606,13 @@ class Game:
                 self._post_battle_side_cards_round = self.current_round
                 print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
 
-        # Update logs and chats
-        self.update_logs()
-        self.update_chats()
+        # Note: logs and chats are fetched by the background poller
+        # No need to block here — the next poll cycle will pick them up
+
+    def _start_turn_async(self):
+        """Fire _handle_start_turn in a background thread."""
+        t = threading.Thread(target=self._handle_start_turn, daemon=True)
+        t.start()
 
     def _handle_start_turn(self):
         """Called when turn changes to current player. Checks and handles auto-fill."""
@@ -531,7 +625,8 @@ class Game:
             
             response = requests.post(
                 f'{settings.SERVER_URL}/games/start_turn',
-                json=payload
+                json=payload,
+                timeout=10
             )
             
             if response.status_code != 200:
@@ -637,14 +732,16 @@ class Game:
 
     def get_figures(self, families: Dict[str, FigureFamily], is_opponent=False) -> List[Figure]:
         """
-        Fetch the figures for the current player from the server.
+        Get figures for the current or opponent player from cached data.
+        Figure data is fetched by the background poller and stored in cached_figures_data.
 
         :param families: A dictionary mapping family names to FigureFamily instances.
+        :param is_opponent: If True, get opponent's figures.
         :return: A list of Figure instances.
         """
         try:
             player_id = self.opponent_player['id'] if is_opponent else self.player_id
-            figures_data = fetch_figures(player_id)
+            figures_data = self.cached_figures_data.get(player_id, [])
             figures = []
 
 
@@ -753,15 +850,13 @@ class Game:
     def _load_enchantments_for_figures(self, figures: List[Figure]):
         """
         Load active enchantment spells and apply them to figures.
+        Uses cached active spells from background poller (no HTTP call).
         
         :param figures: List of Figure instances to apply enchantments to
         """
         try:
-            from utils import spell_service
-            
-            # Fetch all active spells for this game
-            active_spells = spell_service.fetch_active_spells(self.game_id)
-            
+            active_spells = self.cached_active_spells
+
             # Filter enchantment spells and apply to figures
             for spell_data in active_spells:
                 if spell_data.get('spell_type') == 'enchantment' and spell_data.get('target_figure_id'):
@@ -790,60 +885,34 @@ class Game:
     def has_active_all_seeing_eye(self) -> bool:
         """
         Check if current player has an active "All Seeing Eye" spell.
-        This makes all opponent's cards and figures visible to the current player.
+        Uses cached active spells from background poller (no HTTP call).
         
         :return: True if current player has active All Seeing Eye spell, False otherwise
         """
-        try:
-            from utils import spell_service
-            
-            # Fetch all active spells for this game
-            active_spells = spell_service.fetch_active_spells(self.game_id)
-            
-            # Check if current player has cast "All Seeing Eye"
-            if not self.player_id:
-                return False
-            
-            for spell_data in active_spells:
-                if (spell_data.get('spell_type') == 'enchantment' and
-                    'All Seeing Eye' in spell_data.get('spell_name', '') and
-                    spell_data.get('player_id') == self.player_id):
-                    return True
-            
+        if not self.player_id:
             return False
-            
-        except Exception as e:
-            print(f"Error checking for All Seeing Eye: {str(e)}")
-            return False
+        for spell_data in self.cached_active_spells:
+            if (spell_data.get('spell_type') == 'enchantment' and
+                'All Seeing Eye' in spell_data.get('spell_name', '') and
+                spell_data.get('player_id') == self.player_id):
+                return True
+        return False
     
     def check_infinite_hammer_active(self) -> bool:
         """
         Check if current player has an active "Infinite Hammer" spell.
-        This allows unlimited figure actions without ending turn.
+        Uses cached active spells from background poller (no HTTP call).
         
         :return: True if current player has active Infinite Hammer spell, False otherwise
         """
-        try:
-            from utils import spell_service
-            
-            # Fetch all active spells for this game
-            active_spells = spell_service.fetch_active_spells(self.game_id)
-            
-            # Check if current player has cast "Infinite Hammer"
-            if not self.player_id:
-                return False
-            
-            for spell_data in active_spells:
-                if (spell_data.get('spell_type') == 'enchantment' and
-                    'Infinite Hammer' in spell_data.get('spell_name', '') and
-                    spell_data.get('player_id') == self.player_id):
-                    return True
-            
+        if not self.player_id:
             return False
-            
-        except Exception as e:
-            print(f"Error checking for Infinite Hammer: {str(e)}")
-            return False
+        for spell_data in self.cached_active_spells:
+            if (spell_data.get('spell_type') == 'enchantment' and
+                'Infinite Hammer' in spell_data.get('spell_name', '') and
+                spell_data.get('player_id') == self.player_id):
+                return True
+        return False
 
     def is_battle_active(self) -> bool:
         """Return True while a battle is actually in progress (confirmed → resolution).
@@ -864,32 +933,19 @@ class Game:
     def has_opponent_cast_all_seeing_eye(self) -> bool:
         """
         Check if opponent has an active "All Seeing Eye" spell.
-        This makes all player's cards and figures visible to the opponent.
+        Uses cached active spells from background poller (no HTTP call).
         
         :return: True if opponent has active All Seeing Eye spell, False otherwise
         """
-        try:
-            from utils import spell_service
-            
-            # Fetch all active spells for this game
-            active_spells = spell_service.fetch_active_spells(self.game_id)
-            
-            # Check if opponent has cast "All Seeing Eye"
-            opponent_id = self.opponent_player.get('id') if self.opponent_player else None
-            if not opponent_id:
-                return False
-            
-            for spell_data in active_spells:
-                if (spell_data.get('spell_type') == 'enchantment' and
-                    'All Seeing Eye' in spell_data.get('spell_name', '') and
-                    spell_data.get('player_id') == opponent_id):
-                    return True
-            
+        opponent_id = self.opponent_player.get('id') if self.opponent_player else None
+        if not opponent_id:
             return False
-            
-        except Exception as e:
-            print(f"Error checking for All Seeing Eye: {str(e)}")
-            return False
+        for spell_data in self.cached_active_spells:
+            if (spell_data.get('spell_type') == 'enchantment' and
+                'All Seeing Eye' in spell_data.get('spell_name', '') and
+                spell_data.get('player_id') == opponent_id):
+                return True
+        return False
 
     def calculate_resources(self, families: Dict[str, FigureFamily], is_opponent: bool = False) -> Dict[str, Dict[str, int]]:
         """
@@ -1043,7 +1099,7 @@ class Game:
                 'player_id': self.player_id,
                 'card_type': card_type,
                 'cards': [card.serialize() for card in cards]
-            })
+            }, timeout=10)
 
             if response.status_code != 200:
                 print(f"Failed to change {card_type} cards: {response.json().get('message', 'Unknown error')}")
@@ -1067,7 +1123,7 @@ class Game:
                 'player_id': self.player_id,
                 'card_type': card_type,
                 'cards': [card.serialize() for card in cards]
-            })
+            }, timeout=10)
 
             if response.status_code != 200:
                 print(f"Failed to discard {card_type} cards: {response.json().get('message', 'Unknown error')}")

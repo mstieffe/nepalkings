@@ -24,7 +24,7 @@ def add_log_entry(game_id, player_id, round_number, turn_number, message, author
             'author': author,
             'type': entry_type
         }
-        response = requests.post(f'{settings.SERVER_URL}/msg/add_log_entry', json=payload)
+        response = requests.post(f'{settings.SERVER_URL}/msg/add_log_entry', json=payload, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
@@ -39,7 +39,7 @@ def fetch_log_entries(game_id):
     :return: List of log entries.
     """
     try:
-        response = requests.get(f'{settings.SERVER_URL}/msg/get_log_entries', params={'game_id': game_id})
+        response = requests.get(f'{settings.SERVER_URL}/msg/get_log_entries', params={'game_id': game_id}, timeout=10)
         response.raise_for_status()
         return response.json().get('log_entries', [])
     except requests.RequestException as e:
@@ -63,7 +63,7 @@ def send_chat_message(game_id, sender_id, receiver_id, message):
             'receiver_id': receiver_id,
             'message': message
         }
-        response = requests.post(f'{settings.SERVER_URL}/msg/add_chat_message', json=payload)
+        response = requests.post(f'{settings.SERVER_URL}/msg/add_chat_message', json=payload, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
@@ -78,7 +78,7 @@ def fetch_chat_messages(game_id):
     :return: List of chat messages.
     """
     try:
-        response = requests.get(f'{settings.SERVER_URL}/msg/get_chat_messages', params={'game_id': game_id})
+        response = requests.get(f'{settings.SERVER_URL}/msg/get_chat_messages', params={'game_id': game_id}, timeout=10)
         response.raise_for_status()
         return response.json().get('chat_messages', [])
     except requests.RequestException as e:

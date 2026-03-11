@@ -11,13 +11,16 @@ if [ ! -d "$HOME/.virtualenvs/nepalkings" ]; then
     echo "Creating virtualenv..."
     mkvirtualenv nepalkings --python=python3.10
 else
-    echo "Virtualenv exists, activating..."
-    source ~/.virtualenvs/nepalkings/bin/activate
+    echo "Virtualenv exists"
 fi
+
+# Use the virtualenv's pip directly (no activate script needed)
+PIP="$HOME/.virtualenvs/nepalkings/bin/pip"
+PYTHON="$HOME/.virtualenvs/nepalkings/bin/python"
 
 # Install dependencies
 echo "Installing server dependencies..."
-pip install -r ~/nepalkings/server/requirements.txt
+"$PIP" install -r ~/nepalkings/server/requirements.txt
 
 # Create database directory
 mkdir -p ~/nepalkings/server/instance
@@ -25,7 +28,7 @@ mkdir -p ~/nepalkings/server/instance
 # Initialize database
 echo "Initializing database..."
 cd ~/nepalkings/server
-DROP_TABLES_ON_STARTUP=True DB_URL="sqlite:///$(pwd)/instance/nepalkings.db" python -c "from wsgi import application; print('DB initialized')"
+DROP_TABLES_ON_STARTUP=True DB_URL="sqlite:///$(pwd)/instance/nepalkings.db" "$PYTHON" -c "from wsgi import application; print('DB initialized')"
 
 echo ""
 echo "=== Setup complete! ==="

@@ -6,7 +6,7 @@ from game.components.figures.figure_manager import FigureManager
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
 from game.components.cards.card_img import CardImg
-from utils.figure_service import pickup_figure, upgrade_figure
+from utils.figure_service import pickup_figure, upgrade_figure, fetch_figures
 
 
 class FieldScreen(SubScreen):
@@ -33,6 +33,9 @@ class FieldScreen(SubScreen):
         
         # Defender selection mode flag (True when player needs to select defender vs opponent advance)
         self.defender_selection_mode = False
+        
+        # Version of cached figure data last processed by load_figures
+        self._last_figures_version = -1
         
         # Cache for opponent cards (for All Seeing Eye spell)
         self.opponent_card_cache = []  # List of pre-rotated card surfaces
@@ -107,7 +110,11 @@ class FieldScreen(SubScreen):
         super().update(game)
 
         self.game = game
-        self.load_figures()  # Load figures whenever the game state updates
+        # Only rebuild figures when the background poller delivered new data
+        current_version = getattr(game, '_figures_data_version', 0)
+        if current_version != self._last_figures_version:
+            self._last_figures_version = current_version
+            self.load_figures()
 
     def update_hover_state(self):
         """Update hover state for figure icons. Called only on mouse motion."""
@@ -650,8 +657,12 @@ class FieldScreen(SubScreen):
                                 # Success message
                                 print(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 self.state.set_msg(f"Upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
-                                # Refresh game state and reload figures - load_figures() will handle cache updates
-                                self.game.update()
+                                # Refresh cached figure data (single HTTP call instead of full update)
+                                try:
+                                    self.game.cached_figures_data[self.game.player_id] = fetch_figures(self.game.player_id)
+                                    self.game._figures_data_version += 1
+                                except Exception:
+                                    pass
                                 self.load_figures()
                                 print(f"[FIELD_SCREEN] Figures reloaded after upgrade, count: {len(self.figures)}")
                             else:
@@ -1338,8 +1349,15 @@ class FieldScreen(SubScreen):
                 if target_figure.id in self.icon_cache:
                     del self.icon_cache[target_figure.id]
             
-            # Update game state from server
-            self.game.update()
+            # Update game state from server (refresh figures cache)
+            try:
+                self.game.cached_figures_data[self.game.player_id] = fetch_figures(self.game.player_id)
+                if self.game.opponent_player:
+                    opponent_id = self.game.opponent_player['id']
+                    self.game.cached_figures_data[opponent_id] = fetch_figures(opponent_id)
+                self.game._figures_data_version += 1
+            except Exception:
+                pass
             
             # Refresh figure icons to show updated enchantments (or removed figure for Explosion)
             self.load_figures()

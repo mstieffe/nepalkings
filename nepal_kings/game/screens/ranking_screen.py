@@ -4,6 +4,7 @@ from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from config import settings
 from utils.auth_service import fetch_rankings
+from utils.background_poller import BackgroundPoller
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -269,10 +270,28 @@ class RankingScreen(MenuScreenMixin, Screen):
         super().update()
         self._update_icon_buttons()
 
+        # Non-blocking refresh
+        if not hasattr(self, '_ranking_poller'):
+            self._ranking_poller = BackgroundPoller(fetch_rankings)
         now = pygame.time.get_ticks()
         if now - self.last_update_time > self.update_interval:
             self.last_update_time = now
-            self._refresh()
+            if not self._ranking_poller.busy:
+                self._ranking_poller.poll()
+        if self._ranking_poller.has_result():
+            raw = self._ranking_poller.result
+            if raw is not None:
+                for r in raw:
+                    losses = r.get('losses', 0)
+                    wins = r.get('wins', 0)
+                    r['wl_ratio'] = wins / losses if losses > 0 else float(wins)
+                key_name, desc = _SORT_KEYS.get(self._sort_col, ('gold', True))
+                raw.sort(key=lambda r: r.get(key_name, 0), reverse=desc)
+                self.rankings = raw
+                n = len(self.rankings)
+                self._content_h = n * (_ROW_H + _ROW_GAP) - (_ROW_GAP if n else 0)
+                self._max_scroll = max(0, self._content_h - self._viewport_h)
+                self._scroll_y = min(self._scroll_y, self._max_scroll)
 
         # Hover detection
         mx, my = pygame.mouse.get_pos()
