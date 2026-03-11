@@ -132,8 +132,8 @@ def _pick_resolution():
     res_section_h = len(choices) * (btn_h + gap)
     server_section_y = res_start_y + res_section_h + 20
     server_section_h = 40 + len(_SERVER_PRESETS) * (svr_btn_h + gap)
-    # Start button + hint below server section
-    ph = server_section_y + server_section_h + 44 + 16 + 28 + 16
+    # Start button (44px) + gap (16) + hint (~20px) + bottom padding (20)
+    ph = server_section_y + server_section_h + 44 + 16 + 20 + 20
     win = pygame.display.set_mode((pw, ph))
     pygame.display.set_caption('Nepal Kings — Settings')
 
