@@ -80,28 +80,65 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='NepalKings',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,              # UPX can corrupt Pygame/SDL DLLs on Windows
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,  # Windowed app, no terminal
-    disable_windowed_traceback=False,
-    argv_emulation=False,  # MUST be False — True crashes on modern macOS
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=_ICON,
-)
+# Windows: use onedir mode to avoid zlib decompression failures with large assets.
+# macOS/Linux: use onefile mode (single binary / .app bundle).
+_ONEDIR = sys.platform == 'win32' or os.environ.get('PYINSTALLER_ONEDIR') == '1'
+
+if _ONEDIR:
+    # ── One-directory mode (Windows) ──────────────────────────────
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='NepalKings',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=_ICON,
+    )
+
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name='NepalKings',
+    )
+else:
+    # ── One-file mode (macOS / Linux) ─────────────────────────────
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name='NepalKings',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=_ICON,
+    )
 
 # macOS .app bundle
 if sys.platform == 'darwin':
