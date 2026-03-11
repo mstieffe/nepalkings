@@ -51,7 +51,7 @@ _HINT_CLR    = (140, 130, 110)
 _CHECK_CLR   = (90, 200, 110)
 
 
-_DEFAULT_SERVER_URL = 'http://localhost:5000'
+_DEFAULT_SERVER_URL = 'https://nepalkings.pythonanywhere.com'
 
 _SERVER_PRESETS = [
     ('http://localhost:5000',                     'Local (dev)'),
@@ -126,12 +126,14 @@ def _pick_resolution():
     # ── Picker window geometry ──
     pw = 480
     btn_h = 44
+    svr_btn_h = 58          # taller to fit label + URL
     gap   = 12
     res_start_y = 72
     res_section_h = len(choices) * (btn_h + gap)
     server_section_y = res_start_y + res_section_h + 20
-    server_section_h = 40 + len(_SERVER_PRESETS) * (btn_h + gap)
-    ph = server_section_y + server_section_h + 80
+    server_section_h = 40 + len(_SERVER_PRESETS) * (svr_btn_h + gap)
+    # Start button + hint below server section
+    ph = server_section_y + server_section_h + 44 + 16 + 28 + 16
     win = pygame.display.set_mode((pw, ph))
     pygame.display.set_caption('Nepal Kings — Settings')
 
@@ -209,7 +211,7 @@ def _pick_resolution():
 
         svr_rects = []
         for i, (url, label) in enumerate(_SERVER_PRESETS):
-            r = pygame.Rect(40, svr_btn_start + i * (btn_h + gap), pw - 80, btn_h)
+            r = pygame.Rect(40, svr_btn_start + i * (svr_btn_h + gap), pw - 80, svr_btn_h)
             svr_rects.append(r)
             is_hover = r.collidepoint(mx, my)
             is_sel   = (i == server_idx)
@@ -218,17 +220,17 @@ def _pick_resolution():
             pygame.draw.rect(win, bg, r, border_radius=8)
             pygame.draw.rect(win, bdr, r, 2, border_radius=8)
             txt = btn_font.render(label, True, _TEXT_CLR)
-            win.blit(txt, (r.x + 18, r.y + (r.h - txt.get_height()) // 2))
+            win.blit(txt, (r.x + 18, r.y + 6))
             # Show URL underneath the label
             url_txt = hint_font.render(url, True, _HINT_CLR)
-            win.blit(url_txt, (r.x + 18, r.y + (r.h - url_txt.get_height()) // 2 + 14))
+            win.blit(url_txt, (r.x + 18, r.y + 6 + txt.get_height() + 2))
             if is_sel:
                 dot = btn_font.render('●', True, _TITLE_CLR)
                 win.blit(dot, (r.right - dot.get_width() - 14,
                                r.y + (r.h - dot.get_height()) // 2))
 
         # ── "Start Game" button ──
-        start_y_btn = svr_btn_start + len(_SERVER_PRESETS) * (btn_h + gap) + 16
+        start_y_btn = svr_btn_start + len(_SERVER_PRESETS) * (svr_btn_h + gap) + 16
         start_rect = pygame.Rect(pw // 2 - 80, start_y_btn, 160, 44)
         start_hover = start_rect.collidepoint(mx, my)
         sbg = _BTN_BG_HOV if start_hover else _BTN_BG
@@ -240,8 +242,9 @@ def _pick_resolution():
                              start_rect.y + (start_rect.h - start_txt.get_height()) // 2))
 
         # Hint
-        hint = hint_font.render('ESC = quit  •  click to select, then Start', True, _HINT_CLR)
-        win.blit(hint, ((pw - hint.get_width()) // 2, ph - 28))
+        hint = hint_font.render('ESC = quit', True, _HINT_CLR)
+        win.blit(hint, ((pw - hint.get_width()) // 2,
+                        start_rect.bottom + 12))
 
         pygame.display.flip()
         clock.tick(30)
