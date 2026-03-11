@@ -34,6 +34,11 @@ test.db
 *.db
 server/instance/
 
+# ── Unused / legacy image assets ──────────────────────────────────
+nepal_kings/img/_legacy/
+nepal_kings/img/figures_old/
+nepal_kings/img/old_cards/
+
 # ── Misc ──────────────────────────────────────────────────────────
 server_bu.py
 server_test.py
