@@ -521,8 +521,19 @@ sudo killall Dock
 ```
 Or remove the old `.app` from Applications, empty Trash, then copy the new one.
 
-### Windows: SmartScreen warning
-Click "More info" → "Run anyway". This is expected for unsigned executables.
+### Windows: SmartScreen warning ("Der Computer wurde durch Windows geschützt")
+The exe is not code-signed, so Windows SmartScreen blocks it by default.
+To run:
+1. Click **"More info"** (or "Weitere Informationen")
+2. Click **"Run anyway"** (or "Trotzdem ausführen")
+
+This only needs to be done once — Windows remembers your choice.
+
+### Windows: "Pfad zu lang" / path too long when extracting
+Windows has a 260-character path limit. If you extract the zip to a deeply nested
+folder, some file paths may exceed this limit. **Fix:** Extract to a short path, e.g.:
+- `C:\Games\NepalKings\` ✅
+- `C:\Users\YourName\Downloads\NepalKings-Windows\NepalKings\subfolder\` ❌ (too deep)
 
 ### Server: "502 Bad Gateway" on PythonAnywhere
 Redeploy and reload:

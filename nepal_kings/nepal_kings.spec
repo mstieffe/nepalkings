@@ -16,6 +16,17 @@ from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
+# Windows version info (improves SmartScreen reputation)
+_WIN_VERSION_INFO = None
+if sys.platform == 'win32':
+    try:
+        # version_info.py is next to this spec file
+        sys.path.insert(0, os.path.dirname(os.path.abspath(SPECPATH)) if 'SPECPATH' in dir() else os.path.abspath('.'))
+        from version_info import VSVersionInfo
+        _WIN_VERSION_INFO = VSVersionInfo
+    except Exception:
+        pass
+
 # Paths
 _DIR = os.path.abspath('.')
 _IMG_DIR = os.path.join(_DIR, 'img')
@@ -103,6 +114,7 @@ if _ONEDIR:
         codesign_identity=None,
         entitlements_file=None,
         icon=_ICON,
+        version=_WIN_VERSION_INFO,
     )
 
     coll = COLLECT(
