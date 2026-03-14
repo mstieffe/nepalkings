@@ -46,13 +46,21 @@ class BattleMoveManager:
                 self.families.append(family)
             self.families_by_name[family.name] = family
 
+    # Maximum pixel dimension for any loaded image (safety cap)
+    _MAX_IMG_DIM = 512
+
     def _load_image(self, path):
         if path not in BattleMoveManager._image_cache:
             try:
-                BattleMoveManager._image_cache[path] = pygame.image.load(path).convert_alpha()
+                img = pygame.image.load(path).convert_alpha()
+                w, h = img.get_size()
+                if w > self._MAX_IMG_DIM or h > self._MAX_IMG_DIM:
+                    ratio = min(self._MAX_IMG_DIM / w, self._MAX_IMG_DIM / h)
+                    img = pygame.transform.smoothscale(
+                        img, (int(w * ratio), int(h * ratio)))
+                BattleMoveManager._image_cache[path] = img
             except Exception as e:
                 print(f"[BattleMoveManager] Failed to load image: {path} — {e}")
-                # Return a small placeholder surface
                 surf = pygame.Surface((64, 64), pygame.SRCALPHA)
                 surf.fill((100, 100, 100, 128))
                 BattleMoveManager._image_cache[path] = surf

@@ -18,6 +18,32 @@ from config import settings
 class _MenuIconButton:
     """Lightweight icon button for menu screens (no game-state dependency)."""
 
+    # Class-level cache: shared stone & glow images (loaded once for all instances)
+    _shared_cache = {}
+
+    @classmethod
+    def _load_shared(cls):
+        """Load stone and glow images once, return cached dict."""
+        if not cls._shared_cache:
+            _stone_sz = settings.GAME_MENU_ICON_STONE_SZ
+            _glow_sz  = settings.GAME_MENU_ICON_GLOW_SZ
+            _glow_big = settings.GAME_MENU_ICON_GLOW_BIG_SZ
+            _glow_path = settings.GAME_MENU_ICON_GLOW_PATH
+
+            raw_stone = pygame.image.load(settings.GAME_MENU_ICON_STONE_PATH).convert_alpha()
+            raw_gy = pygame.image.load(_glow_path + 'yellow.png').convert_alpha()
+            raw_gw = pygame.image.load(_glow_path + 'white.png').convert_alpha()
+            raw_gb = pygame.image.load(_glow_path + 'black.png').convert_alpha()
+
+            cls._shared_cache = {
+                'stone':          pygame.transform.smoothscale(raw_stone, (_stone_sz, _stone_sz)),
+                'glow_yellow':    pygame.transform.smoothscale(raw_gy, (_glow_sz,  _glow_sz)),
+                'glow_white':     pygame.transform.smoothscale(raw_gw, (_glow_sz,  _glow_sz)),
+                'glow_black':     pygame.transform.smoothscale(raw_gb, (_glow_sz,  _glow_sz)),
+                'glow_yellow_big': pygame.transform.smoothscale(raw_gy, (_glow_big, _glow_big)),
+            }
+        return cls._shared_cache
+
     def __init__(self, window, x, y, symbol_name, action):
         self.window = window
         self.action = action
@@ -25,27 +51,20 @@ class _MenuIconButton:
         _stone_sz  = settings.GAME_MENU_ICON_STONE_SZ
         _sym_sz    = settings.GAME_MENU_ICON_SYMBOL_SZ
         _sym_big   = settings.GAME_MENU_ICON_SYMBOL_BIG_SZ
-        _glow_sz   = settings.GAME_MENU_ICON_GLOW_SZ
-        _glow_big  = settings.GAME_MENU_ICON_GLOW_BIG_SZ
         _sym_path  = settings.GAME_MENU_ICON_SYMBOL_PATH
-        _glow_path = settings.GAME_MENU_ICON_GLOW_PATH
 
-        raw_stone = pygame.image.load(settings.GAME_MENU_ICON_STONE_PATH).convert_alpha()
-        self.stone = pygame.transform.smoothscale(raw_stone, (_stone_sz, _stone_sz))
+        shared = self._load_shared()
+        self.stone           = shared['stone']
+        self.glow_yellow     = shared['glow_yellow']
+        self.glow_white      = shared['glow_white']
+        self.glow_black      = shared['glow_black']
+        self.glow_yellow_big = shared['glow_yellow_big']
 
         raw_active  = pygame.image.load(_sym_path + symbol_name + '_active.png').convert_alpha()
         raw_passive = pygame.image.load(_sym_path + symbol_name + '_passive.png').convert_alpha()
         self.sym_active     = pygame.transform.smoothscale(raw_active,  (_sym_sz,  _sym_sz))
         self.sym_passive    = pygame.transform.smoothscale(raw_passive, (_sym_sz,  _sym_sz))
         self.sym_active_big = pygame.transform.smoothscale(raw_active,  (_sym_big, _sym_big))
-
-        raw_gy = pygame.image.load(_glow_path + 'yellow.png').convert_alpha()
-        raw_gw = pygame.image.load(_glow_path + 'white.png').convert_alpha()
-        raw_gb = pygame.image.load(_glow_path + 'black.png').convert_alpha()
-        self.glow_yellow     = pygame.transform.smoothscale(raw_gy, (_glow_sz,  _glow_sz))
-        self.glow_white      = pygame.transform.smoothscale(raw_gw, (_glow_sz,  _glow_sz))
-        self.glow_black      = pygame.transform.smoothscale(raw_gb, (_glow_sz,  _glow_sz))
-        self.glow_yellow_big = pygame.transform.smoothscale(raw_gy, (_glow_big, _glow_big))
 
         self.rect = pygame.Rect(x, y, _stone_sz, _stone_sz)
         self.hovered = False
@@ -150,16 +169,27 @@ class MenuScreenMixin:
     and ``_draw_menu_overlay()`` after your content.
     """
 
+    # Class-level cache: background + gold icon loaded once, shared by all screens
+    _chrome_cache = {}
+
+    @classmethod
+    def _load_chrome_cache(cls):
+        """Load background and gold icon once, return cached dict."""
+        if not cls._chrome_cache:
+            raw_bg = pygame.image.load(settings.GAME_MENU_BG_IMG_PATH).convert()
+            raw_gold = pygame.image.load(settings.GAME_MENU_GOLD_ICON_PATH).convert_alpha()
+            sz = settings.GAME_MENU_GOLD_ICON_SZ
+            cls._chrome_cache = {
+                'bg':   pygame.transform.smoothscale(raw_bg, (_SW, _SH)),
+                'gold': pygame.transform.smoothscale(raw_gold, (sz, sz)),
+            }
+        return cls._chrome_cache
+
     def _init_menu_chrome(self):
         """Load background, gold display assets, and icon buttons."""
-        # Background
-        raw_bg = pygame.image.load(settings.GAME_MENU_BG_IMG_PATH).convert()
-        self._bg = pygame.transform.smoothscale(raw_bg, (_SW, _SH))
-
-        # Gold icon + font
-        raw_gold = pygame.image.load(settings.GAME_MENU_GOLD_ICON_PATH).convert_alpha()
-        sz = settings.GAME_MENU_GOLD_ICON_SZ
-        self._gold_icon = pygame.transform.smoothscale(raw_gold, (sz, sz))
+        cache = self._load_chrome_cache()
+        self._bg = cache['bg']
+        self._gold_icon = cache['gold']
         self._gold_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_MENU_GOLD_FONT_SIZE)
 
         # Icon buttons (top-right): home | logout

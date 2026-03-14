@@ -1,0 +1,17 @@
+Reduce memory from ~7 GB to ~500 MB: downscale PNGs, cache backgrounds, cap runtime image sizes
+
+Fix 1 - Downscale source PNGs (optimize_pngs.py):
+  - Directory-specific max dimensions (backgrounds 2048, frames 512, icons 256)
+  - 360 PNGs resized, disk: 809 MB -> 76 MB, memory: 5631 MB -> 245 MB
+  - Moved unused sub_screen/background_field.png and background_dark.png to _legacy/
+
+Fix 2 - Cache shared images across screens:
+  - MenuScreenMixin._chrome_cache: background + gold icon loaded once, shared by 5 screens
+  - _MenuIconButton._shared_cache: stone + glow images loaded once for all icon buttons
+  - LoginScreen._bg_cache: greyscale background shared with Client loading screen
+
+Fix 3 - Runtime safety caps in image loaders:
+  - FigureManager.load_image(): cap at 512px max dimension
+  - SpellManager.load_image(): cap at 512px max dimension
+  - BattleMoveManager._load_image(): cap at 512px max dimension
+  - ScoreboardScroll: explicitly del raw surfaces after scaling glow rects

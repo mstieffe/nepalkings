@@ -35,10 +35,19 @@ class FigureManager:
         self.link_figures()
         #self.categorize_all_figures()
 
+    # Maximum pixel dimension for any loaded image (safety cap)
+    _MAX_IMG_DIM = 512
+
     def load_image(self, path: str) -> pygame.Surface:
-        """Helper method to load an image with caching."""
+        """Load an image with caching and runtime max-size safety cap."""
         if path not in self._image_cache:
-            self._image_cache[path] = pygame.image.load(path).convert_alpha()
+            img = pygame.image.load(path).convert_alpha()
+            w, h = img.get_size()
+            if w > self._MAX_IMG_DIM or h > self._MAX_IMG_DIM:
+                ratio = min(self._MAX_IMG_DIM / w, self._MAX_IMG_DIM / h)
+                img = pygame.transform.smoothscale(
+                    img, (int(w * ratio), int(h * ratio)))
+            self._image_cache[path] = img
         return self._image_cache[path]
 
     def add_figure_family(self, family: FigureFamily) -> None:

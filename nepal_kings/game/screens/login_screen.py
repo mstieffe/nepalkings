@@ -31,14 +31,23 @@ _LOADING_CLR = (200, 185, 150)
 
 
 class LoginScreen(Screen):
+    # Class-level cache: greyscale background loaded once, shared
+    _bg_cache = None
+
+    @classmethod
+    def _load_bg(cls):
+        if cls._bg_cache is None:
+            raw_bg = pygame.image.load(settings.LOGIN_BG_IMG_PATH).convert()
+            cls._bg_cache = pygame.transform.smoothscale(raw_bg, (_SW, _SH))
+        return cls._bg_cache
+
     def __init__(self, state):
         super().__init__(state)
         self.loading = False
         self.control_buttons = []
 
         # ── Background (greyscale) ──────────────────────────────────
-        raw_bg = pygame.image.load(settings.LOGIN_BG_IMG_PATH).convert()
-        self._bg = pygame.transform.smoothscale(raw_bg, (_SW, _SH))
+        self._bg = self._load_bg()
 
         # ── Button image ────────────────────────────────────────────
         self._btn_img = pygame.image.load(settings.LOGIN_BTN_IMG_PATH).convert_alpha()

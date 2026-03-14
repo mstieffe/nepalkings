@@ -36,9 +36,8 @@ class Client:
         if os.path.exists(_icon_path):
             pygame.display.set_icon(pygame.image.load(_icon_path))
 
-        # Background – reuse the greyscale login background
-        raw_bg = pygame.image.load(settings.LOGIN_BG_IMG_PATH).convert()
-        bg = pygame.transform.smoothscale(raw_bg, (_SW, _SH))
+        # Background – share the greyscale login background (cached)
+        bg = LoginScreen._load_bg()
 
         # Fonts
         title_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_MENU_TITLE_FONT_SIZE)

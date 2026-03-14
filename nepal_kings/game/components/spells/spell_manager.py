@@ -40,13 +40,21 @@ class SpellManager:
         self.spells_by_suit[spell.suit].append(spell)
         self.spells_by_name.setdefault(spell.name, []).append(spell)
     
+    # Maximum pixel dimension for any loaded image (safety cap)
+    _MAX_IMG_DIM = 512
+
     def load_image(self, path: str) -> pygame.Surface:
-        """Load an image from the given path."""
+        """Load an image with runtime max-size safety cap."""
         try:
-            return pygame.image.load(path).convert_alpha()
+            img = pygame.image.load(path).convert_alpha()
+            w, h = img.get_size()
+            if w > self._MAX_IMG_DIM or h > self._MAX_IMG_DIM:
+                ratio = min(self._MAX_IMG_DIM / w, self._MAX_IMG_DIM / h)
+                img = pygame.transform.smoothscale(
+                    img, (int(w * ratio), int(h * ratio)))
+            return img
         except pygame.error as e:
             print(f"Error loading image {path}: {e}")
-            # Return a placeholder surface
             placeholder = pygame.Surface((100, 100))
             placeholder.fill((200, 200, 200))
             return placeholder

@@ -27,11 +27,14 @@ class ScoreboardScroll:
         self.font_number.set_bold(True)
         self.font_subtitle = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SUBTITLE_FONT_SIZE)
 
-        # Load black and golden rectangle glow images
-        self.rect_glow_black = pygame.image.load(settings.GLOW_RECT_IMG_PATH + 'black.png').convert_alpha()
-        self.rect_glow_black = pygame.transform.smoothscale(self.rect_glow_black, (width * 1.2, height * 1.2))
-        self.rect_glow_yellow = pygame.image.load(settings.GLOW_RECT_IMG_PATH + 'yellow.png').convert_alpha()
-        self.rect_glow_yellow = pygame.transform.smoothscale(self.rect_glow_yellow, (width * 1.2, height * 1.2))
+        # Load black and golden rectangle glow images (scale directly to target size)
+        glow_w, glow_h = int(width * 1.2), int(height * 1.2)
+        raw_black = pygame.image.load(settings.GLOW_RECT_IMG_PATH + 'black.png').convert_alpha()
+        self.rect_glow_black = pygame.transform.smoothscale(raw_black, (glow_w, glow_h))
+        del raw_black
+        raw_yellow = pygame.image.load(settings.GLOW_RECT_IMG_PATH + 'yellow.png').convert_alpha()
+        self.rect_glow_yellow = pygame.transform.smoothscale(raw_yellow, (glow_w, glow_h))
+        del raw_yellow
 
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
 
