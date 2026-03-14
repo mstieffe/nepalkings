@@ -16,16 +16,16 @@ DEBUG_LOG_PATH = os.getenv('DEBUG_LOG_PATH', '/tmp/nepalkings_debug.log')
 
 # Game Logic
 NUM_MAIN_CARDS_START = 12
-NUM_SIDE_CARDS_START = 8
+NUM_SIDE_CARDS_START = 0
 
 NUM_MIN_MAIN_CARDS = 5
 NUM_MIN_SIDE_CARDS = 0
 
-INITIAL_TURNS_DEFENDER = 5
-INITIAL_TURNS_INVADER = 5
+INITIAL_TURNS_DEFENDER = 6
+INITIAL_TURNS_INVADER = 6
 
 # Game win condition
-DEFAULT_GAME_STAKE = 45  # Default gold stake / point threshold to win
+DEFAULT_GAME_STAKE = 35  # Default gold stake / point threshold to win
 
 # New player starting gold
 INITIAL_GOLD = 100
