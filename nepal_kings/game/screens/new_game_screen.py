@@ -22,18 +22,24 @@ _DOT_OFFLINE   = (120, 110, 100)
 _NEW_TAG_BG  = (180, 140, 40)
 _NEW_TAG_TXT = (30, 28, 24)
 
+# Sent / Received tag colours
+_SENT_TAG_BG  = (80, 70, 55, 200)
+_SENT_TAG_TXT = (180, 170, 140)
+_RECV_TAG_BG  = (55, 90, 70, 200)
+_RECV_TAG_TXT = (140, 210, 170)
+
 # ── Overall box ─────────────────────────────────────────────────────
 _BOX_PAD    = int(0.025 * _SH)
 _BOX_X      = int(0.04 * _SW)
 _BOX_Y      = int(0.12 * _SH)
-_BOX_W      = int(0.92 * _SW)
+_BOX_W      = int(0.87 * _SW)
 _BOX_BOTTOM = int(0.90 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
 
 # ── Two-column list areas ──────────────────────────────────────────
 _COL1_X     = _BOX_X + int(0.02 * _SW)
 _COL2_X     = _BOX_X + int(0.48 * _SW)
-_COL_W      = int(0.40 * _SW)
+_COL_W      = int(0.37 * _SW)
 
 # Config panel lives in the bottom portion of the box
 _CONFIG_Y   = int(0.64 * _SH)
@@ -200,6 +206,9 @@ class NewGameScreen(MenuScreenMixin, Screen):
             btn = ListButton(self.window, _COL2_X, y, opp['username'], width=btn_w, height=btn_h)
             btn.is_online = opp.get('is_online', False)
             btn.challenge_id = ch_id  # Store for NEW tag lookup
+            # Determine if this challenge was sent by us or received
+            ch = next((c for c in self.open_challenges if c['id'] == ch_id), None)
+            btn.is_sent = ch is not None and ch.get('challenger_id') == self.user.get('id')
             self.open_challenge_buttons.append(btn)
 
         # Scroll limits
@@ -296,13 +305,32 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 dot_y = btn.rect.centery
                 pygame.draw.circle(self.window, dot_clr, (dot_x, dot_y), _DOT_RADIUS)
 
+                # Sent / Received tag
+                is_sent = getattr(btn, 'is_sent', None)
+                if is_sent is not None:
+                    tag_label = 'SENT' if is_sent else 'RECV'
+                    tag_bg_clr = _SENT_TAG_BG if is_sent else _RECV_TAG_BG
+                    tag_txt_clr = _SENT_TAG_TXT if is_sent else _RECV_TAG_TXT
+                    sr_surf = self._tag_font.render(tag_label, True, tag_txt_clr)
+                    srw, srh = sr_surf.get_size()
+                    sr_pad_x, sr_pad_y = int(0.005 * _SW), int(0.002 * _SH)
+                    sr_x = btn.rect.right - srw - 2 * sr_pad_x - int(0.008 * _SW)
+                    sr_y = btn.rect.centery - (srh + 2 * sr_pad_y) // 2
+                    sr_rect = pygame.Rect(sr_x, sr_y, srw + 2 * sr_pad_x, srh + 2 * sr_pad_y)
+                    sr_bg = pygame.Surface((sr_rect.w, sr_rect.h), pygame.SRCALPHA)
+                    pygame.draw.rect(sr_bg, tag_bg_clr, sr_bg.get_rect(), border_radius=4)
+                    self.window.blit(sr_bg, sr_rect.topleft)
+                    self.window.blit(sr_surf, (sr_rect.x + sr_pad_x, sr_rect.y + sr_pad_y))
+
                 # NEW tag (only for open challenges with a stored challenge_id)
                 ch_id = getattr(btn, 'challenge_id', None)
                 if ch_id is not None and ch_id in self.state._new_challenge_ids:
                     tag_surf = self._tag_font.render('NEW', True, _NEW_TAG_TXT)
                     tw, th = tag_surf.get_size()
                     pad_x, pad_y = int(0.005 * _SW), int(0.002 * _SH)
-                    tag_x = btn.rect.right - tw - 2 * pad_x - int(0.008 * _SW)
+                    # Shift NEW tag left of SENT/RECV tag if present
+                    new_offset = sr_rect.w + int(0.004 * _SW) if is_sent is not None else 0
+                    tag_x = btn.rect.right - tw - 2 * pad_x - int(0.008 * _SW) - new_offset
                     tag_y = btn.rect.centery - (th + 2 * pad_y) // 2
                     tag_rect = pygame.Rect(tag_x, tag_y, tw + 2 * pad_x, th + 2 * pad_y)
                     tag_bg = pygame.Surface((tag_rect.w, tag_rect.h), pygame.SRCALPHA)

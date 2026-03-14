@@ -15,7 +15,7 @@ _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 _BOX_PAD     = int(0.025 * _SH)
 _BOX_X       = int(0.06 * _SW)
 _BOX_Y       = int(0.12 * _SH)
-_BOX_W       = int(0.88 * _SW)
+_BOX_W       = int(0.85 * _SW)
 _BOX_BOTTOM  = int(0.90 * _SH)
 _BOX_H       = _BOX_BOTTOM - _BOX_Y
 
