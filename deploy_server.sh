@@ -10,9 +10,9 @@
 #      Or create a file:  echo "your-token-here" > ~/.nepalkings_pa_token
 #
 # What this script does:
-#   1. Zips the server/ directory (no cache files, ~65KB)
-#   2. Uploads it to PythonAnywhere via their API
-#   3. Unzips it on PythonAnywhere (overwrites existing files)
+#   1. Finds all deployable files (server/, pythonanywhere_wsgi.py, etc.)
+#   2. Uploads each file directly to PythonAnywhere via the Files API
+#   3. Verifies the deploy by checking server_settings.py
 #   4. Reloads the web app so changes take effect
 
 set -e
@@ -20,6 +20,8 @@ set -e
 PA_USER="nepalkings"
 PA_HOST="www.pythonanywhere.com"
 PA_DOMAIN="${PA_USER}.pythonanywhere.com"
+PA_BASE="/home/${PA_USER}/nepalkings"
+CURL_TIMEOUT="--connect-timeout 15 --max-time 60"
 
 # ── Resolve API token ──────────────────────────────────────────────
 if [ -z "$PA_API_TOKEN" ]; then
@@ -41,74 +43,66 @@ cd "$SCRIPT_DIR"
 echo "=== Nepal Kings — Deploy Server to PythonAnywhere ==="
 echo ""
 
-# ── 1. Create zip ─────────────────────────────────────────────────
-ZIP_FILE="/tmp/nepalkings_server.zip"
-echo "📦 Zipping server files..."
-rm -f "$ZIP_FILE"
-zip -r "$ZIP_FILE" server/ pythonanywhere_wsgi.py setup_pythonanywhere.sh \
-    -x "*__pycache__*" "server/instance/*" "*.DS_Store" -q
-ZIP_SIZE=$(ls -lh "$ZIP_FILE" | awk '{print $5}')
-echo "   Created $ZIP_FILE ($ZIP_SIZE)"
+# ── 1. Collect files to deploy ────────────────────────────────────
+echo "📦 Collecting files..."
+FILES=$(find server/ -type f \
+    ! -path "*__pycache__*" \
+    ! -path "server/instance/*" \
+    ! -name "*.DS_Store" \
+    ! -name "*.pyc")
+# Also include root-level deploy helpers
+for extra in pythonanywhere_wsgi.py setup_pythonanywhere.sh; do
+    [ -f "$extra" ] && FILES="$FILES"$'\n'"$extra"
+done
+FILE_COUNT=$(echo "$FILES" | wc -l | tr -d ' ')
+echo "   Found $FILE_COUNT files to upload"
 
-# ── 2. Upload to PythonAnywhere ───────────────────────────────────
-echo "⬆️  Uploading to PythonAnywhere..."
-UPLOAD_URL="https://${PA_HOST}/api/v0/user/${PA_USER}/files/path/home/${PA_USER}/nepalkings_server.zip"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST \
-    -H "Authorization: Token ${PA_API_TOKEN}" \
-    -F "content=@${ZIP_FILE}" \
-    "$UPLOAD_URL")
+# ── 2. Upload each file via Files API ─────────────────────────────
+echo "⬆️  Uploading files..."
+FAIL_COUNT=0
+OK_COUNT=0
 
-if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
-    echo "❌ Upload failed (HTTP $HTTP_CODE). Check your API token."
-    exit 1
-fi
-echo "   Upload OK"
-
-# ── 3. Unzip on PythonAnywhere ────────────────────────────────────
-echo "📂 Unzipping on PythonAnywhere..."
-CONSOLE_URL="https://${PA_HOST}/api/v0/user/${PA_USER}/consoles/"
-
-# Create a temporary console to run the unzip command
-CONSOLE_RESPONSE=$(curl -s \
-    -X POST \
-    -H "Authorization: Token ${PA_API_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d '{"executable": "bash", "arguments": "", "working_directory": "/home/'"${PA_USER}"'"}' \
-    "$CONSOLE_URL")
-
-CONSOLE_ID=$(echo "$CONSOLE_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-
-if [ -z "$CONSOLE_ID" ]; then
-    echo "⚠️  Could not create console automatically."
-    echo "   Please run this in a PythonAnywhere Bash console:"
-    echo ""
-    echo "   cd ~ && mkdir -p nepalkings && cd nepalkings && unzip -o ~/nepalkings_server.zip && rm ~/nepalkings_server.zip"
-    echo ""
-else
-    # Send commands to the console
-    SEND_URL="https://${PA_HOST}/api/v0/user/${PA_USER}/consoles/${CONSOLE_ID}/send_input/"
-    curl -s -o /dev/null \
+while IFS= read -r filepath; do
+    [ -z "$filepath" ] && continue
+    REMOTE_PATH="${PA_BASE}/${filepath}"
+    UPLOAD_URL="https://${PA_HOST}/api/v0/user/${PA_USER}/files/path${REMOTE_PATH}"
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $CURL_TIMEOUT \
         -X POST \
         -H "Authorization: Token ${PA_API_TOKEN}" \
-        -d "input=cd ~ && mkdir -p nepalkings && cd nepalkings && unzip -o ~/nepalkings_server.zip && rm ~/nepalkings_server.zip\n" \
-        "$SEND_URL"
-    echo "   Unzip command sent"
+        -F "content=@${filepath}" \
+        "$UPLOAD_URL")
+    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+        OK_COUNT=$((OK_COUNT + 1))
+    else
+        echo "   ⚠️  Failed: $filepath (HTTP $HTTP_CODE)"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+done <<< "$FILES"
 
-    # Wait a moment for it to complete
-    sleep 3
+echo "   Uploaded $OK_COUNT/$FILE_COUNT files"
+if [ "$FAIL_COUNT" -gt 0 ]; then
+    echo "   ❌ $FAIL_COUNT files failed to upload"
+fi
 
-    # Kill the temporary console
-    curl -s -o /dev/null \
-        -X DELETE \
-        -H "Authorization: Token ${PA_API_TOKEN}" \
-        "https://${PA_HOST}/api/v0/user/${PA_USER}/consoles/${CONSOLE_ID}/"
+# ── 3. Verify deploy ─────────────────────────────────────────────
+echo "🔍 Verifying deploy..."
+VERIFY_URL="https://${PA_HOST}/api/v0/user/${PA_USER}/files/path${PA_BASE}/server/server_settings.py"
+REMOTE_CONTENT=$(curl -s $CURL_TIMEOUT \
+    -H "Authorization: Token ${PA_API_TOKEN}" \
+    "$VERIFY_URL")
+LOCAL_CONTENT=$(cat server/server_settings.py)
+
+if [ "$REMOTE_CONTENT" = "$LOCAL_CONTENT" ]; then
+    echo "   ✅ server_settings.py verified"
+else
+    echo "   ❌ server_settings.py does NOT match local!"
+    exit 1
 fi
 
 # ── 4. Reload the web app ────────────────────────────────────────
-echo "🔄 Reloading web app..."
+echo "🔄 Reloading web app (this may take up to 2 minutes)..."
 RELOAD_URL="https://${PA_HOST}/api/v0/user/${PA_USER}/webapps/${PA_DOMAIN}/reload/"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 15 --max-time 180 \
     -X POST \
     -H "Authorization: Token ${PA_API_TOKEN}" \
     "$RELOAD_URL")
