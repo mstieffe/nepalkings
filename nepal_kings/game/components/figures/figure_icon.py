@@ -1705,10 +1705,11 @@ class FieldFigureIcon(FigureIcon):
         :param scale_factor: The factor by which to scale.
         :return: The scaled image.
         """
+        s = settings.FIELD_FIGURE_ICON_SCALE
         return self.scale_image_total_size(
             image,
-            settings.FIELD_ICON_WIDTH * scale_factor *0.45,  #* 0.45,
-            settings.FIELD_ICON_WIDTH * scale_factor *0.45  #* 0.45,
+            settings.FIELD_ICON_WIDTH * scale_factor * s,
+            settings.FIELD_ICON_WIDTH * scale_factor * s,
         )
 
     def _scale_frame(self, image, scale_factor: float) -> pygame.Surface:
@@ -1719,8 +1720,9 @@ class FieldFigureIcon(FigureIcon):
         :param scale_factor: The factor by which to scale.
         :return: The scaled frame image.
         """
+        s = settings.FIELD_FIGURE_ICON_SCALE
         return self.scale_image_total_size(
             image,
-            settings.FIELD_ICON_WIDTH * scale_factor * settings.FRAME_FIGURE_SCALE * 0.45, #* 0.8,
-            settings.FIELD_ICON_WIDTH * scale_factor * settings.FRAME_FIGURE_SCALE * 0.45 #* 0.8,
+            settings.FIELD_ICON_WIDTH * scale_factor * settings.FRAME_FIGURE_SCALE * s,
+            settings.FIELD_ICON_WIDTH * scale_factor * settings.FRAME_FIGURE_SCALE * s,
         )

@@ -43,3 +43,7 @@ SLOT_ICON_IMG_PATH_DICT = {
 }
 SLOT_ICON_TRANSPARENCY = 50  # Alpha value for slot icon backgrounds (0-255)
 
+# Scale factor for figure icon/frame on the field (relative to FIELD_ICON_WIDTH).
+# Larger on mobile so figures are easier to tap.
+FIELD_FIGURE_ICON_SCALE = 0.60 if _UI_SCALE > 1.0 else 0.45
+
