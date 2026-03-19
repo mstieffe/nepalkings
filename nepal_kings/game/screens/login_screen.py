@@ -6,13 +6,14 @@ from utils.utils import Button, InputField
 from utils.auth_service import login, register
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+_FS = settings._FS
 
 MAX_USERNAME_LENGTH = 15
 MAX_PASSWORD_LENGTH = 15
 
 # ── Dark-theme input-field styling ─────────────────────────────────
 _FIELD_W          = int(0.26 * _SW)
-_FIELD_H          = int(0.045 * _SH)
+_FIELD_H          = int(0.045 * _FS)
 _FIELD_CORNER_R   = int(0.006 * _SH)
 _FIELD_BORDER_W   = 1
 _FIELD_BG_PASSIVE = (35, 35, 45, 200)
@@ -57,9 +58,9 @@ class LoginScreen(Screen):
         self._title_font.set_bold(True)
         self._title_surf = self._title_font.render('Nepal Kings', True, settings.GAME_MENU_TITLE_CLR)
 
-        self._field_font = pygame.font.Font(settings.FONT_PATH, int(0.026 * _SH))
-        self._label_font = pygame.font.Font(settings.FONT_PATH, int(0.020 * _SH))
-        self._loading_font = pygame.font.Font(settings.FONT_PATH, int(0.024 * _SH))
+        self._field_font = pygame.font.Font(settings.FONT_PATH, int(0.026 * _FS))
+        self._label_font = pygame.font.Font(settings.FONT_PATH, int(0.020 * _FS))
+        self._loading_font = pygame.font.Font(settings.FONT_PATH, int(0.024 * _FS))
 
         # ── Layout ──────────────────────────────────────────────────
         _btn_w   = settings.GAME_MENU_BTN_W

@@ -56,7 +56,8 @@ GAME_MENU_ICON_GLOW_SZ       = int(0.055 * SCREEN_WIDTH * _UI_SCALE)
 GAME_MENU_ICON_GLOW_BIG_SZ   = int(0.065 * SCREEN_WIDTH * _UI_SCALE)
 GAME_MENU_ICON_GAP           = int(0.001 * SCREEN_WIDTH)
 GAME_MENU_ICON_TOP_Y         = int(0.008 * SCREEN_HEIGHT)
-GAME_MENU_ICON_RIGHT_MARGIN  = int(0.008 * SCREEN_WIDTH)
+GAME_MENU_ICON_RIGHT_MARGIN  = int(0.004 * SCREEN_WIDTH)     # shifted right (was 0.008)
+GAME_MENU_ICON_LOGOUT_GAP_Y  = int(0.015 * SCREEN_HEIGHT * _UI_SCALE)  # vertical gap between home and logout
 
 # ── ListButton defaults (programmatic list-item buttons) ────────────
 LIST_BTN_W              = int(0.30 * SCREEN_WIDTH)

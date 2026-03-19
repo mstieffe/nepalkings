@@ -621,8 +621,24 @@ class BuildFigureScreen(SubScreen):
         self.window.blit(self.build_hierarchy, (settings.BUILD_HIERARCHY_X, settings.BUILD_HIERARCHY_Y))
 
         internal_color = self.color_mapping.get(self.color, self.color)
+        # Z-order layering: regular → selected → hovered (so info boxes appear on top)
+        all_regular = []
+        all_selected = []
+        all_hovered = None
         for button in self.figure_family_buttons[internal_color]:
+            if button.hovered:
+                all_hovered = button
+            elif button.clicked:
+                all_selected.append(button)
+            else:
+                all_regular.append(button)
+
+        for button in all_regular:
             button.draw()
+        for button in all_selected:
+            button.draw()
+        if all_hovered:
+            all_hovered.draw()
 
         if self.scroll_text_list_shifter:
             selected_figure = self.scroll_text_list_shifter.get_current_selected()
