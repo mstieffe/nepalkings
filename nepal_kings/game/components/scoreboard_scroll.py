@@ -199,8 +199,12 @@ class ScoreboardScroll:
                            y_offset=top_offset, text_spacing=top_spacing)
         self.draw_cell("Round", self.text_dict.get("round", ""), self.x + self.cell_width, self.y,
                        y_offset=top_offset, text_spacing=top_spacing)
-        self.draw_cell("You", self.text_dict.get("your_score", ""), self.x, self.y + self.cell_height, settings.COLOR_GREEN)
-        self.draw_cell("Opponent", self.text_dict.get("opponent_score", ""), self.x + self.cell_width, self.y + self.cell_height, settings.COLOR_RED)
+        # On mobile, nudge bottom-row values down a little so they sit inside the box
+        _bot_offset = int(0.008 * settings.SCREEN_HEIGHT) if _UI_SCALE > 1.0 else 0
+        self.draw_cell("You", self.text_dict.get("your_score", ""), self.x, self.y + self.cell_height, settings.COLOR_GREEN,
+                       y_offset=_bot_offset)
+        self.draw_cell("Opponent", self.text_dict.get("opponent_score", ""), self.x + self.cell_width, self.y + self.cell_height, settings.COLOR_RED,
+                       y_offset=_bot_offset)
 
         # Draw the stake value
         self.draw_stake()

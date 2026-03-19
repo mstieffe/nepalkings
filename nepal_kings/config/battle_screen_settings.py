@@ -95,13 +95,15 @@ TURN_YOUR_COLOR = (250, 221, 0)
 TURN_OPPONENT_COLOR = (160, 140, 100)
 
 # ────────────────── FONTS ─────────────────────────────────────
-# On mobile (_UI_SCALE > 1) bump number fonts so they stay readable
-_BSM = 1.25 if _UI_SCALE > 1.0 else 1.0   # battle-screen mobile multiplier
 BATTLE_SCREEN_FONT_SIZE = int(0.022 * _FS)
 BATTLE_SCREEN_FONT_SIZE_SMALL = int(0.018 * _FS)
-BATTLE_SCREEN_VALUE_FONT_SIZE = int(0.032 * _FS * _BSM)
-BATTLE_SCREEN_DIFF_FONT_SIZE = int(0.026 * _FS * _BSM)
-BATTLE_SCREEN_TOTAL_FONT_SIZE = int(0.06 * _FS * _BSM)
+BATTLE_SCREEN_VALUE_FONT_SIZE = int(0.032 * _FS)
+BATTLE_SCREEN_DIFF_FONT_SIZE = int(0.026 * _FS)
+BATTLE_SCREEN_TOTAL_FONT_SIZE = int(0.06 * _FS)
+
+# Icon power-value font (the number on move icons) — larger on mobile
+_BIM = 1.3 if _UI_SCALE > 1.0 else 1.0
+BATTLE_ICON_VALUE_FONT_SIZE = int(0.018 * _FS * _BIM)
 
 # ─────────────── SLOT VISUAL SETTINGS ─────────────────────────
 BATTLE_SLOT_BG_COLOR = (110, 70, 35)
@@ -111,11 +113,13 @@ BATTLE_SLOT_HIGHLIGHT_COLOR = (250, 221, 0, 120)  # semi-transparent gold for cu
 # ─────────────── POWER CIRCLES ────────────────────────────────
 # Small circles showing per-element power values near figures & slots.
 # Player circle sits below the element; opponent circle sits above.
-POWER_CIRCLE_RADIUS = int(0.014 * SCREEN_WIDTH)          # circle radius
+# On mobile, enlarge power circles so values are readable
+_PCM = 1.25 if _UI_SCALE > 1.0 else 1.0
+POWER_CIRCLE_RADIUS = int(0.014 * SCREEN_WIDTH * _PCM)    # circle radius
 POWER_CIRCLE_BORDER_W = 2
 POWER_CIRCLE_BG_COLOR = (50, 30, 15)
 POWER_CIRCLE_BORDER_COLOR = (140, 120, 90)
-POWER_CIRCLE_FONT_SIZE = int(0.017 * _FS)
+POWER_CIRCLE_FONT_SIZE = int(0.017 * _FS * _PCM)
 POWER_CIRCLE_TEXT_COLOR = (255, 255, 255)
 POWER_CIRCLE_EMPTY_TEXT = "—"                              # shown for unplayed slots
 POWER_CIRCLE_EMPTY_COLOR = (120, 100, 80)

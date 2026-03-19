@@ -86,8 +86,8 @@ class BattleMoveDetailBox:
 
         # Fonts – on mobile, use reduced sizes so content fits the fixed-size box
         if _UI_SCALE > 1.0:
-            _title_sz = int(settings.FONT_SIZE_TITLE_DIALOGUE_BOX / _UI_SCALE * 1.15)
-            _body_sz  = int(settings.FONT_SIZE_DIALOGUE_BOX / _UI_SCALE * 1.15)
+            _title_sz = int(settings.FONT_SIZE_TITLE_DIALOGUE_BOX / _UI_SCALE * 1.4)
+            _body_sz  = int(settings.FONT_SIZE_DIALOGUE_BOX / _UI_SCALE * 1.4)
         else:
             _title_sz = settings.FONT_SIZE_TITLE_DIALOGUE_BOX
             _body_sz  = settings.FONT_SIZE_DIALOGUE_BOX

@@ -43,6 +43,8 @@ class BattleScreen(SubScreen):
         # ── fonts ──
         self.font_normal = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_FONT_SIZE)
         self.font_small = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_FONT_SIZE_SMALL)
+        self.font_icon_value = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_ICON_VALUE_FONT_SIZE)
+        self.font_icon_value.set_bold(True)
         self.font_value = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_VALUE_FONT_SIZE)
         self.font_value.set_bold(True)
         self.font_diff = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_DIFF_FONT_SIZE)
@@ -2181,7 +2183,7 @@ class BattleScreen(SubScreen):
             family_name, suit, power_value,
             self._panel_glow_cache, self._panel_icon_cache,
             self._panel_frame_cache, self._panel_suit_icon_cache,
-            self.font_small, icon_s, suit_b=suit_b,
+            self.font_icon_value, icon_s, suit_b=suit_b,
         )
         return surf
 
@@ -2447,7 +2449,7 @@ class BattleScreen(SubScreen):
                 family_name, suit, power_value,
                 self._panel_glow_cache, self._panel_icon_cache,
                 self._panel_frame_cache, self._panel_suit_icon_cache,
-                self.font_small, icon_s,
+                self.font_icon_value, icon_s,
                 hovered=hovered, is_used=False, suit_b=suit_b,
             )
 
@@ -3207,7 +3209,7 @@ class BattleScreen(SubScreen):
                 family_name, suit, power_value,
                 self._slot_glow_cache, self._slot_icon_cache,
                 self._slot_frame_cache, self._slot_suit_icon_cache,
-                self.font_small, sw, suit_b=suit_b,
+                self.font_icon_value, sw, suit_b=suit_b,
             )
 
             # Red strikethrough on BM value number only when called-figure suit ≠ BM suit
