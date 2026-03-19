@@ -1,0 +1,418 @@
+<html lang="en-us"><script src="https://pygame-web.github.io/cdn/0.9.3/pythons.js" type=module id="site" data-python="python3.12" data-LINES=42 data-COLUMNS=132 data-os="vtx,snd,gui" async defer>#<!--
+
+print("""
+Loading nepal_kings from nepal_kings.apk
+    Pygbag Version : 0.9.3
+    Template Version : 0.9.3
+    Python  : 3.12
+    CDN URL : https://pygame-web.github.io/cdn/0.9.3/
+    Screen  : 1280x720
+    Title   : nepal_kings
+    Folder  : nepal_kings
+    Authors : pgw
+    SPDX-License-Identifier: cookiecutter.spdx
+
+""")
+
+import sys
+import asyncio
+import platform
+import json
+from pathlib import Path
+
+# do not rename
+async def custom_site():
+    import embed
+    platform.document.body.style.background = "#1e1c18"
+
+    platform.window.transfer.hidden = true
+    platform.window.canvas.style.visibility = "visible"
+
+
+    bundle = "nepal_kings"
+
+    # the C or js loader could do that but be explicit.
+    appdir = Path(f"/data/data/{bundle}") # /data/data/nepal_kings
+    appdir.mkdir()
+
+
+    # unpack filesystem from compressed archive into work dir
+    if platform.window.location.host.find('.itch.zone')>0:
+        import zipfile
+        async with platform.fopen("nepal_kings.apk", "rb") as archive:
+            with zipfile.ZipFile(archive) as zip_ref:
+                zip_ref.extractall(appdir.as_posix())
+    else:
+        import tarfile
+        async with platform.fopen("nepal_kings.tar.gz", "rb") as archive:
+            tar = tarfile.open(fileobj=archive, mode="r:gz")
+            tar.extractall(path=appdir.as_posix(), filter='tar')
+            tar.close()
+
+    # preloader will change to work dir and prepend it to sys.path
+    platform.run_main(PyConfig, loaderhome= appdir / "assets", loadermain=None)
+
+
+    # wait preloading complete : that includes images and wasm compilation of bundled modules
+    while embed.counter()<0:
+        await asyncio.sleep(.1)
+
+    main = appdir / "assets" / "main.py"
+
+    # Skip UME (user media engagement) wait — go straight to login.
+    # If UME hasn't happened yet, simulate a click so the browser
+    # unlocks audio context without blocking the user.
+    if not platform.window.MM.UME:
+        __import__(__name__).__file__ = main
+        # Auto-trigger UME via a synthetic click on the canvas
+        platform.window.eval("document.getElementById('canvas').click()")
+        # Brief wait for the event to register
+        for _i in range(20):
+            if platform.window.MM.UME:
+                break
+            await asyncio.sleep(.05)
+
+    # start async top level machinery if not started and add a console in any case if requested.
+    await TopLevel_async_handler.start_toplevel(platform.shell, console=window.python.config.debug)
+
+    # now that apk is mounted we have access to font cache
+    # but we need to fill __file__/__name__ that are not yet set
+    __import__(__name__).__file__ = main
+
+
+    def ui_callback(pkg):
+        platform.window.infobox.innerText = f"installing {pkg}"
+
+    await shell.source(main, callback=ui_callback)
+
+    # if you don't reach that step
+    # your main.py has an infinite sync loop somewhere !
+
+    platform.window.infobox.style.display = "none"
+    platform.window.config.gui_divider = 1
+    platform.window.window_resize()
+    print("default.tmpl: done")
+
+    shell.interactive()
+
+asyncio.run( custom_site() )
+
+# BEGIN BLOCK
+#
+# now this is the html part you can (and should) customize
+# It is not mandatory : pygame-script when it reads the first line (also called
+# shebang ) of above code create absolute minimal widget set
+# required for running with default rules
+#
+# do not alter that comment block it is separating python code from html code
+# =============================================================================
+# --></script><head><!--
+//=============================================================================
+//
+//
+--><script type="application/javascript">
+// END BLOCK
+
+// this dict is available under PyConfig.config from __main__
+config = {
+    xtermjs : "1" ,
+    _sdl2 : "canvas",
+    user_canvas : 0,
+    user_canvas_managed : 0,
+    gui_divider : 1,
+    ume_block : 0,
+    can_close : 0,
+    archive : "nepal_kings",
+    gui_debug : 0,
+    cdn : "https://pygame-web.github.io/cdn/0.9.3/",
+    autorun : 1,
+    PYBUILD : "3.12",
+    fb_ar   : 1.77,
+    fb_width : "1280",
+    fb_height : "720"
+}
+
+function show_infobox() {
+    var box = document.getElementById('infobox');
+    if (!box) return;
+    box.style.display = "flex";
+}
+
+</script>
+
+    <title>Nepal Kings</title>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="screen-orientation" content="landscape">
+
+    <link rel="icon" type="image/png" href="favicon.png" sizes="16x16">
+
+    <style>
+        /* ── Reset ────────────────────────────────────────── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', Arial, Helvetica, sans-serif;
+            background: #1e1c18;
+            color: #ebe1d0;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+        }
+
+        /* ── Loading overlay ──────────────────────────────── */
+        #nk-loader {
+            position: fixed;
+            inset: 0;
+            z-index: 100000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(ellipse at center, #2a2520 0%, #1e1c18 70%);
+        }
+        #nk-loader .title {
+            font-size: clamp(28px, 5vw, 52px);
+            font-weight: 700;
+            color: #fadd00;
+            letter-spacing: 2px;
+            text-shadow: 0 2px 12px rgba(250,221,0,.3);
+            margin-bottom: 8px;
+        }
+        #nk-loader .subtitle {
+            font-size: clamp(12px, 2vw, 18px);
+            color: #8c826e;
+            margin-bottom: 32px;
+        }
+        /* progress bar */
+        #nk-loader .bar-track {
+            width: min(70vw, 360px);
+            height: 6px;
+            background: #3a342a;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        #nk-loader .bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #fadd00, #c8a820);
+            border-radius: 3px;
+            transition: width .3s ease;
+        }
+        #nk-loader .status {
+            margin-top: 14px;
+            font-size: clamp(11px, 1.6vw, 14px);
+            color: #6e6656;
+        }
+
+        /* ── Landscape prompt (portrait overlay) ──────────── */
+        #nk-rotate {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 200000;
+            background: #1e1c18;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 24px;
+        }
+        #nk-rotate .icon {
+            font-size: 64px;
+            margin-bottom: 16px;
+            animation: nk-wobble 2s ease-in-out infinite;
+        }
+        #nk-rotate .msg {
+            font-size: clamp(16px, 3vw, 22px);
+            color: #fadd00;
+            font-weight: 600;
+        }
+        #nk-rotate .hint {
+            margin-top: 8px;
+            font-size: clamp(12px, 2vw, 15px);
+            color: #8c826e;
+        }
+        @keyframes nk-wobble {
+            0%,100% { transform: rotate(0deg); }
+            25%     { transform: rotate(-20deg); }
+            75%     { transform: rotate(20deg); }
+        }
+        @media (orientation: portrait) {
+            #nk-rotate { display: flex !important; }
+        }
+
+        /* ── Canvas ───────────────────────────────────────── */
+        canvas.emscripten {
+            border: 0;
+            background-color: transparent;
+            z-index: 5;
+            padding: 0;
+            margin: 0;
+            position: absolute;
+            /* 16:9 letterbox — dvh with vh fallback */
+            width:  min(100vw, calc(100vh  * 16/9)) !important;
+            height: min(100vh, calc(100vw  *  9/16)) !important;
+            width:  min(100vw, calc(100dvh * 16/9)) !important;
+            height: min(100dvh,calc(100vw  *  9/16)) !important;
+            left: 50% !important;
+            top:  50% !important;
+            transform: translate(-50%, -50%) !important;
+        }
+
+        /* hide pygbag chrome */
+        #transfer, #pyconsole, #crt, #box, #system, #html, #dlg { display: none !important; }
+        #infobox { display: none !important; }
+
+    </style>
+
+    <script src="https://pygame-web.github.io/cdn/0.9.3//browserfs.min.js"></script>
+
+</head>
+
+<body>
+
+    <!-- ── Nepal Kings branded loading screen ──────────── -->
+    <div id="nk-loader">
+        <div class="title">Nepal Kings</div>
+        <div class="subtitle">Loading game&hellip;</div>
+        <div class="bar-track"><div class="bar-fill" id="nk-bar"></div></div>
+        <div class="status" id="nk-status">Initialising&hellip;</div>
+    </div>
+
+    <!-- ── Rotate-to-landscape prompt ─────────────────── -->
+    <div id="nk-rotate">
+        <div class="icon">📱</div>
+        <div class="msg">Please rotate your device</div>
+        <div class="hint">Nepal Kings is best played in landscape mode</div>
+    </div>
+
+    <!-- pygbag required elements (hidden) -->
+    <div id="transfer" hidden>
+        <div class="emscripten" id="status">Downloading...</div>
+        <div class="emscripten"><progress value="0" max="100" id="progress"></progress></div>
+    </div>
+
+    <canvas class="emscripten" id="canvas"
+        width="1px" height="1px"
+        oncontextmenu="event.preventDefault()" tabindex=1>
+    </canvas>
+
+    <canvas class="emscripten" id="canvas3d"
+        width="1280px" height="720px"
+        oncontextmenu="event.preventDefault()" tabindex=1 hidden>
+    </canvas>
+
+    <div id="infobox" hidden>Loading, please wait ...</div>
+    <div id="html"></div>
+    <div id="crt" class="bottomright" hidden>
+        <div id="system" hidden></div>
+        <div id="box" class="emscripten_border" hidden>
+            <div id="info" class="trinfo"></div>
+            <iframe id="iframe" class="framed" name="iframe"
+                width="470px" height="90%"
+                src="https://pygame-web.github.io/cdn/0.9.3/empty.html"
+                hidden></iframe>
+        </div>
+    </div>
+    <div id="dlg" hidden>
+        <input type="file" id="dlg_multifile" multiple accept="image/*">
+        <label for="dlg_multifile">Select files</label>
+    </div>
+    <div id="pyconsole" hidden>
+        <div id="terminal" tabIndex=1 align="left"></div>
+    </div>
+
+    <script type="application/javascript">
+
+    globalThis.__canvas_resized = (self, ecw, ech) => {}
+
+    // ── Loading-bar progress hook ────────────────────────
+    (function(){
+        var bar = document.getElementById('nk-bar');
+        var stat = document.getElementById('nk-status');
+        var prog = document.getElementById('progress');
+        // Watch the hidden pygbag <progress> element
+        if (prog) {
+            var obs = new MutationObserver(function(){
+                var v = prog.value, m = prog.max || 100;
+                var pct = Math.min(100, Math.round(v / m * 100));
+                if (bar) bar.style.width = pct + '%';
+                if (stat) {
+                    if (pct < 30) stat.textContent = 'Downloading assets\u2026';
+                    else if (pct < 80) stat.textContent = 'Preparing game engine\u2026';
+                    else stat.textContent = 'Almost ready\u2026';
+                }
+            });
+            obs.observe(prog, {attributes: true});
+        }
+        // Also hook XHR progress if pygbag fires it
+        var origXHR = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(){
+            var x = this;
+            x.addEventListener('progress', function(e){
+                if (e.lengthComputable && bar) {
+                    var pct = Math.round(e.loaded / e.total * 100);
+                    bar.style.width = pct + '%';
+                }
+            });
+            return origXHR.apply(this, arguments);
+        };
+    })();
+
+    // Hide loader when canvas gets its first real resize
+    (function(){
+        var c = document.getElementById('canvas');
+        var loader = document.getElementById('nk-loader');
+        if (!c || !loader) return;
+        var obs = new MutationObserver(function(){
+            if (parseInt(c.width) > 1 && parseInt(c.height) > 1) {
+                loader.style.opacity = '0';
+                loader.style.transition = 'opacity .4s ease';
+                setTimeout(function(){ loader.style.display = 'none'; }, 500);
+                obs.disconnect();
+            }
+        });
+        obs.observe(c, {attributes: true, attributeFilter: ['width','height']});
+    })();
+
+    // ── Lock to landscape on supporting browsers ─────────
+    (function(){
+        try {
+            if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('landscape').catch(function(){});
+            }
+        } catch(e) {}
+    })();
+
+    async function custom_onload(debug_hidden) {
+        console.log(__FILE__, "custom_onload");
+        if (typeof pyconsole !== 'undefined') pyconsole.hidden = true;
+        if (typeof system !== 'undefined') system.hidden = true;
+        if (typeof transfer !== 'undefined') transfer.hidden = true;
+        if (typeof info !== 'undefined') info.hidden = true;
+        if (typeof box !== 'undefined') box.hidden = true;
+        show_infobox();
+    }
+
+    function custom_prerun(){}
+    function custom_postrun(){}
+
+    function debug() {
+        python.config.debug = true;
+        custom_onload(false);
+        Module.PyRun_SimpleString("shell.uptime()");
+        window_resize();
+    }
+
+    function info_inline(data){ document.getElementById("info").innerHTML = data; }
+
+    </script>
+
+</body>
+</html>

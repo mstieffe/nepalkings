@@ -34,6 +34,9 @@ jobs:
       - name: Build web bundle
         run: python -m pygbag --build nepal_kings
 
+      - name: Apply custom index.html
+        run: cp nepal_kings/web/index.html nepal_kings/build/web/index.html
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

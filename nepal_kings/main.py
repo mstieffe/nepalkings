@@ -361,8 +361,8 @@ if __name__ == '__main__':
             else:
                 _fw, _fh = _vw, int(_vw / _ar)
             if _mobile:
-                # On phones use lower resolutions so UI stays readable
-                _table = [(1024, 576), (854, 480)]
+                # Force small resolution so text/buttons stay readable
+                _table = [(854, 480)]
             else:
                 _table = [(1920, 1080), (1600, 900), (1366, 768),
                           (1280, 720), (1024, 576), (854, 480)]
@@ -379,23 +379,9 @@ if __name__ == '__main__':
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
         # ── Canvas CSS: maintain 16:9 aspect ratio + centre ───────
-        # Uses dvh (dynamic viewport height) to avoid mobile Safari
-        # address-bar overlap, with vh fallback for older browsers.
+        # (main styling is in web/index.html; this is a safety net)
         try:
             _embed.js("""(function(){
-                var s=document.createElement('style');
-                s.textContent=
-                    'body{background:#1e1c18!important;margin:0;overflow:hidden}'
-                    +'canvas#canvas{'
-                    +'width:min(100vw,calc(100vh * 16/9))!important;'
-                    +'height:min(100vh,calc(100vw * 9/16))!important;'
-                    +'width:min(100vw,calc(100dvh * 16/9))!important;'
-                    +'height:min(100dvh,calc(100vw * 9/16))!important;'
-                    +'left:50%!important;top:50%!important;'
-                    +'transform:translate(-50%,-50%)!important;'
-                    +'right:auto!important;bottom:auto!important}'
-                    +'#infobox{font-size:min(3vw,18px)!important}';
-                document.head.appendChild(s);
                 var m=document.querySelector('meta[name=viewport]');
                 if(m) m.content='width=device-width,initial-scale=1,'
                     +'maximum-scale=1,user-scalable=no,viewport-fit=cover';
