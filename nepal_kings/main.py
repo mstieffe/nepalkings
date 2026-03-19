@@ -340,19 +340,33 @@ if __name__ == '__main__':
         _w, _h = 1280, 720          # safe defaults
         try:
             import embed as _embed
-            _vp = _embed.js(
-                "({w:window.innerWidth,h:window.innerHeight})"
-            )
+            # Use visualViewport (accurate on mobile) with fallback
+            _vp = _embed.js("""(function(){
+                var vv=window.visualViewport;
+                return {w: vv? vv.width : window.innerWidth,
+                        h: vv? vv.height: window.innerHeight,
+                        dpr: window.devicePixelRatio||1,
+                        mobile: /iPhone|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i
+                                .test(navigator.userAgent)
+                                || (navigator.maxTouchPoints>0
+                                    && Math.min(window.innerWidth,window.innerHeight)<500)
+                       }
+            })()""")
             _vw, _vh = int(_vp['w']), int(_vp['h'])
+            _mobile = bool(_vp.get('mobile', False))
             _ar = 16.0 / 9.0
             # Fit a 16:9 rectangle inside the viewport
             if _vw / max(_vh, 1) > _ar:
                 _fw, _fh = int(_vh * _ar), _vh
             else:
                 _fw, _fh = _vw, int(_vw / _ar)
-            # Pick the largest standard 16:9 resolution that fits
-            for _rw, _rh in [(1920, 1080), (1600, 900), (1366, 768),
-                             (1280, 720), (1024, 576), (854, 480)]:
+            if _mobile:
+                # On phones use lower resolutions so UI stays readable
+                _table = [(1024, 576), (854, 480)]
+            else:
+                _table = [(1920, 1080), (1600, 900), (1366, 768),
+                          (1280, 720), (1024, 576), (854, 480)]
+            for _rw, _rh in _table:
                 if _rw <= _fw and _rh <= _fh:
                     _w, _h = _rw, _rh
                     break
@@ -365,21 +379,29 @@ if __name__ == '__main__':
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
         # ── Canvas CSS: maintain 16:9 aspect ratio + centre ───────
+        # Uses dvh (dynamic viewport height) to avoid mobile Safari
+        # address-bar overlap, with vh fallback for older browsers.
         try:
             _embed.js("""(function(){
                 var s=document.createElement('style');
                 s.textContent=
                     'body{background:#1e1c18!important;margin:0;overflow:hidden}'
                     +'canvas#canvas{'
-                    +'width:min(100vw,calc(100vh*16/9))!important;'
-                    +'height:min(100vh,calc(100vw*9/16))!important;'
+                    +'width:min(100vw,calc(100vh * 16/9))!important;'
+                    +'height:min(100vh,calc(100vw * 9/16))!important;'
+                    +'width:min(100vw,calc(100dvh * 16/9))!important;'
+                    +'height:min(100dvh,calc(100vw * 9/16))!important;'
                     +'left:50%!important;top:50%!important;'
                     +'transform:translate(-50%,-50%)!important;'
-                    +'right:auto!important;bottom:auto!important}';
+                    +'right:auto!important;bottom:auto!important}'
+                    +'#infobox{font-size:min(3vw,18px)!important}';
                 document.head.appendChild(s);
                 var m=document.querySelector('meta[name=viewport]');
                 if(m) m.content='width=device-width,initial-scale=1,'
                     +'maximum-scale=1,user-scalable=no,viewport-fit=cover';
+                window.addEventListener('resize',function(){
+                    if(window.window_resize) window.window_resize();
+                });
                 return 1;
             })()""")
         except Exception:
