@@ -1,3 +1,4 @@
+import sys
 from config import settings
 import pygame
 from pygame.locals import *
@@ -643,6 +644,14 @@ class InputField:
     def activate(self):
         """Activate the input field, setting it as the active field."""
         self.active = True
+        # On mobile web, open a browser prompt for text entry
+        if sys.platform == 'emscripten':
+            from utils.web_keyboard import is_mobile, prompt
+            if is_mobile():
+                result = prompt(self.name, self.content, self.pwd)
+                self.content = result[:self.max_length]
+                self.cursor_pos = len(self.content)
+                self.active = False
 
     def deactivate(self):
         """Deactivate the input field, removing it from the active state."""

@@ -336,10 +336,58 @@ if __name__ == '__main__':
         # ── Web / pygbag mode ──────────────────────────────────────
         import asyncio
 
-        os.environ.setdefault('NK_SCREEN_WIDTH',  '1280')
-        os.environ.setdefault('NK_SCREEN_HEIGHT', '720')
+        # ── Dynamic resolution based on viewport ──────────────────
+        _w, _h = 1280, 720          # safe defaults
+        try:
+            import embed as _embed
+            _vp = _embed.js(
+                "({w:window.innerWidth,h:window.innerHeight})"
+            )
+            _vw, _vh = int(_vp['w']), int(_vp['h'])
+            _ar = 16.0 / 9.0
+            # Fit a 16:9 rectangle inside the viewport
+            if _vw / max(_vh, 1) > _ar:
+                _fw, _fh = int(_vh * _ar), _vh
+            else:
+                _fw, _fh = _vw, int(_vw / _ar)
+            # Pick the largest standard 16:9 resolution that fits
+            for _rw, _rh in [(1920, 1080), (1600, 900), (1366, 768),
+                             (1280, 720), (1024, 576), (854, 480)]:
+                if _rw <= _fw and _rh <= _fh:
+                    _w, _h = _rw, _rh
+                    break
+        except Exception:
+            pass
+
+        os.environ['NK_SCREEN_WIDTH']  = str(_w)
+        os.environ['NK_SCREEN_HEIGHT'] = str(_h)
         os.environ.setdefault('SERVER_URL', _DEFAULT_SERVER_URL)
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+        # ── Canvas CSS: maintain 16:9 aspect ratio + centre ───────
+        try:
+            _embed.js("""(function(){
+                var s=document.createElement('style');
+                s.textContent=
+                    'body{background:#1e1c18!important;margin:0;overflow:hidden}'
+                    +'canvas#canvas{'
+                    +'width:min(100vw,calc(100vh*16/9))!important;'
+                    +'height:min(100vh,calc(100vw*9/16))!important;'
+                    +'left:50%!important;top:50%!important;'
+                    +'transform:translate(-50%,-50%)!important;'
+                    +'right:auto!important;bottom:auto!important}';
+                document.head.appendChild(s);
+                var m=document.querySelector('meta[name=viewport]');
+                if(m) m.content='width=device-width,initial-scale=1,'
+                    +'maximum-scale=1,user-scalable=no,viewport-fit=cover';
+                return 1;
+            })()""")
+        except Exception:
+            pass
+
+        # ── Mobile-keyboard support ───────────────────────────────
+        from utils.web_keyboard import init as _init_kb
+        _init_kb()
 
         from nepal_kings import Client
 

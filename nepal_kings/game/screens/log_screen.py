@@ -1,3 +1,4 @@
+import sys
 import pygame
 from pygame.locals import *
 from datetime import datetime
@@ -72,7 +73,17 @@ class _LogInputField:
 
     def handle_event(self, event):
         if event.type == MOUSEBUTTONDOWN:
+            was_active = self.active
             self.active = self.rect.collidepoint(event.pos)
+            # On mobile web, open a browser prompt for text entry
+            if self.active and not was_active and sys.platform == 'emscripten':
+                from utils.web_keyboard import is_mobile, prompt
+                if is_mobile():
+                    result = prompt(
+                        self.placeholder or 'Message', self.content,
+                    )
+                    self.content = result[:self.max_length]
+                    self.active = False
         elif event.type == KEYDOWN and self.active:
             if event.key == K_BACKSPACE:
                 self.content = self.content[:-1]
