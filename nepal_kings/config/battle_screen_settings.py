@@ -99,7 +99,9 @@ BATTLE_SCREEN_FONT_SIZE = int(0.022 * _FS)
 BATTLE_SCREEN_FONT_SIZE_SMALL = int(0.018 * _FS)
 BATTLE_SCREEN_VALUE_FONT_SIZE = int(0.032 * _FS)
 BATTLE_SCREEN_DIFF_FONT_SIZE = int(0.026 * _FS)
-BATTLE_SCREEN_TOTAL_FONT_SIZE = int(0.06 * _FS)
+# Total score font — smaller on mobile so it fits inside the circle
+_TSM = 0.75 if _UI_SCALE > 1.0 else 1.0
+BATTLE_SCREEN_TOTAL_FONT_SIZE = int(0.06 * _FS * _TSM)
 
 # Icon power-value font (the number on move icons) — larger on mobile
 _BIM = 1.3 if _UI_SCALE > 1.0 else 1.0
@@ -143,3 +145,7 @@ FINISH_BTN_COLOR = (180, 140, 40)
 FINISH_BTN_HOVER_COLOR = (200, 170, 60)
 FINISH_BTN_BORDER_COLOR = (250, 221, 0)
 FINISH_BTN_TEXT_COLOR = (40, 20, 5)
+
+# ─────────────── BATTLE FIGURE ICON SCALE ─────────────────────
+# On mobile, enlarge the figure diamond icons (not the info box below them)
+BATTLE_FIGURE_ICON_SCALE = 1.15 if _UI_SCALE > 1.0 else 1.0

@@ -24,6 +24,42 @@ from game.components.dialogue_box import _DlgButton
 from utils.background_poller import BackgroundPoller
 
 
+def _rescale_battle_icon(icon, scale):
+    """Rescale a FieldFigureIcon's diamond/frame/glow surfaces for the battle screen.
+
+    The info box below the icon is intentionally NOT scaled so it stays compact.
+    """
+    if scale == 1.0 or icon is None:
+        return
+
+    def _ss(surf, s):
+        if surf is None:
+            return surf
+        w, h = surf.get_size()
+        return pygame.transform.smoothscale(surf, (int(w * s), int(h * s)))
+
+    # Icon images (colour + greyscale, normal + big)
+    icon.icon_img = _ss(icon.icon_img, scale)
+    icon.icon_gray_img = _ss(icon.icon_gray_img, scale)
+    icon.icon_img_big = _ss(icon.icon_img_big, scale)
+    icon.icon_gray_img_big = _ss(icon.icon_gray_img_big, scale)
+
+    # Frame images (normal + closed, normal + big)
+    for attr in ('frame_img', 'frame_closed_img', 'frame_hidden_img',
+                 'frame_img_big', 'frame_closed_img_big', 'frame_hidden_img_big'):
+        setattr(icon, attr, _ss(getattr(icon, attr, None), scale))
+
+    # Glow surfaces
+    for attr in ('glow_yellow', 'glow_yellow_big', 'glow_yellow_dark',
+                 'glow_yellow_dark_big', 'glow_black', 'glow_white',
+                 'glow_white_big', 'glow_orange', 'glow_orange_big'):
+        setattr(icon, attr, _ss(getattr(icon, attr, None), scale))
+
+    # Broken / advance overlays
+    for attr in ('broken_icon', 'broken_icon_big'):
+        setattr(icon, attr, _ss(getattr(icon, attr, None), scale))
+
+
 class BattleScreen(SubScreen):
     """Screen for the 3-round battle phase.
 
@@ -477,6 +513,7 @@ class BattleScreen(SubScreen):
                 self.opponent_figure_2 = fig
 
         # Create FieldFigureIcons for rendering
+        _bfis = settings.BATTLE_FIGURE_ICON_SCALE
         if self.player_figure:
             self.player_figure_icon = FieldFigureIcon(
                 window=self.window,
@@ -486,6 +523,7 @@ class BattleScreen(SubScreen):
                 all_player_figures=player_battle_figures,
             )
             self.player_figure_icon.show_advance_overlay = False
+            _rescale_battle_icon(self.player_figure_icon, _bfis)
 
         if self.player_figure_2:
             self.player_figure_icon_2 = FieldFigureIcon(
@@ -496,6 +534,7 @@ class BattleScreen(SubScreen):
                 all_player_figures=player_battle_figures,
             )
             self.player_figure_icon_2.show_advance_overlay = False
+            _rescale_battle_icon(self.player_figure_icon_2, _bfis)
 
         if self.opponent_figure:
             self.opponent_figure_icon = FieldFigureIcon(
@@ -506,6 +545,7 @@ class BattleScreen(SubScreen):
                 all_player_figures=opponent_battle_figures,
             )
             self.opponent_figure_icon.show_advance_overlay = False
+            _rescale_battle_icon(self.opponent_figure_icon, _bfis)
 
         if self.opponent_figure_2:
             self.opponent_figure_icon_2 = FieldFigureIcon(
@@ -516,6 +556,7 @@ class BattleScreen(SubScreen):
                 all_player_figures=opponent_battle_figures,
             )
             self.opponent_figure_icon_2.show_advance_overlay = False
+            _rescale_battle_icon(self.opponent_figure_icon_2, _bfis)
 
         # ── Detect blocks_bonus skill triggers ──
         self._detect_blocks_bonus(player_battle_figures, opponent_battle_figures)
