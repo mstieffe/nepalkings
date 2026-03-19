@@ -271,6 +271,9 @@ class SettingsScreen(MenuScreenMixin, Screen):
     @staticmethod
     def _save_resolution(w, h):
         """Write the chosen resolution to the user config directory, preserving other settings."""
+        import sys
+        if sys.platform == 'emscripten':
+            return  # no persistent filesystem on web
         try:
             os.makedirs(_CFG_DIR, exist_ok=True)
             existing = {}

@@ -609,8 +609,9 @@ class InputField:
                     return 'submit'  # Indicates the user pressed Enter
                 elif event.key == K_TAB:
                     return 'switch'  # Indicates the user pressed Tab
-                elif len(self.content) < self.max_length:
-                    self.insert(event.unicode)
+        elif event.type == pygame.TEXTINPUT:
+            if self.active and len(self.content) < self.max_length:
+                self.insert(event.text)
         elif event.type == MOUSEBUTTONDOWN:
             if self.collide():
                 self.activate()

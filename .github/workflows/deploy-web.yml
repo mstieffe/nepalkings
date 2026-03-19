@@ -1,0 +1,51 @@
+name: Deploy Web Client
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [web-client]
+    paths:
+      - 'nepal_kings/**'
+      - 'pygbag.ini'
+      - '.github/workflows/deploy-web.yml'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pygbag
+        run: pip install pygbag==0.9.3
+
+      - name: Build web bundle
+        run: python -m pygbag --build nepal_kings
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: nepal_kings/build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -76,9 +76,9 @@ class _LogInputField:
         elif event.type == KEYDOWN and self.active:
             if event.key == K_BACKSPACE:
                 self.content = self.content[:-1]
-            elif event.key not in (K_RETURN, K_ESCAPE, K_TAB):
-                if len(self.content) < self.max_length:
-                    self.content += event.unicode
+        elif event.type == pygame.TEXTINPUT and self.active:
+            if len(self.content) < self.max_length:
+                self.content += event.text
 
     def empty(self):
         self.content = ""
