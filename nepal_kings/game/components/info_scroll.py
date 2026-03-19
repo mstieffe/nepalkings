@@ -134,7 +134,7 @@ class InfoScroll:
                 black_color = settings.INFO_SCROLL_BLACK_PILL_CLR
                 
                 # Fixed column positions for consistent alignment
-                red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
+                red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN
                 black_text_x = red_text_x + self._pill_min_w + settings.INFO_SCROLL_ICON_SPACING
                 
                 self._draw_text_with_background(
@@ -167,7 +167,7 @@ class InfoScroll:
                 black_color = settings.INFO_SCROLL_BLACK_PILL_CLR
                 
                 # Fixed column positions for consistent alignment
-                red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
+                red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN
                 black_text_x = red_text_x + self._pill_min_w + settings.INFO_SCROLL_TEXT_MARGIN
                 
                 self._draw_text_with_background(

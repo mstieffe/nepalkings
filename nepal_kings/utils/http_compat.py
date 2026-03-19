@@ -1,12 +1,13 @@
 """HTTP compatibility layer.
 
 Desktop: re-exports from the ``requests`` library.
-Web (pygbag/emscripten): synchronous XMLHttpRequest via embed.js().
+Web (pygbag/emscripten): synchronous XMLHttpRequest via embed.js(),
+plus async XHR helpers for non-blocking background polling.
 """
 import sys as _sys
 
 if _sys.platform == "emscripten":
-    # ── Web: synchronous XHR executed through pygbag's JS bridge ───
+    # ── Web: XHR executed through pygbag's JS bridge ───────────
     import json as _json
     import embed as _embed
 
@@ -114,6 +115,44 @@ if _sys.platform == "emscripten":
             raise
         except Exception as exc:
             raise RequestException(str(exc)) from exc
+
+    # ── Async XHR helpers (non-blocking, for background polling) ──
+
+    _async_id_counter = 0
+
+    def start_async_get(url, params=None):
+        """Fire an async GET XHR; return an integer request-id."""
+        global _async_id_counter
+        _async_id_counter += 1
+        rid = _async_id_counter
+        full_url = _js_escape(url + _encode_params(params))
+        js = (
+            f"(function(){{"
+            f"window._axr=window._axr||{{}};"
+            f"var x=new XMLHttpRequest();"
+            f"x.open('GET','{full_url}',true);"
+            f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
+            f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
+            f"x.send();"
+            f"}})()"
+        )
+        _embed.js(js)
+        return rid
+
+    def check_async(rid):
+        """Check if async request *rid* finished.  Returns _Response or None."""
+        js = (
+            f"(function(){{"
+            f"var r=(window._axr||{{}})[{rid}];"
+            f"if(!r)return null;"
+            f"delete window._axr[{rid}];"
+            f"return r;"
+            f"}})()"
+        )
+        result = _embed.js(js)
+        if result is None:
+            return None
+        return _Response(int(result["s"]), str(result["t"]))
 
 else:
     # ── Desktop: use requests ──────────────────────────────────────

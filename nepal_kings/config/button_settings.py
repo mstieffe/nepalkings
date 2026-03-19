@@ -144,8 +144,8 @@ SCROLL_TEXT_MAX_WIDTH = int(0.15 * SCREEN_WIDTH)  # wider to fill panel
 SCROLL_FONT_SIZE_TITLE = int(0.026 * _FS)
 SCROLL_FONT_SIZE_BODY = int(0.022 * _FS)
 SCROLL_FONT_SIZE_SMALL = int(0.019 * _FS)
-SCROLL_ICON_SIZE = int(0.025 * SCREEN_HEIGHT)      # resource / check icons
-SCROLL_SKILL_ICON_SIZE = int(0.032 * SCREEN_HEIGHT) # skill icons (slightly larger)
+SCROLL_ICON_SIZE = int(0.025 * _FS)                 # resource / check icons
+SCROLL_SKILL_ICON_SIZE = int(0.032 * _FS)            # skill icons (slightly larger)
 
 # Scroll chevron arrows (programmatic, replaces image-based arrows)
 SCROLL_CHEVRON_SIZE = int(0.014 * SCREEN_HEIGHT)   # half-size of the chevron
