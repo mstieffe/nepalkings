@@ -193,21 +193,23 @@ class MenuScreenMixin:
         self._gold_icon = cache['gold']
         self._gold_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_MENU_GOLD_FONT_SIZE)
 
-        # Icon buttons (top-right): home (rightmost), logout below home
+        # Icon buttons (top-right): home at top, settings at bottom, logout just above settings
         stone_sz = settings.GAME_MENU_ICON_STONE_SZ
         home_x   = _SW - settings.GAME_MENU_ICON_RIGHT_MARGIN - stone_sz
         home_y   = settings.GAME_MENU_ICON_TOP_Y
-        logout_gap = getattr(settings, 'GAME_MENU_ICON_LOGOUT_GAP_Y', int(0.015 * _SH))
-        logout_x = home_x
-        logout_y = home_y + stone_sz + logout_gap
 
         self._icon_home   = _MenuIconButton(self.window, home_x,   home_y,   'home',   'home')
-        self._icon_logout = _MenuIconButton(self.window, logout_x, logout_y, 'logout', 'logout')
 
         # Settings icon (bottom-right)
         settings_x = _SW - settings.GAME_MENU_ICON_RIGHT_MARGIN - stone_sz
         settings_y = _SH - settings.GAME_MENU_ICON_RIGHT_MARGIN - stone_sz
         self._icon_settings = _MenuIconButton(self.window, settings_x, settings_y, 'settings', 'settings')
+
+        # Logout icon just above settings
+        logout_gap = getattr(settings, 'GAME_MENU_ICON_LOGOUT_GAP_Y', int(0.006 * _SH))
+        logout_x = settings_x
+        logout_y = settings_y - stone_sz - logout_gap
+        self._icon_logout = _MenuIconButton(self.window, logout_x, logout_y, 'logout', 'logout')
 
         self._icon_buttons = [self._icon_settings, self._icon_home, self._icon_logout]
 

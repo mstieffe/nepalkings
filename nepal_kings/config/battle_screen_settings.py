@@ -1,6 +1,6 @@
 """Layout settings for the Battle Screen."""
 
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
 
 # ─────────────────────────── general ───────────────────────────
 BATTLE_SCREEN_FILL_COLOR = (106, 58, 24)
@@ -95,11 +95,13 @@ TURN_YOUR_COLOR = (250, 221, 0)
 TURN_OPPONENT_COLOR = (160, 140, 100)
 
 # ────────────────── FONTS ─────────────────────────────────────
+# On mobile (_UI_SCALE > 1) bump number fonts so they stay readable
+_BSM = 1.25 if _UI_SCALE > 1.0 else 1.0   # battle-screen mobile multiplier
 BATTLE_SCREEN_FONT_SIZE = int(0.022 * _FS)
 BATTLE_SCREEN_FONT_SIZE_SMALL = int(0.018 * _FS)
-BATTLE_SCREEN_VALUE_FONT_SIZE = int(0.032 * _FS)
-BATTLE_SCREEN_DIFF_FONT_SIZE = int(0.026 * _FS)
-BATTLE_SCREEN_TOTAL_FONT_SIZE = int(0.06 * _FS)
+BATTLE_SCREEN_VALUE_FONT_SIZE = int(0.032 * _FS * _BSM)
+BATTLE_SCREEN_DIFF_FONT_SIZE = int(0.026 * _FS * _BSM)
+BATTLE_SCREEN_TOTAL_FONT_SIZE = int(0.06 * _FS * _BSM)
 
 # ─────────────── SLOT VISUAL SETTINGS ─────────────────────────
 BATTLE_SLOT_BG_COLOR = (110, 70, 35)

@@ -2,6 +2,7 @@ import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
 from config import settings
+from config.screen_settings import _UI_SCALE
 #from game.components.card_img import CardImg
 from game.components.cards.hand import Hand
 from game.components.info_scroll import InfoScroll
@@ -37,7 +38,7 @@ class GameScreen(Screen):
 
         # Unread chat message tracking
         self._last_seen_chat_count = 0
-        self._badge_font = pygame.font.Font(settings.FONT_PATH, int(0.015 * settings.SCREEN_HEIGHT))
+        self._badge_font = pygame.font.Font(settings.FONT_PATH, int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE))
 
         # Field & battle badge tracking
         self._field_unseen_count = 0
@@ -3241,7 +3242,7 @@ class GameScreen(Screen):
         if unread <= 0 or self.state.subscreen == 'log':
             return
         # Draw red circle badge at top-right of log button
-        badge_radius = int(0.006 * settings.SCREEN_WIDTH)
+        badge_radius = int(0.006 * settings.SCREEN_WIDTH * _UI_SCALE)
         badge_x = self.log_button.rect_symbol.right - badge_radius // 2
         badge_y = self.log_button.rect_symbol.top + badge_radius // 2
         pygame.draw.circle(self.window, (220, 40, 40), (badge_x, badge_y), badge_radius)
@@ -3315,7 +3316,8 @@ class GameScreen(Screen):
         """Draw a red notification badge on a game button."""
         if count <= 0:
             return
-        badge_radius = int(0.006 * settings.SCREEN_WIDTH)
+        _ui = getattr(settings, '_UI_SCALE', 1.0)
+        badge_radius = int(0.006 * settings.SCREEN_WIDTH * _ui)
         badge_x = button.rect_symbol.right - badge_radius // 2
         badge_y = button.rect_symbol.top + badge_radius // 2
         pygame.draw.circle(self.window, (220, 40, 40), (badge_x, badge_y), badge_radius)

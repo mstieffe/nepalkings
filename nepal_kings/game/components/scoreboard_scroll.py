@@ -1,5 +1,6 @@
 import pygame
 from config import settings
+from config.screen_settings import _UI_SCALE
 
 
 class ScoreboardScroll:
@@ -177,15 +178,24 @@ class ScoreboardScroll:
         top_spacing = settings.SCOREBOARD_CELL_SUBTITLE_SPACING
 
         # During an active battle, show battle turns with a "(battle)" subtitle
-        in_battle = getattr(self.game, 'in_battle_phase', False) if self.game else False
+        # Use both client-side flag and server-side indicators as fallback (web compatibility)
+        in_battle = False
+        if self.game:
+            in_battle = (getattr(self.game, 'in_battle_phase', False) or
+                         (getattr(self.game, 'battle_confirmed', False) and
+                          getattr(self.game, 'battle_turn_player_id', None) is not None))
+        # On mobile, skip the subtitle to save space
+        _mobile = _UI_SCALE > 1.0
         if in_battle:
             battle_turns = getattr(self.game, 'battle_turns_left', 0)
             self.draw_cell("Turns Left", battle_turns, self.x, self.y,
-                           subtitle="(battle)", subtitle_color=(220, 60, 60),
+                           subtitle=None if _mobile else "(battle)",
+                           subtitle_color=(220, 60, 60),
                            y_offset=top_offset, text_spacing=top_spacing)
         else:
             self.draw_cell("Turns Left", self.text_dict.get("turns_left", ""), self.x, self.y,
-                           subtitle="(build-up)", subtitle_color=(90, 115, 150),
+                           subtitle=None if _mobile else "(build-up)",
+                           subtitle_color=(90, 115, 150),
                            y_offset=top_offset, text_spacing=top_spacing)
         self.draw_cell("Round", self.text_dict.get("round", ""), self.x + self.cell_width, self.y,
                        y_offset=top_offset, text_spacing=top_spacing)

@@ -27,7 +27,7 @@ ACTION_BUTTON_X = int(0.94 * SCREEN_WIDTH)
 ACTION_BUTTON_Y = int(0.86 * SCREEN_HEIGHT)
 
 HOME_BUTTON_X = int(0.96 * SCREEN_WIDTH)
-HOME_BUTTON_Y = int(0.02 * SCREEN_HEIGHT)
+HOME_BUTTON_Y = int(0.04 * SCREEN_HEIGHT)
 
 # On mobile, shift the sidebar icons down to make space for a larger home button
 _SIDEBAR_Y_OFFSET = int(0.04 * SCREEN_HEIGHT) if _UI_SCALE > 1.0 else 0

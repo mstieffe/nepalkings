@@ -5,6 +5,7 @@ from email.utils import parsedate_to_datetime
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from config import settings
+from config.screen_settings import _UI_SCALE
 from utils.utils import Button
 from utils.game_service import fetch_user_games, fetch_user
 from utils.auth_service import send_heartbeat
@@ -13,7 +14,7 @@ from utils.background_poller import BackgroundPoller
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
 # Badge appearance
-_BADGE_RADIUS = int(0.014 * _SH)
+_BADGE_RADIUS = int(0.014 * _SH * _UI_SCALE)
 _BADGE_CLR    = (210, 40, 40)
 _BADGE_TXT    = (255, 255, 255)
 
@@ -81,7 +82,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         # ── Badge polling ───────────────────────────────────────────
         self._badge_timer = 0
         self._badge_interval = 5000          # ms between server polls
-        self._badge_font = pygame.font.Font(settings.FONT_PATH, int(0.018 * _SH))
+        self._badge_font = pygame.font.Font(settings.FONT_PATH, int(0.018 * _SH * _UI_SCALE))
         self._badge_font.set_bold(True)
 
         # ── Pre-render the dark box surface ─────────────────────────
