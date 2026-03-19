@@ -1,4 +1,4 @@
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
 
 # BUTTOM
 BUTTON_IMG_PATH = 'img/button/'
@@ -84,12 +84,12 @@ HAND_BUTTON_GLOW_SHIFT = int(0.002 * SCREEN_WIDTH)
 # ButtonShifter
 RIGHT_ARROW_IMG_PATH = 'img/utils/right_arrow.png'
 LEFT_ARROW_IMG_PATH = 'img/utils/left_arrow.png'
-ARROW_WIDTH = int(0.022 * SCREEN_WIDTH)
-ARROW_HEIGHT = int(0.027 * SCREEN_WIDTH)
-ARROW_BIG_WIDTH = int(0.025 * SCREEN_WIDTH)
-ARROW_BIG_HEIGHT = int(0.031 * SCREEN_WIDTH)
-ARROW_GLOW_WIDTH = int(0.032 * SCREEN_WIDTH)
-ARROW_GLOW_BIG_WIDTH = int(0.036 * SCREEN_WIDTH)
+ARROW_WIDTH = int(0.022 * SCREEN_WIDTH * _UI_SCALE)
+ARROW_HEIGHT = int(0.027 * SCREEN_WIDTH * _UI_SCALE)
+ARROW_BIG_WIDTH = int(0.025 * SCREEN_WIDTH * _UI_SCALE)
+ARROW_BIG_HEIGHT = int(0.031 * SCREEN_WIDTH * _UI_SCALE)
+ARROW_GLOW_WIDTH = int(0.032 * SCREEN_WIDTH * _UI_SCALE)
+ARROW_GLOW_BIG_WIDTH = int(0.036 * SCREEN_WIDTH * _UI_SCALE)
 
 
 # BUTTONS
@@ -148,7 +148,7 @@ SCROLL_ICON_SIZE = int(0.025 * _FS)                 # resource / check icons
 SCROLL_SKILL_ICON_SIZE = int(0.032 * _FS)            # skill icons (slightly larger)
 
 # Scroll chevron arrows (programmatic, replaces image-based arrows)
-SCROLL_CHEVRON_SIZE = int(0.014 * SCREEN_HEIGHT)   # half-size of the chevron
+SCROLL_CHEVRON_SIZE = int(0.014 * SCREEN_HEIGHT * _UI_SCALE)   # half-size of the chevron
 SCROLL_CHEVRON_COLOR = (180, 155, 110)             # warm muted gold
 SCROLL_CHEVRON_HOVER_COLOR = (250, 221, 0)         # bright gold on hover
 SCROLL_CHEVRON_LINE_W = max(2, int(0.003 * SCREEN_HEIGHT))
@@ -162,8 +162,8 @@ SCROLL_PANEL_INNER_CLR = (62, 46, 30, 170)        # subtle inner depth
 SCROLL_PANEL_PAD = int(0.006 * SCREEN_HEIGHT)      # inner padding
 
 # Color toggle pill buttons (replaces image-based buttons)
-COLOR_TOGGLE_W = int(0.075 * SCREEN_WIDTH)
-COLOR_TOGGLE_H = int(0.035 * SCREEN_HEIGHT)
+COLOR_TOGGLE_W = int(0.075 * SCREEN_WIDTH * _UI_SCALE)
+COLOR_TOGGLE_H = int(0.035 * SCREEN_HEIGHT * _UI_SCALE)
 COLOR_TOGGLE_CORNER_R = int(0.006 * SCREEN_HEIGHT)
 COLOR_TOGGLE_GAP = int(0.008 * SCREEN_WIDTH)
 COLOR_TOGGLE_FONT_SIZE = int(0.022 * _FS)

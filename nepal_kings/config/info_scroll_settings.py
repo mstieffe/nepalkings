@@ -88,6 +88,17 @@ SCOREBOARD_CELL_SUBTITLE_SPACING = int(0.013 * SCREEN_HEIGHT * _UI_SCALE) # titl
 SCOREBOARD_SUBTITLE_FONT_SIZE = int(0.012 * _FS)     # subtitle font (e.g. "(build-up)")
 SCOREBOARD_LIMIT_SECTION_HEIGHT = int(0.03 * SCREEN_HEIGHT)
 
+# Mobile scoreboard panel design (replaces paper background when _UI_SCALE > 1)
+SCOREBOARD_USE_PANEL = (_UI_SCALE > 1.0)
+SCOREBOARD_PANEL_BG_CLR        = (35, 30, 25, 200)       # warm dark semi-transparent
+SCOREBOARD_PANEL_BORDER_CLR    = (140, 130, 110)          # muted warm border
+SCOREBOARD_PANEL_BORDER_WIDTH  = 1
+SCOREBOARD_PANEL_CORNER_R      = int(0.008 * SCREEN_HEIGHT)
+SCOREBOARD_PANEL_TEXT_COLOR    = (220, 215, 200)          # warm off-white for labels
+SCOREBOARD_PANEL_VALUE_COLOR   = (250, 245, 230)          # bright off-white for numbers
+SCOREBOARD_PANEL_CROSS_COLOR   = (120, 110, 95)           # subtle warm divider
+SCOREBOARD_PANEL_CROSS_ALPHA   = 120
+
 
 
 

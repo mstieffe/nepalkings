@@ -1809,6 +1809,13 @@ class FieldScreen(SubScreen):
                     self.window.blit(title_text, title_rect)
             
             # Fourth pass: Draw figures
+            # Collect all icon positions across compartments, then draw in
+            # z-order layers so that a selected/hovered info box always
+            # appears on top of icons in neighbouring compartments.
+            all_regular = []
+            all_selected = []
+            all_hovered = None
+
             for player in ['self', 'opponent']:
                 for field in ['castle', 'village', 'military']:
                     compartment = self.compartments[player][field]
@@ -1865,34 +1872,28 @@ class FieldScreen(SubScreen):
                                 icon_y_start = first_center
 
                         # Calculate positions and separate into layers: regular, selected, hovered
-                        regular_positions = []
-                        selected_positions = []
-                        hovered_item = None
-                        
                         for i, figure in enumerate(figures):
                             icon = self.icon_cache[figure.id]
                             icon_x = compartment.left + 0.5*settings.FIELD_ICON_WIDTH 
                             icon_y = icon_y_start + i * icon_spacing
                             
                             if icon.hovered:
-                                hovered_item = (icon, icon_x, icon_y)
+                                all_hovered = (icon, icon_x, icon_y)
                             elif icon.clicked:
-                                selected_positions.append((icon, icon_x, icon_y))
+                                all_selected.append((icon, icon_x, icon_y))
                             else:
-                                regular_positions.append((icon, icon_x, icon_y))
-                        
-                        # Draw in layers: regular -> selected -> hovered
-                        # Each layer in reverse order (topmost figures in foreground)
-                        for icon, icon_x, icon_y in reversed(regular_positions):
-                            icon.draw(icon_x, icon_y)
-                        
-                        for icon, icon_x, icon_y in reversed(selected_positions):
-                            icon.draw(icon_x, icon_y)
-                        
-                        # Draw hovered icon last (on top of everything)
-                        if hovered_item:
-                            icon, icon_x, icon_y = hovered_item
-                            icon.draw(icon_x, icon_y)
+                                all_regular.append((icon, icon_x, icon_y))
+
+            # Draw in global z-order layers: regular -> selected -> hovered
+            for icon, icon_x, icon_y in all_regular:
+                icon.draw(icon_x, icon_y)
+
+            for icon, icon_x, icon_y in all_selected:
+                icon.draw(icon_x, icon_y)
+
+            if all_hovered:
+                icon, icon_x, icon_y = all_hovered
+                icon.draw(icon_x, icon_y)
 
         # Draw opponent's hand cards if All Seeing Eye is active (use cached status)
         if self.cached_all_seeing_eye_status:

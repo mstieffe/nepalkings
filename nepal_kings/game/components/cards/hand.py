@@ -459,7 +459,7 @@ class Hand:
             self.window.blit(self.background_image_addon, (self.x - self.backgorund_dx, self.y - self.backgorund_dy))
 
             self.draw_text(f'{str(len(self.cards))}/{self.num_slots} cards', settings.BLACK, self.text_occupied_slots_x,
-                           self.y + settings.CARD_HEIGHT * 1.04 + settings.TINY_SPACER_Y)
+                           self.y + settings.CARD_HEIGHT * 1.04 + settings.TINY_SPACER_Y + settings.HAND_CARD_COUNT_Y_NUDGE)
 
             for button in self.buttons:
                 button.draw()

@@ -21,6 +21,21 @@ class ScoreboardScroll:
         self.text_dict = self.make_text_dict()
         self.bg_img_path = bg_img_path
 
+        # Whether to use the dark-panel mobile design
+        self._use_panel = getattr(settings, 'SCOREBOARD_USE_PANEL', False)
+
+        # Choose text/cross colours based on mode
+        if self._use_panel:
+            self._text_color = settings.SCOREBOARD_PANEL_TEXT_COLOR
+            self._value_color = settings.SCOREBOARD_PANEL_VALUE_COLOR
+            self._cross_color = settings.SCOREBOARD_PANEL_CROSS_COLOR
+            self._cross_alpha = settings.SCOREBOARD_PANEL_CROSS_ALPHA
+        else:
+            self._text_color = settings.SCOREBOARD_SCROLL_TEXT_COLOR
+            self._value_color = settings.SCOREBOARD_SCROLL_TEXT_COLOR
+            self._cross_color = settings.SCOREBOARD_CROSS_COLOR
+            self._cross_alpha = settings.SCOREBOARD_CROSS_ALPHA
+
         self.font_col_names = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SCROLL_FONT_TITLE_SIZE)
         self.font_text = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SCROLL_FONT_SIZE)
         self.font_number = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SCROLL_NUMBER_FONT_SIZE)
@@ -79,9 +94,18 @@ class ScoreboardScroll:
         self.text_dict = self.make_text_dict()
 
     def init_background(self):
-        """Initialize the background image."""
-        self.background = pygame.image.load(self.bg_img_path)
-        self.background = pygame.transform.smoothscale(self.background, (self.width, self.height))
+        """Initialize the background image or build a dark panel for mobile."""
+        if self._use_panel:
+            r = settings.SCOREBOARD_PANEL_CORNER_R
+            self.background = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+            pygame.draw.rect(self.background, settings.SCOREBOARD_PANEL_BG_CLR,
+                             (0, 0, self.width, self.height), border_radius=r)
+            pygame.draw.rect(self.background, settings.SCOREBOARD_PANEL_BORDER_CLR,
+                             (0, 0, self.width, self.height),
+                             width=settings.SCOREBOARD_PANEL_BORDER_WIDTH, border_radius=r)
+        else:
+            self.background = pygame.image.load(self.bg_img_path)
+            self.background = pygame.transform.smoothscale(self.background, (self.width, self.height))
 
     def draw_transparent_line(self, start, end, color, width, alpha):
         """Draw a transparent line."""
@@ -98,10 +122,10 @@ class ScoreboardScroll:
         vertical_line_start = (self.width // 2, 0)
         vertical_line_end = (self.width // 2, self.cross_height)
 
-        self.draw_transparent_line(horizontal_line_start, horizontal_line_end, settings.SCOREBOARD_CROSS_COLOR, settings.SCOREBOARD_CROSS_WIDTH, settings.SCOREBOARD_CROSS_ALPHA)
-        self.draw_transparent_line(vertical_line_start, vertical_line_end, settings.SCOREBOARD_CROSS_COLOR, settings.SCOREBOARD_CROSS_WIDTH, settings.SCOREBOARD_CROSS_ALPHA)
+        self.draw_transparent_line(horizontal_line_start, horizontal_line_end, self._cross_color, settings.SCOREBOARD_CROSS_WIDTH, self._cross_alpha)
+        self.draw_transparent_line(vertical_line_start, vertical_line_end, self._cross_color, settings.SCOREBOARD_CROSS_WIDTH, self._cross_alpha)
 
-    def draw_cell(self, text, value, cell_x, cell_y, value_color=settings.SCOREBOARD_SCROLL_TEXT_COLOR,
+    def draw_cell(self, text, value, cell_x, cell_y, value_color=None,
                   subtitle=None, subtitle_color=None, y_offset=0, text_spacing=None):
         """Draw the text and value in the specified cell.
 
@@ -109,11 +133,13 @@ class ScoreboardScroll:
         :param y_offset: extra pixels to push the value centre downward (used for top-row cells).
         :param text_spacing: gap between title bottom and value top.  Defaults to SCOREBOARD_CELL_TEXT_SPACING.
         """
+        if value_color is None:
+            value_color = self._value_color
         if text_spacing is None:
             text_spacing = settings.SCOREBOARD_CELL_TEXT_SPACING
 
         # Render the text and value
-        text_obj = self.font_text.render(text, True, settings.SCOREBOARD_SCROLL_TEXT_COLOR)
+        text_obj = self.font_text.render(text, True, self._text_color)
         value_obj = self.font_number.render(str(value), True, value_color)
 
         # Centre text horizontally
@@ -138,7 +164,7 @@ class ScoreboardScroll:
     def draw_stake(self):
         """Draw the stake value at the bottom of the scoreboard."""
         stake_text = self.text_dict.get("stake", "")
-        stake_obj = self.font_col_names.render(f"{stake_text}", True, settings.SCOREBOARD_SCROLL_TEXT_COLOR)
+        stake_obj = self.font_col_names.render(f"{stake_text}", True, self._text_color)
 
         # Position at the bottom center of the scoreboard
         stake_rect = stake_obj.get_rect(center=(self.x + self.width // 2, self.y + self.height - self.stake_section_height // 2))

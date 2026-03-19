@@ -1,4 +1,4 @@
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, SUB_SCREEN_X, SUB_SCREEN_Y, _FS
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, SUB_SCREEN_X, SUB_SCREEN_Y, _FS, _UI_SCALE
 
 # ── Colour palette (earthy/parchment theme) ─────────────────────────
 GUIDE_SIDEBAR_BG            = (72, 52, 34, 200)       # warm dark brown, matches scroll panel
@@ -66,21 +66,21 @@ GUIDE_TITLE_BOTTOM_PAD      = int(0.015 * SCREEN_HEIGHT)
 GUIDE_BODY_BOTTOM_PAD       = int(0.008 * SCREEN_HEIGHT)
 
 # ── Icon / image settings ──────────────────────────────────────────
-GUIDE_ICON_SIZE             = int(0.034 * SCREEN_HEIGHT)     # small inline icon (skills, suits, resources)
-GUIDE_ICON_SIZE_LARGE       = int(0.070 * SCREEN_HEIGHT)     # large inline icon (figures, spells, etc.)
+GUIDE_ICON_SIZE             = int(0.034 * SCREEN_HEIGHT * _UI_SCALE)     # small inline icon (skills, suits, resources)
+GUIDE_ICON_SIZE_LARGE       = int(0.070 * SCREEN_HEIGHT * _UI_SCALE)     # large inline icon (figures, spells, etc.)
 GUIDE_ICON_TEXT_GAP         = int(0.010 * SCREEN_WIDTH)      # gap between icon and text
-GUIDE_IMAGE_MAX_W           = int(0.50 * SCREEN_WIDTH)       # max width for large images
+GUIDE_IMAGE_MAX_W           = int(0.50 * SCREEN_WIDTH * _UI_SCALE)       # max width for large images
 GUIDE_IMAGE_V_PAD           = int(0.008 * SCREEN_HEIGHT)     # vertical padding around images
 
 # ── Table settings ──────────────────────────────────────────────────
-GUIDE_TABLE_ROW_H           = int(0.040 * SCREEN_HEIGHT)     # row height (small icons)
-GUIDE_TABLE_ROW_H_LARGE     = int(0.075 * SCREEN_HEIGHT)     # row height (large icons)
+GUIDE_TABLE_ROW_H           = int(0.040 * SCREEN_HEIGHT * _UI_SCALE)     # row height (small icons)
+GUIDE_TABLE_ROW_H_LARGE     = int(0.075 * SCREEN_HEIGHT * _UI_SCALE)     # row height (large icons)
 GUIDE_TABLE_HEADER_CLR      = (250, 210, 120)                # warm amber header text
 GUIDE_TABLE_CELL_CLR        = (235, 225, 208)                # warm cream cell text
 GUIDE_TABLE_ROW_BG_ALT      = (255, 255, 255, 18)            # subtle zebra stripe
 GUIDE_TABLE_BORDER_CLR      = (158, 81, 33, 80)              # faint table lines
-GUIDE_TABLE_ICON_SIZE       = int(0.030 * SCREEN_HEIGHT)     # small icons inside table cells
-GUIDE_TABLE_ICON_SIZE_LARGE = int(0.060 * SCREEN_HEIGHT)     # large icons inside table cells
+GUIDE_TABLE_ICON_SIZE       = int(0.030 * SCREEN_HEIGHT * _UI_SCALE)     # small icons inside table cells
+GUIDE_TABLE_ICON_SIZE_LARGE = int(0.060 * SCREEN_HEIGHT * _UI_SCALE)     # large icons inside table cells
 GUIDE_TABLE_COL_PAD         = int(0.008 * SCREEN_WIDTH)      # padding between columns
 GUIDE_TABLE_FONT_SIZE       = int(_FS * 0.020)     # slightly smaller for tables
 

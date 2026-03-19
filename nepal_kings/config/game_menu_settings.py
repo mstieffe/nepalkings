@@ -1,4 +1,4 @@
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
 
 # ── Background & button images ──────────────────────────────────────
 GAME_MENU_BG_IMG_PATH   = 'img/background/menu_background.png'
@@ -33,7 +33,7 @@ GAME_MENU_GLOW_DIR      = 'img/menu_button/glow/'
 
 # ── Gold display (upper-left) ───────────────────────────────────────
 GAME_MENU_GOLD_ICON_PATH     = 'img/dialogue_box/icons/gold.png'
-GAME_MENU_GOLD_ICON_SZ       = int(0.045 * SCREEN_HEIGHT)
+GAME_MENU_GOLD_ICON_SZ       = int(0.045 * SCREEN_HEIGHT * _UI_SCALE)
 GAME_MENU_GOLD_FONT_SIZE     = int(0.036 * _FS)
 GAME_MENU_GOLD_TEXT_CLR      = (250, 221, 0)
 GAME_MENU_GOLD_MARGIN_X      = int(0.02 * SCREEN_WIDTH)
@@ -49,11 +49,11 @@ GAME_MENU_GOLD_BOX_BORDER_W  = 1
 GAME_MENU_ICON_SYMBOL_PATH   = 'img/game_button/symbol/'
 GAME_MENU_ICON_STONE_PATH    = 'img/game_button/stone/plain.png'
 GAME_MENU_ICON_GLOW_PATH     = 'img/game_button/glow/'
-GAME_MENU_ICON_STONE_SZ      = int(0.065 * SCREEN_WIDTH)
-GAME_MENU_ICON_SYMBOL_SZ     = int(0.045 * SCREEN_WIDTH)
-GAME_MENU_ICON_SYMBOL_BIG_SZ = int(0.050 * SCREEN_WIDTH)
-GAME_MENU_ICON_GLOW_SZ       = int(0.055 * SCREEN_WIDTH)
-GAME_MENU_ICON_GLOW_BIG_SZ   = int(0.065 * SCREEN_WIDTH)
+GAME_MENU_ICON_STONE_SZ      = int(0.065 * SCREEN_WIDTH * _UI_SCALE)
+GAME_MENU_ICON_SYMBOL_SZ     = int(0.045 * SCREEN_WIDTH * _UI_SCALE)
+GAME_MENU_ICON_SYMBOL_BIG_SZ = int(0.050 * SCREEN_WIDTH * _UI_SCALE)
+GAME_MENU_ICON_GLOW_SZ       = int(0.055 * SCREEN_WIDTH * _UI_SCALE)
+GAME_MENU_ICON_GLOW_BIG_SZ   = int(0.065 * SCREEN_WIDTH * _UI_SCALE)
 GAME_MENU_ICON_GAP           = int(0.001 * SCREEN_WIDTH)
 GAME_MENU_ICON_TOP_Y         = int(0.008 * SCREEN_HEIGHT)
 GAME_MENU_ICON_RIGHT_MARGIN  = int(0.008 * SCREEN_WIDTH)

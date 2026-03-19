@@ -1,4 +1,4 @@
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE
 
 CARD_IMG_PATH = 'img/cards/'
 RED_CROSS_IMG_PATH = 'img/cards/red_cross.png'
@@ -11,6 +11,9 @@ CARD_HEIGHT = int(0.15 * SCREEN_HEIGHT)
 
 RED_CROSS_WIDTH = int(0.02 * SCREEN_WIDTH)
 RED_CROSS_HEIGHT = int(0.02 * SCREEN_WIDTH)
+
+# Vertical nudge for the "X/Y cards" text below each hand (negative = up)
+HAND_CARD_COUNT_Y_NUDGE = int(-0.006 * SCREEN_HEIGHT * (_UI_SCALE - 1.0))
 
 #CARD_HEIGHT = CARD_WIDTH * test_card.get_height() / test_card.get_width()
 
