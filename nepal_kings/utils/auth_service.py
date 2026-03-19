@@ -1,4 +1,4 @@
-import requests
+from utils import http_compat as requests
 from config import settings
 
 def send_heartbeat(username):

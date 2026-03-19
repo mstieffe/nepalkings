@@ -3,7 +3,7 @@ Client-side spell service for server communication.
 Handles all spell-related API calls to the server.
 """
 
-import requests
+from utils import http_compat as requests
 from config import settings
 from typing import Dict, List, Optional, Any
 

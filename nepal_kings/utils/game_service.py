@@ -1,5 +1,5 @@
 # game_service.py
-import requests
+from utils import http_compat as requests
 from config import settings
 from game.core.game import Game
 

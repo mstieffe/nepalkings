@@ -1,3 +1,4 @@
+import asyncio
 import pygame
 #from pygame.locals import *
 from game.screens.login_screen import LoginScreen
@@ -119,7 +120,7 @@ class Client:
     def get_events(self):
         return pygame.event.get()
 
-    def run_screen(self, screen):
+    async def run_screen(self, screen):
         while self.state.screen == screen:
             events = self.get_events()
 
@@ -130,18 +131,16 @@ class Client:
             self.state.update()
             pygame.display.update()
             self.clock.tick(60)
+            await asyncio.sleep(0)
 
-    def run(self):
+    async def run(self):
         while self.running:
             print(self.state.screen)
             if self.state.screen == 'restart':
                 self._restart_game()
                 return
             elif self.state.screen in self.screens:
-                #if self.state.screen == 'new_game':
-                #    self.screens['new_game'].update_users()
-                #    self.screens['new_game'] = NewGameScreen(self.state)
-                self.run_screen(self.state.screen)
+                await self.run_screen(self.state.screen)
             else:
                 self.running = False
 
@@ -149,6 +148,13 @@ class Client:
     def _restart_game():
         """Restart the process so the new resolution takes effect."""
         import sys as _sys
+        if _sys.platform == "emscripten":
+            try:
+                from platform import window
+                window.location.reload()
+            except Exception:
+                pass
+            return
         pygame.quit()
         python = _sys.executable
         os.execv(python, [python] + _sys.argv)
@@ -157,4 +163,4 @@ class Client:
 
 if __name__ == '__main__':
     client = Client()
-    client.run()
+    asyncio.run(client.run())

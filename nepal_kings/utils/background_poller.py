@@ -38,8 +38,13 @@ class BackgroundPoller:
 
         a = args if args is not None else self._args
         kw = kwargs if kwargs is not None else self._kwargs
-        t = threading.Thread(target=self._run, args=(a, kw), daemon=True)
-        t.start()
+        try:
+            t = threading.Thread(target=self._run, args=(a, kw), daemon=True)
+            t.start()
+        except RuntimeError:
+            # Threading unavailable (e.g. WASM/emscripten) — silently skip
+            with self._lock:
+                self._busy = False
 
     def has_result(self):
         """Return True if a new result is available since the last read."""

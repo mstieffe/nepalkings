@@ -703,7 +703,7 @@ class GameScreen(Screen):
         spell_id = self.state.game.pending_spell_id
         
         def _fetch():
-            import requests
+            from utils import http_compat as requests
             try:
                 response = requests.get(
                     f'{settings.SERVER_URL}/spells/get_pending_spell',
@@ -2752,7 +2752,7 @@ class GameScreen(Screen):
 
         def _do():
             try:
-                import requests as _req
+                from utils import http_compat as _req
                 from config import settings as _s
                 resp = _req.post(
                     f'{_s.SERVER_URL}/spells/end_infinite_hammer',

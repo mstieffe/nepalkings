@@ -1,4 +1,4 @@
-import requests
+from utils import http_compat as requests
 from config import settings
 
 def add_log_entry(game_id, player_id, round_number, turn_number, message, author, entry_type):

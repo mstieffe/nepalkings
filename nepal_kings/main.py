@@ -325,19 +325,38 @@ def main():
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     # Now import the game — all config constants are derived from env vars
+    import asyncio
     from nepal_kings import Client
     client = Client()
-    client.run()
+    asyncio.run(client.run())
 
 
 if __name__ == '__main__':
-    import traceback as _tb
-    _log = os.path.join(os.path.expanduser('~'), '.nepalkings', 'crash.log')
-    try:
-        main()
-    except Exception:
-        os.makedirs(os.path.dirname(_log), exist_ok=True)
-        with open(_log, 'a') as _f:
-            _f.write('\n--- crash ' + __import__('datetime').datetime.now().isoformat() + ' ---\n')
-            _tb.print_exc(file=_f)
-        raise
+    if sys.platform == "emscripten":
+        # ── Web / pygbag mode ──────────────────────────────────────
+        import asyncio
+
+        os.environ.setdefault('NK_SCREEN_WIDTH',  '1280')
+        os.environ.setdefault('NK_SCREEN_HEIGHT', '720')
+        os.environ.setdefault('SERVER_URL', _DEFAULT_SERVER_URL)
+        os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+        from nepal_kings import Client
+
+        async def _web_main():
+            client = Client()
+            await client.run()
+
+        asyncio.run(_web_main())
+    else:
+        # ── Desktop mode ───────────────────────────────────────────
+        import traceback as _tb
+        _log = os.path.join(os.path.expanduser('~'), '.nepalkings', 'crash.log')
+        try:
+            main()
+        except Exception:
+            os.makedirs(os.path.dirname(_log), exist_ok=True)
+            with open(_log, 'a') as _f:
+                _f.write('\n--- crash ' + __import__('datetime').datetime.now().isoformat() + ' ---\n')
+                _tb.print_exc(file=_f)
+            raise

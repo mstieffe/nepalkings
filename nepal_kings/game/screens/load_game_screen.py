@@ -5,7 +5,7 @@ from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from config import settings
-import requests
+from utils import http_compat as requests
 from game.core.game import Game
 from utils.background_poller import BackgroundPoller
 

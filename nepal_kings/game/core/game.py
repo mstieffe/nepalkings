@@ -1,4 +1,4 @@
-import requests
+from utils import http_compat as requests
 import threading
 from config import settings
 from game.components.cards.card import Card

@@ -1,6 +1,6 @@
 """Client-side API service for battle shop operations."""
 
-import requests
+from utils import http_compat as requests
 from config import settings
 
 
