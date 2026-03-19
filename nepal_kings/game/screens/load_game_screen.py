@@ -354,9 +354,18 @@ class LoadGameScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
+        _box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
+
         for event in events:
             if self._handle_icon_events(event):
                 continue
+
+            # Click outside content box → back to game menu
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and not self.dialogue_box
+                    and not _box_rect.collidepoint(event.pos)):
+                self.state.screen = 'game_menu'
+                return
 
             # Scroll wheel
             if event.type == MOUSEWHEEL:
