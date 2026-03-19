@@ -2,11 +2,11 @@ import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
 from config import settings
+from config.screen_settings import _FS
 from utils.utils import Button, InputField
 from utils.auth_service import login, register
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
-_FS = settings._FS
 
 MAX_USERNAME_LENGTH = 15
 MAX_PASSWORD_LENGTH = 15
