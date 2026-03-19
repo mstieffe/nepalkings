@@ -80,10 +80,14 @@ class ScrollTextListShifter:
         self._content_scroll_speed = int(0.025 * settings.SCREEN_HEIGHT)
         self._last_content_h = 0    # rendered height of current item (updated each draw)
 
+        # ------ Touch-drag scrolling state ------
+        self._touch_scrolling = False
+        self._touch_last_y = 0
+
         # Clip rect: area where text content should be visible
         # Content fills from the top of the panel down to just above the nav bar
         if scroll_rect is not None:
-            top_pad = int(0.012 * settings.SCREEN_HEIGHT)
+            top_pad = int(0.020 * settings.SCREEN_HEIGHT)
             self._clip_rect = pygame.Rect(
                 scroll_rect.x + 4,
                 scroll_rect.y + top_pad,
@@ -91,7 +95,7 @@ class ScrollTextListShifter:
                 scroll_rect.height - top_pad - self._nav_bar_h
             )
             # Content starts at the top of the clip area (overrides caller's y)
-            self.y = self._clip_rect.y + int(0.008 * settings.SCREEN_HEIGHT)
+            self.y = self._clip_rect.y + int(0.010 * settings.SCREEN_HEIGHT)
         else:
             self._clip_rect = None
 
@@ -678,11 +682,15 @@ class ScrollTextListShifter:
         can_scroll = self._content_overflows()
         for event in events:
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # left click
+                if event.button == 1:  # left click / touch
                     if self._left_hovered:
                         self.shift_up()
                     elif self._right_hovered:
                         self.shift_down()
+                    elif can_scroll and self._clip_rect and self._clip_rect.collidepoint(event.pos):
+                        # Start touch-drag scroll tracking
+                        self._touch_scrolling = True
+                        self._touch_last_y = event.pos[1]
                 # Mouse wheel — scroll content vertically when inside the panel
                 elif event.button == 4 and can_scroll:  # wheel up
                     if self._clip_rect and self._clip_rect.collidepoint(pygame.mouse.get_pos()):
@@ -691,6 +699,14 @@ class ScrollTextListShifter:
                     if self._clip_rect and self._clip_rect.collidepoint(pygame.mouse.get_pos()):
                         self._content_scroll_y = max(-self._max_scroll(),
                                                      self._content_scroll_y - self._content_scroll_speed)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self._touch_scrolling = False
+            elif event.type == pygame.MOUSEMOTION and self._touch_scrolling:
+                # Touch-drag vertical scrolling
+                dy = event.pos[1] - self._touch_last_y
+                self._touch_last_y = event.pos[1]
+                self._content_scroll_y += dy
+                self._content_scroll_y = max(-self._max_scroll(), min(0, self._content_scroll_y))
             elif event.type == pygame.MOUSEWHEEL and can_scroll:
                 # Some systems use MOUSEWHEEL instead of button 4/5
                 if self._clip_rect and self._clip_rect.collidepoint(pygame.mouse.get_pos()):

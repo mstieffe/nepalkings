@@ -9,6 +9,7 @@ from game.screens.ranking_screen import RankingScreen
 from game.screens.settings_screen import SettingsScreen
 from game.screens.game_screen import GameScreen
 from game.core.state import State
+from game.core.input_state import process_events as _process_input
 from config import settings
 import os
 #import sys
@@ -118,7 +119,9 @@ class Client:
         draw_progress(1.0, 'Ready')
 
     def get_events(self):
-        return pygame.event.get()
+        events = pygame.event.get()
+        _process_input(events)
+        return events
 
     async def run_screen(self, screen):
         while self.state.screen == screen:

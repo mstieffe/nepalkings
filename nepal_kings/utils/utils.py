@@ -2,6 +2,7 @@ import sys
 from config import settings
 import pygame
 from pygame.locals import *
+from game.core.input_state import get_pressed as _get_pressed
 
 def get_opp_color(color):
     if color == "offensive":
@@ -203,7 +204,7 @@ class GameButton:
             # Locked buttons track hover and click but don't trigger screen changes
             if self.locked:
                 self.hovered = self.collide()
-                if self.hovered and pygame.mouse.get_pressed()[0]:
+                if self.hovered and _get_pressed()[0]:
                     self.locked_clicked = True
                 else:
                     self.locked_clicked = False
@@ -212,7 +213,7 @@ class GameButton:
             
             self.hovered = self.collide()
 
-            if self.hovered and pygame.mouse.get_pressed()[0]:
+            if self.hovered and _get_pressed()[0]:
                 self.clicked = True
                 # Allow all subscreen changes (including during waiting for counter response)
                 # Action blocking happens at the action level, not screen access level
@@ -327,7 +328,7 @@ class Button:
             self.clicked = False
         else:
             self.hovered = self.collide()
-            self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+            self.clicked = self.hovered and _get_pressed()[0]
 
 
 class SubScreenButton:
@@ -472,7 +473,7 @@ class SubScreenButton:
             self.clicked = False
         else:
             self.hovered = self.collide()
-            self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+            self.clicked = self.hovered and _get_pressed()[0]
 
 
 class ColorTogglePill:
@@ -513,7 +514,7 @@ class ColorTogglePill:
 
     def update(self):
         self.hovered = self.collide()
-        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+        self.clicked = self.hovered and _get_pressed()[0]
 
     def draw(self):
         r = self.corner_r

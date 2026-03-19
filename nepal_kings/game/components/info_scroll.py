@@ -120,10 +120,6 @@ class InfoScroll:
             if 'icon_img_red' in row and 'icon_img_black' in row:
                 # Scenario: resources_df with two icons
                 self.window.blit(self.preloaded_icons[row['icon_img_red']], (icon_x, starting_y_position))
-                self.window.blit(
-                    self.preloaded_icons[row['icon_img_black']],
-                    (icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_ICON_SPACING, starting_y_position)
-                )
 
                 # Draw corresponding text with green/blue, use red for deficit
                 red_text = str(row['red'])
@@ -139,7 +135,7 @@ class InfoScroll:
                 
                 # Fixed column positions for consistent alignment
                 red_text_x = icon_x + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_TEXT_MARGIN - 5
-                black_text_x = red_text_x + self._pill_min_w + settings.INFO_SCROLL_ICON_SIZE + settings.INFO_SCROLL_ICON_SPACING
+                black_text_x = red_text_x + self._pill_min_w + settings.INFO_SCROLL_ICON_SPACING
                 
                 self._draw_text_with_background(
                     red_text, red_color,

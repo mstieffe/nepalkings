@@ -40,6 +40,11 @@ class TutorialScreen(SubScreen):
         self.scrollbar_height = self.content_height
         self.dragging = False
 
+        # Touch-drag scroll state
+        self._touch_scrolling = False
+        self._touch_last_y = 0
+        self._touch_accum = 0
+
     def _build_sections(self):
         """Build the tutorial content sections."""
         return [
@@ -168,9 +173,36 @@ class TutorialScreen(SubScreen):
                         if self.current_section < len(self.sections) - 1:
                             self.current_section += 1
                             self.scroll_offset = 0
+                    else:
+                        # Start touch-drag scroll
+                        content_rect = pygame.Rect(self.content_x, self.content_y,
+                                                   self.content_width, self.content_height)
+                        if content_rect.collidepoint(event.pos):
+                            self._touch_scrolling = True
+                            self._touch_last_y = event.pos[1]
+                            self._touch_accum = 0
                 elif event.button == 4:  # Scroll up
                     self.scroll_offset = max(0, self.scroll_offset - 1)
                 elif event.button == 5:  # Scroll down
+                    self.scroll_offset += 1
+            elif event.type == MOUSEBUTTONUP and getattr(event, 'button', 1) == 1:
+                self._touch_scrolling = False
+            elif event.type == MOUSEMOTION and self._touch_scrolling:
+                dy = event.pos[1] - self._touch_last_y
+                self._touch_last_y = event.pos[1]
+                self._touch_accum += dy
+                line_h = self.body_font.get_height() + self.line_spacing
+                if line_h > 0:
+                    while self._touch_accum > line_h:
+                        self.scroll_offset = max(0, self.scroll_offset - 1)
+                        self._touch_accum -= line_h
+                    while self._touch_accum < -line_h:
+                        self.scroll_offset += 1
+                        self._touch_accum += line_h
+            elif event.type == MOUSEWHEEL:
+                if event.y > 0:
+                    self.scroll_offset = max(0, self.scroll_offset - 1)
+                elif event.y < 0:
                     self.scroll_offset += 1
 
     def draw(self):

@@ -1,5 +1,6 @@
 from config import settings
 import pygame
+from game.core.input_state import get_pressed as _get_pressed
 
 class StateButton:
     def __init__(self, 
@@ -179,7 +180,7 @@ class StateButton:
             #self.game = self.state.game
             #self.game = state.game
             self.hovered = self.collide()
-            if self.hovered and pygame.mouse.get_pressed()[0]:
+            if self.hovered and _get_pressed()[0]:
                 self.clicked = True
             else:
                 self.clicked = False

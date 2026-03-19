@@ -3,6 +3,7 @@ import pygame
 from pygame.locals import *
 from datetime import datetime
 from config import settings
+from game.core.input_state import get_pressed as _get_pressed
 from game.screens.sub_screen import SubScreen
 
 
@@ -28,7 +29,7 @@ class _LogToggleButton:
 
     def update(self):
         self.hovered = self.collide()
-        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+        self.clicked = self.hovered and _get_pressed()[0]
 
     def draw(self):
         if self.active:

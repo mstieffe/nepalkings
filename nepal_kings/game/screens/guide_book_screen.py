@@ -69,6 +69,8 @@ class GuideBookScreen(SubScreen):
             self.scrollbar_x, self.scrollbar_y, self.scrollbar_w, 40)
 
         self.dragging = False
+        self._touch_scrolling = False
+        self._touch_last_y = 0
         self.scrollbar_handle_color = settings.GUIDE_SCROLLBAR_HANDLE_P
 
         # Pre-render content surfaces for the initially selected section
@@ -1427,14 +1429,29 @@ class GuideBookScreen(SubScreen):
                 if self.handle_rect.height > 0 and self.handle_rect.collidepoint(event.pos):
                     self.dragging = True
                     self.scrollbar_handle_color = settings.GUIDE_SCROLLBAR_HANDLE_A
+                else:
+                    # Touch-drag scroll start in content area
+                    content_rect = pygame.Rect(self.content_x, self.content_y,
+                                               self.content_w, self.content_h)
+                    if content_rect.collidepoint(event.pos):
+                        self._touch_scrolling = True
+                        self._touch_last_y = event.pos[1]
 
             elif event.type == MOUSEBUTTONUP:
                 if self.dragging:
                     self.dragging = False
                     self.scrollbar_handle_color = settings.GUIDE_SCROLLBAR_HANDLE_P
+                self._touch_scrolling = False
 
-            elif event.type == MOUSEMOTION and self.dragging:
-                self._handle_scrollbar_drag(event)
+            elif event.type == MOUSEMOTION:
+                if self.dragging:
+                    self._handle_scrollbar_drag(event)
+                elif getattr(self, '_touch_scrolling', False):
+                    # Touch-drag vertical scrolling
+                    dy = event.pos[1] - self._touch_last_y
+                    self._touch_last_y = event.pos[1]
+                    self.scroll_offset -= dy
+                    self._clamp_scroll()
 
             elif event.type == MOUSEWHEEL:
                 # Only scroll when mouse is over the content area or scrollbar

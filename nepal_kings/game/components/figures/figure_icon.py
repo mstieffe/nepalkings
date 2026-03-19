@@ -6,6 +6,7 @@ import pygame
 
 from game.components.cards.card_img import CardImg
 from config import settings
+from game.core.input_state import get_pressed as _get_pressed
 
 class FigureIcon:
     # Class-level cache for base glow images (loaded once for all instances)
@@ -373,7 +374,7 @@ class FigureIcon:
         glow_img_clicked = self.glow_yellow_dark if self.is_active else self.glow_white
         glow_img_clicked_big = self.glow_yellow_dark_big if self.is_active else self.glow_white_big
 
-        if pygame.mouse.get_pressed()[0] and self.hovered:
+        if _get_pressed()[0] and self.hovered:
             # If hovering while left mouse button pressed
             self.window.blit(glow_img_clicked, (self.rect_glow.topleft[0], self.rect_glow.topleft[1] + y_offset))
             self.window.blit(icon_img, (self.rect_icon.topleft[0], self.rect_icon.topleft[1] + y_offset))
@@ -762,7 +763,7 @@ class FieldFigureIcon(FigureIcon):
         shadow_offset_y = int(settings.FIELD_ICON_WIDTH * 0.08)
 
         # Determine states
-        is_mouse_pressed = pygame.mouse.get_pressed()[0]
+        is_mouse_pressed = _get_pressed()[0]
         is_default_state = not self.hovered and not self.clicked
 
         # Draw the figure icon
@@ -904,7 +905,7 @@ class FieldFigureIcon(FigureIcon):
             text = "foreigner"
 
         # Determine if we're in "big" state to match icon scaling exactly
-        is_mouse_pressed = pygame.mouse.get_pressed()[0]
+        is_mouse_pressed = _get_pressed()[0]
         
         if self.is_visible:
             # Match parent FigureIcon.draw() logic exactly:

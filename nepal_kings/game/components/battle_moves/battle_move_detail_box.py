@@ -11,6 +11,7 @@ The figure selector (list-shifter) is shown in BOTH modes for Call moves.
 import pygame
 from config import settings
 from game.components.dialogue_box import _DlgButton
+from game.core.input_state import get_pressed as _get_pressed
 from game.components.cards.card_img import CardImg
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.arrow_button import ArrowButton
@@ -891,7 +892,7 @@ class BattleMoveDetailBox:
 
         mouse_pos = pygame.mouse.get_pos()
         self.close_button_hovered = self.close_button_rect.collidepoint(mouse_pos)
-        self.close_button_clicked = self.close_button_hovered and pygame.mouse.get_pressed()[0]
+        self.close_button_clicked = self.close_button_hovered and _get_pressed()[0]
 
         for event in events:
             if event.type == pygame.MOUSEBUTTONDOWN:

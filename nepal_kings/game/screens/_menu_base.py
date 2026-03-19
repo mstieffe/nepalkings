@@ -9,6 +9,7 @@ Provides:
 
 import pygame
 from config import settings
+from game.core.input_state import get_pressed as _get_pressed
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -78,7 +79,7 @@ class _MenuIconButton:
 
     def update(self):
         self.hovered = self.collide()
-        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+        self.clicked = self.hovered and _get_pressed()[0]
 
     def draw(self):
         if self.hovered:
@@ -121,7 +122,7 @@ class ListButton:
 
     def update(self):
         self.hovered = self.collide()
-        self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+        self.clicked = self.hovered and _get_pressed()[0]
 
     def draw(self):
         # Pick colours based on state

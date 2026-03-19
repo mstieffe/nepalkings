@@ -1,5 +1,6 @@
 import pygame
 from config import settings
+from game.core.input_state import get_pressed as _get_pressed
 
 
 class SpellIcon:
@@ -159,7 +160,7 @@ class SpellIcon:
     
     def draw(self) -> None:
         """Draw the spell icon with appropriate state."""
-        is_mouse_pressed = pygame.mouse.get_pressed()[0]
+        is_mouse_pressed = _get_pressed()[0]
         shadow_offset_y = settings.get_y(0.005)
         
         # Select icon and frame based on active state

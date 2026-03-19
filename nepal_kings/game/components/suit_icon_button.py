@@ -1,6 +1,7 @@
 from config import settings
 import pygame
 import math
+from game.core.input_state import get_pressed as _get_pressed
 
 class SuitIconButton:
 
@@ -101,7 +102,7 @@ class SuitIconButton:
         glow_img = self.glow_yellow if self.is_active else self.glow_black
         glow_big_img = self.glow_orange_big if self.is_active else self.glow_white_big
 
-        if pygame.mouse.get_pressed()[0] and self.hovered:
+        if _get_pressed()[0] and self.hovered:
             # Mouse is pressed and hovering
             self.window.blit(glow_big_img, (self.rect_glow_big.topleft[0], self.rect_glow_big.topleft[1] + y_offset))
             self.window.blit(icon_img, (self.rect_icon.topleft[0], self.rect_icon.topleft[1] + y_offset))

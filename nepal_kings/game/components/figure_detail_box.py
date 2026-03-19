@@ -2,6 +2,7 @@ import pygame
 from config import settings
 from game.components.dialogue_box import _DlgButton
 from game.components.cards.card_img import CardImg
+from game.core.input_state import get_pressed as _get_pressed
 
 
 class FigureDetailBox:
@@ -1116,7 +1117,7 @@ class FigureDetailBox:
         self.close_button_hovered = self.close_button_rect.collidepoint(mouse_pos)
         
         # Check if mouse is pressed for click effect
-        mouse_pressed = pygame.mouse.get_pressed()[0]
+        mouse_pressed = _get_pressed()[0]
         self.close_button_clicked = self.close_button_hovered and mouse_pressed
 
         for event in events:

@@ -2,6 +2,7 @@
 
 import pygame
 from config import settings
+from game.core.input_state import get_pressed as _get_pressed
 
 
 class BattleMoveIcon:
@@ -128,7 +129,7 @@ class BattleMoveIcon:
 
     # ------------------------------------------------------------------ draw
     def draw(self):
-        pressed = pygame.mouse.get_pressed()[0]
+        pressed = _get_pressed()[0]
         shadow_y = settings.get_y(0.005)
 
         icon = self.icon_img if self.is_active else self.icon_gray_img

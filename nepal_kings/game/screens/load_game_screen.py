@@ -371,18 +371,30 @@ class LoadGameScreen(MenuScreenMixin, Screen):
                 if thumb.collidepoint(event.pos):
                     self._dragging_thumb = True
                     self._drag_offset = event.pos[1] - thumb.y
+                else:
+                    # Touch-drag scroll in the content area
+                    box = pygame.Rect(_BOX_X, self._rows_top, _BOX_W, self._viewport_h)
+                    if box.collidepoint(event.pos):
+                        self._touch_scrolling = True
+                        self._touch_last_y = event.pos[1]
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
                 self._dragging_thumb = False
+                self._touch_scrolling = False
 
-            if event.type == MOUSEMOTION and self._dragging_thumb:
-                track = self._track_rect()
-                thumb_h = self._thumb_rect().h
-                travel = track.h - thumb_h
-                if travel > 0:
-                    new_top = event.pos[1] - self._drag_offset - track.y
-                    frac = max(0.0, min(1.0, new_top / travel))
-                    self._scroll_y = int(frac * self._max_scroll)
+            if event.type == MOUSEMOTION:
+                if self._dragging_thumb:
+                    track = self._track_rect()
+                    thumb_h = self._thumb_rect().h
+                    travel = track.h - thumb_h
+                    if travel > 0:
+                        new_top = event.pos[1] - self._drag_offset - track.y
+                        frac = max(0.0, min(1.0, new_top / travel))
+                        self._scroll_y = int(frac * self._max_scroll)
+                elif getattr(self, '_touch_scrolling', False):
+                    dy = event.pos[1] - self._touch_last_y
+                    self._touch_last_y = event.pos[1]
+                    self._scroll_y = max(0, min(self._max_scroll, self._scroll_y - dy))
 
             # Row click
             if not self.dialogue_box and event.type == MOUSEBUTTONUP and event.button == 1:

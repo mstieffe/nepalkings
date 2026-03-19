@@ -1,6 +1,7 @@
 from config import settings
 import pygame
 import textwrap
+from game.core.input_state import get_pressed as _get_pressed
 
 
 # ── Themed button for the dialogue box ─────────────────────────────
@@ -53,7 +54,7 @@ class _DlgButton:
             self.clicked = False
         else:
             self.hovered = self.collide()
-            self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+            self.clicked = self.hovered and _get_pressed()[0]
 
     def get_text_color(self):
         if self.disabled:

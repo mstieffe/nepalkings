@@ -1,5 +1,6 @@
 from config import settings
 import pygame
+from game.core.input_state import get_pressed as _get_pressed
 
 class ArrowButton:
     def __init__(self, window, callback, x=0, y=0, direction='right', is_active=True):
@@ -71,7 +72,7 @@ class ArrowButton:
         glow_image_clicked = self.glow_images['orange'] if self.is_active else self.glow_images['white']
         glow_image_big = self.glow_images['yellow_big'] if self.is_active else self.glow_images['black_big']
 
-        if self.hovered and pygame.mouse.get_pressed()[0]:
+        if self.hovered and _get_pressed()[0]:
             self.window.blit(glow_image, self.rect_glow)
             self.window.blit(arrow_image, self.rect_arrow)
         elif self.hovered:
@@ -88,7 +89,7 @@ class ArrowButton:
         """Update the hovered and clicked state."""
         self.hovered = self.collide()
 
-        if self.hovered and pygame.mouse.get_pressed()[0]:
+        if self.hovered and _get_pressed()[0]:
             self.clicked = True
             self.callback()  # Trigger the callback when clicked
         else:

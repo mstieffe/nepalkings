@@ -1,5 +1,6 @@
 from config import settings
 import pygame
+from game.core.input_state import get_pressed as _get_pressed
 
 
 class ConfirmButton:
@@ -104,7 +105,7 @@ class ConfirmButton:
     def update(self):
         if not self.disabled:
             self.hovered = self.collide()
-            self.clicked = self.hovered and pygame.mouse.get_pressed()[0]
+            self.clicked = self.hovered and _get_pressed()[0]
         else:
             self.hovered = False
             self.clicked = False

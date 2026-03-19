@@ -492,30 +492,53 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
             # Thumb dragging
             if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                _started_thumb = False
                 for col_key in ('col1', 'col2'):
                     thumb = self._thumb_rect(col_key)
                     if thumb.w and thumb.collidepoint(event.pos):
                         self._dragging_thumb = col_key
                         self._drag_offset = event.pos[1] - thumb.y
+                        _started_thumb = True
                         break
+                if not _started_thumb:
+                    # Touch-drag scroll in the content columns
+                    col1_clip = pygame.Rect(_COL1_X, self._list_top, _COL_W, self._viewport_h())
+                    col2_clip = pygame.Rect(_COL2_X, self._list_top, _COL_W, self._viewport_h())
+                    if col1_clip.collidepoint(event.pos):
+                        self._touch_scrolling = 'col1'
+                        self._touch_last_y = event.pos[1]
+                    elif col2_clip.collidepoint(event.pos):
+                        self._touch_scrolling = 'col2'
+                        self._touch_last_y = event.pos[1]
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
                 self._dragging_thumb = None
+                self._touch_scrolling = None
 
-            if event.type == MOUSEMOTION and self._dragging_thumb:
-                col_key = self._dragging_thumb
-                track = self._track_rect(col_key)
-                thumb_h = self._thumb_rect(col_key).h
-                travel = track.h - thumb_h
-                max_s = self._max_scroll_col1 if col_key == 'col1' else self._max_scroll_col2
-                if travel > 0:
-                    new_top = event.pos[1] - self._drag_offset - track.y
-                    frac = max(0.0, min(1.0, new_top / travel))
-                    val = int(frac * max_s)
+            if event.type == MOUSEMOTION:
+                if self._dragging_thumb:
+                    col_key = self._dragging_thumb
+                    track = self._track_rect(col_key)
+                    thumb_h = self._thumb_rect(col_key).h
+                    travel = track.h - thumb_h
+                    max_s = self._max_scroll_col1 if col_key == 'col1' else self._max_scroll_col2
+                    if travel > 0:
+                        new_top = event.pos[1] - self._drag_offset - track.y
+                        frac = max(0.0, min(1.0, new_top / travel))
+                        val = int(frac * max_s)
+                        if col_key == 'col1':
+                            self._scroll_col1 = val
+                        else:
+                            self._scroll_col2 = val
+                elif getattr(self, '_touch_scrolling', None):
+                    dy = event.pos[1] - self._touch_last_y
+                    self._touch_last_y = event.pos[1]
+                    col_key = self._touch_scrolling
+                    max_s = self._max_scroll_col1 if col_key == 'col1' else self._max_scroll_col2
                     if col_key == 'col1':
-                        self._scroll_col1 = val
+                        self._scroll_col1 = max(0, min(max_s, self._scroll_col1 - dy))
                     else:
-                        self._scroll_col2 = val
+                        self._scroll_col2 = max(0, min(max_s, self._scroll_col2 - dy))
 
             # Clicks
             if not self.dialogue_box and event.type == MOUSEBUTTONUP and event.button == 1:

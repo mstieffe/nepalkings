@@ -3,6 +3,7 @@
 import pygame
 from pygame.locals import *
 from config import settings
+from game.core.input_state import get_pressed as _get_pressed
 from game.screens.sub_screen import SubScreen
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
 from game.components.battle_moves.battle_move import BattleMove
@@ -836,7 +837,7 @@ class BattleShopScreen(SubScreen):
 
         # Determine hover state
         mouse_pos = pygame.mouse.get_pos()
-        mouse_pressed = pygame.mouse.get_pressed()[0]
+        mouse_pressed = _get_pressed()[0]
         self._hovered_slot = None
 
         for i in range(max_moves):
