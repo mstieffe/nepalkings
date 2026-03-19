@@ -10,6 +10,7 @@ The figure selector (list-shifter) is shown in BOTH modes for Call moves.
 
 import pygame
 from config import settings
+from config.screen_settings import _UI_SCALE
 from game.components.dialogue_box import _DlgButton
 from game.core.input_state import get_pressed as _get_pressed
 from game.components.cards.card_img import CardImg
@@ -83,12 +84,18 @@ class BattleMoveDetailBox:
         bm_suit = battle_move_data.get('suit', '')
         self.bm_is_red = bm_suit in _RED_SUITS
 
-        # Fonts
-        self.title_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_TITLE_DIALOGUE_BOX)
+        # Fonts – on mobile, use reduced sizes so content fits the fixed-size box
+        if _UI_SCALE > 1.0:
+            _title_sz = int(settings.FONT_SIZE_TITLE_DIALOGUE_BOX / _UI_SCALE * 1.15)
+            _body_sz  = int(settings.FONT_SIZE_DIALOGUE_BOX / _UI_SCALE * 1.15)
+        else:
+            _title_sz = settings.FONT_SIZE_TITLE_DIALOGUE_BOX
+            _body_sz  = settings.FONT_SIZE_DIALOGUE_BOX
+        self.title_font = pygame.font.Font(settings.FONT_PATH, _title_sz)
         self.title_font.set_bold(True)
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_DIALOGUE_BOX)
-        self.small_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_DIALOGUE_BOX - 4)
-        self.value_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_DIALOGUE_BOX)
+        self.font = pygame.font.Font(settings.FONT_PATH, _body_sz)
+        self.small_font = pygame.font.Font(settings.FONT_PATH, max(_body_sz - 4, 10))
+        self.value_font = pygame.font.Font(settings.FONT_PATH, _body_sz)
         self.value_font.set_bold(True)
 
         # Card image(s)
@@ -358,7 +365,7 @@ class BattleMoveDetailBox:
         btn_y_rel = y
         btn_gap = 5
         if self.is_battle_context:
-            btn_h = int(settings.SCREEN_HEIGHT * 0.026)
+            btn_h = int(settings.SCREEN_HEIGHT * 0.026 * max(_UI_SCALE, 1.0))
             if self.is_double_dagger_move:
                 n = 2  # use! + dismantle!
             elif self.is_dagger_move:
@@ -392,7 +399,7 @@ class BattleMoveDetailBox:
     def _create_action_buttons(self, start_y):
         """Create use!/gamble!/combine! buttons flowing down from start_y."""
         btn_w = int(self.width * 0.26)
-        btn_h = int(settings.SCREEN_HEIGHT * 0.026)
+        btn_h = int(settings.SCREEN_HEIGHT * 0.026 * max(_UI_SCALE, 1.0))
         btn_gap = 5
         cx = self.rect.centerx
 
