@@ -726,7 +726,10 @@ class GameScreen(Screen):
             self._pending_spell_fetch_ready = True
         
         thread = threading.Thread(target=_fetch, daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except RuntimeError:
+            _fetch()  # web fallback: run synchronously
     
     def _cache_castable_spells(self):
         """Compute and cache castable counter spells for the current pending spell."""
@@ -2766,7 +2769,10 @@ class GameScreen(Screen):
             except Exception as e:
                 print(f"[INFINITE_HAMMER] Error: {e}")
 
-        threading.Thread(target=_do, daemon=True).start()
+        try:
+            threading.Thread(target=_do, daemon=True).start()
+        except RuntimeError:
+            _do()  # web fallback: run synchronously
     
     def _handle_counter_spell_counter(self):
         """Handle player choosing to counter the spell."""

@@ -611,8 +611,11 @@ class Game:
 
     def _start_turn_async(self):
         """Fire _handle_start_turn in a background thread."""
-        t = threading.Thread(target=self._handle_start_turn, daemon=True)
-        t.start()
+        try:
+            t = threading.Thread(target=self._handle_start_turn, daemon=True)
+            t.start()
+        except RuntimeError:
+            self._handle_start_turn()  # web fallback: run synchronously
 
     def _handle_start_turn(self):
         """Called when turn changes to current player. Checks and handles auto-fill."""
