@@ -253,16 +253,14 @@ function show_infobox() {
             background-color: transparent;
             z-index: 5;
             padding: 0;
-            margin: 0;
-            position: absolute;
+            margin: auto;
+            position: fixed;
+            inset: 0;
             /* 16:9 letterbox — dvh with vh fallback */
             width:  min(100vw, calc(100vh  * 16/9)) !important;
             height: min(100vh, calc(100vw  *  9/16)) !important;
             width:  min(100vw, calc(100dvh * 16/9)) !important;
             height: min(100dvh,calc(100vw  *  9/16)) !important;
-            left: 50% !important;
-            top:  50% !important;
-            transform: translate(-50%, -50%) !important;
         }
 
         /* hide pygbag chrome */

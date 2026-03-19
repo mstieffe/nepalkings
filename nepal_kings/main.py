@@ -363,6 +363,7 @@ if __name__ == '__main__':
             if _mobile:
                 # Force small resolution so text/buttons stay readable
                 _table = [(854, 480)]
+                os.environ['NK_UI_SCALE'] = '1.6'
             else:
                 _table = [(1920, 1080), (1600, 900), (1366, 768),
                           (1280, 720), (1024, 576), (854, 480)]
@@ -370,6 +371,9 @@ if __name__ == '__main__':
                 if _rw <= _fw and _rh <= _fh:
                     _w, _h = _rw, _rh
                     break
+            else:
+                # Viewport smaller than smallest table entry; use it anyway
+                _w, _h = _table[-1]
         except Exception:
             pass
 

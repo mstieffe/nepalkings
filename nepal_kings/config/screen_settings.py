@@ -4,6 +4,11 @@ SCREEN_WIDTH  = int(_os.environ.get('NK_SCREEN_WIDTH',  '1920'))
 SCREEN_HEIGHT = int(_os.environ.get('NK_SCREEN_HEIGHT', '1080'))
 SCREEN_CAPTION = 'Nepal Kings'
 
+# Font-scale height: same as SCREEN_HEIGHT on desktop; inflated on mobile
+# so that text stays readable when the canvas is CSS-scaled to a small screen.
+_UI_SCALE = float(_os.environ.get('NK_UI_SCALE', '1.0'))
+_FS = int(SCREEN_HEIGHT * _UI_SCALE)
+
 # Sizes
 CENTER_X = int(0.5 * SCREEN_WIDTH)
 CENTER_Y = int(0.5 * SCREEN_HEIGHT)
@@ -74,7 +79,7 @@ SUB_SCREEN_TITLE_SHADOW_COLOR = (30, 20, 10)
 SUB_SCREEN_TITLE_SHADOW_OFFSET = max(2, int(0.003 * SCREEN_HEIGHT))
 SUB_SCREEN_TITLE_X = int(0.53 * SCREEN_WIDTH)
 SUB_SCREEN_TITLE_Y = int(0.028 * SCREEN_HEIGHT)
-SUB_SCREEN_TITLE_FONT_SIZE = int(0.034 * SCREEN_HEIGHT)
+SUB_SCREEN_TITLE_FONT_SIZE = int(0.034 * _FS)
 SUB_SCREEN_TITLE_CORNER_R = int(0.006 * SCREEN_HEIGHT)
 
 
