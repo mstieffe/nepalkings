@@ -3258,13 +3258,33 @@ class BattleScreen(SubScreen):
                 bm_suit_lower = (suit or '').lower()
                 cf_suit_lower = (call_fig.suit or '').lower()
                 if cf_suit_lower != bm_suit_lower:
-                    # Badge is at centre-bottom of the icon
-                    badge_cy = slot_cy + int(sw * 0.34)
-                    val_txt = self.font_small.render(str(power_value), True, (255, 255, 255))
-                    val_hw = val_txt.get_width() // 2 + 3
+                    # Replicate the badge layout from the renderer to find the
+                    # exact centre of the value text (not the whole badge).
+                    eff_icon_s = sw  # icon_size passed to draw_battle_move_icon
+                    badge_cy = slot_cy + int(eff_icon_s * 0.34)
+                    val_surf = self.font_icon_value.render(str(power_value), True, (255, 255, 255))
+                    # Collect suit icon widths to compute content_w
+                    inner_gap = 3
+                    suit_gap = 2
+                    si_total_w = 0
+                    _sc = self._slot_suit_icon_cache
+                    if suit_b and suit_b != suit:
+                        for sk in (suit.lower(), suit_b.lower()):
+                            si = _sc.get(sk) or _sc.get(sk)
+                            if si:
+                                si_total_w += si.get_width() + suit_gap
+                        si_total_w = max(0, si_total_w - suit_gap)
+                    else:
+                        si = _sc.get(suit.lower())
+                        if si:
+                            si_total_w = si.get_width()
+                    content_w = val_surf.get_width() + (inner_gap + si_total_w if si_total_w else 0)
+                    # Value text midleft is at badge_cx - content_w // 2
+                    val_cx = cx - content_w // 2 + val_surf.get_width() // 2
+                    val_hw = val_surf.get_width() // 2 + 3
                     pygame.draw.line(
                         self.window, (220, 40, 40),
-                        (cx - val_hw, badge_cy), (cx + val_hw, badge_cy), 3)
+                        (val_cx - val_hw, badge_cy), (val_cx + val_hw, badge_cy), 3)
         else:
             # Empty diamond slot
             dr = self._slot_diamond.get_rect(center=(cx, slot_cy))
