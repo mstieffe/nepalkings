@@ -1,5 +1,6 @@
 import pygame
 from config import settings
+from config.screen_settings import _UI_SCALE
 from game.core.input_state import get_pressed as _get_pressed
 
 
@@ -230,7 +231,7 @@ class SpellIcon:
             else:
                 text_surface = self.text_surface_grey_big if is_big else self.text_surface_grey
             
-            _name_gap = -2 if getattr(settings, '_UI_SCALE', 1.0) > 1.0 else 15
+            _name_gap = -2 if _UI_SCALE > 1.0 else 15
             text_rect = text_surface.get_rect(center=(self.x, self.y + current_frame.get_height() // 2 + _name_gap))
             self.window.blit(text_surface, text_rect.topleft)
 

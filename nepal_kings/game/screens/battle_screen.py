@@ -3287,7 +3287,7 @@ class BattleScreen(SubScreen):
                     val_hw = val_surf.get_width() // 2 + 3
                     pygame.draw.line(
                         self.window, (220, 40, 40),
-                        (val_cx - val_hw, strike_y), (val_cx + val_hw, strike_y), 3)
+                        (val_cx - val_hw, strike_y), (val_cx + val_hw, strike_y), 2)
         else:
             # Empty diamond slot
             dr = self._slot_diamond.get_rect(center=(cx, slot_cy))
