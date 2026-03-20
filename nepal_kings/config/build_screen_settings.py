@@ -1,7 +1,7 @@
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE
 
 # Build-figure icon scale: bigger on mobile so icons are tap-friendly
-BUILD_FIGURE_ICON_SCALE = 1.2 if _UI_SCALE > 1.0 else 1.0
+BUILD_FIGURE_ICON_SCALE = 1.25 if _UI_SCALE > 1.0 else 1.0
 
 # BUILD SCREEN
 BUILD_HIERARCHY_IMG_PATH = 'img/figures/build_hierarchy/build_hierarchy.png'
