@@ -14,6 +14,17 @@ import json
 import os
 import sys
 
+# Raise per-process file-descriptor limit so heavy image/font loading
+# during init doesn't hit macOS's default 256-fd ceiling.
+if sys.platform != "emscripten":
+    try:
+        import resource
+        _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if _soft < 4096:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (min(4096, _hard), _hard))
+    except Exception:
+        pass
+
 import pygame
 
 # ── Paths / Constants ──────────────────────────────────────────────
