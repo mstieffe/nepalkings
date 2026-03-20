@@ -503,10 +503,11 @@ class BuildFigureIcon(FigureIcon):
         :param scale_factor: The factor by which to scale.
         :return: The scaled image.
         """
+        s = settings.BUILD_FIGURE_ICON_SCALE
         return self.scale_image_total_size(
             image,
-            settings.BUILD_FIGURE_ICON_WIDTH * scale_factor,
-            settings.BUILD_FIGURE_ICON_HEIGHT * scale_factor,
+            settings.BUILD_FIGURE_ICON_WIDTH * scale_factor * s,
+            settings.BUILD_FIGURE_ICON_HEIGHT * scale_factor * s,
         )
 
     def _scale_frame(self, image, scale_factor: float) -> pygame.Surface:
@@ -517,10 +518,11 @@ class BuildFigureIcon(FigureIcon):
         :param scale_factor: The factor by which to scale.
         :return: The scaled frame image.
         """
+        s = settings.BUILD_FIGURE_ICON_SCALE
         return self.scale_image_total_size(
             image,
-            settings.BUILD_FIGURE_ICON_WIDTH * scale_factor * settings.FRAME_FIGURE_SCALE,
-            settings.BUILD_FIGURE_ICON_HEIGHT * scale_factor * settings.FRAME_FIGURE_SCALE,
+            settings.BUILD_FIGURE_ICON_WIDTH * scale_factor * settings.FRAME_FIGURE_SCALE * s,
+            settings.BUILD_FIGURE_ICON_HEIGHT * scale_factor * settings.FRAME_FIGURE_SCALE * s,
         )
 
     def is_in_hand(self, suit=None) -> bool:

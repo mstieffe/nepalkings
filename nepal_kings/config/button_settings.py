@@ -165,7 +165,7 @@ SCROLL_PANEL_INNER_CLR = (62, 46, 30, 170)        # subtle inner depth
 SCROLL_PANEL_PAD = int(0.006 * SCREEN_HEIGHT)      # inner padding
 
 # Color toggle pill buttons (replaces image-based buttons)
-COLOR_TOGGLE_W = int(0.075 * SCREEN_WIDTH * _UI_SCALE)
+COLOR_TOGGLE_W = (int(0.18 * SCREEN_WIDTH) - int(0.008 * SCREEN_WIDTH)) // 2
 COLOR_TOGGLE_H = int(0.035 * SCREEN_HEIGHT * _UI_SCALE)
 COLOR_TOGGLE_CORNER_R = int(0.006 * SCREEN_HEIGHT)
 COLOR_TOGGLE_GAP = int(0.008 * SCREEN_WIDTH)

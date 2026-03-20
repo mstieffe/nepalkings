@@ -1,4 +1,4 @@
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS
 
 INPUTFIELD_BORDER_COLOR_ACTIVE = (250, 170, 0)
 INPUTFIELD_BORDER_COLOR_PASSIVE = (60, 60, 60)
@@ -14,9 +14,7 @@ INPUTFIELD_HEIGHT = int(0.04 * SCREEN_HEIGHT)
 
 MSG_BACKGROUND_COLOR = (0, 0, 0)
 
-# Message body font — slightly larger on mobile for readability
-_MFM = 1.15 if _UI_SCALE > 1.0 else 1.0
-MSG_FONT_SIZE = int(0.022 * _FS * _MFM)
+MSG_FONT_SIZE = int(0.022 * _FS)
 
 MSG_MAX_WIDTH = int(0.8 * SCREEN_WIDTH)
 MSG_MAX_HEIGHT = int(0.45 * SCREEN_HEIGHT)
@@ -88,11 +86,9 @@ MSG_SEND_BUTTON_ACTIVE_IMG = 'img/button/confirm/green.png'
 MSG_SEND_BUTTON_INACTIVE_IMG = 'img/button/confirm/grey.png'
 
 # Log screen toggle/send button styling (programmatic, dark-themed)
-# On mobile, enlarge toggle buttons so they're easier to tap
-_LBM = 1.25 if _UI_SCALE > 1.0 else 1.0
-LOG_BTN_W = int(0.07 * SCREEN_WIDTH * _LBM)
-LOG_BTN_H = int(0.035 * SCREEN_HEIGHT * _LBM)
-LOG_BTN_FONT_SIZE = int(0.022 * _FS * _MFM)
+LOG_BTN_W = int(0.07 * SCREEN_WIDTH)
+LOG_BTN_H = int(0.035 * SCREEN_HEIGHT)
+LOG_BTN_FONT_SIZE = int(0.022 * _FS)
 LOG_BTN_CORNER_R = int(0.005 * SCREEN_HEIGHT)
 LOG_BTN_BG_CLR = (40, 38, 35, 160)
 LOG_BTN_BG_ACTIVE_CLR = (55, 50, 40, 200)
@@ -103,8 +99,8 @@ LOG_BTN_TEXT_CLR = (180, 175, 160)
 LOG_BTN_TEXT_ACTIVE_CLR = (250, 221, 0)
 LOG_BTN_BORDER_W = 1
 
-# Log entry icon settings — scale with _UI_SCALE on mobile
-LOG_ICON_SIZE = int(0.019 * SCREEN_HEIGHT * _LBM)
+# Log entry icon settings
+LOG_ICON_SIZE = int(0.019 * SCREEN_HEIGHT)
 LOG_ICON_PAD = int(0.005 * SCREEN_WIDTH)
 
 # Map log entry type → icon image path
@@ -156,7 +152,7 @@ LOG_INPUT_BORDER_ACTIVE_CLR = (180, 160, 80)
 LOG_INPUT_TEXT_CLR = (220, 215, 200)
 LOG_INPUT_PLACEHOLDER_CLR = (120, 115, 100)
 LOG_INPUT_CORNER_R = int(0.005 * SCREEN_HEIGHT)
-LOG_INPUT_FONT_SIZE = int(0.024 * _FS * _MFM)
-LOG_INPUT_H = int(0.038 * SCREEN_HEIGHT * _LBM)
+LOG_INPUT_FONT_SIZE = int(0.024 * _FS)
+LOG_INPUT_H = int(0.038 * SCREEN_HEIGHT)
 
 

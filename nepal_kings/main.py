@@ -361,19 +361,30 @@ if __name__ == '__main__':
             else:
                 _fw, _fh = _vw, int(_vw / _ar)
             if _mobile:
-                # Force small resolution so text/buttons stay readable
-                _table = [(854, 480)]
-                os.environ['NK_UI_SCALE'] = '1.6'
+                # Tiered mobile resolutions with matching UI scale.
+                # Higher resolution for larger phones; scale keeps UI tappable.
+                _mobile_table = [
+                    (1280, 720, '1.4'),
+                    (1024, 576, '1.5'),
+                    ( 854, 480, '1.6'),
+                ]
+                for _rw, _rh, _us in _mobile_table:
+                    if _rw <= _fw and _rh <= _fh:
+                        _w, _h = _rw, _rh
+                        os.environ['NK_UI_SCALE'] = _us
+                        break
+                else:
+                    _w, _h = _mobile_table[-1][0], _mobile_table[-1][1]
+                    os.environ['NK_UI_SCALE'] = _mobile_table[-1][2]
             else:
                 _table = [(1920, 1080), (1600, 900), (1366, 768),
                           (1280, 720), (1024, 576), (854, 480)]
-            for _rw, _rh in _table:
-                if _rw <= _fw and _rh <= _fh:
-                    _w, _h = _rw, _rh
-                    break
-            else:
-                # Viewport smaller than smallest table entry; use it anyway
-                _w, _h = _table[-1]
+                for _rw, _rh in _table:
+                    if _rw <= _fw and _rh <= _fh:
+                        _w, _h = _rw, _rh
+                        break
+                else:
+                    _w, _h = _table[-1]
         except Exception:
             pass
 
