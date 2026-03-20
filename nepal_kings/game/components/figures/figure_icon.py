@@ -1327,14 +1327,13 @@ class FieldFigureIcon(FigureIcon):
 
                 # Draw skill icons (non-village only)
                 if _show_skills and skill_icon_size > 0:
-                    for i, skill in enumerate(skills_to_display):
+                    for i, skill_key in enumerate(skills_to_display):
                         if i > 0:
                             current_x += element_spacing
-                        skill_icon = skill.get('icon')
-                        if skill_icon:
-                            scaled = pygame.transform.smoothscale(skill_icon, (skill_icon_size, skill_icon_size))
-                            icon_y = info_center_y - scaled.get_height() // 2
-                            self.window.blit(scaled, (current_x, icon_y))
+                        if skill_key in skill_icon_dict:
+                            skill_icon = skill_icon_dict[skill_key]
+                            icon_y = info_center_y - skill_icon.get_height() // 2
+                            self.window.blit(skill_icon, (current_x, icon_y))
                             current_x += skill_icon_size
 
                 # Draw enchantment modifier
