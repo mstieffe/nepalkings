@@ -3316,7 +3316,7 @@ class GameScreen(Screen):
         """Draw a red notification badge on a game button."""
         if count <= 0:
             return
-        _ui = getattr(settings, '_UI_SCALE', 1.0)
+        _ui = _UI_SCALE
         badge_radius = int(0.006 * settings.SCREEN_WIDTH * _ui)
         badge_x = button.rect_symbol.right - badge_radius // 2
         badge_y = button.rect_symbol.top + badge_radius // 2
