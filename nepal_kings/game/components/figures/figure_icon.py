@@ -1294,13 +1294,13 @@ class FieldFigureIcon(FigureIcon):
             # Calculate vertical center for the info row
             info_center_y = text_bg_rect.bottom + info_height // 2
             
-            # Calculate total row width for centering
+            # Hidden village figures: do NOT show skill icons — revealing
+            # skills exposes the figure's identity before it is uncovered.
+            # Only enchantment icons (visible spell effects) are shown.
+            
+            # Calculate total row width for centering (skills excluded)
             hidden_info_row_width = 0
-            if skills_to_display and skill_icon_size > 0:
-                hidden_info_row_width += len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
             if has_enchantments and enchantment_modifier_surface:
-                if hidden_info_row_width > 0:
-                    hidden_info_row_width += element_spacing
                 hidden_info_row_width += enchantment_modifier_surface.get_width()
             if has_enchantments and enchantment_icons:
                 if hidden_info_row_width > 0:
@@ -1310,30 +1310,8 @@ class FieldFigureIcon(FigureIcon):
             # Start from left side of the row
             current_x = self.x - hidden_info_row_width // 2
             
-            # Draw skill icons
-            if skills_to_display:
-                for i, skill_key in enumerate(skills_to_display):
-                    if i > 0:
-                        current_x += element_spacing
-                    if skill_key in skill_icon_dict:
-                        skill_icon = skill_icon_dict[skill_key]
-                        skill_y = info_center_y - skill_icon.get_height() // 2
-                        # Draw white glow behind skill icon
-                        if skill_glow:
-                            glow_x = current_x + (skill_icon.get_width() - skill_glow.get_width()) // 2
-                            glow_y = skill_y + (skill_icon.get_height() - skill_glow.get_height()) // 2
-                            self.window.blit(skill_glow, (glow_x, glow_y))
-                        # Hidden opponent figures: do NOT draw suit icons
-                        # (neither advantage suit nor own suit) to avoid
-                        # revealing faction information.
-                        # Draw skill icon on top
-                        self.window.blit(skill_icon, (current_x, skill_y))
-                        current_x += skill_icon.get_width()
-            
             # Draw enchantment modifier
             if has_enchantments and enchantment_modifier_surface:
-                if skills_to_display:
-                    current_x += element_spacing
                 enchant_y = info_center_y - enchantment_modifier_surface.get_height() // 2
                 # Draw outline (black) in 4 directions
                 if enchantment_modifier_outline:
@@ -1345,7 +1323,7 @@ class FieldFigureIcon(FigureIcon):
             
             # Draw enchantment spell icons
             if has_enchantments and enchantment_icons:
-                if enchantment_modifier_surface or skills_to_display:
+                if enchantment_modifier_surface:
                     current_x += element_spacing
                 for i, enchant_icon in enumerate(enchantment_icons):
                     if i > 0:
