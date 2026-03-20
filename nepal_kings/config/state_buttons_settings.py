@@ -36,6 +36,6 @@ TOOLTIP_DOT_RADIUS = max(3, int(0.004 * SCREEN_HEIGHT))
 TOOLTIP_DOT_ACTIVE_CLR = (60, 190, 60)    # green dot
 TOOLTIP_DOT_PASSIVE_CLR = (190, 50, 50)   # red dot
 TOOLTIP_DOT_SPACING = int(0.006 * SCREEN_WIDTH)
-TOOLTIP_FONT_SIZE = int(0.017 * _FS)
+TOOLTIP_FONT_SIZE = int(0.017 * _FS * (1.25 if _UI_SCALE > 1.0 else 1.0))
 TOOLTIP_OFFSET_X = int(0.01 * SCREEN_WIDTH)   # horizontal gap from icon edge
 TOOLTIP_OFFSET_Y = int(0.005 * SCREEN_HEIGHT)  # vertical nudge
