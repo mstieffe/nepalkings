@@ -1059,14 +1059,19 @@ class FieldFigureIcon(FigureIcon):
             # Calculate box width
             box_width = max(text_surface.get_width(), info_row_width) + 2 * padding
         else:
-            # For hidden figures, show skills and enchantments
-            has_info = skills_to_display or has_enchantments
+            # For hidden figures, determine what to show.
+            # Village figures: hide skills (would reveal identity);
+            # other fields (castle, military): show skills.
+            _is_village = (hasattr(self.figure, 'family') and
+                           getattr(self.figure.family, 'field', '') == 'village')
+            _show_skills = skills_to_display and not _is_village
+            has_info = _show_skills or has_enchantments
             if has_info:
-                # Calculate width for info row: skills + enchantment modifier + enchantment icons
+                # Calculate width for info row
                 hidden_info_row_width = 0
                 
-                # Add skill icons width
-                if skills_to_display and skill_icon_size > 0:
+                # Add skill icons width (non-village only)
+                if _show_skills and skill_icon_size > 0:
                     skills_width = len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
                     hidden_info_row_width += skills_width
                 
@@ -1084,7 +1089,7 @@ class FieldFigureIcon(FigureIcon):
                 
                 box_width = max(text_surface.get_width(), hidden_info_row_width) + 2 * padding
                 info_height = max(
-                    skill_icon_size if skill_icon_size > 0 else 0,
+                    skill_icon_size if (_show_skills and skill_icon_size > 0) else 0,
                     default_icon_size if enchantment_icons else 0,
                     enchantment_modifier_surface.get_height() if enchantment_modifier_surface else 0
                 ) + 2 * padding
@@ -1291,46 +1296,68 @@ class FieldFigureIcon(FigureIcon):
         
         # Draw skills and enchantments for hidden figures
         elif not self.is_visible and (skills_to_display or has_enchantments):
-            # Calculate vertical center for the info row
-            info_center_y = text_bg_rect.bottom + info_height // 2
-            
-            # Hidden village figures: do NOT show skill icons — revealing
-            # skills exposes the figure's identity before it is uncovered.
-            # Only enchantment icons (visible spell effects) are shown.
-            
-            # Calculate total row width for centering (skills excluded)
-            hidden_info_row_width = 0
-            if has_enchantments and enchantment_modifier_surface:
-                hidden_info_row_width += enchantment_modifier_surface.get_width()
-            if has_enchantments and enchantment_icons:
-                if hidden_info_row_width > 0:
-                    hidden_info_row_width += element_spacing
-                hidden_info_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
-            
-            # Start from left side of the row
-            current_x = self.x - hidden_info_row_width // 2
-            
-            # Draw enchantment modifier
-            if has_enchantments and enchantment_modifier_surface:
-                enchant_y = info_center_y - enchantment_modifier_surface.get_height() // 2
-                # Draw outline (black) in 4 directions
-                if enchantment_modifier_outline:
-                    for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                        self.window.blit(enchantment_modifier_outline, (current_x + offset_x, enchant_y + offset_y))
-                # Draw main purple text on top
-                self.window.blit(enchantment_modifier_surface, (current_x, enchant_y))
-                current_x += enchantment_modifier_surface.get_width()
-            
-            # Draw enchantment spell icons
-            if has_enchantments and enchantment_icons:
-                if enchantment_modifier_surface:
-                    current_x += element_spacing
-                for i, enchant_icon in enumerate(enchantment_icons):
-                    if i > 0:
+            # Village hidden figures: hide skills (identity leak).
+            # Other fields: show skills normally.
+            _is_village = (hasattr(self.figure, 'family') and
+                           getattr(self.figure.family, 'field', '') == 'village')
+            _show_skills = skills_to_display and not _is_village
+
+            if not _show_skills and not has_enchantments:
+                pass  # nothing to draw – badge was collapsed
+            else:
+                # Calculate vertical center for the info row
+                info_center_y = text_bg_rect.bottom + info_height // 2
+
+                # Calculate total row width for centering
+                hidden_info_row_width = 0
+                if _show_skills and skill_icon_size > 0:
+                    skills_width = len(skills_to_display) * skill_icon_size + (len(skills_to_display) - 1) * element_spacing
+                    hidden_info_row_width += skills_width
+                if has_enchantments and enchantment_modifier_surface:
+                    if hidden_info_row_width > 0:
+                        hidden_info_row_width += element_spacing
+                    hidden_info_row_width += enchantment_modifier_surface.get_width()
+                if has_enchantments and enchantment_icons:
+                    if hidden_info_row_width > 0:
+                        hidden_info_row_width += element_spacing
+                    hidden_info_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
+
+                # Start from left side of the row
+                current_x = self.x - hidden_info_row_width // 2
+
+                # Draw skill icons (non-village only)
+                if _show_skills and skill_icon_size > 0:
+                    for i, skill in enumerate(skills_to_display):
+                        if i > 0:
+                            current_x += element_spacing
+                        skill_icon = skill.get('icon')
+                        if skill_icon:
+                            scaled = pygame.transform.smoothscale(skill_icon, (skill_icon_size, skill_icon_size))
+                            icon_y = info_center_y - scaled.get_height() // 2
+                            self.window.blit(scaled, (current_x, icon_y))
+                            current_x += skill_icon_size
+
+                # Draw enchantment modifier
+                if has_enchantments and enchantment_modifier_surface:
+                    if _show_skills and skill_icon_size > 0:
                         current_x += element_spacing
-                    icon_y = info_center_y - enchant_icon.get_height() // 2
-                    self.window.blit(enchant_icon, (current_x, icon_y))
-                    current_x += enchant_icon.get_width()
+                    enchant_y = info_center_y - enchantment_modifier_surface.get_height() // 2
+                    if enchantment_modifier_outline:
+                        for offset_x, offset_y in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                            self.window.blit(enchantment_modifier_outline, (current_x + offset_x, enchant_y + offset_y))
+                    self.window.blit(enchantment_modifier_surface, (current_x, enchant_y))
+                    current_x += enchantment_modifier_surface.get_width()
+
+                # Draw enchantment spell icons
+                if has_enchantments and enchantment_icons:
+                    if enchantment_modifier_surface or (_show_skills and skill_icon_size > 0):
+                        current_x += element_spacing
+                    for i, enchant_icon in enumerate(enchantment_icons):
+                        if i > 0:
+                            current_x += element_spacing
+                        icon_y = info_center_y - enchant_icon.get_height() // 2
+                        self.window.blit(enchant_icon, (current_x, icon_y))
+                        current_x += enchant_icon.get_width()
 
     def update(self) -> None:
         """
