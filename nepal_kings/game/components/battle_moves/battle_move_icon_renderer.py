@@ -24,14 +24,13 @@ def draw_battle_move_icon(
     suffix='',
     suit_b=None,
 ):
-    """Draw a single battle move icon with glow, frame, power number and suit icon.
+    """Draw a single battle move icon with glow, frame, and power/suit badge.
 
     The drawing order is:
       1. Glow (suit-coloured, or yellow if used)
       2. Family icon (greyed if used)
       3. Frame (greyed if used)
-      4. Power number at 3/4 height with dark circle background (white text)
-      5. Suit icon centred below the icon
+      4. Elliptical badge at centre-bottom with power value + suit icon(s)
 
     Parameters
     ----------
@@ -106,52 +105,63 @@ def draw_battle_move_icon(
         else:
             window.blit(frame_img, frame_img.get_rect(center=(cx, cy)).topleft)
 
-    # ── 4. Power number — centred vertically, at 0.2 icon_width from left edge ──
+    # ── 4 + 5. Combined value + suit badge — elliptical, centred at bottom ──
     label_color = (180, 170, 155) if is_used else (255, 255, 255)
     val_surf = font.render(str(power_value), True, label_color)
-    val_cx = cx - int(eff_icon_s * 0.26)  # 0.2 from left edge = centre - 0.3
-    val_cy = cy - 0.02 * icon_size  
 
-    # Dark circle background for readability
-    circle_r = max(val_surf.get_width(), val_surf.get_height()) // 2 + 4
-    circle_surf = pygame.Surface((circle_r * 2, circle_r * 2), pygame.SRCALPHA)
-    bg_alpha = 140 if is_used else 180
-    pygame.draw.circle(circle_surf, (0, 0, 0, bg_alpha), (circle_r, circle_r), circle_r)
-    window.blit(circle_surf, circle_surf.get_rect(center=(val_cx, val_cy)).topleft)
-    window.blit(val_surf, val_surf.get_rect(center=(val_cx, val_cy)).topleft)
-
-    # ── 5. Suit icon(s) — centred vertically, at 0.8 icon_width from left edge ──
-    si_cx = cx + int(eff_icon_s * 0.26)  # 0.8 from left edge = centre + 0.3
-
+    # Collect suit icon(s)
+    suit_icons = []
     if suit_b and suit_b != suit:
-        # Double Dagger: draw two suit icons side by side
-        suit_key_a = suit.lower()
-        suit_key_b = suit_b.lower()
-        icon_a = suit_icon_cache.get(suit_key_a + suffix) or suit_icon_cache.get(suit_key_a)
-        icon_b = suit_icon_cache.get(suit_key_b + suffix) or suit_icon_cache.get(suit_key_b)
-        gap = 2
-        icons = [i for i in (icon_a, icon_b) if i]
-        if icons:
-            total_w = sum(i.get_width() for i in icons) + gap * (len(icons) - 1)
-            start_x = si_cx - total_w // 2
-            for si in icons:
-                si_rect = si.get_rect(topleft=(start_x, val_cy - si.get_height() // 2))
-                if is_used:
-                    si_copy = si.copy()
-                    si_copy.set_alpha(alpha)
-                    window.blit(si_copy, si_rect.topleft)
-                else:
-                    window.blit(si, si_rect.topleft)
-                start_x += si.get_width() + gap
+        for sk in (suit.lower(), suit_b.lower()):
+            si = suit_icon_cache.get(sk + suffix) or suit_icon_cache.get(sk)
+            if si:
+                suit_icons.append(si)
     else:
-        # Single suit icon
-        suit_key = suit.lower()
-        suit_icon = suit_icon_cache.get(suit_key + suffix) or suit_icon_cache.get(suit_key)
-        if suit_icon:
-            si_rect = suit_icon.get_rect(center=(si_cx, val_cy))
+        si = suit_icon_cache.get(suit.lower() + suffix) or suit_icon_cache.get(suit.lower())
+        if si:
+            suit_icons.append(si)
+
+    # Layout: [value] [gap] [suit icon(s)]  inside an ellipse
+    inner_gap = 3
+    suit_gap = 2
+    si_total_w = sum(s.get_width() for s in suit_icons) + suit_gap * max(0, len(suit_icons) - 1)
+    si_max_h = max((s.get_height() for s in suit_icons), default=0)
+    content_w = val_surf.get_width() + (inner_gap + si_total_w if suit_icons else 0)
+    content_h = max(val_surf.get_height(), si_max_h)
+
+    pad_x = 5
+    pad_y = 3
+    ell_w = content_w + pad_x * 2
+    ell_h = content_h + pad_y * 2
+
+    badge_cx = cx
+    badge_cy = cy + int(eff_icon_s * 0.38)
+
+    # Draw elliptical background
+    bg_alpha = 140 if is_used else 180
+    ell_surf = pygame.Surface((ell_w, ell_h), pygame.SRCALPHA)
+    pygame.draw.ellipse(ell_surf, (0, 0, 0, bg_alpha), (0, 0, ell_w, ell_h))
+    window.blit(ell_surf, ell_surf.get_rect(center=(badge_cx, badge_cy)).topleft)
+
+    # Draw value text (left of centre within badge)
+    val_x = badge_cx - content_w // 2
+    val_rect = val_surf.get_rect(midleft=(val_x, badge_cy))
+    if is_used:
+        val_copy = val_surf.copy()
+        val_copy.set_alpha(alpha)
+        window.blit(val_copy, val_rect.topleft)
+    else:
+        window.blit(val_surf, val_rect.topleft)
+
+    # Draw suit icon(s) (right of value)
+    if suit_icons:
+        si_start_x = val_rect.right + inner_gap
+        for si in suit_icons:
+            si_rect = si.get_rect(midleft=(si_start_x, badge_cy))
             if is_used:
-                si_copy = suit_icon.copy()
+                si_copy = si.copy()
                 si_copy.set_alpha(alpha)
                 window.blit(si_copy, si_rect.topleft)
             else:
-                window.blit(suit_icon, si_rect.topleft)
+                window.blit(si, si_rect.topleft)
+            si_start_x += si.get_width() + suit_gap

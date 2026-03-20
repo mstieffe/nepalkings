@@ -1575,8 +1575,8 @@ class FieldFigureIcon(FigureIcon):
                 self._advance_icon_cache[filename] = pygame.image.load(icon_path).convert_alpha()
             
             advance_img = self._advance_icon_cache[filename]
-            # Size to fit in top corner of icon (same size as broken icon)
-            base_size = int(settings.FIELD_ICON_WIDTH * 0.25)
+            # Size to fit in top corner of icon; larger on mobile
+            base_size = int(settings.FIELD_ICON_WIDTH * settings.ADVANCE_ICON_SCALE)
             if is_big:
                 icon_size = int(base_size * self.icon_scale_factor)
             else:

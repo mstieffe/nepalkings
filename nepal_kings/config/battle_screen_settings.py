@@ -18,10 +18,13 @@ BATTLE_PANEL_W = int(0.10 * SCREEN_WIDTH)
 BATTLE_PANEL_H = int(0.62 * SCREEN_HEIGHT)
 
 # Icons inside the panel (3 stacked vertically)
-_BPIM = 1.3 if _UI_SCALE > 1.0 else 1.0   # enlarge battle-panel move icons on mobile
+_BPIM = 1.15 if _UI_SCALE > 1.0 else 1.0   # enlarge battle-panel move icons on mobile
 BATTLE_PANEL_ICON_SIZE = int(0.055 * SCREEN_WIDTH * _BPIM)
 BATTLE_PANEL_ICON_FRAME_SCALE = 1.3
 BATTLE_PANEL_ICON_GLOW_SIZE = int(0.08 * SCREEN_WIDTH * _BPIM)
+
+# Advance overlay icon — slightly bigger on mobile so the charge arrow is visible
+_ADVANCE_ICON_SCALE = 0.35 if _UI_SCALE > 1.0 else 0.25
 BATTLE_PANEL_ICON_START_Y = int(0.17 * SCREEN_HEIGHT)
 BATTLE_PANEL_ICON_DELTA_Y = int(0.14 * SCREEN_HEIGHT)
 

@@ -3711,8 +3711,7 @@ class BattleScreen(SubScreen):
                 text = "Your turn!"
                 color = settings.TURN_YOUR_COLOR
             else:
-                opp_name = self.game.opponent_name or "Opponent"
-                text = f"Waiting for {opp_name}..."
+                text = "Waiting..."
                 color = settings.TURN_OPPONENT_COLOR
 
             turn_surf = self.font_turn.render(text, True, color)
