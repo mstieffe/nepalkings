@@ -592,6 +592,7 @@ class BuildFigureScreen(SubScreen):
                                       "cards": figure.cards,
                                       "content": figure}
                                      for figure in figures]
+            self.scroll_text_list.sort(key=lambda x: x["power"], reverse=True)
         else:
             # Get figure instances to show their attributes even when cards are missing
             self.scroll_text_list = []
@@ -609,8 +610,10 @@ class BuildFigureScreen(SubScreen):
                         "suit": suit,
                         "cards": self.get_given_cards_for_figure(figure),
                         "missing_cards": self.get_missing_cards_converted_ZK_for_figure(figure),
-                        "content": None
+                        "content": None,
+                        "_sort_power": figure.get_value()
                     })
+            self.scroll_text_list.sort(key=lambda x: x["_sort_power"], reverse=True)
         self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
 
     def draw(self):
