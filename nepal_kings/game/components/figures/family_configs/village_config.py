@@ -6,7 +6,7 @@ from game.components.cards.card import Card
 ############# Village #############
 
 VILLAGE_START_POS_X = 0.39 * SCREEN_WIDTH
-_VILLAGE_Y_NUDGE = 0.02 * SCREEN_HEIGHT if _UI_SCALE > 1.0 else 0
+_VILLAGE_Y_NUDGE = 0.00 * SCREEN_HEIGHT if _UI_SCALE > 1.0 else 0
 VILLAGE_START_POS_Y = 0.38 * SCREEN_HEIGHT + _VILLAGE_Y_NUDGE
 VILLAGE_DELTA_X = 0.09 * SCREEN_WIDTH
 

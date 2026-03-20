@@ -3258,9 +3258,9 @@ class BattleScreen(SubScreen):
                 bm_suit_lower = (suit or '').lower()
                 cf_suit_lower = (call_fig.suit or '').lower()
                 if cf_suit_lower != bm_suit_lower:
-                    # Replicate the badge layout from the renderer to find the
-                    # exact centre of the value text (not the whole badge).
-                    eff_icon_s = sw  # icon_size passed to draw_battle_move_icon
+                    # Use actual cached icon size (matches renderer logic)
+                    icon_img_check = self._slot_icon_cache.get(family_name)
+                    eff_icon_s = icon_img_check.get_width() if icon_img_check else sw
                     badge_cy = slot_cy + int(eff_icon_s * 0.34)
                     val_surf = self.font_icon_value.render(str(power_value), True, (255, 255, 255))
                     # Collect suit icon widths to compute content_w
@@ -3281,10 +3281,13 @@ class BattleScreen(SubScreen):
                     content_w = val_surf.get_width() + (inner_gap + si_total_w if si_total_w else 0)
                     # Value text midleft is at badge_cx - content_w // 2
                     val_cx = cx - content_w // 2 + val_surf.get_width() // 2
+                    # Use font metric for exact vertical centre of the text
+                    val_rect = val_surf.get_rect(center=(val_cx, badge_cy))
+                    strike_y = val_rect.centery
                     val_hw = val_surf.get_width() // 2 + 3
                     pygame.draw.line(
                         self.window, (220, 40, 40),
-                        (val_cx - val_hw, badge_cy), (val_cx + val_hw, badge_cy), 3)
+                        (val_cx - val_hw, strike_y), (val_cx + val_hw, strike_y), 3)
         else:
             # Empty diamond slot
             dr = self._slot_diamond.get_rect(center=(cx, slot_cy))

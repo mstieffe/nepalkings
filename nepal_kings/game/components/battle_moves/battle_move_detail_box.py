@@ -86,8 +86,8 @@ class BattleMoveDetailBox:
 
         # Fonts – on mobile, use reduced sizes so content fits the fixed-size box
         if _UI_SCALE > 1.0:
-            _title_sz = int(settings.FONT_SIZE_TITLE_DIALOGUE_BOX / _UI_SCALE * 1.4)
-            _body_sz  = int(settings.FONT_SIZE_DIALOGUE_BOX / _UI_SCALE * 1.4)
+            _title_sz = int(settings.FONT_SIZE_TITLE_DIALOGUE_BOX / _UI_SCALE * 1.7)
+            _body_sz  = int(settings.FONT_SIZE_DIALOGUE_BOX / _UI_SCALE * 1.7)
         else:
             _title_sz = settings.FONT_SIZE_TITLE_DIALOGUE_BOX
             _body_sz  = settings.FONT_SIZE_DIALOGUE_BOX
@@ -361,7 +361,9 @@ class BattleMoveDetailBox:
             y += dagger_icon_size + pad // 2
             y += self.small_font.get_height() + pad                   # counter "1 / N"
 
-        # Buttons
+        # Buttons — extra gap before buttons on mobile for readability
+        if _UI_SCALE > 1.0:
+            y += pad
         btn_y_rel = y
         btn_gap = 5
         if self.is_battle_context:
