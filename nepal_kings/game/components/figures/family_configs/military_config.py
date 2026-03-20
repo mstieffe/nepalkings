@@ -22,9 +22,9 @@ military_dict_list = [
         "color": "defensive",
         "field": "military",
         "description": (
-            "The Wooden Fortress is a defensive military figure that cannot initiate an advance. "
+            "The Wooden Fortress is a defensive military figure that cannot attack. "
             "Opponents must target the fortress before other figures when choosing a defender. "
-            "Requires as many stones as its number-card value. Can be upgraded to Stone Fortress."
+            "Requires food equal to its number-card value. Can be upgraded to a Stone Fortress."
         ),
         "icon_img": "fortress1.png",
         "icon_gray_img": "fortress1.png",
@@ -56,9 +56,9 @@ military_dict_list = [
         "color": "defensive",
         "field": "military",
         "description": (
-            "The Stone Fortress is a defensive military figure that cannot initiate an advance. "
+            "The Stone Fortress is a defensive military figure that cannot attack. "
             "Opponents must target the fortress before other figures when choosing a defender. "
-            "Requires as many stones as its number-card value and an additional 7 shields."
+            "Requires food equal to its number-card value and an additional 7 shields."
         ),
         "icon_img": "fortress2.png",
         "icon_gray_img": "fortress2.png",
@@ -88,8 +88,9 @@ military_dict_list = [
         "color": "offensive",
         "field": "military",
         "description": (
-            "The Gorkha Warriors is an offensive military figure that can advance immediately when placed on the field. "
-            "Requires as many food as its number-card value. Can be upgraded to Elite Gorkha Warriors."
+            "The Gorkha Warriors is an offensive military figure that charges instantly into battle "
+            "when placed on the field. Requires food equal to its number-card value. "
+            "Can be upgraded to Elite Gorkha Warriors."
         ),
         "icon_img": "army1.png",
         "icon_gray_img": "army1.png",
@@ -120,8 +121,8 @@ military_dict_list = [
         "color": "offensive",
         "field": "military",
         "description": (
-            "The Elite Gorkha Warriors is an offensive military figure that can advance immediately when placed on the field. "
-            "Requires as many food as its number-card value and an additional 7 swords."
+            "The Elite Gorkha Warriors is an offensive military figure that charges instantly into battle "
+            "when placed on the field. Requires food equal to its number-card value and an additional 7 swords."
         ),
         "icon_img": "army2.png",
         "icon_gray_img": "army2.png",

@@ -8,8 +8,8 @@ castle_dict_list = [
         "color": "defensive",
         "field": "castle",
         "description": (
-            "The Himalaya Castle is the residence of your black kings, ruling over your defensive forces. "
-            "Each additional king adds a new black land, i.e., figure slot, to your village and military base."
+            "The Himalaya King rules over your defensive forces. "
+            "Each king supports two village slots and one military slot."
         ),
         "icon_img": "castle_black.png",
         "icon_gray_img": "castle_black.png",
@@ -35,7 +35,8 @@ castle_dict_list = [
         "color": "defensive",
         "field": "castle",
         "description": (
-            "Primodial defensive king. Supports two village slots and one military slot."
+            "The Himalaya Maharaja is the primordial defensive king. "
+            "Supports three village slots and two military slots. Triggers checkmate when defeated."
         ),
         "icon_img": "castle_black.png",
         "icon_gray_img": "castle_black.png",
@@ -62,8 +63,8 @@ castle_dict_list = [
         "color": "offensive",
         "field": "castle",
         "description": (
-            "The Djungle Castle is the residence of your red kings, ruling over your offensive forces. "
-            "Each additional king adds a new red land, i.e., figure slot, to your village and military base."
+            "The Djungle King rules over your offensive forces. "
+            "Each king supports two village slots and one military slot."
         ),
         "icon_img": "castle_red.png",
         "icon_gray_img": "castle_red.png",
@@ -89,7 +90,8 @@ castle_dict_list = [
         "color": "offensive",
         "field": "castle",
         "description": (
-            "Primodial offensive king. Supports two village slots and one military slot."
+            "The Djungle Maharaja is the primordial offensive king. "
+            "Supports three village slots and two military slots. Triggers checkmate when defeated."
         ),
         "icon_img": "castle_red.png",
         "icon_gray_img": "castle_red.png",

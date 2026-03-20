@@ -28,9 +28,9 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The small yack farm is a defensive figure who supplies you with essential food resources "
-            "required for constructing a fortress. It generates food equal to its number-card value. "
-            "The small yack farm can be upgraded to a large yack farm."
+            "The Small Yack Farm is a defensive village figure that produces food "
+            "equal to its number-card value. Food is required for building a fortress. "
+            "Can be upgraded to a Large Yack Farm."
         ),
         "icon_img": "yack_farm1.png",
         "icon_gray_img": "yack_farm1.png",
@@ -61,8 +61,8 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The large yack farm is a defensive figure who supplies you with essential food resources "
-            "required for constructing a fortress. It generates food equal to twice its number-card value."
+            "The Large Yack Farm is a defensive village figure that produces food "
+            "equal to twice its number-card value. Food is required for building a fortress."
         ),
         "icon_img": "yack_farm2.png",
         "icon_gray_img": "yack_farm2.png",
@@ -91,9 +91,9 @@ village_dict_list = [
         "color": "offensive",
         "field": "village",
         "description": (
-            "The small rice farm is an offensive figure who supplies you with essential food resources "
-            "required for recruiting Gorkha soldiers. It generates food equal to its number-card value. "
-            "The small rice farm can be upgraded to a large rice farm."
+            "The Small Rice Farm is an offensive village figure that produces food "
+            "equal to its number-card value. Food is required for recruiting Gorkha Warriors. "
+            "Can be upgraded to a Large Rice Farm."
         ),
         "icon_img": "rice_farm1.png",
         "icon_gray_img": "rice_farm1.png",
@@ -124,8 +124,8 @@ village_dict_list = [
         "color": "offensive",
         "field": "village",
         "description": (
-            "The large rice farm is an offensive figure who supplies you with essential food resources "
-            "required for recruiting Gorkha warriors. It generates food equal to twice its number-card value."
+            "The Large Rice Farm is an offensive village figure that produces food "
+            "equal to twice its number-card value. Food is required for recruiting Gorkha Warriors."
         ),
         "icon_img": "rice_farm2.png",
         "icon_gray_img": "rice_farm2.png",
@@ -154,8 +154,9 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The Himalaya Temple is a spiritual figure that blocks the support bonus of the opponent's battle figure "
-            "whose suit it has an advantage over, i.e., Spade Temple blocking Heart and Clubs Temple blocking Diamond."
+            "The Himalaya Temple is a defensive village figure that cannot attack. "
+            "It blocks the support bonus of the opponent's battle figure whose suit it has an advantage over "
+            "(Spades blocks Hearts, Clubs blocks Diamonds). Can be upgraded to a Shield Manufactory."
         ),
         "icon_img": "shrine_black.png",
         "icon_gray_img": "shrine_black.png",
@@ -185,8 +186,9 @@ village_dict_list = [
         "color": "offensive",
         "field": "village",
         "description": (
-            "The Djungle Temple is a spiritual figure that blocks the support bonus of the opponent's battle figure "
-            "whose suit it has an advantage over, i.e., Heart Temple blocking Clubs and Diamond Temple blocking Spade."
+            "The Djungle Temple is an offensive village figure that cannot attack. "
+            "It blocks the support bonus of the opponent's battle figure whose suit it has an advantage over "
+            "(Hearts blocks Clubs, Diamonds blocks Spades). Can be upgraded to a Sword Manufactory."
         ),
         "icon_img": "shrine_red.png",
         "icon_gray_img": "shrine_red.png",
@@ -216,8 +218,8 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The Shield Manufactory is a defensive figure who provides you with essential shield resources "
-            "required for constructing a fortress II. It generates shields equal to its number-card value."
+            "The Shield Manufactory is a defensive village figure that produces 7 shields. "
+            "Shields are required for upgrading a Wooden Fortress to a Stone Fortress."
         ),
         "icon_img": "manufactory_black.png",
         "icon_gray_img": "manufactory_black.png",
@@ -245,8 +247,8 @@ village_dict_list = [
         "color": "offensive",
         "field": "village",
         "description": (
-            "The Sword Manufactory is an offensive figure who provides you with essential sword resources "
-            "required for constructing an army II. It generates swords equal to its number-card value."
+            "The Sword Manufactory is an offensive village figure that produces 7 swords. "
+            "Swords are required for upgrading Gorkha Warriors to Elite Gorkha Warriors."
         ),
         "icon_img": "manufactory_red.png",
         "icon_gray_img": "manufactory_red.png",
@@ -274,8 +276,8 @@ village_dict_list = [
         "color": "offensive",
         "field": "village",
         "description": (
-            "The Carpenter is an offensive figure producing wood required for cavalry or archers. "
-            "It generates wood equal to its number-card value."
+            "The Carpenter is an offensive village figure that produces material "
+            "equal to its number-card value. Material is required for building Cavalry or Archers."
         ),
         "icon_img": "carpenter.png",
         "icon_gray_img": "carpenter.png",
@@ -304,8 +306,8 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The Stone Mason is a defensive figure producing stone required for constructing a wall or catapult. "
-            "It generates stone equal to its number-card value."
+            "The Stone Mason is a defensive village figure that produces material "
+            "equal to its number-card value. Material is required for building a Wall or Archers."
         ),
         "icon_img": "stone_mason.png",
         "icon_gray_img": "stone_mason.png",
@@ -334,8 +336,9 @@ village_dict_list = [
         "color": "defensive",
         "field": "village",
         "description": (
-            "The Himalaya Healer is a defensive figure that increases the base power of all village figures "
-            "with the same suit by +4."
+            "The Himalaya Healer is a defensive village figure that cannot attack. "
+            "It increases the base power of all village figures with the same suit by +4. "
+            "Can be upgraded to a Stone Mason."
         ),
         "icon_img": "himalaya_healer.png",
         "icon_gray_img": "himalaya_healer.png",
@@ -365,8 +368,9 @@ village_dict_list = [
         "color": "offensive",
         "field": "village",
         "description": (
-            "The Djungle Healer is an offensive figure that increases the base power of all village figures "
-            "with the same suit by +4."
+            "The Djungle Healer is an offensive village figure that cannot attack. "
+            "It increases the base power of all village figures with the same suit by +4. "
+            "Can be upgraded to a Carpenter."
         ),
         "icon_img": "djungle_healer.png",
         "icon_gray_img": "djungle_healer.png",
