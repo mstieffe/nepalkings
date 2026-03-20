@@ -596,22 +596,21 @@ class BuildFigureScreen(SubScreen):
             # Get figure instances to show their attributes even when cards are missing
             self.scroll_text_list = []
             for suit in button.family.suits:
-                # Get figure instance to access its attributes
-                figure = button.family.get_figures_by_suit(suit)[0]
-                self.scroll_text_list.append({
-                    "title": button.family.name,
-                    "figure_type": f"{figure.family.field.capitalize()} Figure",
-                    "text": button.family.description,
-                    # Don't show power when cards are missing
-                    "support": figure.get_battle_bonus(),
-                    "produces": figure.produces if figure.produces else None,
-                    "requires": figure.requires if figure.requires else None,
-                    **{k: getattr(figure, k, False) for k in SKILL_KEYS},
-                    "suit": suit,
-                    "cards": self.get_given_cards(button.family, suit),
-                    "missing_cards": self.get_missing_cards_converted_ZK(button.family, suit),
-                    "content": None
-                })
+                for figure in button.family.get_figures_by_suit(suit):
+                    self.scroll_text_list.append({
+                        "title": button.family.name,
+                        "figure_type": f"{figure.family.field.capitalize()} Figure",
+                        "text": button.family.description,
+                        # Don't show power when cards are missing
+                        "support": figure.get_battle_bonus(),
+                        "produces": figure.produces if figure.produces else None,
+                        "requires": figure.requires if figure.requires else None,
+                        **{k: getattr(figure, k, False) for k in SKILL_KEYS},
+                        "suit": suit,
+                        "cards": self.get_given_cards_for_figure(figure),
+                        "missing_cards": self.get_missing_cards_converted_ZK_for_figure(figure),
+                        "content": None
+                    })
         self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
 
     def draw(self):
@@ -728,15 +727,16 @@ class BuildFigureScreen(SubScreen):
         return missing_cards
     
     def get_given_cards(self, figure_family, suit):
-        """Get given cards for a figure."""
-        # Get all cards in the player's hand
+        """Get given cards for the first figure variant in a family/suit."""
+        figure = figure_family.get_figures_by_suit(suit)[0]
+        return self.get_given_cards_for_figure(figure)
+
+    def get_given_cards_for_figure(self, figure):
+        """Get given cards for a specific figure."""
         main_cards, side_cards = self.game.get_hand()
         hand_cards = main_cards + side_cards
-
-        # Count occurrences of each card in the hand using tuples
         hand_counter = Counter(card.to_tuple() for card in hand_cards)
 
-        figure = figure_family.get_figures_by_suit(suit)[0]
         # Count occurrences of required cards for the figure using tuples
         figure_counter = Counter(card.to_tuple() for card in figure.cards)
 
@@ -756,6 +756,10 @@ class BuildFigureScreen(SubScreen):
     def get_missing_cards_converted_ZK(self, figure_family, suit):
         """Get missing cards for all figures in a family."""
         figure = figure_family.get_figures_by_suit(suit)[0]
+        return self.get_missing_cards_converted_ZK_for_figure(figure)
+
+    def get_missing_cards_converted_ZK_for_figure(self, figure):
+        """Get missing cards for a specific figure, converting ZK cards."""
         missing_cards = []
         for card in self.get_missing_cards(figure):
             if card.is_ZK:
