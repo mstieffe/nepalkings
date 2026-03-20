@@ -223,16 +223,14 @@ class SpellIcon:
         
         # Draw name if enabled
         if self.draw_name:
-            is_big = self.hovered or self.clicked
-            
-            # Choose text color based on castability
+            # Choose text color based on castability — always use normal size
             if self.is_active:
-                text_surface = self.text_surface_big if is_big else self.text_surface
+                text_surface = self.text_surface
             else:
-                text_surface = self.text_surface_grey_big if is_big else self.text_surface_grey
+                text_surface = self.text_surface_grey
             
-            _name_gap = -2 if _UI_SCALE > 1.0 else 15
-            text_rect = text_surface.get_rect(center=(self.x, self.y + current_frame.get_height() // 2 + _name_gap))
+            _name_gap = 3 if _UI_SCALE > 1.0 else 15
+            text_rect = text_surface.get_rect(center=(self.x, self.y + frame_img.get_height() // 2 + _name_gap))
             self.window.blit(text_surface, text_rect.topleft)
 
 
