@@ -394,8 +394,7 @@ class BattleScreen(SubScreen):
                 self.game.game_id, self.game.player_id,
             )
             self.player_moves = result.get('battle_moves', [])
-        except Exception as e:
-            print(f"[BattleScreen] Failed to load player moves: {e}")
+        except Exception:
             self.player_moves = []
 
         # Load opponent's bought battle moves (will be hidden)
