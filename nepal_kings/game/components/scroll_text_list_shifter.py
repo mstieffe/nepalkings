@@ -1,5 +1,6 @@
 import pygame
 from config import settings
+from config.screen_settings import _UI_SCALE
 from game.components.cards.card_img import CardImg
 
 
@@ -543,15 +544,16 @@ class ScrollTextListShifter:
             self.window.blit(skills_label, skills_rect)
             y += skills_rect.height + blank_line_height * 0.4
             
-            # Draw skill icons and names (max 2 per row)
+            # Draw skill icons and names (1 per row on mobile, 2 on desktop)
+            _max_per_row = 1 if _UI_SCALE > 1.0 else 2
             current_x = x + blank_line_height * 0.5
             icon_spacing = int(blank_line_height * 0.3)
             skills_in_row = 0
             row_height = 0
             
             for skill_key, skill_name in skills_to_display:
-                # Start a new row after every 2 skills
-                if skills_in_row >= 2:
+                # Start a new row when row is full
+                if skills_in_row >= _max_per_row:
                     y += row_height + blank_line_height * 0.3
                     current_x = x + blank_line_height * 0.5
                     skills_in_row = 0
