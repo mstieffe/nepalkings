@@ -548,6 +548,8 @@ class ColorTogglePill:
         # Faction colour dot to the left of the text
         if self._dot_clr is not None:
             dot_x = txt_rect.left - self._dot_r - 4
+            # Clamp so the dot never bleeds outside the button
+            dot_x = max(dot_x, self.rect.left + self._dot_r + 2)
             dot_y = self.rect.centery
             pygame.draw.circle(self.window, self._dot_clr, (dot_x, dot_y), self._dot_r)
 
