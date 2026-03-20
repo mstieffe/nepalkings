@@ -191,7 +191,9 @@ class GuideBookScreen(SubScreen):
                     {'table': {
                         'headers': ['', 'Offensive (Green)', 'Defensive (Blue)'],
                         'rows': [
-                            ['Suits', 'Hearts, Diamonds', 'Clubs, Spades'],
+                            ['Suits',
+                             [(_s + 'hearts.png', ''), (_s + 'diamonds.png', '')],
+                             [(_s + 'clubs.png', ''), (_s + 'spades.png', '')]],
                             ['Castle', 'Djungle Maharaja', 'Himalaya Maharaja'],
                             ['Specialty', 'Charge & mobility', 'Defense & buffs'],
                         ],
@@ -1215,7 +1217,23 @@ class GuideBookScreen(SubScreen):
                 if ci >= num_cols:
                     break
                 cx_pos = col_xs[ci] + col_pad
-                if isinstance(cell, tuple) and len(cell) == 2:
+                if isinstance(cell, list):
+                    # List of (icon_path, text) pairs — draw icons side by side
+                    draw_x = cx_pos
+                    for item in cell:
+                        if isinstance(item, tuple) and len(item) == 2:
+                            ip, ct = item
+                            ic = self._load_icon(ip, icon_sz)
+                            iy = cur_y + (row_h - icon_sz) // 2
+                            surf.blit(ic, (draw_x, iy))
+                            draw_x += icon_sz + 2
+                            if ct:
+                                ts = self.table_font.render(
+                                    str(ct), True, settings.GUIDE_TABLE_CELL_CLR)
+                                ty = cur_y + (row_h - ts.get_height()) // 2
+                                surf.blit(ts, (draw_x, ty))
+                                draw_x += ts.get_width() + 4
+                elif isinstance(cell, tuple) and len(cell) == 2:
                     # (icon_path, text)
                     icon_path, cell_text = cell
                     icon = self._load_icon(icon_path, icon_sz)

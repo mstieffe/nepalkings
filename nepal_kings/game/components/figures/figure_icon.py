@@ -1053,7 +1053,8 @@ class FieldFigureIcon(FigureIcon):
                 info_row_width += element_spacing + (len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing)
             
             # Info section height: single row only
-            info_height = max(power_surface.get_height(), icon_size, skill_icon_size if skill_icon_size > 0 else 0) + 2 * padding
+            info_padding = int(padding * settings.FIGURE_NAME_INFO_PADDING_SCALE)
+            info_height = max(power_surface.get_height(), icon_size, skill_icon_size if skill_icon_size > 0 else 0) + 2 * info_padding
             
             # Calculate box width
             box_width = max(text_surface.get_width(), info_row_width) + 2 * padding

@@ -135,7 +135,7 @@ def draw_battle_move_icon(
     ell_h = content_h + pad_y * 2
 
     badge_cx = cx
-    badge_cy = cy + int(eff_icon_s * 0.38)
+    badge_cy = cy + int(eff_icon_s * 0.34)
 
     # Draw elliptical background
     bg_alpha = 140 if is_used else 180

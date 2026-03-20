@@ -152,4 +152,4 @@ FINISH_BTN_TEXT_COLOR = (40, 20, 5)
 
 # ─────────────── BATTLE FIGURE ICON SCALE ─────────────────────
 # On mobile, enlarge the figure diamond icons (not the info box below them)
-BATTLE_FIGURE_ICON_SCALE = 1.05 if _UI_SCALE > 1.0 else 1.0
+BATTLE_FIGURE_ICON_SCALE = 0.95 if _UI_SCALE > 1.0 else 1.0

@@ -3253,18 +3253,18 @@ class BattleScreen(SubScreen):
                 self.font_icon_value, sw, suit_b=suit_b,
             )
 
-            # Red strikethrough on BM value number only when called-figure suit ≠ BM suit
+            # Red strikethrough on BM value number when called-figure suit ≠ BM suit
             if call_fig and hasattr(call_fig, 'suit'):
                 bm_suit_lower = (suit or '').lower()
                 cf_suit_lower = (call_fig.suit or '').lower()
                 if cf_suit_lower != bm_suit_lower:
-                    # Value number is at cx - 0.26*sw, centred vertically
-                    val_cx = cx - int(sw * 0.26)
+                    # Badge is at centre-bottom of the icon
+                    badge_cy = slot_cy + int(sw * 0.34)
                     val_txt = self.font_small.render(str(power_value), True, (255, 255, 255))
                     val_hw = val_txt.get_width() // 2 + 3
                     pygame.draw.line(
                         self.window, (220, 40, 40),
-                        (val_cx - val_hw, slot_cy), (val_cx + val_hw, slot_cy), 3)
+                        (cx - val_hw, badge_cy), (cx + val_hw, badge_cy), 3)
         else:
             # Empty diamond slot
             dr = self._slot_diamond.get_rect(center=(cx, slot_cy))

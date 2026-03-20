@@ -230,7 +230,8 @@ class SpellIcon:
             else:
                 text_surface = self.text_surface_grey_big if is_big else self.text_surface_grey
             
-            text_rect = text_surface.get_rect(center=(self.x, self.y + current_frame.get_height() // 2 + 15))
+            _name_gap = 8 if settings._UI_SCALE > 1.0 else 15
+            text_rect = text_surface.get_rect(center=(self.x, self.y + current_frame.get_height() // 2 + _name_gap))
             self.window.blit(text_surface, text_rect.topleft)
 
 
