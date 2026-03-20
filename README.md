@@ -126,17 +126,18 @@ Everything you need to run, build, deploy, and maintain Nepal Kings.
    - [Remote server (PythonAnywhere)](#remote-server-pythonanywhere)
    - [Switching servers via the UI](#switching-servers-via-the-ui)
    - [CLI flags reference](#cli-flags-reference)
-5. [Running the Server Independently](#running-the-server-independently)
-6. [Deploying / Updating the Server on PythonAnywhere](#deploying--updating-the-server-on-pythonanywhere)
+5. [Web Client (Browser)](#web-client-browser)
+6. [Running the Server Independently](#running-the-server-independently)
+7. [Deploying / Updating the Server on PythonAnywhere](#deploying--updating-the-server-on-pythonanywhere)
    - [First-time PythonAnywhere setup](#first-time-pythonanywhere-setup)
    - [Deploying updates](#deploying-updates)
-7. [Building Installers for Distribution](#building-installers-for-distribution)
+8. [Building Installers for Distribution](#building-installers-for-distribution)
    - [Local build (macOS)](#local-build-macos)
    - [Cross-platform builds (GitHub Actions)](#cross-platform-builds-github-actions)
    - [Distributing to users](#distributing-to-users)
-8. [Changing the App Icon](#changing-the-app-icon)
-9. [Configuration & Settings](#configuration--settings)
-10. [Troubleshooting](#troubleshooting)
+9. [Changing the App Icon](#changing-the-app-icon)
+10. [Configuration & Settings](#configuration--settings)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -255,6 +256,39 @@ python main.py --server-url http://192.168.1.50:5000
 # Force the settings picker
 python main.py -s
 ```
+
+---
+
+## Web Client (Browser)
+
+Nepal Kings can be played directly in the browser — no installation required. The web client is built with [pygbag](https://pygame-web.github.io/) and hosted on GitHub Pages.
+
+**Play now:** [https://mstieffe.github.io/nepalkings/](https://mstieffe.github.io/nepalkings/)
+
+- Works on desktop and mobile browsers
+- Connects to the PythonAnywhere server automatically
+- Mobile devices get a scaled UI optimised for touch input
+
+### How it's deployed
+
+The web client is built and deployed automatically via GitHub Actions whenever changes are pushed to the `web-client` branch (see `.github/workflows/deploy-web.yml`). The workflow:
+
+1. Builds the pygame app into a WebAssembly bundle using `pygbag 0.9.3`
+2. Applies the custom `nepal_kings/web/index.html`
+3. Deploys to GitHub Pages
+
+After a push, the live site updates within a few minutes (build + CDN cache).
+
+### Running the web client locally
+
+```bash
+pip install pygbag==0.9.3
+python -m pygbag nepal_kings
+```
+
+Then open `http://localhost:8000` in your browser.
+
+> **Note:** Do not log in as the same player from multiple clients (desktop + web) simultaneously. This can cause state conflicts during battles.
 
 ---
 
