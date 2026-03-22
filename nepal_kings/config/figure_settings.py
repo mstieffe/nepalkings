@@ -3,6 +3,8 @@ from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
 # PATHS
 FIGURE_ICON_IMG_DIR = 'img/figures/icons/'
 FIGURE_ICON_GREYSCALE_IMG_DIR = 'img/figures/icons_greyscale/'
+FIGURE_ICON_SMALL_IMG_DIR = 'img/figures/icons_small/'
+FIGURE_ICON_SMALL_GREYSCALE_IMG_DIR = 'img/figures/icons_small_greyscale/'
 FIGURE_FRAME_IMG_DIR = 'img/figures/frames/'
 FIGURE_FRAME_GREYSCALE_IMG_DIR = 'img/figures/frames_greyscale/'
 FIGURE_FRAME_HIDDEN_IMG_DIR = 'img/figures/frames_hidden/'

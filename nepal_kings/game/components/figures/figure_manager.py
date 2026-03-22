@@ -70,7 +70,7 @@ class FigureManager:
             for figure in family.figures:
                 self.add_figure(figure)
 
-    def create_figure_family(self, name, color, suits, figures, field, description, icon_img, icon_gray_img, frame_img, frame_closed_img, frame_hidden_img, glow_img, build_position=None, frame_hidden_greyscale_img=None):
+    def create_figure_family(self, name, color, suits, figures, field, description, icon_img, icon_gray_img, icon_img_small, icon_gray_img_small, frame_img, frame_closed_img, frame_hidden_img, glow_img, build_position=None, frame_hidden_greyscale_img=None):
         """Helper method to create and add a FigureFamily."""
         family = FigureFamily(
             name=name,
@@ -81,6 +81,8 @@ class FigureManager:
             description=description,
             icon_img=icon_img,
             icon_gray_img=icon_gray_img,
+            icon_img_small=icon_img_small,
+            icon_gray_img_small=icon_gray_img_small,
             frame_img=frame_img,
             frame_closed_img=frame_closed_img,
             frame_hidden_img=frame_hidden_img,
@@ -106,6 +108,8 @@ class FigureManager:
                 description=config["description"],
                 icon_img=self.load_image(settings.FIGURE_ICON_IMG_DIR + config["icon_img"]),
                 icon_gray_img=self.load_image(settings.FIGURE_ICON_GREYSCALE_IMG_DIR + config["icon_gray_img"]),
+                icon_img_small=self.load_image(settings.FIGURE_ICON_SMALL_IMG_DIR + config["icon_img"]),
+                icon_gray_img_small=self.load_image(settings.FIGURE_ICON_SMALL_GREYSCALE_IMG_DIR + config["icon_gray_img"]),
                 frame_img=self.load_image(settings.FIGURE_FRAME_IMG_DIR + config["frame_img"]),
                 frame_closed_img=self.load_image(settings.FIGURE_FRAME_GREYSCALE_IMG_DIR + config["frame_closed_img"]),
                 frame_hidden_img=self.load_image(settings.FIGURE_FRAME_HIDDEN_IMG_DIR + config["frame_closed_img"]),

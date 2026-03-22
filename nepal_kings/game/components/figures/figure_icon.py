@@ -451,8 +451,8 @@ class BuildFigureIcon(FigureIcon):
             fig_fam.name,
             x,
             y,
-            fig_fam.icon_img,
-            fig_fam.icon_gray_img,
+            fig_fam.icon_img_small,
+            fig_fam.icon_gray_img_small,
             fig_fam.frame_img,
             fig_fam.frame_closed_img,
             fig_fam.frame_hidden_img,
@@ -480,14 +480,14 @@ class BuildFigureIcon(FigureIcon):
         scale_factor = castle_scale_factor if is_castle else 1
         big_scale_factor = scale_factor * settings.FIGURE_ICON_BIG_SCALE
 
-        self.icon_img = self._scale_icon(fig_fam.icon_img, scale_factor)
-        self.icon_gray_img = self._scale_icon(fig_fam.icon_gray_img, scale_factor)
+        self.icon_img = self._scale_icon(fig_fam.icon_img_small, scale_factor)
+        self.icon_gray_img = self._scale_icon(fig_fam.icon_gray_img_small, scale_factor)
         self.frame_img = self._scale_frame(fig_fam.frame_img, scale_factor)
         self.frame_closed_img = self._scale_frame(fig_fam.frame_closed_img, scale_factor)
         self.frame_hidden_img = self._scale_frame(fig_fam.frame_hidden_img, scale_factor)
 
-        self.icon_img_big = self._scale_icon(fig_fam.icon_img, big_scale_factor)
-        self.icon_gray_img_big = self._scale_icon(fig_fam.icon_gray_img, big_scale_factor)
+        self.icon_img_big = self._scale_icon(fig_fam.icon_img_small, big_scale_factor)
+        self.icon_gray_img_big = self._scale_icon(fig_fam.icon_gray_img_small, big_scale_factor)
         self.frame_img_big = self._scale_frame(fig_fam.frame_img, big_scale_factor)
         self.frame_closed_img_big = self._scale_frame(fig_fam.frame_closed_img, big_scale_factor)
         self.frame_hidden_img_big = self._scale_frame(fig_fam.frame_hidden_img, big_scale_factor)
@@ -584,8 +584,8 @@ class FieldFigureIcon(FigureIcon):
             figure.family.name,
             x,
             y,
-            figure.family.icon_img,
-            figure.family.icon_gray_img,
+            figure.family.icon_img_small,
+            figure.family.icon_gray_img_small,
             figure.family.frame_img,
             figure.family.frame_closed_img,
             figure.family.frame_hidden_img,

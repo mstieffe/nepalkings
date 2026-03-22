@@ -23,6 +23,8 @@ class FigureFamily:
         description: str = "",
         field: Optional[str] = None,
         frame_hidden_greyscale_img: pygame.Surface = None,
+        icon_img_small: pygame.Surface = None,
+        icon_gray_img_small: pygame.Surface = None,
     ):
         self.name = name
         self.color = color
@@ -30,6 +32,8 @@ class FigureFamily:
         self.figures = figures
         self.icon_img = icon_img
         self.icon_gray_img = icon_gray_img
+        self.icon_img_small = icon_img_small if icon_img_small is not None else icon_img
+        self.icon_gray_img_small = icon_gray_img_small if icon_gray_img_small is not None else icon_gray_img
         self.frame_img = frame_img
         self.frame_closed_img = frame_closed_img
         self.frame_hidden_img = frame_hidden_img
