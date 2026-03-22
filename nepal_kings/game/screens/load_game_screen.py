@@ -165,6 +165,13 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         game_dicts = response.json().get('games', [])
         return [Game(gd, self.state.user_dict) for gd in game_dicts]
 
+    def _parse_games_response(self, response):
+        """Transform an HTTP response into a list of Game objects (used by async poller)."""
+        if response.status_code != 200:
+            return []
+        game_dicts = response.json().get('games', [])
+        return [Game(gd, self.state.user_dict) for gd in game_dicts]
+
     # ── Helpers ───────────────────────────────────────────────────
 
     def _col_x(self, idx):
@@ -324,7 +331,12 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         if current_time - self.last_update_time >= self.update_interval:
             self.last_update_time = current_time
             if self._games_poller is None:
-                self._games_poller = BackgroundPoller(self._fetch_games)
+                self._games_poller = BackgroundPoller(
+                    self._fetch_games,
+                    async_get_url=f'{settings.SERVER_URL}/games/get_games',
+                    async_get_params={'username': self.state.user_dict['username']},
+                    async_transform=self._parse_games_response,
+                )
             if not self._games_poller.busy:
                 self._games_poller.poll()
         # Apply when ready

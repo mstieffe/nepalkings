@@ -271,7 +271,11 @@ class RankingScreen(MenuScreenMixin, Screen):
 
         # Non-blocking refresh
         if not hasattr(self, '_ranking_poller'):
-            self._ranking_poller = BackgroundPoller(fetch_rankings)
+            self._ranking_poller = BackgroundPoller(
+                fetch_rankings,
+                async_get_url=f'{settings.SERVER_URL}/auth/get_rankings',
+                async_transform=lambda resp: resp.json().get('rankings', []) if resp.status_code == 200 else [],
+            )
         now = pygame.time.get_ticks()
         if now - self.last_update_time > self.update_interval:
             self.last_update_time = now

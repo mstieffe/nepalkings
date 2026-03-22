@@ -21,7 +21,8 @@ _IS_EMSCRIPTEN = _sys.platform == "emscripten"
 class BackgroundPoller:
     """Run a callable in a daemon thread; cache the latest result."""
 
-    def __init__(self, func, args=(), kwargs=None):
+    def __init__(self, func, args=(), kwargs=None, async_get_url=None,
+                 async_get_params=None, async_transform=None):
         self._func = func
         self._args = args
         self._kwargs = kwargs or {}
@@ -32,6 +33,11 @@ class BackgroundPoller:
         self._busy = False
         # Async-XHR state (emscripten only)
         self._pending_rids: dict | None = None
+        # Simple single-GET async mode
+        self._async_get_url = async_get_url
+        self._async_get_params = async_get_params
+        self._async_transform = async_transform
+        self._simple_rid = None
 
     # ── public api ──────────────────────────────────────────────
 
@@ -40,8 +46,11 @@ class BackgroundPoller:
         with self._lock:
             if self._busy:
                 # On emscripten, check pending async requests each call
-                if _IS_EMSCRIPTEN and self._pending_rids is not None:
-                    self._check_async_results()
+                if _IS_EMSCRIPTEN:
+                    if self._pending_rids is not None:
+                        self._check_async_results()
+                    elif self._simple_rid is not None:
+                        self._check_simple_async()
                 return
             self._busy = True
 
@@ -49,10 +58,11 @@ class BackgroundPoller:
         kw = kwargs if kwargs is not None else self._kwargs
 
         if _IS_EMSCRIPTEN:
-            # Use async XHR only for the game-state poller (fetch_server_data)
             fname = getattr(self._func, '__name__', '')
             if fname == 'fetch_server_data':
                 self._start_async_poll(a, kw)
+            elif self._async_get_url is not None:
+                self._start_simple_async()
             else:
                 self._run(a, kw)
         else:
@@ -64,9 +74,11 @@ class BackgroundPoller:
 
     def has_result(self):
         """Return True if a new result is available since the last read."""
-        # Drive the async state machine when polled for results
-        if _IS_EMSCRIPTEN and self._pending_rids is not None:
-            self._check_async_results()
+        if _IS_EMSCRIPTEN:
+            if self._pending_rids is not None:
+                self._check_async_results()
+            elif self._simple_rid is not None:
+                self._check_simple_async()
         return self._has_result
 
     @property
@@ -78,8 +90,11 @@ class BackgroundPoller:
 
     @property
     def busy(self):
-        if _IS_EMSCRIPTEN and self._pending_rids is not None:
-            self._check_async_results()
+        if _IS_EMSCRIPTEN:
+            if self._pending_rids is not None:
+                self._check_async_results()
+            elif self._simple_rid is not None:
+                self._check_simple_async()
         return self._busy
 
     # ── internals (threaded, desktop) ───────────────────────────
@@ -97,6 +112,35 @@ class BackgroundPoller:
                 self._busy = False
 
     # ── internals (async XHR, emscripten) ───────────────────────
+
+    def _start_simple_async(self):
+        """Fire a single async GET XHR for the configured URL."""
+        from utils.http_compat import start_async_get
+        self._simple_rid = start_async_get(self._async_get_url,
+                                           self._async_get_params)
+
+    def _check_simple_async(self):
+        """Check if the simple async GET finished."""
+        from utils.http_compat import check_async
+        if self._simple_rid is None:
+            return
+        resp = check_async(self._simple_rid)
+        if resp is None:
+            return
+        self._simple_rid = None
+        try:
+            if self._async_transform:
+                res = self._async_transform(resp)
+            else:
+                res = resp
+            with self._lock:
+                self._result = res
+                self._has_result = True
+        except Exception as e:
+            print(f"[BackgroundPoller] simple async: {e}")
+        finally:
+            with self._lock:
+                self._busy = False
 
     def _start_async_poll(self, args, _kwargs):
         """Fire all GET requests in parallel using async XHR."""
