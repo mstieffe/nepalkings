@@ -77,22 +77,15 @@ class BattleScreen(SubScreen):
         self.figure_manager = FigureManager()
 
         # ── fonts ──
-        self.font_normal = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_FONT_SIZE)
-        self.font_small = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_FONT_SIZE_SMALL)
-        self.font_icon_value = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_ICON_VALUE_FONT_SIZE)
-        self.font_icon_value.set_bold(True)
-        self.font_value = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_VALUE_FONT_SIZE)
-        self.font_value.set_bold(True)
-        self.font_diff = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_DIFF_FONT_SIZE)
-        self.font_diff.set_bold(True)
-        self.font_total = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SCREEN_TOTAL_FONT_SIZE)
-        self.font_total.set_bold(True)
-        self.font_round = pygame.font.Font(settings.FONT_PATH, settings.ROUNDS_LABEL_FONT_SIZE)
-        self.font_round.set_bold(True)
-        self.font_turn = pygame.font.Font(settings.FONT_PATH, settings.TURN_INDICATOR_FONT_SIZE)
-        self.font_turn.set_bold(True)
-        self.font_power_circle = pygame.font.Font(settings.FONT_PATH, settings.POWER_CIRCLE_FONT_SIZE)
-        self.font_power_circle.set_bold(True)
+        self.font_normal = settings.get_font(settings.BATTLE_SCREEN_FONT_SIZE)
+        self.font_small = settings.get_font(settings.BATTLE_SCREEN_FONT_SIZE_SMALL)
+        self.font_icon_value = settings.get_font(settings.BATTLE_ICON_VALUE_FONT_SIZE, bold=True)
+        self.font_value = settings.get_font(settings.BATTLE_SCREEN_VALUE_FONT_SIZE, bold=True)
+        self.font_diff = settings.get_font(settings.BATTLE_SCREEN_DIFF_FONT_SIZE, bold=True)
+        self.font_total = settings.get_font(settings.BATTLE_SCREEN_TOTAL_FONT_SIZE, bold=True)
+        self.font_round = settings.get_font(settings.ROUNDS_LABEL_FONT_SIZE, bold=True)
+        self.font_turn = settings.get_font(settings.TURN_INDICATOR_FONT_SIZE, bold=True)
+        self.font_power_circle = settings.get_font(settings.POWER_CIRCLE_FONT_SIZE, bold=True)
 
         # ── battle state ──
         self.current_round = 0     # 0-indexed (0, 1, 2)
@@ -2000,8 +1993,7 @@ class BattleScreen(SubScreen):
         self.window.blit(self._card_picker_panel, box.topleft)
 
         # Title
-        title_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_TITLE_DIALOGUE_BOX)
-        title_font.set_bold(True)
+        title_font = settings.get_font(settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
         title_surf = title_font.render(self._card_picker_title, True, settings.TITLE_TEXT_COLOR)
         # Icon on both sides of title
         icon_surface = None
@@ -2049,7 +2041,7 @@ class BattleScreen(SubScreen):
                 card_img.draw_front(rect.x, rect.y)
 
             # Card label below
-            label_font = pygame.font.Font(settings.FONT_PATH, int(0.018 * settings.SCREEN_HEIGHT))
+            label_font = settings.get_font(int(0.018 * settings.SCREEN_HEIGHT))
             suit = entry['card_data'].get('suit', '?')
             rank = entry['card_data'].get('rank', '?')
             label = f"{rank} of {suit}"

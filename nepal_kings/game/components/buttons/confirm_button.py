@@ -12,8 +12,8 @@ class ConfirmButton:
         self.disabled = disabled
 
         # Fonts
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.CONFIRM_BUTTON_FONT_SIZE)
-        self.font_small = pygame.font.Font(settings.FONT_PATH, settings.CONFIRM_BUTTON_FONT_SIZE_SMALL)
+        self.font = settings.get_font(settings.CONFIRM_BUTTON_FONT_SIZE)
+        self.font_small = settings.get_font(settings.CONFIRM_BUTTON_FONT_SIZE_SMALL)
 
         # Dimensions
         self.set_dimensions(width, height)

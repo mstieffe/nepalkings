@@ -54,13 +54,12 @@ class LoginScreen(Screen):
         self._btn_img = pygame.image.load(settings.LOGIN_BTN_IMG_PATH).convert_alpha()
 
         # ── Fonts ───────────────────────────────────────────────────
-        self._title_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_MENU_TITLE_FONT_SIZE)
-        self._title_font.set_bold(True)
+        self._title_font = settings.get_font(settings.GAME_MENU_TITLE_FONT_SIZE, bold=True)
         self._title_surf = self._title_font.render('Nepal Kings', True, settings.GAME_MENU_TITLE_CLR)
 
-        self._field_font = pygame.font.Font(settings.FONT_PATH, int(0.026 * _FS))
-        self._label_font = pygame.font.Font(settings.FONT_PATH, int(0.020 * _FS))
-        self._loading_font = pygame.font.Font(settings.FONT_PATH, int(0.024 * _FS))
+        self._field_font = settings.get_font(int(0.026 * _FS))
+        self._label_font = settings.get_font(int(0.020 * _FS))
+        self._loading_font = settings.get_font(int(0.024 * _FS))
 
         # ── Layout ──────────────────────────────────────────────────
         _btn_w   = settings.GAME_MENU_BTN_W

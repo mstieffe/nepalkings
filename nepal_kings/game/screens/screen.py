@@ -17,8 +17,8 @@ class Screen:
             self.window = pygame.display.set_mode((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
 
         # Set up the font
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE)
-        self._msg_font = pygame.font.Font(settings.FONT_PATH, int(0.022 * settings.SCREEN_HEIGHT))
+        self.font = settings.get_font(settings.FONT_SIZE)
+        self._msg_font = settings.get_font(int(0.022 * settings.SCREEN_HEIGHT))
 
         # Set clock
         self.clock = pygame.time.Clock()

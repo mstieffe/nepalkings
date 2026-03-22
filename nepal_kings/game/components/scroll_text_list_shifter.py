@@ -13,11 +13,10 @@ class ScrollTextListShifter:
         :param scroll_rect: pygame.Rect of the scroll panel (for clipping & chevron placement).
         """
         self.window = window
-        self.title_font = pygame.font.Font(settings.FONT_PATH, settings.SCROLL_FONT_SIZE_TITLE)
-        self.title_font.set_bold(True)
-        self.scroll_font = pygame.font.Font(settings.FONT_PATH, settings.SCROLL_FONT_SIZE_BODY)
-        self.small_font = pygame.font.Font(settings.FONT_PATH, settings.SCROLL_FONT_SIZE_SMALL)
-        self.counter_font = pygame.font.Font(settings.FONT_PATH, settings.SCROLL_FONT_SIZE_SMALL)
+        self.title_font = settings.get_font(settings.SCROLL_FONT_SIZE_TITLE, bold=True)
+        self.scroll_font = settings.get_font(settings.SCROLL_FONT_SIZE_BODY)
+        self.small_font = settings.get_font(settings.SCROLL_FONT_SIZE_SMALL)
+        self.counter_font = settings.get_font(settings.SCROLL_FONT_SIZE_SMALL)
         self.text_list = text_list  # List of text dictionaries
         self.x = x
         self.y = y

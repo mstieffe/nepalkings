@@ -121,14 +121,12 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         self._drag_offset = 0
 
         # Fonts
-        self._title_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_TITLE_FONT_SIZE)
-        self._title_font.set_bold(True)
+        self._title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
         self._title_surf = self._title_font.render('Load Game', True, settings.SUB_SCREEN_TITLE_CLR)
 
-        self._hdr_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_HEADER_FONT_SIZE)
-        self._cell_font = pygame.font.Font(settings.FONT_PATH, settings.LIST_BTN_FONT_SIZE)
-        self._tag_font = pygame.font.Font(settings.FONT_PATH, int(0.016 * _SH))
-        self._tag_font.set_bold(True)
+        self._hdr_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
+        self._cell_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
+        self._tag_font = settings.get_font(int(0.016 * _SH), bold=True)
 
         # Compute fixed layout positions inside the box
         self._title_render_y = _TITLE_Y

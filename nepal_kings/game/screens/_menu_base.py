@@ -113,7 +113,7 @@ class ListButton:
         w = width  or settings.LIST_BTN_W
         h = height or settings.LIST_BTN_H
         self.rect = pygame.Rect(x, y, w, h)
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.LIST_BTN_FONT_SIZE)
+        self.font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
         self.hovered = False
         self.clicked = False
 
@@ -191,7 +191,7 @@ class MenuScreenMixin:
         cache = self._load_chrome_cache()
         self._bg = cache['bg']
         self._gold_icon = cache['gold']
-        self._gold_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_MENU_GOLD_FONT_SIZE)
+        self._gold_font = settings.get_font(settings.GAME_MENU_GOLD_FONT_SIZE)
 
         # Icon buttons (top-right): home at top, settings at bottom, logout just above settings
         stone_sz = settings.GAME_MENU_ICON_STONE_SZ

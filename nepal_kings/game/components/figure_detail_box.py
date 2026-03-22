@@ -30,10 +30,9 @@ class FigureDetailBox:
         self.resources_data = resources_data  # Cache for resource deficit calculation
 
         # Fonts
-        self.title_font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_TITLE_DIALOGUE_BOX)
-        self.title_font.set_bold(True)
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_DIALOGUE_BOX)
-        self.small_font = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_DIALOGUE_BOX * 0.87))
+        self.title_font = settings.get_font(settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
+        self.font = settings.get_font(settings.FONT_SIZE_DIALOGUE_BOX)
+        self.small_font = settings.get_font(int(settings.FONT_SIZE_DIALOGUE_BOX * 0.87))
 
         # Create card images for the figure's cards
         card_width = int(settings.SCREEN_WIDTH * 0.05)

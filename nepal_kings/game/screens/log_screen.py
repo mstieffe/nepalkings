@@ -21,7 +21,7 @@ class _LogToggleButton:
         self.hovered = False
         self.clicked = False
         self.rect = pygame.Rect(x, y, settings.LOG_BTN_W, settings.LOG_BTN_H)
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.LOG_BTN_FONT_SIZE)
+        self.font = settings.get_font(settings.LOG_BTN_FONT_SIZE)
         self._r = settings.LOG_BTN_CORNER_R
 
     def collide(self):
@@ -69,7 +69,7 @@ class _LogInputField:
         self.active = False
         _w = int(0.54 * settings.SCREEN_WIDTH)
         self.rect = pygame.Rect(x, y, _w, settings.LOG_INPUT_H)
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.LOG_INPUT_FONT_SIZE)
+        self.font = settings.get_font(settings.LOG_INPUT_FONT_SIZE)
         self._r = settings.LOG_INPUT_CORNER_R
 
     def handle_event(self, event):
@@ -142,7 +142,7 @@ class LogScreen(SubScreen):
 
         self.init_ui_elements()
 
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.MSG_FONT_SIZE)
+        self.font = settings.get_font(settings.MSG_FONT_SIZE)
         self.scroll_step = 1  # Number of lines scrolled per step
 
         # Preload log entry icons

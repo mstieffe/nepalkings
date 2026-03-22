@@ -18,10 +18,9 @@ class TutorialScreen(SubScreen):
         self.scroll_offset = 0
 
         # Fonts
-        self.title_section_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_TITLE_FONT_SIZE)
-        self.title_section_font.set_bold(True)
-        self.body_font = pygame.font.Font(settings.FONT_PATH, settings.MSG_FONT_SIZE)
-        self.nav_font = pygame.font.Font(settings.FONT_PATH, settings.MSG_FONT_SIZE)
+        self.title_section_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
+        self.body_font = settings.get_font(settings.MSG_FONT_SIZE)
+        self.nav_font = settings.get_font(settings.MSG_FONT_SIZE)
 
         # Layout constants (relative to sub screen area)
         self.content_x = settings.SUB_SCREEN_X + int(0.03 * settings.SCREEN_WIDTH)

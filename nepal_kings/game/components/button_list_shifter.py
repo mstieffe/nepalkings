@@ -17,7 +17,7 @@ class ButtonListShifter:
 
         # Initialize title and font
         self.title = title
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
+        self.font = settings.get_font(settings.GAME_BUTTON_FONT_SIZE)
         self.text_surface = self.font.render(self.title, True, settings.SUIT_ICON_CAPTION_COLOR)
         self.text_rect = self.text_surface.get_rect(center=(self.x + (self.num_buttons_displayed - 1) * self.delta_x / 2, self.y - title_offset_y))
 

@@ -25,8 +25,8 @@ class BattleMoveIcon:
         self.hovered = False
 
         # Fonts
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_MOVE_ICON_FONT_SIZE)
-        self.font_big = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_MOVE_ICON_FONT_BIG_SIZE)
+        self.font = settings.get_font(settings.BATTLE_MOVE_ICON_FONT_SIZE)
+        self.font_big = settings.get_font(settings.BATTLE_MOVE_ICON_FONT_BIG_SIZE)
 
         # Text surfaces
         self.text_surface = self.font.render(family.name, True, settings.BATTLE_MOVE_ICON_CAPTION_COLOR)

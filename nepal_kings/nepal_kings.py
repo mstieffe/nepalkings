@@ -42,10 +42,9 @@ class Client:
         bg = LoginScreen._load_bg()
 
         # Fonts
-        title_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_MENU_TITLE_FONT_SIZE)
-        title_font.set_bold(True)
+        title_font = settings.get_font(settings.GAME_MENU_TITLE_FONT_SIZE, bold=True)
         title_surf = title_font.render('Nepal Kings', True, settings.GAME_MENU_TITLE_CLR)
-        status_font = pygame.font.Font(settings.FONT_PATH, int(0.022 * _SH))
+        status_font = settings.get_font(int(0.022 * _SH))
 
         # Bar geometry
         bar_w = int(0.36 * _SW)

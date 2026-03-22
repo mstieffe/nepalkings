@@ -91,12 +91,10 @@ class BattleMoveDetailBox:
         else:
             _title_sz = settings.FONT_SIZE_TITLE_DIALOGUE_BOX
             _body_sz  = settings.FONT_SIZE_DIALOGUE_BOX
-        self.title_font = pygame.font.Font(settings.FONT_PATH, _title_sz)
-        self.title_font.set_bold(True)
-        self.font = pygame.font.Font(settings.FONT_PATH, _body_sz)
-        self.small_font = pygame.font.Font(settings.FONT_PATH, max(_body_sz - 4, 10))
-        self.value_font = pygame.font.Font(settings.FONT_PATH, _body_sz)
-        self.value_font.set_bold(True)
+        self.title_font = settings.get_font(_title_sz, bold=True)
+        self.font = settings.get_font(_body_sz)
+        self.small_font = settings.get_font(max(_body_sz - 4, 10))
+        self.value_font = settings.get_font(_body_sz, bold=True)
 
         # Card image(s)
         card_w = int(settings.SCREEN_WIDTH * 0.038)

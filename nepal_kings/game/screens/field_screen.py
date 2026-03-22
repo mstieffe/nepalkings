@@ -48,13 +48,11 @@ class FieldScreen(SubScreen):
         }
 
         # Font for field titles
-        self.field_title_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
-        self.board_title_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_BOARD_TITLE_FONT_SIZE)
-        self.board_title_font.set_bold(True)
+        self.field_title_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE)
+        self.board_title_font = settings.get_font(settings.FIELD_BOARD_TITLE_FONT_SIZE, bold=True)
         
         # Font for target selection prompt
-        self.target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE + 4)
-        self.target_prompt_font.set_bold(True)
+        self.target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE + 4, bold=True)
         
         # Cache All Seeing Eye status to avoid repeated expensive checks
         self.cached_all_seeing_eye_status = None
@@ -1517,7 +1515,7 @@ class FieldScreen(SubScreen):
         prompt_surface = self.target_prompt_font.render(prompt_text, True, (255, 50, 50))  # Bright red
         
         # Create cancel instruction text
-        cancel_font = pygame.font.Font(settings.FONT_PATH, int(settings.FIELD_TITLE_FONT_SIZE * 0.9))
+        cancel_font = settings.get_font(int(settings.FIELD_TITLE_FONT_SIZE * 0.9))
         cancel_text = "Press ESC to cancel"
         cancel_surface = cancel_font.render(cancel_text, True, (255, 255, 150))  # Light yellow
         
@@ -1567,7 +1565,7 @@ class FieldScreen(SubScreen):
         prompt_surface = self.target_prompt_font.render(prompt_text, True, (100, 200, 255))  # Blue
         
         # Create instruction text
-        info_font = pygame.font.Font(settings.FONT_PATH, int(settings.FIELD_TITLE_FONT_SIZE * 0.9))
+        info_font = settings.get_font(int(settings.FIELD_TITLE_FONT_SIZE * 0.9))
         
         # Check for must_be_attacked constraint on opponent's eligible figures
         # Exclude figures with cannot_defend or cannot_be_targeted

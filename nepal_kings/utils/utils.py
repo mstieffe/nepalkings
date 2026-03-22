@@ -40,7 +40,7 @@ class GameButton:
         self.locked = locked
         self.locked_clicked = False
         self.glow_shift = glow_shift if glow_shift is not None else settings.GAME_BUTTON_GLOW_SHIFT
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
+        self.font = settings.get_font(settings.GAME_BUTTON_FONT_SIZE)
         self.state = state
         self.subscreen_trigger = subscreen
         self.screen_trigger = screen
@@ -112,7 +112,7 @@ class GameButton:
 
         self.hover_text = hover_text
         # Tooltip pill surfaces
-        self._tt_font = pygame.font.Font(settings.FONT_PATH, settings.TOOLTIP_FONT_SIZE)
+        self._tt_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
         self._tt_surf = self._tt_font.render(self.hover_text, True, settings.TOOLTIP_TEXT_COLOR)
         self._is_active_state = True  # tracked during draw for tooltip dot colour
 
@@ -233,8 +233,8 @@ class Button:
         self.text = text
 
         # Load font settings
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_BUTTON)
-        self.font_small = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_BUTTON * 0.9))
+        self.font = settings.get_font(settings.FONT_SIZE_BUTTON)
+        self.font_small = settings.get_font(int(settings.FONT_SIZE_BUTTON * 0.9))
 
         # Set button dimensions based on text and provided width/height
         self.set_dimensions(width, height)
@@ -341,8 +341,8 @@ class SubScreenButton:
         self.button_img_inactive_path = button_img_inactive
 
         # Load font settings
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_SUBSCREEN_BUTTON)
-        self.font_small = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_SUBSCREEN_BUTTON * 0.9))
+        self.font = settings.get_font(settings.FONT_SIZE_SUBSCREEN_BUTTON)
+        self.font_small = settings.get_font(int(settings.FONT_SIZE_SUBSCREEN_BUTTON * 0.9))
 
         # Set button dimensions based on text and provided width/height
         self.set_dimensions(width, height)
@@ -494,8 +494,7 @@ class ColorTogglePill:
         self.x = x
         self.y = y
         self.text = text
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.COLOR_TOGGLE_FONT_SIZE)
-        self.font.set_bold(True)
+        self.font = settings.get_font(settings.COLOR_TOGGLE_FONT_SIZE, bold=True)
 
         self.rect = pygame.Rect(x, y, settings.COLOR_TOGGLE_W, settings.COLOR_TOGGLE_H)
         self.corner_r = settings.COLOR_TOGGLE_CORNER_R
@@ -558,7 +557,7 @@ class ControlButton(Button):
 
     def __init__(self, window, x: int = 0, y: int =0, text: str = ""):
         super().__init__(window, x, y, text)
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.LOGOUT_FONT_SIZE)
+        self.font = settings.get_font(settings.LOGOUT_FONT_SIZE)
         self.rect = pygame.Rect(self.x, self.y, settings.CONTROL_BUTTON_WIDTH, settings.CONTROL_BUTTON_HEIGHT)
 
     def draw(self):
@@ -591,8 +590,8 @@ class InputField:
         self.color_rect = settings.INPUTFIELD_COLOR_PASSIVE
         self.color_text = settings.TEXT_COLOR_PASSIVE
         self.border_color = settings.INPUTFIELD_BORDER_COLOR_PASSIVE  # Border color for the input field
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.INPUTFIELD_FONT_SIZE)
-        self.font_title = pygame.font.Font(settings.FONT_PATH, settings.INPUTFIELD_FONT_SIZE_TITLE)
+        self.font = settings.get_font(settings.INPUTFIELD_FONT_SIZE)
+        self.font_title = settings.get_font(settings.INPUTFIELD_FONT_SIZE_TITLE)
 
         self.height = height or settings.INPUTFIELD_HEIGHT
         self.width = width or settings.INPUTFIELD_WIDTH

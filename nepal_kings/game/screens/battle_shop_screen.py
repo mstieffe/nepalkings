@@ -50,10 +50,8 @@ class BattleShopScreen(SubScreen):
         self._load_bought_moves()
 
         # Slot rendering
-        self.slot_font = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SHOP_TYPE_LABEL_FONT_SIZE)
-        self.slot_font.set_bold(True)
-        self.slot_label_font = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SHOP_TYPE_LABEL_FONT_SIZE)
-        self.slot_label_font.set_bold(True)
+        self.slot_font = settings.get_font(settings.BATTLE_SHOP_TYPE_LABEL_FONT_SIZE, bold=True)
+        self.slot_label_font = settings.get_font(settings.BATTLE_SHOP_TYPE_LABEL_FONT_SIZE, bold=True)
 
         # Slot hover state
         self._hovered_slot = None  # Index of currently hovered slot (or None)
@@ -93,11 +91,7 @@ class BattleShopScreen(SubScreen):
             settings.BATTLE_SHOP_READY_BUTTON_Y,
             "ready!"
         )
-        self.phase_banner_font = pygame.font.Font(
-            settings.FONT_PATH,
-            settings.BATTLE_SHOP_PHASE_BANNER_FONT_SIZE,
-        )
-        self.phase_banner_font.set_bold(True)
+        self.phase_banner_font = settings.get_font(settings.BATTLE_SHOP_PHASE_BANNER_FONT_SIZE, bold=True)
 
     def reset_state(self):
         """Reset all game-specific transient state.

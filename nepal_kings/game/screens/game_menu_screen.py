@@ -33,8 +33,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         self._btn_img = pygame.image.load(settings.GAME_MENU_BTN_IMG_PATH).convert_alpha()
 
         # ── Title font ──────────────────────────────────────────────
-        self._title_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_MENU_TITLE_FONT_SIZE)
-        self._title_font.set_bold(True)
+        self._title_font = settings.get_font(settings.GAME_MENU_TITLE_FONT_SIZE, bold=True)
         self._title_surf = self._title_font.render('Nepal Kings', True, settings.GAME_MENU_TITLE_CLR)
 
         # ── Menu buttons (centred) ──────────────────────────────────
@@ -82,8 +81,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         # ── Badge polling ───────────────────────────────────────────
         self._badge_timer = 0
         self._badge_interval = 5000          # ms between server polls
-        self._badge_font = pygame.font.Font(settings.FONT_PATH, int(0.018 * _SH * _UI_SCALE))
-        self._badge_font.set_bold(True)
+        self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
 
         # ── Pre-render the dark box surface ─────────────────────────
         self._box_surf = pygame.Surface(

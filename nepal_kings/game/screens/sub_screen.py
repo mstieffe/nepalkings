@@ -24,8 +24,8 @@ class SubScreen:
         self.scroll_background = None
 
         # Set up the font
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE)
-        self.title_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_TITLE_FONT_SIZE)
+        self.font = settings.get_font(settings.FONT_SIZE)
+        self.title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE)
 
         self.dialogue_box = None
 

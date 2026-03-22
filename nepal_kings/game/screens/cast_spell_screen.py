@@ -342,7 +342,7 @@ class CastSpellScreen(SubScreen):
         effect_types_order = ['greed', 'enchantment', 'tactics']
         
         # Create type label surfaces
-        self.type_label_font = pygame.font.Font(settings.FONT_PATH, settings.SPELL_TYPE_LABEL_FONT_SIZE)
+        self.type_label_font = settings.get_font(settings.SPELL_TYPE_LABEL_FONT_SIZE)
         self.type_labels = {}
         self.type_label_positions = {}
         

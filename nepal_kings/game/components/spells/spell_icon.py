@@ -56,8 +56,8 @@ class SpellIcon:
         self.frame_hidden_img_big = self.scale_image(frame_hidden_img, settings.SPELL_ICON_BIG_SCALE) if frame_hidden_img else self.frame_closed_img_big
         
         # Fonts
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.SPELL_ICON_FONT_SIZE)
-        self.font_big = pygame.font.Font(settings.FONT_PATH, settings.SPELL_ICON_FONT_BIG_SIZE)
+        self.font = settings.get_font(settings.SPELL_ICON_FONT_SIZE)
+        self.font_big = settings.get_font(settings.SPELL_ICON_FONT_BIG_SIZE)
         
         # Text surfaces
         self.text_surface = self.font.render(self.name, True, settings.SPELL_ICON_CAPTION_COLOR)

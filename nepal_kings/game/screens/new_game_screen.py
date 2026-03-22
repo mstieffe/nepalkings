@@ -81,14 +81,12 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._selected_opponent = None
 
         # Fonts
-        self._title_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_TITLE_FONT_SIZE)
-        self._title_font.set_bold(True)
+        self._title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
         self._title_surf = self._title_font.render('New Game', True, settings.SUB_SCREEN_TITLE_CLR)
 
-        self._header_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_HEADER_FONT_SIZE)
-        self._panel_font = pygame.font.Font(settings.FONT_PATH, settings.LIST_BTN_FONT_SIZE)
-        self._tag_font = pygame.font.Font(settings.FONT_PATH, int(0.016 * _SH))
-        self._tag_font.set_bold(True)
+        self._header_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
+        self._panel_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
+        self._tag_font = settings.get_font(int(0.016 * _SH), bold=True)
 
         # Layout positions inside box
         self._title_y = _BOX_Y + _BOX_PAD
@@ -126,8 +124,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
         _cfg_font_sz  = int(0.022 * _SH)
         _cfg_title_sz = int(0.018 * _SH)
         for fld in (self.stake_field, self.time_field):
-            fld.font       = pygame.font.Font(settings.FONT_PATH, _cfg_font_sz)
-            fld.font_title = pygame.font.Font(settings.FONT_PATH, _cfg_title_sz)
+            fld.font       = settings.get_font(_cfg_font_sz)
+            fld.font_title = settings.get_font(_cfg_title_sz)
 
         self.no_time_limit = True
         self._checkbox_size = int(0.022 * _SH)

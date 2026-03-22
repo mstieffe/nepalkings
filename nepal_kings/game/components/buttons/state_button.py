@@ -27,7 +27,7 @@ class StateButton:
         self.x = x
         self.y = y
         self.glow_shift = glow_shift if glow_shift is not None else settings.GAME_BUTTON_GLOW_SHIFT
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
+        self.font = settings.get_font(settings.GAME_BUTTON_FONT_SIZE)
         self.state = state
         self.subscreen_trigger = subscreen
         self.track_turn = track_turn
@@ -94,7 +94,7 @@ class StateButton:
         self.hover_text_passive = hover_text_passive
 
         # Tooltip font (dedicated smaller size for pill)
-        self._tt_font = pygame.font.Font(settings.FONT_PATH, settings.TOOLTIP_FONT_SIZE)
+        self._tt_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
         self._tt_surf_active = self._tt_font.render(self.hover_text_active, True, settings.TOOLTIP_TEXT_COLOR)
         self._tt_surf_passive = self._tt_font.render(self.hover_text_passive, True, settings.TOOLTIP_TEXT_COLOR)
 

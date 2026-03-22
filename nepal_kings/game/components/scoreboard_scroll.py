@@ -37,11 +37,10 @@ class ScoreboardScroll:
             self._cross_color = settings.SCOREBOARD_CROSS_COLOR
             self._cross_alpha = settings.SCOREBOARD_CROSS_ALPHA
 
-        self.font_col_names = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SCROLL_FONT_TITLE_SIZE)
-        self.font_text = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SCROLL_FONT_SIZE)
-        self.font_number = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SCROLL_NUMBER_FONT_SIZE)
-        self.font_number.set_bold(True)
-        self.font_subtitle = pygame.font.Font(settings.FONT_PATH, settings.SCOREBOARD_SUBTITLE_FONT_SIZE)
+        self.font_col_names = settings.get_font(settings.SCOREBOARD_SCROLL_FONT_TITLE_SIZE)
+        self.font_text = settings.get_font(settings.SCOREBOARD_SCROLL_FONT_SIZE)
+        self.font_number = settings.get_font(settings.SCOREBOARD_SCROLL_NUMBER_FONT_SIZE, bold=True)
+        self.font_subtitle = settings.get_font(settings.SCOREBOARD_SUBTITLE_FONT_SIZE)
 
         # Load black and golden rectangle glow images (scale directly to target size)
         glow_w, glow_h = int(width * 1.2), int(height * 1.2)

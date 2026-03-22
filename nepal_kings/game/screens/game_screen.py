@@ -38,7 +38,7 @@ class GameScreen(Screen):
 
         # Unread chat message tracking
         self._last_seen_chat_count = 0
-        self._badge_font = pygame.font.Font(settings.FONT_PATH, int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE))
+        self._badge_font = settings.get_font(int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE))
 
         # Field & battle badge tracking
         self._field_unseen_count = 0
@@ -114,10 +114,9 @@ class GameScreen(Screen):
         self._previous_battle_modifiers = []  # Track for change detection / notifications
         self._just_allowed_spell = False  # Flag to suppress duplicate notification after allowing a spell
         self._hovered_battle_modifier = None  # Index of currently hovered modifier (or None)
-        self._battle_modifier_font = pygame.font.Font(settings.FONT_PATH, settings.GAME_BUTTON_FONT_SIZE)
-        self._spell_box_title_font = pygame.font.Font(settings.FONT_PATH, settings.BATTLE_SPELL_BOX_TITLE_FONT_SIZE)
-        self._spell_box_title_font.set_bold(True)
-        self._tooltip_font = pygame.font.Font(settings.FONT_PATH, settings.TOOLTIP_FONT_SIZE)
+        self._battle_modifier_font = settings.get_font(settings.GAME_BUTTON_FONT_SIZE)
+        self._spell_box_title_font = settings.get_font(settings.BATTLE_SPELL_BOX_TITLE_FONT_SIZE, bold=True)
+        self._tooltip_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
     
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
@@ -1969,8 +1968,7 @@ class GameScreen(Screen):
         # Create a "vs." text surface at the target image height to avoid distortion
         target_height = settings.DIALOGUE_BOX_IMG_HEIGHT
         vs_font_size = max(12, target_height // 3)
-        vs_font = pygame.font.Font(settings.FONT_PATH, vs_font_size)
-        vs_font.set_bold(True)
+        vs_font = settings.get_font(vs_font_size, bold=True)
         vs_text = vs_font.render("vs.", True, settings.TITLE_TEXT_COLOR)
         # Create transparent surface at target height with text centered
         vs_surface = pygame.Surface((vs_text.get_width() + settings.SMALL_SPACER_X * 2, target_height), pygame.SRCALPHA)
@@ -2402,12 +2400,12 @@ class GameScreen(Screen):
     def _draw_forced_advance_prompt(self):
         """Draw a persistent prompt indicating player must advance a figure."""
         # Create prompt text
-        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
+        target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE)
         prompt_text = "BATTLE TIME"
         prompt_surface = target_prompt_font.render(prompt_text, True, (255, 200, 100))  # Orange
         
         # Create instruction text
-        cancel_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        cancel_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
         instruction_text = "Advance a figure on the field, or build+advance with Instant Charge"
         instruction_surface = cancel_font.render(instruction_text, True, (255, 230, 150))  # Light orange
         
@@ -2450,7 +2448,7 @@ class GameScreen(Screen):
     
     def _draw_own_advance_waiting_prompt(self):
         """Draw a persistent prompt showing the advancing player is waiting for opponent."""
-        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
         
         # Include active modifier name in prompt header
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
@@ -2463,7 +2461,7 @@ class GameScreen(Screen):
             prompt_text = "YOUR FIGURE ADVANCING"
         prompt_surface = target_prompt_font.render(prompt_text, True, (100, 255, 150))  # Green
         
-        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        detail_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 4)
         figure_name = self.state.game.own_advance_figure_name or "your figure"
         detail_text = f"Waiting for opponent's reaction to {figure_name}"
         detail_surface = detail_font.render(detail_text, True, (180, 255, 200))  # Light green
@@ -2496,7 +2494,7 @@ class GameScreen(Screen):
     
     def _draw_opponent_advance_prompt(self):
         """Draw a prompt showing opponent has advanced a figure."""
-        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
         
         # Include active modifier name in prompt header
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
@@ -2522,7 +2520,7 @@ class GameScreen(Screen):
             prompt_text = "OPPONENT ADVANCING"
         prompt_surface = target_prompt_font.render(prompt_text, True, (255, 200, 100))  # Orange
         
-        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        detail_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 4)
         if 'Blitzkrieg' in modifier_types:
             detail_text = "Blitzkrieg — you cannot counter-advance"
         elif has_cannot_be_blocked:
@@ -2563,11 +2561,11 @@ class GameScreen(Screen):
 
     def _draw_waiting_for_defender_pick_prompt(self):
         """Draw a persistent prompt for the defender waiting for opponent to pick their battle figure."""
-        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
         prompt_text = "BATTLE INCOMING"
         prompt_surface = target_prompt_font.render(prompt_text, True, (255, 150, 150))  # Red-ish
 
-        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        detail_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 4)
         # Check if Blitzkrieg prevented counter-advance
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
         modifier_types = [m.get('type') for m in modifiers]
@@ -2611,7 +2609,7 @@ class GameScreen(Screen):
 
     def _draw_waiting_for_battle_decision_prompt(self):
         """Draw a persistent prompt while waiting for opponent's battle/fold decision."""
-        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
         is_advancing = (self.state.game.advancing_player_id == self.state.game.player_id)
         
         if is_advancing:
@@ -2623,7 +2621,7 @@ class GameScreen(Screen):
         
         prompt_surface = target_prompt_font.render(prompt_text, True, (200, 200, 100))  # Yellow-ish
 
-        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        detail_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 4)
         detail_surface = detail_font.render(detail_text, True, (220, 220, 150))  # Light yellow
 
         text_width = max(prompt_surface.get_width(), detail_surface.get_width())
@@ -2660,11 +2658,11 @@ class GameScreen(Screen):
 
     def _draw_select_defender_prompt(self):
         """Draw a persistent prompt for the advancing player to select an opponent's defender."""
-        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
+        target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE)
         prompt_text = "SELECT OPPONENT'S DEFENDER"
         prompt_surface = target_prompt_font.render(prompt_text, True, (100, 200, 255))  # Blue
 
-        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        detail_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 4)
         
         # Build detail text based on active battle modifiers and must_be_attacked
         detail_text = "Go to the field and select an opponent figure to face your advance"
@@ -2885,12 +2883,12 @@ class GameScreen(Screen):
         spell_name = getattr(self, 'pending_spell_name', None) or 'your spell'
         
         # Create prompt text
-        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
         prompt_text = f"WAITING FOR OPPONENT"
         prompt_surface = target_prompt_font.render(prompt_text, True, (255, 200, 100))  # Orange
         
         # Create detail text
-        detail_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 4)
+        detail_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 4)
         detail_text = f"You cast {spell_name}. Opponent can counter or allow it."
         detail_surface = detail_font.render(detail_text, True, (255, 230, 150))  # Light orange
         
@@ -3094,12 +3092,12 @@ class GameScreen(Screen):
     def _draw_infinite_hammer_prompt(self):
         """Draw a prominent prompt indicating Infinite Hammer mode is active."""
         # Create prompt text
-        target_prompt_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE)
+        target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE)
         prompt_text = "INFINITE HAMMER MODE"
         prompt_surface = target_prompt_font.render(prompt_text, True, (255, 215, 0))  # Gold
         
         # Create instruction text
-        cancel_font = pygame.font.Font(settings.FONT_PATH, settings.FIELD_TITLE_FONT_SIZE - 2)
+        cancel_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
         instruction_text = "Build, upgrade, and pickup without ending turn • Press ESC to end turn"
         instruction_surface = cancel_font.render(instruction_text, True, (255, 255, 150))  # Light yellow
         

@@ -12,7 +12,7 @@ class Hand:
 
     def __init__(self, window, state, x: float = 0.0, y: float = 0.0, type="main_card", hidden=False):
         self.window = window
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FONT_SIZE_DETAIL)
+        self.font = settings.get_font(settings.FONT_SIZE_DETAIL)
         self.state = state
         self.game = state.game if state else None
         self.type = type

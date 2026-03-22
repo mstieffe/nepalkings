@@ -13,8 +13,8 @@ class SuitIconButton:
         self.y = y
 
         # Fonts for rendering text
-        self.font = pygame.font.Font(settings.FONT_PATH, settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE)
-        self.font_big = pygame.font.Font(settings.FONT_PATH, settings.FIGURE_ICON_FONT_CAPTION_BIG_FONT_SIZE)
+        self.font = settings.get_font(settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE)
+        self.font_big = settings.get_font(settings.FIGURE_ICON_FONT_CAPTION_BIG_FONT_SIZE)
 
         # Initialize state variables
         self.is_active = True

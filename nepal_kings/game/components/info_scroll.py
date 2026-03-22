@@ -40,10 +40,13 @@ class InfoScroll:
 
     def _load_font(self, size, bold=False, italic=False):
         """Load a font with optional styles."""
-        font = pygame.font.Font(settings.FONT_PATH, size)
-        font.set_bold(bold)
-        font.set_italic(italic)
-        return font
+        if italic:
+            # Italic not in global cache – create a private instance
+            font = pygame.font.Font(settings.FONT_PATH, size)
+            font.set_bold(bold)
+            font.set_italic(True)
+            return font
+        return settings.get_font(size, bold=bold)
 
     def _load_scaled_image(self, path, width, height):
         """Load and scale an image."""

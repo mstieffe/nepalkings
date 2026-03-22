@@ -73,18 +73,15 @@ class SettingsScreen(MenuScreenMixin, Screen):
         self._init_menu_chrome()
 
         # ── Fonts ───────────────────────────────────────────────────
-        self._title_font = pygame.font.Font(settings.FONT_PATH,
-                                            settings.SUB_SCREEN_TITLE_FONT_SIZE)
-        self._title_font.set_bold(True)
+        self._title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
         self._title_surf = self._title_font.render('Settings', True,
                                                    settings.SUB_SCREEN_TITLE_CLR)
 
-        self._section_font = pygame.font.Font(settings.FONT_PATH, int(0.026 * _SH))
-        self._section_font.set_bold(True)
+        self._section_font = settings.get_font(int(0.026 * _SH), bold=True)
 
-        self._btn_font = pygame.font.Font(settings.FONT_PATH, int(0.022 * _SH))
-        self._hint_font = pygame.font.Font(settings.FONT_PATH, int(0.018 * _SH))
-        self._banner_font = pygame.font.Font(settings.FONT_PATH, int(0.020 * _SH))
+        self._btn_font = settings.get_font(int(0.022 * _SH))
+        self._hint_font = settings.get_font(int(0.018 * _SH))
+        self._banner_font = settings.get_font(int(0.020 * _SH))
 
         # ── Resolution state ────────────────────────────────────────
         self._current_w = settings.SCREEN_WIDTH

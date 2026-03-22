@@ -90,12 +90,11 @@ class RankingScreen(MenuScreenMixin, Screen):
         self._drag_offset = 0
 
         # Fonts
-        self._title_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_TITLE_FONT_SIZE)
-        self._title_font.set_bold(True)
+        self._title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
         self._title_surf = self._title_font.render('Rankings', True, settings.SUB_SCREEN_TITLE_CLR)
 
-        self._hdr_font = pygame.font.Font(settings.FONT_PATH, settings.SUB_SCREEN_HEADER_FONT_SIZE)
-        self._cell_font = pygame.font.Font(settings.FONT_PATH, settings.LIST_BTN_FONT_SIZE)
+        self._hdr_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
+        self._cell_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
 
         # Compute fixed layout positions
         self._title_render_y = _TITLE_Y

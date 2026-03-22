@@ -18,29 +18,19 @@ class GuideBookScreen(SubScreen):
         self.scroll_offset = 0          # pixel offset (not line index)
 
         # ── fonts ───────────────────────────────────────────────────────
-        self.section_title_font = pygame.font.Font(
-            settings.FONT_PATH, settings.GUIDE_SECTION_TITLE_FONT_SIZE)
-        self.section_title_font.set_bold(True)
+        self.section_title_font = settings.get_font(settings.GUIDE_SECTION_TITLE_FONT_SIZE, bold=True)
 
-        self.heading_font = pygame.font.Font(
-            settings.FONT_PATH, settings.GUIDE_HEADING_FONT_SIZE)
-        self.heading_font.set_bold(True)
+        self.heading_font = settings.get_font(settings.GUIDE_HEADING_FONT_SIZE, bold=True)
 
-        self.body_font = pygame.font.Font(
-            settings.FONT_PATH, settings.GUIDE_BODY_FONT_SIZE)
+        self.body_font = settings.get_font(settings.GUIDE_BODY_FONT_SIZE)
 
-        self.menu_font = pygame.font.Font(
-            settings.FONT_PATH, settings.GUIDE_MENU_FONT_SIZE)
+        self.menu_font = settings.get_font(settings.GUIDE_MENU_FONT_SIZE)
 
-        self.menu_font_active = pygame.font.Font(
-            settings.FONT_PATH, settings.GUIDE_MENU_FONT_ACTIVE_SIZE)
-        self.menu_font_active.set_bold(True)
+        self.menu_font_active = settings.get_font(settings.GUIDE_MENU_FONT_ACTIVE_SIZE, bold=True)
 
-        self.table_font = pygame.font.Font(
-            settings.FONT_PATH, settings.GUIDE_TABLE_FONT_SIZE)
+        self.table_font = settings.get_font(settings.GUIDE_TABLE_FONT_SIZE)
 
-        self.small_body_font = pygame.font.Font(
-            settings.FONT_PATH, settings.GUIDE_TABLE_FONT_SIZE)
+        self.small_body_font = settings.get_font(settings.GUIDE_TABLE_FONT_SIZE)
 
         # ── image cache ─────────────────────────────────────────────────
         self._image_cache = {}

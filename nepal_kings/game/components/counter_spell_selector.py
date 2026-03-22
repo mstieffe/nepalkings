@@ -35,10 +35,9 @@ class CounterSpellSelector:
         self._created_at = pygame.time.get_ticks()  # grace period
         
         # Fonts
-        self.title_font = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_DETAIL * 1.2))
-        self.title_font.set_bold(True)
-        self.spell_font = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_DETAIL * 1.0))
-        self.detail_font = pygame.font.Font(settings.FONT_PATH, int(settings.FONT_SIZE_DETAIL * 0.85))
+        self.title_font = settings.get_font(int(settings.FONT_SIZE_DETAIL * 1.2), bold=True)
+        self.spell_font = settings.get_font(int(settings.FONT_SIZE_DETAIL * 1.0))
+        self.detail_font = settings.get_font(int(settings.FONT_SIZE_DETAIL * 0.85))
         
         # Current selection
         self.current_index = 0
