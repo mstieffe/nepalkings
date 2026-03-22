@@ -8,7 +8,7 @@ from game.components.figures.figure import Figure, FigureFamily
 from typing import List, Dict
 
 class Game:
-    def __init__(self, game_dict, user_dict):
+    def __init__(self, game_dict, user_dict, lightweight=False):
         self.game_id = game_dict['id']
         self.state = game_dict['state']
         self.date = game_dict['date']
@@ -157,25 +157,26 @@ class Game:
         self.log_entries = []
         self.chat_messages = []
 
-        # Fetch initial data for logs and chats
-        self.update_logs()
-        self.update_chats()
+        if not lightweight:
+            # Fetch initial data for logs and chats
+            self.update_logs()
+            self.update_chats()
 
-        # Pre-load figures so the first render isn't empty
-        for player in self.players:
-            pid = player['id']
+            # Pre-load figures so the first render isn't empty
+            for player in self.players:
+                pid = player['id']
+                try:
+                    self.cached_figures_data[pid] = fetch_figures(pid)
+                except Exception:
+                    self.cached_figures_data[pid] = []
+            self._figures_data_version += 1
+
+            # Pre-load active spells
             try:
-                self.cached_figures_data[pid] = fetch_figures(pid)
+                from utils import spell_service
+                self.cached_active_spells = spell_service.fetch_active_spells(self.game_id)
             except Exception:
-                self.cached_figures_data[pid] = []
-        self._figures_data_version += 1
-
-        # Pre-load active spells
-        try:
-            from utils import spell_service
-            self.cached_active_spells = spell_service.fetch_active_spells(self.game_id)
-        except Exception:
-            pass
+                pass
 
     # ── Network fetch (thread-safe, no mutations) ──────────────
 

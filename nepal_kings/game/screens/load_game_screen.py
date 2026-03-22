@@ -170,7 +170,7 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         if response.status_code != 200:
             return []
         game_dicts = response.json().get('games', [])
-        return [Game(gd, self.state.user_dict) for gd in game_dicts]
+        return [Game(gd, self.state.user_dict, lightweight=True) for gd in game_dicts]
 
     # ── Helpers ───────────────────────────────────────────────────
 
