@@ -1379,8 +1379,8 @@ class FieldFigureIcon(FigureIcon):
         scale_factor = castle_scale_factor if is_castle else 1
         big_scale_factor = scale_factor * settings.FIGURE_ICON_BIG_SCALE
 
-        self.icon_img = self._scale_icon(fig_fam.icon_img, scale_factor)
-        self.icon_gray_img = self._scale_icon(fig_fam.icon_gray_img, scale_factor)
+        self.icon_img = self._scale_icon(fig_fam.icon_img_small, scale_factor)
+        self.icon_gray_img = self._scale_icon(fig_fam.icon_gray_img_small, scale_factor)
         self.frame_img = self._scale_frame(fig_fam.frame_img, scale_factor)
         self.frame_closed_img = self._scale_frame(fig_fam.frame_closed_img, scale_factor)
         self.frame_hidden_img = self._scale_frame(fig_fam.frame_hidden_img, scale_factor)
@@ -1390,8 +1390,8 @@ class FieldFigureIcon(FigureIcon):
         else:
             self.frame_hidden_grey_img = self.frame_hidden_img
 
-        self.icon_img_big = self._scale_icon(fig_fam.icon_img, big_scale_factor)
-        self.icon_gray_img_big = self._scale_icon(fig_fam.icon_gray_img, big_scale_factor)
+        self.icon_img_big = self._scale_icon(fig_fam.icon_img_small, big_scale_factor)
+        self.icon_gray_img_big = self._scale_icon(fig_fam.icon_gray_img_small, big_scale_factor)
         self.frame_img_big = self._scale_frame(fig_fam.frame_img, big_scale_factor)
         self.frame_closed_img_big = self._scale_frame(fig_fam.frame_closed_img, big_scale_factor)
         self.frame_hidden_img_big = self._scale_frame(fig_fam.frame_hidden_img, big_scale_factor)
