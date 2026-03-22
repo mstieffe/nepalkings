@@ -119,8 +119,6 @@ class GuideBookScreen(SubScreen):
     # Icon-path prefixes that should always use the SMALL size
     _SMALL_ICON_PREFIXES = (
         'img/figures/state_icons/',
-        'img/figures/icons_small/',
-        'img/slot_icons/',
         'img/suits/',
         'img/resource_icons/',
     )
