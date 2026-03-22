@@ -183,6 +183,13 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         user = fetch_user(username)
         return {'games': games, 'user': user}
 
+    @staticmethod
+    def _parse_badge_responses(responses):
+        """Transform multi-request async responses into badge data dict."""
+        games = responses['games'].json().get('games', [])
+        user = responses['user'].json().get('user', {})
+        return {'games': games, 'user': user}
+
     def _poll_badges(self):
         """Fetch game / challenge counts from the server and update badges.
 
@@ -196,8 +203,21 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
         # Kick off background fetch
         if not hasattr(self, '_badge_poller') or self._badge_poller is None:
+            base = settings.SERVER_URL
             self._badge_poller = BackgroundPoller(
-                self._bg_poll_badges, args=(username,))
+                self._bg_poll_badges, args=(username,),
+                async_requests=[
+                    {'key': 'heartbeat', 'method': 'POST',
+                     'url': f'{base}/auth/heartbeat',
+                     'data': {'username': 0}},
+                    {'key': 'games',
+                     'url': f'{base}/games/get_games',
+                     'params': {'username': 0}},
+                    {'key': 'user',
+                     'url': f'{base}/auth/get_user',
+                     'params': {'username': 0}},
+                ],
+                async_transform=self._parse_badge_responses)
         if not self._badge_poller.busy:
             self._badge_poller.poll(args=(username,))
 

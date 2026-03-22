@@ -22,7 +22,8 @@ class BackgroundPoller:
     """Run a callable in a daemon thread; cache the latest result."""
 
     def __init__(self, func, args=(), kwargs=None, async_get_url=None,
-                 async_get_params=None, async_transform=None):
+                 async_get_params=None, async_transform=None,
+                 async_requests=None):
         self._func = func
         self._args = args
         self._kwargs = kwargs or {}
@@ -38,6 +39,10 @@ class BackgroundPoller:
         self._async_get_params = async_get_params
         self._async_transform = async_transform
         self._simple_rid = None
+        # Multi-request async mode: list of {key, method, url, params/data}
+        self._async_requests = async_requests
+        self._multi_rids = None
+        self._multi_responses = None
 
     # ── public api ──────────────────────────────────────────────
 
@@ -51,6 +56,8 @@ class BackgroundPoller:
                         self._check_async_results()
                     elif self._simple_rid is not None:
                         self._check_simple_async()
+                    elif self._multi_rids is not None:
+                        self._check_multi_async()
                 return
             self._busy = True
 
@@ -61,6 +68,8 @@ class BackgroundPoller:
             fname = getattr(self._func, '__name__', '')
             if fname == 'fetch_server_data':
                 self._start_async_poll(a, kw)
+            elif self._async_requests is not None:
+                self._start_multi_async(a)
             elif self._async_get_url is not None:
                 self._start_simple_async()
             else:
@@ -79,6 +88,8 @@ class BackgroundPoller:
                 self._check_async_results()
             elif self._simple_rid is not None:
                 self._check_simple_async()
+            elif self._multi_rids is not None:
+                self._check_multi_async()
         return self._has_result
 
     @property
@@ -95,6 +106,8 @@ class BackgroundPoller:
                 self._check_async_results()
             elif self._simple_rid is not None:
                 self._check_simple_async()
+            elif self._multi_rids is not None:
+                self._check_multi_async()
         return self._busy
 
     # ── internals (threaded, desktop) ───────────────────────────
@@ -138,6 +151,59 @@ class BackgroundPoller:
                 self._has_result = True
         except Exception as e:
             print(f"[BackgroundPoller] simple async: {e}")
+        finally:
+            with self._lock:
+                self._busy = False
+
+    def _start_multi_async(self, args):
+        """Fire multiple async XHRs in parallel for the configured requests."""
+        from utils.http_compat import start_async_get, start_async_post
+        # Build the request specs, substituting {0}, {1}, ... with args
+        self._multi_rids = {}
+        self._multi_responses = {}
+        for spec in self._async_requests:
+            key = spec['key']
+            url = spec['url']
+            method = spec.get('method', 'GET')
+            if method == 'POST':
+                data = spec.get('data', {})
+                # Substitute args into data values
+                resolved = {k: (args[v] if isinstance(v, int) and isinstance(args, (list, tuple)) and v < len(args) else v)
+                            for k, v in data.items()}
+                self._multi_rids[key] = start_async_post(url, resolved)
+            else:
+                params = spec.get('params', {})
+                resolved = {k: (args[v] if isinstance(v, int) and isinstance(args, (list, tuple)) and v < len(args) else v)
+                            for k, v in params.items()}
+                self._multi_rids[key] = start_async_get(url, resolved)
+
+    def _check_multi_async(self):
+        """Check if all multi-request async XHRs finished."""
+        from utils.http_compat import check_async
+        if self._multi_rids is None:
+            return
+        still_pending = {}
+        for key, rid in self._multi_rids.items():
+            resp = check_async(rid)
+            if resp is None:
+                still_pending[key] = rid
+            else:
+                self._multi_responses[key] = resp
+        if still_pending:
+            self._multi_rids = still_pending
+            return
+        # All done
+        self._multi_rids = None
+        try:
+            if self._async_transform:
+                res = self._async_transform(self._multi_responses)
+            else:
+                res = self._multi_responses
+            with self._lock:
+                self._result = res
+                self._has_result = True
+        except Exception as e:
+            print(f"[BackgroundPoller] multi async: {e}")
         finally:
             with self._lock:
                 self._busy = False

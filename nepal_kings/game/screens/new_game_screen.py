@@ -180,6 +180,13 @@ class NewGameScreen(MenuScreenMixin, Screen):
         user = fetch_user(username)
         return {'users': users, 'user': user}
 
+    @staticmethod
+    def _parse_challenge_responses(responses):
+        """Transform multi-request async responses into challenge data."""
+        users = responses['users'].json().get('users', [])
+        user = responses['user'].json().get('user', {})
+        return {'users': users, 'user': user}
+
     def _rebuild_challenge_buttons(self):
         """Rebuild challenge / opponent button lists from self.users / self.open_opponents."""
         self.possible_opponents = [u for u in self.users if u not in self.open_opponents.values()]
@@ -426,8 +433,18 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.last_update_time = current_time
             username = self.state.user_dict.get('username', '')
             if self._challenge_poller is None:
+                base = settings.SERVER_URL
                 self._challenge_poller = BackgroundPoller(
-                    self._bg_fetch_challenges, args=(username,))
+                    self._bg_fetch_challenges, args=(username,),
+                    async_requests=[
+                        {'key': 'users',
+                         'url': f'{base}/auth/get_users',
+                         'params': {'username': 0}},
+                        {'key': 'user',
+                         'url': f'{base}/auth/get_user',
+                         'params': {'username': 0}},
+                    ],
+                    async_transform=self._parse_challenge_responses)
             if not self._challenge_poller.busy:
                 self._challenge_poller.poll(args=(username,))
         # Apply result if ready
