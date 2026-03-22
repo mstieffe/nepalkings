@@ -34,7 +34,7 @@ class BattleShopScreen(SubScreen):
         # Cached player figures for Call-move figure selection
         self._player_figures = []
         self._resources_data = None
-        self._figures_loaded_game_id = None
+        self._figures_loaded_game_key = None
 
         # UI init
         self.init_info_box()
@@ -46,7 +46,7 @@ class BattleShopScreen(SubScreen):
 
         # Bought moves (loaded from server)
         self.bought_moves = []  # List of server dicts
-        self._loaded_game_id = None  # Track which game_id was last loaded
+        self._loaded_game_key = None  # Track (game_id, player_id) for reload detection
         self._load_bought_moves()
 
         # Slot rendering
@@ -101,8 +101,8 @@ class BattleShopScreen(SubScreen):
         self.selected_family = None
         self.selected_moves = []
         self.bought_moves = []
-        self._loaded_game_id = None
-        self._figures_loaded_game_id = None
+        self._loaded_game_key = None
+        self._figures_loaded_game_key = None
         self._player_figures = []
         self._resources_data = None
         self._hovered_slot = None
@@ -249,7 +249,8 @@ class BattleShopScreen(SubScreen):
                 self.game.game_id, self.game.player_id
             )
             self.bought_moves = result.get('battle_moves', [])
-            self._loaded_game_id = getattr(self.game, 'game_id', None)
+            self._loaded_game_key = (getattr(self.game, 'game_id', None),
+                                     getattr(self.game, 'player_id', None))
         except Exception as e:
             print(f"[BattleShop] Failed to load bought moves: {e}")
             self.bought_moves = []
@@ -269,8 +270,9 @@ class BattleShopScreen(SubScreen):
         self.game = game
 
         # Reload bought moves when the game changes (e.g. loading a saved game)
-        current_gid = getattr(game, 'game_id', None)
-        if current_gid and current_gid != self._loaded_game_id:
+        current_key = (getattr(game, 'game_id', None),
+                       getattr(game, 'player_id', None))
+        if current_key[0] and current_key != self._loaded_game_key:
             self._load_bought_moves()
             self._load_player_figures()
 
@@ -577,7 +579,8 @@ class BattleShopScreen(SubScreen):
             families = self.figure_manager.families
             self._player_figures = self.game.get_figures(families, is_opponent=False)
             self._resources_data = self.game.calculate_resources(families, is_opponent=False)
-            self._figures_loaded_game_id = getattr(self.game, 'game_id', None)
+            self._figures_loaded_game_key = (getattr(self.game, 'game_id', None),
+                                              getattr(self.game, 'player_id', None))
         except Exception as e:
             print(f"[BattleShop] Failed to load player figures: {e}")
             self._player_figures = []
@@ -595,7 +598,7 @@ class BattleShopScreen(SubScreen):
             return []
 
         # Ensure figures are loaded
-        if not self._player_figures or self._figures_loaded_game_id != getattr(self.game, 'game_id', None):
+        if not self._player_figures or self._figures_loaded_game_key != (getattr(self.game, 'game_id', None), getattr(self.game, 'player_id', None)):
             self._load_player_figures()
 
         bm_suit = bm.get('suit', '')

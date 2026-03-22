@@ -198,8 +198,8 @@ class BattleScreen(SubScreen):
         self._round_fig_icons = []
         self._round_fig_hovered_idx = None   # index into _round_fig_icons or None
 
-        # ── loaded game id tracking ──
-        self._loaded_game_id = None
+        # ── loaded (game_id, player_id) tracking ──
+        self._loaded_game_key = None
 
     def reset_state(self):
         """Reset all game-specific transient state.
@@ -263,7 +263,7 @@ class BattleScreen(SubScreen):
         self._card_picker_box_rect = None
         self._round_fig_icons = []
         self._round_fig_hovered_idx = None
-        self._loaded_game_id = None
+        self._loaded_game_key = None
         self.dialogue_box = None
         print("[BattleScreen] State reset for game switch")
 
@@ -441,7 +441,7 @@ class BattleScreen(SubScreen):
         self.game.in_battle_phase = True
         self.game.battle_turns_left = 3  # each player gets 3 battle turns
 
-        self._loaded_game_id = self.game.game_id
+        self._loaded_game_key = (self.game.game_id, self.game.player_id)
 
     def _load_battle_figures(self):
         """Load the advancing and defending figures as FieldFigureIcons.
@@ -1152,13 +1152,14 @@ class BattleScreen(SubScreen):
         self.game = game
 
         # Load data if needed
-        current_gid = getattr(game, 'game_id', None)
-        if current_gid and current_gid != self._loaded_game_id:
+        current_key = (getattr(game, 'game_id', None),
+                       getattr(game, 'player_id', None))
+        if current_key[0] and current_key != self._loaded_game_key:
             self._load_battle_data()
             # (Re)create the background poller for this game
             self._battle_poller = BackgroundPoller(
                 lambda gid, pid: game_service.get_battle_state(gid, pid),
-                args=(current_gid, game.player_id))
+                args=(current_key[0], game.player_id))
 
         # Non-blocking battle state poll (every ~1 s)
         now = pygame.time.get_ticks()
@@ -2140,7 +2141,7 @@ class BattleScreen(SubScreen):
             battle_shop = parent.subscreens.get('battle_shop')
             if battle_shop:
                 battle_shop.bought_moves = []
-                battle_shop._loaded_game_id = None
+                battle_shop._loaded_game_key = None
                 battle_shop._battle_moves_confirmed = False
                 battle_shop._waiting_for_opponent = False
 

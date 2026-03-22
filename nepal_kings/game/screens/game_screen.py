@@ -29,8 +29,8 @@ class GameScreen(Screen):
         # Store reference to game_screen in state for button access
         self.state.parent_screen = self
 
-        # Track current game ID to detect game switches
-        self._current_game_id = None
+        # Track current (game_id, player_id) to detect game/user switches
+        self._current_game_key = None
 
         # ── Background game-state poller (non-blocking) ────────
         self._game_poller = None  # Created on first update_game()
@@ -399,11 +399,13 @@ class GameScreen(Screen):
         if not self.state.game:
             return
         
-        # Detect game switch — reset stale state from previous game
+        # Detect game or user switch — reset stale state
         current_id = getattr(self.state.game, 'game_id', None)
-        if current_id != self._current_game_id:
+        current_pid = getattr(self.state.game, 'player_id', None)
+        current_key = (current_id, current_pid)
+        if current_key != self._current_game_key:
             self._reset_game_screen_state()
-            self._current_game_id = current_id
+            self._current_game_key = current_key
             # Recreate poller for the new game
             self._game_poller = BackgroundPoller(
                 Game.fetch_server_data, args=(current_id,))
@@ -597,7 +599,7 @@ class GameScreen(Screen):
                 self.side_hand.cards_to_discard_count = 0
                 self.side_hand.dialogue_box = None
         
-        print(f"[GAME_SCREEN] State reset for new game {self._current_game_id}")
+        print(f"[GAME_SCREEN] State reset for new game {self._current_game_key}")
 
     def check_counter_spell_state(self):
         """Check if player needs to respond to counter spell or is waiting for opponent."""
@@ -2154,7 +2156,7 @@ class GameScreen(Screen):
         battle_shop = self.subscreens.get('battle_shop')
         if battle_shop:
             battle_shop.bought_moves = []
-            battle_shop._loaded_game_id = None
+            battle_shop._loaded_game_key = None
             battle_shop._battle_moves_confirmed = False
             battle_shop._waiting_for_opponent = False
         
