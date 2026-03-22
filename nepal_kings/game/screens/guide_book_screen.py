@@ -510,13 +510,13 @@ class GuideBookScreen(SubScreen):
                     {'table': {
                         'headers': ['Figure', 'Key', 'Number', 'Upgrade', 'Produces'],
                         'rows': [
-                            [(_fi + 'temple_black.png', 'Himalaya Temple'),
+                            [(_fi + 'shrine_black.png', 'Himalaya Temple'),
                              'Q + Q (blue)', '\u2014', '7 \u2192 Shield Mfg.',
                              '\u2014 (blocks bonus)'],
                             [(_fi + 'manufactory_black.png', 'Shield Manufactory'),
                              'Q + Q (blue)', '7', '\u2014',
                              'Armour \u00d7 7'],
-                            [(_fi + 'temple_red.png', 'Djungle Temple'),
+                            [(_fi + 'shrine_red.png', 'Djungle Temple'),
                              'Q + Q (green)', '\u2014', '7 \u2192 Sword Mfg.',
                              '\u2014 (blocks bonus)'],
                             [(_fi + 'manufactory_red.png', 'Sword Manufactory'),
