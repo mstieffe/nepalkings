@@ -119,6 +119,8 @@ class GuideBookScreen(SubScreen):
     # Icon-path prefixes that should always use the SMALL size
     _SMALL_ICON_PREFIXES = (
         'img/figures/state_icons/',
+        'img/figures/icons_small/',
+        'img/slot_icons/',
         'img/suits/',
         'img/resource_icons/',
     )
@@ -152,7 +154,7 @@ class GuideBookScreen(SubScreen):
         _s = 'img/suits/'
         _r = 'img/resource_icons/'
         _sl = 'img/slot_icons/'
-        _fi = 'img/figures/icons/'
+        _fi = 'img/figures/icons_small/'
         _sk = 'img/figures/state_icons/'
         _sp = 'img/spells/icons/'
         _bm = 'img/battle/icons/'
@@ -199,13 +201,13 @@ class GuideBookScreen(SubScreen):
                     {'heading': 'Board Layout'},
                     'Each player\'s board has three fields:',
                     '',
-                    {'icon_bullet': _sl + 'castle.png',
+                    {'icon_bullet': _sl + 'castle_small.png',
                      'text': 'Castle: home of the Maharaja and Kings. '
                      'Produces villagers and warriors.'},
-                    {'icon_bullet': _sl + 'village.png',
+                    {'icon_bullet': _sl + 'village_small.png',
                      'text': 'Village: farms, temples, and craftsmen. '
                      'Produces food, materials, and armour.'},
-                    {'icon_bullet': _sl + 'military.png',
+                    {'icon_bullet': _sl + 'military_small.png',
                      'text': 'Military: soldiers and fortifications '
                      'that fight in battle.'},
                 ],
@@ -421,7 +423,7 @@ class GuideBookScreen(SubScreen):
             {
                 'title': 'Castle',
                 'content': [
-                    {'icon_text': _sl + 'castle.png',
+                    {'icon_text': _sl + 'castle_small.png',
                      'text': 'Castle figures are the rulers of your kingdom. '
                      'Each player starts with a Maharaja already placed. '
                      'Additional Kings can be built using King (K) cards.'},
@@ -474,7 +476,7 @@ class GuideBookScreen(SubScreen):
             {
                 'title': 'Village',
                 'content': [
-                    {'icon_text': _sl + 'village.png',
+                    {'icon_text': _sl + 'village_small.png',
                      'text': 'Village figures produce the resources your '
                      'kingdom needs - food for soldiers, materials for '
                      'construction, and armour for elite units. Each '
@@ -555,7 +557,7 @@ class GuideBookScreen(SubScreen):
             {
                 'title': 'Military',
                 'content': [
-                    {'icon_text': _sl + 'military.png',
+                    {'icon_text': _sl + 'military_small.png',
                      'text': 'Military figures are your primary fighting '
                      'force. They are typically the ones advancing into '
                      'battle. Each military figure consumes 1 Warrior.'},
