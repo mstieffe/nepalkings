@@ -23,7 +23,7 @@ SPELL_FRAME_SCALE = 1.4
 
 # SPELL ICON POSITIONING (layout in main display area)
 SPELL_ICON_DELTA_X = int(0.105 * SCREEN_WIDTH)
-SPELL_ICON_DELTA_Y = int(0.22 * SCREEN_HEIGHT) if _IS_MOBILE else int(0.16 * SCREEN_HEIGHT)
+SPELL_ICON_DELTA_Y = int(0.16 * SCREEN_HEIGHT)
 
 # CAST SPELL SCREEN LAYOUT (match build figure screen layout)
 CAST_SPELL_ICON_START_X = int(0.41 * SCREEN_WIDTH)
@@ -58,7 +58,7 @@ SPELL_TYPE_TACTICS = 'tactics'  # Modify battle type
 # SPELL TYPE LABELS
 SPELL_TYPE_LABEL_X = int(0.350 * SCREEN_WIDTH)
 SPELL_TYPE_LABEL_Y_OFFSET = int(0.0 * SCREEN_HEIGHT)  # Vertical offset from icon position
-SPELL_TYPE_LABEL_FONT_SIZE = int(FS_BODY * 1.09)           # was int(0.024 * _FS)  →  0.022 * 1.09 ≈ 0.024
+SPELL_TYPE_LABEL_FONT_SIZE = int(FS_TINY * 1.1) if _IS_MOBILE else int(FS_BODY * 1.09)  # was int(0.024 * _FS)
 SPELL_TYPE_LABEL_COLOR = (95, 42, 22)
 
 # FONT SETTINGS

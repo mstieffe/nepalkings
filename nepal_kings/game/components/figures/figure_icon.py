@@ -1109,10 +1109,11 @@ class FieldFigureIcon(FigureIcon):
         text_y = info_box_center_y
         
         # Create text background box
-        text_box_height = text_surface.get_height() + 2 * padding
+        text_padding = int(padding * settings.FIGURE_NAME_TEXT_PADDING_SCALE)
+        text_box_height = text_surface.get_height() + 2 * text_padding
         text_bg_rect = pygame.Rect(
             int(self.x - box_width // 2),
-            int(text_y - text_surface.get_height() // 2 - padding),
+            int(text_y - text_surface.get_height() // 2 - text_padding),
             int(box_width),
             int(text_box_height)
         )

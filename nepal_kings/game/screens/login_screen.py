@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import sys as _sys
 import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
@@ -7,6 +8,9 @@ from config import settings
 from config.screen_settings import _FS
 from utils.utils import Button, InputField
 from utils.auth_service import login, register
+import utils.http_compat as _http
+
+_IS_WEB = (_sys.platform == 'emscripten')
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -48,6 +52,10 @@ class LoginScreen(Screen):
         super().__init__(state)
         self.loading = False
         self.control_buttons = []
+
+        # Async auth state (web only)
+        self._pending_rid = None   # request-id from http_compat.start_async_post
+        self._pending_action = None  # 'login' or 'register'
 
         # ── Background (greyscale) ──────────────────────────────────
         self._bg = self._load_bg()
@@ -245,38 +253,89 @@ class LoginScreen(Screen):
     # ── Auth handlers ───────────────────────────────────────────────
 
     def handle_login(self):
-        self.loading = True
-        response_data = login(self.field_username.content, self.field_pwd.content)
-        self.loading = False
+        if self.loading:
+            return
+        if _IS_WEB:
+            self.loading = True
+            self._pending_rid = _http.start_async_post(
+                f'{settings.SERVER_URL}/auth/login',
+                data={'username': self.field_username.content,
+                      'password': self.field_pwd.content}
+            )
+            self._pending_action = 'login'
+        else:
+            self.loading = True
+            response_data = login(self.field_username.content, self.field_pwd.content)
+            self.loading = False
+            self._apply_login_response(response_data)
 
-        self.state.set_msg(response_data['message'])
-        if response_data['success']:
+    def handle_register(self):
+        if self.loading:
+            return
+        if _IS_WEB:
+            self.loading = True
+            self._pending_rid = _http.start_async_post(
+                f'{settings.SERVER_URL}/auth/register',
+                data={'username': self.field_username.content,
+                      'password': self.field_pwd.content}
+            )
+            self._pending_action = 'register'
+        else:
+            self.loading = True
+            response_data = register(self.field_username.content, self.field_pwd.content)
+            self.loading = False
+            self._apply_register_response(response_data)
+
+    def _poll_pending_auth(self):
+        """Check whether the async XHR has finished and process the result."""
+        if self._pending_rid is None:
+            return
+        resp = _http.check_async(self._pending_rid)
+        if resp is None:
+            return  # still in flight
+        # Request finished
+        self._pending_rid = None
+        self.loading = False
+        action = self._pending_action
+        self._pending_action = None
+        try:
+            if resp.status_code == 401:
+                response_data = {'success': False, 'message': 'Login failed. Username or password incorrect'}
+            elif resp.status_code == 409:
+                response_data = {'success': False, 'message': 'Registration failed. Username already exists.'}
+            elif resp.status_code >= 400:
+                response_data = {'success': False, 'message': f'Request failed ({resp.status_code}). Please try again.'}
+            else:
+                response_data = resp.json()
+        except Exception:
+            response_data = {'success': False, 'message': 'Unexpected error. Please try again.'}
+        if action == 'login':
+            self._apply_login_response(response_data)
+        else:
+            self._apply_register_response(response_data)
+
+    def _apply_login_response(self, response_data):
+        self.state.set_msg(response_data.get('message', ''))
+        if response_data.get('success'):
             self.state.user_dict = response_data.get('user')
             self.state.game = None
-            # Store when the user was last online (for offline-aware badges)
             self.state._last_seen_at = response_data.get('previous_last_active')
-            # Reset badge tracking so first poll uses _last_seen_at
             self.state._known_game_ids = None
             self.state._known_challenge_ids = None
             self.state._new_game_ids = set()
             self.state._new_challenge_ids = set()
             self.state.badge_new_games = 0
             self.state.badge_new_challenges = 0
-            self.state.screen = "game_menu"
+            self.state.screen = 'game_menu'
         else:
             self.field_username.empty()
             self.field_pwd.empty()
 
-    def handle_register(self):
-        self.loading = True
-        response_data = register(self.field_username.content, self.field_pwd.content)
-        self.loading = False
-        self.state.set_msg(response_data['message'])
-
-        if response_data['success']:
+    def _apply_register_response(self, response_data):
+        self.state.set_msg(response_data.get('message', ''))
+        if response_data.get('success'):
             self.state.user_dict = response_data.get('user')
             self.state.game = None
-            # New user — no previous session
             self.state._last_seen_at = None
             self.state._known_game_ids = None
             self.state._known_challenge_ids = None
@@ -284,7 +343,7 @@ class LoginScreen(Screen):
             self.state._new_challenge_ids = set()
             self.state.badge_new_games = 0
             self.state.badge_new_challenges = 0
-            self.state.screen = "game_menu"
+            self.state.screen = 'game_menu'
         else:
             self.field_username.empty()
             self.field_pwd.empty()
@@ -315,3 +374,5 @@ class LoginScreen(Screen):
         super().update()
         self.button_login.update()
         self.button_register.update()
+        if _IS_WEB:
+            self._poll_pending_auth()
