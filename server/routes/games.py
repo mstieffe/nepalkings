@@ -2904,12 +2904,18 @@ def finish_battle_pick_card():
     bm_cards, bm_records = _collect_battle_move_cards(game_id)
 
     # If winner picked a card, give it to them
+    picked_card_info = None
     if picked_card_id:
         if picked_card_type == 'side':
             picked = SideCard.query.get(picked_card_id)
         else:
             picked = MainCard.query.get(picked_card_id)
         if picked and picked.game_id == game_id:
+            picked_card_info = {
+                'suit': picked.suit.value,
+                'rank': picked.rank.value,
+                'card_type': picked_card_type,
+            }
             picked.player_id = player_id
             picked.in_deck = False
             picked.part_of_figure = False
@@ -2964,6 +2970,12 @@ def finish_battle_pick_card():
 
     # Collect resting figure IDs BEFORE clearing battle state
     resting_ids = _collect_resting_figure_ids(game)
+
+    # Store picked card info in last_battle_result so the loser sees it on polling
+    if picked_card_info and game.last_battle_result:
+        result = dict(game.last_battle_result)
+        result['picked_card'] = picked_card_info
+        game.last_battle_result = result
 
     # Clear battle state (this resets fold_winner_id to None)
     _clear_battle_state(game)

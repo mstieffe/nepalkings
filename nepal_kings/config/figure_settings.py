@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE, _IS_MOBILE
+from config.font_settings import FS_SMALL
 
 # PATHS
 FIGURE_ICON_IMG_DIR = 'img/figures/icons/'
@@ -29,7 +30,7 @@ FIGURE_NAME_SEP_COLOR = (170, 140, 100)           # soft separator
 FIGURE_NAME_SHADOW_COLOR = (40, 30, 18, 90)       # subtle drop shadow
 FIGURE_NAME_PADDING = int(0.005 * SCREEN_WIDTH)
 # On mobile, compress info-row vertical padding to save space
-FIGURE_NAME_INFO_PADDING_SCALE = 0.5 if _UI_SCALE > 1.0 else 1.0
+FIGURE_NAME_INFO_PADDING_SCALE = 0.5 if _IS_MOBILE else 1.0
 FIGURE_NAME_CORNER_R = int(0.005 * SCREEN_HEIGHT)
 FIGURE_NAME_SHADOW_OFFSET = max(2, int(0.003 * SCREEN_HEIGHT))
 
@@ -49,8 +50,8 @@ FIGURE_ICON_SIN_AMPL = int(0.005 * SCREEN_HEIGHT)
 
 FIGURE_ICON_CAPTION_COLOR = (95, 42, 22)
 
-FIGURE_ICON_FONT_CAPTION_FONT_SIZE = int(0.02 * _FS)
-FIGURE_ICON_FONT_CAPTION_BIG_FONT_SIZE = int(0.025 * _FS)
+FIGURE_ICON_FONT_CAPTION_FONT_SIZE     = FS_SMALL              # was int(0.02 * _FS)
+FIGURE_ICON_FONT_CAPTION_BIG_FONT_SIZE = int(FS_SMALL * 1.25)  # was int(0.025 * _FS)  →  0.02 * 1.25 = 0.025
 
 
 # SUIT ICON

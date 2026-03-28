@@ -459,6 +459,9 @@ class GameScreen(Screen):
         # Check for post-battle side card draw notification
         self.check_post_battle_side_cards()
         
+        # Check for battle loot notification (which card the winner kept)
+        self.check_loot_notification()
+        
         # Check for opponent turn notification (includes Forced Deal and Dump Cards details)
         self.check_opponent_turn_notification()
         
@@ -538,6 +541,14 @@ class GameScreen(Screen):
         self._previous_battle_modifiers = []
         self._hovered_battle_modifier = None
         self._just_allowed_spell = False
+        
+        # Clear queued notifications and stale advance/turn flags so
+        # they don't replay after the fold/battle result dialogue.
+        self.pending_notifications = []
+        if self.state.game:
+            self.state.game.pending_advance_notification = False
+            self.state.game.pending_own_advance_notification = False
+            self.state.game.pending_opponent_turn_summary = None
         
         # ── Reset ALL subscreens ──
         # Each subscreen has a reset_state() that clears its game-specific
@@ -1076,6 +1087,37 @@ class GameScreen(Screen):
         # Clear the notification
         self.state.game.pending_post_battle_side_cards = None
 
+    def check_loot_notification(self):
+        """Show the battle loser which card the winner chose to keep."""
+        if not self.state.game or not self.state.game.pending_loot_notification:
+            return
+
+        # Defer while still on battle screen
+        if self.state.subscreen == 'battle':
+            return
+
+        loot = self.state.game.pending_loot_notification
+        winner_name = loot.get('winner_name', 'Opponent')
+        suit = loot['suit']
+        rank = loot['rank']
+        card_type = loot.get('card_type', 'main')
+        type_label = 'side card' if card_type == 'side' else 'main card'
+
+        message = f"{winner_name} kept your {type_label} as loot."
+
+        from game.components.cards.card_img import CardImg
+        card_img = CardImg(self.window, suit, rank)
+
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'images': [card_img.front_img],
+            'icon': "loot",
+            'title': "Battle Loot"
+        })
+
+        self.state.game.pending_loot_notification = None
+
     def check_opponent_turn_notification(self):
         """Check for opponent turn summary and show dialogue if needed."""
         if not self.state.game or not self.state.game.pending_opponent_turn_summary:
@@ -1340,6 +1382,12 @@ class GameScreen(Screen):
     def check_ceasefire_ended_notification(self):
         """Check if ceasefire ended and show notification if needed."""
         if not self.state.game or not self.state.game.pending_ceasefire_ended:
+            return
+        
+        # Guard: if ceasefire is actually active now (e.g. transient state during
+        # battle resolution), drop the stale notification
+        if self.state.game.ceasefire_active:
+            self.state.game.pending_ceasefire_ended = False
             return
         
         # Load ceasefire passive icon
@@ -3390,6 +3438,12 @@ class GameScreen(Screen):
         self._draw_unread_chat_badge()
 
         # ── Overlays drawn AFTER super().render() so they appear on top ──
+
+        # Draw All Seeing Eye hover card on top of buttons
+        if self.state.subscreen == 'field':
+            field_screen = self.subscreens.get('field')
+            if field_screen and getattr(field_screen, 'cached_all_seeing_eye_status', False):
+                field_screen.draw_opponent_card_hover()
 
         # Draw field & battle change badges
         self._draw_field_badge()

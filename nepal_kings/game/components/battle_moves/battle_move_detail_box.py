@@ -12,7 +12,7 @@ The figure selector (list-shifter) is shown in BOTH modes for Call moves.
 
 import pygame
 from config import settings
-from config.screen_settings import _UI_SCALE
+from config.screen_settings import _UI_SCALE, _IS_MOBILE
 from game.components.dialogue_box import _DlgButton
 from game.core.input_state import get_pressed as _get_pressed
 from game.components.cards.card_img import CardImg
@@ -87,7 +87,7 @@ class BattleMoveDetailBox:
         self.bm_is_red = bm_suit in _RED_SUITS
 
         # Fonts – on mobile, use reduced sizes so content fits the fixed-size box
-        if _UI_SCALE > 1.0:
+        if _IS_MOBILE:
             _title_sz = int(settings.FONT_SIZE_TITLE_DIALOGUE_BOX / _UI_SCALE * 1.7)
             _body_sz  = int(settings.FONT_SIZE_DIALOGUE_BOX / _UI_SCALE * 1.7)
         else:
@@ -362,7 +362,7 @@ class BattleMoveDetailBox:
             y += self.small_font.get_height() + pad                   # counter "1 / N"
 
         # Buttons — extra gap before buttons on mobile for readability
-        if _UI_SCALE > 1.0:
+        if _IS_MOBILE:
             y += pad
         btn_y_rel = y
         btn_gap = 5

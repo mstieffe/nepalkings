@@ -2,7 +2,7 @@
 # See LICENSE file in the project root for full license information.
 import pygame
 from config import settings
-from config.screen_settings import _UI_SCALE
+from config.screen_settings import _UI_SCALE, _IS_MOBILE
 
 
 class ScoreboardScroll:
@@ -186,7 +186,7 @@ class ScoreboardScroll:
                          (getattr(self.game, 'battle_confirmed', False) and
                           getattr(self.game, 'battle_turn_player_id', None) is not None))
         # On mobile, skip the subtitle to save space
-        _mobile = _UI_SCALE > 1.0
+        _mobile = _IS_MOBILE
         if in_battle:
             battle_turns = getattr(self.game, 'battle_turns_left', 0)
             self.draw_cell("Turns Left", battle_turns, self.x, self.y,
@@ -201,7 +201,7 @@ class ScoreboardScroll:
         self.draw_cell("Round", self.text_dict.get("round", ""), self.x + self.cell_width, self.y,
                        y_offset=top_offset, text_spacing=top_spacing)
         # On mobile, nudge bottom-row values down a little so they sit inside the box
-        _bot_offset = int(0.008 * settings.SCREEN_HEIGHT) if _UI_SCALE > 1.0 else 0
+        _bot_offset = int(0.008 * settings.SCREEN_HEIGHT) if _IS_MOBILE else 0
         self.draw_cell("You", self.text_dict.get("your_score", ""), self.x, self.y + self.cell_height, settings.COLOR_GREEN,
                        y_offset=_bot_offset)
         self.draw_cell("Opponent", self.text_dict.get("opponent_score", ""), self.x + self.cell_width, self.y + self.cell_height, settings.COLOR_RED,

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE, _IS_MOBILE
+from config.font_settings import FS_BODY, FS_SMALL, FS_HEADING
 
 # PATHS
 BATTLE_MOVE_ICON_IMG_DIR = 'img/battle/icons/'
@@ -52,7 +53,7 @@ BATTLE_SHOP_CONFIRM_BUTTON_Y = int(0.62 * SCREEN_HEIGHT)
 BATTLE_SHOP_MAX_MOVES = 3
 BATTLE_SHOP_SLOT_X = int(0.36 * SCREEN_WIDTH)
 BATTLE_SHOP_SLOT_Y = int(0.44 * SCREEN_HEIGHT)
-_BSSM = 1.3 if _UI_SCALE > 1.0 else 1.0   # enlarge slot icons on mobile
+_BSSM = 1.3 if _IS_MOBILE else 1.0   # enlarge slot icons on mobile
 BATTLE_SHOP_SLOT_WIDTH = int(0.06 * SCREEN_WIDTH * _BSSM)
 BATTLE_SHOP_SLOT_HEIGHT = int(0.06 * SCREEN_WIDTH * _BSSM)
 BATTLE_SHOP_SLOT_DELTA_X = int(0.10 * SCREEN_WIDTH * _BSSM)
@@ -63,7 +64,7 @@ BATTLE_SHOP_SLOT_BG_COLOR = (110, 70, 35)
 BATTLE_SHOP_SLOT_EMPTY_COLOR = (90, 60, 30)
 
 # FONT SETTINGS
-BATTLE_MOVE_ICON_FONT_SIZE = int(0.018 * _FS)
+BATTLE_MOVE_ICON_FONT_SIZE = int(FS_SMALL * 0.9)           # was int(0.018 * _FS)  →  0.02 * 0.9 = 0.018
 BATTLE_MOVE_ICON_FONT_BIG_SIZE = int(0.022 * SCREEN_HEIGHT)
 BATTLE_MOVE_ICON_CAPTION_COLOR = (95, 42, 22)
 
@@ -72,7 +73,7 @@ BATTLE_MOVE_ICON_GLOW_WIDTH = int(0.08 * SCREEN_WIDTH)
 BATTLE_MOVE_ICON_GLOW_BIG_WIDTH = int(0.11 * SCREEN_WIDTH)
 
 # BATTLE MOVE TYPE LABEL
-BATTLE_SHOP_TYPE_LABEL_FONT_SIZE = int(0.024 * _FS)
+BATTLE_SHOP_TYPE_LABEL_FONT_SIZE = int(FS_BODY * 1.09)     # was int(0.024 * _FS)  →  0.022 * 1.09 ≈ 0.024
 BATTLE_SHOP_TYPE_LABEL_COLOR = (95, 42, 22)
 
 # READY BUTTON (battle moves phase — centred below slots)
@@ -80,6 +81,6 @@ BATTLE_SHOP_READY_BUTTON_X = int(0.56 * SCREEN_WIDTH)
 BATTLE_SHOP_READY_BUTTON_Y = int(0.58 * SCREEN_HEIGHT)
 
 # PHASE BANNER (battle moves mandatory selection notice)
-BATTLE_SHOP_PHASE_BANNER_FONT_SIZE = int(0.028 * _FS)
+BATTLE_SHOP_PHASE_BANNER_FONT_SIZE = int(FS_HEADING * 1.08) # was int(0.028 * _FS)  →  0.026 * 1.08 ≈ 0.028
 BATTLE_SHOP_PHASE_BANNER_COLOR = (235, 225, 208)
 BATTLE_SHOP_PHASE_WAITING_COLOR = (190, 178, 155)

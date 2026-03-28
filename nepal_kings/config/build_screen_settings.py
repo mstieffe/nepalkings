@@ -1,9 +1,9 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE, _IS_MOBILE
 
 # Build-figure icon scale: bigger on mobile so icons are tap-friendly
-BUILD_FIGURE_ICON_SCALE = 1.25 if _UI_SCALE > 1.0 else 1.0
+BUILD_FIGURE_ICON_SCALE = 1.25 if _IS_MOBILE else 1.0
 
 # BUILD SCREEN
 BUILD_HIERARCHY_IMG_PATH = 'img/figures/build_hierarchy/build_hierarchy.png'

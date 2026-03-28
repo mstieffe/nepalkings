@@ -1500,24 +1500,28 @@ class FieldScreen(SubScreen):
             self.window.blit(card_surface, (start_x, current_y))
             current_y += rotated_card_height + card_spacing
         
-        # Draw enlarged hover card on top
+        # Update hover state (actual drawing deferred to draw_opponent_card_hover)
         if hovered_idx != self._opponent_card_hovered_idx:
             self._opponent_card_hovered_idx = hovered_idx
             if hovered_idx >= 0:
                 self._opponent_hover_surface = self._make_opponent_hover_card(hovered_idx)
             else:
                 self._opponent_hover_surface = None
-        
-        if self._opponent_hover_surface and hovered_idx >= 0:
-            hr = self._opponent_card_rects[hovered_idx]
-            # Position enlarged card to the right of the small card
-            hx = hr.right + int(0.006 * settings.SCREEN_WIDTH)
-            hy = hr.centery - self._opponent_hover_surface.get_height() // 2
-            # Keep on screen
-            if hx + self._opponent_hover_surface.get_width() > settings.SCREEN_WIDTH:
-                hx = hr.left - self._opponent_hover_surface.get_width() - int(0.006 * settings.SCREEN_WIDTH)
-            hy = max(0, min(hy, settings.SCREEN_HEIGHT - self._opponent_hover_surface.get_height()))
-            self.window.blit(self._opponent_hover_surface, (hx, hy))
+
+    def draw_opponent_card_hover(self):
+        """Draw the enlarged hover card overlay. Called from game_screen after buttons."""
+        hovered_idx = self._opponent_card_hovered_idx
+        if not self._opponent_hover_surface or hovered_idx < 0:
+            return
+        if hovered_idx >= len(self._opponent_card_rects):
+            return
+        hr = self._opponent_card_rects[hovered_idx]
+        hx = hr.right + int(0.006 * settings.SCREEN_WIDTH)
+        hy = hr.centery - self._opponent_hover_surface.get_height() // 2
+        if hx + self._opponent_hover_surface.get_width() > settings.SCREEN_WIDTH:
+            hx = hr.left - self._opponent_hover_surface.get_width() - int(0.006 * settings.SCREEN_WIDTH)
+        hy = max(0, min(hy, settings.SCREEN_HEIGHT - self._opponent_hover_surface.get_height()))
+        self.window.blit(self._opponent_hover_surface, (hx, hy))
 
     def _generate_opponent_card_cache(self, opponent_main_cards, opponent_side_cards):
         """Generate and cache rotated card surfaces for opponent's hand."""

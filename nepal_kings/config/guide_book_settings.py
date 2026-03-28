@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, SUB_SCREEN_X, SUB_SCREEN_Y, _FS, _UI_SCALE
+from config.font_settings import FS_SUBTITLE, FS_HEADING, FS_BODY, FS_SMALL
 
 # ── Colour palette (earthy/parchment theme) ─────────────────────────
 GUIDE_SIDEBAR_BG            = (72, 52, 34, 200)       # warm dark brown, matches scroll panel
@@ -20,10 +21,10 @@ GUIDE_SCROLLBAR_HANDLE_A    = (250, 221, 0)             # bright gold active / d
 GUIDE_BORDER_CLR            = (120, 85, 42)             # warm brown border (echoes frame)
 
 # ── Font sizes (relative to screen height) ──────────────────────────
-GUIDE_SECTION_TITLE_FONT_SIZE = int(_FS * 0.032)
-GUIDE_HEADING_FONT_SIZE       = int(_FS * 0.026)
-GUIDE_BODY_FONT_SIZE          = int(_FS * 0.022)
-GUIDE_MENU_FONT_SIZE          = int(_FS * 0.022)
+GUIDE_SECTION_TITLE_FONT_SIZE = int(FS_SUBTITLE * 0.94)  # was int(_FS * 0.032)  →  0.034 * 0.94 ≈ 0.032
+GUIDE_HEADING_FONT_SIZE       = FS_HEADING               # was int(_FS * 0.026)
+GUIDE_BODY_FONT_SIZE          = FS_BODY                  # was int(_FS * 0.022)
+GUIDE_MENU_FONT_SIZE          = FS_BODY                  # was int(_FS * 0.022)
 GUIDE_MENU_FONT_ACTIVE_SIZE   = int(SCREEN_HEIGHT * 0.023)
 
 # ── Layout geometry ─────────────────────────────────────────────────
@@ -84,7 +85,7 @@ GUIDE_TABLE_BORDER_CLR      = (158, 81, 33, 80)              # faint table lines
 GUIDE_TABLE_ICON_SIZE       = int(0.030 * SCREEN_HEIGHT * _UI_SCALE)     # small icons inside table cells
 GUIDE_TABLE_ICON_SIZE_LARGE = int(0.060 * SCREEN_HEIGHT * _UI_SCALE)     # large icons inside table cells
 GUIDE_TABLE_COL_PAD         = int(0.008 * SCREEN_WIDTH)      # padding between columns
-GUIDE_TABLE_FONT_SIZE       = int(_FS * 0.020)     # slightly smaller for tables
+GUIDE_TABLE_FONT_SIZE       = FS_SMALL              # was int(_FS * 0.020)
 
 # ── Scroll speed ────────────────────────────────────────────────────
 GUIDE_SCROLL_SPEED = int(0.035 * SCREEN_HEIGHT)

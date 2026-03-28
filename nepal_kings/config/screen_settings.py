@@ -9,6 +9,7 @@ SCREEN_CAPTION = 'Nepal Kings'
 # Font-scale height: same as SCREEN_HEIGHT on desktop; inflated on mobile
 # so that text stays readable when the canvas is CSS-scaled to a small screen.
 _UI_SCALE = float(_os.environ.get('NK_UI_SCALE', '1.0'))
+_IS_MOBILE = (_os.environ.get('NK_IS_MOBILE', '0') == '1')  # True only on mobile web
 _FS = int(SCREEN_HEIGHT * _UI_SCALE)
 
 # Sizes

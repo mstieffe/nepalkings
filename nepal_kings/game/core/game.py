@@ -155,6 +155,10 @@ class Game:
         self.pending_post_battle_side_cards = None  # [{suit, rank}, ...] for current player
         self._post_battle_side_cards_round = 0  # Round for which notification was already shown
 
+        # Loot notification for battle loser (which card the winner kept)
+        self.pending_loot_notification = None  # dict with suit/rank/card_type/winner_name
+        self._loot_notification_round = 0  # Round for which loot notification was already shown
+
         # Initialize log entries and chat messages
         self.log_entries = []
         self.chat_messages = []
@@ -524,6 +528,21 @@ class Game:
                 self._post_battle_side_cards_round = self.current_round
                 print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
 
+        # Detect loot notification for battle loser (which card the winner kept)
+        last_result = game_dict.get('last_battle_result') or {}
+        picked_card = last_result.get('picked_card')
+        if (picked_card and self.player_id and
+                last_result.get('loser_player_id') == self.player_id and
+                self.current_round != self._loot_notification_round):
+            self.pending_loot_notification = {
+                'suit': picked_card['suit'],
+                'rank': picked_card['rank'],
+                'card_type': picked_card['card_type'],
+                'winner_name': last_result.get('winner_name', 'Opponent'),
+            }
+            self._loot_notification_round = self.current_round
+            print(f"[LOOT] Opponent kept card: {picked_card}")
+
 
     def update_from_dict(self, game_dict):
         """Update game state directly from a dictionary (e.g., from spell service response)."""
@@ -676,8 +695,10 @@ class Game:
                     else:
                         print(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold (no real action)")
                         self.pending_opponent_turn_summary = None
-                elif self.pending_advance_notification:
-                    print(f"[START_TURN] Suppressing opponent turn summary — advance notification pending")
+                elif (self.pending_advance_notification or
+                      (self.advancing_figure_id and
+                       self.advancing_player_id != self.player_id)):
+                    print(f"[START_TURN] Suppressing opponent turn summary — advance notification pending or opponent advance active")
                 elif self.pending_battle_ready:
                     print(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
                 elif self.pending_fold_result:
@@ -938,11 +959,14 @@ class Game:
 
         Note: the advance/defender-selection phase (advancing_figure_id set but
         battle not yet confirmed) is NOT considered battle-active — players must
-        still be free to act during that phase.
+        still be free to act during that phase.  However, once a player has
+        chosen to fight and is waiting for the opponent's decision, actions are
+        blocked.
         """
         return bool(
             self.battle_moves_phase
             or self.battle_confirmed
+            or self.waiting_for_battle_decision
         )
 
     def has_opponent_cast_all_seeing_eye(self) -> bool:

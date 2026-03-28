@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE, _IS_MOBILE
+from config.font_settings import FS_BUTTON, FS_BODY, FS_HEADING, FS_SMALL
 
 # BUTTOM
 BUTTON_IMG_PATH = 'img/button/'
@@ -32,7 +33,7 @@ HOME_BUTTON_X = int(0.96 * SCREEN_WIDTH)
 HOME_BUTTON_Y = int(0.05 * SCREEN_HEIGHT)
 
 # On mobile, shift the sidebar icons down to make space for a larger home button
-_SIDEBAR_Y_OFFSET = int(0.04 * SCREEN_HEIGHT) if _UI_SCALE > 1.0 else 0
+_SIDEBAR_Y_OFFSET = int(0.04 * SCREEN_HEIGHT) if _IS_MOBILE else 0
 
 TUTORIAL_BUTTON_X = int(0.96 * SCREEN_WIDTH)
 TUTORIAL_BUTTON_Y = int(0.15 * SCREEN_HEIGHT) + _SIDEBAR_Y_OFFSET
@@ -61,7 +62,7 @@ GAME_BUTTON_TEXT_COLOR_ACTIVE = (250, 221, 0) #(20, 20, 20)
 GAME_BUTTON_TEXT_COLOR_PASSIVE = (220, 220, 220) #(20, 20, 20)
 GAME_BUTTON_TEXT_COLOR_SHADOW = (20, 20, 20) #(250, 221, 0)
 
-GAME_BUTTON_FONT_SIZE = int(0.03 * _FS)
+GAME_BUTTON_FONT_SIZE = FS_BUTTON                  # was int(0.03 * _FS)
 GAME_BUTTON_TEXT_SHIFT_X = -int(0.02 * SCREEN_WIDTH)
 GAME_BUTTON_TEXT_SHIFT_Y = int(0.06 * SCREEN_HEIGHT)
 
@@ -135,8 +136,8 @@ CONFIRM_BUTTON_TEXT_COLOR_ACTIVE = (20, 20, 20)
 CONFIRM_BUTTON_TEXT_COLOR_PASSIVE = (240, 240, 240)
 CONFIRM_BUTTON_TEXT_COLOR_DISABLED = (160, 150, 140)
 
-CONFIRM_BUTTON_FONT_SIZE = int(0.03 * _FS)
-CONFIRM_BUTTON_FONT_SIZE_SMALL = int(0.02 * _FS)
+CONFIRM_BUTTON_FONT_SIZE = FS_BUTTON               # was int(0.03 * _FS)
+CONFIRM_BUTTON_FONT_SIZE_SMALL = FS_SMALL          # was int(0.02 * _FS)
 
 # ScrollTextListShifter
 SCROLL_TEXT_COLOR = (240, 228, 205)             # warm cream on brown bg
@@ -146,9 +147,9 @@ SCROLL_TEXT_DIVIDER_COLOR = (140, 105, 65)       # warm brown divider
 SCROLL_TEXT_MAX_WIDTH = int(0.15 * SCREEN_WIDTH)  # wider to fill panel
 
 # Scroll font sizes (larger for readability)
-SCROLL_FONT_SIZE_TITLE = int(0.026 * _FS)
-SCROLL_FONT_SIZE_BODY = int(0.022 * _FS)
-SCROLL_FONT_SIZE_SMALL = int(0.019 * _FS)
+SCROLL_FONT_SIZE_TITLE = FS_HEADING                # was int(0.026 * _FS)
+SCROLL_FONT_SIZE_BODY = FS_BODY                    # was int(0.022 * _FS)
+SCROLL_FONT_SIZE_SMALL = int(FS_SMALL * 0.95)      # was int(0.019 * _FS)  →  0.02 * 0.95 = 0.019
 SCROLL_ICON_SIZE = int(0.025 * _FS)                 # resource / check icons
 SCROLL_SKILL_ICON_SIZE = int(0.032 * _FS)            # skill icons (slightly larger)
 
@@ -171,7 +172,7 @@ COLOR_TOGGLE_W = (int(0.18 * SCREEN_WIDTH) - int(0.008 * SCREEN_WIDTH)) // 2
 COLOR_TOGGLE_H = int(0.035 * SCREEN_HEIGHT * _UI_SCALE)
 COLOR_TOGGLE_CORNER_R = int(0.006 * SCREEN_HEIGHT)
 COLOR_TOGGLE_GAP = int(0.008 * SCREEN_WIDTH)
-COLOR_TOGGLE_FONT_SIZE = int(0.022 * _FS)
+COLOR_TOGGLE_FONT_SIZE = FS_BODY                   # was int(0.022 * _FS)
 COLOR_TOGGLE_BG_CLR = (50, 38, 28, 180)           # dark brown
 COLOR_TOGGLE_BG_ACTIVE_CLR = (72, 52, 34, 220)    # lighter brown when active
 COLOR_TOGGLE_BG_HOVER_CLR = (80, 58, 38, 220)     # hover

@@ -4,13 +4,25 @@ from config.screen_settings import SCREEN_HEIGHT, _FS
 
 import pygame
 
-# Font settings
-FONT_PATH = None
-FONT_SIZE = int(0.05 * _FS)
-FONT_SIZE_DETAIL = int(0.02 * _FS)
-FONT_SIZE_BUTTON = int(0.03 * _FS)
-FONT_SIZE_SUBSCREEN_BUTTON = int(0.02 * _FS)
-LOGOUT_FONT_SIZE = int(0.03 * _FS)
+# ── Font Size Groups ──────────────────────────────────────────────────────────
+# Adjust these shared bases to scale whole categories of related text together.
+# All font size constants across all config files derive from one of these groups.
+FS_DISPLAY  = int(0.060 * _FS)  # Large decorative display  (e.g. battle total score circle)
+FS_TITLE    = int(0.040 * _FS)  # Primary titles and large action/input buttons
+FS_SUBTITLE = int(0.036 * _FS)  # Sub-screen/dialogue titles and section headlines
+FS_HEADING  = int(0.034 * _FS)  # Column/section headings, scroll headers, guide headings
+FS_BODY     = int(0.030 * _FS)  # Body text — labels, list items, messages, round labels
+FS_BUTTON   = int(0.030 * _FS)  # Standard game/confirm/sub-screen button labels
+FS_SMALL    = int(0.026 * _FS)  # Small text — icon captions, turn indicator, mini scroll
+FS_TINY     = int(0.026 * _FS)  # Fine detail — tooltips, power circles, scoreboard sub-labels
+
+# ── Legacy aliases (keep existing constant names mapped to groups) ────────────
+FONT_PATH               = None
+FONT_SIZE               = FS_DISPLAY   # hero/large display font
+FONT_SIZE_DETAIL        = FS_BUTTON    # detail text in cards, spell selector
+FONT_SIZE_BUTTON        = FS_TITLE     # primary action buttons (login, register)
+FONT_SIZE_SUBSCREEN_BUTTON = FS_BUTTON # sub-screen tab buttons
+LOGOUT_FONT_SIZE        = FS_TITLE     # logout/navigation buttons
 
 # ── Global font cache ──────────────────────────────────────────────
 # pygame.font.Font() keeps an open file descriptor per instance.

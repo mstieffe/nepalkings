@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
+from config.font_settings import FS_TITLE, FS_SUBTITLE, FS_HEADING, FS_BODY
 
 # ── Background & button images ──────────────────────────────────────
 GAME_MENU_BG_IMG_PATH   = 'img/background/menu_background.png'
@@ -24,7 +25,7 @@ GAME_MENU_BOX_BG_CLR    = (30, 30, 30, 160)
 GAME_MENU_BOX_BORDER_W  = 2
 
 # ── Title ────────────────────────────────────────────────────────────
-GAME_MENU_TITLE_FONT_SIZE   = int(0.04 * _FS)
+GAME_MENU_TITLE_FONT_SIZE   = FS_TITLE                    # was int(0.04 * _FS)
 GAME_MENU_TITLE_CLR         = (250, 221, 0)
 GAME_MENU_TITLE_PAD_BOTTOM  = int(0.03 * SCREEN_HEIGHT)
 
@@ -36,7 +37,7 @@ GAME_MENU_GLOW_DIR      = 'img/menu_button/glow/'
 # ── Gold display (upper-left) ───────────────────────────────────────
 GAME_MENU_GOLD_ICON_PATH     = 'img/dialogue_box/icons/gold.png'
 GAME_MENU_GOLD_ICON_SZ       = int(0.045 * SCREEN_HEIGHT * _UI_SCALE)
-GAME_MENU_GOLD_FONT_SIZE     = int(0.036 * _FS)
+GAME_MENU_GOLD_FONT_SIZE     = int(FS_TITLE * 0.9)         # was int(0.036 * _FS)  →  0.04 * 0.9 = 0.036
 GAME_MENU_GOLD_TEXT_CLR      = (250, 221, 0)
 GAME_MENU_GOLD_MARGIN_X      = int(0.02 * SCREEN_WIDTH)
 GAME_MENU_GOLD_MARGIN_Y      = int(0.025 * SCREEN_HEIGHT)
@@ -64,7 +65,7 @@ GAME_MENU_ICON_LOGOUT_GAP_Y  = int(0.006 * SCREEN_HEIGHT * _UI_SCALE)  # vertica
 # ── ListButton defaults (programmatic list-item buttons) ────────────
 LIST_BTN_W              = int(0.30 * SCREEN_WIDTH)
 LIST_BTN_H              = int(0.050 * SCREEN_HEIGHT)
-LIST_BTN_FONT_SIZE      = int(0.022 * _FS)
+LIST_BTN_FONT_SIZE      = FS_BODY                          # was int(0.022 * _FS)
 LIST_BTN_CORNER_RADIUS  = int(0.006 * SCREEN_HEIGHT)
 LIST_BTN_BORDER_W       = 1
 LIST_BTN_BG_CLR         = (35, 35, 40, 180)
@@ -76,9 +77,9 @@ LIST_BTN_TEXT_CLR        = (190, 185, 175)
 LIST_BTN_TEXT_HOVER_CLR  = (255, 245, 220)
 
 # ── Sub-screen layout (load_game, new_game shared) ──────────────────
-SUB_SCREEN_TITLE_FONT_SIZE   = int(0.035 * _FS)
+SUB_SCREEN_TITLE_FONT_SIZE   = FS_SUBTITLE                 # was int(0.035 * _FS)
 SUB_SCREEN_TITLE_CLR         = (250, 221, 0)
-SUB_SCREEN_HEADER_FONT_SIZE  = int(0.026 * _FS)
+SUB_SCREEN_HEADER_FONT_SIZE  = FS_HEADING                  # was int(0.026 * _FS)
 SUB_SCREEN_HEADER_CLR        = (220, 200, 140)
 SUB_SCREEN_PANEL_BG_CLR      = (25, 25, 30, 170)
 SUB_SCREEN_PANEL_BORDER_CLR  = (120, 110, 95)

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE, _IS_MOBILE
+from config.font_settings import FS_TITLE, FS_HEADING, FS_SMALL, FS_TINY
 
 INFO_SCROLL_WIDTH = int(0.105 * SCREEN_WIDTH)
 INFO_SCROLL_X = int(0.011 * SCREEN_WIDTH)   
@@ -10,7 +11,7 @@ INFO_SCROLL_HEIGHT = int(0.24 * SCREEN_HEIGHT)
 INFO_SCROLL_BG_IMG_PATH = 'img/background/paper4.png'  # legacy, no longer used
 GLOW_RECT_IMG_PATH = 'img/glow/rect/'
 
-INFO_SCROLL_FONT_SIZE = int(0.02 * _FS)
+INFO_SCROLL_FONT_SIZE = FS_SMALL                              # was int(0.02 * _FS)
 INFO_SCROLL_Y_TITLE_MARGIN = int(0.015 * SCREEN_HEIGHT)
 INFO_SCROLL_TITLE_SPACING = int(0.025 * SCREEN_HEIGHT)
 INFO_SCROLL_LINE_SPACING = int(0.035 * SCREEN_HEIGHT)
@@ -75,9 +76,9 @@ SCOREBOARD_SCROLL_SPACER = int(0.01 * SCREEN_WIDTH)
 SCOREBOARD_SCROLL_BG_IMG_PATH = 'img/background/paper3.png'
 
 # On mobile, use smaller fonts so text fits the original-size panel
-SCOREBOARD_SCROLL_FONT_SIZE = int(0.016 * _FS) if _UI_SCALE > 1.0 else int(0.02 * _FS)
+SCOREBOARD_SCROLL_FONT_SIZE = int(FS_TINY * 0.94) if _IS_MOBILE else FS_SMALL        # was int(0.016 * _FS) / int(0.02 * _FS)
 SCOREBOARD_SCROLL_FONT_TITLE_SIZE = int(0.025 * SCREEN_HEIGHT)
-SCOREBOARD_SCROLL_NUMBER_FONT_SIZE = int(0.028 * _FS) if _UI_SCALE > 1.0 else int(0.04 * _FS)
+SCOREBOARD_SCROLL_NUMBER_FONT_SIZE = int(FS_HEADING * 1.08) if _IS_MOBILE else FS_TITLE  # was int(0.028 * _FS) / int(0.04 * _FS)
 SCOREBOARD_SCROLL_LINE_SPACING = int(0.02 * SCREEN_HEIGHT)
 SCOREBOARD_SCROLL_TEXT_COLOR = (20, 20, 20)
 
@@ -86,13 +87,13 @@ SCOREBOARD_CROSS_ALPHA = 80
 SCOREBOARD_CROSS_WIDTH = int(0.0015 * SCREEN_WIDTH)
 SCOREBOARD_CROSS_SPACING = int(0.03 * SCREEN_WIDTH)
 SCOREBOARD_CELL_TEXT_SPACING = int(0.002 * SCREEN_WIDTH)
-SCOREBOARD_CELL_VALUE_OFFSET = int(0.012 * SCREEN_HEIGHT) if _UI_SCALE > 1.0 else int(0.010 * SCREEN_HEIGHT)
-SCOREBOARD_CELL_SUBTITLE_SPACING = int(0.006 * SCREEN_HEIGHT) if _UI_SCALE > 1.0 else int(0.010 * SCREEN_HEIGHT)
-SCOREBOARD_SUBTITLE_FONT_SIZE = int(0.009 * _FS) if _UI_SCALE > 1.0 else int(0.012 * _FS)
+SCOREBOARD_CELL_VALUE_OFFSET = int(0.012 * SCREEN_HEIGHT) if _IS_MOBILE else int(0.010 * SCREEN_HEIGHT)
+SCOREBOARD_CELL_SUBTITLE_SPACING = int(0.006 * SCREEN_HEIGHT) if _IS_MOBILE else int(0.010 * SCREEN_HEIGHT)
+SCOREBOARD_SUBTITLE_FONT_SIZE = int(FS_TINY * 0.53) if _IS_MOBILE else int(FS_TINY * 0.71)  # was int(0.009 * _FS) / int(0.012 * _FS)
 SCOREBOARD_LIMIT_SECTION_HEIGHT = int(0.03 * SCREEN_HEIGHT)
 
-# Mobile scoreboard panel design (replaces paper background when _UI_SCALE > 1)
-SCOREBOARD_USE_PANEL = (_UI_SCALE > 1.0)
+# Mobile scoreboard panel design (replaces paper background on mobile)
+SCOREBOARD_USE_PANEL = _IS_MOBILE
 SCOREBOARD_PANEL_BG_CLR        = (35, 30, 25, 200)       # warm dark semi-transparent
 SCOREBOARD_PANEL_BORDER_CLR    = (140, 130, 110)          # muted warm border
 SCOREBOARD_PANEL_BORDER_WIDTH  = 1

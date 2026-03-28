@@ -374,12 +374,13 @@ if __name__ == '__main__':
             else:
                 _fw, _fh = _vw, int(_vw / _ar)
             if _mobile:
+                os.environ['NK_IS_MOBILE'] = '1'
                 # Tiered mobile resolutions with matching UI scale.
                 # Higher resolution for larger phones; scale keeps UI tappable.
                 _mobile_table = [
-                    (1280, 720, '1.4'),
-                    (1024, 576, '1.5'),
-                    ( 854, 480, '1.6'),
+                    (1280, 720, '1.5'),
+                    (1024, 576, '1.6'),
+                    ( 854, 480, '1.7'),
                 ]
                 for _rw, _rh, _us in _mobile_table:
                     if _rw <= _fw and _rh <= _fh:

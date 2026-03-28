@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS
+from config.font_settings import FS_TITLE, FS_BUTTON, FS_BODY
 
 INPUTFIELD_BORDER_COLOR_ACTIVE = (250, 170, 0)
 INPUTFIELD_BORDER_COLOR_PASSIVE = (60, 60, 60)
 INPUTFIELD_TEXT_COLOR_HEADER= (220, 220, 220)
-INPUTFIELD_FONT_SIZE = int(0.04 * _FS)
-INPUTFIELD_FONT_SIZE_TITLE = int(0.03 * _FS)
+INPUTFIELD_FONT_SIZE        = FS_TITLE    # was int(0.04 * _FS)
+INPUTFIELD_FONT_SIZE_TITLE  = FS_BUTTON   # was int(0.03 * _FS)
 INPUTFIELD_COLOR_PASSIVE = (100, 100, 100)
 INPUTFIELD_COLOR_ACTIVE = (120, 120, 120) #(250, 170, 0)
 
@@ -16,7 +17,7 @@ INPUTFIELD_HEIGHT = int(0.04 * SCREEN_HEIGHT)
 
 MSG_BACKGROUND_COLOR = (0, 0, 0)
 
-MSG_FONT_SIZE = int(0.022 * _FS)
+MSG_FONT_SIZE               = FS_BODY     # was int(0.022 * _FS)
 
 MSG_MAX_WIDTH = int(0.8 * SCREEN_WIDTH)
 MSG_MAX_HEIGHT = int(0.45 * SCREEN_HEIGHT)
@@ -90,7 +91,7 @@ MSG_SEND_BUTTON_INACTIVE_IMG = 'img/button/confirm/grey.png'
 # Log screen toggle/send button styling (programmatic, dark-themed)
 LOG_BTN_W = int(0.07 * SCREEN_WIDTH)
 LOG_BTN_H = int(0.035 * SCREEN_HEIGHT)
-LOG_BTN_FONT_SIZE = int(0.022 * _FS)
+LOG_BTN_FONT_SIZE           = FS_BODY     # was int(0.022 * _FS)
 LOG_BTN_CORNER_R = int(0.005 * SCREEN_HEIGHT)
 LOG_BTN_BG_CLR = (40, 38, 35, 160)
 LOG_BTN_BG_ACTIVE_CLR = (55, 50, 40, 200)
@@ -154,7 +155,7 @@ LOG_INPUT_BORDER_ACTIVE_CLR = (180, 160, 80)
 LOG_INPUT_TEXT_CLR = (220, 215, 200)
 LOG_INPUT_PLACEHOLDER_CLR = (120, 115, 100)
 LOG_INPUT_CORNER_R = int(0.005 * SCREEN_HEIGHT)
-LOG_INPUT_FONT_SIZE = int(0.024 * _FS)
+LOG_INPUT_FONT_SIZE         = int(FS_BODY * 1.09)  # was int(0.024 * _FS)  →  0.022 * 1.09 ≈ 0.024
 LOG_INPUT_H = int(0.038 * SCREEN_HEIGHT)
 
 

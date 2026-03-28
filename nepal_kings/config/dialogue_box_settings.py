@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
+from config.font_settings import FS_SUBTITLE, FS_HEADING, FS_BODY
 import pygame
 
-FONT_SIZE_DIALOGUE_BOX = int(0.026 * _FS)
-FONT_SIZE_TITLE_DIALOGUE_BOX = int(0.034 * _FS)
+FONT_SIZE_DIALOGUE_BOX       = FS_HEADING   # was int(0.026 * _FS)
+FONT_SIZE_TITLE_DIALOGUE_BOX = FS_SUBTITLE  # was int(0.034 * _FS)
 
 TITLE_TEXT_COLOR = (250, 221, 0)
 DIALOGUE_BOX_MSG_TEXT_CLR = (220, 215, 200)
@@ -35,7 +36,7 @@ DIALOGUE_BOX_BTN_W = int(0.14 * SCREEN_WIDTH)
 DIALOGUE_BOX_BTN_H = int(0.050 * SCREEN_HEIGHT)
 DIALOGUE_BOX_BTN_GAP = int(0.015 * SCREEN_WIDTH)
 DIALOGUE_BOX_BTN_MARGIN_BOTTOM = int(0.025 * SCREEN_HEIGHT)
-DIALOGUE_BOX_BTN_FONT_SIZE = int(0.022 * _FS)
+DIALOGUE_BOX_BTN_FONT_SIZE = FS_BODY              # was int(0.022 * _FS)
 DIALOGUE_BOX_BTN_TEXT_CLR = (230, 225, 210)
 DIALOGUE_BOX_BTN_TEXT_HOVER_CLR = (255, 245, 220)
 DIALOGUE_BOX_GLOW_DIR = 'img/menu_button/glow/'
