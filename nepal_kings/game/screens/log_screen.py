@@ -178,6 +178,9 @@ class LogScreen(SubScreen):
             50  # Placeholder height; updated dynamically
         )
         self.dragging = False
+        self._touch_scrolling = False
+        self._touch_last_y = 0
+        self._touch_accum = 0.0  # sub-line pixel accumulator for smooth drag
 
         # Initialize with the scrollbar at the bottom
         self.scroll_offset = self.calculate_max_scroll()
@@ -189,6 +192,9 @@ class LogScreen(SubScreen):
         """
         self.scroll_offset = self.calculate_max_scroll()
         self.dragging = False
+        self._touch_scrolling = False
+        self._touch_last_y = 0
+        self._touch_accum = 0.0
         self.scrollbar_handle_color = self.scrollbar_handle_color_passive
         print("[LogScreen] State reset for game switch")
 
@@ -406,27 +412,50 @@ class LogScreen(SubScreen):
             self.chat_input.handle_event(event)
 
             if event.type == MOUSEBUTTONUP:
-                if self.btn_log.collide():
-                    self.btn_log.active = not self.btn_log.active
-                    self.show_log = self.btn_log.active
-                elif self.btn_chat.collide():
-                    self.btn_chat.active = not self.btn_chat.active
-                    self.show_chat = self.btn_chat.active
-                elif self.btn_send.collide() and self.chat_input.content.strip():
-                    self.handle_send_message(self.chat_input.content.strip())
-                    self.chat_input.empty()
+                if not self._touch_scrolling:
+                    if self.btn_log.collide():
+                        self.btn_log.active = not self.btn_log.active
+                        self.show_log = self.btn_log.active
+                    elif self.btn_chat.collide():
+                        self.btn_chat.active = not self.btn_chat.active
+                        self.show_chat = self.btn_chat.active
+                    elif self.btn_send.collide() and self.chat_input.content.strip():
+                        self.handle_send_message(self.chat_input.content.strip())
+                        self.chat_input.empty()
 
-                # Release scrollbar drag
+                # Release scrollbar drag and touch scroll
                 self.dragging = False
+                self._touch_scrolling = False
+                self._touch_accum = 0.0
                 self.scrollbar_handle_color = self.scrollbar_handle_color_passive
 
             elif event.type == MOUSEBUTTONDOWN:
                 if self.handle_rect.collidepoint(event.pos):
                     self.dragging = True
                     self.scrollbar_handle_color = self.scrollbar_handle_color_active
+                else:
+                    # Touch-drag scroll start in the message area
+                    content_rect = pygame.Rect(
+                        settings.MSG_TEXT_BOX_X, settings.MSG_TEXT_BOX_Y,
+                        settings.MSG_TEXT_BOX_WIDTH, settings.MSG_TEXT_BOX_HEIGHT)
+                    if content_rect.collidepoint(event.pos):
+                        self._touch_scrolling = True
+                        self._touch_last_y = event.pos[1]
+                        self._touch_accum = 0.0
 
-            elif event.type == MOUSEMOTION and self.dragging:
-                self.handle_scrollbar_drag(event)
+            elif event.type == MOUSEMOTION:
+                if self.dragging:
+                    self.handle_scrollbar_drag(event)
+                elif self._touch_scrolling:
+                    dy = event.pos[1] - self._touch_last_y
+                    self._touch_last_y = event.pos[1]
+                    line_h = self.font.get_height() + settings.MSG_BUBBLE_SPACING + settings.MSG_BUBBLE_PAD_Y
+                    self._touch_accum -= dy
+                    lines_delta = int(self._touch_accum / line_h)
+                    if lines_delta != 0:
+                        self._touch_accum -= lines_delta * line_h
+                        max_scroll = self.calculate_max_scroll()
+                        self.scroll_offset = max(0, min(self.scroll_offset + lines_delta, max_scroll))
 
             if event.type == MOUSEWHEEL:
                 max_scroll = self.calculate_max_scroll()
