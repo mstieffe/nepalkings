@@ -417,9 +417,10 @@ class GameScreen(Screen):
             self.main_hand.deselect_all_cards()
             self.side_hand.deselect_all_cards()
             # Re-lock the battle button when leaving battle/battle_shop
-            # BUT keep it unlocked during an active battle phase
+            # BUT keep it unlocked during an active battle phase or battle moves selection
             if self.previous_subscreen in ('battle', 'battle_shop') and self.state.subscreen == 'field':
-                if not getattr(self.state.game, 'in_battle_phase', False):
+                if (not getattr(self.state.game, 'in_battle_phase', False) and
+                        not getattr(self.state.game, 'battle_moves_phase', False)):
                     self.battle_button.locked = True
             # Mark chats as read when opening the log screen
             if self.state.subscreen == 'log' and self.state.game and self.state.game.chat_messages:
@@ -3492,16 +3493,14 @@ class GameScreen(Screen):
 
     def update(self, events):
         """Update the game screen and all relevant components."""
-        # During defender selection or forced advance, block subscreen changes from button clicks
+        # During defender selection, block subscreen changes from button clicks
         # super().update() calls button.update() which can change state.subscreen
         field_screen = self.subscreens.get('field')
         block_subscreen_change = (
-            self.state.game and (
-                (self.state.game.pending_defender_selection and 
-                 self.state.game.defender_selection_dialogue_shown and
-                 field_screen and field_screen.defender_selection_mode) or
-                (self.state.game.battle_moves_phase)
-            )
+            self.state.game and
+            self.state.game.pending_defender_selection and
+            self.state.game.defender_selection_dialogue_shown and
+            field_screen and field_screen.defender_selection_mode
         )
         
         if block_subscreen_change:

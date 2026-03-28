@@ -41,7 +41,11 @@ class FieldScreen(SubScreen):
         
         # Cache for opponent cards (for All Seeing Eye spell)
         self.opponent_card_cache = []  # List of pre-rotated card surfaces
+        self.opponent_card_cache_main_count = 0  # Number of main cards in cache
         self.last_opponent_card_ids = set()  # Track opponent card IDs to detect changes
+        self._opponent_card_rects = []  # (rect, card_data) for hover detection
+        self._opponent_card_hovered_idx = -1  # Index of hovered card (-1 = none)
+        self._opponent_hover_surface = None  # Enlarged card surface for hover
         
         # Initialize categorized figures structure
         self.categorized_figures = {
@@ -97,7 +101,11 @@ class FieldScreen(SubScreen):
         self._pending_advance_figure = None
         self.defender_selection_mode = False
         self.opponent_card_cache = []
+        self.opponent_card_cache_main_count = 0
         self.last_opponent_card_ids = set()
+        self._opponent_card_rects = []
+        self._opponent_card_hovered_idx = -1
+        self._opponent_hover_surface = None
         self.cached_all_seeing_eye_status = None
         self.cached_opponent_all_seeing_eye_status = None
         self._last_all_seeing_eye_status = None
@@ -1467,45 +1475,101 @@ class FieldScreen(SubScreen):
         start_y = castle_comp.top + int(0.028 * settings.SCREEN_HEIGHT)
         
         card_spacing = max(1, int(0.003 * settings.SCREEN_HEIGHT))
+        group_spacing = int(0.015 * settings.SCREEN_HEIGHT)  # Extra gap between main/side
         
-        # Draw cached card surfaces
+        main_count = self.opponent_card_cache_main_count
+        
+        # Draw cached card surfaces and track rects for hover detection
+        self._opponent_card_rects = []
         current_y = start_y
-        for card_surface in self.opponent_card_cache:
+        mouse_pos = pygame.mouse.get_pos()
+        hovered_idx = -1
+        
+        for i, card_surface in enumerate(self.opponent_card_cache):
+            # Add group separator between main and side cards
+            if i == main_count and main_count > 0 and len(self.opponent_card_cache) > main_count:
+                current_y += group_spacing
+            
+            card_rect = pygame.Rect(start_x, current_y,
+                                    card_surface.get_width(), card_surface.get_height())
+            self._opponent_card_rects.append(card_rect)
+            
+            if card_rect.collidepoint(mouse_pos):
+                hovered_idx = i
+            
             self.window.blit(card_surface, (start_x, current_y))
             current_y += rotated_card_height + card_spacing
+        
+        # Draw enlarged hover card on top
+        if hovered_idx != self._opponent_card_hovered_idx:
+            self._opponent_card_hovered_idx = hovered_idx
+            if hovered_idx >= 0:
+                self._opponent_hover_surface = self._make_opponent_hover_card(hovered_idx)
+            else:
+                self._opponent_hover_surface = None
+        
+        if self._opponent_hover_surface and hovered_idx >= 0:
+            hr = self._opponent_card_rects[hovered_idx]
+            # Position enlarged card to the right of the small card
+            hx = hr.right + int(0.006 * settings.SCREEN_WIDTH)
+            hy = hr.centery - self._opponent_hover_surface.get_height() // 2
+            # Keep on screen
+            if hx + self._opponent_hover_surface.get_width() > settings.SCREEN_WIDTH:
+                hx = hr.left - self._opponent_hover_surface.get_width() - int(0.006 * settings.SCREEN_WIDTH)
+            hy = max(0, min(hy, settings.SCREEN_HEIGHT - self._opponent_hover_surface.get_height()))
+            self.window.blit(self._opponent_hover_surface, (hx, hy))
 
     def _generate_opponent_card_cache(self, opponent_main_cards, opponent_side_cards):
         """Generate and cache rotated card surfaces for opponent's hand."""
         self.opponent_card_cache = []
+        self._opponent_card_data = []  # Store (suit, rank) for hover enlargement
+        self._opponent_card_hovered_idx = -1
+        self._opponent_hover_surface = None
         
         card_display_width = int(settings.CARD_WIDTH * 0.27)
         card_display_height = int(settings.CARD_HEIGHT * 0.27)
         
         # Generate main cards
         for card in opponent_main_cards:
-            card_img = CardImg(self.window, card.get('suit'), card.get('rank'), 
+            suit, rank = card.get('suit'), card.get('rank')
+            card_img = CardImg(self.window, suit, rank, 
                               width=card_display_width, height=card_display_height)
             
-            # Create and rotate surface
             card_surface = pygame.Surface((card_display_width, card_display_height), pygame.SRCALPHA)
             card_img.front_img.convert_alpha()
             card_surface.blit(card_img.front_img, (0, 0))
             rotated_surface = pygame.transform.rotate(card_surface, -90)
             
             self.opponent_card_cache.append(rotated_surface)
+            self._opponent_card_data.append((suit, rank))
+        
+        self.opponent_card_cache_main_count = len(opponent_main_cards)
         
         # Generate side cards
         for card in opponent_side_cards:
-            card_img = CardImg(self.window, card.get('suit'), card.get('rank'),
+            suit, rank = card.get('suit'), card.get('rank')
+            card_img = CardImg(self.window, suit, rank,
                               width=card_display_width, height=card_display_height)
             
-            # Create and rotate surface
             card_surface = pygame.Surface((card_display_width, card_display_height), pygame.SRCALPHA)
             card_img.front_img.convert_alpha()
             card_surface.blit(card_img.front_img, (0, 0))
             rotated_surface = pygame.transform.rotate(card_surface, -90)
             
             self.opponent_card_cache.append(rotated_surface)
+            self._opponent_card_data.append((suit, rank))
+
+    def _make_opponent_hover_card(self, idx):
+        """Create an enlarged rotated card surface for the hovered opponent card."""
+        if idx < 0 or idx >= len(self._opponent_card_data):
+            return None
+        suit, rank = self._opponent_card_data[idx]
+        hover_w = int(settings.CARD_WIDTH * 0.55)
+        hover_h = int(settings.CARD_HEIGHT * 0.55)
+        card_img = CardImg(self.window, suit, rank, width=hover_w, height=hover_h)
+        surf = pygame.Surface((hover_w, hover_h), pygame.SRCALPHA)
+        surf.blit(card_img.front_img, (0, 0))
+        return pygame.transform.rotate(surf, -90)
 
     def _draw_target_selection_prompt(self):
         """Draw a prominent prompt asking the player to select a target figure."""
