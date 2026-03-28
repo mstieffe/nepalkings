@@ -2133,6 +2133,12 @@ class BattleScreen(SubScreen):
             self.game.battle_moves_ready = False
             self.game.waiting_for_opponent_battle_moves = False
             self.game.both_battle_moves_ready = False
+            # Suppress the next turn summary — battle result was already shown
+            # in the victory/defeat/draw dialogue.
+            self.game.suppress_next_turn_summary = True
+            # Clear any stale ceasefire-ended flag so a queued notification from
+            # mid-battle doesn't fire after returning to the field screen.
+            self.game.pending_ceasefire_ended = False
 
         # Clear all local battle state
         self.reset_state()
@@ -2146,6 +2152,12 @@ class BattleScreen(SubScreen):
                 battle_shop._loaded_game_key = None
                 battle_shop._battle_moves_confirmed = False
                 battle_shop._waiting_for_opponent = False
+
+        # Flush stale queued game-screen notifications from the battle phase.
+        # Important flag-based notifications (side cards, loot, auto-fill) use
+        # their own flags and will re-queue when their check_ methods run again.
+        if parent and hasattr(parent, 'pending_notifications'):
+            parent.pending_notifications = []
 
         # Switch subscreen
         self.state.subscreen = 'field'
