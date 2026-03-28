@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 #from server.game_service.deck import Deck
 #from server.models import Game, Player, MainCard, SideCard, db
 

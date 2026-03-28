@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 import pygame
 from config import settings
 from config.screen_settings import _UI_SCALE

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """
 Simple figure image class for displaying figure icons in dialogue boxes.
 Similar to CardImg but for figures - shows only the icon without stats/info.

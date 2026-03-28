@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 from models import MainCard, SideCard, db, MainRank, Suit
 import random
 

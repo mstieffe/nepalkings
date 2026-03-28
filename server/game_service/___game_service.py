@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 from game_service.models import db, Game, Player, Card
 
 def create_deck(game):

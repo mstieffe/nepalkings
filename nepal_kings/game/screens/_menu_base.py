@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """
 Shared helpers for menu-style screens (game_menu, new_game, load_game).
 

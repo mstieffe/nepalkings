@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """Nepal Kings — launcher with startup resolution picker.
 
 Run this instead of nepal_kings.py.  On first launch a small dialog

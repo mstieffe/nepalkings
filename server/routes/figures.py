@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm.attributes import flag_modified
 from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, SideCard, LogEntry, User, ActiveSpell

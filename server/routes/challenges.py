@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 from flask import Blueprint, request, jsonify
 from models import db, User, Challenge
 import server_settings as settings

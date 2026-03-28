@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 import pygame
 from datetime import datetime
 from email.utils import parsedate_to_datetime

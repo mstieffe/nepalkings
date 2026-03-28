@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 #!/usr/bin/env python3
 """List all active PNGs sorted by file size, showing dimensions."""
 from PIL import Image

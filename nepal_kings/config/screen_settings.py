@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 # Screen settings
 import os as _os
 SCREEN_WIDTH  = int(_os.environ.get('NK_SCREEN_WIDTH',  '1920'))

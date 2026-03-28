@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """Client-side API service for battle shop operations."""
 
 from utils import http_compat as requests

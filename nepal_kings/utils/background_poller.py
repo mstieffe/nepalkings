@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """Lightweight background wrapper for network polling.
 
 Desktop:  runs the callable in a daemon thread.

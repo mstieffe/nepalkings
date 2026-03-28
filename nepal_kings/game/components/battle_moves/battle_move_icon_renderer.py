@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """Shared rendering logic for battle move icons (diamond-shaped slots).
 
 Used by both the Battle Shop Screen (bought slots) and Battle Screen

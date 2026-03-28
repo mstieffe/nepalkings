@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """Battle Screen — the 3-round battle phase between two figures.
 
 Layout (left → right):

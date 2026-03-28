@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """Event-based mouse button tracking for reliable touch support on mobile.
 
 On emscripten/mobile, ``pygame.mouse.get_pressed()`` can miss quick taps

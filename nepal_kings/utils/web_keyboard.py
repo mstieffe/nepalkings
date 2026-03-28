@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """Mobile virtual-keyboard helpers for pygbag web builds.
 
 On mobile browsers the virtual keyboard only opens when a native HTML

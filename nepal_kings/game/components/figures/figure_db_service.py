@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 from typing import List, Dict
 from game.components.figures.figure import Figure, FigureFamily
 from game.components.cards.card import Card

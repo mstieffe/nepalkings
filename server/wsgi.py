@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
 """WSGI entry point for PythonAnywhere (or any WSGI host).
 
 In PythonAnywhere's Web tab, set the WSGI configuration file to point here:
