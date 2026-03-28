@@ -159,13 +159,14 @@ class FigureIcon:
 
             # Draw background rectangle for text
             padding = settings.FIGURE_NAME_PADDING
+            text_padding = int(padding * settings.FIGURE_NAME_TEXT_PADDING_SCALE)
             corner_r = settings.FIGURE_NAME_CORNER_R
             shadow_off = settings.FIGURE_NAME_SHADOW_OFFSET
             bg_rect = pygame.Rect(
                 text_rect.x - padding,
-                text_rect.y - padding + y_offset,
+                text_rect.y - text_padding + y_offset,
                 text_rect.width + 2 * padding,
-                text_rect.height + 2 * padding
+                text_rect.height + 2 * text_padding
             )
 
             # Drop shadow
