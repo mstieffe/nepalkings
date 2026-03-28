@@ -662,14 +662,22 @@ class Game:
                     print(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
                     self.pending_opponent_turn_summary = opponent_turn_summary
                 elif self.suppress_next_turn_summary:
-                    print(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
                     self.suppress_next_turn_summary = False
-                    self.pending_opponent_turn_summary = None
+                    # Only suppress if opponent hasn't taken a real action in the
+                    # new round (action is a dict for real moves, string for 'unknown').
+                    # After a lost battle the first start_turn carries the opponent's
+                    # actual build/spell/card-change — that must NOT be discarded.
+                    if opponent_turn_summary and isinstance(opponent_turn_summary.get('action'), dict):
+                        print(f"[START_TURN] Suppress flag set but opponent took real action — showing notification")
+                        self.pending_opponent_turn_summary = opponent_turn_summary
+                    else:
+                        print(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold (no real action)")
+                        self.pending_opponent_turn_summary = None
                 elif self.pending_advance_notification:
                     print(f"[START_TURN] Suppressing opponent turn summary — advance notification pending")
                 elif self.pending_battle_ready:
                     print(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
-                elif self.pending_fold_result or self.fold_outcome:
+                elif self.pending_fold_result:
                     print(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
                 elif opponent_turn_summary:
                     print(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
