@@ -451,6 +451,7 @@ class Game:
         # Reset fold tracking when server clears fold state (new round started)
         if previous_fold_outcome and not self.fold_outcome:
             self.fold_result_shown = False
+            self.pending_fold_result = False
 
         # Detect new fold outcome (transition from None to set)
         if self.fold_outcome and not previous_fold_outcome and not self.fold_result_shown:
