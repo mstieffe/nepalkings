@@ -580,7 +580,8 @@ class BattleShopScreen(SubScreen):
             self._player_figures = self.game.get_figures(families, is_opponent=False)
             self._resources_data = self.game.calculate_resources(families, is_opponent=False)
             self._figures_loaded_game_key = (getattr(self.game, 'game_id', None),
-                                              getattr(self.game, 'player_id', None))
+                                              getattr(self.game, 'player_id', None),
+                                              getattr(self.game, '_figures_data_version', 0))
         except Exception as e:
             print(f"[BattleShop] Failed to load player figures: {e}")
             self._player_figures = []
@@ -597,8 +598,8 @@ class BattleShopScreen(SubScreen):
         if not field_type:
             return []
 
-        # Ensure figures are loaded
-        if not self._player_figures or self._figures_loaded_game_key != (getattr(self.game, 'game_id', None), getattr(self.game, 'player_id', None)):
+        # Ensure figures are loaded (re-fetches when background poller updates figure data)
+        if not self._player_figures or self._figures_loaded_game_key != (getattr(self.game, 'game_id', None), getattr(self.game, 'player_id', None), getattr(self.game, '_figures_data_version', 0)):
             self._load_player_figures()
 
         bm_suit = bm.get('suit', '')
