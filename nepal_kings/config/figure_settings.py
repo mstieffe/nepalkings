@@ -29,8 +29,8 @@ FIGURE_NAME_FRAME_COLOR = (120, 72, 36)           # rich warm brown border
 FIGURE_NAME_SEP_COLOR = (170, 140, 100)           # soft separator
 FIGURE_NAME_SHADOW_COLOR = (40, 30, 18, 90)       # subtle drop shadow
 FIGURE_NAME_PADDING = int(0.005 * SCREEN_WIDTH)
-# On mobile, compress info-row vertical padding to save space
-FIGURE_NAME_INFO_PADDING_SCALE = 0.5 if _IS_MOBILE else 1.0
+# Compress info-row vertical padding to minimise box height on all devices
+FIGURE_NAME_INFO_PADDING_SCALE = 0.2
 FIGURE_NAME_CORNER_R = int(0.005 * SCREEN_HEIGHT)
 FIGURE_NAME_SHADOW_OFFSET = max(2, int(0.003 * SCREEN_HEIGHT))
 

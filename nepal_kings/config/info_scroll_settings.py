@@ -11,7 +11,7 @@ INFO_SCROLL_HEIGHT = int(0.24 * SCREEN_HEIGHT)
 INFO_SCROLL_BG_IMG_PATH = 'img/background/paper4.png'  # legacy, no longer used
 GLOW_RECT_IMG_PATH = 'img/glow/rect/'
 
-INFO_SCROLL_FONT_SIZE = FS_SMALL                              # was int(0.02 * _FS)
+INFO_SCROLL_FONT_SIZE = int(FS_SMALL * 0.82) if _IS_MOBILE else FS_SMALL  # was int(0.02 * _FS)
 INFO_SCROLL_Y_TITLE_MARGIN = int(0.015 * SCREEN_HEIGHT)
 INFO_SCROLL_TITLE_SPACING = int(0.025 * SCREEN_HEIGHT)
 INFO_SCROLL_LINE_SPACING = int(0.035 * SCREEN_HEIGHT)
@@ -76,9 +76,9 @@ SCOREBOARD_SCROLL_SPACER = int(0.01 * SCREEN_WIDTH)
 SCOREBOARD_SCROLL_BG_IMG_PATH = 'img/background/paper3.png'
 
 # On mobile, use smaller fonts so text fits the original-size panel
-SCOREBOARD_SCROLL_FONT_SIZE = int(FS_TINY * 0.94) if _IS_MOBILE else FS_SMALL        # was int(0.016 * _FS) / int(0.02 * _FS)
+SCOREBOARD_SCROLL_FONT_SIZE = int(FS_TINY * 0.82) if _IS_MOBILE else FS_SMALL        # was int(0.016 * _FS) / int(0.02 * _FS)
 SCOREBOARD_SCROLL_FONT_TITLE_SIZE = int(0.025 * SCREEN_HEIGHT)
-SCOREBOARD_SCROLL_NUMBER_FONT_SIZE = int(FS_HEADING * 1.08) if _IS_MOBILE else FS_TITLE  # was int(0.028 * _FS) / int(0.04 * _FS)
+SCOREBOARD_SCROLL_NUMBER_FONT_SIZE = FS_HEADING if _IS_MOBILE else FS_TITLE            # was int(0.028 * _FS) / int(0.04 * _FS)
 SCOREBOARD_SCROLL_LINE_SPACING = int(0.02 * SCREEN_HEIGHT)
 SCOREBOARD_SCROLL_TEXT_COLOR = (20, 20, 20)
 

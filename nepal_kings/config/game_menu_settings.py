@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _FS, _UI_SCALE, _IS_MOBILE
 from config.font_settings import FS_TITLE, FS_SUBTITLE, FS_HEADING, FS_BODY
 
 # ── Background & button images ──────────────────────────────────────
@@ -65,7 +65,7 @@ GAME_MENU_ICON_LOGOUT_GAP_Y  = int(0.006 * SCREEN_HEIGHT * _UI_SCALE)  # vertica
 # ── ListButton defaults (programmatic list-item buttons) ────────────
 LIST_BTN_W              = int(0.30 * SCREEN_WIDTH)
 LIST_BTN_H              = int(0.050 * SCREEN_HEIGHT)
-LIST_BTN_FONT_SIZE      = FS_BODY                          # was int(0.022 * _FS)
+LIST_BTN_FONT_SIZE      = int(FS_BODY * 0.85) if _IS_MOBILE else FS_BODY  # was int(0.022 * _FS)
 LIST_BTN_CORNER_RADIUS  = int(0.006 * SCREEN_HEIGHT)
 LIST_BTN_BORDER_W       = 1
 LIST_BTN_BG_CLR         = (35, 35, 40, 180)
