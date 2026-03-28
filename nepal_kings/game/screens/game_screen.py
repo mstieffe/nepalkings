@@ -2835,6 +2835,11 @@ class GameScreen(Screen):
             self._cached_castable_spells = None
             self._pending_spell_fetch_ready = False
             
+            # Discard any stale poller result so old server data doesn't
+            # overwrite the fresh response and re-trigger the spell dialogue
+            if self._game_poller and self._game_poller.has_result():
+                _ = self._game_poller.result
+            
             # Mark that we just allowed a spell so check_battle_modifier_changes
             # doesn't show a duplicate notification for the same modifier
             self._just_allowed_spell = True
@@ -3055,6 +3060,11 @@ class GameScreen(Screen):
             self.pending_spell_details = None
             self._cached_castable_spells = None
             self._pending_spell_fetch_ready = False
+            
+            # Discard any stale poller result so old server data doesn't
+            # overwrite the fresh response and re-trigger the spell dialogue
+            if self._game_poller and self._game_poller.has_result():
+                _ = self._game_poller.result
             
             # Update game state directly from response (no server call needed)
             if result.get('game'):

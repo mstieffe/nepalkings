@@ -24,7 +24,7 @@ BATTLE_PANEL_ICON_FRAME_SCALE = 1.3
 BATTLE_PANEL_ICON_GLOW_SIZE = int(0.08 * SCREEN_WIDTH * _BPIM)
 
 # Advance overlay icon — slightly bigger on mobile so the charge arrow is visible
-_ADVANCE_ICON_SCALE = 0.35 if _UI_SCALE > 1.0 else 0.25
+ADVANCE_ICON_SCALE = 0.35 if _UI_SCALE > 1.0 else 0.25
 BATTLE_PANEL_ICON_START_Y = int(0.17 * SCREEN_HEIGHT)
 BATTLE_PANEL_ICON_DELTA_Y = int(0.14 * SCREEN_HEIGHT)
 
