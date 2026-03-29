@@ -670,6 +670,11 @@ class GameScreen(Screen):
             # so it won't interfere with future spells.
             if self.waiting_for_counter_response:
                 self.waiting_for_counter_response = False
+                # Suppress the next turn summary — the caster already saw the
+                # opponent's last action at the start of this turn; the spell
+                # resolution triggers start_turn again but would re-show the
+                # same stale summary.
+                self.state.game.suppress_next_turn_summary = True
                 # Show caster notification that spell was resolved
                 spell_name = self.pending_spell_name or 'Your spell'
                 # Check logs to determine if spell was allowed or countered
@@ -1444,7 +1449,7 @@ class GameScreen(Screen):
         self.state.game.pending_ceasefire_ended = False
     
     def check_ceasefire_active_notification(self):
-        """Show ceasefire-active notification at the start of a new round."""
+        """Show ceasefire-active notification when ceasefire activates."""
         if not self.state.game or not self.state.game.pending_ceasefire_active_notification:
             return
         
@@ -1460,8 +1465,17 @@ class GameScreen(Screen):
             ceasefire_img = pygame.image.load(icon_path)
             images.append(ceasefire_img)
         
+        # Customize message based on whether Blitzkrieg is active
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+        
+        if has_blitzkrieg:
+            message = "Ceasefire is active!\n\nNo battles can commence while ceasefire is in effect.\n\nThe ceasefire will last until the last turn."
+        else:
+            message = "Ceasefire is active!\n\nNo battles can commence while ceasefire is in effect.\n\nThe ceasefire will last for 3 invader turns."
+        
         self.queue_or_show_notification({
-            'message': "Ceasefire is active!\n\nNo battles can commence while ceasefire is in effect.\n\nThe ceasefire will last for 3 invader turns.",
+            'message': message,
             'actions': ['ok'],
             'images': images if images else None,
             'icon': "info",
@@ -3760,6 +3774,9 @@ class GameScreen(Screen):
                     # Player selected a spell to counter with
                     self.counter_spell_selector = None
                     self._cast_counter_spell(result)
+            # Allow interaction with log (chat) and guide book while waiting
+            if self.state.subscreen in ('log', 'tutorial'):
+                self.subscreens[self.state.subscreen].handle_events(events)
             return
         
         # Block all game actions while waiting for opponent to counter/allow our spell.
@@ -3767,6 +3784,9 @@ class GameScreen(Screen):
         # but cannot interact with subscreens, hands, or perform any game action.
         if self.waiting_for_counter_response:
             super().handle_events(events)
+            # Allow interaction with log (chat) and guide book while waiting
+            if self.state.subscreen in ('log', 'tutorial'):
+                self.subscreens[self.state.subscreen].handle_events(events)
             return
         
         # During forced advance, only allow field and build_figure screens

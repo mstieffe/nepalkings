@@ -335,6 +335,11 @@ class Game:
         if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
             print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
             self.pending_ceasefire_ended = True
+        
+        # Detect ceasefire activation (transition from inactive to active)
+        if not previous_ceasefire and self.ceasefire_active:
+            print(f"[CEASEFIRE] Detected ceasefire activated (was inactive, now active)")
+            self.pending_ceasefire_active_notification = True
 
         # Update spell-related state
         previous_pending_spell_id = self.pending_spell_id
@@ -576,6 +581,11 @@ class Game:
         if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
             print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
             self.pending_ceasefire_ended = True
+        
+        # Detect ceasefire activation (transition from inactive to active)
+        if not previous_ceasefire and self.ceasefire_active:
+            print(f"[CEASEFIRE] Detected ceasefire activated (was inactive, now active)")
+            self.pending_ceasefire_active_notification = True
 
         # Update spell-related state
         self.pending_spell_id = game_dict.get('pending_spell_id')
