@@ -80,6 +80,9 @@ class Game:
         # Ceasefire ended notification (cleared after showing dialogue)
         self.pending_ceasefire_ended = False
         
+        # Ceasefire active notification (set after battle/fold when new round starts)
+        self.pending_ceasefire_active_notification = False
+        
         # Track previous ceasefire state to detect changes
         self.previous_ceasefire_active = self.ceasefire_active
         
@@ -691,16 +694,11 @@ class Game:
                     self.pending_opponent_turn_summary = opponent_turn_summary
                 elif self.suppress_next_turn_summary:
                     self.suppress_next_turn_summary = False
-                    # Only suppress if opponent hasn't taken a real action in the
-                    # new round (action is a dict for real moves, string for 'unknown').
-                    # After a lost battle the first start_turn carries the opponent's
-                    # actual build/spell/card-change — that must NOT be discarded.
-                    if opponent_turn_summary and isinstance(opponent_turn_summary.get('action'), dict):
-                        print(f"[START_TURN] Suppress flag set but opponent took real action — showing notification")
-                        self.pending_opponent_turn_summary = opponent_turn_summary
-                    else:
-                        print(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold (no real action)")
-                        self.pending_opponent_turn_summary = None
+                    # Fully suppress the post-battle/fold turn summary — the
+                    # round-start notifications (victory/defeat, ceasefire, side
+                    # cards) already cover what the player needs to know.
+                    print(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
+                    self.pending_opponent_turn_summary = None
                 elif (self.pending_advance_notification or
                       (self.advancing_figure_id and
                        self.advancing_player_id != self.player_id)):

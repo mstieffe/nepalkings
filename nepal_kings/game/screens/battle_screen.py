@@ -2139,6 +2139,9 @@ class BattleScreen(SubScreen):
             # Clear any stale ceasefire-ended flag so a queued notification from
             # mid-battle doesn't fire after returning to the field screen.
             self.game.pending_ceasefire_ended = False
+            # Queue ceasefire-active notification for the new round
+            if self.game.ceasefire_active:
+                self.game.pending_ceasefire_active_notification = True
 
         # Clear all local battle state
         self.reset_state()

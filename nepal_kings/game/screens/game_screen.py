@@ -457,9 +457,6 @@ class GameScreen(Screen):
         # Check for auto-fill notification
         self.check_auto_fill_notification()
         
-        # Check for post-battle side card draw notification
-        self.check_post_battle_side_cards()
-        
         # Check for battle loot notification (which card the winner kept)
         self.check_loot_notification()
         
@@ -492,6 +489,14 @@ class GameScreen(Screen):
         # Check for ceasefire ended notification AFTER action results
         # so it appears after the success message of the action that caused it
         self.check_ceasefire_ended_notification()
+        
+        # Check for ceasefire active notification (new round start)
+        # Queued after victory/defeat so it appears second
+        self.check_ceasefire_active_notification()
+        
+        # Check for post-battle side card draw notification LAST
+        # so it appears after victory/defeat and ceasefire notifications
+        self.check_post_battle_side_cards()
         
         # Check for pending counter spell state
         self.check_counter_spell_state()
@@ -1438,6 +1443,33 @@ class GameScreen(Screen):
         # Clear the notification
         self.state.game.pending_ceasefire_ended = False
     
+    def check_ceasefire_active_notification(self):
+        """Show ceasefire-active notification at the start of a new round."""
+        if not self.state.game or not self.state.game.pending_ceasefire_active_notification:
+            return
+        
+        # Defer while still on battle screen
+        if self.state.subscreen == 'battle':
+            return
+        
+        # Load ceasefire active icon
+        import os
+        icon_path = os.path.join('img', 'status_icons', 'ceasefire_active.png')
+        images = []
+        if os.path.exists(icon_path):
+            ceasefire_img = pygame.image.load(icon_path)
+            images.append(ceasefire_img)
+        
+        self.queue_or_show_notification({
+            'message': "Ceasefire is active!\n\nNo battles can commence while ceasefire is in effect.\n\nThe ceasefire will last for 3 invader turns.",
+            'actions': ['ok'],
+            'images': images if images else None,
+            'icon': "info",
+            'title': "Ceasefire Active"
+        })
+        
+        self.state.game.pending_ceasefire_active_notification = False
+    
     def check_infinite_hammer_activation(self):
         """Check if Infinite Hammer spell was just activated and show initial dialogue."""
         if not self.state.game:
@@ -1608,7 +1640,7 @@ class GameScreen(Screen):
             self.queue_or_show_notification({
                 'message': (f"You have no figures that can advance!\n\n"
                            f"{winner} wins {points} points and is now the invader.\n\n"
-                           f"Round {new_round} begins. It's your turn!"),
+                           f"Round {new_round} begins. {winner} starts the new round."),
                 'actions': ['ok'],
                 'icon': 'magic',
                 'title': "Defeat"
@@ -2189,7 +2221,7 @@ class GameScreen(Screen):
                     title = "Defeat"
                     message = (f"You have folded.\n\n"
                                f"{winner} wins {points} points and is now the invader.\n\n"
-                               f"Round {new_round} begins. It's your turn!")
+                               f"Round {new_round} begins. {winner} starts the new round.")
                 
                 self.state.game.fold_result_shown = True
                 self.queue_or_show_notification({
@@ -2230,6 +2262,9 @@ class GameScreen(Screen):
         # Clear stale ceasefire-ended flag (update_from_dict may have just set it
         # due to the battle resolution clearing a Blitzkrieg ceasefire)
         self.state.game.pending_ceasefire_ended = False
+        # Queue ceasefire-active notification for the new round
+        if self.state.game.ceasefire_active:
+            self.state.game.pending_ceasefire_active_notification = True
         # Sync modifier tracking to current state so stale poll data that still
         # contains the old modifier doesn't look "new" after we clear the list
         current = self.state.game.battle_modifier
@@ -2312,7 +2347,7 @@ class GameScreen(Screen):
             title = "Defeat"
             message = (f"{reason_text}\n\n"
                        f"{opponent_name} wins 10 points and is now the invader.\n\n"
-                       f"Round {new_round} begins. It's your turn!")
+                       f"Round {new_round} begins. {opponent_name} starts the new round.")
         
         self.state.game.fold_result_shown = True
         self.state.game.pending_fold_result = False
