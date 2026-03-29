@@ -1431,6 +1431,11 @@ class GameScreen(Screen):
             self.state.game.pending_ceasefire_ended = False
             return
         
+        # Defer: don't interrupt other notification sequences — wait until
+        # the queue is empty and no dialogue is active
+        if self.dialogue_box or self.pending_notifications:
+            return
+        
         # Load ceasefire passive icon
         import os
         icon_path = os.path.join('img', 'status_icons', 'ceasefire_passive.png')
@@ -1477,6 +1482,11 @@ class GameScreen(Screen):
         
         # Defer while still on battle screen
         if self.state.subscreen == 'battle':
+            return
+        
+        # Defer: don't interrupt other notification sequences — wait until
+        # the queue is empty and no dialogue is active
+        if self.dialogue_box or self.pending_notifications:
             return
         
         # Load ceasefire active icon
