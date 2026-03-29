@@ -361,11 +361,18 @@ class Game:
                 self.pending_ceasefire_active_notification = False
                 self._ceasefire_notified_round = cur_round
                 self._ceasefire_notified_state = 'ended'
+                # Mark display-round so stale poll data can't re-show "active"
+                # for a round where ceasefire already ended.
+                self._ceasefire_active_displayed_round = cur_round
         
         # Detect ceasefire activation (transition from inactive to active)
         if not previous_ceasefire and self.ceasefire_active:
-            # Dedup: only fire once per (round, state) pair
-            if self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'active':
+            # Ignore if ceasefire already ended this round — stale server data
+            # from a concurrent request that loaded the game before the
+            # ceasefire-end commit was visible.
+            if self._ceasefire_notified_round == cur_round and self._ceasefire_notified_state == 'ended':
+                print(f"[CEASEFIRE] _apply_game_dict: ignoring activation — ceasefire already ended round={cur_round} (stale poll data)")
+            elif self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'active':
                 print(f"[CEASEFIRE] _apply_game_dict: activating notification, prev_polled={previous_ceasefire}, now={self.ceasefire_active}, round={cur_round}, displayed_round={self._ceasefire_active_displayed_round}")
                 self.pending_ceasefire_active_notification = True
                 self._ceasefire_notified_round = cur_round

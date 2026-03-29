@@ -1468,6 +1468,13 @@ class GameScreen(Screen):
             self.state.game.pending_ceasefire_active_notification = False
             return
         
+        # If ceasefire already ended this round, this is stale data — discard
+        if (self.state.game._ceasefire_notified_round == self.state.game.current_round
+                and self.state.game._ceasefire_notified_state == 'ended'):
+            print(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire already ended round {self.state.game.current_round}")
+            self.state.game.pending_ceasefire_active_notification = False
+            return
+        
         # Defer while still on battle screen
         if self.state.subscreen == 'battle':
             return
