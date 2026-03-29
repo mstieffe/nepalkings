@@ -952,6 +952,12 @@ class GameScreen(Screen):
         if not isinstance(current_modifiers, list):
             current_modifiers = []
         
+        # Skip detection right after a battle ended — stale poll data may
+        # still contain old modifiers that look "new" after the reset.
+        if self.state.game.suppress_next_turn_summary:
+            self._previous_battle_modifiers = list(current_modifiers)
+            return
+        
         previous_types = [m.get('type') for m in self._previous_battle_modifiers]
         current_types = [m.get('type') for m in current_modifiers]
         
@@ -1402,6 +1408,13 @@ class GameScreen(Screen):
         # Guard: if ceasefire is actually active now (e.g. transient state during
         # battle resolution), drop the stale notification
         if self.state.game.ceasefire_active:
+            self.state.game.pending_ceasefire_ended = False
+            return
+        
+        # Guard: don't show ceasefire-ended right after a battle resolved —
+        # the Blitzkrieg ceasefire naturally ends with the battle and doesn't
+        # need a separate notification.
+        if self.state.game.suppress_next_turn_summary:
             self.state.game.pending_ceasefire_ended = False
             return
         
@@ -2214,7 +2227,17 @@ class GameScreen(Screen):
         # Reset active battle phase state
         self.state.game.in_battle_phase = False
         self.state.game.battle_turns_left = 0
-        self._previous_battle_modifiers = []
+        # Clear stale ceasefire-ended flag (update_from_dict may have just set it
+        # due to the battle resolution clearing a Blitzkrieg ceasefire)
+        self.state.game.pending_ceasefire_ended = False
+        # Sync modifier tracking to current state so stale poll data that still
+        # contains the old modifier doesn't look "new" after we clear the list
+        current = self.state.game.battle_modifier
+        self._previous_battle_modifiers = list(current) if isinstance(current, list) else []
+        # Discard any stale poller result so old server data (with modifier/
+        # ceasefire still active) doesn't re-trigger notifications
+        if self._game_poller and self._game_poller.has_result():
+            _ = self._game_poller.result
         
         self.battle_button.locked = True
         
@@ -3704,6 +3727,13 @@ class GameScreen(Screen):
                     self._cast_counter_spell(result)
             return
         
+        # Block all game actions while waiting for opponent to counter/allow our spell.
+        # The caster can still navigate between screens (super handles tab buttons)
+        # but cannot interact with subscreens, hands, or perform any game action.
+        if self.waiting_for_counter_response:
+            super().handle_events(events)
+            return
+        
         # During forced advance, only allow field and build_figure screens
         # (build screen is needed for build+advance with instant charge figures)
         if (self.state.game and self.state.game.pending_forced_advance and
@@ -3746,10 +3776,6 @@ class GameScreen(Screen):
             if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
                 self.subscreens[self.state.subscreen].handle_events(events)
             return
-        
-        # For caster waiting for response, allow view actions but show error for game actions
-        # This is handled by subscreens checking self.state.game.turn
-        # The waiting_for_counter_response flag will be checked in action handlers
         
         super().handle_events(events)
 

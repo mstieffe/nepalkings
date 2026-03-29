@@ -2159,6 +2159,17 @@ class BattleScreen(SubScreen):
         if parent and hasattr(parent, 'pending_notifications'):
             parent.pending_notifications = []
 
+        # Discard any stale poller result so old server data (with modifiers/
+        # ceasefire still active) doesn't re-trigger notifications after battle.
+        if parent and hasattr(parent, '_game_poller') and parent._game_poller:
+            if parent._game_poller.has_result():
+                _ = parent._game_poller.result
+
+        # Sync modifier tracking so stale poll data doesn't look "new"
+        if parent and hasattr(parent, '_previous_battle_modifiers'):
+            current = self.game.battle_modifier if self.game else []
+            parent._previous_battle_modifiers = list(current) if isinstance(current, list) else []
+
         # Switch subscreen
         self.state.subscreen = 'field'
 

@@ -325,7 +325,11 @@ class Game:
         self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
         
         # Detect ceasefire ending (transition from active to inactive)
-        if previous_ceasefire and not self.ceasefire_active:
+        # Skip if a battle just ended (suppress_next_turn_summary is set by
+        # _reset_battle_state / _reset_after_battle).  Blitzkrieg ceasefire
+        # always ends when its battle resolves; we don't want a stale or
+        # fresh post-battle poll to trigger a ceasefire-ended notification.
+        if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
             print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
             self.pending_ceasefire_ended = True
 
@@ -564,7 +568,9 @@ class Game:
         self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
         
         # Detect ceasefire ending (transition from active to inactive)
-        if previous_ceasefire and not self.ceasefire_active:
+        # Skip if a battle just ended (suppress_next_turn_summary is set by
+        # _reset_battle_state / _reset_after_battle).
+        if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
             print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
             self.pending_ceasefire_ended = True
 
