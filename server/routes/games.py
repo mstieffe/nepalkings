@@ -2189,6 +2189,8 @@ def _destroy_figure_and_collect_cards(figure):
     """Delete a figure and return its cards as a list of (card_obj, type_str).
 
     Does NOT return cards to deck yet — caller decides what happens with them.
+    Cards are detached from the player (player_id=None) so they appear as
+    orphans until finish_battle_pick_card returns them to the deck.
     """
     card_assocs = CardToFigure.query.filter_by(figure_id=figure.id).all()
     cards = []
@@ -2199,6 +2201,7 @@ def _destroy_figure_and_collect_cards(figure):
             card = SideCard.query.get(assoc.card_id)
         if card:
             card.part_of_figure = False
+            card.player_id = None
             cards.append((card, assoc.card_type))
 
     # Delete associations and the figure
