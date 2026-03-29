@@ -299,7 +299,7 @@ village_dict_list = [
                 produces={'material_red': number} if suit in ['Hearts', 'Diamonds'] else {'material_black': number},
                 requires={'villager_red': 1},
             )
-            for number in [3, 4, 6]
+            for number in [3, 6]
         ]
     },
     # Stone Mason
@@ -329,7 +329,7 @@ village_dict_list = [
                 produces={'material_black': number} if suit in ['Clubs', 'Spades'] else {'material_red': number},
                 requires={'villager_black': 1},
             )
-            for number in [3, 4, 6]
+            for number in [3, 6]
         ]
     },
     # Himalaya Healer

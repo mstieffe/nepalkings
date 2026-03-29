@@ -519,6 +519,7 @@ class BattleScreen(SubScreen):
                 figure=self.player_figure,
                 is_visible=True,
                 all_player_figures=player_battle_figures,
+                resources_data=self._resources_data,
             )
             self.player_figure_icon.show_advance_overlay = False
             _rescale_battle_icon(self.player_figure_icon, _bfis)
@@ -530,6 +531,7 @@ class BattleScreen(SubScreen):
                 figure=self.player_figure_2,
                 is_visible=True,
                 all_player_figures=player_battle_figures,
+                resources_data=self._resources_data,
             )
             self.player_figure_icon_2.show_advance_overlay = False
             _rescale_battle_icon(self.player_figure_icon_2, _bfis)
@@ -541,6 +543,7 @@ class BattleScreen(SubScreen):
                 figure=self.opponent_figure,
                 is_visible=True,  # Fully revealed during battle
                 all_player_figures=opponent_battle_figures,
+                resources_data=self._opponent_resources_data,
             )
             self.opponent_figure_icon.show_advance_overlay = False
             _rescale_battle_icon(self.opponent_figure_icon, _bfis)
@@ -552,6 +555,7 @@ class BattleScreen(SubScreen):
                 figure=self.opponent_figure_2,
                 is_visible=True,
                 all_player_figures=opponent_battle_figures,
+                resources_data=self._opponent_resources_data,
             )
             self.opponent_figure_icon_2.show_advance_overlay = False
             _rescale_battle_icon(self.opponent_figure_icon_2, _bfis)
