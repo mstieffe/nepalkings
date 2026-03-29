@@ -2924,6 +2924,19 @@ def finish_battle_pick_card():
             picked.part_of_figure = False
             picked.part_of_battle_move = False
 
+    # Store picked card info in last_battle_result BEFORE any db.session.commit()
+    # calls (return_cards_to_deck commits internally, which would lose uncommitted
+    # JSON column changes due to SQLAlchemy's plain db.JSON not tracking mutations).
+    print(f"[PICK_CARD] picked_card_info={picked_card_info}, last_battle_result exists={game.last_battle_result is not None}")
+    if picked_card_info:
+        result_dict = dict(game.last_battle_result) if game.last_battle_result else {}
+        result_dict['picked_card'] = picked_card_info
+        game.last_battle_result = result_dict
+        flag_modified(game, 'last_battle_result')
+        print(f"[PICK_CARD] Stored picked_card in last_battle_result: {picked_card_info}")
+    else:
+        print(f"[PICK_CARD] No card picked (winner skipped or no cards)")
+
     # Return remaining battle-move cards to deck
     main_to_deck = []
     side_to_deck = []
@@ -2973,18 +2986,6 @@ def finish_battle_pick_card():
 
     # Collect resting figure IDs BEFORE clearing battle state
     resting_ids = _collect_resting_figure_ids(game)
-
-    # Store picked card info in last_battle_result so the loser sees it on polling
-    print(f"[PICK_CARD] picked_card_info={picked_card_info}, last_battle_result exists={game.last_battle_result is not None}")
-    if picked_card_info and game.last_battle_result:
-        result = dict(game.last_battle_result)
-        result['picked_card'] = picked_card_info
-        game.last_battle_result = result
-        print(f"[PICK_CARD] Stored picked_card in last_battle_result: {picked_card_info}")
-    elif not picked_card_info:
-        print(f"[PICK_CARD] No card picked (winner skipped or no cards)")
-    elif not game.last_battle_result:
-        print(f"[PICK_CARD] WARNING: last_battle_result is None — cannot store picked_card")
 
     # Clear battle state (this resets fold_winner_id to None)
     _clear_battle_state(game)
