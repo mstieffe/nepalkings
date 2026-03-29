@@ -554,8 +554,11 @@ class Game:
         # Detect loot notification for battle loser (which card the winner kept)
         last_result = game_dict.get('last_battle_result') or {}
         picked_card = last_result.get('picked_card')
+        loser_id = last_result.get('loser_player_id')
+        if picked_card:
+            print(f"[LOOT_DEBUG] _apply_game_dict: picked_card={picked_card}, loser_id={loser_id} (type={type(loser_id)}), player_id={self.player_id} (type={type(self.player_id)}), round={self.current_round}, loot_round={self._loot_notification_round}")
         if (picked_card and self.player_id and
-                last_result.get('loser_player_id') == self.player_id and
+                loser_id == self.player_id and
                 self.current_round != self._loot_notification_round):
             self.pending_loot_notification = {
                 'suit': picked_card['suit'],
@@ -660,6 +663,21 @@ class Game:
                 self.pending_post_battle_side_cards = my_cards
                 self._post_battle_side_cards_round = self.current_round
                 print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
+
+        # Detect loot notification for battle loser (which card the winner kept)
+        last_result = game_dict.get('last_battle_result') or {}
+        picked_card = last_result.get('picked_card')
+        if (picked_card and self.player_id and
+                last_result.get('loser_player_id') == self.player_id and
+                self.current_round != self._loot_notification_round):
+            self.pending_loot_notification = {
+                'suit': picked_card['suit'],
+                'rank': picked_card['rank'],
+                'card_type': picked_card['card_type'],
+                'winner_name': last_result.get('winner_name', 'Opponent'),
+            }
+            self._loot_notification_round = self.current_round
+            print(f"[LOOT] Opponent kept card (update_from_dict): {picked_card}")
 
         # Note: logs and chats are fetched by the background poller
         # No need to block here — the next poll cycle will pick them up

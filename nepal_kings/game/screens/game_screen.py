@@ -1125,9 +1125,11 @@ class GameScreen(Screen):
 
         # Defer while still on battle screen
         if self.state.subscreen == 'battle':
+            print(f"[LOOT_DEBUG] check_loot_notification: deferred (subscreen=battle)")
             return
 
         loot = self.state.game.pending_loot_notification
+        print(f"[LOOT_DEBUG] check_loot_notification: showing loot={loot}, dialogue_box={self.dialogue_box is not None}")
         winner_name = loot.get('winner_name', 'Opponent')
         suit = loot['suit']
         rank = loot['rank']
