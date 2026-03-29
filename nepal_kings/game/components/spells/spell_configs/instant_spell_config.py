@@ -37,7 +37,7 @@ DRAW_2_SIDE_CARDS_CONFIG = {
     "glow_img": "blue.png",
     "spells": lambda family, suit: [
         Spell(
-            name=f"Draw 2 Side",
+            name=f"Draw 2 SideCards",
             family=family,
             cards=[Card('2', suit, 2)],
             suit=suit,
@@ -120,7 +120,7 @@ DRAW_2_MAIN_CARDS_CONFIG = {
     "glow_img": "blue.png",
     "spells": lambda family, suit: [
         Spell(
-            name=f"Draw 2 Main",
+            name=f"Draw 2 MainCards",
             family=family,
             cards=[Card('8', suit, 8)],
             suit=suit,
