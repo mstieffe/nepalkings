@@ -656,8 +656,13 @@ class GameScreen(Screen):
         
         # Clear waiting state when spell is resolved
         if not self.state.game.pending_spell_id:
-            # Clear the guard once the server confirms the spell is gone
-            self._last_resolved_spell_id = None
+            # NOTE: Do NOT clear _last_resolved_spell_id here.
+            # On the web platform, stale poller results can arrive AFTER
+            # update_from_dict() has already set pending_spell_id = None.
+            # If we clear the guard now, the stale data will re-trigger the
+            # counter-spell dialogue.  The guard persists until a new game
+            # is loaded (_reset_game_screen_state) and uses unique spell IDs,
+            # so it won't interfere with future spells.
             if self.waiting_for_counter_response:
                 self.waiting_for_counter_response = False
                 # Show caster notification that spell was resolved
@@ -2936,6 +2941,13 @@ class GameScreen(Screen):
             })
         else:
             self.need_to_respond_to_spell = False
+            # Set guard even on failure — the spell was already resolved
+            # server-side (e.g. the first allow succeeded), so stale polls
+            # must not re-trigger the dialogue.
+            self._last_resolved_spell_id = resolved_spell_id
+            # Discard stale poller result
+            if self._game_poller and self._game_poller.has_result():
+                _ = self._game_poller.result
             # Clear spell cache on error too
             self.pending_spell_details = None
             self._cached_castable_spells = None
@@ -3160,6 +3172,12 @@ class GameScreen(Screen):
                 'title': "Error"
             })
             self.need_to_respond_to_spell = False
+            # Set guard even on failure — the spell was already resolved
+            # server-side, so stale polls must not re-trigger the dialogue.
+            self._last_resolved_spell_id = self.state.game.pending_spell_id
+            # Discard stale poller result
+            if self._game_poller and self._game_poller.has_result():
+                _ = self._game_poller.result
             # Clear spell cache on error too
             self.pending_spell_details = None
             self._cached_castable_spells = None
