@@ -167,6 +167,7 @@ class BattleScreen(SubScreen):
         self._player_figures = []           # all player Figure objects
         self._opponent_figures = []         # all opponent Figure objects
         self._resources_data = None         # resource totals for deficit check
+        self._opponent_resources_data = None  # opponent resource totals for deficit check
 
         # ── panel icon hover state ──
         self._panel_hovered_index = None    # index of hovered panel icon (0-2 or None)
@@ -238,6 +239,7 @@ class BattleScreen(SubScreen):
         self._player_figures = []
         self._opponent_figures = []
         self._resources_data = None
+        self._opponent_resources_data = None
         self._panel_hovered_index = None
         self._panel_clicked_index = None
         self._gambled_this_round = False
@@ -415,11 +417,13 @@ class BattleScreen(SubScreen):
             self._player_figures = self.game.get_figures(families, is_opponent=False)
             self._opponent_figures = self.game.get_figures(families, is_opponent=True)
             self._resources_data = self.game.calculate_resources(families, is_opponent=False)
+            self._opponent_resources_data = self.game.calculate_resources(families, is_opponent=True)
         except Exception as e:
             print(f"[BattleScreen] Failed to load player figures for call eligibility: {e}")
             self._player_figures = []
             self._opponent_figures = []
             self._resources_data = None
+            self._opponent_resources_data = None
 
         # Reset played state
         self.player_played = [None, None, None]
@@ -1156,7 +1160,11 @@ class BattleScreen(SubScreen):
         # Load data if needed
         current_key = (getattr(game, 'game_id', None),
                        getattr(game, 'player_id', None))
-        if current_key[0] and current_key != self._loaded_game_key:
+        needs_reload = current_key[0] and current_key != self._loaded_game_key
+        # Safety: reload if we're in battle phase but have no moves loaded
+        if not needs_reload and current_key[0] and not self.player_moves and getattr(game, 'in_battle_phase', False):
+            needs_reload = True
+        if needs_reload:
             self._load_battle_data()
             # (Re)create the background poller for this game
             self._battle_poller = BackgroundPoller(
@@ -1386,11 +1394,11 @@ class BattleScreen(SubScreen):
                 break
 
         # Figure icon click handling
-        for fig_icon, fig_obj, fig_list in (
-            (self.player_figure_icon, self.player_figure, self._player_figures),
-            (self.player_figure_icon_2, self.player_figure_2, self._player_figures),
-            (self.opponent_figure_icon, self.opponent_figure, None),
-            (self.opponent_figure_icon_2, self.opponent_figure_2, None),
+        for fig_icon, fig_obj, fig_list, res_data in (
+            (self.player_figure_icon, self.player_figure, self._player_figures, self._resources_data),
+            (self.player_figure_icon_2, self.player_figure_2, self._player_figures, self._resources_data),
+            (self.opponent_figure_icon, self.opponent_figure, None, self._opponent_resources_data),
+            (self.opponent_figure_icon_2, self.opponent_figure_2, None, self._opponent_resources_data),
         ):
             if fig_icon:
                 fig_icon.handle_events(events)
@@ -1401,7 +1409,7 @@ class BattleScreen(SubScreen):
                         fig_obj,
                         self.game,
                         all_figures=fig_list,
-                        resources_data=self._resources_data,
+                        resources_data=res_data,
                     )
                     fig_icon.clicked = False  # reset toggle so it doesn't re-trigger
                     return
@@ -1431,7 +1439,7 @@ class BattleScreen(SubScreen):
                     fig,
                     self.game,
                     all_figures=fig_list,
-                    resources_data=self._resources_data if is_player else None,
+                    resources_data=self._resources_data if is_player else self._opponent_resources_data,
                 )
                 return True
         return False

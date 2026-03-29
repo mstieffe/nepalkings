@@ -725,6 +725,8 @@ def upgrade_figure():
         # Inherit cannot_be_blocked and rest_after_attack from the old figure, or accept from client override
         new_cannot_be_blocked = data.get('cannot_be_blocked', figure.cannot_be_blocked)
         new_rest_after_attack = data.get('rest_after_attack', figure.rest_after_attack)
+        new_produces = data.get('produces', {}) or {}
+        new_requires = data.get('requires', {}) or {}
         new_figure = Figure(
             player_id=player_id,
             game_id=game_id,
@@ -735,6 +737,8 @@ def upgrade_figure():
             suit=figure.suit,
             description=figure.description,
             upgrade_family_name=None,  # The upgraded figure may or may not have further upgrades
+            produces=new_produces,
+            requires=new_requires,
             cannot_be_blocked=new_cannot_be_blocked,
             rest_after_attack=new_rest_after_attack
         )

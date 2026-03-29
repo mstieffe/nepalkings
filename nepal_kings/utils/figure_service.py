@@ -112,7 +112,7 @@ def pickup_figure(figure_id, player_id, game_id):
         raise Exception(f"Failed to pick up figure: {response.json().get('message', 'Unknown error')}")
     return response.json()
 
-def upgrade_figure(figure_id, player_id, game_id, upgrade_card_id, upgrade_card_type):
+def upgrade_figure(figure_id, player_id, game_id, upgrade_card_id, upgrade_card_type, produces=None, requires=None):
     """
     Upgrade a figure by adding an upgrade card and changing it to a new family.
     :param figure_id: ID of the figure to upgrade.
@@ -120,13 +120,17 @@ def upgrade_figure(figure_id, player_id, game_id, upgrade_card_id, upgrade_card_
     :param game_id: ID of the game.
     :param upgrade_card_id: ID of the card used for upgrading.
     :param upgrade_card_type: Type of the upgrade card ('main' or 'side').
+    :param produces: Resource production dict for the upgraded figure.
+    :param requires: Resource requirements dict for the upgraded figure.
     """
     data = {
         'figure_id': figure_id,
         'player_id': player_id,
         'game_id': game_id,
         'upgrade_card_id': upgrade_card_id,
-        'upgrade_card_type': upgrade_card_type
+        'upgrade_card_type': upgrade_card_type,
+        'produces': produces or {},
+        'requires': requires or {}
     }
     response = requests.post(f'{settings.SERVER_URL}/figures/upgrade_figure', json=data, timeout=10)
     if response.status_code != 200:

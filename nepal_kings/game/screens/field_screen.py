@@ -652,13 +652,34 @@ class FieldScreen(SubScreen):
                             # Determine card type
                             upgrade_card_type = 'main' if upgrade_card.is_main_card else 'side'
                             
+                            # Look up the upgrade target family to get produces/requires
+                            target_produces = {}
+                            target_requires = {}
+                            target_family_name = self.figure_pending_upgrade.upgrade_family_name
+                            if target_family_name and target_family_name in self.figure_manager.families:
+                                target_family = self.figure_manager.families[target_family_name]
+                                for tmpl in target_family.figures:
+                                    if tmpl.suit == self.figure_pending_upgrade.suit:
+                                        # Match by number card if both have one
+                                        if self.figure_pending_upgrade.number_card and tmpl.number_card:
+                                            if tmpl.number_card.rank == self.figure_pending_upgrade.number_card.rank:
+                                                target_produces = tmpl.produces or {}
+                                                target_requires = tmpl.requires or {}
+                                                break
+                                        elif not self.figure_pending_upgrade.number_card and not tmpl.number_card:
+                                            target_produces = tmpl.produces or {}
+                                            target_requires = tmpl.requires or {}
+                                            break
+                            
                             # Call server to upgrade the figure
                             result = upgrade_figure(
                                 self.figure_pending_upgrade.id,
                                 self.game.player_id,
                                 self.game.game_id,
                                 upgrade_card.id,
-                                upgrade_card_type
+                                upgrade_card_type,
+                                produces=target_produces,
+                                requires=target_requires
                             )
                             
                             if result.get('success'):
