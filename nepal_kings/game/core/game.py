@@ -569,8 +569,8 @@ class Game:
         last_result = game_dict.get('last_battle_result') or {}
         picked_card = last_result.get('picked_card')
         loser_id = last_result.get('loser_player_id')
-        if picked_card:
-            print(f"[LOOT_DEBUG] _apply_game_dict: picked_card={picked_card}, loser_id={loser_id} (type={type(loser_id)}), player_id={self.player_id} (type={type(self.player_id)}), round={self.current_round}, loot_round={self._loot_notification_round}")
+        if last_result:
+            print(f"[LOOT_DEBUG] _apply_game_dict: last_battle_result keys={list(last_result.keys())}, picked_card={picked_card}, loser_id={loser_id} (type={type(loser_id)}), player_id={self.player_id} (type={type(self.player_id)}), round={self.current_round}, loot_round={self._loot_notification_round}")
         if (picked_card and self.player_id and
                 loser_id == self.player_id and
                 self.current_round != self._loot_notification_round):

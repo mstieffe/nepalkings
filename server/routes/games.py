@@ -2972,10 +2972,16 @@ def finish_battle_pick_card():
     resting_ids = _collect_resting_figure_ids(game)
 
     # Store picked card info in last_battle_result so the loser sees it on polling
+    print(f"[PICK_CARD] picked_card_info={picked_card_info}, last_battle_result exists={game.last_battle_result is not None}")
     if picked_card_info and game.last_battle_result:
         result = dict(game.last_battle_result)
         result['picked_card'] = picked_card_info
         game.last_battle_result = result
+        print(f"[PICK_CARD] Stored picked_card in last_battle_result: {picked_card_info}")
+    elif not picked_card_info:
+        print(f"[PICK_CARD] No card picked (winner skipped or no cards)")
+    elif not game.last_battle_result:
+        print(f"[PICK_CARD] WARNING: last_battle_result is None — cannot store picked_card")
 
     # Clear battle state (this resets fold_winner_id to None)
     _clear_battle_state(game)
