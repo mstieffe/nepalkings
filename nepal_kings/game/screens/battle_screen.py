@@ -1171,6 +1171,24 @@ class BattleScreen(SubScreen):
                 lambda gid, pid: game_service.get_battle_state(gid, pid),
                 args=(current_key[0], game.player_id))
 
+        # Safety: retry loading figures if we're in battle but figures are
+        # still missing (can happen when cached_figures_data wasn't ready yet
+        # on the initial load after a reconnect).
+        if (self.player_figure is None
+                and current_key[0]
+                and getattr(game, 'in_battle_phase', False)
+                and (game.advancing_figure_id or game.defending_figure_id)):
+            self._load_battle_figures()
+            # Also refresh the supporting figure lists / resources
+            try:
+                families = self.figure_manager.families
+                self._player_figures = game.get_figures(families, is_opponent=False)
+                self._opponent_figures = game.get_figures(families, is_opponent=True)
+                self._resources_data = game.calculate_resources(families, is_opponent=False)
+                self._opponent_resources_data = game.calculate_resources(families, is_opponent=True)
+            except Exception:
+                pass
+
         # Non-blocking battle state poll (every ~1 s)
         now = pygame.time.get_ticks()
         if not hasattr(self, '_battle_poll_timer'):
