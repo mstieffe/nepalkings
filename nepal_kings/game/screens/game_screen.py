@@ -2276,7 +2276,10 @@ class GameScreen(Screen):
     def _reset_battle_state(self):
         """Reset all battle-related state after fold or loss."""
         self.state.game.pending_battle_ready = False
-        self.state.game.battle_ready_shown = False
+        # Keep battle_ready_shown = True so stale in-flight polls can't
+        # re-trigger the fight/fold dialogue.  It's reset by _apply_game_dict
+        # when the server clears advancing_figure_id (new round).
+        self.state.game.battle_ready_shown = True
         self.state.game.pending_forced_advance = False
         self.state.game.forced_advance_dialogue_shown = False
         self.state.game.pending_defender_selection = False

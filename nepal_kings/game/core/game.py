@@ -406,6 +406,13 @@ class Game:
         # Reset advance-notification tracking when advance is fully cleared
         if not self.advancing_figure_id:
             self._last_advance_notified_id = None
+            # Server cleared battle state (new round) — allow battle_ready
+            # detection again.  Until this moment, battle_ready_shown stays
+            # True to block stale in-flight polls from re-triggering the
+            # battle/fold dialogue.
+            if previous_advancing:
+                self.battle_ready_shown = False
+                self.pending_battle_ready = False
 
         # Detect opponent advance (new advance appeared and it's not ours)
         # Use turn value from game_dict directly (self.turn is stale at this point)

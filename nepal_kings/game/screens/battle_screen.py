@@ -2163,12 +2163,16 @@ class BattleScreen(SubScreen):
             self.game.pending_forced_advance = False
             self.game.forced_advance_dialogue_shown = False
             self.game.pending_battle_ready = False
-            self.game.battle_ready_shown = False
+            # Keep battle_ready_shown = True so stale in-flight polls can't
+            # re-trigger the fight/fold dialogue.  It's reset by
+            # _apply_game_dict when the server clears advancing_figure_id.
+            self.game.battle_ready_shown = True
             self.game.pending_own_advance_notification = False
             self.game.pending_advance_notification = False
             self.game.waiting_for_battle_decision = False
             self.game.pending_fold_result = False
-            self.game.fold_result_shown = False
+            # Keep fold_result_shown = True (same logic as battle_ready_shown)
+            self.game.fold_result_shown = True
             self.game.auto_proceed_to_battle = False
             self.game.battle_moves_phase = False
             self.game.battle_moves_ready = False
