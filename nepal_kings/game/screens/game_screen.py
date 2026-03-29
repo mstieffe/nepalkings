@@ -454,9 +454,6 @@ class GameScreen(Screen):
         self._update_field_badge()
         self._update_battle_badge()
         
-        # Check for auto-fill notification
-        self.check_auto_fill_notification()
-        
         # Check for battle loot notification (which card the winner kept)
         self.check_loot_notification()
         
@@ -494,9 +491,13 @@ class GameScreen(Screen):
         # Queued after victory/defeat so it appears second
         self.check_ceasefire_active_notification()
         
-        # Check for post-battle side card draw notification LAST
+        # Check for post-battle side card draw notification
         # so it appears after victory/defeat and ceasefire notifications
         self.check_post_battle_side_cards()
+        
+        # Check for auto-fill notification LAST among post-battle notifications
+        # so it appears after victory/defeat, loot, ceasefire, and side cards
+        self.check_auto_fill_notification()
         
         # Check for pending counter spell state
         self.check_counter_spell_state()
