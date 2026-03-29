@@ -103,6 +103,7 @@ class GameScreen(Screen):
         self.counter_spell_selector = None  # Active counter spell selector UI
         self._cached_castable_spells = None  # Cached castable spells for current pending spell
         self._pending_spell_fetch_ready = False  # Flag: background fetch completed
+        self._last_resolved_spell_id = None  # Guard: prevents stale polls from re-triggering
         
         _report(0.88, 'Loading spells …')
         # Pre-create SpellManager so spell images are loaded at startup, not on first counter-spell
@@ -536,6 +537,7 @@ class GameScreen(Screen):
         self.counter_spell_selector = None
         self._cached_castable_spells = None
         self._pending_spell_fetch_ready = False
+        self._last_resolved_spell_id = None
         
         # Reset battle modifier tracking
         self._previous_battle_modifiers = []
@@ -622,6 +624,9 @@ class GameScreen(Screen):
         
         # Check if this player needs to respond to a counterable spell
         if self.state.game.waiting_for_counter and not self.need_to_respond_to_spell:
+            # Guard: ignore stale poll data for a spell we already resolved
+            if self.state.game.pending_spell_id == self._last_resolved_spell_id:
+                return
             # Player needs to respond - start background fetch (non-blocking)
             self.need_to_respond_to_spell = True
             self._fetch_pending_spell_async()
@@ -633,6 +638,9 @@ class GameScreen(Screen):
         
         # Check if player is waiting for opponent's response (caster side)
         if self.state.game.pending_spell_id and not self.state.game.waiting_for_counter and not self.waiting_for_counter_response:
+            # Guard: ignore stale poll data for a spell we already resolved
+            if self.state.game.pending_spell_id == self._last_resolved_spell_id:
+                return
             # Player cast a counterable spell and is waiting
             self.waiting_for_counter_response = True
             
@@ -648,6 +656,8 @@ class GameScreen(Screen):
         
         # Clear waiting state when spell is resolved
         if not self.state.game.pending_spell_id:
+            # Clear the guard once the server confirms the spell is gone
+            self._last_resolved_spell_id = None
             if self.waiting_for_counter_response:
                 self.waiting_for_counter_response = False
                 # Show caster notification that spell was resolved
@@ -2871,15 +2881,17 @@ class GameScreen(Screen):
         
         # Save spell data before clearing cache (needed for icon lookup)
         spell_data = self.pending_spell_details or {}
+        resolved_spell_id = self.state.game.pending_spell_id
         
         result = spell_service.allow_spell(
             player_id=self.state.game.player_id,
             game_id=self.state.game.game_id,
-            pending_spell_id=self.state.game.pending_spell_id
+            pending_spell_id=resolved_spell_id
         )
         
         if result.get('success'):
             self.need_to_respond_to_spell = False
+            self._last_resolved_spell_id = resolved_spell_id
             
             # Clear spell cache immediately so next spell gets fresh data
             self.pending_spell_details = None
@@ -3106,6 +3118,7 @@ class GameScreen(Screen):
         
         if result.get('success'):
             self.need_to_respond_to_spell = False
+            self._last_resolved_spell_id = self.state.game.pending_spell_id
             
             # Clear spell cache immediately so next spell gets fresh data
             self.pending_spell_details = None
