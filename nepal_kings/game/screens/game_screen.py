@@ -1453,6 +1453,11 @@ class GameScreen(Screen):
         if not self.state.game or not self.state.game.pending_ceasefire_active_notification:
             return
         
+        # If ceasefire is no longer active, discard the stale notification
+        if not self.state.game.ceasefire_active:
+            self.state.game.pending_ceasefire_active_notification = False
+            return
+        
         # Defer while still on battle screen
         if self.state.subscreen == 'battle':
             return

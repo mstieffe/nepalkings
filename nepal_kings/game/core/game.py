@@ -336,6 +336,8 @@ class Game:
         if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
             print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
             self.pending_ceasefire_ended = True
+            # Clear stale active notification — ceasefire ended takes priority
+            self.pending_ceasefire_active_notification = False
         
         # Detect ceasefire activation (transition from inactive to active)
         if not previous_ceasefire and self.ceasefire_active:
@@ -590,6 +592,8 @@ class Game:
         if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
             print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
             self.pending_ceasefire_ended = True
+            # Clear stale active notification — ceasefire ended takes priority
+            self.pending_ceasefire_active_notification = False
         
         # Detect ceasefire activation (transition from inactive to active)
         if not previous_ceasefire and self.ceasefire_active:
