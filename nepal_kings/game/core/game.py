@@ -86,6 +86,11 @@ class Game:
         # Track previous ceasefire state to detect changes
         self.previous_ceasefire_active = self.ceasefire_active
         
+        # Polling-only ceasefire snapshot — only _apply_game_dict updates this.
+        # update_from_dict must NOT touch it, so action responses can't create
+        # false transitions.
+        self._last_polled_ceasefire = self.ceasefire_active
+        
         # Round-based dedup: tracks (round, state) we last notified about
         # so repeated polls for the same round don't re-fire notifications.
         # state: 'active' or 'ended'
@@ -329,10 +334,13 @@ class Game:
                 }
                 print(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
         
-        # Update ceasefire tracking
-        previous_ceasefire = self.ceasefire_active
+        # Update ceasefire tracking — use _last_polled_ceasefire for transition
+        # detection so that update_from_dict (action responses) can't create
+        # false transitions between polls.
+        previous_ceasefire = self._last_polled_ceasefire
         self.ceasefire_active = game_dict.get('ceasefire_active', False)
         self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
+        self._last_polled_ceasefire = self.ceasefire_active
         cur_round = game_dict.get('current_round', self.current_round)
         
         # Detect ceasefire ending (transition from active to inactive)
