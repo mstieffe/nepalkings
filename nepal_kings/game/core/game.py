@@ -97,6 +97,7 @@ class Game:
         self.defending_figure_id = game_dict.get('defending_figure_id')
         self.defending_figure_id_2 = game_dict.get('defending_figure_id_2')
         self.pending_advance_notification = False  # True when opponent advance detected
+        self._last_advance_notified_id = None  # advancing_figure_id already notified about
         self.pending_forced_advance = False  # True when invader must advance (0 turns)
         self.forced_advance_dialogue_shown = False  # Track if forced advance dialogue was shown
         self.pending_defender_selection = False  # True when advancing player must pick opponent's defender
@@ -366,12 +367,18 @@ class Game:
         if self.pending_forced_advance and self.advancing_figure_id:
             self.pending_forced_advance = False
         
+        # Reset advance-notification tracking when advance is fully cleared
+        if not self.advancing_figure_id:
+            self._last_advance_notified_id = None
+
         # Detect opponent advance (new advance appeared and it's not ours)
         # Use turn value from game_dict directly (self.turn is stale at this point)
         is_now_our_turn = (game_dict.get('turn_player_id') == self.player_id)
         if (self.advancing_figure_id and not previous_advancing and 
-            self.advancing_player_id != self.player_id and is_now_our_turn):
+            self.advancing_player_id != self.player_id and is_now_our_turn
+            and self.advancing_figure_id != self._last_advance_notified_id):
             self.pending_advance_notification = True
+            self._last_advance_notified_id = self.advancing_figure_id
             # Advance notification replaces the normal opponent turn summary
             self.pending_opponent_turn_summary = None
         # Civil War fallback: advance was detected on an earlier poll when it
@@ -382,8 +389,10 @@ class Game:
               is_now_our_turn and
               self.previous_turn_player_id != self.player_id and
               not self.pending_advance_notification and
-              not self.defending_figure_id):
+              not self.defending_figure_id and
+              self.advancing_figure_id != self._last_advance_notified_id):
             self.pending_advance_notification = True
+            self._last_advance_notified_id = self.advancing_figure_id
             self.pending_opponent_turn_summary = None
         
         # Skip advance/defender detection while battle is confirmed or in progress

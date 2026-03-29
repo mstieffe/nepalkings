@@ -1211,6 +1211,17 @@ class BattleScreen(SubScreen):
         if self._battle_poller and self._battle_poller.has_result():
             self._apply_battle_state(self._battle_poller.result)
 
+        # Auto-finish: if all moves are played and the opponent already
+        # resolved the battle (battle_confirmed went False or fold_winner_id
+        # appeared), auto-trigger _finish_battle for the lagging client.
+        if (self._all_moves_played()
+                and not self._battle_result
+                and not self.dialogue_box
+                and game
+                and (not getattr(game, 'battle_confirmed', True)
+                     or getattr(game, 'fold_winner_id', None))):
+            self._finish_battle()
+
         # Auto-skip: if it's our turn but we have no unused moves left
         self._check_auto_skip()
 
