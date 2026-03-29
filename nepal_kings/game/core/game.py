@@ -97,6 +97,11 @@ class Game:
         self._ceasefire_notified_round = None
         self._ceasefire_notified_state = None
         
+        # Display-level dedup: the round for which ceasefire-active was
+        # already shown on screen.  Prevents any code path from showing
+        # it twice in the same round.
+        self._ceasefire_active_displayed_round = None
+        
         # Infinite Hammer mode tracking
         self.infinite_hammer_active = False
         self.infinite_hammer_dialogue_shown = False
@@ -361,7 +366,7 @@ class Game:
         if not previous_ceasefire and self.ceasefire_active:
             # Dedup: only fire once per (round, state) pair
             if self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'active':
-                print(f"[CEASEFIRE] Detected ceasefire activated (was inactive, now active) round={cur_round}")
+                print(f"[CEASEFIRE] _apply_game_dict: activating notification, prev_polled={previous_ceasefire}, now={self.ceasefire_active}, round={cur_round}, displayed_round={self._ceasefire_active_displayed_round}")
                 self.pending_ceasefire_active_notification = True
                 self._ceasefire_notified_round = cur_round
                 self._ceasefire_notified_state = 'active'

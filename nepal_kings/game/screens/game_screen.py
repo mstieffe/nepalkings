@@ -1458,6 +1458,13 @@ class GameScreen(Screen):
         
         # If ceasefire is no longer active, discard the stale notification
         if not self.state.game.ceasefire_active:
+            print(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire no longer active")
+            self.state.game.pending_ceasefire_active_notification = False
+            return
+        
+        # Display-level dedup: only show once per round regardless of source
+        if self.state.game._ceasefire_active_displayed_round == self.state.game.current_round:
+            print(f"[CEASEFIRE] check_ceasefire_active: discarding — already displayed for round {self.state.game.current_round}")
             self.state.game.pending_ceasefire_active_notification = False
             return
         
@@ -1481,6 +1488,9 @@ class GameScreen(Screen):
             message = "Ceasefire is active!\n\nNo battles can commence while ceasefire is in effect.\n\nThe ceasefire will last until the last turn."
         else:
             message = "Ceasefire is active!\n\nNo battles can commence while ceasefire is in effect.\n\nThe ceasefire will last for 3 invader turns."
+        
+        print(f"[CEASEFIRE] check_ceasefire_active: SHOWING notification for round {self.state.game.current_round}")
+        self.state.game._ceasefire_active_displayed_round = self.state.game.current_round
         
         self.queue_or_show_notification({
             'message': message,
@@ -2284,7 +2294,9 @@ class GameScreen(Screen):
         # Clear stale ceasefire-ended flag
         self.state.game.pending_ceasefire_ended = False
         # Queue ceasefire-active notification for the new round
-        if self.state.game.ceasefire_active:
+        # (only if not already displayed this round)
+        if self.state.game.ceasefire_active and self.state.game._ceasefire_active_displayed_round != self.state.game.current_round:
+            print(f"[CEASEFIRE] _reset_battle_state: queuing ceasefire-active, round={self.state.game.current_round}")
             self.state.game.pending_ceasefire_active_notification = True
             # Mark as notified so polling doesn't re-trigger
             self.state.game._ceasefire_notified_round = self.state.game.current_round

@@ -2181,7 +2181,9 @@ class BattleScreen(SubScreen):
             # mid-battle doesn't fire after returning to the field screen.
             self.game.pending_ceasefire_ended = False
             # Queue ceasefire-active notification for the new round
-            if self.game.ceasefire_active:
+            # (only if not already displayed this round)
+            if self.game.ceasefire_active and self.game._ceasefire_active_displayed_round != self.game.current_round:
+                print(f"[CEASEFIRE] _reset_after_battle: queuing ceasefire-active, round={self.game.current_round}")
                 self.game.pending_ceasefire_active_notification = True
                 # Mark as notified so polling doesn't re-trigger
                 self.game._ceasefire_notified_round = self.game.current_round
