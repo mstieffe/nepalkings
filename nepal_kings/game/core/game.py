@@ -86,6 +86,12 @@ class Game:
         # Track previous ceasefire state to detect changes
         self.previous_ceasefire_active = self.ceasefire_active
         
+        # Round-based dedup: tracks (round, state) we last notified about
+        # so repeated polls for the same round don't re-fire notifications.
+        # state: 'active' or 'ended'
+        self._ceasefire_notified_round = None
+        self._ceasefire_notified_state = None
+        
         # Infinite Hammer mode tracking
         self.infinite_hammer_active = False
         self.infinite_hammer_dialogue_shown = False
@@ -327,6 +333,7 @@ class Game:
         previous_ceasefire = self.ceasefire_active
         self.ceasefire_active = game_dict.get('ceasefire_active', False)
         self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
+        cur_round = game_dict.get('current_round', self.current_round)
         
         # Detect ceasefire ending (transition from active to inactive)
         # Skip if a battle just ended (suppress_next_turn_summary is set by
@@ -334,15 +341,22 @@ class Game:
         # always ends when its battle resolves; we don't want a stale or
         # fresh post-battle poll to trigger a ceasefire-ended notification.
         if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
-            print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
-            self.pending_ceasefire_ended = True
-            # Clear stale active notification — ceasefire ended takes priority
-            self.pending_ceasefire_active_notification = False
+            # Dedup: only fire once per (round, state) pair
+            if self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'ended':
+                print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive) round={cur_round}")
+                self.pending_ceasefire_ended = True
+                self.pending_ceasefire_active_notification = False
+                self._ceasefire_notified_round = cur_round
+                self._ceasefire_notified_state = 'ended'
         
         # Detect ceasefire activation (transition from inactive to active)
         if not previous_ceasefire and self.ceasefire_active:
-            print(f"[CEASEFIRE] Detected ceasefire activated (was inactive, now active)")
-            self.pending_ceasefire_active_notification = True
+            # Dedup: only fire once per (round, state) pair
+            if self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'active':
+                print(f"[CEASEFIRE] Detected ceasefire activated (was inactive, now active) round={cur_round}")
+                self.pending_ceasefire_active_notification = True
+                self._ceasefire_notified_round = cur_round
+                self._ceasefire_notified_state = 'active'
 
         # Update spell-related state
         previous_pending_spell_id = self.pending_spell_id
@@ -584,24 +598,11 @@ class Game:
         self.invader_player_id = game_dict.get('invader_player_id')
         self.turn_player_id = game_dict.get('turn_player_id')
         
-        # Update ceasefire tracking
-        previous_ceasefire = self.ceasefire_active
+        # Update ceasefire tracking — raw fields only.
+        # Transition detection is handled exclusively by _apply_game_dict (polling)
+        # to avoid stale action-response data re-triggering notifications.
         self.ceasefire_active = game_dict.get('ceasefire_active', False)
         self.ceasefire_start_turn = game_dict.get('ceasefire_start_turn')
-        
-        # Detect ceasefire ending (transition from active to inactive)
-        # Skip if a battle just ended (suppress_next_turn_summary is set by
-        # _reset_battle_state / _reset_after_battle).
-        if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
-            print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive)")
-            self.pending_ceasefire_ended = True
-            # Clear stale active notification — ceasefire ended takes priority
-            self.pending_ceasefire_active_notification = False
-        
-        # Detect ceasefire activation (transition from inactive to active)
-        if not previous_ceasefire and self.ceasefire_active:
-            print(f"[CEASEFIRE] Detected ceasefire activated (was inactive, now active)")
-            self.pending_ceasefire_active_notification = True
 
         # Update spell-related state
         self.pending_spell_id = game_dict.get('pending_spell_id')

@@ -2183,6 +2183,9 @@ class BattleScreen(SubScreen):
             # Queue ceasefire-active notification for the new round
             if self.game.ceasefire_active:
                 self.game.pending_ceasefire_active_notification = True
+                # Mark as notified so polling doesn't re-trigger
+                self.game._ceasefire_notified_round = self.game.current_round
+                self.game._ceasefire_notified_state = 'active'
 
         # Clear all local battle state
         self.reset_state()

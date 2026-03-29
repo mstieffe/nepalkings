@@ -2281,12 +2281,14 @@ class GameScreen(Screen):
         # Reset active battle phase state
         self.state.game.in_battle_phase = False
         self.state.game.battle_turns_left = 0
-        # Clear stale ceasefire-ended flag (update_from_dict may have just set it
-        # due to the battle resolution clearing a Blitzkrieg ceasefire)
+        # Clear stale ceasefire-ended flag
         self.state.game.pending_ceasefire_ended = False
         # Queue ceasefire-active notification for the new round
         if self.state.game.ceasefire_active:
             self.state.game.pending_ceasefire_active_notification = True
+            # Mark as notified so polling doesn't re-trigger
+            self.state.game._ceasefire_notified_round = self.state.game.current_round
+            self.state.game._ceasefire_notified_state = 'active'
         # Sync modifier tracking to current state so stale poll data that still
         # contains the old modifier doesn't look "new" after we clear the list
         current = self.state.game.battle_modifier
