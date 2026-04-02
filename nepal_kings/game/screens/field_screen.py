@@ -437,6 +437,11 @@ class FieldScreen(SubScreen):
                 dialogue_before_response = self.dialogue_box
                 # Button clicked - process the response
                 if response == 'yes':
+                    # Block all actions in finished games
+                    if getattr(self.game, 'game_over', False):
+                        self.dialogue_box = None
+                        return
+
                     # Check if player is waiting for counter spell response
                     if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
                         if self.state.parent_screen.waiting_for_counter_response:
@@ -727,6 +732,9 @@ class FieldScreen(SubScreen):
                     # civil_war_defender_second flag stays set so they can pick
                     pass
                 elif response == 'skip':
+                    if getattr(self.game, 'game_over', False):
+                        self.dialogue_box = None
+                        return
                     # Civil War — player skips the second figure pick
                     from utils.game_service import skip_civil_war_second
                     if getattr(self.game, 'civil_war_awaiting_second', False):
@@ -1308,6 +1316,8 @@ class FieldScreen(SubScreen):
         
         :param target_figure: The figure selected as the target
         """
+        if getattr(self.game, 'game_over', False):
+            return
         from utils import spell_service
         
         pending = self.state.pending_spell_cast

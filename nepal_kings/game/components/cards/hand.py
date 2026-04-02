@@ -186,6 +186,8 @@ class Hand:
 
     def handle_button_click(self):
         """Handle the click on the round_arrow button."""
+        if getattr(self.game, 'game_over', False):
+            return
         selected_cards = self.get_selected_cards()
 
         if selected_cards:
@@ -271,6 +273,8 @@ class Hand:
     
     def handle_discard_confirm(self):
         """Handle confirmation of card discard."""
+        if getattr(self.game, 'game_over', False):
+            return False
         selected_cards = self.get_selected_cards()
         
         if len(selected_cards) == self.cards_to_discard_count:
@@ -352,6 +356,9 @@ class Hand:
             else:
                 # Normal mode dialogue handling
                 if response == 'yes':
+                    if getattr(self.game, 'game_over', False):
+                        self.dialogue_box = None
+                        return
                     print("Cards changed!")
                     # Change the selected cards
                     selected_cards = self.get_selected_cards()

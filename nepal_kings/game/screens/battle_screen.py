@@ -1329,6 +1329,8 @@ class BattleScreen(SubScreen):
 
     def _check_auto_skip(self):
         """Auto-skip the battle turn if it's our turn but we have no unused moves left."""
+        if getattr(self.game, 'game_over', False):
+            return
         if not self.game or not self.is_player_turn or self._auto_skip_pending:
             return
         if self._has_played_move_this_turn:
@@ -1605,6 +1607,8 @@ class BattleScreen(SubScreen):
         self._pending_use_move = None
         self._pending_use_figure = None
 
+        if getattr(self.game, 'game_over', False):
+            return
         if response != 'use!' or move_idx is None:
             return
 
@@ -2324,6 +2328,10 @@ class BattleScreen(SubScreen):
             self._pending_gamble_move = None
             return
 
+        if getattr(self.game, 'game_over', False):
+            self._pending_gamble_move = None
+            return
+
         move = self._pending_gamble_move
         self._pending_gamble_move = None
         if not move:
@@ -2387,6 +2395,10 @@ class BattleScreen(SubScreen):
             self._pending_combine_data = None
             return
 
+        if getattr(self.game, 'game_over', False):
+            self._pending_combine_data = None
+            return
+
         data = self._pending_combine_data
         self._pending_combine_data = None
         if not data:
@@ -2447,6 +2459,10 @@ class BattleScreen(SubScreen):
     def _on_dismantle_confirmed(self, response):
         """Handle the dismantle confirmation dialogue response."""
         if response != 'dismantle!':
+            self._pending_dismantle_move = None
+            return
+
+        if getattr(self.game, 'game_over', False):
             self._pending_dismantle_move = None
             return
 

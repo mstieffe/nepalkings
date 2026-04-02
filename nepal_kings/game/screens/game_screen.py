@@ -1670,6 +1670,8 @@ class GameScreen(Screen):
     
     def _handle_cannot_advance_loss(self):
         """Handle the case where the player cannot advance any figure — auto-lose."""
+        if getattr(self.state.game, 'game_over', False):
+            return
         from utils.game_service import cannot_advance_loss
         result = cannot_advance_loss(self.state.game.game_id, self.state.game.player_id)
         
@@ -2237,6 +2239,8 @@ class GameScreen(Screen):
     
     def _submit_battle_decision(self, decision):
         """Submit a battle decision (battle or fold) to the server and handle the response."""
+        if getattr(self.state.game, 'game_over', False):
+            return
         from utils.game_service import battle_decision
         result = battle_decision(self.state.game.game_id, self.state.game.player_id, decision)
         
@@ -2969,6 +2973,8 @@ class GameScreen(Screen):
     
     def _handle_counter_spell_counter(self):
         """Handle player choosing to counter the spell."""
+        if getattr(self.state.game, 'game_over', False):
+            return
         if not self.state.game or not self.state.game.pending_spell_id:
             return
         
@@ -3005,6 +3011,8 @@ class GameScreen(Screen):
     
     def _handle_counter_spell_allow(self):
         """Handle player choosing to allow the spell."""
+        if getattr(self.state.game, 'game_over', False):
+            return
         if not self.state.game or not self.state.game.pending_spell_id:
             return
         

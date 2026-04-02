@@ -480,6 +480,9 @@ class BattleShopScreen(SubScreen):
 
     def _buy_current_move(self):
         """Actually purchase the pending move via the server."""
+        if getattr(self.game, 'game_over', False):
+            self.dialogue_box = None
+            return
         move = self._pending_buy_move
         if not move:
             self.dialogue_box = None
@@ -681,6 +684,9 @@ class BattleShopScreen(SubScreen):
 
     def _return_current_slot_move(self):
         """Return a battle move from the slot."""
+        if getattr(self.game, 'game_over', False):
+            self.dialogue_box = None
+            return
         idx = self._pending_return_index
         if idx is None or idx >= len(self.bought_moves):
             self.dialogue_box = None
@@ -724,6 +730,8 @@ class BattleShopScreen(SubScreen):
 
     def _on_ready_confirm(self):
         """Player confirms their 3 battle moves — notify server."""
+        if getattr(self.game, 'game_over', False):
+            return
         if len(self.bought_moves) < settings.BATTLE_SHOP_MAX_MOVES:
             return
 
