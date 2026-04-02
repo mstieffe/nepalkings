@@ -117,9 +117,10 @@ class ScoreboardScroll:
 
     def draw_cross(self):
         """Draw the cross centered on top of the scroll background."""
-        # Horizontal line
-        horizontal_line_start = (0, self.height // 2)
-        horizontal_line_end = (self.width, self.height // 2)
+        # Horizontal line — shifted down to match bottom-row offset
+        h_y = self.height // 2 + settings.SCOREBOARD_BOTTOM_ROW_EXTRA_Y // 2
+        horizontal_line_start = (0, h_y)
+        horizontal_line_end = (self.width, h_y)
         # Vertical line
         vertical_line_start = (self.width // 2, 0)
         vertical_line_end = (self.width // 2, self.cross_height)
@@ -200,11 +201,13 @@ class ScoreboardScroll:
                            y_offset=top_offset, text_spacing=top_spacing)
         self.draw_cell("Round", self.text_dict.get("round", ""), self.x + self.cell_width, self.y,
                        y_offset=top_offset, text_spacing=top_spacing)
-        # On mobile, nudge bottom-row values down a little so they sit inside the box
+        # Nudge bottom-row cells down so there's more visual separation from the top row
+        _bot_extra = settings.SCOREBOARD_BOTTOM_ROW_EXTRA_Y
         _bot_offset = int(0.008 * settings.SCREEN_HEIGHT) if _IS_MOBILE else 0
-        self.draw_cell("You", self.text_dict.get("your_score", ""), self.x, self.y + self.cell_height, settings.COLOR_GREEN,
+        self.draw_cell("You", self.text_dict.get("your_score", ""), self.x, self.y + self.cell_height + _bot_extra, settings.COLOR_GREEN,
                        y_offset=_bot_offset)
-        self.draw_cell("Opponent", self.text_dict.get("opponent_score", ""), self.x + self.cell_width, self.y + self.cell_height, settings.COLOR_RED,
+        opponent_label = self.text_dict.get("opponent", "Opponent")
+        self.draw_cell(opponent_label, self.text_dict.get("opponent_score", ""), self.x + self.cell_width, self.y + self.cell_height + _bot_extra, settings.COLOR_RED,
                        y_offset=_bot_offset)
 
         # Draw the stake value
