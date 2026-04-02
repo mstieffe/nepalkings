@@ -439,6 +439,18 @@ class GameScreen(Screen):
         # ── Finished game: read-only mode — skip polling and notifications ──
         if self.state.game.game_over:
             self.state.game.game_over_shown = True  # suppress game-over dialogue
+
+            # One-time figure fetch for lightweight games (e.g. from async poller)
+            if not any(self.state.game.cached_figures_data.values()):
+                from utils.figure_service import fetch_figures
+                for player in self.state.game.players:
+                    pid = player['id']
+                    try:
+                        self.state.game.cached_figures_data[pid] = fetch_figures(pid)
+                    except Exception:
+                        self.state.game.cached_figures_data[pid] = []
+                self.state.game._figures_data_version += 1
+
             self.main_hand.update(self.state.game)
             self.side_hand.update(self.state.game)
             for elem in self.display_elements:
