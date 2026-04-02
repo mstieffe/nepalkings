@@ -236,6 +236,11 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         try:
             game_dicts = data['games']
             user = data['user']
+
+            # Sync gold (and any other user fields) so the display stays current
+            if user and self.state.user_dict:
+                self.state.user_dict['gold'] = user.get('gold', self.state.user_dict.get('gold', 0))
+
             current_game_ids = {g['id'] for g in game_dicts}
             if self.state._known_game_ids is None:
                 # First poll after login — check which games appeared while offline
