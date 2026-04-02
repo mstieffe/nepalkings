@@ -436,6 +436,18 @@ class GameScreen(Screen):
                 self._last_seen_battle_round = self._get_battle_snapshot()
             self.previous_subscreen = self.state.subscreen
         
+        # ── Finished game: read-only mode — skip polling and notifications ──
+        if self.state.game.game_over:
+            self.state.game.game_over_shown = True  # suppress game-over dialogue
+            self.main_hand.update(self.state.game)
+            self.side_hand.update(self.state.game)
+            for elem in self.display_elements:
+                if isinstance(elem, InfoScroll):
+                    elem.update(self.state.game, families=self.figure_manager.families)
+                else:
+                    elem.update(self.state.game)
+            return
+
         # Skip full server poll while defender is actively responding to counter spell
         # (they don't need fresh data while deciding, and the poll blocks the UI)
         if not self.need_to_respond_to_spell:

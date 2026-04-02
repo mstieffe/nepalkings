@@ -58,6 +58,9 @@ class CastSpellScreen(SubScreen):
         Cast the selected spell using the spell service.
         Maps dummy cards to real cards and sends to server.
         """
+        if getattr(self.game, 'game_over', False):
+            return
+
         # Check if player is waiting for counter spell response
         if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
             if self.state.parent_screen.waiting_for_counter_response:

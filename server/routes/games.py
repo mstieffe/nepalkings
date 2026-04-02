@@ -750,7 +750,7 @@ def get_games():
 
         # Explicitly specify the onclause to avoid ambiguity
         games = Game.query.join(Player, Player.game_id == Game.id).filter(
-            (Player.user_id == user.id) & (Game.state == 'open')
+            Player.user_id == user.id
         ).all()
 
         return jsonify({

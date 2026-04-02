@@ -48,6 +48,10 @@ _NEW_TAG_TXT = (30, 28, 24)
 # "Your turn" tag colour
 _TURN_TAG_CLR = (90, 200, 110)
 
+# "Finished" tag colours
+_FINISHED_TAG_BG  = (100, 90, 80)
+_FINISHED_TAG_TXT = (180, 170, 155)
+
 # Scrollbar
 _SCROLLBAR_W   = int(0.006 * _SW)
 _SCROLLBAR_CLR = (100, 95, 85, 180)
@@ -165,14 +169,18 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         if response.status_code != 200:
             return []
         game_dicts = response.json().get('games', [])
-        return [Game(gd, self.state.user_dict) for gd in game_dicts]
+        games = [Game(gd, self.state.user_dict) for gd in game_dicts]
+        games.sort(key=lambda g: (g.state == 'finished',))
+        return games
 
     def _parse_games_response(self, response):
         """Transform an HTTP response into a list of Game objects (used by async poller)."""
         if response.status_code != 200:
             return []
         game_dicts = response.json().get('games', [])
-        return [Game(gd, self.state.user_dict, lightweight=True) for gd in game_dicts]
+        games = [Game(gd, self.state.user_dict, lightweight=True) for gd in game_dicts]
+        games.sort(key=lambda g: (g.state == 'finished',))
+        return games
 
     # ── Helpers ───────────────────────────────────────────────────
 
@@ -223,7 +231,7 @@ class LoadGameScreen(MenuScreenMixin, Screen):
 
         # Rows (clipped to viewport)
         if not self.games:
-            hint = self._cell_font.render("No active games", True, (140, 140, 140))
+            hint = self._cell_font.render("No games", True, (140, 140, 140))
             self.window.blit(hint, (_TABLE_X + cell_pad, self._rows_top + int(0.01 * _SH)))
         else:
             self._draw_rows(cell_pad)
@@ -277,12 +285,24 @@ class LoadGameScreen(MenuScreenMixin, Screen):
                 x_off = cell_pad + (int(0.018 * _SW) if idx == 0 else 0)
                 self.window.blit(surf, (self._col_x(idx) + x_off, text_y))
 
-            # --- Status column (last): "Your turn" or "NEW" tag ---
+            # --- Status column (last): "Your turn", "NEW", or "Finished" tag ---
             status_x = self._col_x(len(_COL_DEFS) - 1) + cell_pad
+            is_finished = (game.state == 'finished')
             is_my_turn = (game.turn_player_id == game.player_id)
             is_new = game.game_id in self.state._new_game_ids
 
-            if is_new:
+            if is_finished:
+                tag_text = 'Finished'
+                tag_surf = self._tag_font.render(tag_text, True, _FINISHED_TAG_TXT)
+                tw, th = tag_surf.get_size()
+                pad_x, pad_y = int(0.006 * _SW), int(0.003 * _SH)
+                tag_rect = pygame.Rect(status_x, rect.centery - (th + 2 * pad_y) // 2,
+                                       tw + 2 * pad_x, th + 2 * pad_y)
+                tag_bg = pygame.Surface((tag_rect.w, tag_rect.h), pygame.SRCALPHA)
+                pygame.draw.rect(tag_bg, _FINISHED_TAG_BG, tag_bg.get_rect(), border_radius=4)
+                self.window.blit(tag_bg, tag_rect.topleft)
+                self.window.blit(tag_surf, (tag_rect.x + pad_x, tag_rect.y + pad_y))
+            elif is_new:
                 tag_text = 'NEW'
                 tag_surf = self._tag_font.render(tag_text, True, _NEW_TAG_TXT)
                 tw, th = tag_surf.get_size()
@@ -435,10 +455,13 @@ class LoadGameScreen(MenuScreenMixin, Screen):
                 self.set_action("load_game", label, "open")
                 stake_str = f"{game.stake} gold"
                 time_str = f"{game.turn_time_limit // 60} min" if game.turn_time_limit else "No Limit"
-                self.make_dialogue_box(
-                    f'Load game vs {game.opponent_name}?\n\n'
-                    f'Stake: {stake_str}\nTurn Limit: {time_str}',
-                    actions=["yes", "cancel"], title="Load Game")
+                is_finished = (game.state == 'finished')
+                title = "Review Game" if is_finished else "Load Game"
+                prompt = (f'Review finished game vs {game.opponent_name}?\n\n'
+                          f'Stake: {stake_str}\nTurn Limit: {time_str}') if is_finished else (
+                         f'Load game vs {game.opponent_name}?\n\n'
+                         f'Stake: {stake_str}\nTurn Limit: {time_str}')
+                self.make_dialogue_box(prompt, actions=["yes", "cancel"], title=title)
                 return
 
     def _handle_game_loading(self):

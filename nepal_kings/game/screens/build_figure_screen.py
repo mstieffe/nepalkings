@@ -62,6 +62,9 @@ class BuildFigureScreen(SubScreen):
 
     def create_figure_in_db(self, selected_figure, instant_charge_advance=False):
         """Insert the selected figure into the database. Returns the server response dict."""
+        if getattr(self.game, 'game_over', False):
+            return {'success': False, 'message': 'Game is finished'}
+
         # Map dummy cards in the figure to real cards in the player's hand
         real_cards = self.map_figure_cards_to_hand(selected_figure)
 
