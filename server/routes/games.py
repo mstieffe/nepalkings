@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import random
+import logging
 from datetime import datetime
 from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
 from game_service.deck_manager import DeckManager
@@ -11,6 +12,29 @@ from game_service.deck_manager import DeckManager
 import server_settings as settings
 
 games = Blueprint('games', __name__)
+
+_ai_logger = logging.getLogger('nepalkings.ai.trigger')
+
+@games.after_request
+def _ai_trigger_hook(response):
+    """After every successful POST, check if an AI player needs to act."""
+    if (request.method == 'POST' and response.status_code == 200
+            and settings.AI_ENABLED):
+        game_id = None
+        try:
+            if request.is_json and request.json:
+                game_id = request.json.get('game_id')
+            elif request.form:
+                game_id = request.form.get('game_id')
+        except Exception:
+            pass
+        if game_id:
+            try:
+                from ai.ai_worker import trigger_ai_if_needed
+                trigger_ai_if_needed(int(game_id), app=current_app._get_current_object())
+            except Exception as e:
+                _ai_logger.debug(f"AI trigger check: {e}")
+    return response
 
 def _check_and_update_ceasefire(game):
     """

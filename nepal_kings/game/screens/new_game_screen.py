@@ -670,7 +670,14 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
     def handle_create_challenge(self, opponent_name, stake=45, turn_time_limit=None):
         response = create_challenge(self.state.user_dict['username'], opponent_name, stake=stake, turn_time_limit=turn_time_limit)
-        if response['success']:
+        if response.get('ai_auto_accept') and 'game' in response:
+            # AI auto-accepted — go directly into the game
+            self.state.game = Game(response['game'], self.state.user_dict)
+            # Remove the auto-created challenge from the list
+            if 'challenge_id' in response:
+                remove_challenge(response['challenge_id'])
+            self.state.screen = "game"
+        elif response['success']:
             self.state.set_msg(f"Challenge sent to {opponent_name}")
         else:
             self.state.set_msg(response['message'])

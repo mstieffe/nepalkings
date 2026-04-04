@@ -79,8 +79,18 @@ with app.app_context():
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE user ADD COLUMN last_active DATETIME"))
                 conn.commit()
+        if 'is_ai' not in existing_cols:
+            print("  ↳ Adding 'is_ai' column to user table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN is_ai BOOLEAN DEFAULT 0"))
+                conn.commit()
     
     print("✅ Database initialized")
+
+    # Create AI users if enabled
+    if settings.AI_ENABLED:
+        from ai import init_ai_users
+        init_ai_users()
 
 # ── Session cleanup on every request teardown ──
 @app.teardown_appcontext

@@ -63,20 +63,22 @@ class User(db.Model):
     password_hash = db.Column(db.String(128), nullable=False)
     gold = db.Column(db.Integer, nullable=False, default=server_config.INITIAL_GOLD)  # Starting gold
     last_active = db.Column(db.DateTime, nullable=True)  # Heartbeat timestamp
+    is_ai = db.Column(db.Boolean, nullable=False, default=False)  # AI opponent flag
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
                                         foreign_keys='Challenge.challenger_id')
     challenges_received = db.relationship('Challenge', backref='challenged', lazy=True,
                                           foreign_keys='Challenge.challenged_id')
 
     def serialize(self):
-        is_online = False
-        if self.last_active:
+        is_online = self.is_ai  # AI users are always "online"
+        if not is_online and self.last_active:
             is_online = (datetime.utcnow() - self.last_active).total_seconds() < 60
         return {
             'id': self.id,
             'username': self.username,
             'gold': self.gold,
             'is_online': is_online,
+            'is_ai': self.is_ai,
             'challenges_issued': [challenge.serialize() for challenge in self.challenges_issued],
             'challenges_received': [challenge.serialize() for challenge in self.challenges_received]
         }

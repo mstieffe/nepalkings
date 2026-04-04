@@ -3,10 +3,33 @@
 """Server routes for battle shop — buy and return battle moves."""
 
 import random
-from flask import Blueprint, request, jsonify
+import logging
+from flask import Blueprint, request, jsonify, current_app
 from models import db, Game, Player, MainCard, SideCard, BattleMove, User, LogEntry
+import server_settings as settings
 
 battle_shop = Blueprint('battle_shop', __name__)
+
+_ai_logger = logging.getLogger('nepalkings.ai.trigger')
+
+@battle_shop.after_request
+def _ai_trigger_hook(response):
+    """After every successful POST, check if an AI player needs to act."""
+    if (request.method == 'POST' and response.status_code == 200
+            and settings.AI_ENABLED):
+        game_id = None
+        try:
+            if request.is_json and request.json:
+                game_id = request.json.get('game_id')
+        except Exception:
+            pass
+        if game_id:
+            try:
+                from ai.ai_worker import trigger_ai_if_needed
+                trigger_ai_if_needed(int(game_id), app=current_app._get_current_object())
+            except Exception as e:
+                _ai_logger.debug(f"AI trigger check: {e}")
+    return response
 
 # Max battle moves per player
 MAX_BATTLE_MOVES = 3

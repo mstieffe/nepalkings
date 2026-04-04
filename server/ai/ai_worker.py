@@ -1,0 +1,642 @@
+# Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
+# See LICENSE file in the project root for full license information.
+"""
+AI Worker — event-driven background AI player.
+
+When a game state change puts an AI player in a position where they need
+to act, `trigger_ai_if_needed(game_id)` spawns a short-lived daemon thread
+that reads the game state, consults the LLM, and executes the chosen action.
+"""
+import threading
+import time
+import logging
+import requests as http_requests
+
+import server_settings as settings
+from ai.llm_client import LLMClient, parse_action_response
+from ai.game_state import serialize_game_for_llm
+from ai.action_enum import detect_phase, enumerate_actions, format_actions_for_llm
+from ai.prompts import SYSTEM_PROMPT, PHASE_PROMPTS
+
+logger = logging.getLogger('nepalkings.ai.worker')
+
+# Global LLM client (lazy-initialized)
+_llm_client = None
+# Lock to prevent multiple AI threads for the same game
+_active_games = set()
+_active_games_lock = threading.Lock()
+
+
+def _get_llm_client():
+    """Get or create the shared LLM client instance."""
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = LLMClient(
+            provider=settings.AI_PROVIDER,
+            model=settings.AI_MODEL,
+            api_key=settings.AI_OPENAI_API_KEY,
+        )
+    return _llm_client
+
+
+def trigger_ai_if_needed(game_id, app=None):
+    """
+    Check if an AI player needs to act in this game, and if so,
+    spawn a background thread to handle it.
+    
+    Called at the end of state-mutating route handlers.
+    This function returns immediately — the AI work happens asynchronously.
+    """
+    if not settings.AI_ENABLED:
+        return
+    
+    if not settings.AI_OPENAI_API_KEY:
+        logger.debug("AI trigger skipped: no API key configured")
+        return
+
+    # Import here to avoid circular imports
+    from models import Game, User
+    
+    # Quick check: does this game have an AI player who needs to act?
+    game = Game.query.get(game_id)
+    if not game or game.state == 'finished':
+        return
+    
+    ai_player = None
+    for player in game.players:
+        user = User.query.get(player.user_id)
+        if user and user.is_ai:
+            ai_player = player
+            break
+    
+    if not ai_player:
+        return
+    
+    # Check if the AI actually needs to act right now
+    game_dict = game.serialize()
+    phase = detect_phase(game_dict, ai_player.id)
+    if not phase:
+        return
+    
+    # Avoid spawning duplicate threads for the same game
+    with _active_games_lock:
+        if game_id in _active_games:
+            logger.debug(f"AI thread already active for game {game_id}")
+            return
+        _active_games.add(game_id)
+    
+    # Get the Flask app for context (needed in background thread)
+    if app is None:
+        from flask import current_app
+        try:
+            app = current_app._get_current_object()
+        except RuntimeError:
+            logger.error("No Flask app context available for AI thread")
+            with _active_games_lock:
+                _active_games.discard(game_id)
+            return
+    
+    # Spawn background thread
+    thread = threading.Thread(
+        target=_ai_game_loop,
+        args=(app, game_id, ai_player.id),
+        daemon=True,
+        name=f"ai-game-{game_id}",
+    )
+    thread.start()
+    logger.info(f"AI thread spawned for game {game_id}, phase={phase}")
+
+
+def _ai_game_loop(app, game_id, ai_player_id):
+    """
+    Main AI loop. Runs in a background thread.
+    Keeps acting as long as it's the AI's turn (handles multi-step phases like battle shop).
+    """
+    try:
+        time.sleep(settings.AI_THINK_DELAY)
+        
+        max_iterations = 20  # Safety limit to prevent infinite loops
+        iteration = 0
+        called_start_turn = False
+        
+        while iteration < max_iterations:
+            iteration += 1
+            
+            with app.app_context():
+                from models import Game
+                game = Game.query.get(game_id)
+                if not game or game.state == 'finished':
+                    logger.info(f"AI loop exit: game {game_id} is finished/gone")
+                    break
+                
+                game_dict = game.serialize()
+            
+            phase = detect_phase(game_dict, ai_player_id)
+            if not phase:
+                logger.info(f"AI loop exit: no action needed in game {game_id}")
+                break
+            
+            logger.info(f"AI acting in game {game_id}: phase={phase}, iteration={iteration}")
+            
+            # Call start_turn once at the beginning of AI's turn (auto-fills cards)
+            if phase == 'normal_turn' and not called_start_turn:
+                _exec_start_turn(settings.SERVER_URL, game_id, ai_player_id)
+                called_start_turn = True
+                # Re-fetch game state after start_turn (cards may have been filled)
+                with app.app_context():
+                    game = Game.query.get(game_id)
+                    if not game or game.state == 'finished':
+                        break
+                    game_dict = game.serialize()
+                phase = detect_phase(game_dict, ai_player_id)
+                if not phase:
+                    break
+            
+            # Handle finish_battle phase (calculate total_diff, call endpoint)
+            if phase == 'finish_battle':
+                result = _handle_finish_battle(app, game_id, ai_player_id, game_dict)
+                if result:
+                    # After finish_battle, check if we need to pick a card or handle draw
+                    time.sleep(1)
+                    continue  # Loop will detect post_battle_pick or exit
+                break
+            
+            # Handle post_battle_pick (winner picks a card)
+            if phase == 'post_battle_pick':
+                _handle_post_battle_pick(app, game_id, ai_player_id)
+                break  # After picking, new round starts — turn might be ours or opponent's
+            
+            # Enumerate legal actions
+            actions = enumerate_actions(game_dict, ai_player_id, phase)
+            if not actions:
+                logger.warning(f"AI has no actions in phase {phase} for game {game_id}")
+                break
+            
+            # If only one action, take it without LLM
+            if len(actions) == 1:
+                chosen = actions[0]
+                logger.info(f"AI auto-choosing only action: {chosen['type']}")
+            else:
+                # Ask LLM
+                chosen = _ask_llm_for_action(game_dict, ai_player_id, phase, actions)
+            
+            # Execute the chosen action
+            success = _execute_action(app, game_id, ai_player_id, chosen)
+            if not success:
+                logger.warning(f"AI action failed: {chosen['type']} in game {game_id}")
+                # Try fallback: if build failed, change cards instead
+                if chosen['type'] == 'build_figure':
+                    fallback = next((a for a in actions if a['type'] == 'change_cards'), None)
+                    if fallback:
+                        logger.info("AI falling back to change_cards")
+                        _execute_action(app, game_id, ai_player_id, fallback)
+                break
+            
+            # Small delay between consecutive actions (battle shop: buy → buy → confirm)
+            if phase in ('battle_shop',):
+                time.sleep(1)
+            else:
+                time.sleep(settings.AI_THINK_DELAY)
+    
+    except Exception as e:
+        logger.error(f"AI thread error for game {game_id}: {e}", exc_info=True)
+    finally:
+        with _active_games_lock:
+            _active_games.discard(game_id)
+
+
+def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
+    """Ask the LLM to choose an action and return the action dict."""
+    try:
+        llm = _get_llm_client()
+        
+        # Build the user prompt
+        game_state_text = serialize_game_for_llm(game_dict, ai_player_id)
+        actions_text = format_actions_for_llm(actions)
+        phase_instruction = PHASE_PROMPTS.get(phase, "Choose the best action.")
+        
+        user_prompt = f"{game_state_text}\n\n{actions_text}\n\n{phase_instruction}"
+        
+        # Call LLM
+        response = llm.choose_action(SYSTEM_PROMPT, user_prompt)
+        parsed = parse_action_response(response)
+        
+        action_id = parsed.get('action', 1)
+        
+        # Find the matching action
+        chosen = next((a for a in actions if a['id'] == action_id), None)
+        if not chosen:
+            logger.warning(f"LLM chose invalid action {action_id}, defaulting to first")
+            chosen = actions[0]
+        
+        logger.info(f"LLM chose action {action_id}: {chosen['type']} — {chosen['description'][:80]}")
+        return chosen
+    
+    except Exception as e:
+        logger.error(f"LLM call failed, choosing first action: {e}")
+        return actions[0]
+
+
+def _execute_action(app, game_id, ai_player_id, action):
+    """Execute an AI action via the server's HTTP API."""
+    action_type = action['type']
+    params = action.get('params', {})
+    base = settings.SERVER_URL
+    
+    try:
+        if action_type == 'build_figure':
+            return _exec_build_figure(base, game_id, ai_player_id, params)
+        elif action_type == 'change_cards':
+            return _exec_change_cards(app, game_id, ai_player_id)
+        elif action_type == 'advance_figure':
+            return _exec_advance_figure(base, game_id, ai_player_id, params)
+        elif action_type == 'select_defender':
+            return _exec_select_defender(base, game_id, ai_player_id, params)
+        elif action_type == 'battle_decision':
+            return _exec_battle_decision(base, game_id, ai_player_id, params)
+        elif action_type == 'buy_battle_move':
+            return _exec_buy_battle_move(base, game_id, ai_player_id, params)
+        elif action_type == 'confirm_battle_moves':
+            return _exec_confirm_battle_moves(base, game_id, ai_player_id)
+        elif action_type == 'play_battle_move':
+            return _exec_play_battle_move(base, game_id, ai_player_id, params)
+        elif action_type == 'skip_battle_turn':
+            return _exec_skip_battle_turn(base, game_id, ai_player_id)
+        elif action_type == 'allow_spell':
+            return _exec_allow_spell(base, game_id, ai_player_id)
+        elif action_type == 'counter_spell':
+            return _exec_counter_spell(base, game_id, ai_player_id)
+        else:
+            logger.error(f"Unknown action type: {action_type}")
+            return False
+    except Exception as e:
+        logger.error(f"Action execution failed ({action_type}): {e}", exc_info=True)
+        return False
+
+
+# ── Battle resolution helpers ────────────────────────────────────
+
+
+def _compute_total_diff(app, game_id, ai_player_id, game_dict):
+    """
+    Compute total_diff for the AI player (positive = AI wins).
+    total_diff = figure_power_diff + sum_of_round_move_diffs
+    """
+    with app.app_context():
+        from models import Figure, BattleMove
+        from routes.games import _compute_figure_base_power
+
+        adv_figure = Figure.query.get(game_dict['advancing_figure_id'])
+        def_figure = Figure.query.get(game_dict['defending_figure_id'])
+        if not adv_figure or not def_figure:
+            return 0
+
+        adv_power = _compute_figure_base_power(adv_figure)
+        def_power = _compute_figure_base_power(def_figure)
+
+        # Figure diff from AI's perspective
+        if game_dict.get('advancing_player_id') == ai_player_id:
+            fig_diff = adv_power - def_power
+        else:
+            fig_diff = def_power - adv_power
+
+        # Move diffs per round
+        moves = BattleMove.query.filter_by(game_id=game_id).all()
+        round_diff = 0
+        for rnd in range(3):
+            ai_val = 0
+            opp_val = 0
+            for m in moves:
+                if m.played_round != rnd:
+                    continue
+                if m.player_id == ai_player_id:
+                    ai_val += m.value
+                else:
+                    opp_val += m.value
+            round_diff += ai_val - opp_val
+
+        return fig_diff + round_diff
+
+
+def _handle_finish_battle(app, game_id, ai_player_id, game_dict):
+    """Call finish_battle and handle the result (pick card or draw choice)."""
+    total_diff = _compute_total_diff(app, game_id, ai_player_id, game_dict)
+    base = settings.SERVER_URL
+
+    logger.info(f"AI calling finish_battle, total_diff={total_diff}")
+    resp = http_requests.post(f'{base}/games/finish_battle', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'total_diff': total_diff,
+    }, timeout=15)
+    result = resp.json()
+
+    if not result.get('success', True):
+        logger.warning(f"finish_battle failed: {result.get('message')}")
+        return False
+
+    outcome = result.get('outcome')
+    logger.info(f"finish_battle outcome={outcome}")
+
+    if outcome == 'draw':
+        # If AI is the defender, make a draw choice
+        defender_pid = result.get('defender_player_id')
+        if defender_pid == ai_player_id:
+            returnable = result.get('returnable_cards', [])
+            _handle_finish_battle_draw(base, game_id, ai_player_id, returnable)
+        # If AI is not the defender, the human defender handles it
+        return True
+    elif outcome == 'win':
+        # AI won — need to pick a card (will be handled in next loop as post_battle_pick)
+        return True
+    elif outcome == 'lose':
+        # AI lost — opponent picks card. Nothing for AI to do.
+        return True
+    elif result.get('already_resolved'):
+        # Second call — already handled. Check if we need to pick.
+        return True
+    return True
+
+
+def _handle_post_battle_pick(app, game_id, ai_player_id):
+    """Winner (AI) picks the best card from the returnable cards pool."""
+    base = settings.SERVER_URL
+
+    # First call finish_battle to get returnable_cards (may be already_resolved)
+    # Actually, the fold_winner_id is set, so we re-call finish_battle to get cards
+    resp = http_requests.post(f'{base}/games/finish_battle', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'total_diff': 1,  # Positive = we won (doesn't matter, already resolved)
+    }, timeout=15)
+    result = resp.json()
+
+    returnable = result.get('returnable_cards', [])
+    if not returnable:
+        logger.warning("No returnable cards for post_battle_pick")
+        # Try to pick with card_id=None to just clear battle state
+        http_requests.post(f'{base}/games/finish_battle_pick_card', json={
+            'game_id': game_id,
+            'player_id': ai_player_id,
+            'card_id': None,
+        }, timeout=15)
+        return
+
+    # Pick the highest-value card
+    best = max(returnable, key=lambda c: c.get('value', 0))
+    picked_id = best.get('id')
+
+    logger.info(f"AI picking card {picked_id} (value={best.get('value')}) from {len(returnable)} returnable")
+    resp = http_requests.post(f'{base}/games/finish_battle_pick_card', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'card_id': picked_id,
+    }, timeout=15)
+    pick_result = resp.json()
+    if pick_result.get('game_over'):
+        logger.info(f"Game over after battle pick in game {game_id}")
+
+
+def _handle_finish_battle_draw(base, game_id, ai_player_id, returnable_cards):
+    """Handle draw resolution. AI chooses the best option as defender."""
+    # Strategy: if there are good cards to pick, pick one. Otherwise take 10 points.
+    if returnable_cards:
+        best = max(returnable_cards, key=lambda c: c.get('value', 0))
+        if best.get('value', 0) >= 5:
+            # Pick the card
+            logger.info(f"AI draw choice: pick_card (value={best.get('value')})")
+            http_requests.post(f'{base}/games/finish_battle_draw', json={
+                'game_id': game_id,
+                'player_id': ai_player_id,
+                'choice': 'pick_card',
+                'picked_card_id': best['id'],
+            }, timeout=15)
+            return
+
+    # Default: destroy opponent's figure (strongest aggressive play)
+    logger.info("AI draw choice: destroy")
+    http_requests.post(f'{base}/games/finish_battle_draw', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'choice': 'destroy',
+    }, timeout=15)
+
+
+# ── Action executors (HTTP calls to own server) ───────────────────
+
+
+def _exec_start_turn(base, game_id, ai_player_id):
+    """Call start_turn to trigger auto-fill and ceasefire checks."""
+    try:
+        resp = http_requests.post(f'{base}/games/start_turn', json={
+            'game_id': game_id,
+            'player_id': ai_player_id,
+        }, timeout=15)
+        result = resp.json()
+        if result.get('success'):
+            auto_fill = result.get('auto_fill')
+            if auto_fill:
+                logger.info(f"start_turn auto-filled cards: {auto_fill}")
+            if result.get('ceasefire_ended'):
+                logger.info("Ceasefire ended at start of AI's turn")
+            return True
+        logger.warning(f"start_turn failed: {result.get('message')}")
+        return False
+    except Exception as e:
+        logger.warning(f"start_turn error (non-fatal): {e}")
+        return False
+
+
+def _exec_build_figure(base, game_id, ai_player_id, params):
+    """Build a figure via POST /figures/create_figure."""
+    data = {
+        'player_id': ai_player_id,
+        'game_id': game_id,
+        'family_name': params['family_name'],
+        'field': params['field'],
+        'color': params['color'],
+        'name': params['name'],
+        'suit': params['suit'],
+        'description': params.get('description', ''),
+        'upgrade_family_name': params.get('upgrade_family_name'),
+        'produces': params.get('produces', {}),
+        'requires': params.get('requires', {}),
+        'cards': params.get('cards', []),
+        'instant_charge_advance': params.get('instant_charge_advance', False),
+        'cannot_be_blocked': params.get('cannot_be_blocked', False),
+        'rest_after_attack': params.get('rest_after_attack', False),
+    }
+    resp = http_requests.post(f'{base}/figures/create_figure', json=data, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Built figure: {params['name']}")
+        return True
+    logger.warning(f"Build figure failed: {result.get('message')}")
+    return False
+
+
+def _exec_change_cards(app, game_id, ai_player_id):
+    """Change cards via POST /games/change_cards."""
+    # First get the current hand to know which cards to return
+    with app.app_context():
+        from models import Game, MainCard
+        game = Game.query.get(game_id)
+        if not game:
+            return False
+        
+        # Get all non-figure, non-battle-move main cards in hand
+        hand_cards = MainCard.query.filter_by(
+            player_id=ai_player_id,
+            in_deck=False,
+        ).all()
+        
+        card_ids = [c.id for c in hand_cards 
+                    if not c.part_of_figure and not c.part_of_battle_move]
+    
+    if not card_ids:
+        logger.warning("No cards to change")
+        return False
+    
+    base = settings.SERVER_URL
+    resp = http_requests.post(f'{base}/games/change_cards', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'card_ids': card_ids,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Changed {len(card_ids)} cards")
+        return True
+    logger.warning(f"Change cards failed: {result.get('message')}")
+    return False
+
+
+def _exec_advance_figure(base, game_id, ai_player_id, params):
+    """Advance a figure via POST /games/advance_figure."""
+    resp = http_requests.post(f'{base}/games/advance_figure', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'figure_id': params['figure_id'],
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Advanced figure {params['figure_id']}")
+        return True
+    logger.warning(f"Advance failed: {result.get('message')}")
+    return False
+
+
+def _exec_select_defender(base, game_id, ai_player_id, params):
+    """Select defender via POST /games/select_defender."""
+    resp = http_requests.post(f'{base}/games/select_defender', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'figure_id': params['figure_id'],
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Selected defender {params['figure_id']}")
+        return True
+    logger.warning(f"Select defender failed: {result.get('message')}")
+    return False
+
+
+def _exec_battle_decision(base, game_id, ai_player_id, params):
+    """Submit battle decision via POST /games/battle_decision."""
+    resp = http_requests.post(f'{base}/games/battle_decision', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'decision': params['decision'],
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Battle decision: {params['decision']}")
+        return True
+    logger.warning(f"Battle decision failed: {result.get('message')}")
+    return False
+
+
+def _exec_buy_battle_move(base, game_id, ai_player_id, params):
+    """Buy a battle move via POST /battle_shop/buy_battle_move."""
+    resp = http_requests.post(f'{base}/battle_shop/buy_battle_move', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'card_id': params['card_id'],
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Bought battle move: card {params['card_id']}")
+        return True
+    logger.warning(f"Buy battle move failed: {result.get('message')}")
+    return False
+
+
+def _exec_confirm_battle_moves(base, game_id, ai_player_id):
+    """Confirm battle moves via POST /battle_shop/confirm_battle_moves."""
+    resp = http_requests.post(f'{base}/battle_shop/confirm_battle_moves', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info("Confirmed battle moves")
+        return True
+    logger.warning(f"Confirm battle moves failed: {result.get('message')}")
+    return False
+
+
+def _exec_play_battle_move(base, game_id, ai_player_id, params):
+    """Play a battle move via POST /games/play_battle_move."""
+    resp = http_requests.post(f'{base}/games/play_battle_move', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'move_id': params['move_id'],
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Played battle move {params['move_id']}")
+        return True
+    logger.warning(f"Play battle move failed: {result.get('message')}")
+    return False
+
+
+def _exec_skip_battle_turn(base, game_id, ai_player_id):
+    """Skip battle turn via POST /games/skip_battle_turn."""
+    resp = http_requests.post(f'{base}/games/skip_battle_turn', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info("Skipped battle turn")
+        return True
+    logger.warning(f"Skip battle turn failed: {result.get('message')}")
+    return False
+
+
+def _exec_allow_spell(base, game_id, ai_player_id):
+    """Allow a pending spell via POST /spells/allow_spell."""
+    resp = http_requests.post(f'{base}/spells/allow_spell', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info("Allowed spell")
+        return True
+    logger.warning(f"Allow spell failed: {result.get('message')}")
+    return False
+
+
+def _exec_counter_spell(base, game_id, ai_player_id):
+    """Counter a pending spell via POST /spells/counter_spell."""
+    resp = http_requests.post(f'{base}/spells/counter_spell', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info("Countered spell")
+        return True
+    logger.warning(f"Counter spell failed: {result.get('message')}")
+    return False

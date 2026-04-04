@@ -80,6 +80,10 @@ def login():
         if not user or not check_password_hash(user.password_hash, password):
             return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
 
+        # Block login as AI users
+        if user.is_ai:
+            return jsonify({'success': False, 'message': 'Cannot log in as an AI player'}), 403
+
         # Capture the previous last_active before updating (for offline-badge detection)
         previous_last_active = user.last_active
         user.last_active = datetime.utcnow()

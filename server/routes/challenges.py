@@ -57,6 +57,50 @@ def create_challenge():
 
         db.session.add(challenge)
         db.session.commit()
+
+        # Auto-accept if the opponent is an AI player
+        if opponent_user.is_ai:
+            # Import create_game logic inline to avoid circular imports
+            from routes.games import create_game as _route_create_game
+            from flask import current_app
+            import logging
+            logger = logging.getLogger('nepalkings.ai')
+
+            # Use Flask's test request context to call create_game internally
+            with current_app.test_request_context(
+                '/games/create_game',
+                method='POST',
+                data={'challenge_id': str(challenge.id)},
+                content_type='application/x-www-form-urlencoded'
+            ):
+                game_response = _route_create_game()
+                # game_response is a tuple (response, status_code) or just a response
+                if isinstance(game_response, tuple):
+                    resp_obj, status = game_response
+                else:
+                    resp_obj = game_response
+                    status = 200
+
+                game_data = resp_obj.get_json()
+
+                if game_data.get('success') and 'game' in game_data:
+                    logger.info(f"AI auto-accepted challenge {challenge.id} → game {game_data['game']['id']}")
+                    # Trigger AI if it's the AI's turn
+                    if settings.AI_ENABLED:
+                        from ai.ai_worker import trigger_ai_if_needed
+                        trigger_ai_if_needed(game_data['game']['id'], app=current_app._get_current_object())
+
+                    return jsonify({
+                        'success': True,
+                        'message': 'Game created against AI',
+                        'ai_auto_accept': True,
+                        'challenge_id': challenge.id,
+                        'game': game_data['game'],
+                    })
+                else:
+                    logger.error(f"AI auto-accept failed: {game_data.get('message')}")
+                    # Fall through to return normal challenge response
+
     except Exception as e:
         db.session.rollback()
         # In case there is an exception while adding the challenge
