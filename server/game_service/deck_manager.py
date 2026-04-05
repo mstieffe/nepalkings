@@ -39,17 +39,19 @@ class DeckManager:
 
         If drawing *num_cards* would exceed the maximum hand size, the
         number drawn is clamped so the hand stays at the limit.
+        Only cards actually in the player's hand (not part of a figure)
+        count towards the hand size limit.
         """
         from models import MainCard, SideCard
         import server_settings as settings
 
         if card_type == 'main':
             current = MainCard.query.filter_by(
-                player_id=player.id, in_deck=False).count()
+                player_id=player.id, in_deck=False, part_of_figure=False).count()
             max_size = settings.MAX_MAIN_HAND_SIZE
         else:
             current = SideCard.query.filter_by(
-                player_id=player.id, in_deck=False).count()
+                player_id=player.id, in_deck=False, part_of_figure=False).count()
             max_size = settings.MAX_SIDE_HAND_SIZE
 
         allowed = max(0, max_size - current)

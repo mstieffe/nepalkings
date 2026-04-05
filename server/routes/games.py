@@ -1140,15 +1140,20 @@ def change_cards():
         # Handle MainCards or SideCards based on card_type
         if card_type == "main":
             selected_cards = MainCard.query.filter(MainCard.id.in_(card_ids)).all()
-            new_cards = DeckManager.draw_cards_from_deck(Game.query.get(game_id), Player.query.get(player_id), len(card_ids), "main")
         elif card_type == "side":
             selected_cards = SideCard.query.filter(SideCard.id.in_(card_ids)).all()
-            new_cards = DeckManager.draw_cards_from_deck(Game.query.get(game_id), Player.query.get(player_id), len(card_ids), "side")
         else:
             return jsonify({'success': False, 'message': 'Invalid card type specified'}), 400
 
-        # Return the selected cards to the deck
+        # Return the selected cards to the deck BEFORE drawing new ones,
+        # so the hand-size check inside draw_cards_from_deck is accurate
+        # and the returned cards become available for drawing again.
         DeckManager.return_cards_to_deck(selected_cards)
+
+        # Now draw replacements
+        new_cards = DeckManager.draw_cards_from_deck(
+            Game.query.get(game_id), Player.query.get(player_id),
+            len(card_ids), card_type)
 
         # Update turns left for the player
         player = Player.query.get(player_id)
