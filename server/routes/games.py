@@ -2309,8 +2309,14 @@ def _compute_enchantment_mod(figure_id, enchantment_spells):
 
 
 def _compute_figure_full_power(figure, all_figures, enchant_spells,
-                               is_defending, opponent_player_id):
-    """Full figure power including base, healer, support, wall, enchant, DA."""
+                               is_defending, opponent_player_id,
+                               include_da=True):
+    """Full figure power including base, healer, support, wall, enchant.
+
+    When *include_da* is True (default) the distance-attack penalty from
+    an opponent's Archer is subtracted.  Set False when DA tracking is
+    handled externally (e.g. by ``_compute_server_total_diff``).
+    """
     if not figure:
         return 0
     base = _compute_figure_base_power(figure)
@@ -2319,17 +2325,54 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
     wall = (_compute_wall_defence_total(figure.player_id, all_figures)
             if is_defending else 0)
     enchant = _compute_enchantment_mod(figure.id, enchant_spells)
-    da_penalty = _compute_distance_penalty(
-        figure, opponent_player_id, all_figures)
+    da_penalty = (_compute_distance_penalty(
+        figure, opponent_player_id, all_figures) if include_da else 0)
     if _check_temple_blocking(figure, opponent_player_id, all_figures):
         support = 0
         wall = 0
     return base + healer + support + wall + enchant - da_penalty
 
 
+def _find_archer_da(player_id, all_figures, battle_ids=None):
+    """Return (advantage_suit, penalty_value) for a player's Archer.
+
+    *battle_ids* is a set of figure IDs currently in battle; these are
+    excluded as DA sources (the client does this too).
+    Returns (None, 0) if no eligible Archer found.
+    """
+    if battle_ids is None:
+        battle_ids = set()
+    for f in all_figures:
+        if f.player_id != player_id:
+            continue
+        if f.id in battle_ids:
+            continue
+        if 'Archer' not in (f.name or ''):
+            continue
+        adv = _get_advantage_suit(f.suit)
+        if not adv:
+            continue
+        for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
+            if assoc.card_type == 'side':
+                card = SideCard.query.get(assoc.card_id)
+                if card:
+                    return adv, card.value
+    return None, 0
+
+
 def _compute_move_effective_value(move, all_figures, game,
                                   player_id, opponent_player_id):
-    """Effective battle-move value including call-figure bonuses."""
+    """Effective battle-move value including call-figure bonuses.
+
+    For call figures the client applies:
+    * figure base power (card sum or castle override)
+    * healer buff (+4 per same-suit Healer for village call figs)
+    * wall defence (number card value, ALL call figs when defending)
+    * bm_value added only when BM suit matches call-figure suit
+    Temple blocking is NOT applied to call figures' wall bonus (client
+    behaviour).  Distance-attack on call figures is handled separately
+    in ``_compute_server_total_diff``.
+    """
     if not move or move.family_name == 'Block':
         return 0
     bm_value = move.value or 0
@@ -2344,9 +2387,7 @@ def _compute_move_effective_value(move, all_figures, game,
             is_def = (player_id != game.advancing_player_id)
             wall = (_compute_wall_defence_total(player_id, all_figures)
                     if is_def else 0)
-            if _check_temple_blocking(call_fig, opponent_player_id,
-                                      all_figures):
-                wall = 0
+            # NOTE: no temple blocking on call-figure wall (matches client)
             bm_suit = (move.suit or '').lower()
             fig_suit = (call_fig.suit or '').lower()
             if bm_suit == fig_suit:
@@ -2356,7 +2397,14 @@ def _compute_move_effective_value(move, all_figures, game,
 
 
 def _compute_server_total_diff(game):
-    """Authoritative total_diff from DB.  Positive = invader wins."""
+    """Authoritative total_diff from DB.  Positive = invader wins.
+
+    Mirrors the client's ``_get_total_diff()`` logic:
+    * figure power = base + healer + support + wall + enchant − DA
+    * DA fires ONCE per archer per battle (battle figure first, then
+      first matching call figure in rounds — never both).
+    * Block zeroes the entire round.
+    """
     adv_fig = (Figure.query.get(game.advancing_figure_id)
                if game.advancing_figure_id else None)
     def_fig = (Figure.query.get(game.defending_figure_id)
@@ -2372,22 +2420,56 @@ def _compute_server_total_diff(game):
         game_id=game.id, is_active=True, spell_type='enchantment').all()
     all_moves = BattleMove.query.filter_by(game_id=game.id).all()
 
-    # ── figure power (including Civil War second figures) ──
+    # IDs of figures currently in battle (excluded as DA sources)
+    battle_ids = set()
+    for fid in (game.advancing_figure_id, game.advancing_figure_id_2,
+                game.defending_figure_id, game.defending_figure_id_2):
+        if fid:
+            battle_ids.add(fid)
+
+    # ── figure power WITHOUT distance-attack (handled below) ──
     adv_power = _compute_figure_full_power(
-        adv_fig, all_figures, enchant_spells, False, def_pid)
+        adv_fig, all_figures, enchant_spells, False, def_pid, include_da=False)
     def_power = _compute_figure_full_power(
-        def_fig, all_figures, enchant_spells, True, adv_pid)
+        def_fig, all_figures, enchant_spells, True, adv_pid, include_da=False)
 
     if game.advancing_figure_id_2:
         f2 = Figure.query.get(game.advancing_figure_id_2)
         if f2:
             adv_power += _compute_figure_full_power(
-                f2, all_figures, enchant_spells, False, def_pid)
+                f2, all_figures, enchant_spells, False, def_pid,
+                include_da=False)
     if game.defending_figure_id_2:
         f2 = Figure.query.get(game.defending_figure_id_2)
         if f2:
             def_power += _compute_figure_full_power(
-                f2, all_figures, enchant_spells, True, adv_pid)
+                f2, all_figures, enchant_spells, True, adv_pid,
+                include_da=False)
+
+    # ── Distance-attack: once per archer per battle ──
+    # Advancing player's archer → targets defending battle figure(s)
+    adv_da_suit, adv_da_val = _find_archer_da(adv_pid, all_figures, battle_ids)
+    adv_da_used = False
+    if adv_da_suit:
+        for fig in (def_fig,
+                    Figure.query.get(game.defending_figure_id_2)
+                    if game.defending_figure_id_2 else None):
+            if fig and adv_da_suit.lower() == (fig.suit or '').lower():
+                def_power -= adv_da_val
+                adv_da_used = True
+                break
+
+    # Defending player's archer → targets advancing battle figure(s)
+    def_da_suit, def_da_val = _find_archer_da(def_pid, all_figures, battle_ids)
+    def_da_used = False
+    if def_da_suit:
+        for fig in (adv_fig,
+                    Figure.query.get(game.advancing_figure_id_2)
+                    if game.advancing_figure_id_2 else None):
+            if fig and def_da_suit.lower() == (fig.suit or '').lower():
+                adv_power -= def_da_val
+                def_da_used = True
+                break
 
     fig_diff = adv_power - def_power
 
@@ -2406,6 +2488,27 @@ def _compute_server_total_diff(game):
             m, all_figures, game, adv_pid, def_pid) for m in adv_m)
         def_val = sum(_compute_move_effective_value(
             m, all_figures, game, def_pid, adv_pid) for m in def_m)
+
+        # Unfired DA hits first matching call figure in opponent's moves
+        if not adv_da_used and adv_da_suit:
+            for m in def_m:
+                if m.call_figure_id:
+                    cf = next((f for f in all_figures
+                               if f.id == m.call_figure_id), None)
+                    if cf and adv_da_suit.lower() == (cf.suit or '').lower():
+                        def_val -= adv_da_val
+                        adv_da_used = True
+                        break
+        if not def_da_used and def_da_suit:
+            for m in adv_m:
+                if m.call_figure_id:
+                    cf = next((f for f in all_figures
+                               if f.id == m.call_figure_id), None)
+                    if cf and def_da_suit.lower() == (cf.suit or '').lower():
+                        adv_val -= def_da_val
+                        def_da_used = True
+                        break
+
         round_diff += adv_val - def_val
 
     total = fig_diff + round_diff
@@ -2963,6 +3066,15 @@ def finish_battle():
     server_diff = _compute_server_total_diff(game)
     # server_diff > 0 means invader wins; convert to caller's perspective
     total_diff = server_diff if is_invader else -server_diff
+
+    # ── Discrepancy check ──
+    # Compare client value with server value (both in caller perspective)
+    diff_delta = abs(total_diff - client_total_diff)
+    if diff_delta != 0:
+        level = "WARNING" if diff_delta > 0 else "INFO"
+        print(f"[FINISH_BATTLE] ⚠️  DISCREPANCY: player={player_id} "
+              f"client_diff={client_total_diff} server_diff(caller)={total_diff} "
+              f"delta={diff_delta}  (server is authoritative)")
     print(f"[FINISH_BATTLE] player={player_id} is_invader={is_invader} "
           f"client_diff={client_total_diff} server_diff={server_diff} "
           f"used_diff={total_diff}")
