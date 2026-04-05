@@ -168,6 +168,9 @@ class Game:
         self.pending_game_over = None  # Will be set to game_over dict when detected
         self.game_over_shown = False  # Track if game-over dialogue was shown
 
+        # Prevent double-actions: set True while an action HTTP call is in flight
+        self.action_in_progress = False
+
         # Battle reconnect flag — True until the client has checked for active battle on first poll
         self.battle_reconnect_pending = True
 

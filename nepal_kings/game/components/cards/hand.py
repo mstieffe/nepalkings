@@ -359,16 +359,25 @@ class Hand:
                     if getattr(self.game, 'game_over', False):
                         self.dialogue_box = None
                         return
+                    if self.game.action_in_progress:
+                        self.dialogue_box = None
+                        return
                     print("Cards changed!")
                     # Change the selected cards
                     selected_cards = self.get_selected_cards()
 
                     if selected_cards:
                         # Call the appropriate card change method based on type and fetch new cards
-                        if self.type == "main_card":
-                            new_cards = self.game.change_main_cards(selected_cards)
-                        else:  # SideCards
-                            new_cards = self.game.change_side_cards(selected_cards)
+                        # Note: change_main_cards/change_side_cards internally call game.update()
+                        # which refreshes the full game state before returning
+                        self.game.action_in_progress = True
+                        try:
+                            if self.type == "main_card":
+                                new_cards = self.game.change_main_cards(selected_cards)
+                            else:  # SideCards
+                                new_cards = self.game.change_side_cards(selected_cards)
+                        finally:
+                            self.game.action_in_progress = False
 
                         # Open a new DialogueBox to display the drawn cards
                         self.dialogue_box = DialogueBox(

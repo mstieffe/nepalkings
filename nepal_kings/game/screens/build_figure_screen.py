@@ -65,41 +65,48 @@ class BuildFigureScreen(SubScreen):
         if getattr(self.game, 'game_over', False):
             return {'success': False, 'message': 'Game is finished'}
 
-        # Map dummy cards in the figure to real cards in the player's hand
-        real_cards = self.map_figure_cards_to_hand(selected_figure)
+        if self.game.action_in_progress:
+            return {'success': False, 'message': 'Action already in progress'}
 
-        if real_cards is None:
-            print(f"Failed to create figure: Could not find all cards in the player's hand.")
-            return {'success': False, 'message': 'Could not find all cards in hand'}
+        self.game.action_in_progress = True
+        try:
+            # Map dummy cards in the figure to real cards in the player's hand
+            real_cards = self.map_figure_cards_to_hand(selected_figure)
 
-        # Update the selected figure with real cards
-        selected_figure.cards = real_cards
-        selected_figure.key_cards = [card for card in real_cards if card in selected_figure.key_cards]
-        
-        # Update number_card only if it exists
-        if selected_figure.number_card is not None:
-            selected_figure.number_card = next((card for card in real_cards if card == selected_figure.number_card), None)
-        
-        # Update upgrade_card only if it exists
-        if selected_figure.upgrade_card is not None:
-            selected_figure.upgrade_card = next((card for card in real_cards if card == selected_figure.upgrade_card), None)
+            if real_cards is None:
+                print(f"Failed to create figure: Could not find all cards in the player's hand.")
+                return {'success': False, 'message': 'Could not find all cards in hand'}
 
-        # Save the figure to the database
-        response = FigureDbService.save_figure(
-            figure=selected_figure,
-            player_id=self.game.player_id,
-            game_id=self.game.game_id,
-            instant_charge_advance=instant_charge_advance
-        )
+            # Update the selected figure with real cards
+            selected_figure.cards = real_cards
+            selected_figure.key_cards = [card for card in real_cards if card in selected_figure.key_cards]
+            
+            # Update number_card only if it exists
+            if selected_figure.number_card is not None:
+                selected_figure.number_card = next((card for card in real_cards if card == selected_figure.number_card), None)
+            
+            # Update upgrade_card only if it exists
+            if selected_figure.upgrade_card is not None:
+                selected_figure.upgrade_card = next((card for card in real_cards if card == selected_figure.upgrade_card), None)
 
-        if response.get('success'):
-            print(f"Figure {selected_figure.name} created successfully in the database.")
-        else:
-            print(f"Failed to create figure: {response.get('message', 'Unknown error')}")
+            # Save the figure to the database
+            response = FigureDbService.save_figure(
+                figure=selected_figure,
+                player_id=self.game.player_id,
+                game_id=self.game.game_id,
+                instant_charge_advance=instant_charge_advance
+            )
 
-        self.game.update()
+            if response.get('success'):
+                print(f"Figure {selected_figure.name} created successfully in the database.")
+            else:
+                print(f"Failed to create figure: {response.get('message', 'Unknown error')}")
 
-        return response
+            self.game.update()
+
+            return response
+        finally:
+            self.game.action_in_progress = False
 
     def _can_instant_charge_advance(self, figure):
         """

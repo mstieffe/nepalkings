@@ -667,8 +667,19 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
     def _check_accepted_challenges(self):
         """Check if any issued challenges have been accepted and show notification."""
-        if self.dialogue_box or self.state._pending_accepted_challenge:
+        if self.dialogue_box:
             return
+        # If a previous notification was set on another screen (or the dialogue
+        # was dismissed by navigating away), clean up the stale state.
+        if self.state._pending_accepted_challenge:
+            stale_id = self.state._pending_accepted_challenge['challenge_id']
+            try:
+                remove_challenge(stale_id)
+            except Exception:
+                pass
+            self.state._pending_accepted_challenge = None
+            if self.state.action.get('task') == 'challenge_accepted':
+                self.reset_action()
         for ch in self.user.get('challenges_issued', []):
             if (ch.get('status') == 'accepted'
                     and ch['id'] not in self.state._notified_accepted_challenges):

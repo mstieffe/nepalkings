@@ -61,6 +61,9 @@ class CastSpellScreen(SubScreen):
         if getattr(self.game, 'game_over', False):
             return
 
+        if self.game.action_in_progress:
+            return
+
         # Check if player is waiting for counter spell response
         if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
             if self.state.parent_screen.waiting_for_counter_response:
@@ -117,23 +120,29 @@ class CastSpellScreen(SubScreen):
         } for card in real_cards]
         
         # Call spell service to cast the spell
-        result = spell_service.cast_spell(
-            player_id=self.game.player_id,
-            game_id=self.game.game_id,
-            spell_name=selected_spell.name,
-            spell_type=selected_spell.family.type,
-            spell_family_name=selected_spell.family.name,
-            suit=selected_spell.suit,
-            cards=cards_data,
-            target_figure_id=target_figure_id,
-            counterable=selected_spell.counterable,
-            possible_during_ceasefire=selected_spell.possible_during_ceasefire
-        )
+        self.game.action_in_progress = True
+        try:
+            result = spell_service.cast_spell(
+                player_id=self.game.player_id,
+                game_id=self.game.game_id,
+                spell_name=selected_spell.name,
+                spell_type=selected_spell.family.type,
+                spell_family_name=selected_spell.family.name,
+                suit=selected_spell.suit,
+                cards=cards_data,
+                target_figure_id=target_figure_id,
+                counterable=selected_spell.counterable,
+                possible_during_ceasefire=selected_spell.possible_during_ceasefire
+            )
+        except Exception:
+            self.game.action_in_progress = False
+            raise
         
         if result.get('success'):
             # Check if waiting for opponent to respond (counterable spell)
             waiting_for_player_id = result.get('waiting_for_player_id')
             if waiting_for_player_id:
+                self.game.action_in_progress = False
                 # Store spell name in game_screen for waiting prompt
                 if hasattr(self.state, 'parent_screen') and self.state.parent_screen:
                     self.state.parent_screen.pending_spell_name = selected_spell.name
@@ -144,6 +153,8 @@ class CastSpellScreen(SubScreen):
             if result.get('game'):
                 # Update directly from returned game state (no extra server call)
                 self.game.update_from_dict(result['game'])
+            
+            self.game.action_in_progress = False
             
             # Show success message with drawn cards (if any)
             spell_effect = result.get('spell_effect', {})
@@ -262,6 +273,7 @@ class CastSpellScreen(SubScreen):
                 button.clicked = False
         
         else:
+            self.game.action_in_progress = False
             # Show error message
             error_msg = result.get('message', 'Unknown error')
             self.make_dialogue_box(

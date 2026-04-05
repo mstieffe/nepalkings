@@ -442,6 +442,11 @@ class FieldScreen(SubScreen):
                         self.dialogue_box = None
                         return
 
+                    # Block double-actions while a previous action is still in progress
+                    if self.game.action_in_progress:
+                        self.dialogue_box = None
+                        return
+
                     # Check if player is waiting for counter spell response
                     if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
                         if self.state.parent_screen.waiting_for_counter_response:
@@ -469,6 +474,7 @@ class FieldScreen(SubScreen):
                     if self.figure_pending_pickup:
                         # User confirmed pickup
                         try:
+                            self.game.action_in_progress = True
                             # Call server to pick up the figure
                             result = pickup_figure(
                                 self.figure_pending_pickup.id,
@@ -481,8 +487,9 @@ class FieldScreen(SubScreen):
                                 card_count = result.get('main_card_count', 0) + result.get('side_card_count', 0)
                                 print(f"Successfully picked up {self.figure_pending_pickup.name}. {card_count} cards returned to hand.")
                                 
-                                # Trigger a game update to refresh the state
-                                # This will reload figures and cards from the server
+                                # Refresh game state (cards, turn, figures) from server
+                                self.game.update()
+                                
                                 self.state.set_msg(f"Picked up {self.figure_pending_pickup.name}. {card_count} cards returned to your hand.")
                                 
                             else:
@@ -494,6 +501,8 @@ class FieldScreen(SubScreen):
                         except Exception as e:
                             print(f"Error picking up figure: {str(e)}")
                             self.state.set_msg(f"Error picking up figure: {str(e)}")
+                        finally:
+                            self.game.action_in_progress = False
                         
                         # Close the detail box and dialogue box
                         self.figure_detail_box = None
@@ -509,134 +518,143 @@ class FieldScreen(SubScreen):
                         for icon in self.figure_icons:
                             icon.show_advance_overlay = True
                         from utils.game_service import advance_figure
-                        result = advance_figure(
-                            self.game.game_id,
-                            self.game.player_id,
-                            figure.id
-                        )
-                        if result.get('success'):
-                            print(f"[FIELD] Advanced {figure.name} successfully")
-                            self.state.set_msg(f"Advanced {figure.name} toward battle!")
-                            # Update game state from response
-                            if result.get('game'):
-                                self.game.update_from_dict(result['game'])
-                            # Reload figures to refresh icons
-                            self.load_figures()
-                            
-                            # Check if Civil War needs a second figure
-                            if result.get('civil_war_need_second'):
-                                civil_war_color = result.get('civil_war_color', '')
-                                color_name = 'red' if civil_war_color == 'offensive' else 'black'
-                                self.game.civil_war_awaiting_second = True
-                                self.game.civil_war_required_color = civil_war_color
-                                cw_icons = self._get_modifier_icon_images('Civil War')
-                                self.make_dialogue_box(
-                                    message=f"Civil War! You may select a second village figure of the same color ({color_name}), or fight with only one figure.",
-                                    actions=['select second', 'skip'],
-                                    images=cw_icons if cw_icons else None,
-                                    icon="magic" if not cw_icons else None,
-                                    title="Civil War - Second Figure"
-                                )
-                            else:
-                                # Clear Civil War second pick state if it was active
-                                if hasattr(self.game, 'civil_war_awaiting_second'):
-                                    self.game.civil_war_awaiting_second = False
-                                    self.game.civil_war_required_color = None
-                                # Clear forced advance state if it was a forced advance
-                                if self.game.forced_advance_dialogue_shown:
-                                    self.game.pending_forced_advance = False
-                                # Trigger advance notification check (Blitzkrieg needs the combined dialogue)
-                                self.game.pending_own_advance_notification = True
-                                self.game.own_advance_figure_name = figure.name
-                        else:
-                            error_msg = result.get('message', 'Unknown error')
-                            print(f"[FIELD] Failed to advance: {error_msg}")
-                            self.make_dialogue_box(
-                                message=f"Cannot advance: {error_msg}",
-                                actions=['ok'],
-                                icon="error",
-                                title="Advance Failed"
+                        try:
+                            self.game.action_in_progress = True
+                            result = advance_figure(
+                                self.game.game_id,
+                                self.game.player_id,
+                                figure.id
                             )
+                            if result.get('success'):
+                                print(f"[FIELD] Advanced {figure.name} successfully")
+                                self.state.set_msg(f"Advanced {figure.name} toward battle!")
+                                # Update game state from response
+                                if result.get('game'):
+                                    self.game.update_from_dict(result['game'])
+                                # Reload figures to refresh icons
+                                self.load_figures()
+                                
+                                # Check if Civil War needs a second figure
+                                if result.get('civil_war_need_second'):
+                                    civil_war_color = result.get('civil_war_color', '')
+                                    color_name = 'red' if civil_war_color == 'offensive' else 'black'
+                                    self.game.civil_war_awaiting_second = True
+                                    self.game.civil_war_required_color = civil_war_color
+                                    cw_icons = self._get_modifier_icon_images('Civil War')
+                                    self.make_dialogue_box(
+                                        message=f"Civil War! You may select a second village figure of the same color ({color_name}), or fight with only one figure.",
+                                        actions=['select second', 'skip'],
+                                        images=cw_icons if cw_icons else None,
+                                        icon="magic" if not cw_icons else None,
+                                        title="Civil War - Second Figure"
+                                    )
+                                else:
+                                    # Clear Civil War second pick state if it was active
+                                    if hasattr(self.game, 'civil_war_awaiting_second'):
+                                        self.game.civil_war_awaiting_second = False
+                                        self.game.civil_war_required_color = None
+                                    # Clear forced advance state if it was a forced advance
+                                    if self.game.forced_advance_dialogue_shown:
+                                        self.game.pending_forced_advance = False
+                                    # Trigger advance notification check (Blitzkrieg needs the combined dialogue)
+                                    self.game.pending_own_advance_notification = True
+                                    self.game.own_advance_figure_name = figure.name
+                            else:
+                                error_msg = result.get('message', 'Unknown error')
+                                print(f"[FIELD] Failed to advance: {error_msg}")
+                                self.make_dialogue_box(
+                                    message=f"Cannot advance: {error_msg}",
+                                    actions=['ok'],
+                                    icon="error",
+                                    title="Advance Failed"
+                                )
+                        finally:
+                            self.game.action_in_progress = False
 
                     elif self.figure_pending_defender_selection:
                         # User confirmed defender selection
                         target_figure = self.figure_pending_defender_selection
                         from utils.game_service import select_defender
-                        result = select_defender(
-                            self.game.game_id,
-                            self.game.player_id,
-                            target_figure.id
-                        )
-                        
-                        if result.get('success'):
-                            # Check if this was a deficit auto-loss
-                            if result.get('deficit_loss'):
-                                # Defender's figure had a deficit — they auto-lose
-                                deficit_fig_name = result.get('deficit_figure_name', 'Unknown')
-                                winner = result.get('winner', 'You')
-                                points = result.get('points', 10)
-                                # Update game state from response
-                                if result.get('game'):
-                                    self.game.update_from_dict(result['game'])
-                                self.load_figures()
-                                self.defender_selection_mode = False
-                                self._reset_defender_selectable()
-                                self.game.pending_defender_selection = False
-                                # Clear Civil War state
-                                if hasattr(self.game, 'civil_war_defender_second'):
-                                    self.game.civil_war_defender_second = False
-                                    self.game.civil_war_required_color = None
-                                # Mark fold result as shown so check_fold_result() doesn't double-show
-                                self.game.fold_result_shown = True
-                                new_round = self.game.current_round
-                                self.make_dialogue_box(
-                                    message=f"Opponent's {deficit_fig_name} has a resource deficit and cannot fight!\n\n{winner} wins {points} points.\n\nRound {new_round} begins.",
-                                    actions=['ok'],
-                                    icon="magic",
-                                    title="Resource Deficit — Victory!"
-                                )
-                            # Check if Civil War needs a second defender
-                            elif result.get('civil_war_need_second'):
-                                civil_war_color = result.get('civil_war_color', '')
-                                color_name = 'red' if civil_war_color == 'offensive' else 'black'
-                                self.game.civil_war_defender_second = True
-                                self.game.civil_war_required_color = civil_war_color
-                                cw_icons = self._get_modifier_icon_images('Civil War')
-                                self.make_dialogue_box(
-                                    message=f"Civil War! You may select a second opponent village figure of the same color ({color_name}), or proceed with only one.",
-                                    actions=['select second', 'skip'],
-                                    images=cw_icons if cw_icons else None,
-                                    icon="magic" if not cw_icons else None,
-                                    title="Civil War - Second Defender"
-                                )
-                                # Update selectable figures for second pick
-                                self._update_defender_selectable()
-                            else:
-                                # Normal success — update and exit defender mode
-                                if result.get('game'):
-                                    self.game.update_from_dict(result['game'])
-                                self.load_figures()
-                                self.defender_selection_mode = False
-                                self._reset_defender_selectable()
-                                self.state.set_msg(f"Selected {target_figure.name} as opponent's defender.")
-                                self.game.pending_defender_selection = False
-                                # Clear Civil War defender state
-                                if hasattr(self.game, 'civil_war_defender_second'):
-                                    self.game.civil_war_defender_second = False
-                                    self.game.civil_war_required_color = None
-                        else:
-                            error_msg = result.get('message', 'Unknown error')
-                            self.make_dialogue_box(
-                                message=f"Failed to select defender: {error_msg}",
-                                actions=['ok'],
-                                icon="error",
-                                title="Error"
+                        try:
+                            self.game.action_in_progress = True
+                            result = select_defender(
+                                self.game.game_id,
+                                self.game.player_id,
+                                target_figure.id
                             )
+                            
+                            if result.get('success'):
+                                # Check if this was a deficit auto-loss
+                                if result.get('deficit_loss'):
+                                    # Defender's figure had a deficit — they auto-lose
+                                    deficit_fig_name = result.get('deficit_figure_name', 'Unknown')
+                                    winner = result.get('winner', 'You')
+                                    points = result.get('points', 10)
+                                    # Update game state from response
+                                    if result.get('game'):
+                                        self.game.update_from_dict(result['game'])
+                                    self.load_figures()
+                                    self.defender_selection_mode = False
+                                    self._reset_defender_selectable()
+                                    self.game.pending_defender_selection = False
+                                    # Clear Civil War state
+                                    if hasattr(self.game, 'civil_war_defender_second'):
+                                        self.game.civil_war_defender_second = False
+                                        self.game.civil_war_required_color = None
+                                    # Mark fold result as shown so check_fold_result() doesn't double-show
+                                    self.game.fold_result_shown = True
+                                    new_round = self.game.current_round
+                                    self.make_dialogue_box(
+                                        message=f"Opponent's {deficit_fig_name} has a resource deficit and cannot fight!\n\n{winner} wins {points} points.\n\nRound {new_round} begins.",
+                                        actions=['ok'],
+                                        icon="magic",
+                                        title="Resource Deficit — Victory!"
+                                    )
+                                # Check if Civil War needs a second defender
+                                elif result.get('civil_war_need_second'):
+                                    civil_war_color = result.get('civil_war_color', '')
+                                    color_name = 'red' if civil_war_color == 'offensive' else 'black'
+                                    self.game.civil_war_defender_second = True
+                                    self.game.civil_war_required_color = civil_war_color
+                                    cw_icons = self._get_modifier_icon_images('Civil War')
+                                    self.make_dialogue_box(
+                                        message=f"Civil War! You may select a second opponent village figure of the same color ({color_name}), or proceed with only one.",
+                                        actions=['select second', 'skip'],
+                                        images=cw_icons if cw_icons else None,
+                                        icon="magic" if not cw_icons else None,
+                                        title="Civil War - Second Defender"
+                                    )
+                                    # Update selectable figures for second pick
+                                    self._update_defender_selectable()
+                                else:
+                                    # Normal success — update and exit defender mode
+                                    if result.get('game'):
+                                        self.game.update_from_dict(result['game'])
+                                    self.load_figures()
+                                    self.defender_selection_mode = False
+                                    self._reset_defender_selectable()
+                                    self.state.set_msg(f"Selected {target_figure.name} as opponent's defender.")
+                                    self.game.pending_defender_selection = False
+                                    # Clear Civil War defender state
+                                    if hasattr(self.game, 'civil_war_defender_second'):
+                                        self.game.civil_war_defender_second = False
+                                        self.game.civil_war_required_color = None
+                            else:
+                                error_msg = result.get('message', 'Unknown error')
+                                self.make_dialogue_box(
+                                    message=f"Failed to select defender: {error_msg}",
+                                    actions=['ok'],
+                                    icon="error",
+                                    title="Error"
+                                )
+                        finally:
+                            self.game.action_in_progress = False
                         
                         self.figure_pending_defender_selection = None
                     
                     elif self.figure_pending_upgrade:
                         # User confirmed upgrade
+                        self.game.action_in_progress = True
                         try:
                             # Find the upgrade card in the player's hand
                             main_hand, side_hand = self.game.get_hand()
@@ -691,12 +709,8 @@ class FieldScreen(SubScreen):
                                 # Success message
                                 print(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 self.state.set_msg(f"Upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
-                                # Refresh cached figure data (single HTTP call instead of full update)
-                                try:
-                                    self.game.cached_figures_data[self.game.player_id] = fetch_figures(self.game.player_id)
-                                    self.game._figures_data_version += 1
-                                except Exception:
-                                    pass
+                                # Refresh full game state (turn, cards) and figures from server
+                                self.game.update()
                                 self.load_figures()
                                 print(f"[FIELD_SCREEN] Figures reloaded after upgrade, count: {len(self.figures)}")
                             else:
@@ -708,6 +722,8 @@ class FieldScreen(SubScreen):
                         except Exception as e:
                             print(f"Error upgrading figure: {str(e)}")
                             self.state.set_msg(f"Error upgrading figure: {str(e)}")
+                        finally:
+                            self.game.action_in_progress = False
                         
                         # Close the detail box and dialogue box
                         self.figure_detail_box = None
@@ -1318,6 +1334,8 @@ class FieldScreen(SubScreen):
         """
         if getattr(self.game, 'game_over', False):
             return
+        if self.game.action_in_progress:
+            return
         from utils import spell_service
         
         pending = self.state.pending_spell_cast
@@ -1364,18 +1382,23 @@ class FieldScreen(SubScreen):
         } for card in real_cards]
         
         # Call spell service to cast the spell
-        result = spell_service.cast_spell(
-            player_id=self.game.player_id,
-            game_id=self.game.game_id,
-            spell_name=selected_spell.name,
-            spell_type=selected_spell.family.type,
-            spell_family_name=selected_spell.family.name,
-            suit=selected_spell.suit,
-            cards=cards_data,
-            target_figure_id=target_figure.id,
-            counterable=selected_spell.counterable,
-            possible_during_ceasefire=selected_spell.possible_during_ceasefire
-        )
+        self.game.action_in_progress = True
+        try:
+            result = spell_service.cast_spell(
+                player_id=self.game.player_id,
+                game_id=self.game.game_id,
+                spell_name=selected_spell.name,
+                spell_type=selected_spell.family.type,
+                spell_family_name=selected_spell.family.name,
+                suit=selected_spell.suit,
+                cards=cards_data,
+                target_figure_id=target_figure.id,
+                counterable=selected_spell.counterable,
+                possible_during_ceasefire=selected_spell.possible_during_ceasefire
+            )
+        except Exception:
+            self.game.action_in_progress = False
+            raise
         
         if result.get('success'):
             # For Explosion spells, don't apply enchantment locally since figure is destroyed
@@ -1388,6 +1411,10 @@ class FieldScreen(SubScreen):
                 if target_figure.id in self.icon_cache:
                     del self.icon_cache[target_figure.id]
             
+            # Update game state from server response
+            if result.get('game'):
+                self.game.update_from_dict(result['game'])
+            
             # Update game state from server (refresh figures cache)
             try:
                 self.game.cached_figures_data[self.game.player_id] = fetch_figures(self.game.player_id)
@@ -1397,6 +1424,8 @@ class FieldScreen(SubScreen):
                 self.game._figures_data_version += 1
             except Exception:
                 pass
+            
+            self.game.action_in_progress = False
             
             # Refresh figure icons to show updated enchantments (or removed figure for Explosion)
             self.load_figures()
@@ -1430,6 +1459,7 @@ class FieldScreen(SubScreen):
                     images=[figure_icon]
                 )
         else:
+            self.game.action_in_progress = False
             # Show error message
             error_msg = result.get('message', 'Unknown error')
             self.make_dialogue_box(
