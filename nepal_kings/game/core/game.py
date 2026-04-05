@@ -2,6 +2,7 @@
 # See LICENSE file in the project root for full license information.
 from utils import http_compat as requests
 import threading
+import pygame
 from config import settings
 from game.components.cards.card import Card
 from utils.msg_service import fetch_log_entries, add_log_entry, fetch_chat_messages, send_chat_message
