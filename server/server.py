@@ -72,6 +72,11 @@ with app.app_context():
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE game ADD COLUMN resting_figure_ids JSON"))
                 conn.commit()
+        if 'battle_gamble_counts' not in existing_cols:
+            print("  ↳ Adding 'battle_gamble_counts' column to game table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE game ADD COLUMN battle_gamble_counts JSON"))
+                conn.commit()
     if 'user' in inspector.get_table_names():
         existing_cols = {c['name'] for c in inspector.get_columns('user')}
         if 'last_active' not in existing_cols:

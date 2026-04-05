@@ -2652,6 +2652,7 @@ def _clear_battle_state(game):
     game.battle_round = 0
     game.battle_turn_player_id = None
     game.battle_skipped_rounds = None
+    game.battle_gamble_counts = None
 
 
 def _collect_resting_figure_ids(game):

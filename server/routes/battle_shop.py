@@ -292,6 +292,12 @@ def gamble_battle_move():
     if not player or player.game_id != game_id:
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
 
+    # Enforce gamble limit: max 1 gamble per player per battle shop phase
+    gamble_counts = game.battle_gamble_counts or {}
+    pid_str = str(player_id)
+    if gamble_counts.get(pid_str, 0) >= 1:
+        return jsonify({'success': False, 'message': 'You can only gamble once per battle'}), 400
+
     # Find the battle move to sacrifice
     bm = BattleMove.query.get(battle_move_id)
     if not bm:
@@ -348,6 +354,12 @@ def gamble_battle_move():
         db.session.add(move)
         db.session.flush()  # get move.id
         new_moves.append(move.serialize())
+
+    # Track gamble count for this player
+    gamble_counts[pid_str] = gamble_counts.get(pid_str, 0) + 1
+    game.battle_gamble_counts = gamble_counts
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(game, 'battle_gamble_counts')
 
     db.session.commit()
 

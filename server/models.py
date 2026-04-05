@@ -154,6 +154,9 @@ class Game(db.Model):
     # Figures currently resting (rest_after_attack skill — cannot act for one round after battle)
     resting_figure_ids = db.Column(db.JSON, nullable=True)  # list of figure IDs
 
+    # Battle shop gamble tracking — {str(player_id): count}
+    battle_gamble_counts = db.Column(db.JSON, nullable=True)
+
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
@@ -195,6 +198,7 @@ class Game(db.Model):
             'post_battle_drawn_cards': self.post_battle_drawn_cards,
             'last_battle_result': self.last_battle_result,
             'resting_figure_ids': self.resting_figure_ids or [],
+            'battle_gamble_counts': self.battle_gamble_counts or {},
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],

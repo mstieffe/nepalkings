@@ -35,9 +35,30 @@ class DeckManager:
 
     @staticmethod
     def draw_cards_from_deck(game, player, num_cards, card_type="main"):
-        """Draw a batch of cards from the deck."""
+        """Draw a batch of cards from the deck, respecting max hand size.
+
+        If drawing *num_cards* would exceed the maximum hand size, the
+        number drawn is clamped so the hand stays at the limit.
+        """
+        from models import MainCard, SideCard
+        import server_settings as settings
+
+        if card_type == 'main':
+            current = MainCard.query.filter_by(
+                player_id=player.id, in_deck=False).count()
+            max_size = settings.MAX_MAIN_HAND_SIZE
+        else:
+            current = SideCard.query.filter_by(
+                player_id=player.id, in_deck=False).count()
+            max_size = settings.MAX_SIDE_HAND_SIZE
+
+        allowed = max(0, max_size - current)
+        actual = min(num_cards, allowed)
+        if actual <= 0:
+            return []
+
         deck = DeckManager.get_deck_for_game(game)
-        return deck.draw_cards(player, num_cards, card_type)
+        return deck.draw_cards(player, actual, card_type)
 
     @staticmethod
     def return_cards_to_deck(cards):
