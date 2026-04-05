@@ -7,7 +7,10 @@ def fetch_figures(player_id):
     """
     Fetch all figures associated with a specific player from the server.
     """
-    response = requests.get(f'{settings.SERVER_URL}/figures/get_figures', params={'player_id': player_id}, timeout=10)
+    try:
+        response = requests.get(f'{settings.SERVER_URL}/figures/get_figures', params={'player_id': player_id}, timeout=10)
+    except Exception as e:
+        raise Exception(f"Failed to fetch figures for player {player_id}: {e}")
     if response.status_code != 200:
         raise Exception(f"Failed to fetch figures: {response.json().get('message', 'Unknown error')}")
     return response.json().get('figures', [])
@@ -16,7 +19,10 @@ def fetch_figure(figure_id):
     """
     Fetch a single figure by its ID.
     """
-    response = requests.get(f'{settings.SERVER_URL}/figures/get_figure', params={'figure_id': figure_id}, timeout=10)
+    try:
+        response = requests.get(f'{settings.SERVER_URL}/figures/get_figure', params={'figure_id': figure_id}, timeout=10)
+    except Exception as e:
+        raise Exception(f"Failed to fetch figure {figure_id}: {e}")
     if response.status_code != 200:
         raise Exception(f"Failed to fetch figure: {response.json().get('message', 'Unknown error')}")
     return response.json().get('figure', {})
@@ -57,9 +63,17 @@ def create_figure(player_id, game_id, family_name, field, color, name, suit, des
         'cannot_be_blocked': cannot_be_blocked,
         'rest_after_attack': rest_after_attack
     }
-    response = requests.post(f'{settings.SERVER_URL}/figures/create_figure', json=data, timeout=10)
+    try:
+        response = requests.post(f'{settings.SERVER_URL}/figures/create_figure', json=data, timeout=15)
+    except Exception as e:
+        print(f"[FIGURE_SERVICE] create_figure network error: {e}")
+        return {'success': False, 'message': 'Server is busy, please try again.'}
     if response.status_code != 200:
-        raise Exception(f"Failed to create figure: {response.json().get('message', 'Unknown error')}")
+        try:
+            msg = response.json().get('message', 'Unknown error')
+        except Exception:
+            msg = f'Server returned status {response.status_code}'
+        return {'success': False, 'message': f'Failed to create figure: {msg}'}
     return response.json()
 
 def update_figure(figure_id, name=None, suit=None, description=None, upgrade_family_name=None, cards=None):

@@ -200,7 +200,8 @@ class Game(db.Model):
             'side_cards': [card.serialize() for card in self.side_cards],
             'log_entries': [entry.serialize() for entry in self.log_entries],
             'chat_messages': [message.serialize() for message in self.chat_messages],
-            'battle_moves': [move.serialize() for move in self.battle_moves]
+            'battle_moves': [move.serialize() for move in self.battle_moves],
+            'active_spells': [spell.serialize() for spell in self.active_spells],
         }
 
 

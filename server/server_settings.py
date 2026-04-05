@@ -37,7 +37,7 @@ AI_USERNAMES = ['[AI] Strategos']  # AI player usernames created at startup
 AI_INITIAL_GOLD = 999999  # AI starts with effectively infinite gold
 AI_THINK_DELAY = 2  # Seconds of artificial "thinking" delay
 AI_OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')  # OpenAI API key
-AI_MODEL = os.getenv('AI_MODEL', 'gpt-4o-mini')  # LLM model name
+AI_MODEL = os.getenv('AI_MODEL', 'gpt-4.1-mini')  # LLM model name
 AI_PROVIDER = os.getenv('AI_PROVIDER', 'openai')  # LLM provider
 AI_ENABLED = os.getenv('AI_ENABLED', 'True').lower() == 'true'
 

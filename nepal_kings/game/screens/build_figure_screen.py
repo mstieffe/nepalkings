@@ -366,7 +366,17 @@ class BuildFigureScreen(SubScreen):
                         return
                     
                     print("Creating figure...")
-                    self.create_figure_in_db(selected_figure)
+                    build_result = self.create_figure_in_db(selected_figure)
+
+                    if not build_result or not build_result.get('success'):
+                        error_msg = build_result.get('message', 'Unknown error') if build_result else 'Build failed'
+                        self.make_dialogue_box(
+                            message=f"Failed to build figure: {error_msg}",
+                            actions=['ok'],
+                            icon="error",
+                            title="Build Failed"
+                        )
+                        return
 
                     self.make_dialogue_box(
                         message="Your new figure has been placed on the field.",

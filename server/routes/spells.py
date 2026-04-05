@@ -4,7 +4,8 @@
 Server-side spell routes for handling spell casting, countering, and management.
 """
 
-from flask import Blueprint, request, jsonify
+import logging
+from flask import Blueprint, request, jsonify, current_app
 from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult
 from datetime import datetime
 from game_service.deck_manager import DeckManager
@@ -13,6 +14,27 @@ from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
 
 spells = Blueprint('spells', __name__)
+
+_ai_logger = logging.getLogger('nepalkings.ai.trigger')
+
+@spells.after_request
+def _ai_trigger_hook(response):
+    """After every POST, check if an AI player needs to act."""
+    if request.method == 'POST' and settings.AI_ENABLED:
+        game_id = None
+        try:
+            if request.is_json and request.json:
+                game_id = request.json.get('game_id')
+        except Exception:
+            pass
+        if game_id:
+            try:
+                from ai.ai_worker import trigger_ai_if_needed
+                _ai_logger.info(f"Spells trigger hook firing for game {game_id}")
+                trigger_ai_if_needed(int(game_id), app=current_app._get_current_object())
+            except Exception as e:
+                _ai_logger.warning(f"AI trigger error in spells hook: {e}")
+    return response
 
 
 @spells.route('/cast_spell', methods=['POST'])

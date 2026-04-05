@@ -14,9 +14,8 @@ _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 
 @battle_shop.after_request
 def _ai_trigger_hook(response):
-    """After every successful POST, check if an AI player needs to act."""
-    if (request.method == 'POST' and response.status_code == 200
-            and settings.AI_ENABLED):
+    """After every POST, check if an AI player needs to act."""
+    if request.method == 'POST' and settings.AI_ENABLED:
         game_id = None
         try:
             if request.is_json and request.json:
@@ -28,7 +27,7 @@ def _ai_trigger_hook(response):
                 from ai.ai_worker import trigger_ai_if_needed
                 trigger_ai_if_needed(int(game_id), app=current_app._get_current_object())
             except Exception as e:
-                _ai_logger.debug(f"AI trigger check: {e}")
+                _ai_logger.warning(f"AI trigger error in battle_shop hook: {e}")
     return response
 
 # Max battle moves per player

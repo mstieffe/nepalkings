@@ -17,9 +17,8 @@ _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 
 @games.after_request
 def _ai_trigger_hook(response):
-    """After every successful POST, check if an AI player needs to act."""
-    if (request.method == 'POST' and response.status_code == 200
-            and settings.AI_ENABLED):
+    """After every POST, check if an AI player needs to act."""
+    if request.method == 'POST' and settings.AI_ENABLED:
         game_id = None
         try:
             if request.is_json and request.json:
@@ -33,7 +32,7 @@ def _ai_trigger_hook(response):
                 from ai.ai_worker import trigger_ai_if_needed
                 trigger_ai_if_needed(int(game_id), app=current_app._get_current_object())
             except Exception as e:
-                _ai_logger.debug(f"AI trigger check: {e}")
+                _ai_logger.warning(f"AI trigger error in games hook: {e}")
     return response
 
 def _check_and_update_ceasefire(game):
@@ -1304,6 +1303,11 @@ def advance_figure():
         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
         has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
         has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+        has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+
+        # Peasant War: only village figures can advance
+        if has_peasant_war and figure.field != 'village':
+            return jsonify({'success': False, 'message': 'Peasant War: only village figures can advance'}), 400
 
         # Determine if this is a counter-advance (opponent already advanced)
         is_counter_advance = (game.advancing_figure_id is not None and 

@@ -21,13 +21,13 @@ class LLMClient:
         self.api_key = api_key
         self._openai_client = None
 
-    def choose_action(self, system_prompt: str, user_prompt: str) -> str:
+    def choose_action(self, system_prompt: str, user_prompt: str, temperature: float = 0.4) -> str:
         """
         Ask the LLM to choose an action given game context.
         Returns the raw text response from the LLM.
         """
         if self.provider == 'openai':
-            return self._call_openai(system_prompt, user_prompt)
+            return self._call_openai(system_prompt, user_prompt, temperature)
         raise ValueError(f"Unknown LLM provider: {self.provider}")
 
     def _get_openai_client(self):
@@ -40,7 +40,7 @@ class LLMClient:
                 raise RuntimeError("openai package not installed. Run: pip install openai")
         return self._openai_client
 
-    def _call_openai(self, system_prompt: str, user_prompt: str) -> str:
+    def _call_openai(self, system_prompt: str, user_prompt: str, temperature: float = 0.4) -> str:
         """Call OpenAI Chat Completions API."""
         client = self._get_openai_client()
         try:
@@ -50,11 +50,11 @@ class LLMClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.7,
-                max_tokens=500,
+                temperature=temperature,
+                max_tokens=800,
             )
             content = response.choices[0].message.content.strip()
-            logger.debug(f"LLM response ({self.model}): {content[:200]}")
+            logger.debug(f"LLM response ({self.model}, t={temperature}): {content[:200]}")
             return content
         except Exception as e:
             logger.error(f"LLM call failed ({self.provider}/{self.model}): {e}")
@@ -64,26 +64,37 @@ class LLMClient:
 def parse_action_response(response_text: str) -> dict:
     """
     Parse the LLM's action response into a structured dict.
-    Expected format: JSON object with 'action' key and action-specific parameters.
+    Handles chain-of-thought: reasoning text followed by JSON.
     Falls back to extracting action number if JSON parse fails.
     """
-    # Try JSON parse first
+    import re
+    text = response_text.strip()
+
+    # Strip markdown code fences if present
+    code_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+    if code_match:
+        try:
+            return json.loads(code_match.group(1).strip())
+        except (json.JSONDecodeError, IndexError):
+            pass
+
+    # Try direct JSON parse (response is pure JSON)
     try:
-        # Strip markdown code fences if present
-        text = response_text.strip()
-        if text.startswith('```'):
-            text = text.split('\n', 1)[1] if '\n' in text else text[3:]
-            if text.endswith('```'):
-                text = text[:-3]
-            text = text.strip()
-            if text.startswith('json'):
-                text = text[4:].strip()
         return json.loads(text)
     except (json.JSONDecodeError, IndexError):
         pass
 
+    # Find JSON objects in the text (chain-of-thought reasoning may precede it)
+    json_matches = list(re.finditer(r'\{[^{}]*\}', text))
+    for match in reversed(json_matches):  # Try last match first
+        try:
+            parsed = json.loads(match.group())
+            if 'action' in parsed:
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
     # Fallback: look for action number pattern like "Action: 1" or just "1"
-    import re
     match = re.search(r'(?:action\s*[:=]\s*)?(\d+)', response_text, re.IGNORECASE)
     if match:
         return {"action": int(match.group(1))}

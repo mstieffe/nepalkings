@@ -25,6 +25,22 @@ _llm_client = None
 # Lock to prevent multiple AI threads for the same game
 _active_games = set()
 _active_games_lock = threading.Lock()
+_pending_retrigger = set()  # Games that need rechecking after current loop
+# Per-game strategy memory — persists across LLM calls within a game
+_game_strategies = {}  # game_id → list of strategy notes
+_game_strategies_lock = threading.Lock()
+
+# Phase-specific LLM temperatures — lower = more deterministic for math-heavy decisions
+PHASE_TEMPERATURES = {
+    'normal_turn': 0.4,       # Balanced — strategic + math
+    'select_defender': 0.3,   # Target evaluation
+    'battle_decision': 0.2,   # Pure math: fold vs battle
+    'battle_shop': 0.3,       # Card evaluation + combinatorics
+    'battle_round': 0.2,      # Move sequencing — deterministic
+    'counter_spell': 0.2,     # Cost-benefit analysis
+    'post_battle_pick': 0.2,  # Card value ranking
+    'post_battle_draw': 0.1,  # Almost always "destroy opponent's"
+}
 
 
 def _get_llm_client():
@@ -51,7 +67,7 @@ def trigger_ai_if_needed(game_id, app=None):
         return
     
     if not settings.AI_OPENAI_API_KEY:
-        logger.debug("AI trigger skipped: no API key configured")
+        logger.info(f"AI trigger skipped for game {game_id}: no API key")
         return
 
     # Import here to avoid circular imports
@@ -74,14 +90,24 @@ def trigger_ai_if_needed(game_id, app=None):
     
     # Check if the AI actually needs to act right now
     game_dict = game.serialize()
-    phase = detect_phase(game_dict, ai_player.id)
+    if not game_dict:
+        logger.warning(f"AI trigger: game.serialize() returned None/empty for game {game_id}")
+        return
+    try:
+        phase = detect_phase(game_dict, ai_player.id)
+    except Exception as e:
+        logger.error(f"AI trigger: detect_phase crashed for game {game_id}: {e}", exc_info=True)
+        return
     if not phase:
+        logger.info(f"AI trigger for game {game_id}: no action needed "
+                     f"(turn={game_dict.get('turn_player_id')}, ai={ai_player.id})")
         return
     
     # Avoid spawning duplicate threads for the same game
     with _active_games_lock:
         if game_id in _active_games:
-            logger.debug(f"AI thread already active for game {game_id}")
+            _pending_retrigger.add(game_id)
+            logger.info(f"AI trigger for game {game_id}: thread active, marked retrigger")
             return
         _active_games.add(game_id)
     
@@ -118,6 +144,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
         max_iterations = 20  # Safety limit to prevent infinite loops
         iteration = 0
         called_start_turn = False
+        consecutive_normal_turns = 0  # Track Infinite Hammer multi-build sequences
         
         while iteration < max_iterations:
             iteration += 1
@@ -127,12 +154,42 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 game = Game.query.get(game_id)
                 if not game or game.state == 'finished':
                     logger.info(f"AI loop exit: game {game_id} is finished/gone")
+                    # Clean up strategy memory for finished games
+                    with _game_strategies_lock:
+                        _game_strategies.pop(game_id, None)
                     break
                 
                 game_dict = game.serialize()
             
             phase = detect_phase(game_dict, ai_player_id)
             if not phase:
+                # Check if a concurrent request marked us for retrigger
+                with _active_games_lock:
+                    if game_id in _pending_retrigger:
+                        _pending_retrigger.discard(game_id)
+                        logger.info(f"AI retrigger received for game {game_id}, continuing")
+                        time.sleep(1)
+                        called_start_turn = False
+                        continue
+                # Wait briefly and recheck — handles race where opponent's POST
+                # flips the turn while we're winding down
+                time.sleep(3)
+                with app.app_context():
+                    game = Game.query.get(game_id)
+                    if game and game.state != 'finished':
+                        game_dict = game.serialize()
+                        phase = detect_phase(game_dict, ai_player_id)
+                if phase:
+                    logger.info(f"AI detected deferred action in game {game_id}, phase={phase}")
+                    called_start_turn = False
+                    continue
+                # Final retrigger check after the wait
+                with _active_games_lock:
+                    if game_id in _pending_retrigger:
+                        _pending_retrigger.discard(game_id)
+                        logger.info(f"AI retrigger (post-wait) for game {game_id}")
+                        called_start_turn = False
+                        continue
                 logger.info(f"AI loop exit: no action needed in game {game_id}")
                 break
             
@@ -166,8 +223,9 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 _handle_post_battle_pick(app, game_id, ai_player_id)
                 break  # After picking, new round starts — turn might be ours or opponent's
             
-            # Enumerate legal actions
-            actions = enumerate_actions(game_dict, ai_player_id, phase)
+            # Enumerate legal actions (needs app context for DB queries, e.g. counter_spell)
+            with app.app_context():
+                actions = enumerate_actions(game_dict, ai_player_id, phase)
             if not actions:
                 logger.warning(f"AI has no actions in phase {phase} for game {game_id}")
                 break
@@ -184,44 +242,136 @@ def _ai_game_loop(app, game_id, ai_player_id):
             success = _execute_action(app, game_id, ai_player_id, chosen)
             if not success:
                 logger.warning(f"AI action failed: {chosen['type']} in game {game_id}")
-                # Try fallback: if build failed, change cards instead
-                if chosen['type'] == 'build_figure':
+                # Try other actions of the same type (e.g., next defender target)
+                fallback_success = False
+                for alt in actions:
+                    if alt['id'] != chosen['id'] and alt['type'] == chosen['type']:
+                        logger.info(f"AI trying alternative: {alt['type']} — {alt['description'][:60]}")
+                        if _execute_action(app, game_id, ai_player_id, alt):
+                            fallback_success = True
+                            break
+                if not fallback_success and chosen['type'] == 'build_figure':
                     fallback = next((a for a in actions if a['type'] == 'change_cards'), None)
                     if fallback:
                         logger.info("AI falling back to change_cards")
                         _execute_action(app, game_id, ai_player_id, fallback)
-                break
+                # If confirm_battle_moves failed, try gamble or buy to reach 3 moves
+                if not fallback_success and chosen['type'] == 'confirm_battle_moves':
+                    # Priority: gamble (produces more moves) > buy > combine
+                    gamble_action = next((a for a in actions if a['type'] == 'gamble_battle_move'), None)
+                    buy_action = next((a for a in actions if a['type'] == 'buy_battle_move'), None)
+                    combine_action = next((a for a in actions if a['type'] == 'combine_battle_moves'), None)
+                    for fb in [gamble_action, buy_action, combine_action]:
+                        if fb:
+                            logger.info(f"AI confirm failed, falling back to {fb['type']}")
+                            if _execute_action(app, game_id, ai_player_id, fb):
+                                fallback_success = True
+                                break
+                if not fallback_success:
+                    break
+                # Fallback action succeeded — continue loop
+                time.sleep(settings.AI_THINK_DELAY)
+                continue
             
+            # Track consecutive normal_turn actions (indicates Infinite Hammer mode)
+            if phase == 'normal_turn':
+                consecutive_normal_turns += 1
+            else:
+                consecutive_normal_turns = 0
+
             # Small delay between consecutive actions (battle shop: buy → buy → confirm)
             if phase in ('battle_shop',):
                 time.sleep(1)
+            elif consecutive_normal_turns > 1:
+                # Infinite Hammer: longer delay to avoid saturating PythonAnywhere's
+                # limited web workers with AI self-calls
+                time.sleep(settings.AI_THINK_DELAY + 3)
             else:
                 time.sleep(settings.AI_THINK_DELAY)
     
     except Exception as e:
         logger.error(f"AI thread error for game {game_id}: {e}", exc_info=True)
     finally:
+        retrigger = False
         with _active_games_lock:
             _active_games.discard(game_id)
+            if game_id in _pending_retrigger:
+                _pending_retrigger.discard(game_id)
+                retrigger = True
+        if retrigger:
+            logger.info(f"Processing pending retrigger for game {game_id} after thread exit")
+            with app.app_context():
+                trigger_ai_if_needed(game_id, app=app)
+
+
+def _get_game_log_digest(game_dict, ai_player_id, max_entries=15):
+    """Extract recent game log entries for turn history context."""
+    entries = game_dict.get('log_entries', [])
+    if not entries:
+        return ""
+    # Take the most recent entries
+    recent = entries[-max_entries:]
+    lines = ["\n=== RECENT GAME LOG ==="]
+    for e in recent:
+        msg = e.get('message', '')
+        rnd = e.get('round_number', '?')
+        lines.append(f"  R{rnd}: {msg}")
+    return '\n'.join(lines)
+
+
+def _get_strategy_memory(game_id):
+    """Get accumulated strategy notes for this game."""
+    with _game_strategies_lock:
+        notes = _game_strategies.get(game_id, [])
+        if not notes:
+            return ""
+        lines = ["\n=== YOUR STRATEGY NOTES (from previous turns) ==="]
+        # Highlight the most recent forward plan
+        for n in reversed(notes):
+            if '| PLAN:' in n:
+                plan = n.split('| PLAN:', 1)[1].strip()
+                lines.append(f"  📋 CURRENT PLAN: {plan}")
+                break
+        lines.extend(f"  - {n}" for n in notes[-8:])
+        return '\n'.join(lines)
+
+
+def _update_strategy_memory(game_id, action, phase, plan=None):
+    """Record a brief strategy note about what the AI just did."""
+    note = f"{phase}: chose {action.get('type', '?')} — {action.get('description', '')[:80]}"
+    if plan:
+        note += f" | PLAN: {plan}"
+    with _game_strategies_lock:
+        if game_id not in _game_strategies:
+            _game_strategies[game_id] = []
+        _game_strategies[game_id].append(note)
+        # Keep only last 20 notes to prevent unbounded growth
+        if len(_game_strategies[game_id]) > 20:
+            _game_strategies[game_id] = _game_strategies[game_id][-20:]
 
 
 def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
     """Ask the LLM to choose an action and return the action dict."""
+    game_id = game_dict.get('id')
     try:
         llm = _get_llm_client()
         
-        # Build the user prompt
+        # Build the user prompt with full context
         game_state_text = serialize_game_for_llm(game_dict, ai_player_id)
         actions_text = format_actions_for_llm(actions)
         phase_instruction = PHASE_PROMPTS.get(phase, "Choose the best action.")
+        strategy_memory = _get_strategy_memory(game_id) if game_id else ""
+        log_digest = _get_game_log_digest(game_dict, ai_player_id)
         
-        user_prompt = f"{game_state_text}\n\n{actions_text}\n\n{phase_instruction}"
+        user_prompt = f"{game_state_text}{log_digest}{strategy_memory}\n\n{actions_text}\n\n{phase_instruction}"
         
-        # Call LLM
-        response = llm.choose_action(SYSTEM_PROMPT, user_prompt)
+        # Call LLM with phase-appropriate temperature
+        temperature = PHASE_TEMPERATURES.get(phase, 0.4)
+        response = llm.choose_action(SYSTEM_PROMPT, user_prompt, temperature=temperature)
         parsed = parse_action_response(response)
         
         action_id = parsed.get('action', 1)
+        plan = parsed.get('plan')  # Optional forward plan from chain-of-thought
         
         # Find the matching action
         chosen = next((a for a in actions if a['id'] == action_id), None)
@@ -230,6 +380,11 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
             chosen = actions[0]
         
         logger.info(f"LLM chose action {action_id}: {chosen['type']} — {chosen['description'][:80]}")
+        
+        # Record this decision in strategy memory (with forward plan if provided)
+        if game_id:
+            _update_strategy_memory(game_id, chosen, phase, plan=plan)
+        
         return chosen
     
     except Exception as e:
@@ -258,14 +413,22 @@ def _execute_action(app, game_id, ai_player_id, action):
             return _exec_buy_battle_move(base, game_id, ai_player_id, params)
         elif action_type == 'confirm_battle_moves':
             return _exec_confirm_battle_moves(base, game_id, ai_player_id)
+        elif action_type == 'gamble_battle_move':
+            return _exec_gamble_battle_move(base, game_id, ai_player_id, params)
+        elif action_type == 'combine_battle_moves':
+            return _exec_combine_battle_moves(base, game_id, ai_player_id, params)
         elif action_type == 'play_battle_move':
             return _exec_play_battle_move(base, game_id, ai_player_id, params)
         elif action_type == 'skip_battle_turn':
             return _exec_skip_battle_turn(base, game_id, ai_player_id)
         elif action_type == 'allow_spell':
-            return _exec_allow_spell(base, game_id, ai_player_id)
+            return _exec_allow_spell(base, game_id, ai_player_id, params)
         elif action_type == 'counter_spell':
-            return _exec_counter_spell(base, game_id, ai_player_id)
+            return _exec_counter_spell(base, game_id, ai_player_id, params)
+        elif action_type == 'cast_spell':
+            return _exec_cast_spell(base, game_id, ai_player_id, params)
+        elif action_type == 'end_infinite_hammer':
+            return _exec_end_infinite_hammer(base, game_id, ai_player_id)
         else:
             logger.error(f"Unknown action type: {action_type}")
             return False
@@ -374,11 +537,11 @@ def _handle_post_battle_pick(app, game_id, ai_player_id):
     returnable = result.get('returnable_cards', [])
     if not returnable:
         logger.warning("No returnable cards for post_battle_pick")
-        # Try to pick with card_id=None to just clear battle state
+        # Try to pick with picked_card_id=None to just clear battle state
         http_requests.post(f'{base}/games/finish_battle_pick_card', json={
             'game_id': game_id,
             'player_id': ai_player_id,
-            'card_id': None,
+            'picked_card_id': None,
         }, timeout=15)
         return
 
@@ -390,7 +553,7 @@ def _handle_post_battle_pick(app, game_id, ai_player_id):
     resp = http_requests.post(f'{base}/games/finish_battle_pick_card', json={
         'game_id': game_id,
         'player_id': ai_player_id,
-        'card_id': picked_id,
+        'picked_card_id': picked_id,
     }, timeout=15)
     pick_result = resp.json()
     if pick_result.get('game_over'):
@@ -410,6 +573,7 @@ def _handle_finish_battle_draw(base, game_id, ai_player_id, returnable_cards):
                 'player_id': ai_player_id,
                 'choice': 'pick_card',
                 'picked_card_id': best['id'],
+                'picked_card_type': best.get('type', 'main'),
             }, timeout=15)
             return
 
@@ -476,8 +640,12 @@ def _exec_build_figure(base, game_id, ai_player_id, params):
 
 
 def _exec_change_cards(app, game_id, ai_player_id):
-    """Change cards via POST /games/change_cards."""
-    # First get the current hand to know which cards to return
+    """Change cards via POST /games/change_cards.
+    
+    Smart card selection: keep high-value battle cards (K, A, 10, 9) and
+    key cards needed for building (J for village, Q for temple, A for military).
+    Only swap low-value or duplicate cards we can't use.
+    """
     with app.app_context():
         from models import Game, MainCard
         game = Game.query.get(game_id)
@@ -490,22 +658,59 @@ def _exec_change_cards(app, game_id, ai_player_id):
             in_deck=False,
         ).all()
         
-        card_ids = [c.id for c in hand_cards 
-                    if not c.part_of_figure and not c.part_of_battle_move]
+        free_cards = [c for c in hand_cards
+                      if not c.part_of_figure and not c.part_of_battle_move]
     
-    if not card_ids:
+    if not free_cards:
         logger.warning("No cards to change")
         return False
+    
+    # Rank cards by value for keeping: K(4), A(3), 10, 9, Q, 8, J, 7
+    # Keep: K (battle=4, Maharaja build), A (battle=3, military build),
+    #        10 (battle=10), 9 (battle=9), Q (temple build, battle block)
+    # Swap: 7, 8, and excess duplicates
+    KEEP_RANKS = {'K', 'A', '10', '9'}
+    MAYBE_KEEP = {'Q', 'J'}  # Keep 1-2 of each for building
+
+    to_swap = []
+    kept_counts = {}
+    
+    # Sort: highest value last so we process low-value first
+    sorted_cards = sorted(free_cards, key=lambda c: c.value or 0)
+    
+    for card in sorted_cards:
+        rank = card.rank
+        kept_counts[rank] = kept_counts.get(rank, 0)
+        
+        if rank in KEEP_RANKS:
+            # Always keep K, A, 10, 9
+            kept_counts[rank] += 1
+            continue
+        elif rank in MAYBE_KEEP:
+            # Keep up to 2 of Q and J
+            if kept_counts[rank] < 2:
+                kept_counts[rank] += 1
+                continue
+        # Swap 7s, 8s, and excess Q/J
+        to_swap.append(card.id)
+    
+    if not to_swap:
+        # Nothing worth swapping — swap lowest value card anyway
+        to_swap = [sorted_cards[0].id]
+    
+    logger.info(f"Smart change: swapping {len(to_swap)} of {len(free_cards)} cards "
+                f"(keeping {len(free_cards) - len(to_swap)} high-value cards)")
     
     base = settings.SERVER_URL
     resp = http_requests.post(f'{base}/games/change_cards', json={
         'game_id': game_id,
         'player_id': ai_player_id,
-        'card_ids': card_ids,
+        'cards': [{'id': cid} for cid in to_swap],
+        'card_type': 'main',
     }, timeout=15)
     result = resp.json()
     if result.get('success'):
-        logger.info(f"Changed {len(card_ids)} cards")
+        logger.info(f"Changed {len(to_swap)} cards")
         return True
     logger.warning(f"Change cards failed: {result.get('message')}")
     return False
@@ -562,6 +767,11 @@ def _exec_buy_battle_move(base, game_id, ai_player_id, params):
         'game_id': game_id,
         'player_id': ai_player_id,
         'card_id': params['card_id'],
+        'family_name': params['family_name'],
+        'card_type': params.get('card_type', 'main'),
+        'suit': params['suit'],
+        'rank': params['rank'],
+        'value': params.get('value', 0),
     }, timeout=15)
     result = resp.json()
     if result.get('success'):
@@ -585,16 +795,50 @@ def _exec_confirm_battle_moves(base, game_id, ai_player_id):
     return False
 
 
+def _exec_gamble_battle_move(base, game_id, ai_player_id, params):
+    """Gamble: sacrifice 1 battle move → draw 2 random via POST /battle_shop/gamble_battle_move."""
+    resp = http_requests.post(f'{base}/battle_shop/gamble_battle_move', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'battle_move_id': params['battle_move_id'],
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        new_moves = result.get('new_moves', [])
+        new_desc = ', '.join(f"{m.get('family_name','?')}({m.get('value','?')})" for m in new_moves)
+        logger.info(f"Gambled move {params['battle_move_id']} → drew: {new_desc}")
+        return True
+    logger.warning(f"Gamble battle move failed: {result.get('message')}")
+    return False
+
+
+def _exec_combine_battle_moves(base, game_id, ai_player_id, params):
+    """Combine 2 Daggers into Double Dagger via POST /battle_shop/combine_battle_moves."""
+    resp = http_requests.post(f'{base}/battle_shop/combine_battle_moves', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'move_id_a': params['move_id_a'],
+        'move_id_b': params['move_id_b'],
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        combined = result.get('combined_move', {})
+        logger.info(f"Combined into Double Dagger (value={combined.get('value','?')})")
+        return True
+    logger.warning(f"Combine battle moves failed: {result.get('message')}")
+    return False
+
+
 def _exec_play_battle_move(base, game_id, ai_player_id, params):
     """Play a battle move via POST /games/play_battle_move."""
     resp = http_requests.post(f'{base}/games/play_battle_move', json={
         'game_id': game_id,
         'player_id': ai_player_id,
-        'move_id': params['move_id'],
+        'battle_move_id': params['battle_move_id'],
     }, timeout=15)
     result = resp.json()
     if result.get('success'):
-        logger.info(f"Played battle move {params['move_id']}")
+        logger.info(f"Played battle move {params['battle_move_id']}")
         return True
     logger.warning(f"Play battle move failed: {result.get('message')}")
     return False
@@ -614,11 +858,12 @@ def _exec_skip_battle_turn(base, game_id, ai_player_id):
     return False
 
 
-def _exec_allow_spell(base, game_id, ai_player_id):
+def _exec_allow_spell(base, game_id, ai_player_id, params):
     """Allow a pending spell via POST /spells/allow_spell."""
     resp = http_requests.post(f'{base}/spells/allow_spell', json={
         'game_id': game_id,
         'player_id': ai_player_id,
+        'pending_spell_id': params.get('pending_spell_id'),
     }, timeout=15)
     result = resp.json()
     if result.get('success'):
@@ -628,15 +873,57 @@ def _exec_allow_spell(base, game_id, ai_player_id):
     return False
 
 
-def _exec_counter_spell(base, game_id, ai_player_id):
+def _exec_counter_spell(base, game_id, ai_player_id, params):
     """Counter a pending spell via POST /spells/counter_spell."""
     resp = http_requests.post(f'{base}/spells/counter_spell', json={
         'game_id': game_id,
         'player_id': ai_player_id,
+        'pending_spell_id': params.get('pending_spell_id'),
+        'counter_spell_name': params.get('counter_spell_name', ''),
+        'counter_spell_type': params.get('counter_spell_type', ''),
+        'counter_spell_family_name': params.get('counter_spell_family_name', ''),
+        'counter_cards': params.get('counter_cards', []),
     }, timeout=15)
     result = resp.json()
     if result.get('success'):
         logger.info("Countered spell")
         return True
     logger.warning(f"Counter spell failed: {result.get('message')}")
+    return False
+
+
+def _exec_cast_spell(base, game_id, ai_player_id, params):
+    """Cast a spell via POST /spells/cast_spell."""
+    spell_name = params.get('spell_name', '?')
+    resp = http_requests.post(f'{base}/spells/cast_spell', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'spell_name': spell_name,
+        'spell_type': params.get('spell_type', ''),
+        'spell_family_name': params.get('spell_family_name', ''),
+        'suit': params.get('suit', ''),
+        'cards': params.get('cards', []),
+        'target_figure_id': params.get('target_figure_id'),
+        'counterable': params.get('counterable', False),
+        'possible_during_ceasefire': params.get('possible_during_ceasefire', True),
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Cast spell: {spell_name}")
+        return True
+    logger.warning(f"Cast spell failed ({spell_name}): {result.get('message')}")
+    return False
+
+
+def _exec_end_infinite_hammer(base, game_id, ai_player_id):
+    """End Infinite Hammer mode via POST /spells/end_infinite_hammer."""
+    resp = http_requests.post(f'{base}/spells/end_infinite_hammer', json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info("Ended Infinite Hammer mode")
+        return True
+    logger.warning(f"End Infinite Hammer failed: {result.get('message')}")
     return False
