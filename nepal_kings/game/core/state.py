@@ -27,6 +27,10 @@ class State:
         self._new_challenge_ids = set()    # IDs of challenges that are "new"
         self._last_seen_at = None          # ISO datetime str of previous session end
 
+        # ── Accepted-challenge notification tracking ────────────────
+        self._notified_accepted_challenges = set()  # challenge IDs already shown to user
+        self._pending_accepted_challenge = None     # dict: {id, game_id, opponent_name, stake, ...} waiting for dialogue
+
         # ── Display info (set by launcher before window creation) ───
         self.native_screen_w = 0           # real desktop width
         self.native_screen_h = 0           # real desktop height

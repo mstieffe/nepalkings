@@ -1005,6 +1005,11 @@ def create_game():
                                           num_main_cards=settings.NUM_MAIN_CARDS_START, 
                                           num_side_cards=settings.NUM_SIDE_CARDS_START)
 
+        # Mark the challenge as accepted and link to the created game
+        challenge.status = 'accepted'
+        challenge.game_id = game.id
+        db.session.commit()
+
         return jsonify({
             'success': True,
             'message': 'Game created successfully',

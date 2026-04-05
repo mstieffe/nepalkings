@@ -21,6 +21,7 @@ class Challenge(db.Model):
   status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default='Open')
   stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
   turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
+  game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=True)  # Set when challenge is accepted
   date = db.Column(db.DateTime, default=datetime.utcnow)
 
   def serialize(self):
@@ -28,9 +29,12 @@ class Challenge(db.Model):
       'id': self.id,
       'challenger_id': self.challenger_id,
       'challenged_id': self.challenged_id,
+      'challenger_name': self.challenger.username if self.challenger else None,
+      'challenged_name': self.challenged.username if self.challenged else None,
       'status': self.status.value,
       'stake': self.stake,
       'turn_time_limit': self.turn_time_limit,
+      'game_id': self.game_id,
       'date': self.date.isoformat() if self.date else None
     }
 

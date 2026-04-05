@@ -7,7 +7,7 @@ from game.screens._menu_base import MenuScreenMixin, ListButton
 from game.core.game import Game
 from config import settings
 from utils.utils import Button, InputField
-from utils.game_service import fetch_users, fetch_user, create_challenge, remove_challenge, create_game
+from utils.game_service import fetch_users, fetch_user, create_challenge, remove_challenge, create_game, fetch_game
 from utils.background_poller import BackgroundPoller
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
@@ -168,7 +168,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.state.set_msg(f"Error fetching users or user data: {str(e)}")
             return
 
-        self.open_challenges = self.user['challenges_issued'] + self.user['challenges_received']
+        all_challenges = self.user['challenges_issued'] + self.user['challenges_received']
+        self.open_challenges = [ch for ch in all_challenges if ch.get('status') == 'open']
         self.open_opponents = {}
         for ch in self.open_challenges:
             opp_id = ch['challenger_id'] if ch['challenger_id'] != self.user['id'] else ch['challenged_id']
@@ -455,7 +456,10 @@ class NewGameScreen(MenuScreenMixin, Screen):
             if data:
                 self.users = data['users']
                 self.user = data['user']
-                self.open_challenges = self.user['challenges_issued'] + self.user['challenges_received']
+                # Check for accepted challenges (notify challenger)
+                self._check_accepted_challenges()
+                all_challenges = self.user['challenges_issued'] + self.user['challenges_received']
+                self.open_challenges = [ch for ch in all_challenges if ch.get('status') == 'open']
                 self.open_opponents = {}
                 for ch in self.open_challenges:
                     opp_id = ch['challenger_id'] if ch['challenger_id'] != self.user['id'] else ch['challenged_id']
@@ -580,6 +584,32 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self.handle_remove_challenge(challenge['id'])
             self.reset_action()
 
+        # Accepted challenge notification actions
+        if self.state.action["task"] == "challenge_accepted" and self.state.action["status"] != "open":
+            pending = self.state._pending_accepted_challenge
+            if pending:
+                challenge_id = pending['challenge_id']
+                if self.state.action["status"] == 'go to game':
+                    game_dict = pending.get('game_dict')
+                    if not game_dict and pending.get('game_id'):
+                        try:
+                            game_dict = fetch_game(pending['game_id'])
+                        except Exception:
+                            game_dict = None
+                    if game_dict:
+                        self.state.game = Game(game_dict, self.state.user_dict)
+                        remove_challenge(challenge_id)
+                        self.state._pending_accepted_challenge = None
+                        self.reset_action()
+                        self.state.screen = "game"
+                        return
+                    else:
+                        self.state.set_msg("Failed to load game")
+                else:  # "close"
+                    remove_challenge(challenge_id)
+                self.state._pending_accepted_challenge = None
+            self.reset_action()
+
     def _handle_clicks(self):
         # Checkbox
         if self._selected_opponent:
@@ -633,6 +663,32 @@ class NewGameScreen(MenuScreenMixin, Screen):
                         actions=["accept", "reject"], title="Accept Challenge")
                 return
 
+    # ── Accepted-challenge notification ─────────────────────────
+
+    def _check_accepted_challenges(self):
+        """Check if any issued challenges have been accepted and show notification."""
+        if self.dialogue_box or self.state._pending_accepted_challenge:
+            return
+        for ch in self.user.get('challenges_issued', []):
+            if (ch.get('status') == 'accepted'
+                    and ch['id'] not in self.state._notified_accepted_challenges):
+                opponent_name = ch.get('challenged_name', 'opponent')
+                stake = ch.get('stake', 45)
+                self.state._pending_accepted_challenge = {
+                    'challenge_id': ch['id'],
+                    'game_id': ch.get('game_id'),
+                    'opponent_name': opponent_name,
+                    'stake': stake,
+                }
+                self.state._notified_accepted_challenges.add(ch['id'])
+                self.set_action("challenge_accepted", ch['id'], "open")
+                self.make_dialogue_box(
+                    f'{opponent_name} accepted your challenge!\n\n'
+                    f'Stake: {stake} gold',
+                    actions=["Go to Game", "Close"],
+                    title="Challenge Accepted")
+                break
+
     # ── Challenge submission ──────────────────────────────────────
 
     def _send_challenge(self):
@@ -671,12 +727,23 @@ class NewGameScreen(MenuScreenMixin, Screen):
     def handle_create_challenge(self, opponent_name, stake=45, turn_time_limit=None):
         response = create_challenge(self.state.user_dict['username'], opponent_name, stake=stake, turn_time_limit=turn_time_limit)
         if response.get('ai_auto_accept') and 'game' in response:
-            # AI auto-accepted — go directly into the game
-            self.state.game = Game(response['game'], self.state.user_dict)
-            # Remove the auto-created challenge from the list
-            if 'challenge_id' in response:
-                remove_challenge(response['challenge_id'])
-            self.state.screen = "game"
+            # AI auto-accepted — show notification dialogue
+            challenge_id = response.get('challenge_id')
+            self.state._pending_accepted_challenge = {
+                'challenge_id': challenge_id,
+                'game_id': response['game']['id'],
+                'game_dict': response['game'],
+                'opponent_name': opponent_name,
+                'stake': stake,
+            }
+            if challenge_id:
+                self.state._notified_accepted_challenges.add(challenge_id)
+            self.set_action("challenge_accepted", challenge_id, "open")
+            self.make_dialogue_box(
+                f'{opponent_name} accepted your challenge!\n\n'
+                f'Stake: {stake} gold',
+                actions=["Go to Game", "Close"],
+                title="Challenge Accepted")
         elif response['success']:
             self.state.set_msg(f"Challenge sent to {opponent_name}")
         else:
@@ -686,7 +753,6 @@ class NewGameScreen(MenuScreenMixin, Screen):
         response = create_game(challenge['id'])
         if response['success'] and 'game' in response:
             self.state.game = Game(response['game'], self.state.user_dict)
-            self.handle_remove_challenge(challenge['id'])
             self.state.screen = "game"
         else:
             self.state.set_msg(response['message'])

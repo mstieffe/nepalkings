@@ -9,9 +9,10 @@ from game.screens._menu_base import MenuScreenMixin
 from config import settings
 from config.screen_settings import _UI_SCALE
 from utils.utils import Button
-from utils.game_service import fetch_user_games, fetch_user
+from utils.game_service import fetch_user_games, fetch_user, fetch_game, remove_challenge
 from utils.auth_service import send_heartbeat
 from utils.background_poller import BackgroundPoller
+from game.core.game import Game
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -284,8 +285,36 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 new_ch = current_ch_ids - self.state._known_challenge_ids
                 self.state.badge_new_challenges = len(new_ch)
                 self.state._new_challenge_ids = set(new_ch)
+
+            # -- accepted challenges (notify challenger) --
+            self._check_accepted_challenges(user)
+
         except Exception:
             pass  # network failure — keep previous counts
+
+    def _check_accepted_challenges(self, user):
+        """Show notification dialogue when an issued challenge has been accepted."""
+        if self.dialogue_box or self.state._pending_accepted_challenge:
+            return
+        for ch in user.get('challenges_issued', []):
+            if (ch.get('status') == 'accepted'
+                    and ch['id'] not in self.state._notified_accepted_challenges):
+                opponent_name = ch.get('challenged_name', 'opponent')
+                stake = ch.get('stake', 45)
+                self.state._pending_accepted_challenge = {
+                    'challenge_id': ch['id'],
+                    'game_id': ch.get('game_id'),
+                    'opponent_name': opponent_name,
+                    'stake': stake,
+                }
+                self.state._notified_accepted_challenges.add(ch['id'])
+                self.set_action("challenge_accepted", ch['id'], "open")
+                self.make_dialogue_box(
+                    f'{opponent_name} accepted your challenge!\n\n'
+                    f'Stake: {stake} gold',
+                    actions=["Go to Game", "Close"],
+                    title="Challenge Accepted")
+                break
 
     def _draw_badge(self, btn, count):
         """Draw a small red notification badge at the top-right of *btn*."""
@@ -315,6 +344,33 @@ class GameMenuScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         """Handle button click events."""
         super().handle_events(events)
+
+        # Handle accepted challenge notification actions
+        if self.state.action["task"] == "challenge_accepted" and self.state.action["status"] != "open":
+            pending = self.state._pending_accepted_challenge
+            if pending:
+                challenge_id = pending['challenge_id']
+                if self.state.action["status"] == 'go to game':
+                    game_dict = pending.get('game_dict')
+                    if not game_dict and pending.get('game_id'):
+                        try:
+                            game_dict = fetch_game(pending['game_id'])
+                        except Exception:
+                            game_dict = None
+                    if game_dict:
+                        self.state.game = Game(game_dict, self.state.user_dict)
+                        remove_challenge(challenge_id)
+                        self.state._pending_accepted_challenge = None
+                        self.reset_action()
+                        self.state.screen = "game"
+                        return
+                    else:
+                        self.state.set_msg("Failed to load game")
+                else:  # "close"
+                    remove_challenge(challenge_id)
+                self.state._pending_accepted_challenge = None
+            self.reset_action()
+            return
 
         for event in events:
             if self._handle_icon_events(event):

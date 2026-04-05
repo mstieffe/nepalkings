@@ -89,6 +89,13 @@ with app.app_context():
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE user ADD COLUMN is_ai BOOLEAN DEFAULT 0"))
                 conn.commit()
+    if 'challenge' in inspector.get_table_names():
+        existing_cols = {c['name'] for c in inspector.get_columns('challenge')}
+        if 'game_id' not in existing_cols:
+            print("  ↳ Adding 'game_id' column to challenge table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE challenge ADD COLUMN game_id INTEGER REFERENCES game(id)"))
+                conn.commit()
     
     print("✅ Database initialized")
 

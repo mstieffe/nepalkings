@@ -35,6 +35,13 @@ def fetch_user_games(username):
     return game_dicts
 
 
+def fetch_game(game_id):
+    """Fetch a single game by ID."""
+    response = requests.get(f'{settings.SERVER_URL}/games/get_game', params={'game_id': game_id}, timeout=10)
+    response.raise_for_status()
+    return response.json().get('game')
+
+
 def create_game(challenge_id):
     try:
         response = requests.post(f'{settings.SERVER_URL}/games/create_game', data={'challenge_id': challenge_id}, timeout=10)
