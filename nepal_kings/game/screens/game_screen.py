@@ -478,6 +478,9 @@ class GameScreen(Screen):
         self._update_field_badge()
         self._update_battle_badge()
         
+        # ── Safety valve: auto-clear stale action lock ──
+        self.state.game.check_action_lock_timeout()
+        
         # Check for battle loot notification (which card the winner kept)
         self.check_loot_notification()
         

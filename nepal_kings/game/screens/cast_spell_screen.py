@@ -120,7 +120,7 @@ class CastSpellScreen(SubScreen):
         } for card in real_cards]
         
         # Call spell service to cast the spell
-        self.game.action_in_progress = True
+        self.game.lock_actions()
         try:
             result = spell_service.cast_spell(
                 player_id=self.game.player_id,
@@ -135,14 +135,14 @@ class CastSpellScreen(SubScreen):
                 possible_during_ceasefire=selected_spell.possible_during_ceasefire
             )
         except Exception:
-            self.game.action_in_progress = False
+            self.game.unlock_actions()
             raise
         
         if result.get('success'):
             # Check if waiting for opponent to respond (counterable spell)
             waiting_for_player_id = result.get('waiting_for_player_id')
             if waiting_for_player_id:
-                self.game.action_in_progress = False
+                self.game.unlock_actions()
                 # Store spell name in game_screen for waiting prompt
                 if hasattr(self.state, 'parent_screen') and self.state.parent_screen:
                     self.state.parent_screen.pending_spell_name = selected_spell.name
@@ -150,11 +150,10 @@ class CastSpellScreen(SubScreen):
                 return
             
             # Update game state from server response
+            # (update_from_dict -> unlock_actions)
             if result.get('game'):
                 # Update directly from returned game state (no extra server call)
                 self.game.update_from_dict(result['game'])
-            
-            self.game.action_in_progress = False
             
             # Show success message with drawn cards (if any)
             spell_effect = result.get('spell_effect', {})
@@ -273,7 +272,7 @@ class CastSpellScreen(SubScreen):
                 button.clicked = False
         
         else:
-            self.game.action_in_progress = False
+            self.game.unlock_actions()
             # Show error message
             error_msg = result.get('message', 'Unknown error')
             self.make_dialogue_box(

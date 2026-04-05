@@ -474,7 +474,7 @@ class FieldScreen(SubScreen):
                     if self.figure_pending_pickup:
                         # User confirmed pickup
                         try:
-                            self.game.action_in_progress = True
+                            self.game.lock_actions()
                             # Call server to pick up the figure
                             result = pickup_figure(
                                 self.figure_pending_pickup.id,
@@ -488,6 +488,7 @@ class FieldScreen(SubScreen):
                                 print(f"Successfully picked up {self.figure_pending_pickup.name}. {card_count} cards returned to hand.")
                                 
                                 # Refresh game state (cards, turn, figures) from server
+                                # (update() -> _apply_game_dict -> unlock_actions)
                                 self.game.update()
                                 
                                 self.state.set_msg(f"Picked up {self.figure_pending_pickup.name}. {card_count} cards returned to your hand.")
@@ -497,12 +498,12 @@ class FieldScreen(SubScreen):
                                 error_msg = result.get('message', 'Unknown error')
                                 print(f"Failed to pick up figure: {error_msg}")
                                 self.state.set_msg(f"Failed to pick up figure: {error_msg}")
+                                self.game.unlock_actions()
                                 
                         except Exception as e:
                             print(f"Error picking up figure: {str(e)}")
                             self.state.set_msg(f"Error picking up figure: {str(e)}")
-                        finally:
-                            self.game.action_in_progress = False
+                            self.game.unlock_actions()
                         
                         # Close the detail box and dialogue box
                         self.figure_detail_box = None
@@ -519,7 +520,7 @@ class FieldScreen(SubScreen):
                             icon.show_advance_overlay = True
                         from utils.game_service import advance_figure
                         try:
-                            self.game.action_in_progress = True
+                            self.game.lock_actions()
                             result = advance_figure(
                                 self.game.game_id,
                                 self.game.player_id,
@@ -529,6 +530,7 @@ class FieldScreen(SubScreen):
                                 print(f"[FIELD] Advanced {figure.name} successfully")
                                 self.state.set_msg(f"Advanced {figure.name} toward battle!")
                                 # Update game state from response
+                                # (update_from_dict -> unlock_actions)
                                 if result.get('game'):
                                     self.game.update_from_dict(result['game'])
                                 # Reload figures to refresh icons
@@ -568,15 +570,17 @@ class FieldScreen(SubScreen):
                                     icon="error",
                                     title="Advance Failed"
                                 )
-                        finally:
-                            self.game.action_in_progress = False
+                                self.game.unlock_actions()
+                        except Exception:
+                            self.game.unlock_actions()
+                            raise
 
                     elif self.figure_pending_defender_selection:
                         # User confirmed defender selection
                         target_figure = self.figure_pending_defender_selection
                         from utils.game_service import select_defender
                         try:
-                            self.game.action_in_progress = True
+                            self.game.lock_actions()
                             result = select_defender(
                                 self.game.game_id,
                                 self.game.player_id,
@@ -647,14 +651,16 @@ class FieldScreen(SubScreen):
                                     icon="error",
                                     title="Error"
                                 )
-                        finally:
-                            self.game.action_in_progress = False
+                                self.game.unlock_actions()
+                        except Exception:
+                            self.game.unlock_actions()
+                            raise
                         
                         self.figure_pending_defender_selection = None
                     
                     elif self.figure_pending_upgrade:
                         # User confirmed upgrade
-                        self.game.action_in_progress = True
+                        self.game.lock_actions()
                         try:
                             # Find the upgrade card in the player's hand
                             main_hand, side_hand = self.game.get_hand()
@@ -710,6 +716,7 @@ class FieldScreen(SubScreen):
                                 print(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 self.state.set_msg(f"Upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 # Refresh full game state (turn, cards) and figures from server
+                                # (update() -> _apply_game_dict -> unlock_actions)
                                 self.game.update()
                                 self.load_figures()
                                 print(f"[FIELD_SCREEN] Figures reloaded after upgrade, count: {len(self.figures)}")
@@ -718,12 +725,12 @@ class FieldScreen(SubScreen):
                                 error_msg = result.get('message', 'Unknown error')
                                 print(f"Failed to upgrade figure: {error_msg}")
                                 self.state.set_msg(f"Failed to upgrade figure: {error_msg}")
+                                self.game.unlock_actions()
                                 
                         except Exception as e:
                             print(f"Error upgrading figure: {str(e)}")
                             self.state.set_msg(f"Error upgrading figure: {str(e)}")
-                        finally:
-                            self.game.action_in_progress = False
+                            self.game.unlock_actions()
                         
                         # Close the detail box and dialogue box
                         self.figure_detail_box = None
@@ -1382,7 +1389,7 @@ class FieldScreen(SubScreen):
         } for card in real_cards]
         
         # Call spell service to cast the spell
-        self.game.action_in_progress = True
+        self.game.lock_actions()
         try:
             result = spell_service.cast_spell(
                 player_id=self.game.player_id,
@@ -1397,7 +1404,7 @@ class FieldScreen(SubScreen):
                 possible_during_ceasefire=selected_spell.possible_during_ceasefire
             )
         except Exception:
-            self.game.action_in_progress = False
+            self.game.unlock_actions()
             raise
         
         if result.get('success'):
@@ -1412,6 +1419,7 @@ class FieldScreen(SubScreen):
                     del self.icon_cache[target_figure.id]
             
             # Update game state from server response
+            # (update_from_dict -> unlock_actions)
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             
@@ -1424,8 +1432,6 @@ class FieldScreen(SubScreen):
                 self.game._figures_data_version += 1
             except Exception:
                 pass
-            
-            self.game.action_in_progress = False
             
             # Refresh figure icons to show updated enchantments (or removed figure for Explosion)
             self.load_figures()
@@ -1459,7 +1465,7 @@ class FieldScreen(SubScreen):
                     images=[figure_icon]
                 )
         else:
-            self.game.action_in_progress = False
+            self.game.unlock_actions()
             # Show error message
             error_msg = result.get('message', 'Unknown error')
             self.make_dialogue_box(

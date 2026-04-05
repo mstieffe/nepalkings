@@ -168,8 +168,12 @@ class Game:
         self.pending_game_over = None  # Will be set to game_over dict when detected
         self.game_over_shown = False  # Track if game-over dialogue was shown
 
-        # Prevent double-actions: set True while an action HTTP call is in flight
+        # Prevent double-actions: set True when an action starts, cleared when
+        # fresh game state arrives (via _apply_game_dict / update_from_dict).
+        # A safety timeout (ms) auto-clears the lock if the server never responds.
         self.action_in_progress = False
+        self._action_lock_time = 0          # pygame.time.get_ticks() when lock was set
+        self._ACTION_LOCK_TIMEOUT_MS = 8000  # safety valve: 8 seconds
 
         # Battle reconnect flag — True until the client has checked for active battle on first poll
         self.battle_reconnect_pending = True
@@ -294,9 +298,31 @@ class Game:
         if data:
             self.apply_server_data(data)
 
+    # ── Action lock helpers ────────────────────────────────────
+
+    def lock_actions(self):
+        """Set the action lock.  Call before a server action."""
+        self.action_in_progress = True
+        self._action_lock_time = pygame.time.get_ticks()
+
+    def unlock_actions(self):
+        """Clear the action lock (e.g. on failure / error)."""
+        self.action_in_progress = False
+        self._action_lock_time = 0
+
+    def check_action_lock_timeout(self):
+        """Auto-clear the lock if it's been held too long (safety valve)."""
+        if self.action_in_progress and self._action_lock_time:
+            elapsed = pygame.time.get_ticks() - self._action_lock_time
+            if elapsed > self._ACTION_LOCK_TIMEOUT_MS:
+                print(f"[ACTION_LOCK] Timeout after {elapsed}ms — force-unlocking")
+                self.unlock_actions()
+
     def _apply_game_dict(self, game_dict):
         """Apply a game dict to this instance (main-thread only)."""
         self._game_data_version += 1
+        # Fresh server state arrived — unlock actions
+        self.unlock_actions()
         self.game_id = game_dict['id']
         self.state = game_dict['state']
         self.date = game_dict['date']
@@ -625,6 +651,8 @@ class Game:
     def update_from_dict(self, game_dict):
         """Update game state directly from a dictionary (e.g., from spell service response)."""
         self._game_data_version += 1
+        # Fresh server state arrived — unlock actions
+        self.unlock_actions()
         # Update game data
         self.game_id = game_dict['id']
         self.state = game_dict['state']

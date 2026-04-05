@@ -68,13 +68,14 @@ class BuildFigureScreen(SubScreen):
         if self.game.action_in_progress:
             return {'success': False, 'message': 'Action already in progress'}
 
-        self.game.action_in_progress = True
+        self.game.lock_actions()
         try:
             # Map dummy cards in the figure to real cards in the player's hand
             real_cards = self.map_figure_cards_to_hand(selected_figure)
 
             if real_cards is None:
                 print(f"Failed to create figure: Could not find all cards in the player's hand.")
+                self.game.unlock_actions()
                 return {'success': False, 'message': 'Could not find all cards in hand'}
 
             # Update the selected figure with real cards
@@ -101,12 +102,16 @@ class BuildFigureScreen(SubScreen):
                 print(f"Figure {selected_figure.name} created successfully in the database.")
             else:
                 print(f"Failed to create figure: {response.get('message', 'Unknown error')}")
+                self.game.unlock_actions()
+                return response
 
+            # (update() -> _apply_game_dict -> unlock_actions)
             self.game.update()
 
             return response
-        finally:
-            self.game.action_in_progress = False
+        except Exception:
+            self.game.unlock_actions()
+            raise
 
     def _can_instant_charge_advance(self, figure):
         """

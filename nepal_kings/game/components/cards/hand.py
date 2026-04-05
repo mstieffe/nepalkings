@@ -370,14 +370,16 @@ class Hand:
                         # Call the appropriate card change method based on type and fetch new cards
                         # Note: change_main_cards/change_side_cards internally call game.update()
                         # which refreshes the full game state before returning
-                        self.game.action_in_progress = True
+                        # (update() -> _apply_game_dict -> unlock_actions)
+                        self.game.lock_actions()
                         try:
                             if self.type == "main_card":
                                 new_cards = self.game.change_main_cards(selected_cards)
                             else:  # SideCards
                                 new_cards = self.game.change_side_cards(selected_cards)
-                        finally:
-                            self.game.action_in_progress = False
+                        except Exception:
+                            self.game.unlock_actions()
+                            raise
 
                         # Open a new DialogueBox to display the drawn cards
                         self.dialogue_box = DialogueBox(
