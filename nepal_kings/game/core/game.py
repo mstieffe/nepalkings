@@ -413,6 +413,14 @@ class Game:
             if previous_advancing:
                 self.battle_ready_shown = False
                 self.pending_battle_ready = False
+        elif not previous_advancing:
+            # A brand-new advance appeared (None → set).  Reset battle_ready
+            # tracking so the fight/fold dialogue can fire for this new battle.
+            # This is needed after folds: _reset_battle_state sets
+            # battle_ready_shown=True to block stale polls, but the next
+            # advance in the new round must be allowed through.
+            self.battle_ready_shown = False
+            self.pending_battle_ready = False
 
         # Detect opponent advance (new advance appeared and it's not ours)
         # Use turn value from game_dict directly (self.turn is stale at this point)
