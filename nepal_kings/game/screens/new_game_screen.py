@@ -602,6 +602,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
                     if game_dict:
                         self.state.game = Game(game_dict, self.state.user_dict)
                         remove_challenge(challenge_id)
+                        self.state._notified_accepted_challenges.discard(challenge_id)
                         self.state._pending_accepted_challenge = None
                         self.reset_action()
                         self.state.screen = "game"
@@ -610,6 +611,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
                         self.state.set_msg("Failed to load game")
                 else:  # "close"
                     remove_challenge(challenge_id)
+                self.state._notified_accepted_challenges.discard(challenge_id)
                 self.state._pending_accepted_challenge = None
             self.reset_action()
 
@@ -687,6 +689,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 remove_challenge(stale_id)
             except Exception:
                 pass
+            self.state._notified_accepted_challenges.discard(stale_id)
             self.state._pending_accepted_challenge = None
             if self.state.action.get('task') == 'challenge_accepted':
                 self.reset_action()
