@@ -285,11 +285,13 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
             elif has_civil_war:
                 modifier_note = " [CIVIL WAR: village only]"
             turns = ai_player.get('turns_left', '?')
+            is_invader = (game_dict.get('invader_player_id') == ai_player.get('id'))
+            defender_warn = "" if is_invader else " ⚠️ You are DEFENDER — the invader MUST advance on their last turn. Let them come to you! Only advance if you have an overwhelming advantage."
             actions.append({
                 'id': action_id,
                 'type': 'advance_figure',
                 'description': (f"Advance {fig['name']} ({field}, power≈{power}) — "
-                                f"costs ALL {turns} remaining turns{checkmate_warn}{modifier_note}"),
+                                f"costs ALL {turns} remaining turns{checkmate_warn}{modifier_note}{defender_warn}"),
                 'params': {'figure_id': fig_id},
             })
             action_id += 1

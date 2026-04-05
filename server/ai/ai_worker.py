@@ -440,57 +440,19 @@ def _execute_action(app, game_id, ai_player_id, action):
 # ── Battle resolution helpers ────────────────────────────────────
 
 
-def _compute_total_diff(app, game_id, ai_player_id, game_dict):
-    """
-    Compute total_diff for the AI player (positive = AI wins).
-    total_diff = figure_power_diff + sum_of_round_move_diffs
-    """
-    with app.app_context():
-        from models import Figure, BattleMove
-        from routes.games import _compute_figure_base_power
-
-        adv_figure = Figure.query.get(game_dict['advancing_figure_id'])
-        def_figure = Figure.query.get(game_dict['defending_figure_id'])
-        if not adv_figure or not def_figure:
-            return 0
-
-        adv_power = _compute_figure_base_power(adv_figure)
-        def_power = _compute_figure_base_power(def_figure)
-
-        # Figure diff from AI's perspective
-        if game_dict.get('advancing_player_id') == ai_player_id:
-            fig_diff = adv_power - def_power
-        else:
-            fig_diff = def_power - adv_power
-
-        # Move diffs per round
-        moves = BattleMove.query.filter_by(game_id=game_id).all()
-        round_diff = 0
-        for rnd in range(3):
-            ai_val = 0
-            opp_val = 0
-            for m in moves:
-                if m.played_round != rnd:
-                    continue
-                if m.player_id == ai_player_id:
-                    ai_val += m.value
-                else:
-                    opp_val += m.value
-            round_diff += ai_val - opp_val
-
-        return fig_diff + round_diff
-
-
 def _handle_finish_battle(app, game_id, ai_player_id, game_dict):
-    """Call finish_battle and handle the result (pick card or draw choice)."""
-    total_diff = _compute_total_diff(app, game_id, ai_player_id, game_dict)
+    """Call finish_battle and handle the result (pick card or draw choice).
+
+    The server computes total_diff authoritatively, so we pass 0 as a
+    placeholder.
+    """
     base = settings.SERVER_URL
 
-    logger.info(f"AI calling finish_battle, total_diff={total_diff}")
+    logger.info(f"AI calling finish_battle (server-authoritative diff)")
     resp = http_requests.post(f'{base}/games/finish_battle', json={
         'game_id': game_id,
         'player_id': ai_player_id,
-        'total_diff': total_diff,
+        'total_diff': 0,  # server ignores this; computes its own
     }, timeout=15)
     result = resp.json()
 
@@ -530,7 +492,7 @@ def _handle_post_battle_pick(app, game_id, ai_player_id):
     resp = http_requests.post(f'{base}/games/finish_battle', json={
         'game_id': game_id,
         'player_id': ai_player_id,
-        'total_diff': 1,  # Positive = we won (doesn't matter, already resolved)
+        'total_diff': 0,  # server computes its own; already_resolved path anyway
     }, timeout=15)
     result = resp.json()
 

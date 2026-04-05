@@ -2184,6 +2184,237 @@ def _compute_figure_base_power(figure):
     return total
 
 
+# ── Server-authoritative total_diff computation ──────────────────
+# Spades → Hearts → Clubs → Diamonds → Spades
+_SUIT_ADVANTAGE = {
+    'Spades': 'Hearts',
+    'Hearts': 'Clubs',
+    'Clubs': 'Diamonds',
+    'Diamonds': 'Spades',
+}
+
+
+def _get_advantage_suit(suit):
+    """Return the suit that *suit* has an advantage over."""
+    return _SUIT_ADVANTAGE.get(suit)
+
+
+def _compute_support_bonus(figure, all_figures):
+    """Support bonus from same-player, same-suit figures of appropriate type."""
+    fig_field = (figure.field or '').lower()
+    if fig_field == 'castle':
+        valid_fields = {'castle'}
+    elif fig_field == 'village':
+        valid_fields = {'castle'}
+    elif fig_field == 'military':
+        valid_fields = {'castle', 'village'}
+    else:
+        return 0
+
+    total = 0
+    for f in all_figures:
+        if f.id == figure.id or f.player_id != figure.player_id:
+            continue
+        if (f.suit or '').lower() != (figure.suit or '').lower():
+            continue
+        f_field = (f.field or '').lower()
+        if f_field not in valid_fields:
+            continue
+        # Castle: Maharaja +5, King +4
+        if f_field == 'castle':
+            total += 5 if 'Maharaja' in (f.name or '') else 4
+        else:
+            # Village: sum of main-card (key-card) values
+            for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
+                if assoc.card_type == 'main':
+                    card = MainCard.query.get(assoc.card_id)
+                    if card:
+                        total += card.value
+    return total
+
+
+def _compute_healer_buff(figure, all_figures):
+    """Healer buff: +4 per same-suit Healer (only for village figures)."""
+    if (figure.field or '').lower() != 'village':
+        return 0
+    buff = 0
+    for f in all_figures:
+        if f.id == figure.id or f.player_id != figure.player_id:
+            continue
+        if 'Healer' not in (f.name or ''):
+            continue
+        if (f.suit or '').lower() != (figure.suit or '').lower():
+            continue
+        buff += 4
+    return buff
+
+
+def _compute_wall_defence_total(player_id, all_figures):
+    """Sum of Wall number-card values for a player (defence buff)."""
+    total = 0
+    for f in all_figures:
+        if f.player_id != player_id:
+            continue
+        if 'Wall' not in (f.name or ''):
+            continue
+        for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
+            if assoc.card_type == 'side':
+                card = SideCard.query.get(assoc.card_id)
+                if card:
+                    total += card.value
+    return total
+
+
+def _compute_distance_penalty(target_figure, attacker_player_id, all_figures):
+    """Penalty from opponent's Archer with suit advantage over *target_figure*."""
+    for f in all_figures:
+        if f.player_id != attacker_player_id:
+            continue
+        if 'Archer' not in (f.name or ''):
+            continue
+        adv = _get_advantage_suit(f.suit)
+        if adv and adv.lower() == (target_figure.suit or '').lower():
+            for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
+                if assoc.card_type == 'side':
+                    card = SideCard.query.get(assoc.card_id)
+                    if card:
+                        return card.value
+    return 0
+
+
+def _check_temple_blocking(target_figure, opponent_player_id, all_figures):
+    """True if opponent has a Temple with suit advantage over *target_figure*."""
+    for f in all_figures:
+        if f.player_id != opponent_player_id:
+            continue
+        if 'Temple' not in (f.name or ''):
+            continue
+        adv = _get_advantage_suit(f.suit)
+        if adv and adv.lower() == (target_figure.suit or '').lower():
+            return True
+    return False
+
+
+def _compute_enchantment_mod(figure_id, enchantment_spells):
+    """Sum of active enchantment power modifiers on a figure."""
+    total = 0
+    for spell in enchantment_spells:
+        if spell.target_figure_id != figure_id:
+            continue
+        ed = spell.effect_data or {}
+        pm = ed.get('power_modifier', 0)
+        if isinstance(pm, (int, float)) and pm != -999:
+            total += int(pm)
+    return total
+
+
+def _compute_figure_full_power(figure, all_figures, enchant_spells,
+                               is_defending, opponent_player_id):
+    """Full figure power including base, healer, support, wall, enchant, DA."""
+    if not figure:
+        return 0
+    base = _compute_figure_base_power(figure)
+    healer = _compute_healer_buff(figure, all_figures)
+    support = _compute_support_bonus(figure, all_figures)
+    wall = (_compute_wall_defence_total(figure.player_id, all_figures)
+            if is_defending else 0)
+    enchant = _compute_enchantment_mod(figure.id, enchant_spells)
+    da_penalty = _compute_distance_penalty(
+        figure, opponent_player_id, all_figures)
+    if _check_temple_blocking(figure, opponent_player_id, all_figures):
+        support = 0
+        wall = 0
+    return base + healer + support + wall + enchant - da_penalty
+
+
+def _compute_move_effective_value(move, all_figures, game,
+                                  player_id, opponent_player_id):
+    """Effective battle-move value including call-figure bonuses."""
+    if not move or move.family_name == 'Block':
+        return 0
+    bm_value = move.value or 0
+    if move.call_figure_id:
+        call_fig = next(
+            (f for f in all_figures if f.id == move.call_figure_id), None)
+        if not call_fig:
+            call_fig = Figure.query.get(move.call_figure_id)
+        if call_fig:
+            fig_power = _compute_figure_base_power(call_fig)
+            healer = _compute_healer_buff(call_fig, all_figures)
+            is_def = (player_id != game.advancing_player_id)
+            wall = (_compute_wall_defence_total(player_id, all_figures)
+                    if is_def else 0)
+            if _check_temple_blocking(call_fig, opponent_player_id,
+                                      all_figures):
+                wall = 0
+            bm_suit = (move.suit or '').lower()
+            fig_suit = (call_fig.suit or '').lower()
+            if bm_suit == fig_suit:
+                return fig_power + healer + wall + bm_value
+            return fig_power + healer + wall
+    return bm_value
+
+
+def _compute_server_total_diff(game):
+    """Authoritative total_diff from DB.  Positive = invader wins."""
+    adv_fig = (Figure.query.get(game.advancing_figure_id)
+               if game.advancing_figure_id else None)
+    def_fig = (Figure.query.get(game.defending_figure_id)
+               if game.defending_figure_id else None)
+    if not adv_fig or not def_fig:
+        return 0
+
+    adv_pid = game.advancing_player_id
+    def_pid = next(p.id for p in game.players if p.id != adv_pid)
+
+    all_figures = Figure.query.filter_by(game_id=game.id).all()
+    enchant_spells = ActiveSpell.query.filter_by(
+        game_id=game.id, is_active=True, spell_type='enchantment').all()
+    all_moves = BattleMove.query.filter_by(game_id=game.id).all()
+
+    # ── figure power (including Civil War second figures) ──
+    adv_power = _compute_figure_full_power(
+        adv_fig, all_figures, enchant_spells, False, def_pid)
+    def_power = _compute_figure_full_power(
+        def_fig, all_figures, enchant_spells, True, adv_pid)
+
+    if game.advancing_figure_id_2:
+        f2 = Figure.query.get(game.advancing_figure_id_2)
+        if f2:
+            adv_power += _compute_figure_full_power(
+                f2, all_figures, enchant_spells, False, def_pid)
+    if game.defending_figure_id_2:
+        f2 = Figure.query.get(game.defending_figure_id_2)
+        if f2:
+            def_power += _compute_figure_full_power(
+                f2, all_figures, enchant_spells, True, adv_pid)
+
+    fig_diff = adv_power - def_power
+
+    # ── round diffs from BattleMove records ──
+    round_diff = 0
+    for rnd in range(3):
+        adv_m = [m for m in all_moves
+                 if m.played_round == rnd and m.player_id == adv_pid]
+        def_m = [m for m in all_moves
+                 if m.played_round == rnd and m.player_id == def_pid]
+        if not adv_m and not def_m:
+            continue
+        if any(m.family_name == 'Block' for m in adv_m + def_m):
+            continue
+        adv_val = sum(_compute_move_effective_value(
+            m, all_figures, game, adv_pid, def_pid) for m in adv_m)
+        def_val = sum(_compute_move_effective_value(
+            m, all_figures, game, def_pid, adv_pid) for m in def_m)
+        round_diff += adv_val - def_val
+
+    total = fig_diff + round_diff
+    print(f"[SERVER_TOTAL_DIFF] game={game.id} "
+          f"fig_diff={fig_diff} (adv={adv_power} def={def_power}) "
+          f"round_diff={round_diff} total={total}")
+    return total
+
+
 def _collect_battle_move_cards(game_id):
     """Collect all cards reserved for battle moves in a game.
 
@@ -2610,11 +2841,13 @@ def finish_battle():
 
     Expects JSON: {
         game_id, player_id,
-        player_played: [{id, family_name, value, ...}, ...],  # 3 played moves
-        total_diff: int   # total power diff (positive = player wins)
+        total_diff: int   # (advisory only — server computes its own)
     }
 
-    The endpoint:
+    The endpoint computes the authoritative total_diff server-side from
+    figure power (including support, healer, wall, enchantment, distance-
+    attack bonuses) and battle-move records.
+
     1. Validates the game / players / state.
     2. Determines outcome (win / lose / draw).
     3. For win/lose: awards points = loser-figure base power to winner,
@@ -2625,7 +2858,7 @@ def finish_battle():
     data = request.json
     game_id = data.get('game_id')
     player_id = data.get('player_id')
-    total_diff = data.get('total_diff', 0)  # positive = player wins
+    client_total_diff = data.get('total_diff', 0)  # advisory only
 
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
@@ -2725,6 +2958,14 @@ def finish_battle():
 
     # Determine who the invader/defender is
     is_invader = (game.invader_player_id == player_id)
+
+    # ── Server-authoritative total_diff ──
+    server_diff = _compute_server_total_diff(game)
+    # server_diff > 0 means invader wins; convert to caller's perspective
+    total_diff = server_diff if is_invader else -server_diff
+    print(f"[FINISH_BATTLE] player={player_id} is_invader={is_invader} "
+          f"client_diff={client_total_diff} server_diff={server_diff} "
+          f"used_diff={total_diff}")
 
     if is_invader:
         player_figure = adv_figure

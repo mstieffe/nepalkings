@@ -289,13 +289,14 @@ PHASE_PROMPTS = {
 
 DECISION FRAMEWORK (check in this order):
 0. **CHECK RESOURCE BALANCE FIRST!** Read the RESOURCE BALANCE section in the game state. If you see any ⚠️ DEFICIT, do NOT build more figures that consume those resources. Instead: build a resource PRODUCER (farm for food, King for villagers/warriors) or change cards.
-1. **Can you advance?** If ceasefire is OFF, you have a strong figure with resources met (NOT in deficit), AND you have good battle cards (K/A/10/9): ADVANCE NOW. Don't over-build.
-2. **Is this your last turn?** As invader you MUST advance on turn 6. Choose your best eligible figure (must NOT be in deficit).
-3. **Can you build a useful figure WITHOUT causing a deficit?** Check the ⚠️ DEFICIT WARNING on each build option.
+1. **Should you advance?** Consider your ROLE first:
+   - **As INVADER**: If ceasefire is OFF, you have a strong figure (NOT in deficit), AND good battle cards (K/A/10/9): ADVANCE. Don't over-build. On your LAST turn you MUST advance — choose your best eligible figure.
+   - **As DEFENDER**: Do NOT advance voluntarily! The invader MUST advance on their last turn, so let THEM come to you. Being the defender in battle is a major advantage (you choose whether to counter-advance, you see the invader's fold/fight decision first, and draws favor you). Only advance as defender if you have an overwhelmingly strong position AND a specific strategic reason (e.g., opponent's key figure is exposed and you can definitely destroy it).
+2. **Can you build a useful figure WITHOUT causing a deficit?** Check the ⚠️ DEFICIT WARNING on each build option.
    - Priority: resource producer (farm for food, King for villagers) > military (A+10/9) > other.
    - NEVER build a consumer (military, village) if the resources aren't available — it will enter deficit and be USELESS.
    - Use lowest-value number cards for economy builds, save high numbers for battle.
-4. **Should you cast a spell?** Spells cost a turn but can be powerful:
+3. **Should you cast a spell?** Spells cost a turn but can be powerful:
    - **Poison/Health Boost** (2×3 side): +6/−6 power swing. Cast on your strongest attacker or opponent's key figure. Great BEFORE advancing!
    - **Infinite Hammer** (1×K): Unlimited builds this turn — use when you have 2+ builds available. ⚠️ Costs a K card!
    - **Draw 2 Main/Side** (1×8 or 1×2): Cheap card draw. Good early when building up.
@@ -304,9 +305,9 @@ DECISION FRAMEWORK (check in this order):
    - **All Seeing Eye** (2×9): Reveals opponent's cards. Rarely worth the cost of two 9-Daggers.
    - **Explosion** (4×6 side): Destroys any non-Maharaja figure. Devastating if you have the cards!
    - **AVOID**: Dump Cards (4×7) — costs 4 cards and is unpredictable. Peasant War/Civil War — niche.
-5. **Should you change cards?** Only if hand has no viable builds, no good spells, and no strong battle cards (K/A/10/9).
+4. **Should you change cards?** Only if hand has no viable builds, no good spells, and no strong battle cards (K/A/10/9).
    - When changing, keep K, A, 10, 9, Q. Swap 7, 8, excess J.
-6. **Review your strategy notes**: What did you plan last turn? Continue executing that plan.
+5. **Review your strategy notes**: What did you plan last turn? Continue executing that plan.
 Respond with: {"action": <number>}""",
 
     'select_defender': """You are the INVADER selecting which OPPONENT figure to attack.
