@@ -3,7 +3,7 @@ name: Deploy Web Client
 on:
   workflow_dispatch:
   push:
-    branches: [web-client]
+    branches: [main]
     paths:
       - 'nepal_kings/**'
       - 'pygbag.ini'
