@@ -720,14 +720,15 @@ def _enum_battle_round(game_dict, ai_player, opponent):
         })
         action_id += 1
     
-    # Can skip if no moves left (or strategically)
-    actions.append({
-        'id': action_id,
-        'type': 'skip_battle_turn',
-        'description': "Skip this round (play no move)",
-        'params': {},
-    })
-    action_id += 1
+    # Can only skip if no unplayed moves remain
+    if not ai_moves:
+        actions.append({
+            'id': action_id,
+            'type': 'skip_battle_turn',
+            'description': "Skip this round (no moves left to play)",
+            'params': {},
+        })
+        action_id += 1
     
     return actions
 

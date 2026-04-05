@@ -2932,6 +2932,16 @@ def skip_battle_turn():
     if game.battle_turn_player_id != player_id:
         return jsonify({'success': False, 'message': 'It is not your turn in the battle'}), 400
 
+    # Reject skip if the player still has unplayed battle moves
+    unplayed_count = BattleMove.query.filter_by(
+        game_id=game_id, player_id=player_id, played_round=None
+    ).count()
+    if unplayed_count > 0:
+        return jsonify({
+            'success': False,
+            'message': 'You must play a battle move — you still have unplayed moves'
+        }), 400
+
     # Record the skip
     skipped = game.battle_skipped_rounds or {}
     pid_key = str(player_id)
