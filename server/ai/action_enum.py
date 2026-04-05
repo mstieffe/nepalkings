@@ -363,12 +363,14 @@ def _enum_select_defender(game_dict, ai_player, opponent):
                 civil_war_color = fig.get('color')
                 break
 
+    checkmate_fallback = []
     for fig in opponent.get('figures', []):
         # Skip figures that can't be targeted
         if fig.get('cannot_be_targeted'):
             continue
-        # Skip checkmate figures — the server rejects these
+        # Checkmate figures are normally skipped; keep as fallback
         if fig.get('checkmate'):
+            checkmate_fallback.append(fig)
             continue
         # Peasant War: only village figures can be selected
         if has_peasant_war and fig.get('field') != 'village':
@@ -397,7 +399,22 @@ def _enum_select_defender(game_dict, ai_player, opponent):
             'params': {'figure_id': fig['id']},
         })
         action_id += 1
-    
+
+    # Fallback: if no non-checkmate targets, allow checkmate figures
+    if not actions and checkmate_fallback:
+        for fig in checkmate_fallback:
+            fig_power = _est_figure_power(fig)
+            diff = ai_power - fig_power
+            field = fig.get('field', '?')
+            actions.append({
+                'id': action_id,
+                'type': 'select_defender',
+                'description': (f"Attack opponent's {fig['name']} ({field}, power≈{fig_power}, "
+                                f"diff={diff:+d}) [CHECKMATE — exposed!]"),
+                'params': {'figure_id': fig['id']},
+            })
+            action_id += 1
+
     return actions
 
 

@@ -2073,6 +2073,7 @@ class FieldScreen(SubScreen):
         
         # Determine which opponent figures are eligible
         opponent_figures_eligible = []
+        checkmate_fallback = []
         for fig in self.figures:
             if fig.player_id == self.game.player_id:
                 continue
@@ -2081,6 +2082,7 @@ class FieldScreen(SubScreen):
             if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
                 continue
             if hasattr(fig, 'checkmate') and fig.checkmate:
+                checkmate_fallback.append(fig)
                 continue
             # Village-only restriction (Peasant War / Civil War)
             if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
@@ -2094,6 +2096,10 @@ class FieldScreen(SubScreen):
                 if fig.id == self.game.defending_figure_id:
                     continue
             opponent_figures_eligible.append(fig)
+        
+        # Fallback: if no non-checkmate targets, allow checkmate figures
+        if not opponent_figures_eligible and checkmate_fallback:
+            opponent_figures_eligible = checkmate_fallback
         
         # must_be_attacked filtering — only consider village figures if village_only
         must_be_attacked_figures = []

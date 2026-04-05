@@ -694,6 +694,13 @@ class Game:
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
         
+        # Detect battle_ready when both figures are set (e.g. after select_defender)
+        if (self.advancing_figure_id and self.defending_figure_id and
+                not self.battle_confirmed and
+                not self.pending_battle_ready and not self.battle_ready_shown):
+            self.pending_battle_ready = True
+            print(f"[BATTLE_READY] update_from_dict: both figures set, triggering battle_ready")
+        
         # Update battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')

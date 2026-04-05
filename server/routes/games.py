@@ -1497,9 +1497,22 @@ def select_defender():
         if figure.player_id == player_id:
             return jsonify({'success': False, 'message': 'You must select an opponent\'s figure, not your own'}), 400
         
-        # Check checkmate constraint (checkmate figures cannot be selected as defenders)
+        # Check checkmate constraint (checkmate figures cannot be selected
+        # as defenders UNLESS the opponent has no other valid figures).
         if getattr(figure, 'checkmate', False):
-            return jsonify({'success': False, 'message': f'{figure.name} has Checkmate and cannot be selected as a defender'}), 400
+            opponent_id = figure.player_id
+            other_figures = Figure.query.filter(
+                Figure.player_id == opponent_id,
+                Figure.id != figure_id,
+                Figure.game_id == game_id
+            ).all()
+            has_non_checkmate = any(
+                not getattr(f, 'checkmate', False)
+                for f in other_figures
+            )
+            if has_non_checkmate:
+                return jsonify({'success': False, 'message': f'{figure.name} has Checkmate and cannot be selected as a defender'}), 400
+            # else: opponent only has checkmate figures — allow targeting
         
         # Check battle modifiers for Civil War
         modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
