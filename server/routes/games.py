@@ -2199,11 +2199,11 @@ def _get_advantage_suit(suit):
     return _SUIT_ADVANTAGE.get(suit)
 
 
-def _compute_support_bonus(figure, all_figures):
+def _compute_support_bonus(figure, all_figures, game_id):
     """Support bonus from same-player, same-suit figures of appropriate type.
 
     Matches client ``_calculate_battle_bonus_received`` exactly.
-    No deficit check — support bonus is always active.
+    Figures in resource deficit do NOT provide support bonus.
     """
     fig_field = (figure.field or '').lower()
     if fig_field == 'castle':
@@ -2226,6 +2226,9 @@ def _compute_support_bonus(figure, all_figures):
             continue
         # Military figures provide 0 bonus
         if f_field == 'military':
+            continue
+        # Figures in deficit provide nothing
+        if _check_figure_resource_deficit(f, f.player_id, game_id):
             continue
         # Castle: Maharaja +5, King +4
         if f_field == 'castle':
@@ -2393,7 +2396,7 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
     healer_buff = _compute_healer_buff(figure, own_healers)
 
     # Support bonus
-    support = _compute_support_bonus(figure, all_figures)
+    support = _compute_support_bonus(figure, all_figures, game_id)
 
     # Wall defence (pre-computed; 0 for attackers)
     wall = wall_total
@@ -2401,23 +2404,21 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
     # Enchantment
     enchant = _compute_enchantment_mod(figure.id, enchant_spells)
 
-    # Temple blocking zeroes support AND wall (NOT healer buff)
+    # Temple blocking zeroes support only (NOT healer, NOT wall)
     if _find_temple_blocker(figure, opponent_player_id, all_figures,
                             battle_ids, game_id):
         support = 0
-        wall = 0
 
     return base + healer_buff + support + wall + enchant
 
 
 def _compute_move_effective_value(move, all_figures, game,
-                                  player_id, own_healers, wall_total):
+                                  player_id, own_healers):
     """Effective battle-move value including call-figure bonuses.
 
     *own_healers*: pre-filtered healer list for the move's player.
-    *wall_total*: pre-computed wall defence total (0 when attacking).
 
-    Temple blocking is NOT applied to call-figure wall (matches client).
+    Wall defence does NOT apply to call figures.
     DA on call figures is handled externally in ``_compute_server_total_diff``.
     """
     if not move or move.family_name == 'Block':
@@ -2431,12 +2432,11 @@ def _compute_move_effective_value(move, all_figures, game,
         if call_fig:
             fig_power = _compute_figure_base_power(call_fig)
             healer = _compute_healer_buff(call_fig, own_healers)
-            # No temple blocking on call-figure wall (matches client)
             bm_suit = (move.suit or '').lower()
             fig_suit = (call_fig.suit or '').lower()
             if bm_suit == fig_suit:
-                return fig_power + healer + wall_total + bm_value
-            return fig_power + healer + wall_total
+                return fig_power + healer + bm_value
+            return fig_power + healer
     return bm_value
 
 
@@ -2547,10 +2547,9 @@ def _compute_server_total_diff(game):
             continue
 
         adv_val = sum(_compute_move_effective_value(
-            m, all_figures, game, adv_pid, adv_healers, 0) for m in adv_m)
+            m, all_figures, game, adv_pid, adv_healers) for m in adv_m)
         def_val = sum(_compute_move_effective_value(
-            m, all_figures, game, def_pid, def_healers,
-            def_wall_total) for m in def_m)
+            m, all_figures, game, def_pid, def_healers) for m in def_m)
 
         # Unfired DA hits first matching call figure in opponent's moves
         if not adv_da_used and adv_da_suit:

@@ -629,6 +629,8 @@ class BattleScreen(SubScreen):
                 if fig.id in battle_ids:
                     continue
                 if getattr(fig, 'blocks_bonus', False):
+                    if self._figure_has_deficit(fig, self._opponent_resources_data):
+                        continue
                     adv_suit = get_advantage_suit(fig.suit)
                     if adv_suit and adv_suit == player_suit:
                         self.opponent_blocks_bonus_figure = fig
@@ -707,6 +709,8 @@ class BattleScreen(SubScreen):
             if fig.id in battle_ids:
                 continue
             if getattr(fig, 'distance_attack', False):
+                if self._figure_has_deficit(fig, self._opponent_resources_data):
+                    continue
                 adv_suit = get_advantage_suit(fig.suit)
                 if not adv_suit:
                     continue
@@ -771,6 +775,8 @@ class BattleScreen(SubScreen):
             if fig.id in battle_ids:
                 continue
             if getattr(fig, 'buffs_allies', False):
+                if self._figure_has_deficit(fig, self._opponent_resources_data):
+                    continue
                 self.opponent_buffs_allies_figures.append(fig)
 
         if self.opponent_buffs_allies_figures:
@@ -831,6 +837,8 @@ class BattleScreen(SubScreen):
                 if fig.id in battle_ids:
                     continue
                 if getattr(fig, 'buffs_allies_defence', False):
+                    if self._figure_has_deficit(fig, self._opponent_resources_data):
+                        continue
                     self.opponent_buffs_allies_defence_figures.append(fig)
 
             if self.opponent_buffs_allies_defence_figures:
@@ -907,14 +915,19 @@ class BattleScreen(SubScreen):
             eligible.append(fig)
         return eligible
 
-    def _figure_has_deficit(self, fig):
-        """Check whether a figure's resource requirements exceed available supply."""
+    def _figure_has_deficit(self, fig, resources_data=None):
+        """Check whether a figure's resource requirements exceed available supply.
+
+        *resources_data* defaults to the current player's data.  Pass
+        ``self._opponent_resources_data`` when checking an opponent figure.
+        """
         if not getattr(fig, 'requires', None):
             return False
-        if not self._resources_data:
+        rd = resources_data if resources_data is not None else self._resources_data
+        if not rd:
             return False
-        produces = self._resources_data.get('produces', {})
-        requires = self._resources_data.get('requires', {})
+        produces = rd.get('produces', {})
+        requires = rd.get('requires', {})
         for res_name in fig.requires:
             total_produced = produces.get(res_name, 0)
             total_required = requires.get(res_name, 0)
@@ -979,16 +992,15 @@ class BattleScreen(SubScreen):
         # buffs_allies bonus (treated as base power, not affected by blocks_bonus)
         buffs_bonus = getattr(figure_icon, 'buffs_allies_bonus', 0) if figure_icon else 0
         bonus = figure_icon.battle_bonus_received if figure_icon else 0
-        # buffs_allies_defence bonus (treated as support bonus, affected by blocks_bonus)
-        defence_bonus = getattr(figure_icon, 'buffs_allies_defence_bonus', 0) if figure_icon else 0
-        bonus += defence_bonus
-        # blocks_bonus negates the support bonus (including defence buff)
+        # blocks_bonus negates the support bonus (NOT wall defence)
         if figure_icon and getattr(figure_icon, 'battle_bonus_blocked', False):
             bonus = 0
+        # buffs_allies_defence (wall) bonus — NOT affected by blocks_bonus
+        defence_bonus = getattr(figure_icon, 'buffs_allies_defence_bonus', 0) if figure_icon else 0
         enchant = figure.get_total_enchantment_modifier()
         # distance_attack penalty
         dist_penalty = getattr(figure_icon, 'distance_attack_penalty', 0) if figure_icon else 0
-        return base + buffs_bonus + bonus + enchant - dist_penalty
+        return base + buffs_bonus + bonus + defence_bonus + enchant - dist_penalty
 
     def _get_round_diff(self, round_idx):
         """Get the power difference for a specific round (player - opponent).
@@ -1076,8 +1088,7 @@ class BattleScreen(SubScreen):
             # Buffs-allies bonus: +4 per matching buffer for village call figs
             buffs_bonus = self._get_buffs_allies_bonus(call_fig, is_player)
 
-            # Buffs-allies-defence bonus: applies to ALL call figs when defending
-            defence_bonus = self._get_buffs_allies_defence_bonus(is_player)
+            # Wall defence does NOT apply to call figures
 
             # Distance-attack penalty on the called-in figure (once per battle)
             distance_penalty = 0
@@ -1090,8 +1101,8 @@ class BattleScreen(SubScreen):
                         distance_penalty = attacker.number_card.value if attacker.number_card else 0
 
             if fig_suit == bm_suit:
-                return fig_power + buffs_bonus + defence_bonus + bm_value - distance_penalty
-            return fig_power + buffs_bonus + defence_bonus - distance_penalty
+                return fig_power + buffs_bonus + bm_value - distance_penalty
+            return fig_power + buffs_bonus - distance_penalty
         return bm_value
 
     def _get_buffs_allies_bonus(self, figure, is_player):

@@ -665,6 +665,7 @@ class FieldFigureIcon(FigureIcon):
                 pass
         
         # Calculate and cache battle bonus received (expensive operation, only do once)
+        self._resources_data = resources_data
         self.battle_bonus_received = self._calculate_battle_bonus_received(all_player_figures)
         
         # Check if figure has resource deficits
@@ -1674,6 +1675,23 @@ class FieldFigureIcon(FigureIcon):
         self.clicked = old_clicked
         self.is_visible = old_visible
     
+    def _figure_in_deficit(self, fig):
+        """Check if another figure on the same side has a resource deficit.
+
+        Uses the same ``resources_data`` stored at construction time.
+        """
+        if not getattr(fig, 'requires', None):
+            return False
+        rd = self._resources_data
+        if not rd:
+            return False
+        produces = rd.get('produces', {})
+        requires = rd.get('requires', {})
+        for res_name in fig.requires:
+            if requires.get(res_name, 0) > produces.get(res_name, 0):
+                return True
+        return False
+
     def _check_resource_deficit(self, resources_data=None):
         """Check if this figure has any required resources that are in deficit."""
         try:
@@ -1743,7 +1761,8 @@ class FieldFigureIcon(FigureIcon):
                 if (fig.suit == self.figure.suit and 
                     fig.id != self.figure.id and
                     hasattr(fig.family, 'field') and
-                    fig.family.field in valid_types)
+                    fig.family.field in valid_types and
+                    not self._figure_in_deficit(fig))
             ]
             
             # Sum battle bonuses from other figures
