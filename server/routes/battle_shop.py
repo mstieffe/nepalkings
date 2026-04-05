@@ -292,11 +292,11 @@ def gamble_battle_move():
     if not player or player.game_id != game_id:
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
 
-    # Enforce gamble limit: max 1 gamble per player per battle shop phase
+    # Enforce gamble limit: max 3 gambles per player per battle (once per move slot)
     gamble_counts = game.battle_gamble_counts or {}
     pid_str = str(player_id)
-    if gamble_counts.get(pid_str, 0) >= 1:
-        return jsonify({'success': False, 'message': 'You can only gamble once per battle'}), 400
+    if gamble_counts.get(pid_str, 0) >= 3:
+        return jsonify({'success': False, 'message': 'You can only gamble 3 times per battle (once per move)'}), 400
 
     # Find the battle move to sacrifice
     bm = BattleMove.query.get(battle_move_id)

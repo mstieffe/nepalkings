@@ -632,9 +632,9 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
                     })
                     action_id += 1
     
-    # ── Gamble: sacrifice 1 weak move → draw 2 random (max 1 per battle) ──
+    # ── Gamble: sacrifice 1 weak move → draw 2 random (max 3 per battle) ──
     gamble_counts = game_dict.get('battle_gamble_counts') or {}
-    already_gambled = gamble_counts.get(str(ai_player['id']), 0) >= 1
+    already_gambled = gamble_counts.get(str(ai_player['id']), 0) >= 3
     if ai_moves and not already_gambled:
         for move in ai_moves:
             if move.get('family_name') == 'Double Dagger':
