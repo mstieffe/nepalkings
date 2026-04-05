@@ -32,12 +32,19 @@ def get_user():
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
 
+        # Log accepted challenges for debugging notification flow
+        accepted = [c for c in user.challenges_issued
+                    if c.status and c.status.value == 'accepted']
+        if accepted:
+            logging.info(f"[get_user] {username}: {len(accepted)} accepted challenge(s) "
+                         f"in challenges_issued: {[(c.id, c.game_id) for c in accepted]}")
+
         serialized_user = user.serialize()
 
         return jsonify({'success': True, 'user': serialized_user})
     except Exception as e:
         db.session.rollback()
-        logging.error(f"Error fetching user: {e}")
+        logging.error(f"Error fetching user {username}: {e}", exc_info=True)
         return jsonify({'success': False, 'message': 'An error occurred while fetching the user'}), 500
 
 @auth.route('/register', methods=['POST'])

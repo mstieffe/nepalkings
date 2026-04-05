@@ -6,7 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
 from datetime import datetime
-from models import db, User, Challenge, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
 from game_service.deck_manager import DeckManager
 
 import server_settings as settings
@@ -990,9 +990,14 @@ def create_game():
                                           num_side_cards=settings.NUM_SIDE_CARDS_START)
 
         # Mark the challenge as accepted and link to the created game
-        challenge.status = 'accepted'
+        db.session.expire(challenge)          # ensure fresh read before update
+        challenge.status = ChallengeStatus.ACCEPTED
         challenge.game_id = game.id
         db.session.commit()
+
+        logger = logging.getLogger('nepalkings.games')
+        logger.info(f"Challenge {challenge.id} accepted → game {game.id} "
+                    f"(status={challenge.status}, game_id={challenge.game_id})")
 
         return jsonify({
             'success': True,

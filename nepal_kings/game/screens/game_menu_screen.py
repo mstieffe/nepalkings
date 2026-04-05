@@ -287,13 +287,23 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.state._new_challenge_ids = set(new_ch)
 
             # -- accepted challenges (notify challenger) --
-            self._check_accepted_challenges(user)
+            try:
+                self._check_accepted_challenges(user)
+            except Exception as e:
+                print(f"[game_menu] _check_accepted_challenges error: {e}")
 
-        except Exception:
-            pass  # network failure — keep previous counts
+        except Exception as e:
+            print(f"[game_menu] _apply_badge_data error: {e}")
 
     def _check_accepted_challenges(self, user):
         """Show notification dialogue when an issued challenge has been accepted."""
+        issued = user.get('challenges_issued', [])
+        accepted = [ch for ch in issued if ch.get('status') == 'accepted']
+        if accepted:
+            print(f"[game_menu] Found {len(accepted)} accepted challenge(s): "
+                  f"{[(ch['id'], ch.get('game_id')) for ch in accepted]}, "
+                  f"already notified: {self.state._notified_accepted_challenges}, "
+                  f"dialogue_box: {bool(self.dialogue_box)}")
         if self.dialogue_box:
             return
         # If a previous notification was set on another screen (or the dialogue

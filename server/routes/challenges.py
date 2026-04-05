@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from flask import Blueprint, request, jsonify, current_app
-from models import db, User, Challenge
+from models import db, User, Challenge, ChallengeStatus
 import server_settings as settings
 
 challenges = Blueprint('challenges', __name__)
@@ -50,7 +50,7 @@ def create_challenge():
         challenge = Challenge(
             challenger=challenger_user,
             challenged=opponent_user,
-            status='open',
+            status=ChallengeStatus.OPEN,
             stake=stake,
             turn_time_limit=turn_time_limit,
         )
@@ -120,7 +120,7 @@ def open_challenges():
             return jsonify({'success': False, 'error': 'User not found'}), 400
 
         challenges = Challenge.query.filter(
-            (Challenge.challenger == user) | (Challenge.challenged == user)).filter_by(status='open').all()
+            (Challenge.challenger == user) | (Challenge.challenged == user)).filter_by(status=ChallengeStatus.OPEN).all()
 
         return jsonify({
             'challenges': [challenge.serialize() for challenge in challenges]

@@ -457,7 +457,10 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self.users = data['users']
                 self.user = data['user']
                 # Check for accepted challenges (notify challenger)
-                self._check_accepted_challenges()
+                try:
+                    self._check_accepted_challenges()
+                except Exception as e:
+                    print(f"[new_game] _check_accepted_challenges error: {e}")
                 all_challenges = self.user['challenges_issued'] + self.user['challenges_received']
                 self.open_challenges = [ch for ch in all_challenges if ch.get('status') == 'open']
                 self.open_opponents = {}
@@ -667,6 +670,13 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
     def _check_accepted_challenges(self):
         """Check if any issued challenges have been accepted and show notification."""
+        issued = self.user.get('challenges_issued', [])
+        accepted = [ch for ch in issued if ch.get('status') == 'accepted']
+        if accepted:
+            print(f"[new_game] Found {len(accepted)} accepted challenge(s): "
+                  f"{[(ch['id'], ch.get('game_id')) for ch in accepted]}, "
+                  f"already notified: {self.state._notified_accepted_challenges}, "
+                  f"dialogue_box: {bool(self.dialogue_box)}")
         if self.dialogue_box:
             return
         # If a previous notification was set on another screen (or the dialogue
