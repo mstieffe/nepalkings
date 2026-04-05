@@ -486,28 +486,12 @@ def _get_opponent_turn_summary(game, current_player_id):
         LogEntry.player_id == current_player_id
     ).first()
     
-    # Also check if opponent has taken any meaningful action
-    opponent_action_logs = LogEntry.query.filter(
-        LogEntry.game_id == game.id,
-        LogEntry.player_id == opponent.id,
-        LogEntry.type.in_(['figure_built', 'figure_upgraded', 'spell_cast', 'figure_pickup', 'card_changed'])
-    ).first()
+    print(f"[GAME_START_CHECK] Player {current_player_id} has logs: {current_player_logs is not None}, is_turn: {game.turn_player_id == current_player_id}")
     
-    print(f"[GAME_START_CHECK] Player {current_player_id} has logs: {current_player_logs is not None}, opponent has action logs: {opponent_action_logs is not None}, is_turn: {game.turn_player_id == current_player_id}")
-    
-    # Show welcome message if player has no logs, UNLESS:
-    # - It's their turn AND opponent has played (they already saw the game while waiting, now it's their turn)
-    should_show_welcome = False
-    if not current_player_logs:
-        if not opponent_action_logs:
-            # Neither player has played - always show welcome
-            should_show_welcome = True
-        elif game.turn_player_id != current_player_id:
-            # Opponent has played but it's not this player's turn yet
-            # This is their first view of the game while waiting - show welcome
-            should_show_welcome = True
-        # else: opponent has played and now it's player's turn - they already saw the game, skip welcome
-    
+    # Show welcome message if player has no logs at all — they haven't
+    # interacted with this game yet, regardless of what the opponent did.
+    should_show_welcome = not current_player_logs
+
     if should_show_welcome:
         print(f"[GAME_START_CHECK] Showing welcome for player {current_player_id}")
         # Get the player's Maharaja figure

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from models import db, User, Challenge
 import server_settings as settings
 
@@ -58,48 +58,9 @@ def create_challenge():
         db.session.add(challenge)
         db.session.commit()
 
-        # Auto-accept if the opponent is an AI player
+        # Auto-accept if the opponent is an AI player (with a short delay)
         if opponent_user.is_ai:
-            # Import create_game logic inline to avoid circular imports
-            from routes.games import create_game as _route_create_game
-            from flask import current_app
-            import logging
-            logger = logging.getLogger('nepalkings.ai')
-
-            # Use Flask's test request context to call create_game internally
-            with current_app.test_request_context(
-                '/games/create_game',
-                method='POST',
-                data={'challenge_id': str(challenge.id)},
-                content_type='application/x-www-form-urlencoded'
-            ):
-                game_response = _route_create_game()
-                # game_response is a tuple (response, status_code) or just a response
-                if isinstance(game_response, tuple):
-                    resp_obj, status = game_response
-                else:
-                    resp_obj = game_response
-                    status = 200
-
-                game_data = resp_obj.get_json()
-
-                if game_data.get('success') and 'game' in game_data:
-                    logger.info(f"AI auto-accepted challenge {challenge.id} → game {game_data['game']['id']}")
-                    # Trigger AI if it's the AI's turn
-                    if settings.AI_ENABLED:
-                        from ai.ai_worker import trigger_ai_if_needed
-                        trigger_ai_if_needed(game_data['game']['id'], app=current_app._get_current_object())
-
-                    return jsonify({
-                        'success': True,
-                        'message': 'Game created against AI',
-                        'ai_auto_accept': True,
-                        'challenge_id': challenge.id,
-                        'game': game_data['game'],
-                    })
-                else:
-                    logger.error(f"AI auto-accept failed: {game_data.get('message')}")
-                    # Fall through to return normal challenge response
+            _schedule_ai_accept(challenge.id, current_app._get_current_object())
 
     except Exception as e:
         db.session.rollback()
@@ -107,6 +68,48 @@ def create_challenge():
         return jsonify({'success': False, 'message': f'Failed to create challenge, Error: {str(e)}'}), 400
 
     return jsonify({'success': True, 'message': 'Challenge sent'})
+
+
+def _schedule_ai_accept(challenge_id, app):
+    """Auto-accept a challenge from an AI opponent after a short delay."""
+    import threading
+
+    def _do_accept():
+        import time
+        time.sleep(2)  # Small delay so it feels natural
+        with app.app_context():
+            from routes.games import create_game as _route_create_game
+            import logging
+            logger = logging.getLogger('nepalkings.ai')
+
+            challenge = Challenge.query.get(challenge_id)
+            if not challenge or challenge.status.value != 'open':
+                logger.info(f"AI auto-accept skipped: challenge {challenge_id} no longer open")
+                return
+
+            with app.test_request_context(
+                '/games/create_game',
+                method='POST',
+                data={'challenge_id': str(challenge_id)},
+                content_type='application/x-www-form-urlencoded'
+            ):
+                game_response = _route_create_game()
+                if isinstance(game_response, tuple):
+                    resp_obj, status_code = game_response
+                else:
+                    resp_obj = game_response
+
+                game_data = resp_obj.get_json()
+
+                if game_data.get('success') and 'game' in game_data:
+                    logger.info(f"AI auto-accepted challenge {challenge_id} → game {game_data['game']['id']}")
+                    if settings.AI_ENABLED:
+                        from ai.ai_worker import trigger_ai_if_needed
+                        trigger_ai_if_needed(game_data['game']['id'], app=app)
+                else:
+                    logger.error(f"AI auto-accept failed: {game_data.get('message')}")
+
+    threading.Thread(target=_do_accept, daemon=True).start()
 
 @challenges.route('/open_challenges', methods=['GET'])
 def open_challenges():

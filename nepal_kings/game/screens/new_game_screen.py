@@ -726,28 +726,10 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
     def handle_create_challenge(self, opponent_name, stake=45, turn_time_limit=None):
         response = create_challenge(self.state.user_dict['username'], opponent_name, stake=stake, turn_time_limit=turn_time_limit)
-        if response.get('ai_auto_accept') and 'game' in response:
-            # AI auto-accepted — show notification dialogue
-            challenge_id = response.get('challenge_id')
-            self.state._pending_accepted_challenge = {
-                'challenge_id': challenge_id,
-                'game_id': response['game']['id'],
-                'game_dict': response['game'],
-                'opponent_name': opponent_name,
-                'stake': stake,
-            }
-            if challenge_id:
-                self.state._notified_accepted_challenges.add(challenge_id)
-            self.set_action("challenge_accepted", challenge_id, "open")
-            self.make_dialogue_box(
-                f'{opponent_name} accepted your challenge!\n\n'
-                f'Stake: {stake} gold',
-                actions=["Go to Game", "Close"],
-                title="Challenge Accepted")
-        elif response['success']:
+        if response.get('success'):
             self.state.set_msg(f"Challenge sent to {opponent_name}")
         else:
-            self.state.set_msg(response['message'])
+            self.state.set_msg(response.get('message', 'Failed to create challenge'))
 
     def handle_create_game(self, challenge):
         response = create_game(challenge['id'])
