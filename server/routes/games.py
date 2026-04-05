@@ -2200,7 +2200,11 @@ def _get_advantage_suit(suit):
 
 
 def _compute_support_bonus(figure, all_figures):
-    """Support bonus from same-player, same-suit figures of appropriate type."""
+    """Support bonus from same-player, same-suit figures of appropriate type.
+
+    Matches client ``_calculate_battle_bonus_received`` exactly.
+    No deficit check — support bonus is always active.
+    """
     fig_field = (figure.field or '').lower()
     if fig_field == 'castle':
         valid_fields = {'castle'}
@@ -2220,6 +2224,9 @@ def _compute_support_bonus(figure, all_figures):
         f_field = (f.field or '').lower()
         if f_field not in valid_fields:
             continue
+        # Military figures provide 0 bonus
+        if f_field == 'military':
+            continue
         # Castle: Maharaja +5, King +4
         if f_field == 'castle':
             total += 5 if 'Maharaja' in (f.name or '') else 4
@@ -2233,30 +2240,62 @@ def _compute_support_bonus(figure, all_figures):
     return total
 
 
-def _compute_healer_buff(figure, all_figures):
-    """Healer buff: +4 per same-suit Healer (only for village figures)."""
-    if (figure.field or '').lower() != 'village':
-        return 0
-    buff = 0
-    for f in all_figures:
-        if f.id == figure.id or f.player_id != figure.player_id:
-            continue
-        if 'Healer' not in (f.name or ''):
-            continue
-        if (f.suit or '').lower() != (figure.suit or '').lower():
-            continue
-        buff += 4
-    return buff
-
-
-def _compute_wall_defence_total(player_id, all_figures):
-    """Sum of Wall number-card values for a player (defence buff)."""
-    total = 0
+def _find_healer_figures(player_id, all_figures, battle_ids, game_id):
+    """Return list of Healer figures for *player_id* that are not in battle
+    and not in resource deficit.  Matches client ``_detect_buffs_allies``."""
+    healers = []
     for f in all_figures:
         if f.player_id != player_id:
             continue
+        if f.id in battle_ids:
+            continue
+        if 'Healer' not in (f.name or ''):
+            continue
+        if _check_figure_resource_deficit(f, player_id, game_id):
+            continue
+        healers.append(f)
+    return healers
+
+
+def _compute_healer_buff(figure, healers):
+    """Healer buff: +4 per same-suit Healer for village figures.
+
+    *healers* must already be pre-filtered by ``_find_healer_figures``
+    (excludes battle figures and deficit figures).
+    """
+    if (figure.field or '').lower() != 'village':
+        return 0
+    buff = 0
+    for h in healers:
+        if (h.suit or '').lower() == (figure.suit or '').lower():
+            buff += 4
+    return buff
+
+
+def _find_wall_figures(player_id, all_figures, battle_ids, game_id):
+    """Return list of Wall figures for *player_id* that are not in battle
+    and not in resource deficit.  Matches client ``_detect_buffs_allies_defence``."""
+    walls = []
+    for f in all_figures:
+        if f.player_id != player_id:
+            continue
+        if f.id in battle_ids:
+            continue
         if 'Wall' not in (f.name or ''):
             continue
+        if _check_figure_resource_deficit(f, player_id, game_id):
+            continue
+        walls.append(f)
+    return walls
+
+
+def _compute_wall_defence_total(walls):
+    """Sum of Wall number-card (side-card) values.
+
+    *walls* must already be pre-filtered by ``_find_wall_figures``.
+    """
+    total = 0
+    for f in walls:
         for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
             if assoc.card_type == 'side':
                 card = SideCard.query.get(assoc.card_id)
@@ -2265,34 +2304,53 @@ def _compute_wall_defence_total(player_id, all_figures):
     return total
 
 
-def _compute_distance_penalty(target_figure, attacker_player_id, all_figures):
-    """Penalty from opponent's Archer with suit advantage over *target_figure*."""
-    for f in all_figures:
-        if f.player_id != attacker_player_id:
-            continue
-        if 'Archer' not in (f.name or ''):
-            continue
-        adv = _get_advantage_suit(f.suit)
-        if adv and adv.lower() == (target_figure.suit or '').lower():
-            for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
-                if assoc.card_type == 'side':
-                    card = SideCard.query.get(assoc.card_id)
-                    if card:
-                        return card.value
-    return 0
+def _find_temple_blocker(target_figure, opponent_player_id, all_figures,
+                         battle_ids, game_id):
+    """True if opponent has a non-deficit, non-battle Temple with suit
+    advantage over *target_figure*.
 
-
-def _check_temple_blocking(target_figure, opponent_player_id, all_figures):
-    """True if opponent has a Temple with suit advantage over *target_figure*."""
+    Matches client ``_detect_blocks_bonus``.
+    """
     for f in all_figures:
         if f.player_id != opponent_player_id:
             continue
+        if f.id in battle_ids:
+            continue
         if 'Temple' not in (f.name or ''):
+            continue
+        if _check_figure_resource_deficit(f, opponent_player_id, game_id):
             continue
         adv = _get_advantage_suit(f.suit)
         if adv and adv.lower() == (target_figure.suit or '').lower():
             return True
     return False
+
+
+def _find_archer_da(player_id, all_figures, battle_ids, game_id):
+    """Return (advantage_suit, penalty_value) for a player's Archer.
+
+    Excludes battle figures and deficit figures.
+    Matches client ``_detect_distance_attack``.
+    Returns (None, 0) if no eligible Archer found.
+    """
+    for f in all_figures:
+        if f.player_id != player_id:
+            continue
+        if f.id in battle_ids:
+            continue
+        if 'Archer' not in (f.name or ''):
+            continue
+        if _check_figure_resource_deficit(f, player_id, game_id):
+            continue
+        adv = _get_advantage_suit(f.suit)
+        if not adv:
+            continue
+        for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
+            if assoc.card_type == 'side':
+                card = SideCard.query.get(assoc.card_id)
+                if card:
+                    return adv, card.value
+    return None, 0
 
 
 def _compute_enchantment_mod(figure_id, enchantment_spells):
@@ -2309,69 +2367,58 @@ def _compute_enchantment_mod(figure_id, enchantment_spells):
 
 
 def _compute_figure_full_power(figure, all_figures, enchant_spells,
-                               is_defending, opponent_player_id,
-                               include_da=True):
-    """Full figure power including base, healer, support, wall, enchant.
+                               opponent_player_id,
+                               battle_ids, game_id,
+                               own_healers, wall_total):
+    """Full battle-figure power.  Matches client ``_get_figure_total_power``.
 
-    When *include_da* is True (default) the distance-attack penalty from
-    an opponent's Archer is subtracted.  Set False when DA tracking is
-    handled externally (e.g. by ``_compute_server_total_diff``).
+    Formula::
+
+        base
+        + healer_buff           (NOT affected by Temple)
+        + (support + wall)      (zeroed if Temple blocks)
+        + enchantment
+        − DA penalty            (handled externally, not here)
+
+    *own_healers*: pre-filtered healer list for the figure's player
+        (from ``_find_healer_figures``).
+    *wall_total*: pre-computed wall defence total for the figure's player
+        (0 when attacking, since only the defender gets wall defence).
     """
     if not figure:
         return 0
     base = _compute_figure_base_power(figure)
-    healer = _compute_healer_buff(figure, all_figures)
+
+    # Healer buff (NOT affected by Temple)
+    healer_buff = _compute_healer_buff(figure, own_healers)
+
+    # Support bonus
     support = _compute_support_bonus(figure, all_figures)
-    wall = (_compute_wall_defence_total(figure.player_id, all_figures)
-            if is_defending else 0)
+
+    # Wall defence (pre-computed; 0 for attackers)
+    wall = wall_total
+
+    # Enchantment
     enchant = _compute_enchantment_mod(figure.id, enchant_spells)
-    da_penalty = (_compute_distance_penalty(
-        figure, opponent_player_id, all_figures) if include_da else 0)
-    if _check_temple_blocking(figure, opponent_player_id, all_figures):
+
+    # Temple blocking zeroes support AND wall (NOT healer buff)
+    if _find_temple_blocker(figure, opponent_player_id, all_figures,
+                            battle_ids, game_id):
         support = 0
         wall = 0
-    return base + healer + support + wall + enchant - da_penalty
 
-
-def _find_archer_da(player_id, all_figures, battle_ids=None):
-    """Return (advantage_suit, penalty_value) for a player's Archer.
-
-    *battle_ids* is a set of figure IDs currently in battle; these are
-    excluded as DA sources (the client does this too).
-    Returns (None, 0) if no eligible Archer found.
-    """
-    if battle_ids is None:
-        battle_ids = set()
-    for f in all_figures:
-        if f.player_id != player_id:
-            continue
-        if f.id in battle_ids:
-            continue
-        if 'Archer' not in (f.name or ''):
-            continue
-        adv = _get_advantage_suit(f.suit)
-        if not adv:
-            continue
-        for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
-            if assoc.card_type == 'side':
-                card = SideCard.query.get(assoc.card_id)
-                if card:
-                    return adv, card.value
-    return None, 0
+    return base + healer_buff + support + wall + enchant
 
 
 def _compute_move_effective_value(move, all_figures, game,
-                                  player_id, opponent_player_id):
+                                  player_id, own_healers, wall_total):
     """Effective battle-move value including call-figure bonuses.
 
-    For call figures the client applies:
-    * figure base power (card sum or castle override)
-    * healer buff (+4 per same-suit Healer for village call figs)
-    * wall defence (number card value, ALL call figs when defending)
-    * bm_value added only when BM suit matches call-figure suit
-    Temple blocking is NOT applied to call figures' wall bonus (client
-    behaviour).  Distance-attack on call figures is handled separately
-    in ``_compute_server_total_diff``.
+    *own_healers*: pre-filtered healer list for the move's player.
+    *wall_total*: pre-computed wall defence total (0 when attacking).
+
+    Temple blocking is NOT applied to call-figure wall (matches client).
+    DA on call figures is handled externally in ``_compute_server_total_diff``.
     """
     if not move or move.family_name == 'Block':
         return 0
@@ -2383,27 +2430,26 @@ def _compute_move_effective_value(move, all_figures, game,
             call_fig = Figure.query.get(move.call_figure_id)
         if call_fig:
             fig_power = _compute_figure_base_power(call_fig)
-            healer = _compute_healer_buff(call_fig, all_figures)
-            is_def = (player_id != game.advancing_player_id)
-            wall = (_compute_wall_defence_total(player_id, all_figures)
-                    if is_def else 0)
-            # NOTE: no temple blocking on call-figure wall (matches client)
+            healer = _compute_healer_buff(call_fig, own_healers)
+            # No temple blocking on call-figure wall (matches client)
             bm_suit = (move.suit or '').lower()
             fig_suit = (call_fig.suit or '').lower()
             if bm_suit == fig_suit:
-                return fig_power + healer + wall + bm_value
-            return fig_power + healer + wall
+                return fig_power + healer + wall_total + bm_value
+            return fig_power + healer + wall_total
     return bm_value
 
 
 def _compute_server_total_diff(game):
     """Authoritative total_diff from DB.  Positive = invader wins.
 
-    Mirrors the client's ``_get_total_diff()`` logic:
+    Mirrors the client's ``_get_total_diff()`` logic exactly:
     * figure power = base + healer + support + wall + enchant − DA
+    * Healer/Wall/Temple/Archer with resource deficit are skipped
     * DA fires ONCE per archer per battle (battle figure first, then
-      first matching call figure in rounds — never both).
-    * Block zeroes the entire round.
+      first matching call figure in rounds — never both)
+    * Wall defence only applies to the DEFENDING side
+    * Block zeroes the entire round
     """
     adv_fig = (Figure.query.get(game.advancing_figure_id)
                if game.advancing_figure_id else None)
@@ -2420,35 +2466,50 @@ def _compute_server_total_diff(game):
         game_id=game.id, is_active=True, spell_type='enchantment').all()
     all_moves = BattleMove.query.filter_by(game_id=game.id).all()
 
-    # IDs of figures currently in battle (excluded as DA sources)
+    # IDs of figures currently in battle (excluded from skill sources)
     battle_ids = set()
     for fid in (game.advancing_figure_id, game.advancing_figure_id_2,
                 game.defending_figure_id, game.defending_figure_id_2):
         if fid:
             battle_ids.add(fid)
 
+    # ── Pre-compute healer/wall lists (with deficit filtering) ──
+    adv_healers = _find_healer_figures(adv_pid, all_figures, battle_ids,
+                                       game.id)
+    def_healers = _find_healer_figures(def_pid, all_figures, battle_ids,
+                                       game.id)
+    # Wall defence only applies to the defending side
+    def_walls = _find_wall_figures(def_pid, all_figures, battle_ids, game.id)
+    def_wall_total = _compute_wall_defence_total(def_walls)
+
     # ── figure power WITHOUT distance-attack (handled below) ──
     adv_power = _compute_figure_full_power(
-        adv_fig, all_figures, enchant_spells, False, def_pid, include_da=False)
+        adv_fig, all_figures, enchant_spells,
+        def_pid, battle_ids, game.id,
+        adv_healers, 0)  # attacker: wall = 0
     def_power = _compute_figure_full_power(
-        def_fig, all_figures, enchant_spells, True, adv_pid, include_da=False)
+        def_fig, all_figures, enchant_spells,
+        adv_pid, battle_ids, game.id,
+        def_healers, def_wall_total)
 
     if game.advancing_figure_id_2:
         f2 = Figure.query.get(game.advancing_figure_id_2)
         if f2:
             adv_power += _compute_figure_full_power(
-                f2, all_figures, enchant_spells, False, def_pid,
-                include_da=False)
+                f2, all_figures, enchant_spells,
+                def_pid, battle_ids, game.id,
+                adv_healers, 0)
     if game.defending_figure_id_2:
         f2 = Figure.query.get(game.defending_figure_id_2)
         if f2:
             def_power += _compute_figure_full_power(
-                f2, all_figures, enchant_spells, True, adv_pid,
-                include_da=False)
+                f2, all_figures, enchant_spells,
+                adv_pid, battle_ids, game.id,
+                def_healers, def_wall_total)
 
     # ── Distance-attack: once per archer per battle ──
-    # Advancing player's archer → targets defending battle figure(s)
-    adv_da_suit, adv_da_val = _find_archer_da(adv_pid, all_figures, battle_ids)
+    adv_da_suit, adv_da_val = _find_archer_da(adv_pid, all_figures,
+                                               battle_ids, game.id)
     adv_da_used = False
     if adv_da_suit:
         for fig in (def_fig,
@@ -2459,8 +2520,8 @@ def _compute_server_total_diff(game):
                 adv_da_used = True
                 break
 
-    # Defending player's archer → targets advancing battle figure(s)
-    def_da_suit, def_da_val = _find_archer_da(def_pid, all_figures, battle_ids)
+    def_da_suit, def_da_val = _find_archer_da(def_pid, all_figures,
+                                               battle_ids, game.id)
     def_da_used = False
     if def_da_suit:
         for fig in (adv_fig,
@@ -2484,10 +2545,12 @@ def _compute_server_total_diff(game):
             continue
         if any(m.family_name == 'Block' for m in adv_m + def_m):
             continue
+
         adv_val = sum(_compute_move_effective_value(
-            m, all_figures, game, adv_pid, def_pid) for m in adv_m)
+            m, all_figures, game, adv_pid, adv_healers, 0) for m in adv_m)
         def_val = sum(_compute_move_effective_value(
-            m, all_figures, game, def_pid, adv_pid) for m in def_m)
+            m, all_figures, game, def_pid, def_healers,
+            def_wall_total) for m in def_m)
 
         # Unfired DA hits first matching call figure in opponent's moves
         if not adv_da_used and adv_da_suit:
