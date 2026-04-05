@@ -34,30 +34,36 @@ class DeckManager:
         deck.return_card_to_deck(card)
 
     @staticmethod
-    def draw_cards_from_deck(game, player, num_cards, card_type="main"):
+    def draw_cards_from_deck(game, player, num_cards, card_type="main", force=False):
         """Draw a batch of cards from the deck, respecting max hand size.
 
         If drawing *num_cards* would exceed the maximum hand size, the
         number drawn is clamped so the hand stays at the limit.
         Only cards actually in the player's hand (not part of a figure)
         count towards the hand size limit.
+
+        If *force* is True, skip the hand-size check entirely (e.g. for
+        spell draws where the client will prompt the player to discard).
         """
         from models import MainCard, SideCard
         import server_settings as settings
 
-        if card_type == 'main':
-            current = MainCard.query.filter_by(
-                player_id=player.id, in_deck=False, part_of_figure=False).count()
-            max_size = settings.MAX_MAIN_HAND_SIZE
-        else:
-            current = SideCard.query.filter_by(
-                player_id=player.id, in_deck=False, part_of_figure=False).count()
-            max_size = settings.MAX_SIDE_HAND_SIZE
+        if not force:
+            if card_type == 'main':
+                current = MainCard.query.filter_by(
+                    player_id=player.id, in_deck=False, part_of_figure=False).count()
+                max_size = settings.MAX_MAIN_HAND_SIZE
+            else:
+                current = SideCard.query.filter_by(
+                    player_id=player.id, in_deck=False, part_of_figure=False).count()
+                max_size = settings.MAX_SIDE_HAND_SIZE
 
-        allowed = max(0, max_size - current)
-        actual = min(num_cards, allowed)
-        if actual <= 0:
-            return []
+            allowed = max(0, max_size - current)
+            actual = min(num_cards, allowed)
+            if actual <= 0:
+                return []
+        else:
+            actual = num_cards
 
         deck = DeckManager.get_deck_for_game(game)
         return deck.draw_cards(player, actual, card_type)

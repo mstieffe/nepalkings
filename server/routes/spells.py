@@ -590,7 +590,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
         # Draw card spells
         if spell.spell_name == 'Draw 2 SideCards':
             try:
-                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 2, 'side')
+                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 2, 'side', force=True)
                 spell_effect['effect'] = f'Drew {len(drawn_cards)} side cards'
                 spell_effect['cards_drawn'] = len(drawn_cards)
                 spell_effect['card_type'] = 'side'
@@ -607,7 +607,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
         
         elif spell.spell_name == 'Draw 2 MainCards':
             try:
-                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 2, 'main')
+                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 2, 'main', force=True)
                 spell_effect['effect'] = f'Drew {len(drawn_cards)} main cards'
                 spell_effect['cards_drawn'] = len(drawn_cards)
                 spell_effect['card_type'] = 'main'
