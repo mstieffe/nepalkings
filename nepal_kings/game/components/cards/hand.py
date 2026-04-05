@@ -275,9 +275,14 @@ class Hand:
         """Handle confirmation of card discard."""
         if getattr(self.game, 'game_over', False):
             return False
+        if self.game.action_in_progress:
+            return False
         selected_cards = self.get_selected_cards()
         
         if len(selected_cards) == self.cards_to_discard_count:
+            # Lock actions to prevent double-confirm and stale poller overwrites
+            # (discard_cards -> game.update() -> _apply_game_dict -> unlock_actions)
+            self.game.lock_actions()
             # Discard the cards
             if self.type == "main_card":
                 success = self.game.discard_main_cards(selected_cards)
@@ -295,6 +300,8 @@ class Hand:
                     slot.clicked = False
                 
                 return True
+            else:
+                self.game.unlock_actions()
         
         return False
 

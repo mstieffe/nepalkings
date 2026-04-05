@@ -36,6 +36,7 @@ class GameScreen(Screen):
 
         # ── Background game-state poller (non-blocking) ────────
         self._game_poller = None  # Created on first update_game()
+        self._poller_data_version = 0  # _game_data_version when poll started
         self.update_interval = 2000  # ms between polls (remote-friendly)
 
         # Unread chat message tracking
@@ -412,6 +413,7 @@ class GameScreen(Screen):
             # Recreate poller for the new game
             self._game_poller = BackgroundPoller(
                 Game.fetch_server_data, args=(current_id,))
+            self._poller_data_version = getattr(self.state.game, '_game_data_version', 0)
         
         # Check if subscreen changed - if so, deselect all cards
         if self.previous_subscreen != self.state.subscreen:
@@ -468,9 +470,17 @@ class GameScreen(Screen):
                 self._game_poller = BackgroundPoller(
                     Game.fetch_server_data,
                     args=(self.state.game.game_id,))
+                self._poller_data_version = self.state.game._game_data_version
             if self._game_poller.has_result():
-                self.state.game.apply_server_data(self._game_poller.result)
+                result = self._game_poller.result
+                # Only apply if no action (discard, advance, etc.) updated
+                # the game state while this poll was in flight.
+                if self._poller_data_version == self.state.game._game_data_version:
+                    self.state.game.apply_server_data(result)
+                else:
+                    print(f"[POLLER] Discarding stale result (poll v{self._poller_data_version} vs current v{self.state.game._game_data_version})")
             if not self._game_poller.busy:
+                self._poller_data_version = self.state.game._game_data_version
                 self._game_poller.poll(
                     args=(self.state.game.game_id,))
         
