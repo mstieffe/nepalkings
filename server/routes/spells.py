@@ -211,9 +211,6 @@ def counter_spell():
     if err:
         return err
     
-    if not all([player_id, game_id, pending_spell_id, counter_spell_name]):
-        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
-    
     game = Game.query.get(game_id)
     pending_spell = ActiveSpell.query.get(pending_spell_id)
     
@@ -280,9 +277,6 @@ def allow_spell():
     err = verify_player_ownership(player_id)
     if err:
         return err
-    
-    if not all([player_id, game_id, pending_spell_id]):
-        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
     
     game = Game.query.get(game_id)
     pending_spell = ActiveSpell.query.get(pending_spell_id)

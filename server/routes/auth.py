@@ -23,7 +23,22 @@ _USERNAME_MIN = 3
 _USERNAME_MAX = 30
 _USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')  # letters, digits, underscores, hyphens
 _PASSWORD_MIN = 6
-_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')  # basic email format check
+def _is_valid_email(email: str) -> bool:
+    """Quick sanity check for email format — avoids regex ReDoS."""
+    if not email or len(email) > 254:
+        return False
+    at_idx = email.find('@')
+    if at_idx < 1 or at_idx == len(email) - 1:
+        return False
+    local = email[:at_idx]
+    domain = email[at_idx + 1:]
+    if len(local) > 64:
+        return False
+    if '.' not in domain or domain.startswith('.') or domain.endswith('.'):
+        return False
+    if ' ' in email or '\t' in email:
+        return False
+    return True
 
 # ── Long-lived AI service token max age (1 year) ──
 _AI_TOKEN_MAX_AGE = 365 * 24 * 3600
@@ -212,7 +227,7 @@ def register():
                 'message': f'Password must be at least {_PASSWORD_MIN} characters'
             }), 400
 
-        if email and not _EMAIL_RE.match(email):
+        if email and not _is_valid_email(email):
             return jsonify({'success': False, 'message': 'Invalid email address'}), 400
 
         if User.query.filter_by(username=username).first():

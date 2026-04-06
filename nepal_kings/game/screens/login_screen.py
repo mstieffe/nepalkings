@@ -341,6 +341,7 @@ class LoginScreen(Screen):
         if response_data.get('success'):
             self.state.user_dict = response_data.get('user')
             self.state.auth_token = None
+            _http.clear_auth_token()  # ensure no stale token from a previous session
             self.state.game = None
             self.state._last_seen_at = None
             self.state._known_game_ids = None

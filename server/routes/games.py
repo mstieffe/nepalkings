@@ -1256,12 +1256,12 @@ def discard_cards():
         game_id = data['game_id']
         player_id = data['player_id']
         card_ids = [card['id'] for card in data['cards']]
+        card_type = data.get('card_type', 'main')  # Default to main cards
+        card_ranks = [card['rank'] for card in data['cards']]
 
         err = verify_player_ownership(player_id)
         if err:
             return err
-        card_type = data.get('card_type', 'main')  # Default to main cards
-        card_ranks = [card['rank'] for card in data['cards']]
 
         game = Game.query.get(game_id)
         if game:
