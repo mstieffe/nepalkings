@@ -152,9 +152,11 @@ def _set_security_headers(response):
     return response
 
 # ── Per-endpoint rate limits ──
-# Applied after blueprint registration so the view functions are resolvable.
-limiter.limit(settings.RATE_LIMIT_LOGIN)(app.view_functions['auth.login'])
-limiter.limit(settings.RATE_LIMIT_REGISTER)(app.view_functions['auth.register'])
+# Import the actual view functions from the auth routes module and apply
+# stricter rate limits to sensitive authentication endpoints.
+from routes.auth import login as _auth_login, register as _auth_register
+limiter.limit(settings.RATE_LIMIT_LOGIN)(_auth_login)
+limiter.limit(settings.RATE_LIMIT_REGISTER)(_auth_register)
 
 if __name__ == '__main__':
     def _graceful_shutdown(signum, frame):

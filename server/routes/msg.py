@@ -27,6 +27,7 @@ def add_log_entry():
 
         # Truncate oversized messages to match DB column limits
         if isinstance(message, str) and len(message) > _MAX_LOG_MESSAGE:
+            logging.warning(f"Log message truncated from {len(message)} to {_MAX_LOG_MESSAGE} chars (game {game_id})")
             message = message[:_MAX_LOG_MESSAGE]
 
         log_entry = LogEntry(
@@ -77,6 +78,7 @@ def add_chat_message():
 
         # Truncate oversized messages to match DB column limits
         if isinstance(message, str) and len(message) > _MAX_CHAT_MESSAGE:
+            logging.warning(f"Chat message truncated from {len(message)} to {_MAX_CHAT_MESSAGE} chars (game {game_id})")
             message = message[:_MAX_CHAT_MESSAGE]
 
         chat_message = ChatMessage(

@@ -13,7 +13,7 @@ auth = Blueprint('auth', __name__)
 # ── Validation constants ──
 _USERNAME_MIN = 3
 _USERNAME_MAX = 30
-_USERNAME_RE = re.compile(r'^[\w\-]+$')  # letters, digits, underscores, hyphens
+_USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')  # letters, digits, underscores, hyphens
 _PASSWORD_MIN = 6
 
 @auth.route('/get_users', methods=['GET'])
