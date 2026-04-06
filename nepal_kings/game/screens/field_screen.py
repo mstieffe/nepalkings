@@ -639,6 +639,9 @@ class FieldScreen(SubScreen):
                                     self._reset_defender_selectable()
                                     self.state.set_msg(f"Selected {target_figure.name} as opponent's defender.")
                                     self.game.pending_defender_selection = False
+                                    print(f"[SELECT_DEFENDER] Success: defender={target_figure.name} (id={target_figure.id}), "
+                                          f"pending_battle_ready={self.game.pending_battle_ready}, "
+                                          f"battle_ready_shown={self.game.battle_ready_shown}")
                                     # Clear Civil War defender state
                                     if hasattr(self.game, 'civil_war_defender_second'):
                                         self.game.civil_war_defender_second = False

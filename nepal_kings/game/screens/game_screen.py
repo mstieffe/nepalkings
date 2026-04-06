@@ -2104,6 +2104,11 @@ class GameScreen(Screen):
         if self.state.game.battle_ready_shown:
             return
         
+        print(f"[CHECK_BATTLE_READY] Firing: advancing={self.state.game.advancing_figure_id}, "
+              f"defending={self.state.game.defending_figure_id}, "
+              f"is_advancing={self.state.game.advancing_player_id == self.state.game.player_id}, "
+              f"dialogue_box={'yes' if self.dialogue_box else 'no'}")
+        
         # ── Reconnect guard: battle already confirmed on server ──
         if self.state.game.battle_confirmed:
             self.state.game.battle_ready_shown = True
@@ -3903,6 +3908,11 @@ class GameScreen(Screen):
                 return
             if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
                 self.subscreens[self.state.subscreen].handle_events(events)
+            # After field screen handled events, defender may have been selected
+            # (update_from_dict sets pending_battle_ready) — show fight/fold
+            # immediately instead of waiting for the throttled update_game cycle.
+            if self.state.game and self.state.game.pending_battle_ready:
+                self.check_battle_ready()
             return
         
         # During Civil War second figure selection, only allow field screen access
@@ -3917,6 +3927,9 @@ class GameScreen(Screen):
                 return
             if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
                 self.subscreens[self.state.subscreen].handle_events(events)
+            # Civil War second pick may complete defender selection — check immediately
+            if self.state.game and self.state.game.pending_battle_ready:
+                self.check_battle_ready()
             return
         
         super().handle_events(events)
