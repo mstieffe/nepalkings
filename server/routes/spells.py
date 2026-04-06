@@ -87,6 +87,13 @@ def cast_spell():
     if game.turn_player_id != player_id:
         return jsonify({'success': False, 'message': 'Not your turn'}), 403
     
+    # Block tactics spells when an advance is in progress
+    if spell_type == 'tactics' and game.advancing_figure_id:
+        return jsonify({
+            'success': False,
+            'message': 'Cannot cast battle modifier spells while a figure is advancing'
+        }), 403
+
     # Check if spell can be cast during ceasefire
     if not possible_during_ceasefire and game.ceasefire_active:
         return jsonify({

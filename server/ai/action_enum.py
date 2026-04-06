@@ -1111,8 +1111,8 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
             })
             action_id += 1
 
-    # ── TACTICS SPELLS (NOT during ceasefire, counterable) ──
-    if not ceasefire:
+    # ── TACTICS SPELLS (NOT during ceasefire or advance, counterable) ──
+    if not ceasefire and not game_dict.get('advancing_figure_id'):
         # Check existing battle modifiers to avoid duplicates
         existing_modifiers = set()
         for mod in (game_dict.get('battle_modifier') or []):
