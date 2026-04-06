@@ -124,6 +124,8 @@ class BattleScreen(SubScreen):
         self.opponent_distance_attack_figure = None
         self._player_da_hit_battle = False   # True if player's DA already fired on battle fig
         self._opponent_da_hit_battle = False  # True if opponent's DA already fired on battle fig
+        self._player_da_archers = []   # list of {fig, adv_suit, penalty, hit_battle}
+        self._opponent_da_archers = []
 
         # Buffs-allies: figures that boost base power of same-suit village figures by +4
         self.player_buffs_allies_figures = []   # list of Figure objects
@@ -230,6 +232,8 @@ class BattleScreen(SubScreen):
         self.opponent_distance_attack_figure = None
         self._player_da_hit_battle = False
         self._opponent_da_hit_battle = False
+        self._player_da_archers = []
+        self._opponent_da_archers = []
         self.player_buffs_allies_figures = []
         self.opponent_buffs_allies_figures = []
         self.player_buffs_allies_defence_figures = []
@@ -644,15 +648,20 @@ class BattleScreen(SubScreen):
     # ────────────────── distance_attack detection ───────────────
 
     def _detect_distance_attack(self, player_figures, opponent_figures):
-        """Check if any field figure has distance_attack whose suit advantage
-        matches the opponent's battle figure(s).  If so, store it and apply
-        a power penalty on the targeted battle figure icons.
+        """Check if any field figures have distance_attack whose suit advantage
+        matches the opponent's battle figure(s).  If so, store them and apply
+        power penalties on the targeted battle figure icons.
 
-        The distance attacker can only fire once per battle:
-        if it hits a battle figure here, it won't also hit called-in figures.
+        Each eligible archer fires once per battle: if it hits a battle figure
+        here, it won't also hit called-in figures.  Multiple archers can fire
+        independently.
         """
         from game.components.figures.family_configs.skill_config import get_advantage_suit
 
+        # Lists of dicts: {fig, adv_suit, penalty, hit_battle}
+        self._player_da_archers = []
+        self._opponent_da_archers = []
+        # Legacy single-figure attrs (used by display/support code)
         self.player_distance_attack_figure = None
         self.opponent_distance_attack_figure = None
         self._player_da_hit_battle = False
@@ -665,7 +674,12 @@ class BattleScreen(SubScreen):
             if fig:
                 battle_ids.add(fig.id)
 
-        # --- Player's distance attacker → penalises opponent's battle figures ---
+        print(f"[DA_DETECT] battle_ids={battle_ids}, "
+              f"player_figs={len(player_figures)}, opp_figs={len(opponent_figures)}, "
+              f"opp_figure={getattr(self.opponent_figure, 'name', None)}(suit={getattr(self.opponent_figure, 'suit', None)}), "
+              f"player_figure={getattr(self.player_figure, 'name', None)}(suit={getattr(self.player_figure, 'suit', None)})")
+
+        # --- Player's distance attackers → penalise opponent's battle figures ---
         opp_targets = []
         if self.opponent_figure:
             opp_targets.append((self.opponent_figure.suit, self.opponent_figure_icon))
@@ -675,30 +689,46 @@ class BattleScreen(SubScreen):
         for fig in player_figures:
             if fig.id in battle_ids:
                 continue
-            if getattr(fig, 'distance_attack', False):
-                if self._figure_has_deficit(fig):
-                    continue
-                adv_suit = get_advantage_suit(fig.suit)
-                if not adv_suit:
-                    continue
-                # Store the attacker — it may fire on battle fig or call fig
-                self.player_distance_attack_figure = fig
-                penalty_value = fig.number_card.value if fig.number_card else 0
-                # Try to fire on a matching battle figure (consumes the shot)
-                for opp_suit, opp_icon in opp_targets:
-                    if adv_suit == opp_suit:
-                        self._player_da_hit_battle = True
-                        if opp_icon:
-                            opp_icon.distance_attack_penalty = penalty_value
-                        print(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
-                              f"reduces opponent's battle figure (suit={opp_suit}) by -{penalty_value}")
-                        break
-                if not self._player_da_hit_battle:
+            da_flag = getattr(fig, 'distance_attack', False)
+            if not da_flag:
+                continue
+            has_deficit = self._figure_has_deficit(fig)
+            if has_deficit:
+                print(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
+                      f"has distance_attack but is in DEFICIT — skipping")
+                continue
+            adv_suit = get_advantage_suit(fig.suit)
+            if not adv_suit:
+                print(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
+                      f"has distance_attack but no advantage suit — skipping")
+                continue
+            penalty_value = fig.number_card.value if fig.number_card else 0
+            print(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
+                  f"distance_attack=True, adv_suit={adv_suit}, penalty={penalty_value}, "
+                  f"opp_targets={[(s, bool(i)) for s, i in opp_targets]}")
+            hit_battle = False
+            for opp_suit, opp_icon in opp_targets:
+                if adv_suit == opp_suit:
+                    hit_battle = True
+                    if opp_icon:
+                        opp_icon.distance_attack_penalty = getattr(opp_icon, 'distance_attack_penalty', 0) + penalty_value
                     print(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
-                          f"ready to fire on opponent's call figures (advantage over {adv_suit})")
-                break
+                          f"reduces opponent's battle figure (suit={opp_suit}) by -{penalty_value}")
+                    break
+            if not hit_battle:
+                print(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
+                      f"ready to fire on opponent's call figures (advantage over {adv_suit})")
+            self._player_da_archers.append({
+                'fig': fig, 'adv_suit': adv_suit, 'penalty': penalty_value,
+                'hit_battle': hit_battle
+            })
 
-        # --- Opponent's distance attacker → penalises player's battle figures ---
+        # Set legacy attrs from first archer
+        if self._player_da_archers:
+            self.player_distance_attack_figure = self._player_da_archers[0]['fig']
+            self._player_da_hit_battle = any(a['hit_battle'] for a in self._player_da_archers)
+
+        # --- Opponent's distance attackers → penalise player's battle figures ---
         player_targets = []
         if self.player_figure:
             player_targets.append((self.player_figure.suit, self.player_figure_icon))
@@ -708,26 +738,43 @@ class BattleScreen(SubScreen):
         for fig in opponent_figures:
             if fig.id in battle_ids:
                 continue
-            if getattr(fig, 'distance_attack', False):
-                if self._figure_has_deficit(fig, self._opponent_resources_data):
-                    continue
-                adv_suit = get_advantage_suit(fig.suit)
-                if not adv_suit:
-                    continue
-                self.opponent_distance_attack_figure = fig
-                penalty_value = fig.number_card.value if fig.number_card else 0
-                for player_suit, player_icon in player_targets:
-                    if adv_suit == player_suit:
-                        self._opponent_da_hit_battle = True
-                        if player_icon:
-                            player_icon.distance_attack_penalty = penalty_value
-                        print(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
-                              f"reduces player's battle figure (suit={player_suit}) by -{penalty_value}")
-                        break
-                if not self._opponent_da_hit_battle:
+            da_flag = getattr(fig, 'distance_attack', False)
+            if not da_flag:
+                continue
+            if self._figure_has_deficit(fig, self._opponent_resources_data):
+                print(f"[DA_DETECT] Opponent's {fig.name} (id={fig.id}, suit={fig.suit}) "
+                      f"has distance_attack but is in DEFICIT — skipping")
+                continue
+            adv_suit = get_advantage_suit(fig.suit)
+            if not adv_suit:
+                continue
+            penalty_value = fig.number_card.value if fig.number_card else 0
+            hit_battle = False
+            for player_suit, player_icon in player_targets:
+                if adv_suit == player_suit:
+                    hit_battle = True
+                    if player_icon:
+                        player_icon.distance_attack_penalty = getattr(player_icon, 'distance_attack_penalty', 0) + penalty_value
                     print(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
-                          f"ready to fire on player's call figures (advantage over {adv_suit})")
-                break
+                          f"reduces player's battle figure (suit={player_suit}) by -{penalty_value}")
+                    break
+            if not hit_battle:
+                print(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
+                      f"ready to fire on player's call figures (advantage over {adv_suit})")
+            self._opponent_da_archers.append({
+                'fig': fig, 'adv_suit': adv_suit, 'penalty': penalty_value,
+                'hit_battle': hit_battle
+            })
+
+        # Set legacy attrs from first archer
+        if self._opponent_da_archers:
+            self.opponent_distance_attack_figure = self._opponent_da_archers[0]['fig']
+            self._opponent_da_hit_battle = any(a['hit_battle'] for a in self._opponent_da_archers)
+
+        print(f"[DA_DETECT] Result: player_da={[a['fig'].name for a in self._player_da_archers]}, "
+              f"opponent_da={[a['fig'].name for a in self._opponent_da_archers]}, "
+              f"player_hits={[a['hit_battle'] for a in self._player_da_archers]}, "
+              f"opponent_hits={[a['hit_battle'] for a in self._opponent_da_archers]}")
 
     # ────────────────── buffs_allies detection ──────────────────
 
@@ -1018,43 +1065,40 @@ class BattleScreen(SubScreen):
         o_val = self._get_move_effective_power(o, is_player=False, round_idx=round_idx)
         return p_val - o_val
 
-    def _get_da_call_round(self, for_player_da):
-        """Return the first round index where a distance attacker fires on
-        an opponent's called-in figure, or None.
+    def _get_da_call_penalty(self, for_player_da, round_idx):
+        """Return the total DA penalty applied to a called-in figure in a
+        specific round, from archers that didn't hit a battle figure.
 
-        ``for_player_da=True``  → player's DA targets opponent's call figs.
-        ``for_player_da=False`` → opponent's DA targets player's call figs.
+        ``for_player_da=True``  → player's archers target opponent's call figs.
+        ``for_player_da=False`` → opponent's archers target player's call figs.
 
-        Returns None if the DA already fired on a battle figure or if no
-        matching call figure exists in any round.
+        Each non-consumed archer fires on the first matching call figure
+        it finds (scanning rounds 0-2).  Returns the sum of penalties from
+        all archers whose first matching round equals *round_idx*.
         """
         if for_player_da:
-            if self._player_da_hit_battle:
-                return None  # already consumed on battle fig
-            attacker = self.player_distance_attack_figure
-            played = self.opponent_played  # opponent's moves have their call figs
+            archers = self._player_da_archers
+            played = self.opponent_played
         else:
-            if self._opponent_da_hit_battle:
-                return None
-            attacker = self.opponent_distance_attack_figure
+            archers = self._opponent_da_archers
             played = self.player_played
 
-        if not attacker:
-            return None
-
-        from game.components.figures.family_configs.skill_config import get_advantage_suit
-        adv_suit = get_advantage_suit(attacker.suit)
-        if not adv_suit:
-            return None
-
-        for r in range(3):
-            move = played[r]
-            if not move:
-                continue
-            call_fig = move.get('_call_figure')
-            if call_fig and (call_fig.suit or '').lower() == adv_suit.lower():
-                return r
-        return None
+        total_penalty = 0
+        for archer in archers:
+            if archer['hit_battle']:
+                continue  # already consumed on battle fig
+            adv_suit = archer['adv_suit']
+            # Find the first round where this archer hits a call figure
+            for r in range(3):
+                move = played[r]
+                if not move:
+                    continue
+                call_fig = move.get('_call_figure')
+                if call_fig and (call_fig.suit or '').lower() == adv_suit.lower():
+                    if r == round_idx:
+                        total_penalty += archer['penalty']
+                    break  # this archer's shot is consumed
+        return total_penalty
 
     def _get_move_effective_power(self, move, is_player=None, round_idx=None):
         """Get effective power of a played move including Call-figure bonus.
@@ -1090,15 +1134,11 @@ class BattleScreen(SubScreen):
 
             # Wall defence does NOT apply to call figures
 
-            # Distance-attack penalty on the called-in figure (once per battle)
+            # Distance-attack penalty on the called-in figure (multi-archer)
             distance_penalty = 0
             if is_player is not None and round_idx is not None:
-                da_round = self._get_da_call_round(for_player_da=not is_player)
-                if da_round == round_idx:
-                    attacker = (self.opponent_distance_attack_figure if is_player
-                                else self.player_distance_attack_figure)
-                    if attacker:
-                        distance_penalty = attacker.number_card.value if attacker.number_card else 0
+                distance_penalty = self._get_da_call_penalty(
+                    for_player_da=not is_player, round_idx=round_idx)
 
             if fig_suit == bm_suit:
                 return fig_power + buffs_bonus + bm_value - distance_penalty
@@ -1848,7 +1888,7 @@ class BattleScreen(SubScreen):
 
         self._awaiting_card_pick = True
         self._open_card_picker(
-            cards[:6],
+            cards,
             title="Pick a Card",
             callback=self._on_card_picked,
         )
@@ -1935,7 +1975,7 @@ class BattleScreen(SubScreen):
         """Show card picker for draw defender pick_card choice."""
         cards = self._returnable_cards
         self._open_card_picker(
-            cards[:6],
+            cards,
             title="Pick a Card",
             callback=self._on_draw_card_picked,
         )
@@ -2659,8 +2699,9 @@ class BattleScreen(SubScreen):
         player_support = []
         if self.player_blocks_bonus_figure:
             player_support.append(('blocks_bonus', self.player_blocks_bonus_figure))
-        if self.player_distance_attack_figure and self._player_da_hit_battle:
-            player_support.append(('distance_attack', self.player_distance_attack_figure))
+        for archer in self._player_da_archers:
+            if archer['hit_battle']:
+                player_support.append(('distance_attack', archer['fig']))
         # Add buffs_allies figures that buff the player's battle figure
         for buff_fig in self.player_buffs_allies_figures:
             for bf in (self.player_figure, self.player_figure_2):
@@ -2704,8 +2745,9 @@ class BattleScreen(SubScreen):
         opp_support = []
         if self.opponent_blocks_bonus_figure:
             opp_support.append(('blocks_bonus', self.opponent_blocks_bonus_figure))
-        if self.opponent_distance_attack_figure and self._opponent_da_hit_battle:
-            opp_support.append(('distance_attack', self.opponent_distance_attack_figure))
+        for archer in self._opponent_da_archers:
+            if archer['hit_battle']:
+                opp_support.append(('distance_attack', archer['fig']))
         # Add buffs_allies figures that buff the opponent's battle figure
         for buff_fig in self.opponent_buffs_allies_figures:
             for bf in (self.opponent_figure, self.opponent_figure_2):

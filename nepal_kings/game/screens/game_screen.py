@@ -2394,7 +2394,22 @@ class GameScreen(Screen):
 
     def check_fold_result(self):
         """Check if a fold outcome was detected via polling (for the waiting player)."""
-        if not self.state.game or not self.state.game.pending_fold_result:
+        if not self.state.game:
+            return
+
+        # Safety net: fold_outcome is set but pending_fold_result was never
+        # triggered (e.g. update_from_dict overwrote fold_outcome before
+        # _apply_game_dict could detect the transition).
+        if (not self.state.game.pending_fold_result and
+                self.state.game.fold_outcome and
+                self.state.game.waiting_for_battle_decision and
+                not self.state.game.fold_result_shown):
+            print("[FOLD] Safety net: fold_outcome set but pending_fold_result "
+                  "missed — forcing fold result")
+            self.state.game.pending_fold_result = True
+            self.state.game.waiting_for_battle_decision = False
+
+        if not self.state.game.pending_fold_result:
             return
         if self.state.game.fold_result_shown:
             return
@@ -2555,11 +2570,26 @@ class GameScreen(Screen):
 
     def check_auto_proceed_to_battle(self):
         """Check if both players chose battle (detected via polling for the waiting player)."""
-        if not self.state.game or not self.state.game.auto_proceed_to_battle:
+        if not self.state.game:
             return
-        
-        self.state.game.auto_proceed_to_battle = False
-        self._enter_battle_moves_phase()
+
+        if self.state.game.auto_proceed_to_battle:
+            self.state.game.auto_proceed_to_battle = False
+            self._enter_battle_moves_phase()
+            return
+
+        # Safety net: if battle_confirmed is True on the server but the
+        # auto_proceed flag was never set (e.g. update_from_dict overwrote
+        # battle_confirmed before _apply_game_dict could detect the
+        # transition), force the transition now.
+        if (self.state.game.battle_confirmed and
+                self.state.game.waiting_for_battle_decision and
+                not self.state.game.battle_moves_phase and
+                not self.state.game.in_battle_phase):
+            print("[BATTLE_DECISION] Safety net: battle_confirmed=True but "
+                  "auto_proceed missed — forcing transition to battle shop")
+            self.state.game.waiting_for_battle_decision = False
+            self._enter_battle_moves_phase()
 
     def _enter_battle_moves_phase(self):
         """Transition both players into the battle shop for mandatory battle-move selection."""

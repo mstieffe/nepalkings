@@ -6,7 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
 from datetime import datetime
-from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
 from game_service.deck_manager import DeckManager
 
 import server_settings as settings
@@ -2282,10 +2282,13 @@ def _compute_support_bonus(figure, all_figures, game_id):
         if f_field == 'castle':
             total += 5 if 'Maharaja' in (f.name or '') else 4
         else:
-            # Village: sum of main-card (key-card) values
+            # Village: sum of KEY card values only (not number/upgrade cards)
             for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
-                if assoc.card_type == 'main':
-                    card = MainCard.query.get(assoc.card_id)
+                if assoc.role == CardRole.KEY:
+                    if assoc.card_type == 'main':
+                        card = MainCard.query.get(assoc.card_id)
+                    else:
+                        card = SideCard.query.get(assoc.card_id)
                     if card:
                         total += card.value
     return total
@@ -2377,31 +2380,56 @@ def _find_temple_blocker(target_figure, opponent_player_id, all_figures,
     return False
 
 
-def _find_archer_da(player_id, all_figures, battle_ids, game_id):
-    """Return (advantage_suit, penalty_value) for a player's Archer.
+def _find_all_archer_da(player_id, all_figures, battle_ids, game_id):
+    """Return a list of (advantage_suit, penalty_value) for ALL eligible Archers.
 
     Excludes battle figures and deficit figures.
-    Matches client ``_detect_distance_attack``.
-    Returns (None, 0) if no eligible Archer found.
+    Matches client ``_detect_distance_attack`` (multi-archer).
+    Returns an empty list if no eligible Archer found.
     """
+    results = []
     for f in all_figures:
         if f.player_id != player_id:
             continue
         if f.id in battle_ids:
+            print(f"[ARCHER_DA] Skipping {f.name} (id={f.id}): in battle_ids")
             continue
         if 'Archer' not in (f.name or ''):
             continue
         if _check_figure_resource_deficit(f, player_id, game_id):
+            print(f"[ARCHER_DA] Skipping {f.name} (id={f.id}, suit={f.suit}): resource deficit")
             continue
         adv = _get_advantage_suit(f.suit)
         if not adv:
+            print(f"[ARCHER_DA] Skipping {f.name} (id={f.id}, suit={f.suit}): no advantage suit")
             continue
-        for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
-            if assoc.card_type == 'side':
+        # Use the NUMBER card value as the penalty (matches client logic).
+        # The Archer's key card and number card may both be side-deck cards;
+        # we must pick the one with role='NUMBER'.
+        assocs = CardToFigure.query.filter_by(figure_id=f.id).all()
+        number_val = 0
+        for assoc in assocs:
+            if assoc.role == CardRole.NUMBER and assoc.card_type == 'side':
                 card = SideCard.query.get(assoc.card_id)
                 if card:
-                    return adv, card.value
-    return None, 0
+                    number_val = card.value
+                    break
+        if number_val == 0:
+            # Fallback: use any side card value (shouldn't normally happen)
+            for assoc in assocs:
+                if assoc.card_type == 'side':
+                    card = SideCard.query.get(assoc.card_id)
+                    if card:
+                        number_val = card.value
+                        break
+        if number_val == 0:
+            print(f"[ARCHER_DA] Skipping {f.name} (id={f.id}): no side card found")
+            continue
+        print(f"[ARCHER_DA] Found {f.name} (id={f.id}, suit={f.suit}) → adv={adv}, penalty={number_val}")
+        results.append((adv, number_val))
+    if not results:
+        print(f"[ARCHER_DA] No eligible Archer found for player {player_id}")
+    return results
 
 
 def _compute_enchantment_mod(figure_id, enchantment_spells):
@@ -2555,32 +2583,49 @@ def _compute_server_total_diff(game):
                 adv_pid, battle_ids, game.id,
                 def_healers, def_wall_total)
 
-    # ── Distance-attack: once per archer per battle ──
-    adv_da_suit, adv_da_val = _find_archer_da(adv_pid, all_figures,
-                                               battle_ids, game.id)
-    adv_da_used = False
-    if adv_da_suit:
-        for fig in (def_fig,
-                    Figure.query.get(game.defending_figure_id_2)
-                    if game.defending_figure_id_2 else None):
-            if fig and adv_da_suit.lower() == (fig.suit or '').lower():
-                def_power -= adv_da_val
-                adv_da_used = True
-                break
+    # ── Distance-attack: each eligible archer fires once per battle ──
+    # Build list of defender targets
+    def_targets = [def_fig]
+    if game.defending_figure_id_2:
+        f2 = Figure.query.get(game.defending_figure_id_2)
+        if f2:
+            def_targets.append(f2)
 
-    def_da_suit, def_da_val = _find_archer_da(def_pid, all_figures,
-                                               battle_ids, game.id)
-    def_da_used = False
-    if def_da_suit:
-        for fig in (adv_fig,
-                    Figure.query.get(game.advancing_figure_id_2)
-                    if game.advancing_figure_id_2 else None):
-            if fig and def_da_suit.lower() == (fig.suit or '').lower():
-                adv_power -= def_da_val
-                def_da_used = True
-                break
+    adv_da_list = _find_all_archer_da(adv_pid, all_figures,
+                                       battle_ids, game.id)
+    adv_da_applied = []
+    # Each archer fires at most once; each target can be hit by multiple archers
+    for da_suit, da_val in adv_da_list:
+        for fig in def_targets:
+            if fig and da_suit.lower() == (fig.suit or '').lower():
+                def_power -= da_val
+                adv_da_applied.append((da_suit, da_val))
+                print(f"[DA_APPLY] Adv archer DA fires: adv_suit={da_suit} vs "
+                      f"def_fig={fig.name}(suit={fig.suit}) → def_power-={da_val}")
+                break  # this archer consumed its shot
+
+    # Build list of advancing targets
+    adv_targets = [adv_fig]
+    if game.advancing_figure_id_2:
+        f2 = Figure.query.get(game.advancing_figure_id_2)
+        if f2:
+            adv_targets.append(f2)
+
+    def_da_list = _find_all_archer_da(def_pid, all_figures,
+                                       battle_ids, game.id)
+    def_da_applied = []
+    for da_suit, da_val in def_da_list:
+        for fig in adv_targets:
+            if fig and da_suit.lower() == (fig.suit or '').lower():
+                adv_power -= da_val
+                def_da_applied.append((da_suit, da_val))
+                print(f"[DA_APPLY] Def archer DA fires: def_suit={da_suit} vs "
+                      f"adv_fig={fig.name}(suit={fig.suit}) → adv_power-={da_val}")
+                break  # this archer consumed its shot
 
     fig_diff = adv_power - def_power
+    print(f"[TOTAL_DIFF] adv_power={adv_power} def_power={def_power} fig_diff={fig_diff} "
+          f"adv_da={adv_da_applied} def_da={def_da_applied}")
 
     # ── round diffs from BattleMove records ──
     round_diff = 0
@@ -3145,7 +3190,7 @@ def finish_battle():
         else:
             outcome = 'lose'
 
-        # For winners, collect returnable cards (battle move + orphaned figure cards)
+        # For winners, collect returnable cards (all played BM cards + orphaned figure cards)
         returnable_cards = []
         if outcome == 'win':
             bm_cards, _ = _collect_battle_move_cards(game_id)
@@ -3155,6 +3200,7 @@ def finish_battle():
             orphaned_side = SideCard.query.filter_by(
                 game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
             ).all()
+            # Battle move cards first, then orphaned figure cards
             all_cards = bm_cards + [(c, 'main') for c in orphaned_main] + [(c, 'side') for c in orphaned_side]
             returnable_cards = [_serialize_battle_card(c, ct) for c, ct in all_cards]
 
@@ -3263,11 +3309,10 @@ def finish_battle():
     # cards go into the loot / return-to-deck pool)
     _return_unplayed_battle_move_cards(game_id)
 
-    # Collect remaining (played) battle move cards from BOTH players
-    bm_cards, bm_records = _collect_battle_move_cards(game_id)
-
     if total_diff == 0:
         # ──── DRAW ────
+        # Collect remaining (played) battle move cards from BOTH players
+        bm_cards, bm_records = _collect_battle_move_cards(game_id)
         # Defender gets to choose: destroy opponent figure, 10 pts, or pick a card
         # Determine who the defender is
         defender_player_id = None
@@ -3293,6 +3338,11 @@ def finish_battle():
 
     else:
         # ──── WIN / LOSE ────
+        # Collect played battle move cards from BOTH players.
+        # All played BM cards go into the loot pool (winner picks 1,
+        # rest go to deck).  Winner's figure stays; loser's is destroyed.
+        bm_cards, bm_records = _collect_battle_move_cards(game_id)
+
         points_awarded = _compute_figure_base_power(loser_figure)
 
         # Civil War: determine loser's second figure and add its power too
@@ -3343,8 +3393,9 @@ def finish_battle():
 
         db.session.flush()
 
-        # All returnable cards = figure cards + battle move cards
-        all_returnable = figure_cards + bm_cards
+        # Returnable cards = all played battle move cards (both players)
+        # + destroyed loser figure cards.  BM cards listed first.
+        all_returnable = bm_cards + figure_cards
         returnable_cards = [_serialize_battle_card(c, ct) for c, ct in all_returnable]
 
         # Log
@@ -3451,7 +3502,7 @@ def finish_battle_pick_card():
     # already done in finish_battle, but handles reconnect edge cases)
     _return_unplayed_battle_move_cards(game_id)
 
-    # Collect remaining (played) battle move cards
+    # Collect remaining played battle move cards (from both players)
     bm_cards, bm_records = _collect_battle_move_cards(game_id)
 
     # If winner picked a card, give it to them

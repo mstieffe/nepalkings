@@ -69,6 +69,10 @@ class Game:
         # Initialize to None so first login triggers turn detection if it's their turn
         self.previous_turn_player_id = None
         
+        # Track opponent's turns_left to detect missed intermediate turn states
+        # (e.g. AI responds faster than polling interval)
+        self._last_opponent_turns_left = None
+        
         # Track if game start notification was shown (needs to be shown once per player)
         self.game_start_notification_checked = False
         
@@ -596,6 +600,15 @@ class Game:
         self.turn = True if self.turn_player_id == self.player_id else False
         self.invader = True if self.invader_player_id == self.player_id else False
 
+        # Track opponent's turns_left for missed-turn detection
+        opp_turns = None
+        for p in self.players:
+            if p['id'] != self.player_id:
+                opp_turns = p.get('turns_left')
+                break
+        prev_opp_turns = self._last_opponent_turns_left
+        self._last_opponent_turns_left = opp_turns
+
         # Check for game start notification on first update (regardless of turn number)
         if not self.game_start_notification_checked:
             print(f"[GAME_START] First update - player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
@@ -614,6 +627,15 @@ class Game:
         # trigger _handle_start_turn for auto-fill since turn-change detection missed it
         elif previous_pending_spell_id and not self.pending_spell_id and self.turn and previous_turn:
             print(f"[SPELL_RESOLVED] Spell resolved while turn stayed with us. Calling start_turn for auto-fill...")
+            self._start_turn_async()
+        
+        # Missed intermediate turn: it was our turn before, it's our turn now,
+        # but the opponent's turns_left changed — meaning the opponent took a
+        # turn between polls and we never observed the turn=AI state.
+        elif (self.turn and previous_turn and
+              prev_opp_turns is not None and opp_turns is not None and
+              opp_turns != prev_opp_turns):
+            print(f"[TURN CHANGE] Missed intermediate turn — opponent turns_left {prev_opp_turns}→{opp_turns}. Calling start_turn...")
             self._start_turn_async()
         
         # Update previous turn player for next check
@@ -689,10 +711,26 @@ class Game:
         
         # Update battle decision/fold state
         self.battle_decisions = game_dict.get('battle_decisions')
+        previous_battle_confirmed = self.battle_confirmed
         self.battle_confirmed = game_dict.get('battle_confirmed', False)
         self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
+        previous_fold_outcome = self.fold_outcome
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
+
+        # Detect both chose battle (transition) — mirrors _apply_game_dict
+        if (self.battle_confirmed and not previous_battle_confirmed and
+                self.waiting_for_battle_decision):
+            self.auto_proceed_to_battle = True
+            self.waiting_for_battle_decision = False
+            print("[BATTLE_DECISION] update_from_dict: both players chose battle — auto-proceeding")
+
+        # Detect fold outcome (transition) — mirrors _apply_game_dict
+        if (self.fold_outcome and not previous_fold_outcome and
+                not self.fold_result_shown):
+            self.pending_fold_result = True
+            self.waiting_for_battle_decision = False
+            print(f"[FOLD] update_from_dict: fold outcome={self.fold_outcome}, winner={self.fold_winner_id}")
         
         # Detect battle_ready when both figures are set (e.g. after select_defender)
         if (self.advancing_figure_id and self.defending_figure_id and
