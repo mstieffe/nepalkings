@@ -23,18 +23,18 @@ app = Flask(__name__)
 CORS(app)  # Allow cross-origin requests from game clients
 
 # ── Logging configuration ──
-# Set up a proper logger so route files can use logging.info/warning/error
-# instead of print(), which avoids unbounded stdout buffer growth.
+# Central logging setup.  All server modules use named loggers under the
+# 'nepalkings' hierarchy so that every line carries a timestamp, level,
+# and the originating module — making production log analysis much easier.
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG_ENABLED else logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%H:%M:%S',
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
 )
 logger = logging.getLogger('nepalkings')
 
-# Disable Flask's default request logging
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)  # Only show errors, not every request
+# Disable Flask's default per-request logging (very noisy)
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # Configure the database URI and SQLite-specific settings
 app.config['SQLALCHEMY_DATABASE_URI'] = settings.DB_URL
@@ -55,11 +55,11 @@ db.init_app(app)
 # Initialize database tables
 with app.app_context():
     if settings.DROP_TABLES_ON_STARTUP:
-        print("⚠️  WARNING: Dropping all database tables (DROP_TABLES_ON_STARTUP=True)")
+        logger.warning("Dropping all database tables (DROP_TABLES_ON_STARTUP=True)")
         db.drop_all()
-        print("✅ All tables dropped")
+        logger.info("All tables dropped")
     
-    print("Creating database tables...")
+    logger.info("Creating database tables...")
     db.create_all()
     
     # Auto-migrate: add missing columns to existing tables
@@ -68,36 +68,36 @@ with app.app_context():
     if 'game' in inspector.get_table_names():
         existing_cols = {c['name'] for c in inspector.get_columns('game')}
         if 'resting_figure_ids' not in existing_cols:
-            print("  ↳ Adding 'resting_figure_ids' column to game table...")
+            logger.info("Auto-migrate: adding 'resting_figure_ids' column to game table")
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE game ADD COLUMN resting_figure_ids JSON"))
                 conn.commit()
         if 'battle_gamble_counts' not in existing_cols:
-            print("  ↳ Adding 'battle_gamble_counts' column to game table...")
+            logger.info("Auto-migrate: adding 'battle_gamble_counts' column to game table")
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE game ADD COLUMN battle_gamble_counts JSON"))
                 conn.commit()
     if 'user' in inspector.get_table_names():
         existing_cols = {c['name'] for c in inspector.get_columns('user')}
         if 'last_active' not in existing_cols:
-            print("  ↳ Adding 'last_active' column to user table...")
+            logger.info("Auto-migrate: adding 'last_active' column to user table")
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE user ADD COLUMN last_active DATETIME"))
                 conn.commit()
         if 'is_ai' not in existing_cols:
-            print("  ↳ Adding 'is_ai' column to user table...")
+            logger.info("Auto-migrate: adding 'is_ai' column to user table")
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE user ADD COLUMN is_ai BOOLEAN DEFAULT 0"))
                 conn.commit()
     if 'challenge' in inspector.get_table_names():
         existing_cols = {c['name'] for c in inspector.get_columns('challenge')}
         if 'game_id' not in existing_cols:
-            print("  ↳ Adding 'game_id' column to challenge table...")
+            logger.info("Auto-migrate: adding 'game_id' column to challenge table")
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE challenge ADD COLUMN game_id INTEGER REFERENCES game(id)"))
                 conn.commit()
     
-    print("✅ Database initialized")
+    logger.info("Database initialized")
 
     # Create AI users if enabled
     if settings.AI_ENABLED:
@@ -128,7 +128,7 @@ app.register_blueprint(battle_shop, url_prefix='/battle_shop')
 if __name__ == '__main__':
     def _graceful_shutdown(signum, frame):
         """Handle SIGINT/SIGTERM quickly by closing the DB engine."""
-        print("\n🛑 Shutting down server...")
+        logger.info("Shutting down server...")
         with app.app_context():
             db.session.remove()
             db.engine.dispose()
@@ -142,5 +142,5 @@ if __name__ == '__main__':
             db.create_all()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
-        print(f'Application failed to start, Error: {str(e)}')
+        logger.error(f'Application failed to start: {e}')
 

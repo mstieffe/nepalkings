@@ -21,6 +21,10 @@ from game.screens.battle_shop_screen import BattleShopScreen
 from game.components.figures.figure_manager import FigureManager
 from utils.background_poller import BackgroundPoller
 from game.core.game import Game
+import logging
+
+logger = logging.getLogger('nk.screens.game_screen')
+
 
 
 class GameScreen(Screen):
@@ -478,7 +482,7 @@ class GameScreen(Screen):
                 if self._poller_data_version == self.state.game._game_data_version:
                     self.state.game.apply_server_data(result)
                 else:
-                    print(f"[POLLER] Discarding stale result (poll v{self._poller_data_version} vs current v{self.state.game._game_data_version})")
+                    logger.warning(f"[POLLER] Discarding stale result (poll v{self._poller_data_version} vs current v{self.state.game._game_data_version})")
             if not self._game_poller.busy:
                 self._poller_data_version = self.state.game._game_data_version
                 self._game_poller.poll(
@@ -658,7 +662,7 @@ class GameScreen(Screen):
                 self.side_hand.cards_to_discard_count = 0
                 self.side_hand.dialogue_box = None
         
-        print(f"[GAME_SCREEN] State reset for new game {self._current_game_key}")
+        logger.info(f"[GAME_SCREEN] State reset for new game {self._current_game_key}")
 
     def check_counter_spell_state(self):
         """Check if player needs to respond to counter spell or is waiting for opponent."""
@@ -1163,11 +1167,11 @@ class GameScreen(Screen):
 
         # Defer while still on battle screen
         if self.state.subscreen == 'battle':
-            print(f"[LOOT_DEBUG] check_loot_notification: deferred (subscreen=battle)")
+            logger.debug(f"[LOOT_DEBUG] check_loot_notification: deferred (subscreen=battle)")
             return
 
         loot = self.state.game.pending_loot_notification
-        print(f"[LOOT_DEBUG] check_loot_notification: showing loot={loot}, dialogue_box={self.dialogue_box is not None}")
+        logger.debug(f"[LOOT_DEBUG] check_loot_notification: showing loot={loot}, dialogue_box={self.dialogue_box is not None}")
         winner_name = loot.get('winner_name', 'Opponent')
         suit = loot['suit']
         rank = loot['rank']
@@ -1198,13 +1202,13 @@ class GameScreen(Screen):
         opponent_name = summary.get('opponent_name', 'Opponent')
         action = summary.get('action')
         
-        print(f"\n{'='*60}")
-        print(f"[OPPONENT_TURN_CLIENT] Processing notification")
-        print(f"[OPPONENT_TURN_CLIENT] Summary: {summary}")
-        print(f"[OPPONENT_TURN_CLIENT] Action: {action}")
-        print(f"{'='*60}\n")
-        print(f"[WELCOME_MSG] Processing notification - action: {action}")
-        print(f"{'='*60}\n")
+        logger.debug(f"\n{'='*60}")
+        logger.debug(f"[OPPONENT_TURN_CLIENT] Processing notification")
+        logger.debug(f"[OPPONENT_TURN_CLIENT] Summary: {summary}")
+        logger.debug(f"[OPPONENT_TURN_CLIENT] Action: {action}")
+        logger.debug(f"{'='*60}\n")
+        logger.info(f"[WELCOME_MSG] Processing notification - action: {action}")
+        logger.debug(f"{'='*60}\n")
         
         # Check for game start notification
         if action == 'game_start':
@@ -1224,8 +1228,8 @@ class GameScreen(Screen):
             maharaja_figure = self._create_figure_from_data(maharaja_data, families)
             
             if maharaja_figure:
-                print(f"[WELCOME_MSG] Creating FieldFigureIcon for {maharaja_figure.name}")
-                print(f"[WELCOME_MSG] Figure has {len(maharaja_figure.cards)} cards")
+                logger.info(f"[WELCOME_MSG] Creating FieldFigureIcon for {maharaja_figure.name}")
+                logger.info(f"[WELCOME_MSG] Figure has {len(maharaja_figure.cards)} cards")
                 
                 # Create FieldFigureIcon for the maharaja (same as explosion spell)
                 from game.components.figures.figure_icon import FieldFigureIcon
@@ -1244,7 +1248,7 @@ class GameScreen(Screen):
                 import os
                 images = [maharaja_icon]
                 
-                print(f"[WELCOME_MSG] Showing dialogue with {len(images)} images")
+                logger.info(f"[WELCOME_MSG] Showing dialogue with {len(images)} images")
                 
                 # Build welcome message with game information
                 role_text = "invader" if is_invader else "defender"
@@ -1282,9 +1286,9 @@ class GameScreen(Screen):
             action_message = action.get('message', 'completed their turn')
             spell_name = action.get('spell_name', '')
             
-            print(f"[OPPONENT_TURN_CLIENT] Processing action: type={action_type}, spell={repr(spell_name)}, has_new_cards={'new_cards' in action}")
+            logger.debug(f"[OPPONENT_TURN_CLIENT] Processing action: type={action_type}, spell={repr(spell_name)}, has_new_cards={'new_cards' in action}")
             if 'new_cards' in action:
-                print(f"[OPPONENT_TURN_CLIENT] new_cards present with {len(action.get('new_cards', []))} cards")
+                logger.debug(f"[OPPONENT_TURN_CLIENT] new_cards present with {len(action.get('new_cards', []))} cards")
             
             # Load icons for actions
             images = []
@@ -1299,7 +1303,7 @@ class GameScreen(Screen):
                 cards_given = action.get('cards_given', [])
                 cards_received = action.get('cards_received', [])
                 
-                print(f"[FORCED_DEAL_CLIENT] Showing cards: gave {len(cards_given)}, received {len(cards_received)}")
+                logger.info(f"[FORCED_DEAL_CLIENT] Showing cards: gave {len(cards_given)}, received {len(cards_received)}")
                 
                 # Add received cards (show first)
                 for card_data in cards_received:
@@ -1342,13 +1346,13 @@ class GameScreen(Screen):
             elif (action_type == 'spell' and spell_name == 'Dump Cards' and 
                   'new_cards' in action):
                 
-                print(f"[DUMP_CARDS_CLIENT] ENTERING Dump Cards card display block")
+                logger.debug(f"[DUMP_CARDS_CLIENT] ENTERING Dump Cards card display block")
                 
                 from game.components.cards.card import Card
                 new_cards = action.get('new_cards', [])
                 
-                print(f"[DUMP_CARDS_CLIENT] Showing {len(new_cards)} new cards from opponent turn notification")
-                print(f"[DUMP_CARDS_CLIENT] new_cards data: {new_cards}")
+                logger.debug(f"[DUMP_CARDS_CLIENT] Showing {len(new_cards)} new cards from opponent turn notification")
+                logger.debug(f"[DUMP_CARDS_CLIENT] new_cards data: {new_cards}")
                 
                 # Add all new cards
                 for card_data in new_cards:
@@ -1500,20 +1504,20 @@ class GameScreen(Screen):
         
         # If ceasefire is no longer active, discard the stale notification
         if not self.state.game.ceasefire_active:
-            print(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire no longer active")
+            logger.info(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire no longer active")
             self.state.game.pending_ceasefire_active_notification = False
             return
         
         # Display-level dedup: only show once per round regardless of source
         if self.state.game._ceasefire_active_displayed_round == self.state.game.current_round:
-            print(f"[CEASEFIRE] check_ceasefire_active: discarding — already displayed for round {self.state.game.current_round}")
+            logger.info(f"[CEASEFIRE] check_ceasefire_active: discarding — already displayed for round {self.state.game.current_round}")
             self.state.game.pending_ceasefire_active_notification = False
             return
         
         # If ceasefire already ended this round, this is stale data — discard
         if (self.state.game._ceasefire_notified_round == self.state.game.current_round
                 and self.state.game._ceasefire_notified_state == 'ended'):
-            print(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire already ended round {self.state.game.current_round}")
+            logger.info(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire already ended round {self.state.game.current_round}")
             self.state.game.pending_ceasefire_active_notification = False
             return
         
@@ -1543,7 +1547,7 @@ class GameScreen(Screen):
         else:
             message = "Ceasefire is active!\n\nNo battles can commence while ceasefire is in effect.\n\nThe ceasefire will last for 3 invader turns."
         
-        print(f"[CEASEFIRE] check_ceasefire_active: SHOWING notification for round {self.state.game.current_round}")
+        logger.info(f"[CEASEFIRE] check_ceasefire_active: SHOWING notification for round {self.state.game.current_round}")
         self.state.game._ceasefire_active_displayed_round = self.state.game.current_round
         
         self.queue_or_show_notification({
@@ -1735,7 +1739,7 @@ class GameScreen(Screen):
             })
         else:
             error_msg = result.get('message', 'Unknown error')
-            print(f"[GAME_SCREEN] Auto-loss failed: {error_msg}")
+            logger.error(f"[GAME_SCREEN] Auto-loss failed: {error_msg}")
     
     def _check_any_defender_selectable(self):
         """Check if any of the opponent's figures can be selected as a defender."""
@@ -1835,7 +1839,7 @@ class GameScreen(Screen):
             })
         else:
             error_msg = result.get('message', 'Unknown error')
-            print(f"[GAME_SCREEN] Defender auto-loss failed: {error_msg}")
+            logger.error(f"[GAME_SCREEN] Defender auto-loss failed: {error_msg}")
     
     def _get_battle_modifier_info(self):
         """Get battle modifier summary text and icon images for notification dialogues."""
@@ -2104,7 +2108,7 @@ class GameScreen(Screen):
         if self.state.game.battle_ready_shown:
             return
         
-        print(f"[CHECK_BATTLE_READY] Firing: advancing={self.state.game.advancing_figure_id}, "
+        logger.info(f"[CHECK_BATTLE_READY] Firing: advancing={self.state.game.advancing_figure_id}, "
               f"defending={self.state.game.defending_figure_id}, "
               f"is_advancing={self.state.game.advancing_player_id == self.state.game.player_id}, "
               f"dialogue_box={'yes' if self.dialogue_box else 'no'}")
@@ -2123,7 +2127,7 @@ class GameScreen(Screen):
                 # Both players already confirmed moves — go straight to battle
                 self.battle_button.locked = False
                 self.state.subscreen = 'battle'
-                print("[BATTLE_READY] Reconnect: both moves confirmed — entering battle screen")
+                logger.info("[BATTLE_READY] Reconnect: both moves confirmed — entering battle screen")
             elif my_moves_ready:
                 # We confirmed but opponent hasn't — go to battle shop in waiting mode
                 self.battle_button.locked = False
@@ -2136,12 +2140,12 @@ class GameScreen(Screen):
                     shop._load_bought_moves()
                     shop._battle_moves_confirmed = True
                     shop._waiting_for_opponent = True
-                print("[BATTLE_READY] Reconnect: our moves confirmed — waiting for opponent")
+                logger.info("[BATTLE_READY] Reconnect: our moves confirmed — waiting for opponent")
             else:
                 # Neither confirmed yet — enter battle shop normally
                 self.battle_button.locked = False
                 self.state.game.auto_proceed_to_battle = True
-                print("[BATTLE_READY] Reconnect: battle confirmed, moves not yet selected")
+                logger.info("[BATTLE_READY] Reconnect: battle confirmed, moves not yet selected")
             return
         
         # ── Reconnect guard: we already submitted our decision ──
@@ -2150,7 +2154,7 @@ class GameScreen(Screen):
         if my_decision == 'battle':
             self.state.game.battle_ready_shown = True
             self.state.game.waiting_for_battle_decision = True
-            print("[BATTLE_READY] Reconnect: our decision already recorded — resuming wait")
+            logger.info("[BATTLE_READY] Reconnect: our decision already recorded — resuming wait")
             return
         
         is_advancing = (self.state.game.advancing_player_id == self.state.game.player_id)
@@ -2275,7 +2279,7 @@ class GameScreen(Screen):
         result = battle_decision(self.state.game.game_id, self.state.game.player_id, decision)
         
         if not result.get('success'):
-            print(f"[GAME_SCREEN] Battle decision failed: {result.get('message')}")
+            logger.error(f"[GAME_SCREEN] Battle decision failed: {result.get('message')}")
             # Check if the failure is because our decision was already recorded
             # (reconnect scenario).  If so, resume waiting for the opponent.
             # Otherwise (network error, server down), allow the fight/fold
@@ -2287,7 +2291,7 @@ class GameScreen(Screen):
             else:
                 # Network/server error — let the dialogue re-appear
                 self.state.game.battle_ready_shown = False
-                print("[GAME_SCREEN] Battle decision POST failed — will re-show fight/fold dialogue")
+                logger.error("[GAME_SCREEN] Battle decision POST failed — will re-show fight/fold dialogue")
             return
         
         if result.get('resolved'):
@@ -2370,7 +2374,7 @@ class GameScreen(Screen):
         # Queue ceasefire-active notification for the new round
         # (only if not already displayed this round)
         if self.state.game.ceasefire_active and self.state.game._ceasefire_active_displayed_round != self.state.game.current_round:
-            print(f"[CEASEFIRE] _reset_battle_state: queuing ceasefire-active, round={self.state.game.current_round}")
+            logger.info(f"[CEASEFIRE] _reset_battle_state: queuing ceasefire-active, round={self.state.game.current_round}")
             self.state.game.pending_ceasefire_active_notification = True
             # Mark as notified so polling doesn't re-trigger
             self.state.game._ceasefire_notified_round = self.state.game.current_round
@@ -2412,7 +2416,7 @@ class GameScreen(Screen):
                 self.state.game.fold_outcome and
                 self.state.game.waiting_for_battle_decision and
                 not self.state.game.fold_result_shown):
-            print("[FOLD] Safety net: fold_outcome set but pending_fold_result "
+            logger.warning("[FOLD] Safety net: fold_outcome set but pending_fold_result "
                   "missed — forcing fold result")
             self.state.game.pending_fold_result = True
             self.state.game.waiting_for_battle_decision = False
@@ -2572,7 +2576,7 @@ class GameScreen(Screen):
 
     def _on_game_over_acknowledged(self, response=None):
         """Handle game-over dialogue acknowledgement — return to game menu."""
-        print("[GAME_OVER] Player acknowledged — returning to game menu")
+        logger.info("[GAME_OVER] Player acknowledged — returning to game menu")
         self.state.game = None
         self.state.screen = 'game_menu'
 
@@ -2594,7 +2598,7 @@ class GameScreen(Screen):
                 self.state.game.waiting_for_battle_decision and
                 not self.state.game.battle_moves_phase and
                 not self.state.game.in_battle_phase):
-            print("[BATTLE_DECISION] Safety net: battle_confirmed=True but "
+            logger.warning("[BATTLE_DECISION] Safety net: battle_confirmed=True but "
                   "auto_proceed missed — forcing transition to battle shop")
             self.state.game.waiting_for_battle_decision = False
             self._enter_battle_moves_phase()
@@ -2653,7 +2657,7 @@ class GameScreen(Screen):
         if (self.state.game.battle_confirmed and
                 self.state.game.battle_turn_player_id is not None and
                 not self.state.game.in_battle_phase):
-            print("[BATTLE_RECONNECT] Detected active battle on server — entering battle screen")
+            logger.info("[BATTLE_RECONNECT] Detected active battle on server — entering battle screen")
             self.battle_button.locked = False
             self.state.game.in_battle_phase = True
             self.state.game.battle_turns_left = 3  # will be synced by battle screen poll
@@ -3028,11 +3032,11 @@ class GameScreen(Screen):
                     timeout=10,
                 )
                 if resp.status_code == 200:
-                    print("[INFINITE_HAMMER] Mode ended successfully")
+                    logger.info("[INFINITE_HAMMER] Mode ended successfully")
                 else:
-                    print(f"[INFINITE_HAMMER] Failed: {resp.text}")
+                    logger.error(f"[INFINITE_HAMMER] Failed: {resp.text}")
             except Exception as e:
-                print(f"[INFINITE_HAMMER] Error: {e}")
+                logger.error(f"[INFINITE_HAMMER] Error: {e}")
 
         try:
             threading.Thread(target=_do, daemon=True).start()
@@ -3068,7 +3072,7 @@ class GameScreen(Screen):
             self._show_counter_spell_selection(castable_spells, spell_name)
             
         except Exception as e:
-            print(f"[COUNTER_SPELL] Error: {str(e)}")
+            logger.error(f"[COUNTER_SPELL] Error: {str(e)}")
             self.make_dialogue_box(
                 message=f"Error loading counter spells: {str(e)}",
                 actions=['ok'],
@@ -3218,16 +3222,16 @@ class GameScreen(Screen):
         side_hand_cards = self.side_hand.cards if hasattr(self, 'side_hand') else []
         all_cards = main_hand_cards + side_hand_cards
         
-        print(f"[COUNTER_SPELL_SELECTOR] Main hand cards count: {len(main_hand_cards)}")
-        print(f"[COUNTER_SPELL_SELECTOR] Side hand cards count: {len(side_hand_cards)}")
-        print(f"[COUNTER_SPELL_SELECTOR] Total playable cards: {len(all_cards)}")
-        print(f"[COUNTER_SPELL_SELECTOR] Main hand: {[(c.suit, c.rank) for c in main_hand_cards]}")
-        print(f"[COUNTER_SPELL_SELECTOR] Side hand: {[(c.suit, c.rank) for c in side_hand_cards]}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Main hand cards count: {len(main_hand_cards)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Side hand cards count: {len(side_hand_cards)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Total playable cards: {len(all_cards)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Main hand: {[(c.suit, c.rank) for c in main_hand_cards]}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Side hand: {[(c.suit, c.rank) for c in side_hand_cards]}")
         
         hand_counter = Counter((card.suit, card.rank) for card in all_cards)
         
-        print(f"[COUNTER_SPELL_SELECTOR] Player hand: {dict(hand_counter)}")
-        print(f"[COUNTER_SPELL_SELECTOR] Input castable_spells count: {len(castable_spells)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Player hand: {dict(hand_counter)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Input castable_spells count: {len(castable_spells)}")
         
         # Double-check each spell is actually castable with current hand
         verified_spells = []
@@ -3235,15 +3239,15 @@ class GameScreen(Screen):
             spell_counter = Counter((card.suit, card.rank) for card in spell.cards)
             can_cast = all(hand_counter[card_tuple] >= count 
                           for card_tuple, count in spell_counter.items())
-            print(f"[COUNTER_SPELL_SELECTOR] Spell '{spell.name}' requires {dict(spell_counter)}, can_cast={can_cast}")
+            logger.debug(f"[COUNTER_SPELL_SELECTOR] Spell '{spell.name}' requires {dict(spell_counter)}, can_cast={can_cast}")
             if can_cast:
                 verified_spells.append(spell)
         
-        print(f"[COUNTER_SPELL_SELECTOR] Verified spells count: {len(verified_spells)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Verified spells count: {len(verified_spells)}")
         
         if not verified_spells:
             # No valid spells after verification - player cannot counter
-            print(f"[COUNTER_SPELL_SELECTOR] No verified spells found")
+            logger.debug(f"[COUNTER_SPELL_SELECTOR] No verified spells found")
             self.make_dialogue_box(
                 message=f"You don't have the cards to counter {target_spell_name}.\n\nYou'll need to allow it.",
                 actions=['allow'],

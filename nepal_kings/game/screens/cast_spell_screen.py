@@ -9,6 +9,10 @@ from game.components.spells.spell_manager import SpellManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from utils import spell_service
+import logging
+
+logger = logging.getLogger('nk.screens.cast_spell')
+
 
 
 class CastSpellScreen(SubScreen):
@@ -51,7 +55,7 @@ class CastSpellScreen(SubScreen):
         self.selected_spells = []
         self._last_game_data_version = -1
         self.dialogue_box = None
-        print("[CastSpellScreen] State reset for game switch")
+        logger.debug("[CastSpellScreen] State reset for game switch")
 
     def cast_spell_in_db(self, selected_spell):
         """
@@ -161,11 +165,11 @@ class CastSpellScreen(SubScreen):
             cards_received_data = spell_effect.get('cards_received', [])
             cards_given_data = spell_effect.get('cards_given', [])
             
-            print(f"[CAST_SPELL_SCREEN] Full spell_effect: {spell_effect}")
-            print(f"[CAST_SPELL_SCREEN] Spell effect received: {spell_effect.get('effect')}")
-            print(f"[CAST_SPELL_SCREEN] Drawn cards data: {len(drawn_cards_data)} cards")
-            print(f"[CAST_SPELL_SCREEN] Cards received: {len(cards_received_data)} cards")
-            print(f"[CAST_SPELL_SCREEN] Cards given: {len(cards_given_data)} cards")
+            logger.debug(f"[CAST_SPELL_SCREEN] Full spell_effect: {spell_effect}")
+            logger.debug(f"[CAST_SPELL_SCREEN] Spell effect received: {spell_effect.get('effect')}")
+            logger.debug(f"[CAST_SPELL_SCREEN] Drawn cards data: {len(drawn_cards_data)} cards")
+            logger.debug(f"[CAST_SPELL_SCREEN] Cards received: {len(cards_received_data)} cards")
+            logger.debug(f"[CAST_SPELL_SCREEN] Cards given: {len(cards_given_data)} cards")
             
             # Create card images from drawn cards or swapped cards
             card_images = []

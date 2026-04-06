@@ -6,6 +6,8 @@ from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, S
 import logging
 import server_settings as settings
 
+logger = logging.getLogger('nepalkings.routes.figures')
+
 figures = Blueprint('figures', __name__)
 
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
@@ -63,9 +65,7 @@ def create_figure():
         cannot_be_blocked = data.get('cannot_be_blocked', False)
         rest_after_attack = data.get('rest_after_attack', False)
 
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[SERVER] Creating {name}: produces={produces}, requires={requires}\n")
+        logger.debug(f"Creating {name}: produces={produces}, requires={requires}")
 
         if not cards:
             return jsonify({'success': False, 'message': 'No cards provided for the figure'}), 400
@@ -86,9 +86,7 @@ def create_figure():
             cannot_be_blocked=cannot_be_blocked,
             rest_after_attack=rest_after_attack
         )
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[SERVER] Figure object created: produces={figure.produces}, requires={figure.requires}\n")
+        logger.debug(f"Figure object created: produces={figure.produces}, requires={figure.requires}")
         db.session.add(figure)
         db.session.flush()  # Flush to get figure.id before committing
 
@@ -248,15 +246,15 @@ def create_figure():
                     active_hammer.effect_data['actions'] = []
                 
                 action_desc = f"built a figure with {len(cards)} cards on {field or 'field'}"
-                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
-                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                logger.debug(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                logger.debug(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
                 active_hammer.effect_data['actions'].append({
                     'type': 'build',
                     'description': action_desc
                 })
                 # Mark field as modified for SQLAlchemy
                 flag_modified(active_hammer, 'effect_data')
-                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                logger.debug(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
                 db.session.commit()
 
         # Create log entry
@@ -277,9 +275,7 @@ def create_figure():
         db.session.commit()
 
         serialized = figure.serialize()
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[SERVER] Returning serialized figure: produces={serialized.get('produces')}, requires={serialized.get('requires')}\n")
+        logger.debug(f"Returning serialized figure: produces={serialized.get('produces')}, requires={serialized.get('requires')}")
 
         response_data = {'success': True, 'message': 'Figure created successfully', 'figure': serialized}
 
@@ -369,15 +365,15 @@ def update_figure():
                     active_hammer.effect_data['actions'] = []
                 
                 action_desc = f"upgraded a figure to {figure.upgrade_family_name}"
-                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
-                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                logger.debug(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                logger.debug(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
                 active_hammer.effect_data['actions'].append({
                     'type': 'upgrade',
                     'description': action_desc
                 })
                 # Mark field as modified for SQLAlchemy
                 flag_modified(active_hammer, 'effect_data')
-                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                logger.debug(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
                 db.session.commit()
 
         db.session.commit()
@@ -420,9 +416,9 @@ def get_figures():
             return jsonify({'success': False, 'message': 'Player ID is required'}), 400
 
         figures = Figure.query.filter_by(player_id=player_id).all()
-        print(f"[GET_FIGURES] Retrieved {len(figures)} figures for player {player_id}")
+        logger.debug(f"[GET_FIGURES] Retrieved {len(figures)} figures for player {player_id}")
         for fig in figures:
-            print(f"[GET_FIGURES] Figure: id={fig.id}, name={fig.name}, family={fig.family_name}")
+            logger.debug(f"[GET_FIGURES] Figure: id={fig.id}, name={fig.name}, family={fig.family_name}")
         return jsonify({'success': True, 'figures': [figure.serialize() for figure in figures]})
 
     except Exception as e:
@@ -516,15 +512,15 @@ def delete_figure():
                     active_hammer.effect_data['actions'] = []
                 
                 action_desc = f"removed a figure from {figure_field}"
-                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
-                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                logger.debug(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                logger.debug(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
                 active_hammer.effect_data['actions'].append({
                     'type': 'delete',
                     'description': action_desc
                 })
                 # Mark field as modified for SQLAlchemy
                 flag_modified(active_hammer, 'effect_data')
-                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                logger.debug(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
                 db.session.commit()
 
         return jsonify({'success': True, 'message': 'Figure deleted successfully'})
@@ -632,15 +628,15 @@ def pickup_figure():
                     active_hammer.effect_data['actions'] = []
                 
                 action_desc = f"picked up a figure with {card_count} cards from {field_partition}"
-                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
-                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                logger.debug(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                logger.debug(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
                 active_hammer.effect_data['actions'].append({
                     'type': 'pickup',
                     'description': action_desc
                 })
                 # Mark field as modified for SQLAlchemy
                 flag_modified(active_hammer, 'effect_data')
-                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                logger.debug(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
                 db.session.commit()
         
         # Create log entry
@@ -798,8 +794,8 @@ def upgrade_figure():
 
         # Serialize the new figure BEFORE expiring session for Infinite Hammer tracking
         new_figure_serialized = new_figure.serialize()
-        print(f"[UPGRADE_FIGURE] Created new figure: id={new_figure.id}, name={new_figure_name}, player_id={player_id}")
-        print(f"[UPGRADE_FIGURE] Serialized: {new_figure_serialized}")
+        logger.info(f"[UPGRADE_FIGURE] Created new figure: id={new_figure.id}, name={new_figure_name}, player_id={player_id}")
+        logger.info(f"[UPGRADE_FIGURE] Serialized: {new_figure_serialized}")
 
         # Update turns left for the player
         player = Player.query.get(player_id)
@@ -837,7 +833,7 @@ def upgrade_figure():
         
         # Commit everything BEFORE Infinite Hammer tracking to ensure new figure is in DB
         db.session.commit()
-        print(f"[UPGRADE_FIGURE] Committed new figure and log entry")
+        logger.info(f"[UPGRADE_FIGURE] Committed new figure and log entry")
         
         # Track action for Infinite Hammer if active
         if has_infinite_hammer:
@@ -860,17 +856,17 @@ def upgrade_figure():
                     active_hammer.effect_data['actions'] = []
                 
                 action_desc = f"upgraded a {figure_field} {old_figure_name} to {new_figure_name}"
-                print(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
-                print(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
+                logger.debug(f"[INFINITE_HAMMER] Tracking action: {action_desc}")
+                logger.debug(f"[INFINITE_HAMMER] Current actions before append: {active_hammer.effect_data.get('actions', [])}")
                 active_hammer.effect_data['actions'].append({
                     'type': 'upgrade',
                     'description': action_desc
                 })
                 # Mark field as modified for SQLAlchemy
                 flag_modified(active_hammer, 'effect_data')
-                print(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
+                logger.debug(f"[INFINITE_HAMMER] Updated effect_data: {active_hammer.effect_data}")
                 db.session.commit()
-                print(f"[INFINITE_HAMMER] Committed action tracking")
+                logger.debug(f"[INFINITE_HAMMER] Committed action tracking")
 
         return jsonify({
             'success': True,

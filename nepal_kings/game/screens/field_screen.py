@@ -9,6 +9,10 @@ from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
 from game.components.cards.card_img import CardImg
 from utils.figure_service import pickup_figure, upgrade_figure, fetch_figures
+import logging
+
+logger = logging.getLogger('nk.screens.field')
+
 
 
 class FieldScreen(SubScreen):
@@ -111,7 +115,7 @@ class FieldScreen(SubScreen):
         self._last_all_seeing_eye_status = None
         self.dialogue_box = None
         self._reset_defender_selectable()
-        print("[FieldScreen] State reset for game switch")
+        logger.debug("[FieldScreen] State reset for game switch")
 
     def update(self, game):
         """Update the game state and load figures."""
@@ -267,14 +271,14 @@ class FieldScreen(SubScreen):
             
             if figures_changed or enchantments_changed or all_seeing_eye_changed:
                 if all_seeing_eye_changed:
-                    print(f"[FIELD_SCREEN] All Seeing Eye status changed: {self._last_all_seeing_eye_status} -> {self.cached_all_seeing_eye_status}")
+                    logger.debug(f"[FIELD_SCREEN] All Seeing Eye status changed: {self._last_all_seeing_eye_status} -> {self.cached_all_seeing_eye_status}")
                     # Clear icon cache for opponent figures to regenerate with new visibility
                     self.icon_cache.clear()
                     self._last_all_seeing_eye_status = self.cached_all_seeing_eye_status
                 if enchantments_changed:
-                    print(f"[FIELD_SCREEN] Enchantments changed, regenerating icons")
-                    print(f"[FIELD_SCREEN] Old: {self.last_enchantment_state}")
-                    print(f"[FIELD_SCREEN] New: {current_enchantment_state}")
+                    logger.debug(f"[FIELD_SCREEN] Enchantments changed, regenerating icons")
+                    logger.debug(f"[FIELD_SCREEN] Old: {self.last_enchantment_state}")
+                    logger.debug(f"[FIELD_SCREEN] New: {current_enchantment_state}")
                     
                     # Clear cache for figures whose enchantments changed
                     for figure_id in current_figure_ids:
@@ -282,7 +286,7 @@ class FieldScreen(SubScreen):
                         new_enchant = current_enchantment_state.get(figure_id)
                         if old_enchant != new_enchant:
                             if figure_id in self.icon_cache:
-                                print(f"[FIELD_SCREEN] Clearing cache for figure {figure_id} due to enchantment change")
+                                logger.debug(f"[FIELD_SCREEN] Clearing cache for figure {figure_id} due to enchantment change")
                                 del self.icon_cache[figure_id]
                 
                 # Remove stale entries from icon_cache (destroyed figures)
@@ -296,7 +300,7 @@ class FieldScreen(SubScreen):
                 self.last_figure_ids = current_figure_ids
                 self.last_enchantment_state = current_enchantment_state
         except Exception as e:
-            print(f"Error loading figures: {e}")
+            logger.error(f"Error loading figures: {e}")
 
     def _get_enchantment_state(self):
         """
@@ -485,7 +489,7 @@ class FieldScreen(SubScreen):
                             if result.get('success'):
                                 # Success message
                                 card_count = result.get('main_card_count', 0) + result.get('side_card_count', 0)
-                                print(f"Successfully picked up {self.figure_pending_pickup.name}. {card_count} cards returned to hand.")
+                                logger.debug(f"Successfully picked up {self.figure_pending_pickup.name}. {card_count} cards returned to hand.")
                                 
                                 # Refresh game state (cards, turn, figures) from server
                                 # (update() -> _apply_game_dict -> unlock_actions)
@@ -496,12 +500,12 @@ class FieldScreen(SubScreen):
                             else:
                                 # Show error message
                                 error_msg = result.get('message', 'Unknown error')
-                                print(f"Failed to pick up figure: {error_msg}")
+                                logger.error(f"Failed to pick up figure: {error_msg}")
                                 self.state.set_msg(f"Failed to pick up figure: {error_msg}")
                                 self.game.unlock_actions()
                                 
                         except Exception as e:
-                            print(f"Error picking up figure: {str(e)}")
+                            logger.error(f"Error picking up figure: {str(e)}")
                             self.state.set_msg(f"Error picking up figure: {str(e)}")
                             self.game.unlock_actions()
                         
@@ -527,7 +531,7 @@ class FieldScreen(SubScreen):
                                 figure.id
                             )
                             if result.get('success'):
-                                print(f"[FIELD] Advanced {figure.name} successfully")
+                                logger.debug(f"[FIELD] Advanced {figure.name} successfully")
                                 self.state.set_msg(f"Advanced {figure.name} toward battle!")
                                 # Update game state from response
                                 # (update_from_dict -> unlock_actions)
@@ -563,7 +567,7 @@ class FieldScreen(SubScreen):
                                     self.game.own_advance_figure_name = figure.name
                             else:
                                 error_msg = result.get('message', 'Unknown error')
-                                print(f"[FIELD] Failed to advance: {error_msg}")
+                                logger.error(f"[FIELD] Failed to advance: {error_msg}")
                                 self.make_dialogue_box(
                                     message=f"Cannot advance: {error_msg}",
                                     actions=['ok'],
@@ -639,7 +643,7 @@ class FieldScreen(SubScreen):
                                     self._reset_defender_selectable()
                                     self.state.set_msg(f"Selected {target_figure.name} as opponent's defender.")
                                     self.game.pending_defender_selection = False
-                                    print(f"[SELECT_DEFENDER] Success: defender={target_figure.name} (id={target_figure.id}), "
+                                    logger.debug(f"[SELECT_DEFENDER] Success: defender={target_figure.name} (id={target_figure.id}), "
                                           f"pending_battle_ready={self.game.pending_battle_ready}, "
                                           f"battle_ready_shown={self.game.battle_ready_shown}")
                                     # Clear Civil War defender state
@@ -716,22 +720,22 @@ class FieldScreen(SubScreen):
                             
                             if result.get('success'):
                                 # Success message
-                                print(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
+                                logger.debug(f"Successfully upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 self.state.set_msg(f"Upgraded {self.figure_pending_upgrade.name} to {self.figure_pending_upgrade.upgrade_family_name}.")
                                 # Refresh full game state (turn, cards) and figures from server
                                 # (update() -> _apply_game_dict -> unlock_actions)
                                 self.game.update()
                                 self.load_figures()
-                                print(f"[FIELD_SCREEN] Figures reloaded after upgrade, count: {len(self.figures)}")
+                                logger.debug(f"[FIELD_SCREEN] Figures reloaded after upgrade, count: {len(self.figures)}")
                             else:
                                 # Show error message
                                 error_msg = result.get('message', 'Unknown error')
-                                print(f"Failed to upgrade figure: {error_msg}")
+                                logger.error(f"Failed to upgrade figure: {error_msg}")
                                 self.state.set_msg(f"Failed to upgrade figure: {error_msg}")
                                 self.game.unlock_actions()
                                 
                         except Exception as e:
-                            print(f"Error upgrading figure: {str(e)}")
+                            logger.error(f"Error upgrading figure: {str(e)}")
                             self.state.set_msg(f"Error upgrading figure: {str(e)}")
                             self.game.unlock_actions()
                         
@@ -1111,7 +1115,7 @@ class FieldScreen(SubScreen):
 
     def handle_figure_click(self, figure):
         """Handle actions when a figure is clicked."""
-        print(f"Selected figure: {figure.name}")
+        logger.debug(f"Selected figure: {figure.name}")
         # Add additional functionality for interacting with the figure
     
     def _handle_target_selection(self, events):
@@ -1177,7 +1181,7 @@ class FieldScreen(SubScreen):
                         break
                 
                 if clicked_icon:
-                    print(f"[DEFENDER_CLICK] Clicked: {clicked_icon.figure.name} (id={clicked_icon.figure.id}), defender_selectable={getattr(clicked_icon, 'defender_selectable', 'N/A')}, is_visible={clicked_icon.is_visible}")
+                    logger.debug(f"[DEFENDER_CLICK] Clicked: {clicked_icon.figure.name} (id={clicked_icon.figure.id}), defender_selectable={getattr(clicked_icon, 'defender_selectable', 'N/A')}, is_visible={clicked_icon.is_visible}")
                     # Show error for non-selectable figures (works for both visible and hidden)
                     if hasattr(clicked_icon, 'defender_selectable') and not clicked_icon.defender_selectable:
                         reason = "This figure cannot be selected as a defender."
@@ -2116,10 +2120,10 @@ class FieldScreen(SubScreen):
         must_be_attacked_ids = {fig.id for fig in must_be_attacked_figures}
         eligible_ids = {fig.id for fig in opponent_figures_eligible}
         
-        print(f"[DEFENDER_SELECT] Advancing figure: {advancing_figure.name if advancing_figure else 'None'}, cannot_be_blocked: {advancing_cannot_be_blocked}")
-        print(f"[DEFENDER_SELECT] Battle modifiers: peasant_war={has_peasant_war}, blitzkrieg={has_blitzkrieg}, civil_war={has_civil_war}")
-        print(f"[DEFENDER_SELECT] Eligible opponent figures: {[(f.name, f.id, getattr(f, 'must_be_attacked', False)) for f in opponent_figures_eligible]}")
-        print(f"[DEFENDER_SELECT] Must-be-attacked figures: {[(f.name, f.id) for f in must_be_attacked_figures]}")
+        logger.debug(f"[DEFENDER_SELECT] Advancing figure: {advancing_figure.name if advancing_figure else 'None'}, cannot_be_blocked: {advancing_cannot_be_blocked}")
+        logger.debug(f"[DEFENDER_SELECT] Battle modifiers: peasant_war={has_peasant_war}, blitzkrieg={has_blitzkrieg}, civil_war={has_civil_war}")
+        logger.debug(f"[DEFENDER_SELECT] Eligible opponent figures: {[(f.name, f.id, getattr(f, 'must_be_attacked', False)) for f in opponent_figures_eligible]}")
+        logger.debug(f"[DEFENDER_SELECT] Must-be-attacked figures: {[(f.name, f.id) for f in must_be_attacked_figures]}")
         
         for icon in self.figure_icons:
             fig = icon.figure
@@ -2139,11 +2143,11 @@ class FieldScreen(SubScreen):
             # If must_be_attacked applies, only those figures are selectable
             if must_be_attacked_ids and fig.id not in must_be_attacked_ids:
                 icon.defender_selectable = False
-                print(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) NOT selectable (must_be_attacked constraint)")
+                logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) NOT selectable (must_be_attacked constraint)")
                 continue
             
             icon.defender_selectable = True
-            print(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) IS selectable")
+            logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) IS selectable")
     
     def _reset_defender_selectable(self):
         """Reset all figure icons to selectable (normal state)."""

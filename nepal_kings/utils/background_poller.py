@@ -16,6 +16,10 @@ Usage:
 """
 import sys as _sys
 import threading
+import logging
+
+logger = logging.getLogger('nk.utils.poller')
+
 
 _IS_EMSCRIPTEN = _sys.platform == "emscripten"
 
@@ -121,7 +125,7 @@ class BackgroundPoller:
                 self._result = res
                 self._has_result = True
         except Exception as e:
-            print(f"[BackgroundPoller] {self._func.__name__}: {e}")
+            logger.debug(f"[BackgroundPoller] {self._func.__name__}: {e}")
         finally:
             with self._lock:
                 self._busy = False
@@ -152,7 +156,7 @@ class BackgroundPoller:
                 self._result = res
                 self._has_result = True
         except Exception as e:
-            print(f"[BackgroundPoller] simple async: {e}")
+            logger.debug(f"[BackgroundPoller] simple async: {e}")
         finally:
             with self._lock:
                 self._busy = False
@@ -205,7 +209,7 @@ class BackgroundPoller:
                 self._result = res
                 self._has_result = True
         except Exception as e:
-            print(f"[BackgroundPoller] multi async: {e}")
+            logger.debug(f"[BackgroundPoller] multi async: {e}")
         finally:
             with self._lock:
                 self._busy = False
@@ -286,7 +290,7 @@ class BackgroundPoller:
                 self._result = result
                 self._has_result = True
         except Exception as e:
-            print(f"[BackgroundPoller] async assemble: {e}")
+            logger.debug(f"[BackgroundPoller] async assemble: {e}")
         finally:
             with self._lock:
                 self._busy = False

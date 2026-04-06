@@ -13,6 +13,8 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
 
+logger = logging.getLogger('nepalkings.routes.spells')
+
 spells = Blueprint('spells', __name__)
 
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
@@ -478,8 +480,8 @@ def end_infinite_hammer():
         
         # Get all accumulated actions BEFORE deactivating
         actions = active_hammer.effect_data.get('actions', []) if active_hammer.effect_data else []
-        print(f"[END_INFINITE_HAMMER] Actions tracked: {actions}")
-        print(f"[END_INFINITE_HAMMER] Full effect_data: {active_hammer.effect_data}")
+        logger.debug(f"[END_INFINITE_HAMMER] Actions tracked: {actions}")
+        logger.debug(f"[END_INFINITE_HAMMER] Full effect_data: {active_hammer.effect_data}")
         
         # Deactivate the spell
         active_hammer.is_active = False
@@ -574,7 +576,7 @@ def _validate_and_mark_spell_cards(player_id, cards_data):
         
     except Exception as e:
         db.session.rollback()
-        print(f"Error validating spell cards: {e}")
+        logger.debug(f"Error validating spell cards: {e}")
         return False
 
 
@@ -644,12 +646,12 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 
                 cards_needed = max(0, 10 - main_hand_count)
                 
-                print(f"[FILL UP TO 10] Current hand: {main_hand_count}, Cards needed: {cards_needed}")
+                logger.debug(f"[FILL UP TO 10] Current hand: {main_hand_count}, Cards needed: {cards_needed}")
                 
                 if cards_needed > 0:
                     # Draw main cards to fill up to 10
                     drawn_cards = DeckManager.draw_cards_from_deck(game, caster, cards_needed, 'main')
-                    print(f"[FILL UP TO 10] Drew {len(drawn_cards)} cards")
+                    logger.debug(f"[FILL UP TO 10] Drew {len(drawn_cards)} cards")
                     spell_effect['effect'] = f'Drew {len(drawn_cards)} main cards to reach 10 total'
                     spell_effect['cards_drawn'] = len(drawn_cards)
                     spell_effect['card_type'] = 'main'
@@ -661,16 +663,16 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         card_data = card.serialize()
                         card_data['type'] = 'main'
                         spell_effect['drawn_cards'].append(card_data)
-                    print(f"[FILL UP TO 10] Serialized {len(spell_effect['drawn_cards'])} cards to spell_effect")
+                    logger.debug(f"[FILL UP TO 10] Serialized {len(spell_effect['drawn_cards'])} cards to spell_effect")
                 else:
                     spell_effect['effect'] = f'Already at or above 10 main cards (current: {main_hand_count})'
                     spell_effect['cards_drawn'] = 0
                     spell_effect['drawn_cards'] = []
                     spell_effect['current_total'] = main_hand_count
-                    print(f"[FILL UP TO 10] Already at {main_hand_count} cards, no draw needed")
+                    logger.debug(f"[FILL UP TO 10] Already at {main_hand_count} cards, no draw needed")
             except Exception as e:
                 db.session.rollback()
-                print(f"[FILL UP TO 10] ERROR: {str(e)}")
+                logger.error(f"[FILL UP TO 10] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
                 spell_effect['error'] = str(e)
         
@@ -752,16 +754,16 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
             try:
                 import random
                 
-                print(f"[FORCED DEAL] Starting Forced Deal spell execution")
+                logger.debug(f"[FORCED DEAL] Starting Forced Deal spell execution")
                 
                 # Get opponent
                 opponent = next((p for p in game.players if p.id != caster.id), None)
                 if not opponent:
                     spell_effect['effect'] = 'No opponent found'
                     spell_effect['error'] = 'No opponent'
-                    print(f"[FORCED DEAL] ERROR: No opponent found")
+                    logger.error(f"[FORCED DEAL] ERROR: No opponent found")
                 else:
-                    print(f"[FORCED DEAL] Caster: {caster.id}, Opponent: {opponent.id}")
+                    logger.debug(f"[FORCED DEAL] Caster: {caster.id}, Opponent: {opponent.id}")
                     
                     # Get caster's MAIN hand cards only (not in deck, not part of figure)
                     caster_main_cards = MainCard.query.filter_by(
@@ -770,7 +772,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         part_of_figure=False
                     ).all()
                     
-                    print(f"[FORCED DEAL] Caster has {len(caster_main_cards)} main cards in hand")
+                    logger.debug(f"[FORCED DEAL] Caster has {len(caster_main_cards)} main cards in hand")
                     
                     # Get opponent's MAIN hand cards only
                     opponent_main_cards = MainCard.query.filter_by(
@@ -779,25 +781,25 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         part_of_figure=False
                     ).all()
                     
-                    print(f"[FORCED DEAL] Opponent has {len(opponent_main_cards)} main cards in hand")
+                    logger.debug(f"[FORCED DEAL] Opponent has {len(opponent_main_cards)} main cards in hand")
                     
                     # Check if both players have at least 2 main cards
                     if len(caster_main_cards) < 2:
                         spell_effect['effect'] = 'Not enough main cards in your hand (need at least 2)'
                         spell_effect['error'] = 'Insufficient cards'
-                        print(f"[FORCED DEAL] ERROR: Caster has only {len(caster_main_cards)} main cards")
+                        logger.error(f"[FORCED DEAL] ERROR: Caster has only {len(caster_main_cards)} main cards")
                     elif len(opponent_main_cards) < 2:
                         spell_effect['effect'] = 'Opponent does not have enough main cards (need at least 2)'
                         spell_effect['error'] = 'Insufficient opponent cards'
-                        print(f"[FORCED DEAL] ERROR: Opponent has only {len(opponent_main_cards)} main cards")
+                        logger.error(f"[FORCED DEAL] ERROR: Opponent has only {len(opponent_main_cards)} main cards")
                     else:
                         # Select 2 random MAIN cards from each player
                         caster_cards_to_swap = random.sample(caster_main_cards, 2)
                         opponent_cards_to_swap = random.sample(opponent_main_cards, 2)
                         
-                        print(f"[FORCED DEAL] Swapping cards:")
-                        print(f"[FORCED DEAL] Caster gives: {[f'{c.rank}{c.suit}' for c in caster_cards_to_swap]}")
-                        print(f"[FORCED DEAL] Opponent gives: {[f'{c.rank}{c.suit}' for c in opponent_cards_to_swap]}")
+                        logger.debug(f"[FORCED DEAL] Swapping cards:")
+                        logger.debug(f"[FORCED DEAL] Caster gives: {[f'{c.rank}{c.suit}' for c in caster_cards_to_swap]}")
+                        logger.debug(f"[FORCED DEAL] Opponent gives: {[f'{c.rank}{c.suit}' for c in opponent_cards_to_swap]}")
                         
                         # Swap ownership
                         for card in caster_cards_to_swap:
@@ -806,7 +808,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         for card in opponent_cards_to_swap:
                             card.player_id = caster.id
                         
-                        print(f"[FORCED DEAL] Card ownership updated successfully")
+                        logger.debug(f"[FORCED DEAL] Card ownership updated successfully")
                         
                         spell_effect['effect'] = 'Exchanged 2 random cards with opponent'
                         spell_effect['cards_given'] = [card.serialize() for card in caster_cards_to_swap]
@@ -830,13 +832,13 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                             'cards_received': [card.serialize() for card in caster_cards_to_swap]
                         }
                         
-                        print(f"[FORCED DEAL] Spell effect prepared with {len(spell_effect['cards_given'])} cards given and {len(spell_effect['cards_received'])} cards received")
+                        logger.debug(f"[FORCED DEAL] Spell effect prepared with {len(spell_effect['cards_given'])} cards given and {len(spell_effect['cards_received'])} cards received")
                         
             except Exception as e:
                 db.session.rollback()
                 spell_effect['effect'] = f'Failed to force deal: {str(e)}'
                 spell_effect['error'] = str(e)
-                print(f"[FORCED DEAL] EXCEPTION: {str(e)}")
+                logger.error(f"[FORCED DEAL] EXCEPTION: {str(e)}")
                 import traceback
                 traceback.print_exc()
         
@@ -1061,7 +1063,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Record the invader's current turn index so ceasefire lasts exactly 3 more invader turns
                     game.ceasefire_start_turn = settings.INITIAL_TURNS_INVADER - invader_player.turns_left
                     
-                    print(f"[CEASEFIRE SPELL] Both players gained 3 turns. Invader: {invader_player.turns_left}, Defender: {defender_player.turns_left}")
+                    logger.info(f"[CEASEFIRE SPELL] Both players gained 3 turns. Invader: {invader_player.turns_left}, Defender: {defender_player.turns_left}")
                     
                     spell_effect['effect'] = 'Both players gained 3 additional turns. Ceasefire restored.'
                     spell_effect['ceasefire_activated'] = True
@@ -1069,7 +1071,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['defender_turns'] = defender_player.turns_left
             except Exception as e:
                 db.session.rollback()
-                print(f"[CEASEFIRE SPELL] ERROR: {str(e)}")
+                logger.error(f"[CEASEFIRE SPELL] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to activate ceasefire: {str(e)}'
                 spell_effect['error'] = str(e)
         
@@ -1096,8 +1098,8 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Invader starts next turn
                     game.turn_player_id = new_invader.id
                     
-                    print(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
-                    print(f"[INVADER SWAP] Both players' turns_left set to 2. Invader starts next turn.")
+                    logger.info(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
+                    logger.info(f"[INVADER SWAP] Both players' turns_left set to 2. Invader starts next turn.")
                     
                     spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 2 turns left. The invader starts next turn.'
                     spell_effect['turn_set'] = True
@@ -1107,7 +1109,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['invader_swapped'] = True
             except Exception as e:
                 db.session.rollback()
-                print(f"[INVADER SWAP] ERROR: {str(e)}")
+                logger.error(f"[INVADER SWAP] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to swap invader: {str(e)}'
                 spell_effect['error'] = str(e)
         
@@ -1129,7 +1131,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         # Reassign invader/defender player references after swap
                         invader_player = Player.query.get(caster.id)
                         defender_player = next((p for p in game.players if p.id != caster.id), None)
-                        print(f"[BLITZKRIEG] Invader swapped from player {old_invader_id} to caster {caster.id}")
+                        logger.info(f"[BLITZKRIEG] Invader swapped from player {old_invader_id} to caster {caster.id}")
                         spell_effect['invader_swapped'] = True
                         spell_effect['old_invader_id'] = old_invader_id
                         spell_effect['new_invader_id'] = caster.id
@@ -1148,7 +1150,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         game.ceasefire_active = True
                         # ceasefire_start_turn not needed — Blitzkrieg ceasefire uses
                         # its own end condition (both players at 0 turns)
-                        print(f"[BLITZKRIEG] Ceasefire activated for last turn")
+                        logger.info(f"[BLITZKRIEG] Ceasefire activated for last turn")
                         spell_effect['ceasefire_activated'] = True
                     
                     # Initialize battle_modifier as list if needed (stackable modifiers)
@@ -1181,15 +1183,15 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Signal SQLAlchemy that the JSON column was mutated in place
                     flag_modified(game, 'battle_modifier')
                     
-                    print(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 2. Invader starts next turn.")
-                    print(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
+                    logger.debug(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 2. Invader starts next turn.")
+                    logger.debug(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
             except Exception as e:
                 db.session.rollback()
-                print(f"[{spell.spell_name.upper()}] ERROR: {str(e)}")
+                logger.error(f"[{spell.spell_name.upper()}] ERROR: {str(e)}")
                 spell_effect['effect'] = f'Failed to activate {spell.spell_name}: {str(e)}'
                 spell_effect['error'] = str(e)
     
-    print(f"[_EXECUTE_SPELL] Returning spell_effect: {spell_effect}")
+    logger.debug(f"[_EXECUTE_SPELL] Returning spell_effect: {spell_effect}")
     return spell_effect
 
 
