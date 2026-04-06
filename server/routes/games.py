@@ -2644,24 +2644,28 @@ def _compute_server_total_diff(game):
         def_val = sum(_compute_move_effective_value(
             m, all_figures, game, def_pid, def_healers) for m in def_m)
 
-        # Unfired DA hits first matching call figure in opponent's moves
-        if not adv_da_used and adv_da_suit:
+        # Unfired DA archers target first matching call figure in opponent's moves
+        for da_suit, da_val in adv_da_list:
+            if (da_suit, da_val) in adv_da_applied:
+                continue  # already consumed on a battle figure
             for m in def_m:
                 if m.call_figure_id:
                     cf = next((f for f in all_figures
                                if f.id == m.call_figure_id), None)
-                    if cf and adv_da_suit.lower() == (cf.suit or '').lower():
-                        def_val -= adv_da_val
-                        adv_da_used = True
+                    if cf and da_suit.lower() == (cf.suit or '').lower():
+                        def_val -= da_val
+                        adv_da_applied.append((da_suit, da_val))
                         break
-        if not def_da_used and def_da_suit:
+        for da_suit, da_val in def_da_list:
+            if (da_suit, da_val) in def_da_applied:
+                continue  # already consumed on a battle figure
             for m in adv_m:
                 if m.call_figure_id:
                     cf = next((f for f in all_figures
                                if f.id == m.call_figure_id), None)
-                    if cf and def_da_suit.lower() == (cf.suit or '').lower():
-                        adv_val -= def_da_val
-                        def_da_used = True
+                    if cf and da_suit.lower() == (cf.suit or '').lower():
+                        adv_val -= da_val
+                        def_da_applied.append((da_suit, da_val))
                         break
 
         round_diff += adv_val - def_val
