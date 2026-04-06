@@ -168,6 +168,10 @@ class Game:
         # Suppress next turn notification after battle/fold (result dialogue already shown)
         self.suppress_next_turn_summary = False
 
+        # Last polled battle result — kept for safety-net notification if the
+        # battle screen exits without showing a result dialogue.
+        self._last_polled_battle_result = None
+
         # Game-over tracking
         self.game_over = (self.state == 'finished')
         self.pending_game_over = None  # Will be set to game_over dict when detected
@@ -669,6 +673,9 @@ class Game:
 
         # Detect loot notification for battle loser (which card the winner kept)
         last_result = game_dict.get('last_battle_result') or {}
+        # Keep a copy for the battle-screen safety net (missed result dialogue)
+        if last_result and last_result.get('winner_player_id'):
+            self._last_polled_battle_result = dict(last_result)
         picked_card = last_result.get('picked_card')
         loser_id = last_result.get('loser_player_id')
         if last_result:

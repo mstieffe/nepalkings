@@ -1184,31 +1184,36 @@ class BattleScreen(SubScreen):
         o_power += self._get_figure_total_power(self.opponent_figure_2, self.opponent_figure_icon_2)
         return p_power - o_power
 
-    def _get_total_diff(self):
-        """Get total difference: figure diff + all completed round diffs."""
+    def _get_total_diff(self, verbose=False):
+        """Get total difference: figure diff + all completed round diffs.
+
+        :param verbose: if True, print per-round debug info (only for finish_battle).
+        """
         fig_diff = self._get_figure_diff()
         total = fig_diff
         for i in range(3):
             rd = self._get_round_diff(i)
             if rd is not None:
                 total += rd
-                p = self.player_played[i]
-                o = self.opponent_played[i]
-                p_val = self._get_move_effective_power(p, is_player=True, round_idx=i) if p else 0
-                o_val = self._get_move_effective_power(o, is_player=False, round_idx=i) if o else 0
-                p_info = (f"{p.get('family_name')}(v={p.get('value')},s={p.get('suit')},"
-                          f"call={p.get('call_figure_id')},"
-                          f"cf={'yes' if p.get('_call_figure') else 'no'})" if p else "None")
-                o_info = (f"{o.get('family_name')}(v={o.get('value')},s={o.get('suit')},"
-                          f"call={o.get('call_figure_id')},"
-                          f"cf={'yes' if o.get('_call_figure') else 'no'})" if o else "None")
-                print(f"[CLIENT_ROUND_{i}] p={p_info} p_eff={p_val} "
-                      f"o={o_info} o_eff={o_val} rd={rd}")
-        p_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
-        o_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
-        print(f"[CLIENT_TOTAL_DIFF] fig_diff={fig_diff} "
-              f"(player={p_power} opponent={o_power}) total={total} "
-              f"is_invader={self.player_is_invader}")
+                if verbose:
+                    p = self.player_played[i]
+                    o = self.opponent_played[i]
+                    p_val = self._get_move_effective_power(p, is_player=True, round_idx=i) if p else 0
+                    o_val = self._get_move_effective_power(o, is_player=False, round_idx=i) if o else 0
+                    p_info = (f"{p.get('family_name')}(v={p.get('value')},s={p.get('suit')},"
+                              f"call={p.get('call_figure_id')},"
+                              f"cf={'yes' if p.get('_call_figure') else 'no'})" if p else "None")
+                    o_info = (f"{o.get('family_name')}(v={o.get('value')},s={o.get('suit')},"
+                              f"call={o.get('call_figure_id')},"
+                              f"cf={'yes' if o.get('_call_figure') else 'no'})" if o else "None")
+                    print(f"[CLIENT_ROUND_{i}] p={p_info} p_eff={p_val} "
+                          f"o={o_info} o_eff={o_val} rd={rd}")
+        if verbose:
+            p_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
+            o_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
+            print(f"[CLIENT_TOTAL_DIFF] fig_diff={fig_diff} "
+                  f"(player={p_power} opponent={o_power}) total={total} "
+                  f"is_invader={self.player_is_invader}")
         return total
 
     def _is_move_used(self, move_idx):
@@ -1292,6 +1297,21 @@ class BattleScreen(SubScreen):
                 and (not getattr(game, 'battle_confirmed', True)
                      or getattr(game, 'fold_winner_id', None))):
             self._finish_battle()
+
+        # Safety net: server already cleaned up (advancing_figure_id gone,
+        # battle not confirmed) but we never resolved locally.  This can
+        # happen if the AI's finish_battle + pick_card completed between
+        # polls and the auto-finish above failed to show a dialogue.
+        if (not self._battle_result
+                and not self.dialogue_box
+                and game
+                and not getattr(game, 'advancing_figure_id', None)
+                and not getattr(game, 'battle_confirmed', True)
+                and not getattr(game, 'fold_winner_id', None)
+                and self._loaded_game_key):
+            print("[BattleScreen] Safety net: battle resolved on server but "
+                  "no local result — exiting battle screen")
+            self._reset_after_battle()
 
         # Auto-skip: if it's our turn but we have no unused moves left
         self._check_auto_skip()
@@ -1743,7 +1763,7 @@ class BattleScreen(SubScreen):
         if not self._all_moves_played():
             return
 
-        total_diff = self._get_total_diff()
+        total_diff = self._get_total_diff(verbose=True)
         print(f"[BattleScreen] Finishing battle — total_diff = {total_diff}")
 
         result = game_service.finish_battle(
@@ -1758,6 +1778,9 @@ class BattleScreen(SubScreen):
             return
 
         self._battle_result = result
+        # Clear the safety-net data — we're about to show the proper dialogue
+        if self.game:
+            self.game._last_polled_battle_result = None
         outcome = result.get('outcome', '')
 
         # If already resolved by the other client, use the game state
@@ -2224,7 +2247,47 @@ class BattleScreen(SubScreen):
 
     def _reset_after_battle(self):
         """Clean up battle state and switch back to the field screen."""
-        print("[BattleScreen] Post-battle cleanup — returning to field")
+        import traceback
+        caller = traceback.extract_stack(limit=3)
+        caller_info = f"{caller[-2].name}" if len(caller) >= 2 else "unknown"
+        had_result = self._battle_result is not None
+        print(f"[BattleScreen] Post-battle cleanup — returning to field "
+              f"(caller={caller_info}, had_result={had_result})")
+
+        # Safety net: if we're exiting the battle without having shown a
+        # battle-result dialogue (e.g. race condition, missed finish_battle),
+        # queue a fallback notification on the game_screen so the user still
+        # sees who won.
+        if not had_result and self.game:
+            last = getattr(self.game, '_last_polled_battle_result', None) or {}
+            winner_id = last.get('winner_player_id')
+            loser_id = last.get('loser_player_id')
+            if winner_id and loser_id:
+                is_winner = (winner_id == self.game.player_id)
+                destroyed = last.get('destroyed_figure_name', 'figure')
+                pts = last.get('points_awarded', 0)
+                winner_name = last.get('winner_name', 'Opponent')
+                loser_name = last.get('loser_name', 'Opponent')
+                if is_winner:
+                    msg = (f"{loser_name}'s {destroyed} is destroyed!\n"
+                           f"You earn {pts} points.")
+                    title = "Victory!"
+                    icon = 'victory'
+                else:
+                    msg = (f"Your {destroyed} is destroyed!\n"
+                           f"{winner_name} earns {pts} points.")
+                    title = "Defeat"
+                    icon = 'defeat'
+                parent = getattr(self.state, 'parent_screen', None)
+                if parent and hasattr(parent, 'queue_or_show_notification'):
+                    print(f"[BattleScreen] Safety net: queuing missed battle result "
+                          f"(winner={winner_name}, loser={loser_name})")
+                    parent.queue_or_show_notification({
+                        'message': msg,
+                        'actions': ['ok'],
+                        'icon': icon,
+                        'title': title,
+                    })
 
         # Reset battle phase flags
         if self.game:
