@@ -9,6 +9,10 @@ import server_settings as settings
 
 msg = Blueprint('msg', __name__)
 
+# ── Length limits (matching DB column sizes) ──
+_MAX_LOG_MESSAGE = 500
+_MAX_CHAT_MESSAGE = 1000
+
 @msg.route('/add_log_entry', methods=['POST'])
 def add_log_entry():
     try:
@@ -20,6 +24,10 @@ def add_log_entry():
         message = data['message']
         author = data['author']
         type = data['type']
+
+        # Truncate oversized messages to match DB column limits
+        if isinstance(message, str) and len(message) > _MAX_LOG_MESSAGE:
+            message = message[:_MAX_LOG_MESSAGE]
 
         log_entry = LogEntry(
             game_id=game_id,
@@ -66,6 +74,10 @@ def add_chat_message():
         sender_id = data['sender_id']
         receiver_id = data['receiver_id']
         message = data['message']
+
+        # Truncate oversized messages to match DB column limits
+        if isinstance(message, str) and len(message) > _MAX_CHAT_MESSAGE:
+            message = message[:_MAX_CHAT_MESSAGE]
 
         chat_message = ChatMessage(
             game_id=game_id,
