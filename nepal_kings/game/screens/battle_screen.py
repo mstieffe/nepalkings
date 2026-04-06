@@ -412,10 +412,9 @@ class BattleScreen(SubScreen):
         # Determine invader status
         self.player_is_invader = self.game.invader
 
-        # Load battling figures
-        self._load_battle_figures()
-
         # Load all player figures + resources for Call move eligibility checks
+        # (must happen BEFORE _load_battle_figures so FieldFigureIcons get
+        #  the correct per-side resources_data for deficit checks)
         try:
             families = self.figure_manager.families
             self._player_figures = self.game.get_figures(families, is_opponent=False)
@@ -428,6 +427,9 @@ class BattleScreen(SubScreen):
             self._opponent_figures = []
             self._resources_data = None
             self._opponent_resources_data = None
+
+        # Load battling figures
+        self._load_battle_figures()
 
         # Reset played state
         self.player_played = [None, None, None]
@@ -3349,13 +3351,13 @@ class BattleScreen(SubScreen):
             # Add distance-attack figure on the OWNER's rounds panel
             if is_player:
                 # Player's DA fires on opponent's call figs — show here
-                da_round = self._get_da_call_round(for_player_da=True)
+                da_penalty = self._get_da_call_penalty(for_player_da=True, round_idx=r_index)
                 da_fig = self.player_distance_attack_figure
             else:
                 # Opponent's DA fires on player's call figs — show here
-                da_round = self._get_da_call_round(for_player_da=False)
+                da_penalty = self._get_da_call_penalty(for_player_da=False, round_idx=r_index)
                 da_fig = self.opponent_distance_attack_figure
-            if da_fig and da_round == r_index and hasattr(da_fig, 'family') and hasattr(da_fig.family, 'icon_img'):
+            if da_fig and da_penalty > 0 and hasattr(da_fig, 'family') and hasattr(da_fig.family, 'icon_img'):
                 slot_figures.append((da_fig, 'distance_attack'))
 
             # Add buffs_allies figures on the OWNER's rounds panel
@@ -3551,15 +3553,10 @@ class BattleScreen(SubScreen):
                 da_penalty_txt = None
                 if r_index is not None:
                     # is_player call fig → opponent's DA targets it
-                    da_round_opp = self._get_da_call_round(for_player_da=not is_player)
-                    if da_round_opp == r_index:
-                        attacker = (self.opponent_distance_attack_figure if is_player
-                                    else self.player_distance_attack_figure)
-                        if attacker:
-                            pen_val = attacker.number_card.value if attacker.number_card else 0
-                            if pen_val > 0:
-                                da_penalty_txt = self.font_small.render(
-                                    f" -{pen_val}", True, (255, 60, 60))
+                    da_pen_val = self._get_da_call_penalty(for_player_da=not is_player, round_idx=r_index)
+                    if da_pen_val > 0:
+                        da_penalty_txt = self.font_small.render(
+                            f" -{da_pen_val}", True, (255, 60, 60))
 
                 ico_w = (suit_ico.get_width() + 3) if suit_ico else 0
                 buffs_w = buffs_bonus_txt.get_width() if buffs_bonus_txt else 0
