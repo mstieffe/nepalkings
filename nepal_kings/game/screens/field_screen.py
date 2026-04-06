@@ -276,18 +276,17 @@ class FieldScreen(SubScreen):
                     self.icon_cache.clear()
                     self._last_all_seeing_eye_status = self.cached_all_seeing_eye_status
                 if enchantments_changed:
-                    logger.debug(f"[FIELD_SCREEN] Enchantments changed, regenerating icons")
-                    logger.debug(f"[FIELD_SCREEN] Old: {self.last_enchantment_state}")
-                    logger.debug(f"[FIELD_SCREEN] New: {current_enchantment_state}")
-                    
                     # Clear cache for figures whose enchantments changed
+                    changed_ids = []
                     for figure_id in current_figure_ids:
                         old_enchant = self.last_enchantment_state.get(figure_id)
                         new_enchant = current_enchantment_state.get(figure_id)
                         if old_enchant != new_enchant:
                             if figure_id in self.icon_cache:
-                                logger.debug(f"[FIELD_SCREEN] Clearing cache for figure {figure_id} due to enchantment change")
                                 del self.icon_cache[figure_id]
+                            changed_ids.append(figure_id)
+                    if changed_ids:
+                        logger.debug(f"[FIELD_SCREEN] Enchantments changed for {len(changed_ids)} figure(s), regenerating")
                 
                 # Remove stale entries from icon_cache (destroyed figures)
                 stale_ids = self.last_figure_ids - current_figure_ids

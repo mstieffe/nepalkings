@@ -634,11 +634,9 @@ class Game:
 
         # Check for game start notification on first update (regardless of turn number)
         if not self.game_start_notification_checked:
-            logger.info(f"[GAME_START] First update - player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
-            logger.info(f"[GAME_START] Checking for welcome message...")
+            logger.info(f"[GAME_START] First update — player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
             self._start_turn_async()
             self.game_start_notification_checked = True
-            logger.info(f"[GAME_START] Flag set to True after first check")
         
         # Check if turn changed to current player - call start_turn endpoint
         elif not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
@@ -682,8 +680,8 @@ class Game:
             self._last_polled_battle_result = dict(last_result)
         picked_card = last_result.get('picked_card')
         loser_id = last_result.get('loser_player_id')
-        if last_result:
-            logger.debug(f"[LOOT_DEBUG] _apply_game_dict: last_battle_result keys={list(last_result.keys())}, picked_card={picked_card}, loser_id={loser_id} (type={type(loser_id)}), player_id={self.player_id} (type={type(self.player_id)}), round={self.current_round}, loot_round={self._loot_notification_round}")
+        if last_result and picked_card and loser_id == self.player_id and self.current_round != self._loot_notification_round:
+            logger.debug(f"[LOOT_DEBUG] _apply_game_dict: picked_card={picked_card}, loser_id={loser_id}, round={self.current_round}")
         if (picked_card and self.player_id and
                 loser_id == self.player_id and
                 self.current_round != self._loot_notification_round):
@@ -1099,8 +1097,7 @@ class Game:
                             )
                             break
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"Error loading enchantments: {e}")
 
     def has_active_all_seeing_eye(self) -> bool:
         """
@@ -1185,11 +1182,7 @@ class Game:
         """
         figures = self.get_figures(families, is_opponent=is_opponent)
         
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[CLIENT] Calculating resources for {len(figures)} figures\n")
-                for figure in figures:
-                    f.write(f"[CLIENT] Figure: {figure.name}, produces: {figure.produces}, requires: {figure.requires}\n")
+        logger.debug(f"Calculating resources for {len(figures)} figures")
 
         # Total requires is always the sum across ALL figures (never changes)
         total_requires = {}
@@ -1223,13 +1216,9 @@ class Game:
                         stable = False
                         break
         
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[CLIENT] Total produces: {total_produces}\n")
-                f.write(f"[CLIENT] Total requires: {total_requires}\n")
-                if excluded:
-                    f.write(f"[CLIENT] Deficit figures excluded from production: "
-                            f"{[figures[i].name for i in excluded]}\n")
+        if excluded:
+            logger.debug(f"Resource deficit: excluded={[figures[i].name for i in excluded]}, "
+                         f"produces={total_produces}, requires={total_requires}")
         return {'produces': total_produces, 'requires': total_requires}
 
     @staticmethod

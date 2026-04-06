@@ -700,30 +700,18 @@ class BattleScreen(SubScreen):
                 continue
             has_deficit = self._figure_has_deficit(fig)
             if has_deficit:
-                logger.debug(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
-                      f"has distance_attack but is in DEFICIT — skipping")
                 continue
             adv_suit = get_advantage_suit(fig.suit)
             if not adv_suit:
-                logger.debug(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
-                      f"has distance_attack but no advantage suit — skipping")
                 continue
             penalty_value = fig.number_card.value if fig.number_card else 0
-            logger.debug(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
-                  f"distance_attack=True, adv_suit={adv_suit}, penalty={penalty_value}, "
-                  f"opp_targets={[(s, bool(i)) for s, i in opp_targets]}")
             hit_battle = False
             for opp_suit, opp_icon in opp_targets:
                 if adv_suit == opp_suit:
                     hit_battle = True
                     if opp_icon:
                         opp_icon.distance_attack_penalty = getattr(opp_icon, 'distance_attack_penalty', 0) + penalty_value
-                    logger.debug(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
-                          f"reduces opponent's battle figure (suit={opp_suit}) by -{penalty_value}")
                     break
-            if not hit_battle:
-                logger.debug(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
-                      f"ready to fire on opponent's call figures (advantage over {adv_suit})")
             self._player_da_archers.append({
                 'fig': fig, 'adv_suit': adv_suit, 'penalty': penalty_value,
                 'hit_battle': hit_battle
@@ -748,8 +736,6 @@ class BattleScreen(SubScreen):
             if not da_flag:
                 continue
             if self._figure_has_deficit(fig, self._opponent_resources_data):
-                logger.debug(f"[DA_DETECT] Opponent's {fig.name} (id={fig.id}, suit={fig.suit}) "
-                      f"has distance_attack but is in DEFICIT — skipping")
                 continue
             adv_suit = get_advantage_suit(fig.suit)
             if not adv_suit:
@@ -761,12 +747,7 @@ class BattleScreen(SubScreen):
                     hit_battle = True
                     if player_icon:
                         player_icon.distance_attack_penalty = getattr(player_icon, 'distance_attack_penalty', 0) + penalty_value
-                    logger.debug(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
-                          f"reduces player's battle figure (suit={player_suit}) by -{penalty_value}")
                     break
-            if not hit_battle:
-                logger.debug(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
-                      f"ready to fire on player's call figures (advantage over {adv_suit})")
             self._opponent_da_archers.append({
                 'fig': fig, 'adv_suit': adv_suit, 'penalty': penalty_value,
                 'hit_battle': hit_battle
@@ -821,7 +802,6 @@ class BattleScreen(SubScreen):
                             battle_fig.family.field == 'village' and
                             battle_fig.suit == buff_fig.suit):
                         icon.buffs_allies_bonus = getattr(icon, 'buffs_allies_bonus', 0) + 4
-                        logger.debug(f"[BUFFS_ALLIES] Player's {buff_fig.name} buffs {battle_fig.name} +4")
 
         # --- Opponent's buffers → buff opponent's own village battle figures ---
         for fig in opponent_figures:
@@ -842,7 +822,6 @@ class BattleScreen(SubScreen):
                             battle_fig.family.field == 'village' and
                             battle_fig.suit == buff_fig.suit):
                         icon.buffs_allies_bonus = getattr(icon, 'buffs_allies_bonus', 0) + 4
-                        logger.debug(f"[BUFFS_ALLIES] Opponent's {buff_fig.name} buffs {battle_fig.name} +4")
 
     # ────────────────── buffs_allies_defence detection ──────────
 

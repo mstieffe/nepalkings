@@ -108,11 +108,9 @@ def _check_and_update_ceasefire(game):
     ceasefire_start = game.ceasefire_start_turn if game.ceasefire_start_turn is not None else 0
     invader_turns_during_ceasefire = current_turn - ceasefire_start
     
-    logger.info(f"[CEASEFIRE] Current turn index: {current_turn}, Ceasefire start index: {ceasefire_start}, Invader turns during ceasefire: {invader_turns_during_ceasefire}")
-    
     # Ceasefire ends after 3 invader turns
     if invader_turns_during_ceasefire >= 3:
-        logger.info(f"[CEASEFIRE] Ceasefire ending (3 invader turns passed)")
+        logger.info(f"[CEASEFIRE] Ceasefire ending (3 invader turns passed, turn_idx={current_turn}, start={ceasefire_start})")
         game.ceasefire_active = False
         game.ceasefire_start_turn = None
         db.session.commit()
