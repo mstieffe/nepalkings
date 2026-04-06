@@ -2635,14 +2635,28 @@ def _compute_server_total_diff(game):
         def_m = [m for m in all_moves
                  if m.played_round == rnd and m.player_id == def_pid]
         if not adv_m and not def_m:
+            print(f"[ROUND_{rnd}] no moves — skipped")
             continue
         if any(m.family_name == 'Block' for m in adv_m + def_m):
+            print(f"[ROUND_{rnd}] Block detected — zeroed")
             continue
 
         adv_val = sum(_compute_move_effective_value(
             m, all_figures, game, adv_pid, adv_healers) for m in adv_m)
         def_val = sum(_compute_move_effective_value(
             m, all_figures, game, def_pid, def_healers) for m in def_m)
+
+        # Log per-move details
+        for m in adv_m:
+            mv = _compute_move_effective_value(m, all_figures, game, adv_pid, adv_healers)
+            print(f"[ROUND_{rnd}] ADV move id={m.id} family={m.family_name} "
+                  f"value={m.value} call_fig={m.call_figure_id} suit={m.suit} "
+                  f"eff_val={mv}")
+        for m in def_m:
+            mv = _compute_move_effective_value(m, all_figures, game, def_pid, def_healers)
+            print(f"[ROUND_{rnd}] DEF move id={m.id} family={m.family_name} "
+                  f"value={m.value} call_fig={m.call_figure_id} suit={m.suit} "
+                  f"eff_val={mv}")
 
         # Unfired DA archers target first matching call figure in opponent's moves
         for da_suit, da_val in adv_da_list:
@@ -2669,6 +2683,8 @@ def _compute_server_total_diff(game):
                         break
 
         round_diff += adv_val - def_val
+        print(f"[ROUND_{rnd}] adv_val={adv_val} def_val={def_val} "
+              f"diff={adv_val - def_val} cumulative={round_diff}")
 
     total = fig_diff + round_diff
     print(f"[SERVER_TOTAL_DIFF] game={game.id} "

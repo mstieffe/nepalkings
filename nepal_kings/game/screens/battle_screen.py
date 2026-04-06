@@ -1186,11 +1186,29 @@ class BattleScreen(SubScreen):
 
     def _get_total_diff(self):
         """Get total difference: figure diff + all completed round diffs."""
-        total = self._get_figure_diff()
+        fig_diff = self._get_figure_diff()
+        total = fig_diff
         for i in range(3):
             rd = self._get_round_diff(i)
             if rd is not None:
                 total += rd
+                p = self.player_played[i]
+                o = self.opponent_played[i]
+                p_val = self._get_move_effective_power(p, is_player=True, round_idx=i) if p else 0
+                o_val = self._get_move_effective_power(o, is_player=False, round_idx=i) if o else 0
+                p_info = (f"{p.get('family_name')}(v={p.get('value')},s={p.get('suit')},"
+                          f"call={p.get('call_figure_id')},"
+                          f"cf={'yes' if p.get('_call_figure') else 'no'})" if p else "None")
+                o_info = (f"{o.get('family_name')}(v={o.get('value')},s={o.get('suit')},"
+                          f"call={o.get('call_figure_id')},"
+                          f"cf={'yes' if o.get('_call_figure') else 'no'})" if o else "None")
+                print(f"[CLIENT_ROUND_{i}] p={p_info} p_eff={p_val} "
+                      f"o={o_info} o_eff={o_val} rd={rd}")
+        p_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
+        o_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
+        print(f"[CLIENT_TOTAL_DIFF] fig_diff={fig_diff} "
+              f"(player={p_power} opponent={o_power}) total={total} "
+              f"is_invader={self.player_is_invader}")
         return total
 
     def _is_move_used(self, move_idx):
