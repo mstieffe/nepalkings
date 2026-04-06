@@ -195,7 +195,8 @@ def cast_spell():
             
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error casting spell: {str(e)}'}), 500
+        logging.error(f"Error casting spell: {e}")
+        return jsonify({'success': False, 'message': 'Error casting spell'}), 500
 
 
 @spells.route('/counter_spell', methods=['POST'])
@@ -271,7 +272,8 @@ def counter_spell():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error countering spell: {str(e)}'}), 500
+        logging.error(f"Error countering spell: {e}")
+        return jsonify({'success': False, 'message': 'Error countering spell'}), 500
 
 
 @spells.route('/allow_spell', methods=['POST'])
@@ -354,7 +356,8 @@ def allow_spell():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error allowing spell: {str(e)}'}), 500
+        logging.error(f"Error allowing spell: {e}")
+        return jsonify({'success': False, 'message': 'Error allowing spell'}), 500
 
 
 @spells.route('/get_active_spells', methods=['GET'])
@@ -441,7 +444,8 @@ def remove_spell_effect():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error removing spell: {str(e)}'}), 500
+        logging.error(f"Error removing spell: {e}")
+        return jsonify({'success': False, 'message': 'Error removing spell'}), 500
 
 
 @spells.route('/end_infinite_hammer', methods=['POST'])
@@ -529,7 +533,8 @@ def end_infinite_hammer():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error ending Infinite Hammer: {str(e)}'}), 500
+        logging.error(f"Error ending Infinite Hammer: {e}")
+        return jsonify({'success': False, 'message': 'Error ending Infinite Hammer'}), 500
 
 
 # Helper functions

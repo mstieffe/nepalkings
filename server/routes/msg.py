@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+import logging
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
 from models import db, LogEntry, ChatMessage
@@ -36,7 +37,8 @@ def add_log_entry():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to add log entry: {str(e)}'}), 400
+        logging.error(f"Failed to add log entry: {e}")
+        return jsonify({'success': False, 'message': 'Failed to add log entry'}), 400
 
 @msg.route('/get_log_entries', methods=['GET'])
 def get_log_entries():
@@ -52,7 +54,8 @@ def get_log_entries():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to get log entries: {str(e)}'}), 400
+        logging.error(f"Failed to get log entries: {e}")
+        return jsonify({'success': False, 'message': 'Failed to get log entries'}), 400
 
 
 @msg.route('/add_chat_message', methods=['POST'])
@@ -77,7 +80,8 @@ def add_chat_message():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to send chat message: {str(e)}'}), 400
+        logging.error(f"Failed to send chat message: {e}")
+        return jsonify({'success': False, 'message': 'Failed to send chat message'}), 400
 
 
 @msg.route('/get_chat_messages', methods=['GET'])
@@ -94,4 +98,5 @@ def get_chat_messages():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to get chat messages: {str(e)}'}), 400
+        logging.error(f"Failed to get chat messages: {e}")
+        return jsonify({'success': False, 'message': 'Failed to get chat messages'}), 400
