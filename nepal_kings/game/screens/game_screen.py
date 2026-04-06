@@ -2276,10 +2276,18 @@ class GameScreen(Screen):
         
         if not result.get('success'):
             print(f"[GAME_SCREEN] Battle decision failed: {result.get('message')}")
-            # Reconnect fallback: if server rejects because our decision was
-            # already recorded, resume waiting for the opponent's decision
-            if decision == 'battle':
-                self.state.game.waiting_for_battle_decision = True
+            # Check if the failure is because our decision was already recorded
+            # (reconnect scenario).  If so, resume waiting for the opponent.
+            # Otherwise (network error, server down), allow the fight/fold
+            # dialogue to re-appear so the user can retry.
+            reason = result.get('reason', '')
+            if reason == 'already_decided' or 'already' in str(result.get('message', '')).lower():
+                if decision == 'battle':
+                    self.state.game.waiting_for_battle_decision = True
+            else:
+                # Network/server error — let the dialogue re-appear
+                self.state.game.battle_ready_shown = False
+                print("[GAME_SCREEN] Battle decision POST failed — will re-show fight/fold dialogue")
             return
         
         if result.get('resolved'):

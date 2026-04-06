@@ -556,6 +556,21 @@ class Game:
         self.auto_loss_detail = game_dict.get('auto_loss_detail')
         self.resting_figure_ids = game_dict.get('resting_figure_ids', [])
 
+        # Safety net: if we think we're waiting for the opponent's decision
+        # but the server has NO record of our decision, the POST must have
+        # failed (e.g. server restart mid-request).  Reset to re-show the
+        # fight/fold dialogue so the player can retry.
+        if (self.waiting_for_battle_decision and
+                self.advancing_figure_id and self.defending_figure_id and
+                not self.battle_confirmed and not self.fold_outcome):
+            decisions = self.battle_decisions or {}
+            my_decision = decisions.get(str(self.player_id))
+            if my_decision is None:
+                print("[BATTLE_DECISION] Safety net: waiting but server has no record of our decision — resetting")
+                self.waiting_for_battle_decision = False
+                self.battle_ready_shown = False
+                self.pending_battle_ready = False  # will be re-set by battle_ready check below
+
         # Update server-authoritative battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
