@@ -1695,6 +1695,7 @@ def cannot_advance_loss():
         resting_ids = _collect_resting_figure_ids(game)
 
         # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
+        _return_unplayed_battle_move_cards(game_id)
         _delete_all_battle_moves(game_id)
         _deactivate_all_spells(game)
         _clear_battle_state(game)
@@ -1802,6 +1803,7 @@ def defender_no_figures_loss():
         resting_ids = _collect_resting_figure_ids(game)
 
         # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
+        _return_unplayed_battle_move_cards(game_id)
         _delete_all_battle_moves(game_id)
         _deactivate_all_spells(game)
         _clear_battle_state(game)
@@ -2056,6 +2058,7 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
     resting_ids = _collect_resting_figure_ids(game)
 
     # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
+    _return_unplayed_battle_move_cards(game.id)
     _delete_all_battle_moves(game.id)
     _deactivate_all_spells(game)
     _clear_battle_state(game)
@@ -2123,6 +2126,7 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
     resting_ids = _collect_resting_figure_ids(game)
 
     # Full post-battle cleanup: battle moves, spells, battle state, new round with side cards
+    _return_unplayed_battle_move_cards(game.id)
     _delete_all_battle_moves(game.id)
     _deactivate_all_spells(game)
     _clear_battle_state(game)
@@ -2690,6 +2694,41 @@ def _deactivate_all_spells(game):
         spell.is_active = False
 
 
+def _return_unplayed_battle_move_cards(game_id):
+    """Return cards from unplayed battle moves back to their owners.
+
+    Unplayed moves (played_round IS NULL) have their cards restored
+    to the player's hand (part_of_battle_move=False, in_deck=False).
+    The corresponding BattleMove rows are deleted.
+    Played moves are left untouched for the loot/deck pool.
+    """
+    unplayed = BattleMove.query.filter_by(game_id=game_id).filter(
+        BattleMove.played_round.is_(None)
+    ).all()
+    for bm in unplayed:
+        # Primary card
+        if bm.card_type == 'side':
+            card = SideCard.query.get(bm.card_id)
+        else:
+            card = MainCard.query.get(bm.card_id)
+        if card:
+            card.part_of_battle_move = False
+            card.in_deck = False
+
+        # Second card (Double Dagger)
+        if bm.card_id_b is not None:
+            ct_b = bm.card_type_b or 'main'
+            if ct_b == 'side':
+                card_b = SideCard.query.get(bm.card_id_b)
+            else:
+                card_b = MainCard.query.get(bm.card_id_b)
+            if card_b:
+                card_b.part_of_battle_move = False
+                card_b.in_deck = False
+
+        db.session.delete(bm)
+
+
 def _delete_all_battle_moves(game_id):
     """Remove all BattleMove rows for a game."""
     BattleMove.query.filter_by(game_id=game_id).delete()
@@ -3188,7 +3227,11 @@ def finish_battle():
     player_user = User.query.get(player.user_id)
     player_name = player_user.username if player_user else f"Player {player_id}"
 
-    # Collect battle move cards (from BOTH players)
+    # Return unplayed battle move cards to their owners (only played
+    # cards go into the loot / return-to-deck pool)
+    _return_unplayed_battle_move_cards(game_id)
+
+    # Collect remaining (played) battle move cards from BOTH players
     bm_cards, bm_records = _collect_battle_move_cards(game_id)
 
     if total_diff == 0:
@@ -3201,7 +3244,10 @@ def finish_battle():
                 defender_player_id = p.id
                 break
 
-        # Serialize the battle move cards so the client can show them
+        # Persist unplayed-card returns before responding
+        db.session.commit()
+
+        # Serialize the played battle move cards so the client can show them
         returnable_cards = [_serialize_battle_card(c, ct) for c, ct in bm_cards]
 
         return jsonify({
@@ -3369,7 +3415,11 @@ def finish_battle_pick_card():
             'game': game.serialize(),
         })
 
-    # Collect ALL battle move cards (in case finish_battle didn't return them yet)
+    # Return unplayed battle move cards to their owners (safety — normally
+    # already done in finish_battle, but handles reconnect edge cases)
+    _return_unplayed_battle_move_cards(game_id)
+
+    # Collect remaining (played) battle move cards
     bm_cards, bm_records = _collect_battle_move_cards(game_id)
 
     # If winner picked a card, give it to them
@@ -3590,7 +3640,10 @@ def finish_battle_draw():
     else:
         return jsonify({'success': False, 'message': f'Invalid choice: {choice}'}), 400
 
-    # Return remaining battle-move cards to deck
+    # Return unplayed battle move cards to their owners (safety)
+    _return_unplayed_battle_move_cards(game_id)
+
+    # Return remaining played battle-move cards to deck
     bm_cards, bm_records = _collect_battle_move_cards(game_id)
     main_to_deck = []
     side_to_deck = []
