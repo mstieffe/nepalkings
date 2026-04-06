@@ -12,6 +12,7 @@ from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
+from routes.auth import require_token, verify_player_ownership
 
 spells = Blueprint('spells', __name__)
 
@@ -38,22 +39,10 @@ def _ai_trigger_hook(response):
 
 
 @spells.route('/cast_spell', methods=['POST'])
+@require_token
 def cast_spell():
     """
     Cast a spell (both counterable and non-counterable).
-    
-    Request JSON:
-    {
-        "player_id": int,
-        "game_id": int,
-        "spell_name": str,
-        "spell_type": str,
-        "spell_family_name": str,
-        "suit": str,
-        "cards": [{"id": int, "rank": str, "suit": str, ...}],
-        "target_figure_id": int | None,
-        "counterable": bool
-    }
     """
     data = request.json
     
@@ -71,6 +60,10 @@ def cast_spell():
     # Validate required fields
     if not all([player_id, game_id, spell_name, spell_type, spell_family_name, suit]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+    
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
     # Get game and player
     game = Game.query.get(game_id)
@@ -200,21 +193,9 @@ def cast_spell():
 
 
 @spells.route('/counter_spell', methods=['POST'])
+@require_token
 def counter_spell():
-    """
-    Counter a pending spell with another spell.
-    
-    Request JSON:
-    {
-        "player_id": int,
-        "game_id": int,
-        "pending_spell_id": int,
-        "counter_spell_name": str,
-        "counter_spell_type": str,
-        "counter_spell_family_name": str,
-        "counter_cards": [...]
-    }
-    """
+    """Counter a pending spell with another spell."""
     data = request.json
     
     player_id = data.get('player_id')
@@ -222,6 +203,13 @@ def counter_spell():
     pending_spell_id = data.get('pending_spell_id')
     counter_spell_name = data.get('counter_spell_name')
     counter_cards = data.get('counter_cards', [])
+    
+    if not all([player_id, game_id, pending_spell_id, counter_spell_name]):
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+    
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
     if not all([player_id, game_id, pending_spell_id, counter_spell_name]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -277,22 +265,21 @@ def counter_spell():
 
 
 @spells.route('/allow_spell', methods=['POST'])
+@require_token
 def allow_spell():
-    """
-    Allow an opponent's pending spell to execute.
-    
-    Request JSON:
-    {
-        "player_id": int,
-        "game_id": int,
-        "pending_spell_id": int
-    }
-    """
+    """Allow an opponent's pending spell to execute."""
     data = request.json
     
     player_id = data.get('player_id')
     game_id = data.get('game_id')
     pending_spell_id = data.get('pending_spell_id')
+    
+    if not all([player_id, game_id, pending_spell_id]):
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+    
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
     if not all([player_id, game_id, pending_spell_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -413,15 +400,9 @@ def get_pending_spell():
 
 
 @spells.route('/remove_spell_effect', methods=['POST'])
+@require_token
 def remove_spell_effect():
-    """
-    Remove/deactivate a spell effect.
-    
-    Request JSON:
-    {
-        "spell_id": int
-    }
-    """
+    """Remove/deactivate a spell effect."""
     data = request.json
     spell_id = data.get('spell_id')
     
@@ -449,22 +430,19 @@ def remove_spell_effect():
 
 
 @spells.route('/end_infinite_hammer', methods=['POST'])
+@require_token
 def end_infinite_hammer():
-    """
-    End Infinite Hammer mode and flip the turn to the opponent.
-    
-    Request JSON:
-    {
-        "game_id": int,
-        "player_id": int
-    }
-    """
+    """End Infinite Hammer mode and flip the turn to the opponent."""
     data = request.json
     game_id = data.get('game_id')
     player_id = data.get('player_id')
     
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'game_id and player_id required'}), 400
+    
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
     try:
         # Expire session to get the latest ActiveSpell data with all accumulated actions

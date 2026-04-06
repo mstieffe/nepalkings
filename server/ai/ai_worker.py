@@ -20,6 +20,21 @@ from ai.prompts import SYSTEM_PROMPT, PHASE_PROMPTS
 
 logger = logging.getLogger('nepalkings.ai.worker')
 
+
+def _ai_headers(ai_player_id):
+    """Return Authorization headers for AI HTTP requests."""
+    try:
+        from ai import get_ai_auth_headers
+        return get_ai_auth_headers(ai_player_id)
+    except Exception:
+        return {}
+
+
+def _ai_post(url, ai_player_id, **kwargs):
+    """POST with AI authentication headers.  Defaults timeout to 15s."""
+    kwargs.setdefault('timeout', 15)
+    return http_requests.post(url, headers=_ai_headers(ai_player_id), **kwargs)
+
 # Global LLM client (lazy-initialized)
 _llm_client = None
 # Lock to prevent multiple AI threads for the same game
@@ -449,7 +464,7 @@ def _handle_finish_battle(app, game_id, ai_player_id, game_dict):
     base = settings.SERVER_URL
 
     logger.info(f"AI calling finish_battle (server-authoritative diff)")
-    resp = http_requests.post(f'{base}/games/finish_battle', json={
+    resp = _ai_post(f'{base}/games/finish_battle', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'total_diff': 0,  # server ignores this; computes its own
@@ -489,7 +504,7 @@ def _handle_post_battle_pick(app, game_id, ai_player_id):
 
     # First call finish_battle to get returnable_cards (may be already_resolved)
     # Actually, the fold_winner_id is set, so we re-call finish_battle to get cards
-    resp = http_requests.post(f'{base}/games/finish_battle', json={
+    resp = _ai_post(f'{base}/games/finish_battle', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'total_diff': 0,  # server computes its own; already_resolved path anyway
@@ -500,7 +515,7 @@ def _handle_post_battle_pick(app, game_id, ai_player_id):
     if not returnable:
         logger.warning("No returnable cards for post_battle_pick")
         # Try to pick with picked_card_id=None to just clear battle state
-        http_requests.post(f'{base}/games/finish_battle_pick_card', json={
+        _ai_post(f'{base}/games/finish_battle_pick_card', ai_player_id, json={
             'game_id': game_id,
             'player_id': ai_player_id,
             'picked_card_id': None,
@@ -512,7 +527,7 @@ def _handle_post_battle_pick(app, game_id, ai_player_id):
     picked_id = best.get('id')
 
     logger.info(f"AI picking card {picked_id} (value={best.get('value')}) from {len(returnable)} returnable")
-    resp = http_requests.post(f'{base}/games/finish_battle_pick_card', json={
+    resp = _ai_post(f'{base}/games/finish_battle_pick_card', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'picked_card_id': picked_id,
@@ -530,7 +545,7 @@ def _handle_finish_battle_draw(base, game_id, ai_player_id, returnable_cards):
         if best.get('value', 0) >= 5:
             # Pick the card
             logger.info(f"AI draw choice: pick_card (value={best.get('value')})")
-            http_requests.post(f'{base}/games/finish_battle_draw', json={
+            _ai_post(f'{base}/games/finish_battle_draw', ai_player_id, json={
                 'game_id': game_id,
                 'player_id': ai_player_id,
                 'choice': 'pick_card',
@@ -541,7 +556,7 @@ def _handle_finish_battle_draw(base, game_id, ai_player_id, returnable_cards):
 
     # Default: destroy opponent's figure (strongest aggressive play)
     logger.info("AI draw choice: destroy")
-    http_requests.post(f'{base}/games/finish_battle_draw', json={
+    _ai_post(f'{base}/games/finish_battle_draw', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'choice': 'destroy',
@@ -554,7 +569,7 @@ def _handle_finish_battle_draw(base, game_id, ai_player_id, returnable_cards):
 def _exec_start_turn(base, game_id, ai_player_id):
     """Call start_turn to trigger auto-fill and ceasefire checks."""
     try:
-        resp = http_requests.post(f'{base}/games/start_turn', json={
+        resp = _ai_post(f'{base}/games/start_turn', ai_player_id, json={
             'game_id': game_id,
             'player_id': ai_player_id,
         }, timeout=15)
@@ -592,7 +607,7 @@ def _exec_build_figure(base, game_id, ai_player_id, params):
         'cannot_be_blocked': params.get('cannot_be_blocked', False),
         'rest_after_attack': params.get('rest_after_attack', False),
     }
-    resp = http_requests.post(f'{base}/figures/create_figure', json=data, timeout=15)
+    resp = _ai_post(f'{base}/figures/create_figure', ai_player_id, json=data, timeout=15)
     result = resp.json()
     if result.get('success'):
         logger.info(f"Built figure: {params['name']}")
@@ -664,7 +679,7 @@ def _exec_change_cards(app, game_id, ai_player_id):
                 f"(keeping {len(free_cards) - len(to_swap)} high-value cards)")
     
     base = settings.SERVER_URL
-    resp = http_requests.post(f'{base}/games/change_cards', json={
+    resp = _ai_post(f'{base}/games/change_cards', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'cards': [{'id': cid} for cid in to_swap],
@@ -680,7 +695,7 @@ def _exec_change_cards(app, game_id, ai_player_id):
 
 def _exec_advance_figure(base, game_id, ai_player_id, params):
     """Advance a figure via POST /games/advance_figure."""
-    resp = http_requests.post(f'{base}/games/advance_figure', json={
+    resp = _ai_post(f'{base}/games/advance_figure', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'figure_id': params['figure_id'],
@@ -695,7 +710,7 @@ def _exec_advance_figure(base, game_id, ai_player_id, params):
 
 def _exec_select_defender(base, game_id, ai_player_id, params):
     """Select defender via POST /games/select_defender."""
-    resp = http_requests.post(f'{base}/games/select_defender', json={
+    resp = _ai_post(f'{base}/games/select_defender', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'figure_id': params['figure_id'],
@@ -710,7 +725,7 @@ def _exec_select_defender(base, game_id, ai_player_id, params):
 
 def _exec_battle_decision(base, game_id, ai_player_id, params):
     """Submit battle decision via POST /games/battle_decision."""
-    resp = http_requests.post(f'{base}/games/battle_decision', json={
+    resp = _ai_post(f'{base}/games/battle_decision', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'decision': params['decision'],
@@ -725,7 +740,7 @@ def _exec_battle_decision(base, game_id, ai_player_id, params):
 
 def _exec_buy_battle_move(base, game_id, ai_player_id, params):
     """Buy a battle move via POST /battle_shop/buy_battle_move."""
-    resp = http_requests.post(f'{base}/battle_shop/buy_battle_move', json={
+    resp = _ai_post(f'{base}/battle_shop/buy_battle_move', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'card_id': params['card_id'],
@@ -745,7 +760,7 @@ def _exec_buy_battle_move(base, game_id, ai_player_id, params):
 
 def _exec_confirm_battle_moves(base, game_id, ai_player_id):
     """Confirm battle moves via POST /battle_shop/confirm_battle_moves."""
-    resp = http_requests.post(f'{base}/battle_shop/confirm_battle_moves', json={
+    resp = _ai_post(f'{base}/battle_shop/confirm_battle_moves', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
     }, timeout=15)
@@ -759,7 +774,7 @@ def _exec_confirm_battle_moves(base, game_id, ai_player_id):
 
 def _exec_gamble_battle_move(base, game_id, ai_player_id, params):
     """Gamble: sacrifice 1 battle move → draw 2 random via POST /battle_shop/gamble_battle_move."""
-    resp = http_requests.post(f'{base}/battle_shop/gamble_battle_move', json={
+    resp = _ai_post(f'{base}/battle_shop/gamble_battle_move', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'battle_move_id': params['battle_move_id'],
@@ -776,7 +791,7 @@ def _exec_gamble_battle_move(base, game_id, ai_player_id, params):
 
 def _exec_combine_battle_moves(base, game_id, ai_player_id, params):
     """Combine 2 Daggers into Double Dagger via POST /battle_shop/combine_battle_moves."""
-    resp = http_requests.post(f'{base}/battle_shop/combine_battle_moves', json={
+    resp = _ai_post(f'{base}/battle_shop/combine_battle_moves', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'move_id_a': params['move_id_a'],
@@ -793,7 +808,7 @@ def _exec_combine_battle_moves(base, game_id, ai_player_id, params):
 
 def _exec_play_battle_move(base, game_id, ai_player_id, params):
     """Play a battle move via POST /games/play_battle_move."""
-    resp = http_requests.post(f'{base}/games/play_battle_move', json={
+    resp = _ai_post(f'{base}/games/play_battle_move', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'battle_move_id': params['battle_move_id'],
@@ -808,7 +823,7 @@ def _exec_play_battle_move(base, game_id, ai_player_id, params):
 
 def _exec_skip_battle_turn(base, game_id, ai_player_id):
     """Skip battle turn via POST /games/skip_battle_turn."""
-    resp = http_requests.post(f'{base}/games/skip_battle_turn', json={
+    resp = _ai_post(f'{base}/games/skip_battle_turn', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
     }, timeout=15)
@@ -822,7 +837,7 @@ def _exec_skip_battle_turn(base, game_id, ai_player_id):
 
 def _exec_allow_spell(base, game_id, ai_player_id, params):
     """Allow a pending spell via POST /spells/allow_spell."""
-    resp = http_requests.post(f'{base}/spells/allow_spell', json={
+    resp = _ai_post(f'{base}/spells/allow_spell', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'pending_spell_id': params.get('pending_spell_id'),
@@ -837,7 +852,7 @@ def _exec_allow_spell(base, game_id, ai_player_id, params):
 
 def _exec_counter_spell(base, game_id, ai_player_id, params):
     """Counter a pending spell via POST /spells/counter_spell."""
-    resp = http_requests.post(f'{base}/spells/counter_spell', json={
+    resp = _ai_post(f'{base}/spells/counter_spell', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'pending_spell_id': params.get('pending_spell_id'),
@@ -857,7 +872,7 @@ def _exec_counter_spell(base, game_id, ai_player_id, params):
 def _exec_cast_spell(base, game_id, ai_player_id, params):
     """Cast a spell via POST /spells/cast_spell."""
     spell_name = params.get('spell_name', '?')
-    resp = http_requests.post(f'{base}/spells/cast_spell', json={
+    resp = _ai_post(f'{base}/spells/cast_spell', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
         'spell_name': spell_name,
@@ -879,7 +894,7 @@ def _exec_cast_spell(base, game_id, ai_player_id, params):
 
 def _exec_end_infinite_hammer(base, game_id, ai_player_id):
     """End Infinite Hammer mode via POST /spells/end_infinite_hammer."""
-    resp = http_requests.post(f'{base}/spells/end_infinite_hammer', json={
+    resp = _ai_post(f'{base}/spells/end_infinite_hammer', ai_player_id, json={
         'game_id': game_id,
         'player_id': ai_player_id,
     }, timeout=15)

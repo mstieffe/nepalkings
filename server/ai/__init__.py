@@ -14,6 +14,22 @@ import server_settings as settings
 
 logger = logging.getLogger('nepalkings.ai')
 
+# Module-level token store: user_id → long-lived service token
+_ai_tokens = {}  # type: dict[int, str]
+
+
+def get_ai_token(user_id):
+    """Return the pre-generated service token for an AI user (or None if not found)."""
+    return _ai_tokens.get(user_id)
+
+
+def get_ai_auth_headers(user_id):
+    """Return Authorization headers dict for an AI user, or empty dict if no token."""
+    token = get_ai_token(user_id)
+    if token:
+        return {'Authorization': f'Bearer {token}'}
+    return {}
+
 
 def init_ai_users():
     """Create AI user accounts if they don't exist. Called at server startup."""
@@ -40,6 +56,15 @@ def init_ai_users():
             db.session.add(ai_user)
             db.session.commit()
             logger.info(f"Created AI user '{ai_name}' (id={ai_user.id})")
+
+    # Generate long-lived service tokens for each AI user (valid for 1 year)
+    from routes.auth import generate_ai_token
+    for ai_name in settings.AI_USERNAMES:
+        user = User.query.filter_by(username=ai_name).first()
+        if user:
+            token = generate_ai_token(user.id)
+            _ai_tokens[user.id] = token
+            logger.info(f"Generated AI service token for '{ai_name}' (id={user.id})")
 
 
 def is_ai_user(user_id):

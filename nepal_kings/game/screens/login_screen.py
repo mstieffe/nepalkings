@@ -317,7 +317,12 @@ class LoginScreen(Screen):
     def _apply_login_response(self, response_data):
         self.state.set_msg(response_data.get('message', ''))
         if response_data.get('success'):
+            # Store the Bearer token for all future requests
+            token = response_data.get('token')
+            if token:
+                _http.set_auth_token(token)
             self.state.user_dict = response_data.get('user')
+            self.state.auth_token = token
             self.state.game = None
             self.state._last_seen_at = response_data.get('previous_last_active')
             self.state._known_game_ids = None
@@ -335,6 +340,7 @@ class LoginScreen(Screen):
         self.state.set_msg(response_data.get('message', ''))
         if response_data.get('success'):
             self.state.user_dict = response_data.get('user')
+            self.state.auth_token = None
             self.state.game = None
             self.state._last_seen_at = None
             self.state._known_game_ids = None
@@ -343,7 +349,10 @@ class LoginScreen(Screen):
             self.state._new_challenge_ids = set()
             self.state.badge_new_games = 0
             self.state.badge_new_challenges = 0
-            self.state.screen = 'game_menu'
+            # After registration, ask the user to log in so they get a token
+            self.state.set_msg('Registration successful! Please log in.')
+            self.field_username.empty()
+            self.field_pwd.empty()
         else:
             self.field_username.empty()
             self.field_pwd.empty()

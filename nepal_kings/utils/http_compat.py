@@ -5,8 +5,32 @@
 Desktop: re-exports from the ``requests`` library.
 Web (pygbag/emscripten): synchronous XMLHttpRequest via embed.js(),
 plus async XHR helpers for non-blocking background polling.
+
+Auth token: call ``set_auth_token(token)`` after login so that all
+subsequent requests automatically include ``Authorization: Bearer <token>``.
 """
 import sys as _sys
+
+# ── Auth token store (shared across both platforms) ──────────────────
+_auth_token = None  # type: str | None
+
+
+def set_auth_token(token):
+    """Store the Bearer token to be sent with every request."""
+    global _auth_token
+    _auth_token = token
+
+
+def clear_auth_token():
+    """Remove the stored Bearer token (e.g. on logout)."""
+    global _auth_token
+    _auth_token = None
+
+
+def get_auth_token():
+    """Return the currently stored Bearer token, or None."""
+    return _auth_token
+
 
 if _sys.platform == "emscripten":
     # ── Web: XHR executed through pygbag's JS bridge ───────────
@@ -70,17 +94,26 @@ if _sys.platform == "emscripten":
         # Join with '&' separators:  expr1 + '&' + expr2 + '&' + expr3
         return ("+'&'+".join(pieces))
 
+    def _auth_header_js():
+        """Return JS snippet to set the Authorization header if a token is stored."""
+        if _auth_token:
+            return f"x.setRequestHeader('Authorization','Bearer {_js_escape(_auth_token)}');"
+        return ""
+
     def _do_xhr(method, url, content_type=None, body_js="null"):
         """Run a synchronous XHR via pygbag's JS bridge; return _Response."""
         ct_line = ""
         if content_type:
             ct_line = f"x.setRequestHeader('Content-Type','{content_type}');"
 
+        auth_line = _auth_header_js()
+
         js = (
             f"(function(){{"
             f"var x=new XMLHttpRequest();"
             f"x.open('{method}','{_js_escape(url)}',false);"
             f"{ct_line}"
+            f"{auth_line}"
             f"x.send({body_js});"
             f"return {{s:x.status,t:x.responseText||''}};"
             f"}})()"
@@ -128,11 +161,13 @@ if _sys.platform == "emscripten":
         _async_id_counter += 1
         rid = _async_id_counter
         full_url = _js_escape(url + _encode_params(params))
+        auth_line = _auth_header_js()
         js = (
             f"(function(){{"
             f"window._axr=window._axr||{{}};"
             f"var x=new XMLHttpRequest();"
             f"x.open('GET','{full_url}',true);"
+            f"{auth_line}"
             f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
             f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
             f"x.send();"
@@ -148,12 +183,14 @@ if _sys.platform == "emscripten":
         rid = _async_id_counter
         full_url = _js_escape(url)
         body_js = _form_body_js(data)
+        auth_line = _auth_header_js()
         js = (
             f"(function(){{"
             f"window._axr=window._axr||{{}};"
             f"var x=new XMLHttpRequest();"
             f"x.open('POST','{full_url}',true);"
             f"x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');"
+            f"{auth_line}"
             f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
             f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
             f"x.send({body_js});"
@@ -178,5 +215,22 @@ if _sys.platform == "emscripten":
         return _Response(int(result["s"]), str(result["t"]))
 
 else:
-    # ── Desktop: use requests ──────────────────────────────────────
-    from requests import get, post, RequestException, HTTPError
+    # ── Desktop: wrap requests to auto-inject Authorization header ─────
+    import requests as _requests
+
+    RequestException = _requests.exceptions.RequestException
+    HTTPError = _requests.exceptions.HTTPError
+
+    def _auth_headers():
+        """Return dict with Authorization header if a token is set."""
+        if _auth_token:
+            return {'Authorization': f'Bearer {_auth_token}'}
+        return {}
+
+    def get(url, params=None, timeout=None, headers=None, **kwargs):
+        h = {**_auth_headers(), **(headers or {})}
+        return _requests.get(url, params=params, timeout=timeout, headers=h, **kwargs)
+
+    def post(url, data=None, json=None, timeout=None, headers=None, **kwargs):
+        h = {**_auth_headers(), **(headers or {})}
+        return _requests.post(url, data=data, json=json, timeout=timeout, headers=h, **kwargs)

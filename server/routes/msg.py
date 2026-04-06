@@ -3,9 +3,10 @@
 import logging
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
-from models import db, LogEntry, ChatMessage
+from models import db, LogEntry, ChatMessage, Player
 
 import server_settings as settings
+from routes.auth import require_token, verify_player_ownership
 
 msg = Blueprint('msg', __name__)
 
@@ -14,6 +15,7 @@ _MAX_LOG_MESSAGE = 500
 _MAX_CHAT_MESSAGE = 1000
 
 @msg.route('/add_log_entry', methods=['POST'])
+@require_token
 def add_log_entry():
     try:
         data = request.json
@@ -24,6 +26,12 @@ def add_log_entry():
         message = data['message']
         author = data['author']
         type = data['type']
+
+        # If player_id provided, verify ownership
+        if player_id is not None:
+            err = verify_player_ownership(player_id)
+            if err:
+                return err
 
         # Truncate oversized messages to match DB column limits
         if isinstance(message, str) and len(message) > _MAX_LOG_MESSAGE:
@@ -68,6 +76,7 @@ def get_log_entries():
 
 
 @msg.route('/add_chat_message', methods=['POST'])
+@require_token
 def add_chat_message():
     try:
         data = request.json
@@ -75,6 +84,11 @@ def add_chat_message():
         sender_id = data['sender_id']
         receiver_id = data['receiver_id']
         message = data['message']
+
+        # Verify the authenticated user owns the sender player slot
+        err = verify_player_ownership(sender_id)
+        if err:
+            return err
 
         # Truncate oversized messages to match DB column limits
         if isinstance(message, str) and len(message) > _MAX_CHAT_MESSAGE:

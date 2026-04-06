@@ -1,19 +1,25 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 import logging
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from models import db, User, Challenge, ChallengeStatus
 import server_settings as settings
+from routes.auth import require_token
 
 challenges = Blueprint('challenges', __name__)
 
 @challenges.route('/remove_challenge', methods=['POST'])
+@require_token
 def remove_challenge():
     try:
         challenge_id = request.form.get('challenge_id')
         challenge = Challenge.query.get(challenge_id)
         if not challenge:
             return jsonify({'success': False, 'message': 'Challenge not found'}), 400
+
+        # Only the challenger or challenged user may remove the challenge
+        if g.user_id not in (challenge.challenger_id, challenge.challenged_id):
+            return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
         db.session.delete(challenge)
         db.session.commit()
@@ -25,6 +31,7 @@ def remove_challenge():
 
 
 @challenges.route('/create_challenge', methods=['POST'])
+@require_token
 def create_challenge():
     try:
         challenger = request.form.get('challenger')
@@ -39,6 +46,10 @@ def create_challenge():
 
         if not challenger_user or not opponent_user:
             return jsonify({'success': False, 'message': 'Challenger or opponent does not exist'}), 400
+
+        # The authenticated user must be the challenger
+        if g.user_id != challenger_user.id:
+            return jsonify({'success': False, 'message': 'Forbidden: you can only create challenges as yourself'}), 403
 
         # Validate stake
         if stake < 1:
@@ -83,6 +94,7 @@ def _schedule_ai_accept(challenge_id, app):
         with app.app_context():
             from routes.games import create_game as _route_create_game
             import logging
+            from flask import g
             logger = logging.getLogger('nepalkings.ai')
 
             challenge = Challenge.query.get(challenge_id)
@@ -90,12 +102,20 @@ def _schedule_ai_accept(challenge_id, app):
                 logger.info(f"AI auto-accept skipped: challenge {challenge_id} no longer open")
                 return
 
+            # Get the AI token so create_game can authenticate the request
+            ai_user_id = challenge.challenged_id
+            from ai import get_ai_token
+            ai_token = get_ai_token(ai_user_id) or ''
+
             with app.test_request_context(
                 '/games/create_game',
                 method='POST',
                 data={'challenge_id': str(challenge_id)},
-                content_type='application/x-www-form-urlencoded'
+                content_type='application/x-www-form-urlencoded',
+                headers={'Authorization': f'Bearer {ai_token}'},
             ):
+                # Manually set g.user_id for the @require_token decorator
+                g.user_id = ai_user_id
                 game_response = _route_create_game()
                 if isinstance(game_response, tuple):
                     resp_obj, status_code = game_response

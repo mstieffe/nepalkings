@@ -7,6 +7,7 @@ from config import settings
 class State:
     def __init__(self):
         self.user_dict = None
+        self.auth_token = None   # Bearer token received from login; also set in http_compat
         self.screen = "login"
         self.subscreen = "field"
         self.message_lines = []

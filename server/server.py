@@ -30,7 +30,9 @@ app.config['SECRET_KEY'] = settings.SECRET_KEY
 _cors_origins = settings.CORS_ORIGINS
 if _cors_origins != '*':
     _cors_origins = [o.strip() for o in _cors_origins.split(',') if o.strip()]
-CORS(app, origins=_cors_origins)
+CORS(app, origins=_cors_origins,
+     allow_headers=['Content-Type', 'Authorization'],
+     expose_headers=['Content-Type'])
 
 # ── Rate limiting ──
 limiter = Limiter(
@@ -106,6 +108,26 @@ with app.app_context():
             print("  ↳ Adding 'is_ai' column to user table...")
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE user ADD COLUMN is_ai BOOLEAN DEFAULT 0"))
+                conn.commit()
+        if 'email' not in existing_cols:
+            print("  ↳ Adding 'email' column to user table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN email VARCHAR(255)"))
+                conn.commit()
+        if 'email_verified' not in existing_cols:
+            print("  ↳ Adding 'email_verified' column to user table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN email_verified BOOLEAN DEFAULT 0 NOT NULL"))
+                conn.commit()
+        if 'email_verification_token' not in existing_cols:
+            print("  ↳ Adding 'email_verification_token' column to user table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN email_verification_token VARCHAR(128)"))
+                conn.commit()
+        if 'email_verification_sent_at' not in existing_cols:
+            print("  ↳ Adding 'email_verification_sent_at' column to user table...")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN email_verification_sent_at DATETIME"))
                 conn.commit()
     if 'challenge' in inspector.get_table_names():
         existing_cols = {c['name'] for c in inspector.get_columns('challenge')}

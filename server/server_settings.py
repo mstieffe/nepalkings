@@ -52,6 +52,22 @@ DEFAULT_GAME_STAKE = 35  # Default gold stake / point threshold to win
 # New player starting gold
 INITIAL_GOLD = 100
 
+# Auth token settings
+# Signed user tokens expire after TOKEN_EXPIRY_SECONDS (default 24 hours).
+# Set a fixed SECRET_KEY env var in production so tokens survive restarts.
+TOKEN_EXPIRY_SECONDS = int(os.getenv('TOKEN_EXPIRY_SECONDS', '86400'))
+
+# Email verification settings
+# Set EMAIL_VERIFICATION_ENABLED=True and configure SMTP to send real emails.
+# When disabled (default), the verification URL is logged server-side instead.
+EMAIL_VERIFICATION_ENABLED = os.getenv('EMAIL_VERIFICATION_ENABLED', 'False').lower() == 'true'
+SMTP_HOST = os.getenv('SMTP_HOST', '')
+SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+SMTP_USER = os.getenv('SMTP_USER', '')
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
+SMTP_FROM = os.getenv('SMTP_FROM', 'noreply@nepalkings.local')
+SERVER_BASE_URL = os.getenv('SERVER_BASE_URL', SERVER_URL)  # Public base URL for email links
+
 # AI Opponent settings
 AI_USERNAMES = ['[AI] Strategos']  # AI player usernames created at startup
 AI_INITIAL_GOLD = 999999  # AI starts with effectively infinite gold

@@ -2,11 +2,19 @@
 # See LICENSE file in the project root for full license information.
 # routes/auth.py
 import re
-from flask import Blueprint, request, jsonify
-from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, User, Player, Game
+import secrets
+import smtplib
+import functools
+import logging
+from email.mime.text import MIMEText
 from datetime import datetime
-import logging  # For logging errors instead of exposing them to the user
+
+from flask import Blueprint, request, jsonify, g
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from models import db, User, Player, Game
+import server_settings as settings
 
 auth = Blueprint('auth', __name__)
 
@@ -15,6 +23,127 @@ _USERNAME_MIN = 3
 _USERNAME_MAX = 30
 _USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')  # letters, digits, underscores, hyphens
 _PASSWORD_MIN = 6
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')  # basic email format check
+
+# ── Long-lived AI service token max age (1 year) ──
+_AI_TOKEN_MAX_AGE = 365 * 24 * 3600
+
+
+# ── Token helpers ─────────────────────────────────────────────────
+
+def generate_token(user_id):
+    """Generate a short-lived signed token for a human user."""
+    s = URLSafeTimedSerializer(settings.SECRET_KEY)
+    return s.dumps(user_id, salt='user-auth')
+
+
+def generate_ai_token(user_id):
+    """Generate a long-lived signed token for an AI service account (1-year TTL)."""
+    s = URLSafeTimedSerializer(settings.SECRET_KEY)
+    return s.dumps(user_id, salt='ai-service')
+
+
+def validate_token(token):
+    """Validate a Bearer token and return the user_id it encodes.
+
+    Tries the short-lived user-auth salt first; if that fails with
+    BadSignature (wrong salt), falls back to the long-lived ai-service salt.
+    Raises SignatureExpired or BadSignature on failure.
+    """
+    s = URLSafeTimedSerializer(settings.SECRET_KEY)
+    try:
+        return s.loads(token, salt='user-auth', max_age=settings.TOKEN_EXPIRY_SECONDS)
+    except SignatureExpired:
+        raise  # Expired user token — let caller return 401
+    except BadSignature:
+        pass  # Might be an AI service token — try the other salt
+    # AI service token: tolerate up to 1 year
+    return s.loads(token, salt='ai-service', max_age=_AI_TOKEN_MAX_AGE)
+
+
+# ── Auth decorator ────────────────────────────────────────────────
+
+def require_token(f):
+    """Decorator that validates a Bearer token in the Authorization header.
+
+    On success, sets ``flask.g.user_id`` to the authenticated user's ID.
+    Returns 401 JSON on missing / expired / invalid tokens.
+    """
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({'success': False, 'message': 'Authentication required'}), 401
+        token = auth_header[7:]  # strip 'Bearer '
+        try:
+            g.user_id = validate_token(token)
+        except SignatureExpired:
+            return jsonify({'success': False, 'message': 'Session expired, please log in again'}), 401
+        except BadSignature:
+            return jsonify({'success': False, 'message': 'Invalid token'}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ── Player-ownership helper ───────────────────────────────────────
+
+def verify_player_ownership(player_id):
+    """Check that the authenticated user (g.user_id) owns player_id.
+
+    Returns a JSON error response tuple on failure, or None on success.
+    Must be called inside a route protected by @require_token.
+    """
+    player = Player.query.get(player_id)
+    if not player:
+        return jsonify({'success': False, 'message': 'Player not found'}), 404
+    if player.user_id != g.user_id:
+        return jsonify({'success': False, 'message': 'Forbidden: player does not belong to authenticated user'}), 403
+    return None
+
+
+# ── Email helper ──────────────────────────────────────────────────
+
+def _send_verification_email(user):
+    """Send (or log) an email-verification link for the given user.
+
+    If SMTP is not configured, the link is written to the server log so
+    developers can verify accounts without a mail server during development.
+    """
+    token = user.email_verification_token
+    verify_url = f"{settings.SERVER_BASE_URL}/auth/verify_email?token={token}"
+
+    if not settings.EMAIL_VERIFICATION_ENABLED or not settings.SMTP_HOST:
+        logging.info(
+            f"[EMAIL VERIFICATION] User '{user.username}' — verify URL (no SMTP configured): {verify_url}"
+        )
+        return
+
+    try:
+        body = (
+            f"Welcome to Nepal Kings, {user.username}!\n\n"
+            f"Please verify your email address by clicking the link below:\n\n"
+            f"  {verify_url}\n\n"
+            f"This link is valid for 24 hours.\n\n"
+            f"If you did not create an account, you can safely ignore this email."
+        )
+        msg = MIMEText(body)
+        msg['Subject'] = 'Nepal Kings — Verify your email address'
+        msg['From'] = settings.SMTP_FROM
+        msg['To'] = user.email
+
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            smtp.send_message(msg)
+
+        logging.info(f"Verification email sent to {user.email} for user '{user.username}'")
+    except Exception as e:
+        logging.error(f"Failed to send verification email to {user.email}: {e}")
+
+
+# ── Routes ────────────────────────────────────────────────────────
 
 @auth.route('/get_users', methods=['GET'])
 def get_users():
@@ -59,6 +188,7 @@ def register():
     try:
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
+        email = request.form.get('email', '').strip().lower() or None
 
         if not username or not password:
             return jsonify({'success': False, 'message': 'Missing username or password'}), 400
@@ -82,13 +212,31 @@ def register():
                 'message': f'Password must be at least {_PASSWORD_MIN} characters'
             }), 400
 
+        if email and not _EMAIL_RE.match(email):
+            return jsonify({'success': False, 'message': 'Invalid email address'}), 400
+
         if User.query.filter_by(username=username).first():
             return jsonify({'success': False, 'message': 'Username already exists'}), 409
 
-        # Ensure password is hashed
-        user = User(username=username, password_hash=generate_password_hash(password))
+        if email and User.query.filter_by(email=email).first():
+            return jsonify({'success': False, 'message': 'Email address already registered'}), 409
+
+        # Generate email verification token if email provided
+        verification_token = secrets.token_urlsafe(32) if email else None
+
+        user = User(
+            username=username,
+            password_hash=generate_password_hash(password),
+            email=email,
+            email_verified=False,
+            email_verification_token=verification_token,
+            email_verification_sent_at=datetime.utcnow() if email else None,
+        )
         db.session.add(user)
         db.session.commit()
+
+        if email and verification_token:
+            _send_verification_email(user)
 
         serialized_user = user.serialize()
 
@@ -122,26 +270,49 @@ def login():
         user.last_active = datetime.utcnow()
         db.session.commit()
 
+        token = generate_token(user.id)
         serialized_user = user.serialize()
 
-        return jsonify({
+        response = {
             'success': True,
             'message': 'Login successful',
+            'token': token,
             'user': serialized_user,
             'previous_last_active': previous_last_active.isoformat() if previous_last_active else None,
-        })
+        }
+        # Warn client if email is set but not verified (non-blocking)
+        if user.email and not user.email_verified:
+            response['email_verification_pending'] = True
+
+        return jsonify(response)
     except Exception as e:
         db.session.rollback()
         logging.error(f"Login failed: {e}")
         return jsonify({'success': False, 'message': 'Login failed. Please try again later.'}), 500
 
+@auth.route('/verify_email', methods=['GET'])
+def verify_email():
+    """Verify a user's email address via the token sent in the verification email."""
+    token = request.args.get('token', '')
+    if not token:
+        return jsonify({'success': False, 'message': 'Missing verification token'}), 400
+
+    user = User.query.filter_by(email_verification_token=token).first()
+    if not user:
+        return jsonify({'success': False, 'message': 'Invalid or expired verification token'}), 400
+
+    user.email_verified = True
+    user.email_verification_token = None  # Invalidate after use
+    db.session.commit()
+    logging.info(f"Email verified for user '{user.username}'")
+
+    return jsonify({'success': True, 'message': 'Email address verified successfully'})
+
 @auth.route('/heartbeat', methods=['POST'])
+@require_token
 def heartbeat():
     try:
-        username = request.form.get('username')
-        if not username:
-            return jsonify({'success': False, 'message': 'Missing username'}), 400
-        user = User.query.filter_by(username=username).first()
+        user = User.query.get(g.user_id)
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         user.last_active = datetime.utcnow()
@@ -188,3 +359,4 @@ def get_rankings():
         db.session.rollback()
         logging.error(f"Rankings failed: {e}")
         return jsonify({'success': False, 'message': 'Failed to fetch rankings'}), 500
+
