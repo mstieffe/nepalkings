@@ -25,8 +25,12 @@ def _ai_headers(ai_player_id):
     """Return Authorization headers for AI HTTP requests."""
     try:
         from ai import get_ai_auth_headers
-        return get_ai_auth_headers(ai_player_id)
-    except Exception:
+        headers = get_ai_auth_headers(ai_player_id)
+        if not headers:
+            logger.warning(f"No AI service token found for player_id={ai_player_id}; requests will be unauthenticated")
+        return headers
+    except Exception as exc:
+        logger.warning(f"Failed to build AI auth headers for player_id={ai_player_id}: {exc}")
         return {}
 
 

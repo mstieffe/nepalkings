@@ -94,7 +94,6 @@ def _schedule_ai_accept(challenge_id, app):
         with app.app_context():
             from routes.games import create_game as _route_create_game
             import logging
-            from flask import g
             logger = logging.getLogger('nepalkings.ai')
 
             challenge = Challenge.query.get(challenge_id)
@@ -114,8 +113,8 @@ def _schedule_ai_accept(challenge_id, app):
                 content_type='application/x-www-form-urlencoded',
                 headers={'Authorization': f'Bearer {ai_token}'},
             ):
-                # Manually set g.user_id for the @require_token decorator
-                g.user_id = ai_user_id
+                # @require_token on create_game will validate the Bearer token
+                # from the request headers and set g.user_id automatically.
                 game_response = _route_create_game()
                 if isinstance(game_response, tuple):
                     resp_obj, status_code = game_response

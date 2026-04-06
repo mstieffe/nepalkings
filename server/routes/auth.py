@@ -24,9 +24,17 @@ _USERNAME_MAX = 30
 _USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')  # letters, digits, underscores, hyphens
 _PASSWORD_MIN = 6
 def _is_valid_email(email: str) -> bool:
-    """Quick sanity check for email format — avoids regex ReDoS."""
+    """Quick sanity check for email format — avoids regex ReDoS.
+
+    Also rejects control characters (\\n, \\r, etc.) to prevent SMTP
+    header injection when the email is later used in email headers.
+    """
     if not email or len(email) > 254:
         return False
+    # Reject any control characters (includes \\n, \\r, \\t, \\x00, etc.)
+    for ch in email:
+        if ord(ch) < 32 or ord(ch) == 127:
+            return False
     at_idx = email.find('@')
     if at_idx < 1 or at_idx == len(email) - 1:
         return False
@@ -36,7 +44,7 @@ def _is_valid_email(email: str) -> bool:
         return False
     if '.' not in domain or domain.startswith('.') or domain.endswith('.'):
         return False
-    if ' ' in email or '\t' in email:
+    if ' ' in email:
         return False
     return True
 
@@ -253,9 +261,21 @@ def register():
         if email and verification_token:
             _send_verification_email(user)
 
+        # Issue a token immediately so the client doesn't need a separate login step
+        auth_token = generate_token(user.id)
         serialized_user = user.serialize()
 
-        return jsonify({'success': True, 'message': 'Registration successful', 'user': serialized_user})
+        response = {
+            'success': True,
+            'message': 'Registration successful',
+            'user': serialized_user,
+            'token': auth_token,
+        }
+        if email and not user.email_verified:
+            # Warn the client that email verification is pending
+            response['email_verification_pending'] = True
+
+        return jsonify(response)
     except Exception as e:
         db.session.rollback()
         logging.error(f"Registration failed: {e}")
@@ -295,7 +315,8 @@ def login():
             'user': serialized_user,
             'previous_last_active': previous_last_active.isoformat() if previous_last_active else None,
         }
-        # Warn client if email is set but not verified (non-blocking)
+        # Warn client if email is set but not verified (non-blocking).
+        # Clients should display a banner prompting the user to check their email.
         if user.email and not user.email_verified:
             response['email_verification_pending'] = True
 
@@ -308,6 +329,9 @@ def login():
 @auth.route('/verify_email', methods=['GET'])
 def verify_email():
     """Verify a user's email address via the token sent in the verification email."""
+    from datetime import timedelta
+    _VERIFY_TOKEN_MAX_AGE_HOURS = 48
+
     token = request.args.get('token', '')
     if not token:
         return jsonify({'success': False, 'message': 'Missing verification token'}), 400
@@ -315,6 +339,17 @@ def verify_email():
     user = User.query.filter_by(email_verification_token=token).first()
     if not user:
         return jsonify({'success': False, 'message': 'Invalid or expired verification token'}), 400
+
+    # Reject tokens older than the maximum allowed age
+    if user.email_verification_sent_at:
+        age = datetime.utcnow() - user.email_verification_sent_at
+        if age > timedelta(hours=_VERIFY_TOKEN_MAX_AGE_HOURS):
+            user.email_verification_token = None  # Invalidate expired token
+            db.session.commit()
+            return jsonify({
+                'success': False,
+                'message': f'Verification link has expired (valid for {_VERIFY_TOKEN_MAX_AGE_HOURS} hours). Please register again or request a new link.'
+            }), 400
 
     user.email_verified = True
     user.email_verification_token = None  # Invalidate after use

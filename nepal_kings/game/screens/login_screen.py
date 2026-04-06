@@ -339,21 +339,28 @@ class LoginScreen(Screen):
     def _apply_register_response(self, response_data):
         self.state.set_msg(response_data.get('message', ''))
         if response_data.get('success'):
-            self.state.user_dict = response_data.get('user')
-            self.state.auth_token = None
-            _http.clear_auth_token()  # ensure no stale token from a previous session
-            self.state.game = None
-            self.state._last_seen_at = None
-            self.state._known_game_ids = None
-            self.state._known_challenge_ids = None
-            self.state._new_game_ids = set()
-            self.state._new_challenge_ids = set()
-            self.state.badge_new_games = 0
-            self.state.badge_new_challenges = 0
-            # After registration, ask the user to log in so they get a token
-            self.state.set_msg('Registration successful! Please log in.')
-            self.field_username.empty()
-            self.field_pwd.empty()
+            # Registration now returns a token — log in automatically
+            token = response_data.get('token')
+            if token:
+                _http.set_auth_token(token)
+                self.state.auth_token = token
+                self.state.user_dict = response_data.get('user')
+                self.state.game = None
+                self.state._last_seen_at = None
+                self.state._known_game_ids = None
+                self.state._known_challenge_ids = None
+                self.state._new_game_ids = set()
+                self.state._new_challenge_ids = set()
+                self.state.badge_new_games = 0
+                self.state.badge_new_challenges = 0
+                self.state.screen = 'game_menu'
+            else:
+                # Fallback: no token returned; ask user to log in
+                self.state.auth_token = None
+                _http.clear_auth_token()
+                self.state.set_msg('Registration successful! Please log in.')
+                self.field_username.empty()
+                self.field_pwd.empty()
         else:
             self.field_username.empty()
             self.field_pwd.empty()
