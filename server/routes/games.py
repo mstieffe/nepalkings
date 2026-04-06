@@ -35,6 +35,22 @@ def _ai_trigger_hook(response):
                 _ai_logger.warning(f"AI trigger error in games hook: {e}")
     return response
 
+def _guard_battle_active(game):
+    """Return an error response if a battle is in progress, else None.
+
+    A battle is "in progress" when:
+    - battle_confirmed is True (players are in battle-move / battle phase), OR
+    - battle_decisions has any entries (at least one player chose fight, waiting for
+      the other to decide fight/fold).
+
+    This prevents mutating game actions (change cards, build figure, advance,
+    cast spell, pickup/upgrade figure) while a battle is being resolved.
+    """
+    if game.battle_confirmed or game.battle_decisions:
+        return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
+    return None
+
+
 def _check_and_update_ceasefire(game):
     """
     Check if ceasefire should end and update game state accordingly.
@@ -1134,6 +1150,12 @@ def change_cards():
         card_ids = [card['id'] for card in data['cards']]
         card_type = data.get('card_type', 'main')  # Default to main cards
 
+        game = Game.query.get(game_id)
+        if game:
+            battle_err = _guard_battle_active(game)
+            if battle_err:
+                return battle_err
+
         print(f"Changing {card_type} cards for player {player_id} in game {game_id}")
         print(f"Selected card IDs: {card_ids}")
         
@@ -1197,6 +1219,12 @@ def discard_cards():
         card_ids = [card['id'] for card in data['cards']]
         card_type = data.get('card_type', 'main')  # Default to main cards
         card_ranks = [card['rank'] for card in data['cards']]
+
+        game = Game.query.get(game_id)
+        if game:
+            battle_err = _guard_battle_active(game)
+            if battle_err:
+                return battle_err
 
         print(f"Discarding {card_type} cards for player {player_id} in game {game_id}")
         print(f"Selected card IDs: {card_ids}")
@@ -1276,14 +1304,18 @@ def advance_figure():
         if game.turn_player_id != player_id:
             return jsonify({'success': False, 'message': 'Not your turn'}), 400
 
-        # Clear stale fold/battle decision state from previous battle phase
-        if game.fold_outcome or game.battle_confirmed or game.battle_decisions:
+        # Block advance during an active battle
+        battle_err = _guard_battle_active(game)
+        if battle_err:
+            return battle_err
+
+        # Clear stale fold state from a previous battle phase (fold_outcome
+        # lingers for client polling; safe to clear on a new advance)
+        if game.fold_outcome:
             game.fold_outcome = None
             game.fold_winner_id = None
             game.auto_loss_reason = None
             game.auto_loss_detail = None
-            game.battle_confirmed = False
-            game.battle_decisions = None
 
         # Validate ceasefire is not active
         if game.ceasefire_active:

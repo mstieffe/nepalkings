@@ -3932,6 +3932,20 @@ class GameScreen(Screen):
                 self.check_battle_ready()
             return
         
+        # During active battle (fight/fold decided, battle-move selection, or
+        # in-battle), block all normal game actions.  Only battle-related
+        # subscreens (battle_shop, battle) and tab navigation are allowed.
+        if self.state.game and self.state.game.is_battle_active():
+            # Allow tab navigation (super handles tab buttons)
+            super().handle_events(events)
+            if not self.state.game:
+                return
+            # Only battle_shop, battle, log, and tutorial subscreens are interactive
+            if self.state.subscreen in ('battle_shop', 'battle', 'log', 'tutorial'):
+                if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
+                    self.subscreens[self.state.subscreen].handle_events(events)
+            return
+        
         super().handle_events(events)
 
         # Check if game exists (may be None after logout)

@@ -43,6 +43,12 @@ def create_figure():
         data = request.json
         player_id = data['player_id']
         game_id = data['game_id']
+
+        # Block during active battle
+        game = Game.query.get(game_id)
+        if game and (game.battle_confirmed or game.battle_decisions):
+            return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
+
         family_name = data['family_name']
         field = data.get('field', None)
         color = data['color']
@@ -536,6 +542,12 @@ def pickup_figure():
         figure_id = data.get('figure_id')
         player_id = data.get('player_id')
         game_id = data.get('game_id')
+
+        # Block during active battle
+        if game_id:
+            game = Game.query.get(game_id)
+            if game and (game.battle_confirmed or game.battle_decisions):
+                return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
         
         if not figure_id:
             return jsonify({'success': False, 'message': 'Figure ID is required'}), 400
@@ -670,6 +682,12 @@ def upgrade_figure():
         game_id = data.get('game_id')
         upgrade_card_id = data.get('upgrade_card_id')
         upgrade_card_type = data.get('upgrade_card_type')  # 'main' or 'side'
+
+        # Block during active battle
+        if game_id:
+            game = Game.query.get(game_id)
+            if game and (game.battle_confirmed or game.battle_decisions):
+                return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
         
         if not all([figure_id, player_id, game_id, upgrade_card_id, upgrade_card_type]):
             return jsonify({'success': False, 'message': 'Missing required parameters'}), 400

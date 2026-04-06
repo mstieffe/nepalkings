@@ -79,6 +79,10 @@ def cast_spell():
     if not game or not player:
         return jsonify({'success': False, 'message': 'Game or player not found'}), 404
     
+    # Block during active battle
+    if game.battle_confirmed or game.battle_decisions:
+        return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
+    
     # Verify it's player's turn
     if game.turn_player_id != player_id:
         return jsonify({'success': False, 'message': 'Not your turn'}), 403
