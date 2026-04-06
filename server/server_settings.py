@@ -2,10 +2,27 @@
 # See LICENSE file in the project root for full license information.
 
 import os
+import secrets
 
 # Server and database configurations
 SERVER_URL = os.getenv('SERVER_URL', 'http://localhost:5000')
 DB_URL = os.getenv('DB_URL', 'sqlite:///test.db')
+
+# Flask secret key — set via SECRET_KEY env var in production.
+# A random fallback is generated for development so the app always starts,
+# but sessions will not persist across restarts without a fixed key.
+SECRET_KEY = os.getenv('SECRET_KEY', secrets.token_hex(32))
+
+# CORS — comma-separated list of allowed origins.
+# Default "*" preserves the existing behaviour (allow all origins).
+# Example: "https://nepalkings.pythonanywhere.com,http://localhost:5000"
+CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*')
+
+# Rate-limiting defaults (requests per window).
+# Uses Flask-Limiter syntax, e.g. "5 per minute".
+RATE_LIMIT_LOGIN = os.getenv('RATE_LIMIT_LOGIN', '10 per minute')
+RATE_LIMIT_REGISTER = os.getenv('RATE_LIMIT_REGISTER', '5 per minute')
+RATE_LIMIT_DEFAULT = os.getenv('RATE_LIMIT_DEFAULT', '120 per minute')
 
 # Database management
 # Set to True to drop and recreate all tables on server startup (useful for schema changes)

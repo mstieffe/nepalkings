@@ -785,6 +785,7 @@ def get_games():
         return jsonify({'success': False, 'message': 'An unexpected error occurred'}), 400
 
 
+@games.route('/get_game', methods=['GET'])
 def get_game():
     try:
         game_id = request.args.get('game_id')
@@ -1070,6 +1071,9 @@ def delete_game():
         return jsonify({'success': False, 'message': 'An unexpected error occurred'}), 400
 
     return jsonify({'success': True, 'message': 'Game deleted successfully'})
+
+
+@games.route('/get_hand', methods=['GET'])
 def get_hand():
     try:
         player_id = request.args.get('player_id')
