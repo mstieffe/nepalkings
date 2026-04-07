@@ -5,8 +5,54 @@
 Desktop: re-exports from the ``requests`` library.
 Web (pygbag/emscripten): synchronous XMLHttpRequest via embed.js(),
 plus async XHR helpers for non-blocking background polling.
+
+Auth token: call ``set_auth_token(token)`` after login so that all
+subsequent requests automatically include ``Authorization: Bearer <token>``.
 """
 import sys as _sys
+
+# ── Auth token store (shared across both platforms) ──────────────────
+_auth_token = None
+
+
+def set_auth_token(token):
+    """Store the Bearer token to be sent with every request."""
+    global _auth_token
+    _auth_token = token
+
+
+def clear_auth_token():
+    """Remove the stored Bearer token (e.g. on logout)."""
+    global _auth_token
+    _auth_token = None
+
+
+def get_auth_token():
+    """Return the currently stored Bearer token, or None."""
+    return _auth_token
+
+
+# ── Session-expired flag ─────────────────────────────────────────
+_session_expired = False
+
+
+def is_session_expired():
+    """Return True if a 401 was received, indicating the token is stale."""
+    return _session_expired
+
+
+def clear_session_expired():
+    """Reset the session-expired flag (e.g. after redirecting to login)."""
+    global _session_expired
+    _session_expired = False
+
+
+def _check_auth_response(status_code):
+    """If status is 401, mark session as expired and clear token."""
+    global _session_expired, _auth_token
+    if status_code == 401 and _auth_token is not None:
+        _session_expired = True
+        _auth_token = None
 
 if _sys.platform == "emscripten":
     # ── Web: XHR executed through pygbag's JS bridge ───────────
@@ -76,11 +122,16 @@ if _sys.platform == "emscripten":
         if content_type:
             ct_line = f"x.setRequestHeader('Content-Type','{content_type}');"
 
+        auth_line = ""
+        if _auth_token:
+            auth_line = f"x.setRequestHeader('Authorization','Bearer {_js_escape(_auth_token)}');"
+
         js = (
             f"(function(){{"
             f"var x=new XMLHttpRequest();"
             f"x.open('{method}','{_js_escape(url)}',false);"
             f"{ct_line}"
+            f"{auth_line}"
             f"x.send({body_js});"
             f"return {{s:x.status,t:x.responseText||''}};"
             f"}})()"
@@ -88,7 +139,9 @@ if _sys.platform == "emscripten":
         result = _embed.js(js)
         if result is None:
             raise RequestException("XHR: embed.js() returned None")
-        return _Response(int(result["s"]), str(result["t"]))
+        status = int(result["s"])
+        _check_auth_response(status)
+        return _Response(status, str(result["t"]))
 
     # -- public API (matches requests.get / requests.post) ------
 
@@ -128,11 +181,15 @@ if _sys.platform == "emscripten":
         _async_id_counter += 1
         rid = _async_id_counter
         full_url = _js_escape(url + _encode_params(params))
+        auth_js = ""
+        if _auth_token:
+            auth_js = f"x.setRequestHeader('Authorization','Bearer {_js_escape(_auth_token)}');"
         js = (
             f"(function(){{"
             f"window._axr=window._axr||{{}};"
             f"var x=new XMLHttpRequest();"
             f"x.open('GET','{full_url}',true);"
+            f"{auth_js}"
             f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
             f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
             f"x.send();"
@@ -148,12 +205,16 @@ if _sys.platform == "emscripten":
         rid = _async_id_counter
         full_url = _js_escape(url)
         body_js = _form_body_js(data)
+        auth_js = ""
+        if _auth_token:
+            auth_js = f"x.setRequestHeader('Authorization','Bearer {_js_escape(_auth_token)}');"
         js = (
             f"(function(){{"
             f"window._axr=window._axr||{{}};"
             f"var x=new XMLHttpRequest();"
             f"x.open('POST','{full_url}',true);"
             f"x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');"
+            f"{auth_js}"
             f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
             f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
             f"x.send({body_js});"
@@ -175,8 +236,31 @@ if _sys.platform == "emscripten":
         result = _embed.js(js)
         if result is None:
             return None
-        return _Response(int(result["s"]), str(result["t"]))
+        status = int(result["s"])
+        _check_auth_response(status)
+        return _Response(status, str(result["t"]))
 
 else:
-    # ── Desktop: use requests ──────────────────────────────────────
-    from requests import get, post, RequestException, HTTPError
+    # ── Desktop: use requests with auto-injected auth ──────────────
+    import requests as _requests
+
+    RequestException = _requests.RequestException
+    HTTPError = _requests.HTTPError
+
+    def get(url, **kwargs):
+        if _auth_token:
+            headers = kwargs.pop('headers', {}) or {}
+            headers.setdefault('Authorization', f'Bearer {_auth_token}')
+            kwargs['headers'] = headers
+        resp = _requests.get(url, **kwargs)
+        _check_auth_response(resp.status_code)
+        return resp
+
+    def post(url, **kwargs):
+        if _auth_token:
+            headers = kwargs.pop('headers', {}) or {}
+            headers.setdefault('Authorization', f'Bearer {_auth_token}')
+            kwargs['headers'] = headers
+        resp = _requests.post(url, **kwargs)
+        _check_auth_response(resp.status_code)
+        return resp

@@ -68,6 +68,11 @@ class User(db.Model):
     gold = db.Column(db.Integer, nullable=False, default=server_config.INITIAL_GOLD)  # Starting gold
     last_active = db.Column(db.DateTime, nullable=True)  # Heartbeat timestamp
     is_ai = db.Column(db.Boolean, nullable=False, default=False)  # AI opponent flag
+    # Email verification fields (all optional for backward compatibility)
+    email = db.Column(db.String(255), nullable=True, unique=True)
+    email_verified = db.Column(db.Boolean, nullable=False, default=False)
+    email_verification_token = db.Column(db.String(128), nullable=True)
+    email_verification_sent_at = db.Column(db.DateTime, nullable=True)
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
                                         foreign_keys='Challenge.challenger_id')
     challenges_received = db.relationship('Challenge', backref='challenged', lazy=True,
@@ -83,6 +88,7 @@ class User(db.Model):
             'gold': self.gold,
             'is_online': is_online,
             'is_ai': self.is_ai,
+            'email_verified': self.email_verified,
             'challenges_issued': [challenge.serialize() for challenge in self.challenges_issued],
             'challenges_received': [challenge.serialize() for challenge in self.challenges_received]
         }

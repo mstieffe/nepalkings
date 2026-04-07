@@ -119,6 +119,26 @@ with app.app_context():
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE user ADD COLUMN is_ai BOOLEAN DEFAULT 0"))
                 conn.commit()
+        if 'email' not in existing_cols:
+            logger.info("Auto-migrate: adding 'email' column to user table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN email VARCHAR(255)"))
+                conn.commit()
+        if 'email_verified' not in existing_cols:
+            logger.info("Auto-migrate: adding 'email_verified' column to user table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN email_verified BOOLEAN DEFAULT 0 NOT NULL"))
+                conn.commit()
+        if 'email_verification_token' not in existing_cols:
+            logger.info("Auto-migrate: adding 'email_verification_token' column to user table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN email_verification_token VARCHAR(128)"))
+                conn.commit()
+        if 'email_verification_sent_at' not in existing_cols:
+            logger.info("Auto-migrate: adding 'email_verification_sent_at' column to user table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE user ADD COLUMN email_verification_sent_at DATETIME"))
+                conn.commit()
     if 'challenge' in inspector.get_table_names():
         existing_cols = {c['name'] for c in inspector.get_columns('challenge')}
         if 'game_id' not in existing_cols:

@@ -4,9 +4,10 @@
 
 import random
 import logging
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from models import db, Game, Player, MainCard, SideCard, BattleMove, User, LogEntry
 import server_settings as settings
+from routes.auth import require_token, verify_player_ownership
 
 battle_shop = Blueprint('battle_shop', __name__)
 
@@ -35,6 +36,7 @@ MAX_BATTLE_MOVES = 3
 
 
 @battle_shop.route('/buy_battle_move', methods=['POST'])
+@require_token
 def buy_battle_move():
     """Buy a battle move by reserving one card from the player's hand.
 
@@ -56,6 +58,10 @@ def buy_battle_move():
 
     if not all([game_id, player_id, family_name, card_id, suit, rank]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:
@@ -123,6 +129,7 @@ def buy_battle_move():
 
 
 @battle_shop.route('/return_battle_move', methods=['POST'])
+@require_token
 def return_battle_move():
     """Return (cancel) a previously bought battle move.
 
@@ -141,6 +148,10 @@ def return_battle_move():
     battle_move = BattleMove.query.get(battle_move_id)
     if not battle_move:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
+
+    err = verify_player_ownership(battle_move.player_id)
+    if err:
+        return err
 
     if battle_move.game_id != game_id or battle_move.player_id != player_id:
         return jsonify({'success': False, 'message': 'Battle move does not belong to this player'}), 400
@@ -189,6 +200,7 @@ def get_battle_moves():
 
 
 @battle_shop.route('/confirm_battle_moves', methods=['POST'])
+@require_token
 def confirm_battle_moves():
     """Mark a player as ready (all 3 battle moves selected).
 
@@ -203,6 +215,10 @@ def confirm_battle_moves():
 
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:
@@ -264,6 +280,7 @@ def _family_for_rank(rank):
 
 
 @battle_shop.route('/gamble_battle_move', methods=['POST'])
+@require_token
 def gamble_battle_move():
     """Gamble: sacrifice one battle move and draw two random replacements.
 
@@ -283,6 +300,10 @@ def gamble_battle_move():
 
     if not all([game_id, player_id, battle_move_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:
@@ -386,6 +407,7 @@ def _same_colour(suit_a, suit_b):
 
 
 @battle_shop.route('/combine_battle_moves', methods=['POST'])
+@require_token
 def combine_battle_moves():
     """Combine two same-colour Dagger battle moves into a Double Dagger.
 
@@ -408,6 +430,10 @@ def combine_battle_moves():
 
     if not all([game_id, player_id, move_id_a, move_id_b]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     if move_id_a == move_id_b:
         return jsonify({'success': False, 'message': 'Cannot combine a move with itself'}), 400
@@ -480,6 +506,7 @@ def combine_battle_moves():
 
 
 @battle_shop.route('/dismantle_battle_move', methods=['POST'])
+@require_token
 def dismantle_battle_move():
     """Split a Double Dagger back into its two original Dagger battle moves.
 
@@ -497,6 +524,10 @@ def dismantle_battle_move():
 
     if not all([game_id, player_id, battle_move_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:

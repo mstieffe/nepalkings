@@ -5,13 +5,14 @@ Server-side spell routes for handling spell casting, countering, and management.
 """
 
 import logging
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult
 from datetime import datetime
 from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
+from routes.auth import require_token, verify_player_ownership
 
 logger = logging.getLogger('nepalkings.routes.spells')
 
@@ -40,6 +41,7 @@ def _ai_trigger_hook(response):
 
 
 @spells.route('/cast_spell', methods=['POST'])
+@require_token
 def cast_spell():
     """
     Cast a spell (both counterable and non-counterable).
@@ -62,6 +64,10 @@ def cast_spell():
     player_id = data.get('player_id')
     game_id = data.get('game_id')
     spell_name = data.get('spell_name')
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     spell_type = data.get('spell_type')
     spell_family_name = data.get('spell_family_name')
     suit = data.get('suit')
@@ -202,6 +208,7 @@ def cast_spell():
 
 
 @spells.route('/counter_spell', methods=['POST'])
+@require_token
 def counter_spell():
     """
     Counter a pending spell with another spell.
@@ -227,6 +234,10 @@ def counter_spell():
     
     if not all([player_id, game_id, pending_spell_id, counter_spell_name]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
     game = Game.query.get(game_id)
     pending_spell = ActiveSpell.query.get(pending_spell_id)
@@ -279,6 +290,7 @@ def counter_spell():
 
 
 @spells.route('/allow_spell', methods=['POST'])
+@require_token
 def allow_spell():
     """
     Allow an opponent's pending spell to execute.
@@ -298,6 +310,10 @@ def allow_spell():
     
     if not all([player_id, game_id, pending_spell_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
     game = Game.query.get(game_id)
     pending_spell = ActiveSpell.query.get(pending_spell_id)
@@ -415,6 +431,7 @@ def get_pending_spell():
 
 
 @spells.route('/remove_spell_effect', methods=['POST'])
+@require_token
 def remove_spell_effect():
     """
     Remove/deactivate a spell effect.
@@ -434,6 +451,10 @@ def remove_spell_effect():
     
     if not spell:
         return jsonify({'success': False, 'message': 'Spell not found'}), 404
+
+    err = verify_player_ownership(spell.player_id)
+    if err:
+        return err
     
     try:
         spell.is_active = False
@@ -451,6 +472,7 @@ def remove_spell_effect():
 
 
 @spells.route('/end_infinite_hammer', methods=['POST'])
+@require_token
 def end_infinite_hammer():
     """
     End Infinite Hammer mode and flip the turn to the opponent.
@@ -467,6 +489,10 @@ def end_infinite_hammer():
     
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'game_id and player_id required'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
     try:
         # Expire session to get the latest ActiveSpell data with all accumulated actions
