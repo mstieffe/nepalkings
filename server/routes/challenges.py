@@ -2,9 +2,12 @@
 # See LICENSE file in the project root for full license information.
 from flask import Blueprint, request, jsonify, current_app
 from models import db, User, Challenge, ChallengeStatus
+import logging
 import server_settings as settings
 
 challenges = Blueprint('challenges', __name__)
+
+logger = logging.getLogger('nepalkings.routes.challenges')
 
 @challenges.route('/remove_challenge', methods=['POST'])
 def remove_challenge():
@@ -18,7 +21,8 @@ def remove_challenge():
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to remove challenge, Error: {str(e)}'}), 400
+        logger.exception('Failed to remove challenge')
+        return jsonify({'success': False, 'message': 'Failed to remove challenge'}), 400
     return jsonify({'success': True, 'message': 'Challenge removed'})
 
 
@@ -64,8 +68,8 @@ def create_challenge():
 
     except Exception as e:
         db.session.rollback()
-        # In case there is an exception while adding the challenge
-        return jsonify({'success': False, 'message': f'Failed to create challenge, Error: {str(e)}'}), 400
+        logger.exception('Failed to create challenge')
+        return jsonify({'success': False, 'message': 'Failed to create challenge'}), 400
 
     return jsonify({'success': True, 'message': 'Challenge sent'})
 
@@ -127,4 +131,5 @@ def open_challenges():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to fetch open challenges')
+        return jsonify({'success': False, 'message': 'Failed to fetch open challenges'}), 400

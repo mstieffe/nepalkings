@@ -2,10 +2,20 @@
 # See LICENSE file in the project root for full license information.
 
 import os
+import secrets
 
 # Server and database configurations
 SERVER_URL = os.getenv('SERVER_URL', 'http://localhost:5000')
 DB_URL = os.getenv('DB_URL', 'sqlite:///test.db')
+
+# Security
+SECRET_KEY = os.getenv('SECRET_KEY', secrets.token_hex(32))
+CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*')  # Comma-separated origins, or '*'
+
+# Rate limiting (Flask-Limiter format)
+RATE_LIMIT_DEFAULT = os.getenv('RATE_LIMIT_DEFAULT', '600 per minute')
+RATE_LIMIT_LOGIN = os.getenv('RATE_LIMIT_LOGIN', '10 per minute')
+RATE_LIMIT_REGISTER = os.getenv('RATE_LIMIT_REGISTER', '5 per minute')
 
 # Database management
 # Set to True to drop and recreate all tables on server startup (useful for schema changes)

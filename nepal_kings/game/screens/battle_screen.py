@@ -24,6 +24,10 @@ from utils import game_service
 from utils.utils import Button
 from game.components.dialogue_box import _DlgButton
 from utils.background_poller import BackgroundPoller
+import logging
+
+logger = logging.getLogger('nk.screens.battle')
+
 
 
 def _rescale_battle_icon(icon, scale):
@@ -273,7 +277,7 @@ class BattleScreen(SubScreen):
         self._round_fig_hovered_idx = None
         self._loaded_game_key = None
         self.dialogue_box = None
-        print("[BattleScreen] State reset for game switch")
+        logger.info("[BattleScreen] State reset for game switch")
 
     # ──────────────────────── init helpers ──────────────────────
 
@@ -406,7 +410,7 @@ class BattleScreen(SubScreen):
                 )
                 self.opponent_moves = result.get('battle_moves', [])
         except Exception as e:
-            print(f"[BattleScreen] Failed to load opponent moves: {e}")
+            logger.error(f"[BattleScreen] Failed to load opponent moves: {e}")
             self.opponent_moves = []
 
         # Determine invader status
@@ -422,7 +426,7 @@ class BattleScreen(SubScreen):
             self._resources_data = self.game.calculate_resources(families, is_opponent=False)
             self._opponent_resources_data = self.game.calculate_resources(families, is_opponent=True)
         except Exception as e:
-            print(f"[BattleScreen] Failed to load player figures for call eligibility: {e}")
+            logger.error(f"[BattleScreen] Failed to load player figures for call eligibility: {e}")
             self._player_figures = []
             self._opponent_figures = []
             self._resources_data = None
@@ -475,7 +479,7 @@ class BattleScreen(SubScreen):
             player_figures = self.game.get_figures(families, is_opponent=False)
             opponent_figures = self.game.get_figures(families, is_opponent=True)
         except Exception as e:
-            print(f"[BattleScreen] Failed to load figures: {e}")
+            logger.error(f"[BattleScreen] Failed to load figures: {e}")
             return
 
         # Determine which is player's and which is opponent's
@@ -617,7 +621,7 @@ class BattleScreen(SubScreen):
                         self.player_blocks_bonus_figure = fig
                         if opp_icon:
                             opp_icon.battle_bonus_blocked = True
-                        print(f"[BLOCKS_BONUS] Player's {fig.name} (suit={fig.suit}) blocks opponent's battle figure (suit={opp_suit}) bonus")
+                        logger.debug(f"[BLOCKS_BONUS] Player's {fig.name} (suit={fig.suit}) blocks opponent's battle figure (suit={opp_suit}) bonus")
                         break
             if self.player_blocks_bonus_figure:
                 break
@@ -642,7 +646,7 @@ class BattleScreen(SubScreen):
                         self.opponent_blocks_bonus_figure = fig
                         if player_icon:
                             player_icon.battle_bonus_blocked = True
-                        print(f"[BLOCKS_BONUS] Opponent's {fig.name} (suit={fig.suit}) blocks player's battle figure (suit={player_suit}) bonus")
+                        logger.debug(f"[BLOCKS_BONUS] Opponent's {fig.name} (suit={fig.suit}) blocks player's battle figure (suit={player_suit}) bonus")
                         break
             if self.opponent_blocks_bonus_figure:
                 break
@@ -676,7 +680,7 @@ class BattleScreen(SubScreen):
             if fig:
                 battle_ids.add(fig.id)
 
-        print(f"[DA_DETECT] battle_ids={battle_ids}, "
+        logger.debug(f"[DA_DETECT] battle_ids={battle_ids}, "
               f"player_figs={len(player_figures)}, opp_figs={len(opponent_figures)}, "
               f"opp_figure={getattr(self.opponent_figure, 'name', None)}(suit={getattr(self.opponent_figure, 'suit', None)}), "
               f"player_figure={getattr(self.player_figure, 'name', None)}(suit={getattr(self.player_figure, 'suit', None)})")
@@ -696,30 +700,18 @@ class BattleScreen(SubScreen):
                 continue
             has_deficit = self._figure_has_deficit(fig)
             if has_deficit:
-                print(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
-                      f"has distance_attack but is in DEFICIT — skipping")
                 continue
             adv_suit = get_advantage_suit(fig.suit)
             if not adv_suit:
-                print(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
-                      f"has distance_attack but no advantage suit — skipping")
                 continue
             penalty_value = fig.number_card.value if fig.number_card else 0
-            print(f"[DA_DETECT] Player's {fig.name} (id={fig.id}, suit={fig.suit}) "
-                  f"distance_attack=True, adv_suit={adv_suit}, penalty={penalty_value}, "
-                  f"opp_targets={[(s, bool(i)) for s, i in opp_targets]}")
             hit_battle = False
             for opp_suit, opp_icon in opp_targets:
                 if adv_suit == opp_suit:
                     hit_battle = True
                     if opp_icon:
                         opp_icon.distance_attack_penalty = getattr(opp_icon, 'distance_attack_penalty', 0) + penalty_value
-                    print(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
-                          f"reduces opponent's battle figure (suit={opp_suit}) by -{penalty_value}")
                     break
-            if not hit_battle:
-                print(f"[DISTANCE_ATTACK] Player's {fig.name} (suit={fig.suit}) "
-                      f"ready to fire on opponent's call figures (advantage over {adv_suit})")
             self._player_da_archers.append({
                 'fig': fig, 'adv_suit': adv_suit, 'penalty': penalty_value,
                 'hit_battle': hit_battle
@@ -744,8 +736,6 @@ class BattleScreen(SubScreen):
             if not da_flag:
                 continue
             if self._figure_has_deficit(fig, self._opponent_resources_data):
-                print(f"[DA_DETECT] Opponent's {fig.name} (id={fig.id}, suit={fig.suit}) "
-                      f"has distance_attack but is in DEFICIT — skipping")
                 continue
             adv_suit = get_advantage_suit(fig.suit)
             if not adv_suit:
@@ -757,12 +747,7 @@ class BattleScreen(SubScreen):
                     hit_battle = True
                     if player_icon:
                         player_icon.distance_attack_penalty = getattr(player_icon, 'distance_attack_penalty', 0) + penalty_value
-                    print(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
-                          f"reduces player's battle figure (suit={player_suit}) by -{penalty_value}")
                     break
-            if not hit_battle:
-                print(f"[DISTANCE_ATTACK] Opponent's {fig.name} (suit={fig.suit}) "
-                      f"ready to fire on player's call figures (advantage over {adv_suit})")
             self._opponent_da_archers.append({
                 'fig': fig, 'adv_suit': adv_suit, 'penalty': penalty_value,
                 'hit_battle': hit_battle
@@ -773,7 +758,7 @@ class BattleScreen(SubScreen):
             self.opponent_distance_attack_figure = self._opponent_da_archers[0]['fig']
             self._opponent_da_hit_battle = any(a['hit_battle'] for a in self._opponent_da_archers)
 
-        print(f"[DA_DETECT] Result: player_da={[a['fig'].name for a in self._player_da_archers]}, "
+        logger.debug(f"[DA_DETECT] Result: player_da={[a['fig'].name for a in self._player_da_archers]}, "
               f"opponent_da={[a['fig'].name for a in self._opponent_da_archers]}, "
               f"player_hits={[a['hit_battle'] for a in self._player_da_archers]}, "
               f"opponent_hits={[a['hit_battle'] for a in self._opponent_da_archers]}")
@@ -817,7 +802,6 @@ class BattleScreen(SubScreen):
                             battle_fig.family.field == 'village' and
                             battle_fig.suit == buff_fig.suit):
                         icon.buffs_allies_bonus = getattr(icon, 'buffs_allies_bonus', 0) + 4
-                        print(f"[BUFFS_ALLIES] Player's {buff_fig.name} buffs {battle_fig.name} +4")
 
         # --- Opponent's buffers → buff opponent's own village battle figures ---
         for fig in opponent_figures:
@@ -838,7 +822,6 @@ class BattleScreen(SubScreen):
                             battle_fig.family.field == 'village' and
                             battle_fig.suit == buff_fig.suit):
                         icon.buffs_allies_bonus = getattr(icon, 'buffs_allies_bonus', 0) + 4
-                        print(f"[BUFFS_ALLIES] Opponent's {buff_fig.name} buffs {battle_fig.name} +4")
 
     # ────────────────── buffs_allies_defence detection ──────────
 
@@ -878,7 +861,7 @@ class BattleScreen(SubScreen):
                 for icon in (self.player_figure_icon, self.player_figure_icon_2):
                     if icon:
                         icon.buffs_allies_defence_bonus = total_bonus
-                        print(f"[BUFFS_ALLIES_DEFENCE] Player defence buff +{total_bonus}")
+                        logger.debug(f"[BUFFS_ALLIES_DEFENCE] Player defence buff +{total_bonus}")
 
         # --- Opponent's defence buffers — only active when opponent is DEFENDING ---
         if self.player_is_invader:
@@ -898,7 +881,7 @@ class BattleScreen(SubScreen):
                 for icon in (self.opponent_figure_icon, self.opponent_figure_icon_2):
                     if icon:
                         icon.buffs_allies_defence_bonus = total_bonus
-                        print(f"[BUFFS_ALLIES_DEFENCE] Opponent defence buff +{total_bonus}")
+                        logger.debug(f"[BUFFS_ALLIES_DEFENCE] Opponent defence buff +{total_bonus}")
 
     # ────────────────── eligible figures for Call moves ──────────
 
@@ -1184,31 +1167,36 @@ class BattleScreen(SubScreen):
         o_power += self._get_figure_total_power(self.opponent_figure_2, self.opponent_figure_icon_2)
         return p_power - o_power
 
-    def _get_total_diff(self):
-        """Get total difference: figure diff + all completed round diffs."""
+    def _get_total_diff(self, verbose=False):
+        """Get total difference: figure diff + all completed round diffs.
+
+        :param verbose: if True, print per-round debug info (only for finish_battle).
+        """
         fig_diff = self._get_figure_diff()
         total = fig_diff
         for i in range(3):
             rd = self._get_round_diff(i)
             if rd is not None:
                 total += rd
-                p = self.player_played[i]
-                o = self.opponent_played[i]
-                p_val = self._get_move_effective_power(p, is_player=True, round_idx=i) if p else 0
-                o_val = self._get_move_effective_power(o, is_player=False, round_idx=i) if o else 0
-                p_info = (f"{p.get('family_name')}(v={p.get('value')},s={p.get('suit')},"
-                          f"call={p.get('call_figure_id')},"
-                          f"cf={'yes' if p.get('_call_figure') else 'no'})" if p else "None")
-                o_info = (f"{o.get('family_name')}(v={o.get('value')},s={o.get('suit')},"
-                          f"call={o.get('call_figure_id')},"
-                          f"cf={'yes' if o.get('_call_figure') else 'no'})" if o else "None")
-                print(f"[CLIENT_ROUND_{i}] p={p_info} p_eff={p_val} "
-                      f"o={o_info} o_eff={o_val} rd={rd}")
-        p_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
-        o_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
-        print(f"[CLIENT_TOTAL_DIFF] fig_diff={fig_diff} "
-              f"(player={p_power} opponent={o_power}) total={total} "
-              f"is_invader={self.player_is_invader}")
+                if verbose:
+                    p = self.player_played[i]
+                    o = self.opponent_played[i]
+                    p_val = self._get_move_effective_power(p, is_player=True, round_idx=i) if p else 0
+                    o_val = self._get_move_effective_power(o, is_player=False, round_idx=i) if o else 0
+                    p_info = (f"{p.get('family_name')}(v={p.get('value')},s={p.get('suit')},"
+                              f"call={p.get('call_figure_id')},"
+                              f"cf={'yes' if p.get('_call_figure') else 'no'})" if p else "None")
+                    o_info = (f"{o.get('family_name')}(v={o.get('value')},s={o.get('suit')},"
+                              f"call={o.get('call_figure_id')},"
+                              f"cf={'yes' if o.get('_call_figure') else 'no'})" if o else "None")
+                    logger.debug(f"[CLIENT_ROUND_{i}] p={p_info} p_eff={p_val} "
+                          f"o={o_info} o_eff={o_val} rd={rd}")
+        if verbose:
+            p_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
+            o_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
+            logger.debug(f"[CLIENT_TOTAL_DIFF] fig_diff={fig_diff} "
+                  f"(player={p_power} opponent={o_power}) total={total} "
+                  f"is_invader={self.player_is_invader}")
         return total
 
     def _is_move_used(self, move_idx):
@@ -1292,6 +1280,21 @@ class BattleScreen(SubScreen):
                 and (not getattr(game, 'battle_confirmed', True)
                      or getattr(game, 'fold_winner_id', None))):
             self._finish_battle()
+
+        # Safety net: server already cleaned up (advancing_figure_id gone,
+        # battle not confirmed) but we never resolved locally.  This can
+        # happen if the AI's finish_battle + pick_card completed between
+        # polls and the auto-finish above failed to show a dialogue.
+        if (not self._battle_result
+                and not self.dialogue_box
+                and game
+                and not getattr(game, 'advancing_figure_id', None)
+                and not getattr(game, 'battle_confirmed', True)
+                and not getattr(game, 'fold_winner_id', None)
+                and self._loaded_game_key):
+            logger.warning("[BattleScreen] Safety net: battle resolved on server but "
+                  "no local result — exiting battle screen")
+            self._reset_after_battle()
 
         # Auto-skip: if it's our turn but we have no unused moves left
         self._check_auto_skip()
@@ -1417,13 +1420,13 @@ class BattleScreen(SubScreen):
 
         # No moves left to play — auto-skip
         self._auto_skip_pending = True
-        print(f"[BattleScreen] No moves left — auto-skipping round {self.current_round + 1}")
+        logger.info(f"[BattleScreen] No moves left — auto-skipping round {self.current_round + 1}")
 
         result = game_service.skip_battle_turn(
             self.game.game_id, self.game.player_id)
 
         if not result.get('success'):
-            print(f"[BattleScreen] skip_battle_turn failed: {result.get('message')}")
+            logger.error(f"[BattleScreen] skip_battle_turn failed: {result.get('message')}")
             self._auto_skip_pending = False
             return
 
@@ -1626,7 +1629,7 @@ class BattleScreen(SubScreen):
         action = action_dict.get('action')
         move_idx = action_dict.get('move_index')
         selected_fig = action_dict.get('selected_figure')
-        print(f"[BattleScreen] Action '{action}' for move {move_idx}, figure={getattr(selected_fig, 'name', None)}")
+        logger.info(f"[BattleScreen] Action '{action}' for move {move_idx}, figure={getattr(selected_fig, 'name', None)}")
 
         if action == 'use':
             self._start_use(move_idx, selected_fig)
@@ -1705,13 +1708,13 @@ class BattleScreen(SubScreen):
 
         if not result.get('success'):
             msg = result.get('message', 'Unknown error')
-            print(f"[BattleScreen] play_battle_move failed: {msg}")
+            logger.error(f"[BattleScreen] play_battle_move failed: {msg}")
             self.make_dialogue_box(
                 f"Failed to play move:\n{msg}",
                 actions=['ok'], icon='info', title="Error")
             return
 
-        print(f"[BattleScreen] Played {family_name} (id={battle_move_id}) "
+        logger.info(f"[BattleScreen] Played {family_name} (id={battle_move_id}) "
               f"in round {self.current_round + 1}")
 
         # Store a local copy for immediate visual feedback
@@ -1743,8 +1746,8 @@ class BattleScreen(SubScreen):
         if not self._all_moves_played():
             return
 
-        total_diff = self._get_total_diff()
-        print(f"[BattleScreen] Finishing battle — total_diff = {total_diff}")
+        total_diff = self._get_total_diff(verbose=True)
+        logger.info(f"[BattleScreen] Finishing battle — total_diff = {total_diff}")
 
         result = game_service.finish_battle(
             self.game.game_id,
@@ -1758,6 +1761,9 @@ class BattleScreen(SubScreen):
             return
 
         self._battle_result = result
+        # Clear the safety-net data — we're about to show the proper dialogue
+        if self.game:
+            self.game._last_polled_battle_result = None
         outcome = result.get('outcome', '')
 
         # If already resolved by the other client, use the game state
@@ -2224,7 +2230,47 @@ class BattleScreen(SubScreen):
 
     def _reset_after_battle(self):
         """Clean up battle state and switch back to the field screen."""
-        print("[BattleScreen] Post-battle cleanup — returning to field")
+        import traceback
+        caller = traceback.extract_stack(limit=3)
+        caller_info = f"{caller[-2].name}" if len(caller) >= 2 else "unknown"
+        had_result = self._battle_result is not None
+        logger.info(f"[BattleScreen] Post-battle cleanup — returning to field "
+              f"(caller={caller_info}, had_result={had_result})")
+
+        # Safety net: if we're exiting the battle without having shown a
+        # battle-result dialogue (e.g. race condition, missed finish_battle),
+        # queue a fallback notification on the game_screen so the user still
+        # sees who won.
+        if not had_result and self.game:
+            last = getattr(self.game, '_last_polled_battle_result', None) or {}
+            winner_id = last.get('winner_player_id')
+            loser_id = last.get('loser_player_id')
+            if winner_id and loser_id:
+                is_winner = (winner_id == self.game.player_id)
+                destroyed = last.get('destroyed_figure_name', 'figure')
+                pts = last.get('points_awarded', 0)
+                winner_name = last.get('winner_name', 'Opponent')
+                loser_name = last.get('loser_name', 'Opponent')
+                if is_winner:
+                    msg = (f"{loser_name}'s {destroyed} is destroyed!\n"
+                           f"You earn {pts} points.")
+                    title = "Victory!"
+                    icon = 'victory'
+                else:
+                    msg = (f"Your {destroyed} is destroyed!\n"
+                           f"{winner_name} earns {pts} points.")
+                    title = "Defeat"
+                    icon = 'defeat'
+                parent = getattr(self.state, 'parent_screen', None)
+                if parent and hasattr(parent, 'queue_or_show_notification'):
+                    logger.warning(f"[BattleScreen] Safety net: queuing missed battle result "
+                          f"(winner={winner_name}, loser={loser_name})")
+                    parent.queue_or_show_notification({
+                        'message': msg,
+                        'actions': ['ok'],
+                        'icon': icon,
+                        'title': title,
+                    })
 
         # Reset battle phase flags
         if self.game:
@@ -2262,7 +2308,7 @@ class BattleScreen(SubScreen):
             # Queue ceasefire-active notification for the new round
             # (only if not already displayed this round)
             if self.game.ceasefire_active and self.game._ceasefire_active_displayed_round != self.game.current_round:
-                print(f"[CEASEFIRE] _reset_after_battle: queuing ceasefire-active, round={self.game.current_round}")
+                logger.info(f"[CEASEFIRE] _reset_after_battle: queuing ceasefire-active, round={self.game.current_round}")
                 self.game.pending_ceasefire_active_notification = True
                 # Mark as notified so polling doesn't re-trigger
                 self.game._ceasefire_notified_round = self.game.current_round

@@ -6,8 +6,17 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, User, Player, Game
 from datetime import datetime
 import logging  # For logging errors instead of exposing them to the user
+import re
 
 auth = Blueprint('auth', __name__)
+
+logger = logging.getLogger('nepalkings.routes.auth')
+
+# ── Input validation constants ──
+_USERNAME_MIN = 3
+_USERNAME_MAX = 30
+_USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
+_PASSWORD_MIN = 6
 
 @auth.route('/get_users', methods=['GET'])
 def get_users():
@@ -55,6 +64,14 @@ def register():
 
         if not username or not password:
             return jsonify({'success': False, 'message': 'Missing username or password'}), 400
+
+        # Input validation
+        if len(username) < _USERNAME_MIN or len(username) > _USERNAME_MAX:
+            return jsonify({'success': False, 'message': f'Username must be {_USERNAME_MIN}-{_USERNAME_MAX} characters'}), 400
+        if not _USERNAME_RE.match(username):
+            return jsonify({'success': False, 'message': 'Username may only contain letters, digits, hyphens, and underscores'}), 400
+        if len(password) < _PASSWORD_MIN:
+            return jsonify({'success': False, 'message': f'Password must be at least {_PASSWORD_MIN} characters'}), 400
 
         if User.query.filter_by(username=username).first():
             return jsonify({'success': False, 'message': 'Username already exists'}), 409

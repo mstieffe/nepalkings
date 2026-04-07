@@ -9,6 +9,10 @@ from utils.msg_service import fetch_log_entries, add_log_entry, fetch_chat_messa
 from utils.figure_service import fetch_figures
 from game.components.figures.figure import Figure, FigureFamily
 from typing import List, Dict
+import logging
+
+logger = logging.getLogger('nk.core.game')
+
 
 class Game:
     def __init__(self, game_dict, user_dict, lightweight=False):
@@ -168,6 +172,10 @@ class Game:
         # Suppress next turn notification after battle/fold (result dialogue already shown)
         self.suppress_next_turn_summary = False
 
+        # Last polled battle result — kept for safety-net notification if the
+        # battle screen exits without showing a result dialogue.
+        self._last_polled_battle_result = None
+
         # Game-over tracking
         self.game_over = (self.state == 'finished')
         self.pending_game_over = None  # Will be set to game_over dict when detected
@@ -233,12 +241,12 @@ class Game:
                 timeout=10,
             )
             if resp.status_code != 200:
-                print("Failed to fetch game")
+                logger.error("Failed to fetch game")
                 return None
 
             game_dict = resp.json().get('game')
             if not game_dict:
-                print("Game data not found in response")
+                logger.debug("Game data not found in response")
                 return None
 
             logs = []
@@ -248,23 +256,23 @@ class Game:
             try:
                 logs = fetch_log_entries(game_id)
             except Exception as e:
-                print(f"BG: Failed to fetch log entries: {e}")
+                logger.error(f"BG: Failed to fetch log entries: {e}")
             try:
                 chats = fetch_chat_messages(game_id)
             except Exception as e:
-                print(f"BG: Failed to fetch chat messages: {e}")
+                logger.error(f"BG: Failed to fetch chat messages: {e}")
             try:
                 from utils import spell_service
                 active_spells = spell_service.fetch_active_spells(game_id)
             except Exception as e:
-                print(f"BG: Failed to fetch active spells: {e}")
+                logger.error(f"BG: Failed to fetch active spells: {e}")
             # Fetch figures for all players in the game
             for player in game_dict.get('players', []):
                 pid = player['id']
                 try:
                     figures_by_player[pid] = fetch_figures(pid)
                 except Exception as e:
-                    print(f"BG: Failed to fetch figures for player {pid}: {e}")
+                    logger.error(f"BG: Failed to fetch figures for player {pid}: {e}")
                     figures_by_player[pid] = []
 
             return {
@@ -275,7 +283,7 @@ class Game:
                 'figures': figures_by_player,
             }
         except Exception as e:
-            print(f"BG fetch error: {e}")
+            logger.error(f"BG fetch error: {e}")
             return None
 
     # ── Apply fetched data (main thread only) ──────────────────
@@ -320,7 +328,7 @@ class Game:
         if self.action_in_progress and self._action_lock_time:
             elapsed = pygame.time.get_ticks() - self._action_lock_time
             if elapsed > self._ACTION_LOCK_TIMEOUT_MS:
-                print(f"[ACTION_LOCK] Timeout after {elapsed}ms — force-unlocking")
+                logger.info(f"[ACTION_LOCK] Timeout after {elapsed}ms — force-unlocking")
                 self.unlock_actions()
 
     def _apply_game_dict(self, game_dict):
@@ -371,7 +379,7 @@ class Game:
                     'gold_awarded': self.stake * 2,
                     'stake': self.stake,
                 }
-                print(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
+                logger.info(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
         
         # Update ceasefire tracking — use _last_polled_ceasefire for transition
         # detection so that update_from_dict (action responses) can't create
@@ -390,7 +398,7 @@ class Game:
         if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
             # Dedup: only fire once per (round, state) pair
             if self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'ended':
-                print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive) round={cur_round}")
+                logger.info(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive) round={cur_round}")
                 self.pending_ceasefire_ended = True
                 self.pending_ceasefire_active_notification = False
                 self._ceasefire_notified_round = cur_round
@@ -405,9 +413,9 @@ class Game:
             # from a concurrent request that loaded the game before the
             # ceasefire-end commit was visible.
             if self._ceasefire_notified_round == cur_round and self._ceasefire_notified_state == 'ended':
-                print(f"[CEASEFIRE] _apply_game_dict: ignoring activation — ceasefire already ended round={cur_round} (stale poll data)")
+                logger.info(f"[CEASEFIRE] _apply_game_dict: ignoring activation — ceasefire already ended round={cur_round} (stale poll data)")
             elif self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'active':
-                print(f"[CEASEFIRE] _apply_game_dict: activating notification, prev_polled={previous_ceasefire}, now={self.ceasefire_active}, round={cur_round}, displayed_round={self._ceasefire_active_displayed_round}")
+                logger.info(f"[CEASEFIRE] _apply_game_dict: activating notification, prev_polled={previous_ceasefire}, now={self.ceasefire_active}, round={cur_round}, displayed_round={self._ceasefire_active_displayed_round}")
                 self.pending_ceasefire_active_notification = True
                 self._ceasefire_notified_round = cur_round
                 self._ceasefire_notified_state = 'active'
@@ -543,7 +551,7 @@ class Game:
         
         if battle_ready:
             self.pending_battle_ready = True
-            print(f"[BATTLE_READY] Figures set: advancing={self.advancing_figure_id}/{self.advancing_figure_id_2}, defending={self.defending_figure_id}/{self.defending_figure_id_2}")
+            logger.info(f"[BATTLE_READY] Figures set: advancing={self.advancing_figure_id}/{self.advancing_figure_id_2}, defending={self.defending_figure_id}/{self.defending_figure_id_2}")
 
         # Detect fold outcome from opponent's battle decision (polling detection)
         previous_fold_outcome = self.fold_outcome
@@ -555,6 +563,21 @@ class Game:
         self.auto_loss_reason = game_dict.get('auto_loss_reason')
         self.auto_loss_detail = game_dict.get('auto_loss_detail')
         self.resting_figure_ids = game_dict.get('resting_figure_ids', [])
+
+        # Safety net: if we think we're waiting for the opponent's decision
+        # but the server has NO record of our decision, the POST must have
+        # failed (e.g. server restart mid-request).  Reset to re-show the
+        # fight/fold dialogue so the player can retry.
+        if (self.waiting_for_battle_decision and
+                self.advancing_figure_id and self.defending_figure_id and
+                not self.battle_confirmed and not self.fold_outcome):
+            decisions = self.battle_decisions or {}
+            my_decision = decisions.get(str(self.player_id))
+            if my_decision is None:
+                logger.warning("[BATTLE_DECISION] Safety net: waiting but server has no record of our decision — resetting")
+                self.waiting_for_battle_decision = False
+                self.battle_ready_shown = False
+                self.pending_battle_ready = False  # will be re-set by battle_ready check below
 
         # Update server-authoritative battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
@@ -569,13 +592,13 @@ class Game:
         if self.fold_outcome and not previous_fold_outcome and not self.fold_result_shown:
             self.pending_fold_result = True
             self.waiting_for_battle_decision = False
-            print(f"[FOLD] Detected fold outcome: {self.fold_outcome}, winner: {self.fold_winner_id}")
+            logger.info(f"[FOLD] Detected fold outcome: {self.fold_outcome}, winner: {self.fold_winner_id}")
 
         # Detect both chose battle (transition from False to True)
         if self.battle_confirmed and not previous_battle_confirmed and self.waiting_for_battle_decision:
             self.auto_proceed_to_battle = True
             self.waiting_for_battle_decision = False
-            print(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
+            logger.info(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
 
         # Detect opponent confirmed battle moves while we are waiting
         previous_bm_confirmed = self.battle_moves_confirmed
@@ -585,7 +608,7 @@ class Game:
                 len(self.battle_moves_confirmed) >= 2):
             self.both_battle_moves_ready = True
             self.waiting_for_opponent_battle_moves = False
-            print(f"[BATTLE_MOVES] Both players confirmed battle moves — proceed to battle")
+            logger.debug(f"[BATTLE_MOVES] Both players confirmed battle moves — proceed to battle")
 
         # Reinitialize current and opponent players
         for player_dict in self.players:
@@ -611,22 +634,20 @@ class Game:
 
         # Check for game start notification on first update (regardless of turn number)
         if not self.game_start_notification_checked:
-            print(f"[GAME_START] First update - player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
-            print(f"[GAME_START] Checking for welcome message...")
+            logger.info(f"[GAME_START] First update — player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
             self._start_turn_async()
             self.game_start_notification_checked = True
-            print(f"[GAME_START] Flag set to True after first check")
         
         # Check if turn changed to current player - call start_turn endpoint
         elif not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
-            print(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
+            logger.info(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
             self._start_turn_async()
         
         # Detect spell resolution: if our spell was pending and just resolved,
         # and it's still our turn (e.g., Invader Swap keeps turn with caster),
         # trigger _handle_start_turn for auto-fill since turn-change detection missed it
         elif previous_pending_spell_id and not self.pending_spell_id and self.turn and previous_turn:
-            print(f"[SPELL_RESOLVED] Spell resolved while turn stayed with us. Calling start_turn for auto-fill...")
+            logger.info(f"[SPELL_RESOLVED] Spell resolved while turn stayed with us. Calling start_turn for auto-fill...")
             self._start_turn_async()
         
         # Missed intermediate turn: it was our turn before, it's our turn now,
@@ -635,7 +656,7 @@ class Game:
         elif (self.turn and previous_turn and
               prev_opp_turns is not None and opp_turns is not None and
               opp_turns != prev_opp_turns):
-            print(f"[TURN CHANGE] Missed intermediate turn — opponent turns_left {prev_opp_turns}→{opp_turns}. Calling start_turn...")
+            logger.info(f"[TURN CHANGE] Missed intermediate turn — opponent turns_left {prev_opp_turns}→{opp_turns}. Calling start_turn...")
             self._start_turn_async()
         
         # Update previous turn player for next check
@@ -650,14 +671,17 @@ class Game:
             if my_cards:
                 self.pending_post_battle_side_cards = my_cards
                 self._post_battle_side_cards_round = self.current_round
-                print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
+                logger.info(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
 
         # Detect loot notification for battle loser (which card the winner kept)
         last_result = game_dict.get('last_battle_result') or {}
+        # Keep a copy for the battle-screen safety net (missed result dialogue)
+        if last_result and last_result.get('winner_player_id'):
+            self._last_polled_battle_result = dict(last_result)
         picked_card = last_result.get('picked_card')
         loser_id = last_result.get('loser_player_id')
-        if last_result:
-            print(f"[LOOT_DEBUG] _apply_game_dict: last_battle_result keys={list(last_result.keys())}, picked_card={picked_card}, loser_id={loser_id} (type={type(loser_id)}), player_id={self.player_id} (type={type(self.player_id)}), round={self.current_round}, loot_round={self._loot_notification_round}")
+        if last_result and picked_card and loser_id == self.player_id and self.current_round != self._loot_notification_round:
+            logger.debug(f"[LOOT_DEBUG] _apply_game_dict: picked_card={picked_card}, loser_id={loser_id}, round={self.current_round}")
         if (picked_card and self.player_id and
                 loser_id == self.player_id and
                 self.current_round != self._loot_notification_round):
@@ -668,7 +692,7 @@ class Game:
                 'winner_name': last_result.get('winner_name', 'Opponent'),
             }
             self._loot_notification_round = self.current_round
-            print(f"[LOOT] Opponent kept card: {picked_card}")
+            logger.info(f"[LOOT] Opponent kept card: {picked_card}")
 
 
     def update_from_dict(self, game_dict):
@@ -723,21 +747,21 @@ class Game:
                 self.waiting_for_battle_decision):
             self.auto_proceed_to_battle = True
             self.waiting_for_battle_decision = False
-            print("[BATTLE_DECISION] update_from_dict: both players chose battle — auto-proceeding")
+            logger.info("[BATTLE_DECISION] update_from_dict: both players chose battle — auto-proceeding")
 
         # Detect fold outcome (transition) — mirrors _apply_game_dict
         if (self.fold_outcome and not previous_fold_outcome and
                 not self.fold_result_shown):
             self.pending_fold_result = True
             self.waiting_for_battle_decision = False
-            print(f"[FOLD] update_from_dict: fold outcome={self.fold_outcome}, winner={self.fold_winner_id}")
+            logger.info(f"[FOLD] update_from_dict: fold outcome={self.fold_outcome}, winner={self.fold_winner_id}")
         
         # Detect battle_ready when both figures are set (e.g. after select_defender)
         if (self.advancing_figure_id and self.defending_figure_id and
                 not self.battle_confirmed and
                 not self.pending_battle_ready and not self.battle_ready_shown):
             self.pending_battle_ready = True
-            print(f"[BATTLE_READY] update_from_dict: both figures set, triggering battle_ready")
+            logger.info(f"[BATTLE_READY] update_from_dict: both figures set, triggering battle_ready")
         
         # Update battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
@@ -775,7 +799,7 @@ class Game:
             if my_cards:
                 self.pending_post_battle_side_cards = my_cards
                 self._post_battle_side_cards_round = self.current_round
-                print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
+                logger.info(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
 
         # Detect loot notification for battle loser (which card the winner kept)
         last_result = game_dict.get('last_battle_result') or {}
@@ -790,7 +814,7 @@ class Game:
                 'winner_name': last_result.get('winner_name', 'Opponent'),
             }
             self._loot_notification_round = self.current_round
-            print(f"[LOOT] Opponent kept card (update_from_dict): {picked_card}")
+            logger.info(f"[LOOT] Opponent kept card (update_from_dict): {picked_card}")
 
         # Note: logs and chats are fetched by the background poller
         # No need to block here — the next poll cycle will pick them up
@@ -810,7 +834,7 @@ class Game:
                 'game_id': self.game_id,
                 'player_id': self.player_id
             }
-            print(f"[START_TURN] Sending payload: game_id={self.game_id} (type={type(self.game_id)}), player_id={self.player_id} (type={type(self.player_id)})")
+            logger.debug(f"[START_TURN] Sending payload: game_id={self.game_id} (type={type(self.game_id)}), player_id={self.player_id} (type={type(self.player_id)})")
             
             response = requests.post(
                 f'{settings.SERVER_URL}/games/start_turn',
@@ -819,19 +843,19 @@ class Game:
             )
             
             if response.status_code != 200:
-                print(f"[START_TURN] Failed with status {response.status_code}: {response.json()}")
+                logger.error(f"[START_TURN] Failed with status {response.status_code}: {response.json()}")
                 return
             
             data = response.json()
-            print(f"[START_TURN] Response: {data}")
+            logger.debug(f"[START_TURN] Response: {data}")
             if data.get('success'):
                 auto_fill = data.get('auto_fill')
                 if auto_fill:
                     # Store for dialogue display
-                    print(f"[START_TURN] Auto-fill needed: {auto_fill}")
+                    logger.debug(f"[START_TURN] Auto-fill needed: {auto_fill}")
                     self.pending_auto_fill = auto_fill
                 else:
-                    print(f"[START_TURN] No auto-fill needed")
+                    logger.debug(f"[START_TURN] No auto-fill needed")
                 
                 # Store opponent turn summary for dialogue display
                 # But suppress it if an advance notification is pending (advance has its own notification)
@@ -844,31 +868,31 @@ class Game:
                 
                 if affects_player and opponent_turn_summary:
                     # Always show notifications that directly affect the player's state
-                    print(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
+                    logger.debug(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
                     self.pending_opponent_turn_summary = opponent_turn_summary
                 elif self.suppress_next_turn_summary:
                     self.suppress_next_turn_summary = False
                     # Fully suppress the post-battle/fold turn summary — the
                     # round-start notifications (victory/defeat, ceasefire, side
                     # cards) already cover what the player needs to know.
-                    print(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
                     self.pending_opponent_turn_summary = None
                 elif (self.pending_advance_notification or
                       (self.advancing_figure_id and
                        self.advancing_player_id != self.player_id)):
-                    print(f"[START_TURN] Suppressing opponent turn summary — advance notification pending or opponent advance active")
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — advance notification pending or opponent advance active")
                 elif self.pending_battle_ready:
-                    print(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
                 elif self.pending_fold_result:
-                    print(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
                 elif opponent_turn_summary:
-                    print(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
+                    logger.debug(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
                     self.pending_opponent_turn_summary = opponent_turn_summary
                 else:
-                    print(f"[START_TURN] No opponent turn summary")
+                    logger.debug(f"[START_TURN] No opponent turn summary")
                     self.pending_opponent_turn_summary = None
         except Exception as e:
-            print(f"Error in start_turn: {str(e)}")
+            logger.error(f"Error in start_turn: {str(e)}")
 
     def get_player_username(self, player_id):
         """Fetch the username of a player given their player_id."""
@@ -942,7 +966,7 @@ class Game:
             for figure_data in figures_data:
                 family_name = figure_data['family_name']
                 if family_name not in families:
-                    print(f"Skipping unknown family: {family_name}")
+                    logger.warning(f"Skipping unknown family: {family_name}")
                     continue
 
                 family = families[family_name]
@@ -951,7 +975,7 @@ class Game:
 
 
                 if not any(cards.values()):
-                    print(f"Skipping figure with no valid cards: {figure_data}")
+                    logger.warning(f"Skipping figure with no valid cards: {figure_data}")
                     continue
 
                 # Safely retrieve number_card and upgrade_card
@@ -1038,7 +1062,7 @@ class Game:
 
             return figures
         except Exception as e:
-            print(f"Error loading figures: {str(e)}")
+            logger.error(f"Error loading figures: {str(e)}")
             return []
     
     def _load_enchantments_for_figures(self, figures: List[Figure]):
@@ -1073,8 +1097,7 @@ class Game:
                             )
                             break
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"Error loading enchantments: {e}")
 
     def has_active_all_seeing_eye(self) -> bool:
         """
@@ -1159,11 +1182,7 @@ class Game:
         """
         figures = self.get_figures(families, is_opponent=is_opponent)
         
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[CLIENT] Calculating resources for {len(figures)} figures\n")
-                for figure in figures:
-                    f.write(f"[CLIENT] Figure: {figure.name}, produces: {figure.produces}, requires: {figure.requires}\n")
+        logger.debug(f"Calculating resources for {len(figures)} figures")
 
         # Total requires is always the sum across ALL figures (never changes)
         total_requires = {}
@@ -1197,13 +1216,9 @@ class Game:
                         stable = False
                         break
         
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[CLIENT] Total produces: {total_produces}\n")
-                f.write(f"[CLIENT] Total requires: {total_requires}\n")
-                if excluded:
-                    f.write(f"[CLIENT] Deficit figures excluded from production: "
-                            f"{[figures[i].name for i in excluded]}\n")
+        if excluded:
+            logger.debug(f"Resource deficit: excluded={[figures[i].name for i in excluded]}, "
+                         f"produces={total_produces}, requires={total_requires}")
         return {'produces': total_produces, 'requires': total_requires}
 
     @staticmethod
@@ -1235,7 +1250,7 @@ class Game:
                 if card_data.get('role') in cards:
                     cards[card_data['role']].append(card)
             except KeyError as e:
-                print(f"Skipping card with missing data: {card_data}, Error: {e}")
+                logger.error(f"Skipping card with missing data: {card_data}, Error: {e}")
                 continue
 
         return cards
@@ -1246,7 +1261,7 @@ class Game:
         try:
             self.log_entries = fetch_log_entries(self.game_id)
         except Exception as e:
-            print(f"Failed to fetch log entries: {str(e)}")
+            logger.error(f"Failed to fetch log entries: {str(e)}")
 
     def add_log_entry(self, round_number, turn_number, message, author, entry_type):
         """Add a log entry and update the log list."""
@@ -1254,14 +1269,14 @@ class Game:
             add_log_entry(self.game_id, self.player_id, round_number, turn_number, message, author, entry_type)
             self.update_logs()
         except Exception as e:
-            print(f"Failed to add log entry: {str(e)}")
+            logger.error(f"Failed to add log entry: {str(e)}")
 
     def update_chats(self):
         """Fetch and update chat messages."""
         try:
             self.chat_messages = fetch_chat_messages(self.game_id)
         except Exception as e:
-            print(f"Failed to fetch chat messages: {str(e)}")
+            logger.error(f"Failed to fetch chat messages: {str(e)}")
 
     def send_chat_message(self, receiver_id, message):
         """Send a chat message and update the chat list."""
@@ -1269,7 +1284,7 @@ class Game:
             send_chat_message(self.game_id, self.player_id, receiver_id, message)
             self.update_chats()
         except Exception as e:
-            print(f"Failed to send chat message: {str(e)}")
+            logger.error(f"Failed to send chat message: {str(e)}")
 
 
     def change_main_cards(self, cards):
@@ -1299,7 +1314,7 @@ class Game:
             }, timeout=10)
 
             if response.status_code != 200:
-                print(f"Failed to change {card_type} cards: {response.json().get('message', 'Unknown error')}")
+                logger.error(f"Failed to change {card_type} cards: {response.json().get('message', 'Unknown error')}")
                 return []
 
             # Update the game state after a successful response
@@ -1309,7 +1324,7 @@ class Game:
 
             return new_cards
         except Exception as e:
-            print(f"An error occurred while changing {card_type} cards: {str(e)}")
+            logger.error(f"An error occurred while changing {card_type} cards: {str(e)}")
             return []
     
     def _discard_cards(self, cards, card_type):
@@ -1323,7 +1338,7 @@ class Game:
             }, timeout=10)
 
             if response.status_code != 200:
-                print(f"Failed to discard {card_type} cards: {response.json().get('message', 'Unknown error')}")
+                logger.error(f"Failed to discard {card_type} cards: {response.json().get('message', 'Unknown error')}")
                 return False
 
             # Log the card discard action
@@ -1336,5 +1351,5 @@ class Game:
 
             return True
         except Exception as e:
-            print(f"An error occurred while discarding {card_type} cards: {str(e)}")
+            logger.error(f"An error occurred while discarding {card_type} cards: {str(e)}")
             return False

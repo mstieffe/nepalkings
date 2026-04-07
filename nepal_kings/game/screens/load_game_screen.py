@@ -10,6 +10,10 @@ from config import settings
 from utils import http_compat as requests
 from game.core.game import Game
 from utils.background_poller import BackgroundPoller
+import logging
+
+logger = logging.getLogger('nk.screens.load_game')
+
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -149,7 +153,7 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         try:
             self.games = self._fetch_games()
         except Exception as e:
-            print(f"Error fetching games: {str(e)}")
+            logger.error(f"Error fetching games: {str(e)}")
             self.games = []
 
         # Compute total content height & max scroll
@@ -479,5 +483,5 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         self.reset_action()
 
     def reset_action(self):
-        print(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
+        logger.debug(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
         self.state.action = {"task": None, "content": None, "status": None}

@@ -793,14 +793,19 @@ def _exec_combine_battle_moves(base, game_id, ai_player_id, params):
 
 def _exec_play_battle_move(base, game_id, ai_player_id, params):
     """Play a battle move via POST /games/play_battle_move."""
-    resp = http_requests.post(f'{base}/games/play_battle_move', json={
+    payload = {
         'game_id': game_id,
         'player_id': ai_player_id,
         'battle_move_id': params['battle_move_id'],
-    }, timeout=15)
+    }
+    call_figure_id = params.get('call_figure_id')
+    if call_figure_id:
+        payload['call_figure_id'] = call_figure_id
+    resp = http_requests.post(f'{base}/games/play_battle_move', json=payload, timeout=15)
     result = resp.json()
     if result.get('success'):
-        logger.info(f"Played battle move {params['battle_move_id']}")
+        logger.info(f"Played battle move {params['battle_move_id']}"
+                     f" (call_figure_id={call_figure_id})")
         return True
     logger.warning(f"Play battle move failed: {result.get('message')}")
     return False

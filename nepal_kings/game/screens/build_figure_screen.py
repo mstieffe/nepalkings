@@ -11,6 +11,10 @@ from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
 from utils.utils import ColorTogglePill
+import logging
+
+logger = logging.getLogger('nk.screens.build_figure')
+
 
 
 class BuildFigureScreen(SubScreen):
@@ -58,7 +62,7 @@ class BuildFigureScreen(SubScreen):
         self.selected_figure_family = None
         self.selected_figures = []
         self.dialogue_box = None
-        print("[BuildFigureScreen] State reset for game switch")
+        logger.debug("[BuildFigureScreen] State reset for game switch")
 
     def create_figure_in_db(self, selected_figure, instant_charge_advance=False):
         """Insert the selected figure into the database. Returns the server response dict."""
@@ -74,7 +78,7 @@ class BuildFigureScreen(SubScreen):
             real_cards = self.map_figure_cards_to_hand(selected_figure)
 
             if real_cards is None:
-                print(f"Failed to create figure: Could not find all cards in the player's hand.")
+                logger.error(f"Failed to create figure: Could not find all cards in the player's hand.")
                 self.game.unlock_actions()
                 return {'success': False, 'message': 'Could not find all cards in hand'}
 
@@ -99,9 +103,9 @@ class BuildFigureScreen(SubScreen):
             )
 
             if response.get('success'):
-                print(f"Figure {selected_figure.name} created successfully in the database.")
+                logger.debug(f"Figure {selected_figure.name} created successfully in the database.")
             else:
-                print(f"Failed to create figure: {response.get('message', 'Unknown error')}")
+                logger.error(f"Failed to create figure: {response.get('message', 'Unknown error')}")
                 self.game.unlock_actions()
                 return response
 
@@ -342,7 +346,7 @@ class BuildFigureScreen(SubScreen):
             response = self.dialogue_box.update(events)
             if response:
                 
-                print("Response:", response)
+                logger.debug("Response:", response)
                 if response == 'yes':
                     # Block regular build during forced advance
                     if getattr(self.game, 'pending_forced_advance', False):
@@ -377,7 +381,7 @@ class BuildFigureScreen(SubScreen):
                         )
                         return
                     
-                    print("Creating figure...")
+                    logger.debug("Creating figure...")
                     build_result = self.create_figure_in_db(selected_figure)
 
                     if not build_result or not build_result.get('success'):
@@ -410,7 +414,7 @@ class BuildFigureScreen(SubScreen):
                             )
                             return
 
-                    print("Creating figure with instant charge advance...")
+                    logger.debug("Creating figure with instant charge advance...")
                     build_result = self.create_figure_in_db(selected_figure, instant_charge_advance=True)
 
                     if not build_result or not build_result.get('success'):
@@ -705,7 +709,7 @@ class BuildFigureScreen(SubScreen):
             if real_card:
                 real_cards.append(real_card)
             else:
-                print(f"Card {dummy_card} not found in hand.")
+                logger.debug(f"Card {dummy_card} not found in hand.")
                 return None  # Return None if any card is not found
 
         return real_cards

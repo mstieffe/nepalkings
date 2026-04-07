@@ -717,6 +717,73 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
     return actions
 
 
+_CALL_FIELD_MAP = {
+    'Call Villager': 'village',
+    'Call Military': 'military',
+    'Call King': 'castle',
+}
+
+_RED_SUITS = {'Hearts', 'Diamonds'}
+_BLACK_SUITS = {'Clubs', 'Spades'}
+
+
+def _figure_power_from_dict(fig):
+    """Compute base power from a serialized figure dict."""
+    if fig.get('field') == 'castle':
+        return 15
+    cards = fig.get('cards', fig.get('cards_to_figure', []))
+    return sum(c.get('value', 0) for c in cards)
+
+
+def _get_best_call_figure(move, game_dict, ai_player):
+    """Return the best eligible figure dict for a Call move, or None."""
+    family = move.get('family_name', '')
+    field_type = _CALL_FIELD_MAP.get(family)
+    if not field_type:
+        return None
+
+    bm_suit = move.get('suit', '')
+    bm_is_red = bm_suit in _RED_SUITS
+
+    # IDs of figures already in battle
+    fighting_ids = set()
+    for attr in ('advancing_figure_id', 'advancing_figure_id_2',
+                 'defending_figure_id', 'defending_figure_id_2'):
+        fid = game_dict.get(attr)
+        if fid is not None:
+            fighting_ids.add(fid)
+
+    # IDs of figures already called in earlier rounds of this battle
+    already_called_ids = set()
+    for bm in game_dict.get('battle_moves', []):
+        if bm.get('player_id') == ai_player['id'] and bm.get('played_round') is not None:
+            cfid = bm.get('call_figure_id')
+            if cfid is not None:
+                already_called_ids.add(cfid)
+
+    best_fig = None
+    best_power = -1
+    for fig in ai_player.get('figures', []):
+        if fig.get('field') != field_type:
+            continue
+        if fig['id'] in fighting_ids:
+            continue
+        if fig['id'] in already_called_ids:
+            continue
+        # Colour check: red BM → red figure, black BM → black figure
+        fig_suit = fig.get('suit', '')
+        if bm_is_red and fig_suit not in _RED_SUITS:
+            continue
+        if not bm_is_red and fig_suit not in _BLACK_SUITS:
+            continue
+        power = _figure_power_from_dict(fig)
+        if power > best_power:
+            best_power = power
+            best_fig = fig
+
+    return best_fig
+
+
 def _enum_battle_round(game_dict, ai_player, opponent):
     """AI plays a battle move or skips."""
     actions = []
@@ -729,11 +796,34 @@ def _enum_battle_round(game_dict, ai_player, opponent):
                 if m.get('player_id') == ai_player['id'] and m.get('played_round') is None]
     
     for move in ai_moves:
+        family = move.get('family_name', '')
+        params = {'battle_move_id': move['id']}
+
+        # For Call moves, auto-select the best eligible figure
+        call_fig = _get_best_call_figure(move, game_dict, ai_player) if family in _CALL_FIELD_MAP else None
+        if call_fig:
+            params['call_figure_id'] = call_fig['id']
+            fig_power = _figure_power_from_dict(call_fig)
+            combined = fig_power + (move.get('value', 0) or 0)
+            desc = (f"Play {family} "
+                    f"(card={move.get('value', '?')}) + "
+                    f"{call_fig.get('name', '?')} (power={fig_power}) "
+                    f"= {combined} total for round {current_round + 1}")
+        elif family in _CALL_FIELD_MAP:
+            # Call move but no eligible figure — only card value applies
+            desc = (f"Play {family} "
+                    f"(value={move.get('value', '?')}, NO eligible figure) "
+                    f"for round {current_round + 1}")
+        else:
+            desc = (f"Play {family} "
+                    f"(value={move.get('value', '?')}) "
+                    f"for round {current_round + 1}")
+
         actions.append({
             'id': action_id,
             'type': 'play_battle_move',
-            'description': f"Play {move.get('name', '?')} (value={move.get('value', '?')}) for round {current_round + 1}",
-            'params': {'battle_move_id': move['id']},
+            'description': desc,
+            'params': params,
         })
         action_id += 1
     

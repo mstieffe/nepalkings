@@ -9,6 +9,10 @@ from config import settings
 from utils.utils import Button, InputField
 from utils.game_service import fetch_users, fetch_user, create_challenge, remove_challenge, create_game, fetch_game
 from utils.background_poller import BackgroundPoller
+import logging
+
+logger = logging.getLogger('nk.screens.new_game')
+
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -460,7 +464,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 try:
                     self._check_accepted_challenges()
                 except Exception as e:
-                    print(f"[new_game] _check_accepted_challenges error: {e}")
+                    logger.error(f"[new_game] _check_accepted_challenges error: {e}")
                 all_challenges = self.user['challenges_issued'] + self.user['challenges_received']
                 self.open_challenges = [ch for ch in all_challenges if ch.get('status') == 'open']
                 self.open_opponents = {}
@@ -675,7 +679,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
         issued = self.user.get('challenges_issued', [])
         accepted = [ch for ch in issued if ch.get('status') == 'accepted']
         if accepted:
-            print(f"[new_game] Found {len(accepted)} accepted challenge(s): "
+            logger.debug(f"[new_game] Found {len(accepted)} accepted challenge(s): "
                   f"{[(ch['id'], ch.get('game_id')) for ch in accepted]}, "
                   f"already notified: {self.state._notified_accepted_challenges}, "
                   f"dialogue_box: {bool(self.dialogue_box)}")
@@ -769,5 +773,5 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.state.set_msg(response['message'])
 
     def reset_action(self):
-        print(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
+        logger.debug(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
         self.state.action = {"task": None, "content": None, "status": None}

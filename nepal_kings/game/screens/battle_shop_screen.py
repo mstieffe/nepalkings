@@ -15,6 +15,10 @@ from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from utils import battle_shop_service
+import logging
+
+logger = logging.getLogger('nk.screens.battle_shop')
+
 
 
 class BattleShopScreen(SubScreen):
@@ -114,7 +118,7 @@ class BattleShopScreen(SubScreen):
         self.dialogue_box = None
         self._battle_moves_confirmed = False
         self._waiting_for_opponent = False
-        print("[BattleShop] State reset for game switch")
+        logger.debug("[BattleShop] State reset for game switch")
 
     @property
     def _is_locked(self):
@@ -254,7 +258,7 @@ class BattleShopScreen(SubScreen):
             self._loaded_game_key = (getattr(self.game, 'game_id', None),
                                      getattr(self.game, 'player_id', None))
         except Exception as e:
-            print(f"[BattleShop] Failed to load bought moves: {e}")
+            logger.error(f"[BattleShop] Failed to load bought moves: {e}")
             self.bought_moves = []
 
     def _get_bought_card_ids(self):
@@ -588,7 +592,7 @@ class BattleShopScreen(SubScreen):
                                               getattr(self.game, 'player_id', None),
                                               getattr(self.game, '_figures_data_version', 0))
         except Exception as e:
-            print(f"[BattleShop] Failed to load player figures: {e}")
+            logger.error(f"[BattleShop] Failed to load player figures: {e}")
             self._player_figures = []
             self._resources_data = None
 

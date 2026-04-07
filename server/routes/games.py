@@ -11,6 +11,8 @@ from game_service.deck_manager import DeckManager
 
 import server_settings as settings
 
+logger = logging.getLogger('nepalkings.routes.games')
+
 games = Blueprint('games', __name__)
 
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
@@ -80,7 +82,7 @@ def _check_and_update_ceasefire(game):
             (p for p in game.players if p.id != game.invader_player_id), None
         )
         if defender and defender.turns_left <= 1:
-            print(f"[CEASEFIRE] Blitzkrieg ceasefire ending (defender has {defender.turns_left} turn(s) left)")
+            logger.info(f"[CEASEFIRE] Blitzkrieg ceasefire ending (defender has {defender.turns_left} turn(s) left)")
             game.ceasefire_active = False
             game.ceasefire_start_turn = None
             db.session.commit()
@@ -91,7 +93,7 @@ def _check_and_update_ceasefire(game):
 
     # Universal end: invader is on their last turn and needs to advance
     if invader.turns_left <= 1:
-        print(f"[CEASEFIRE] Ceasefire ending (invader has {invader.turns_left} turn(s) left — must advance)")
+        logger.info(f"[CEASEFIRE] Ceasefire ending (invader has {invader.turns_left} turn(s) left — must advance)")
         game.ceasefire_active = False
         game.ceasefire_start_turn = None
         db.session.commit()
@@ -106,11 +108,9 @@ def _check_and_update_ceasefire(game):
     ceasefire_start = game.ceasefire_start_turn if game.ceasefire_start_turn is not None else 0
     invader_turns_during_ceasefire = current_turn - ceasefire_start
     
-    print(f"[CEASEFIRE] Current turn index: {current_turn}, Ceasefire start index: {ceasefire_start}, Invader turns during ceasefire: {invader_turns_during_ceasefire}")
-    
     # Ceasefire ends after 3 invader turns
     if invader_turns_during_ceasefire >= 3:
-        print(f"[CEASEFIRE] Ceasefire ending (3 invader turns passed)")
+        logger.info(f"[CEASEFIRE] Ceasefire ending (3 invader turns passed, turn_idx={current_turn}, start={ceasefire_start})")
         game.ceasefire_active = False
         game.ceasefire_start_turn = None
         db.session.commit()
@@ -243,7 +243,7 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
     )
     db.session.add(log_entry)
 
-    print(f"[GAME_OVER] Game {game.id} finished ({reason})! Winner: {winner_username} ({winner_player.points}pts) "
+    logger.info(f"[GAME_OVER] Game {game.id} finished ({reason})! Winner: {winner_username} ({winner_player.points}pts) "
           f"Loser: {loser_username} ({loser_player.points}pts) Gold: {gold_awarded}")
 
     return {
@@ -310,7 +310,7 @@ def _check_and_fill_minimum_cards(game, player):
     Check if player has minimum required cards and auto-fill if needed.
     Returns fill_info dict with details about what was filled, or None if no fill needed.
     """
-    print(f"[AUTO-FILL] Starting check for player {player.id} in game {game.id}")
+    logger.debug(f"[AUTO-FILL] Starting check for player {player.id} in game {game.id}")
     
     # Count current cards (in hand = not in deck and not part of figure)
     main_cards_count = MainCard.query.filter_by(
@@ -331,14 +331,14 @@ def _check_and_fill_minimum_cards(game, player):
     main_cards_needed = max(0, settings.NUM_MIN_MAIN_CARDS - main_cards_count)
     side_cards_needed = max(0, settings.NUM_MIN_SIDE_CARDS - side_cards_count)
     
-    print(f"[AUTO-FILL] Player {player.id}: main={main_cards_count}/{settings.NUM_MIN_MAIN_CARDS}, side={side_cards_count}/{settings.NUM_MIN_SIDE_CARDS}")
+    logger.debug(f"[AUTO-FILL] Player {player.id}: main={main_cards_count}/{settings.NUM_MIN_MAIN_CARDS}, side={side_cards_count}/{settings.NUM_MIN_SIDE_CARDS}")
     
     if main_cards_needed == 0 and side_cards_needed == 0:
-        print(f"[AUTO-FILL] No fill needed")
+        logger.debug(f"[AUTO-FILL] No fill needed")
         return None
     
     # Auto-fill needed
-    print(f"[AUTO-FILL] Need to fill: main={main_cards_needed}, side={side_cards_needed}")
+    logger.debug(f"[AUTO-FILL] Need to fill: main={main_cards_needed}, side={side_cards_needed}")
     fill_info = {
         'main_cards_filled': 0,
         'side_cards_filled': 0,
@@ -346,7 +346,7 @@ def _check_and_fill_minimum_cards(game, player):
     }
     
     if main_cards_needed > 0:
-        print(f"[AUTO-FILL] Drawing {main_cards_needed} main cards")
+        logger.debug(f"[AUTO-FILL] Drawing {main_cards_needed} main cards")
         drawn_main = DeckManager.draw_cards_from_deck(
             game,
             player,
@@ -361,10 +361,10 @@ def _check_and_fill_minimum_cards(game, player):
                 'rank': card.rank.value,
                 'type': 'main'
             })
-        print(f"[AUTO-FILL] Drew {len(drawn_main)} main cards")
+        logger.debug(f"[AUTO-FILL] Drew {len(drawn_main)} main cards")
     
     if side_cards_needed > 0:
-        print(f"[AUTO-FILL] Drawing {side_cards_needed} side cards")
+        logger.debug(f"[AUTO-FILL] Drawing {side_cards_needed} side cards")
         drawn_side = DeckManager.draw_cards_from_deck(
             game,
             player,
@@ -379,9 +379,9 @@ def _check_and_fill_minimum_cards(game, player):
                 'rank': card.rank.value,
                 'type': 'side'
             })
-        print(f"[AUTO-FILL] Drew {len(drawn_side)} side cards")
+        logger.debug(f"[AUTO-FILL] Drew {len(drawn_side)} side cards")
     
-    print(f"[AUTO-FILL] Returning fill_info: {fill_info}")
+    logger.debug(f"[AUTO-FILL] Returning fill_info: {fill_info}")
     return fill_info
 
 def _get_opponent_turn_summary(game, current_player_id):
@@ -391,7 +391,7 @@ def _get_opponent_turn_summary(game, current_player_id):
     """
     from models import LogEntry, ActiveSpell
     
-    print(f"[OPPONENT_TURN] Getting summary for game {game.id}, current player {current_player_id}")
+    logger.debug(f"[OPPONENT_TURN] Getting summary for game {game.id}, current player {current_player_id}")
     
     # Get opponent player
     opponent = None
@@ -411,7 +411,7 @@ def _get_opponent_turn_summary(game, current_player_id):
         LogEntry.player_id == opponent.id,
         LogEntry.round_number == game.current_round
     ).order_by(LogEntry.id.desc()).limit(5).all()
-    print(f"[OPPONENT_TURN] Last 5 logs from opponent: {[(log.type, log.message) for log in all_logs]}")
+    logger.debug(f"[OPPONENT_TURN] Last 5 logs from opponent: {[(log.type, log.message) for log in all_logs]}")
     
     # Check if current player had a figure destroyed (by opponent's Explosion spell)
     destroyed_figure_log = LogEntry.query.filter(
@@ -461,11 +461,11 @@ def _get_opponent_turn_summary(game, current_player_id):
         if not more_recent_action:
             import re
             # Extract actions from message: "username ended Infinite Hammer mode after: action1, action2, action3."
-            print(f"[INFINITE_HAMMER] Log message: {infinite_hammer_log.message}")
+            logger.debug(f"[INFINITE_HAMMER] Log message: {infinite_hammer_log.message}")
             match = re.search(r'ended Infinite Hammer mode after: (.+)\.', infinite_hammer_log.message)
             if match:
                 actions_text = match.group(1)
-                print(f"[INFINITE_HAMMER] Extracted actions: {actions_text}")
+                logger.debug(f"[INFINITE_HAMMER] Extracted actions: {actions_text}")
                 return {
                     'opponent_name': opponent.serialize()['username'],
                     'action': {
@@ -476,7 +476,7 @@ def _get_opponent_turn_summary(game, current_player_id):
                 }
             else:
                 # No actions performed during Infinite Hammer
-                print(f"[INFINITE_HAMMER] No actions match found in message")
+                logger.debug(f"[INFINITE_HAMMER] No actions match found in message")
                 return {
                     'opponent_name': opponent.serialize()['username'],
                     'action': {
@@ -493,7 +493,7 @@ def _get_opponent_turn_summary(game, current_player_id):
         LogEntry.type.in_(['figure_built', 'figure_upgraded', 'spell_cast', 'figure_pickup', 'card_changed'])
     ).order_by(LogEntry.id.desc()).first()
     
-    print(f"[OPPONENT_TURN] Most recent actionable log: {recent_log.type if recent_log else 'None'} - {recent_log.message if recent_log else 'None'}")
+    logger.debug(f"[OPPONENT_TURN] Most recent actionable log: {recent_log.type if recent_log else 'None'} - {recent_log.message if recent_log else 'None'}")
     
     # Check if this is game start - each player should see it once
     # Check if current player has any logs yet (works regardless of turn/round number)
@@ -502,14 +502,14 @@ def _get_opponent_turn_summary(game, current_player_id):
         LogEntry.player_id == current_player_id
     ).first()
     
-    print(f"[GAME_START_CHECK] Player {current_player_id} has logs: {current_player_logs is not None}, is_turn: {game.turn_player_id == current_player_id}")
+    logger.debug(f"[GAME_START_CHECK] Player {current_player_id} has logs: {current_player_logs is not None}, is_turn: {game.turn_player_id == current_player_id}")
     
     # Show welcome message if player has no logs at all — they haven't
     # interacted with this game yet, regardless of what the opponent did.
     should_show_welcome = not current_player_logs
 
     if should_show_welcome:
-        print(f"[GAME_START_CHECK] Showing welcome for player {current_player_id}")
+        logger.debug(f"[GAME_START_CHECK] Showing welcome for player {current_player_id}")
         # Get the player's Maharaja figure
         maharaja = Figure.query.filter_by(
             player_id=current_player_id,
@@ -523,7 +523,7 @@ def _get_opponent_turn_summary(game, current_player_id):
             is_turn = game.turn_player_id == current_player_id
             is_invader = game.invader_player_id == current_player_id
             
-            print(f"[GAME_START_CHECK] Returning game_start action for player {current_player_id} (is_turn={is_turn}, is_invader={is_invader})")
+            logger.debug(f"[GAME_START_CHECK] Returning game_start action for player {current_player_id} (is_turn={is_turn}, is_invader={is_invader})")
             
             return {
                 'action': 'game_start',
@@ -533,9 +533,9 @@ def _get_opponent_turn_summary(game, current_player_id):
                 'is_invader': is_invader
             }
         else:
-            print(f"[GAME_START_CHECK] No Maharaja found for player {current_player_id}")
+            logger.debug(f"[GAME_START_CHECK] No Maharaja found for player {current_player_id}")
     else:
-        print(f"[GAME_START_CHECK] Player {current_player_id} has existing logs, skipping game_start")
+        logger.debug(f"[GAME_START_CHECK] Player {current_player_id} has existing logs, skipping game_start")
     
     if not recent_log:
         return {
@@ -667,7 +667,7 @@ def _get_opponent_turn_summary(game, current_player_id):
             'message': f'Cast {spell_name}'
         }
         
-        print(f"[OPPONENT_TURN] Detected spell: {spell_name}")
+        logger.debug(f"[OPPONENT_TURN] Detected spell: {spell_name}")
         
         # Check if spell affects current player
         if spell_name == 'Forced Deal':
@@ -714,7 +714,7 @@ def _get_opponent_turn_summary(game, current_player_id):
                 part_of_figure=False
             ).all()
             
-            print(f"[DUMP_CARDS_SERVER] Found {len(main_cards)} main cards and {len(side_cards)} side cards for player {current_player_id}")
+            logger.debug(f"[DUMP_CARDS_SERVER] Found {len(main_cards)} main cards and {len(side_cards)} side cards for player {current_player_id}")
             
             # Serialize cards for display
             action_data['new_cards'] = []
@@ -723,7 +723,7 @@ def _get_opponent_turn_summary(game, current_player_id):
                 card_data['type'] = 'main' if isinstance(card, MainCard) else 'side'
                 action_data['new_cards'].append(card_data)
             action_data['message'] = f'Cast Dump Cards - you drew {len(action_data["new_cards"])} new cards'
-            print(f"[DUMP_CARDS_SERVER] Serialized {len(action_data['new_cards'])} cards for notification")
+            logger.debug(f"[DUMP_CARDS_SERVER] Serialized {len(action_data['new_cards'])} cards for notification")
         
         elif spell_name == 'Poison':
             # Check if the poisoned figure belongs to the current player
@@ -760,7 +760,7 @@ def _get_opponent_turn_summary(game, current_player_id):
         
         summary['action'] = action_data
     
-    print(f"[OPPONENT_TURN] Summary: {summary}")
+    logger.debug(f"[OPPONENT_TURN] Summary: {summary}")
     return summary
 
 @games.route('/get_games', methods=['GET'])
@@ -781,7 +781,8 @@ def get_games():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to fetch games')
+        return jsonify({'success': False, 'message': 'Failed to fetch games'}), 400
 
 
 @games.route('/get_game', methods=['GET'])
@@ -801,7 +802,8 @@ def get_game():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to fetch game')
+        return jsonify({'success': False, 'message': 'Failed to fetch game'}), 400
 
 
 @games.route('/start_turn', methods=['POST'])
@@ -814,7 +816,7 @@ def start_turn():
         game_id = data.get('game_id')
         player_id = data.get('player_id')
         
-        print(f"[START_TURN] Called for game {game_id} (type={type(game_id)}), player {player_id} (type={type(player_id)})")
+        logger.debug(f"[START_TURN] Called for game {game_id} (type={type(game_id)}), player {player_id} (type={type(player_id)})")
 
         if not game_id or not player_id:
             return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
@@ -833,7 +835,7 @@ def start_turn():
         
         # If this is game_start, return it immediately (regardless of whose turn it is)
         if opponent_turn_summary and opponent_turn_summary.get('action') == 'game_start':
-            print(f"[START_TURN] Returning game_start notification for player {player_id}")
+            logger.debug(f"[START_TURN] Returning game_start notification for player {player_id}")
             return jsonify({
                 'success': True,
                 'auto_fill': None,
@@ -842,12 +844,12 @@ def start_turn():
             })
 
         # Check if it's actually this player's turn (for normal turn processing)
-        print(f"[START_TURN] Checking turn: game.turn_player_id={game.turn_player_id} (type={type(game.turn_player_id)}), player_id={player_id} (type={type(player_id)})")
+        logger.debug(f"[START_TURN] Checking turn: game.turn_player_id={game.turn_player_id} (type={type(game.turn_player_id)}), player_id={player_id} (type={type(player_id)})")
         if game.turn_player_id != player_id:
-            print(f"[START_TURN] Turn mismatch: game.turn_player_id={game.turn_player_id}, player_id={player_id}")
+            logger.debug(f"[START_TURN] Turn mismatch: game.turn_player_id={game.turn_player_id}, player_id={player_id}")
             return jsonify({'success': False, 'message': 'Not your turn'}), 400
 
-        print(f"[START_TURN] Turn check passed, calling _check_and_fill_minimum_cards")
+        logger.debug(f"[START_TURN] Turn check passed, calling _check_and_fill_minimum_cards")
         
         # Check if ceasefire should end
         ceasefire_ended = _check_and_update_ceasefire(game)
@@ -855,7 +857,7 @@ def start_turn():
         # Check and fill minimum cards
         fill_info = _check_and_fill_minimum_cards(game, player)
         
-        print(f"[START_TURN] Fill info: {fill_info}, Ceasefire ended: {ceasefire_ended}")
+        logger.debug(f"[START_TURN] Fill info: {fill_info}, Ceasefire ended: {ceasefire_ended}")
         
         # Get opponent's last turn summary (includes Forced Deal card details if applicable)
         opponent_turn_summary = _get_opponent_turn_summary(game, player_id)
@@ -869,10 +871,8 @@ def start_turn():
 
     except Exception as e:
         db.session.rollback()
-        print(f"[START_TURN] Exception occurred: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'message': f'An error occurred: {str(e)}'}), 400
+        logger.exception('Failed to start turn')
+        return jsonify({'success': False, 'message': 'Failed to start turn'}), 400
 
 
 @games.route('/create_game', methods=['POST'])
@@ -966,10 +966,10 @@ def create_game():
                 player.turns_left = settings.INITIAL_TURNS_INVADER
 
             else:
-                print("Himalaya Maharaja")
-                print(maharaja_card.suit)
-                print(player.id)
-                print(game.id)
+                logger.debug("Himalaya Maharaja")
+                logger.debug(maharaja_card.suit)
+                logger.debug(player.id)
+                logger.debug(game.id)
                 # Create the figure
                 figure = Figure(
                     player_id=player.id,
@@ -985,9 +985,9 @@ def create_game():
                     requires={},
                     checkmate=True
                 )
-                print(figure)
+                logger.debug(figure)
                 db.session.add(figure)
-                print("created figure")
+                logger.debug("created figure")
             db.session.flush()
 
             # Add cards to the figure and update card attributes
@@ -1023,7 +1023,8 @@ def create_game():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to create game: {str(e)}'}), 400
+        logger.exception('Failed to create game')
+        return jsonify({'success': False, 'message': 'Failed to create game'}), 400
 
 
 @games.route('/delete_game', methods=['POST'])
@@ -1063,7 +1064,8 @@ def delete_game():
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to delete game')
+        return jsonify({'success': False, 'message': 'Failed to delete game'}), 400
 
     return jsonify({'success': True, 'message': 'Game deleted successfully'})
 
@@ -1084,7 +1086,8 @@ def get_hand():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to get hand')
+        return jsonify({'success': False, 'message': 'Failed to get hand'}), 400
 
 
 @games.route('/draw_cards', methods=['POST'])
@@ -1112,7 +1115,8 @@ def draw_cards():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to draw cards, Error: {str(e)}'}), 400
+        logger.exception('Failed to draw cards')
+        return jsonify({'success': False, 'message': 'Failed to draw cards'}), 400
 
 
 @games.route('/return_cards', methods=['POST'])
@@ -1139,7 +1143,8 @@ def return_cards():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to return cards, Error: {str(e)}'}), 400
+        logger.exception('Failed to return cards')
+        return jsonify({'success': False, 'message': 'Failed to return cards'}), 400
     
 @games.route('/change_cards', methods=['POST'])
 def change_cards():
@@ -1156,8 +1161,8 @@ def change_cards():
             if battle_err:
                 return battle_err
 
-        print(f"Changing {card_type} cards for player {player_id} in game {game_id}")
-        print(f"Selected card IDs: {card_ids}")
+        logger.debug(f"Changing {card_type} cards for player {player_id} in game {game_id}")
+        logger.debug(f"Selected card IDs: {card_ids}")
         
         # Handle MainCards or SideCards based on card_type
         if card_type == "main":
@@ -1206,7 +1211,8 @@ def change_cards():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to change cards: {str(e)}"}), 400
+        logger.exception('Failed to change cards')
+        return jsonify({'success': False, 'message': 'Failed to change cards'}), 400
 
 
 @games.route('/discard_cards', methods=['POST'])
@@ -1226,8 +1232,8 @@ def discard_cards():
             if battle_err:
                 return battle_err
 
-        print(f"Discarding {card_type} cards for player {player_id} in game {game_id}")
-        print(f"Selected card IDs: {card_ids}")
+        logger.debug(f"Discarding {card_type} cards for player {player_id} in game {game_id}")
+        logger.debug(f"Selected card IDs: {card_ids}")
         
         # Side card ranks are 2-6, main card ranks are 7-A
         side_card_ranks = ['2', '3', '4', '5', '6']
@@ -1255,7 +1261,8 @@ def discard_cards():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to discard cards: {str(e)}"}), 400
+        logger.exception('Failed to discard cards')
+        return jsonify({'success': False, 'message': 'Failed to discard cards'}), 400
 
 
 @games.route('/update_points', methods=['POST'])
@@ -1276,7 +1283,8 @@ def update_points():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to update points: {str(e)}"}), 400
+        logger.exception('Failed to update points')
+        return jsonify({'success': False, 'message': 'Failed to update points'}), 400
 
 
 @games.route('/advance_figure', methods=['POST'])
@@ -1453,13 +1461,13 @@ def advance_figure():
 
         if civil_war_need_second:
             # Don't flip turn — player needs to pick a second figure
-            print(f"[ADVANCE] Civil War — waiting for second figure pick (color: {civil_war_color})")
+            logger.info(f"[ADVANCE] Civil War — waiting for second figure pick (color: {civil_war_color})")
         elif has_blitzkrieg and not is_counter_advance:
             # Blitzkrieg: give defender their last turn (build, etc.) before
             # the invader selects which defender figure to fight.
             # Counter-advance is blocked separately, so the defender can only
             # do non-advance actions on this turn.
-            print(f"[ADVANCE] Blitzkrieg active — defender gets last turn before defender selection")
+            logger.info(f"[ADVANCE] Blitzkrieg active — defender gets last turn before defender selection")
             game.turn_player_id = other_player.id
         else:
             # Normal: flip turn to opponent
@@ -1494,7 +1502,8 @@ def advance_figure():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to advance figure: {str(e)}"}), 400
+        logger.exception('Failed to advance figure')
+        return jsonify({'success': False, 'message': 'Failed to advance figure'}), 400
 
 
 @games.route('/select_defender', methods=['POST'])
@@ -1609,7 +1618,8 @@ def select_defender():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to select defender: {str(e)}"}), 400
+        logger.exception('Failed to select defender')
+        return jsonify({'success': False, 'message': 'Failed to select defender'}), 400
 
 
 @games.route('/skip_civil_war_second', methods=['POST'])
@@ -1657,7 +1667,7 @@ def skip_civil_war_second():
         db.session.add(log_entry)
         db.session.commit()
 
-        print(f"[CIVIL_WAR] {username} skipped second pick ({context}). Turn flipped.")
+        logger.info(f"[CIVIL_WAR] {username} skipped second pick ({context}). Turn flipped.")
 
         return jsonify({
             'success': True,
@@ -1666,7 +1676,8 @@ def skip_civil_war_second():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to skip: {str(e)}"}), 400
+        logger.exception('Failed to skip civil war second')
+        return jsonify({'success': False, 'message': 'Failed to skip'}), 400
 
 
 @games.route('/cannot_advance_loss', methods=['POST'])
@@ -1757,7 +1768,7 @@ def cannot_advance_loss():
 
         db.session.commit()
 
-        print(f"[AUTO_LOSS] {username} cannot advance — loses battle. Round {game.current_round} starts. New invader: {game.invader_player_id}")
+        logger.info(f"[AUTO_LOSS] {username} cannot advance — loses battle. Round {game.current_round} starts. New invader: {game.invader_player_id}")
 
         return jsonify({
             'success': True,
@@ -1769,7 +1780,8 @@ def cannot_advance_loss():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to process auto-loss: {str(e)}"}), 400
+        logger.exception('Failed to process auto-loss')
+        return jsonify({'success': False, 'message': 'Failed to process auto-loss'}), 400
 
 
 @games.route('/defender_no_figures_loss', methods=['POST'])
@@ -1865,7 +1877,7 @@ def defender_no_figures_loss():
 
         db.session.commit()
 
-        print(f"[DEFENDER_NO_FIGURES] {opponent_name} has no valid figures — loses battle. Round {game.current_round} starts. New invader: {game.invader_player_id}")
+        logger.info(f"[DEFENDER_NO_FIGURES] {opponent_name} has no valid figures — loses battle. Round {game.current_round} starts. New invader: {game.invader_player_id}")
 
         return jsonify({
             'success': True,
@@ -1877,7 +1889,8 @@ def defender_no_figures_loss():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to process defender auto-loss: {str(e)}"}), 400
+        logger.exception('Failed to process defender auto-loss')
+        return jsonify({'success': False, 'message': 'Failed to process defender auto-loss'}), 400
 
 
 @games.route('/battle_decision', methods=['POST'])
@@ -1955,7 +1968,7 @@ def battle_decision():
                 decisions[str(player_id)] = 'battle'
                 game.battle_decisions = decisions
                 db.session.commit()
-                print(f"[BATTLE_DECISION] {username} (invader) chose to fight. Waiting for defender.")
+                logger.info(f"[BATTLE_DECISION] {username} (invader) chose to fight. Waiting for defender.")
                 return jsonify({
                     'success': True,
                     'resolved': False,
@@ -1985,9 +1998,9 @@ def battle_decision():
                 auto_fill_invader = _check_and_fill_minimum_cards(game, invader_player)
                 auto_fill_defender = _check_and_fill_minimum_cards(game, defender_player)
                 if auto_fill_invader:
-                    print(f"[BATTLE_DECISION] Auto-filled invader {invader_player.id}: {auto_fill_invader}")
+                    logger.info(f"[BATTLE_DECISION] Auto-filled invader {invader_player.id}: {auto_fill_invader}")
                 if auto_fill_defender:
-                    print(f"[BATTLE_DECISION] Auto-filled defender {defender_player.id}: {auto_fill_defender}")
+                    logger.info(f"[BATTLE_DECISION] Auto-filled defender {defender_player.id}: {auto_fill_defender}")
 
                 log_entry = LogEntry(
                     game_id=game_id,
@@ -2000,7 +2013,7 @@ def battle_decision():
                 )
                 db.session.add(log_entry)
                 db.session.commit()
-                print(f"[BATTLE_DECISION] Both players chose battle. Proceeding to battle screen.")
+                logger.info(f"[BATTLE_DECISION] Both players chose battle. Proceeding to battle screen.")
                 return jsonify({
                     'success': True,
                     'resolved': True,
@@ -2010,8 +2023,8 @@ def battle_decision():
 
     except Exception as e:
         db.session.rollback()
-        print(f"[BATTLE_DECISION] Error: {str(e)}")
-        return jsonify({'success': False, 'message': f"Failed to process battle decision: {str(e)}"}), 400
+        logger.exception('Failed to process battle decision')
+        return jsonify({'success': False, 'message': 'Failed to process battle decision'}), 400
 
 
 def _check_figure_resource_deficit(figure, player_id, game_id):
@@ -2119,7 +2132,7 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
         game.resting_figure_ids = resting_ids
 
     db.session.commit()
-    print(f"[DEFICIT_LOSS] {loser_name}'s {figure_name} has resource deficit. {winner_name} wins 10 points. Round {game.current_round} starts.")
+    logger.info(f"[DEFICIT_LOSS] {loser_name}'s {figure_name} has resource deficit. {winner_name} wins 10 points. Round {game.current_round} starts.")
 
     return jsonify({
         'success': True,
@@ -2188,7 +2201,7 @@ def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
         game.resting_figure_ids = resting_ids
 
     db.session.commit()
-    print(f"[BATTLE_DECISION] {loser_name} folded. {winner_name} wins 10 points. Round {game.current_round} starts. New invader: {winner_player.id}")
+    logger.info(f"[BATTLE_DECISION] {loser_name} folded. {winner_name} wins 10 points. Round {game.current_round} starts. New invader: {winner_player.id}")
 
     return jsonify({
         'success': True,
@@ -2392,16 +2405,16 @@ def _find_all_archer_da(player_id, all_figures, battle_ids, game_id):
         if f.player_id != player_id:
             continue
         if f.id in battle_ids:
-            print(f"[ARCHER_DA] Skipping {f.name} (id={f.id}): in battle_ids")
+            logger.debug(f"[ARCHER_DA] Skipping {f.name} (id={f.id}): in battle_ids")
             continue
         if 'Archer' not in (f.name or ''):
             continue
         if _check_figure_resource_deficit(f, player_id, game_id):
-            print(f"[ARCHER_DA] Skipping {f.name} (id={f.id}, suit={f.suit}): resource deficit")
+            logger.debug(f"[ARCHER_DA] Skipping {f.name} (id={f.id}, suit={f.suit}): resource deficit")
             continue
         adv = _get_advantage_suit(f.suit)
         if not adv:
-            print(f"[ARCHER_DA] Skipping {f.name} (id={f.id}, suit={f.suit}): no advantage suit")
+            logger.debug(f"[ARCHER_DA] Skipping {f.name} (id={f.id}, suit={f.suit}): no advantage suit")
             continue
         # Use the NUMBER card value as the penalty (matches client logic).
         # The Archer's key card and number card may both be side-deck cards;
@@ -2423,12 +2436,12 @@ def _find_all_archer_da(player_id, all_figures, battle_ids, game_id):
                         number_val = card.value
                         break
         if number_val == 0:
-            print(f"[ARCHER_DA] Skipping {f.name} (id={f.id}): no side card found")
+            logger.debug(f"[ARCHER_DA] Skipping {f.name} (id={f.id}): no side card found")
             continue
-        print(f"[ARCHER_DA] Found {f.name} (id={f.id}, suit={f.suit}) → adv={adv}, penalty={number_val}")
+        logger.debug(f"[ARCHER_DA] Found {f.name} (id={f.id}, suit={f.suit}) → adv={adv}, penalty={number_val}")
         results.append((adv, number_val))
     if not results:
-        print(f"[ARCHER_DA] No eligible Archer found for player {player_id}")
+        logger.debug(f"[ARCHER_DA] No eligible Archer found for player {player_id}")
     return results
 
 
@@ -2600,7 +2613,7 @@ def _compute_server_total_diff(game):
             if fig and da_suit.lower() == (fig.suit or '').lower():
                 def_power -= da_val
                 adv_da_applied.append((da_suit, da_val))
-                print(f"[DA_APPLY] Adv archer DA fires: adv_suit={da_suit} vs "
+                logger.debug(f"[DA_APPLY] Adv archer DA fires: adv_suit={da_suit} vs "
                       f"def_fig={fig.name}(suit={fig.suit}) → def_power-={da_val}")
                 break  # this archer consumed its shot
 
@@ -2619,12 +2632,12 @@ def _compute_server_total_diff(game):
             if fig and da_suit.lower() == (fig.suit or '').lower():
                 adv_power -= da_val
                 def_da_applied.append((da_suit, da_val))
-                print(f"[DA_APPLY] Def archer DA fires: def_suit={da_suit} vs "
+                logger.debug(f"[DA_APPLY] Def archer DA fires: def_suit={da_suit} vs "
                       f"adv_fig={fig.name}(suit={fig.suit}) → adv_power-={da_val}")
                 break  # this archer consumed its shot
 
     fig_diff = adv_power - def_power
-    print(f"[TOTAL_DIFF] adv_power={adv_power} def_power={def_power} fig_diff={fig_diff} "
+    logger.debug(f"[TOTAL_DIFF] adv_power={adv_power} def_power={def_power} fig_diff={fig_diff} "
           f"adv_da={adv_da_applied} def_da={def_da_applied}")
 
     # ── round diffs from BattleMove records ──
@@ -2635,10 +2648,10 @@ def _compute_server_total_diff(game):
         def_m = [m for m in all_moves
                  if m.played_round == rnd and m.player_id == def_pid]
         if not adv_m and not def_m:
-            print(f"[ROUND_{rnd}] no moves — skipped")
+            logger.debug(f"[ROUND_{rnd}] no moves — skipped")
             continue
         if any(m.family_name == 'Block' for m in adv_m + def_m):
-            print(f"[ROUND_{rnd}] Block detected — zeroed")
+            logger.debug(f"[ROUND_{rnd}] Block detected — zeroed")
             continue
 
         adv_val = sum(_compute_move_effective_value(
@@ -2649,12 +2662,12 @@ def _compute_server_total_diff(game):
         # Log per-move details
         for m in adv_m:
             mv = _compute_move_effective_value(m, all_figures, game, adv_pid, adv_healers)
-            print(f"[ROUND_{rnd}] ADV move id={m.id} family={m.family_name} "
+            logger.debug(f"[ROUND_{rnd}] ADV move id={m.id} family={m.family_name} "
                   f"value={m.value} call_fig={m.call_figure_id} suit={m.suit} "
                   f"eff_val={mv}")
         for m in def_m:
             mv = _compute_move_effective_value(m, all_figures, game, def_pid, def_healers)
-            print(f"[ROUND_{rnd}] DEF move id={m.id} family={m.family_name} "
+            logger.debug(f"[ROUND_{rnd}] DEF move id={m.id} family={m.family_name} "
                   f"value={m.value} call_fig={m.call_figure_id} suit={m.suit} "
                   f"eff_val={mv}")
 
@@ -2683,11 +2696,11 @@ def _compute_server_total_diff(game):
                         break
 
         round_diff += adv_val - def_val
-        print(f"[ROUND_{rnd}] adv_val={adv_val} def_val={def_val} "
+        logger.debug(f"[ROUND_{rnd}] adv_val={adv_val} def_val={def_val} "
               f"diff={adv_val - def_val} cumulative={round_diff}")
 
     total = fig_diff + round_diff
-    print(f"[SERVER_TOTAL_DIFF] game={game.id} "
+    logger.debug(f"[SERVER_TOTAL_DIFF] game={game.id} "
           f"fig_diff={fig_diff} (adv={adv_power} def={def_power}) "
           f"round_diff={round_diff} total={total}")
     return total
@@ -2863,11 +2876,11 @@ def _start_new_round(game, winner_player):
                 {'suit': c.suit.value, 'rank': c.rank.value}
                 for c in cards
             ]
-            print(f"[NEW_ROUND] Player {p.id} drew 2 side cards: {drawn_cards_map[str(p.id)]}")
+            logger.debug(f"[NEW_ROUND] Player {p.id} drew 2 side cards: {drawn_cards_map[str(p.id)]}")
         except ValueError:
             # Not enough side cards in deck
             drawn_cards_map[str(p.id)] = []
-            print(f"[NEW_ROUND] Player {p.id}: no side cards available in deck")
+            logger.debug(f"[NEW_ROUND] Player {p.id}: no side cards available in deck")
     game.post_battle_drawn_cards = drawn_cards_map
 
 
@@ -2991,7 +3004,7 @@ def play_battle_move():
     db.session.add(log_entry)
     db.session.commit()
 
-    print(f"[BATTLE_MOVE] Player {player_id} played move {battle_move_id} "
+    logger.info(f"[BATTLE_MOVE] Player {player_id} played move {battle_move_id} "
           f"in round {move.played_round}. Next turn: {game.battle_turn_player_id}, "
           f"battle_round: {game.battle_round}")
 
@@ -3147,7 +3160,7 @@ def skip_battle_turn():
     db.session.add(log_entry)
     db.session.commit()
 
-    print(f"[BATTLE_SKIP] Player {player_id} skipped round {skipped[pid_key][-1]}. "
+    logger.info(f"[BATTLE_SKIP] Player {player_id} skipped round {skipped[pid_key][-1]}. "
           f"Next turn: {game.battle_turn_player_id}, battle_round: {game.battle_round}")
 
     return jsonify({
@@ -3203,7 +3216,7 @@ def finish_battle():
     def_figure = Figure.query.get(game.defending_figure_id) if game.defending_figure_id else None
 
     if (not adv_figure or not def_figure) and game.fold_winner_id:
-        print(f"[FINISH_BATTLE] Battle already resolved for game {game_id} (figure destroyed)")
+        logger.info(f"[FINISH_BATTLE] Battle already resolved for game {game_id} (figure destroyed)")
         winner_id = game.fold_winner_id
         if winner_id == player_id:
             outcome = 'win'
@@ -3294,10 +3307,10 @@ def finish_battle():
     diff_delta = abs(total_diff - client_total_diff)
     if diff_delta != 0:
         level = "WARNING" if diff_delta > 0 else "INFO"
-        print(f"[FINISH_BATTLE] ⚠️  DISCREPANCY: player={player_id} "
+        logger.warning(f"[FINISH_BATTLE] ⚠️  DISCREPANCY: player={player_id} "
               f"client_diff={client_total_diff} server_diff(caller)={total_diff} "
               f"delta={diff_delta}  (server is authoritative)")
-    print(f"[FINISH_BATTLE] player={player_id} is_invader={is_invader} "
+    logger.info(f"[FINISH_BATTLE] player={player_id} is_invader={is_invader} "
           f"client_diff={client_total_diff} server_diff={server_diff} "
           f"used_diff={total_diff}")
 
@@ -3511,7 +3524,7 @@ def finish_battle_pick_card():
 
     # Idempotency: if battle state was already cleaned up, just return success
     if not game.advancing_figure_id and not game.defending_figure_id and not game.battle_confirmed:
-        print(f"[FINISH_BATTLE_PICK] Already cleaned up for game {game_id}, returning success")
+        logger.debug(f"[FINISH_BATTLE_PICK] Already cleaned up for game {game_id}, returning success")
         return jsonify({
             'success': True,
             'message': 'Battle already resolved.',
@@ -3546,15 +3559,15 @@ def finish_battle_pick_card():
     # Store picked card info in last_battle_result BEFORE any db.session.commit()
     # calls (return_cards_to_deck commits internally, which would lose uncommitted
     # JSON column changes due to SQLAlchemy's plain db.JSON not tracking mutations).
-    print(f"[PICK_CARD] picked_card_info={picked_card_info}, last_battle_result exists={game.last_battle_result is not None}")
+    logger.debug(f"[PICK_CARD] picked_card_info={picked_card_info}, last_battle_result exists={game.last_battle_result is not None}")
     if picked_card_info:
         result_dict = dict(game.last_battle_result) if game.last_battle_result else {}
         result_dict['picked_card'] = picked_card_info
         game.last_battle_result = result_dict
         flag_modified(game, 'last_battle_result')
-        print(f"[PICK_CARD] Stored picked_card in last_battle_result: {picked_card_info}")
+        logger.debug(f"[PICK_CARD] Stored picked_card in last_battle_result: {picked_card_info}")
     else:
-        print(f"[PICK_CARD] No card picked (winner skipped or no cards)")
+        logger.debug(f"[PICK_CARD] No card picked (winner skipped or no cards)")
 
     # Return remaining battle-move cards to deck
     main_to_deck = []
@@ -3631,7 +3644,7 @@ def finish_battle_pick_card():
         game.resting_figure_ids = resting_ids
 
     db.session.commit()
-    print(f"[FINISH_BATTLE] Card picked. Post-battle cleanup done. Round {game.current_round} starts. Winner/invader={winner.id}")
+    logger.info(f"[FINISH_BATTLE] Card picked. Post-battle cleanup done. Round {game.current_round} starts. Winner/invader={winner.id}")
 
     return jsonify({
         'success': True,
@@ -3828,7 +3841,7 @@ def finish_battle_draw():
         game.resting_figure_ids = resting_ids
 
     db.session.commit()
-    print(f"[FINISH_BATTLE_DRAW] {result_msg} Round {game.current_round} starts.")
+    logger.info(f"[FINISH_BATTLE_DRAW] {result_msg} Round {game.current_round} starts.")
 
     return jsonify({
         'success': True,
@@ -3874,4 +3887,5 @@ def game_results():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error fetching results: {str(e)}'}), 400
+        logger.exception('Failed to fetch game results')
+        return jsonify({'success': False, 'message': 'Failed to fetch game results'}), 400

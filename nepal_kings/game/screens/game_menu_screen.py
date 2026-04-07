@@ -13,6 +13,10 @@ from utils.game_service import fetch_user_games, fetch_user, fetch_game, remove_
 from utils.auth_service import send_heartbeat
 from utils.background_poller import BackgroundPoller
 from game.core.game import Game
+import logging
+
+logger = logging.getLogger('nk.screens.game_menu')
+
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -290,17 +294,17 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             try:
                 self._check_accepted_challenges(user)
             except Exception as e:
-                print(f"[game_menu] _check_accepted_challenges error: {e}")
+                logger.error(f"[game_menu] _check_accepted_challenges error: {e}")
 
         except Exception as e:
-            print(f"[game_menu] _apply_badge_data error: {e}")
+            logger.error(f"[game_menu] _apply_badge_data error: {e}")
 
     def _check_accepted_challenges(self, user):
         """Show notification dialogue when an issued challenge has been accepted."""
         issued = user.get('challenges_issued', [])
         accepted = [ch for ch in issued if ch.get('status') == 'accepted']
         if accepted:
-            print(f"[game_menu] Found {len(accepted)} accepted challenge(s): "
+            logger.debug(f"[game_menu] Found {len(accepted)} accepted challenge(s): "
                   f"{[(ch['id'], ch.get('game_id')) for ch in accepted]}, "
                   f"already notified: {self.state._notified_accepted_challenges}, "
                   f"dialogue_box: {bool(self.dialogue_box)}")
@@ -416,7 +420,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             except Exception:
                 pass
             self.state.screen = 'new_game'
-            print("New Game button clicked")
+            logger.debug("New Game button clicked")
         elif self.button_load.collide():
             # Mark current games as seen
             self.state.badge_new_games = 0
@@ -428,7 +432,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             except Exception:
                 pass
             self.state.screen = 'load_game'
-            print("Load Game button clicked")
+            logger.debug("Load Game button clicked")
         elif self.button_rankings.collide():
             self.state.screen = 'rankings'
-            print("Rankings button clicked")
+            logger.debug("Rankings button clicked")
