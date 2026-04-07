@@ -1,21 +1,26 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from models import db, User, Challenge, ChallengeStatus
 import logging
 import server_settings as settings
+from routes.auth import require_token, verify_player_ownership
 
 challenges = Blueprint('challenges', __name__)
 
 logger = logging.getLogger('nepalkings.routes.challenges')
 
 @challenges.route('/remove_challenge', methods=['POST'])
+@require_token
 def remove_challenge():
     try:
         challenge_id = request.form.get('challenge_id')
         challenge = Challenge.query.get(challenge_id)
         if not challenge:
             return jsonify({'success': False, 'message': 'Challenge not found'}), 400
+
+        if g.user_id not in (challenge.challenger_id, challenge.challenged_id):
+            return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
         db.session.delete(challenge)
         db.session.commit()
@@ -27,6 +32,7 @@ def remove_challenge():
 
 
 @challenges.route('/create_challenge', methods=['POST'])
+@require_token
 def create_challenge():
     try:
         challenger = request.form.get('challenger')
@@ -41,6 +47,9 @@ def create_challenge():
 
         if not challenger_user or not opponent_user:
             return jsonify({'success': False, 'message': 'Challenger or opponent does not exist'}), 400
+
+        if g.user_id != challenger_user.id:
+            return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
         # Validate stake
         if stake < 1:
@@ -91,11 +100,17 @@ def _schedule_ai_accept(challenge_id, app):
                 logger.info(f"AI auto-accept skipped: challenge {challenge_id} no longer open")
                 return
 
+            # Get AI auth token for the challenged (AI) user
+            from ai import get_ai_auth_headers
+            ai_headers = get_ai_auth_headers(challenge.challenged_id)
+            auth_header = ai_headers.get('Authorization', '')
+
             with app.test_request_context(
                 '/games/create_game',
                 method='POST',
                 data={'challenge_id': str(challenge_id)},
-                content_type='application/x-www-form-urlencoded'
+                content_type='application/x-www-form-urlencoded',
+                headers={'Authorization': auth_header}
             ):
                 game_response = _route_create_game()
                 if isinstance(game_response, tuple):

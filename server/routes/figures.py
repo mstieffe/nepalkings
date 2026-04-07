@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from sqlalchemy.orm.attributes import flag_modified
 from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, SideCard, LogEntry, User, ActiveSpell
 import logging
 import server_settings as settings
+from routes.auth import require_token, verify_player_ownership
 
 logger = logging.getLogger('nepalkings.routes.figures')
 
@@ -40,11 +41,16 @@ def _has_active_infinite_hammer(player_id, game_id):
     return active_hammer is not None
 
 @figures.route('/create_figure', methods=['POST'])
+@require_token
 def create_figure():
     try:
         data = request.json
         player_id = data['player_id']
         game_id = data['game_id']
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         # Block during active battle
         game = Game.query.get(game_id)
@@ -294,6 +300,7 @@ def create_figure():
 
 
 @figures.route('/update_figure', methods=['POST'])
+@require_token
 def update_figure():
     try:
         data = request.json
@@ -304,6 +311,10 @@ def update_figure():
         figure = Figure.query.get(figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 404
+
+        err = verify_player_ownership(figure.player_id)
+        if err:
+            return err
 
         # Update figure fields
         figure.name = data.get('name', figure.name)
@@ -432,6 +443,7 @@ def get_figures():
 
 
 @figures.route('/delete_figure', methods=['POST'])
+@require_token
 def delete_figure():
     try:
         data = request.json
@@ -445,6 +457,10 @@ def delete_figure():
         figure = Figure.query.get(figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 404
+
+        err = verify_player_ownership(figure.player_id)
+        if err:
+            return err
 
         # Retrieve associated cards
         card_associations = CardToFigure.query.filter_by(figure_id=figure.id).all()
@@ -536,6 +552,7 @@ def delete_figure():
 
 
 @figures.route('/pickup_figure', methods=['POST'])
+@require_token
 def pickup_figure():
     """Pick up a figure from the field and return its cards to the player's hand."""
     try:
@@ -543,6 +560,10 @@ def pickup_figure():
         figure_id = data.get('figure_id')
         player_id = data.get('player_id')
         game_id = data.get('game_id')
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         # Block during active battle
         if game_id:
@@ -675,6 +696,7 @@ def pickup_figure():
 
 
 @figures.route('/upgrade_figure', methods=['POST'])
+@require_token
 def upgrade_figure():
     """Upgrade a figure by adding an upgrade card and changing it to a new family."""
     try:
@@ -682,6 +704,10 @@ def upgrade_figure():
         figure_id = data.get('figure_id')
         player_id = data.get('player_id')
         game_id = data.get('game_id')
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
         upgrade_card_id = data.get('upgrade_card_id')
         upgrade_card_type = data.get('upgrade_card_type')  # 'main' or 'side'
 

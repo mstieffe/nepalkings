@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import random
@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
 from game_service.deck_manager import DeckManager
+from routes.auth import require_token, verify_player_ownership
 
 import server_settings as settings
 
@@ -807,6 +808,7 @@ def get_game():
 
 
 @games.route('/start_turn', methods=['POST'])
+@require_token
 def start_turn():
     """
     Called when a player's turn begins. Checks and auto-fills minimum cards if needed.
@@ -820,6 +822,10 @@ def start_turn():
 
         if not game_id or not player_id:
             return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if not game:
@@ -876,6 +882,7 @@ def start_turn():
 
 
 @games.route('/create_game', methods=['POST'])
+@require_token
 def create_game():
     try:
         challenge_id = request.form.get('challenge_id')
@@ -883,6 +890,9 @@ def create_game():
 
         if not challenge:
             return jsonify({'success': False, 'message': 'Challenge not found'}), 400
+
+        if g.user_id not in (challenge.challenger_id, challenge.challenged_id):
+            return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
         # Get the users from the challenge
         user1 = User.query.get(challenge.challenger_id)
@@ -1027,6 +1037,7 @@ def create_game():
 
 
 @games.route('/delete_game', methods=['POST'])
+@require_token
 def delete_game():
     try:
         game_id = request.form.get('game_id')
@@ -1034,6 +1045,10 @@ def delete_game():
 
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        player_ids = [p.user_id for p in game.players]
+        if g.user_id not in player_ids:
+            return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
         # Delete all related records to avoid orphaned rows
         BattleMove.query.filter_by(game_id=game.id).delete()
@@ -1090,6 +1105,7 @@ def get_hand():
 
 
 @games.route('/draw_cards', methods=['POST'])
+@require_token
 def draw_cards():
     try:
         game_id = request.form.get('game_id')
@@ -1102,6 +1118,10 @@ def draw_cards():
 
         if not game or not player:
             return jsonify({'success': False, 'message': 'Invalid game or player'}), 400
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         # Draw cards using DeckManager
         #from game_service.deck import DeckManager
@@ -1119,6 +1139,7 @@ def draw_cards():
 
 
 @games.route('/return_cards', methods=['POST'])
+@require_token
 def return_cards():
     try:
         card_ids = request.form.getlist('card_ids')  # List of card IDs to return
@@ -1133,6 +1154,11 @@ def return_cards():
         if not cards:
             return jsonify({'success': False, 'message': 'No cards found to return'}), 400
 
+        player_id = cards[0].player_id
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
+
         # Return the cards using DeckManager
         #from game_service.deck import DeckManager
         DeckManager.return_cards_to_deck(cards)
@@ -1146,6 +1172,7 @@ def return_cards():
         return jsonify({'success': False, 'message': 'Failed to return cards'}), 400
     
 @games.route('/change_cards', methods=['POST'])
+@require_token
 def change_cards():
     try:
         data = request.json
@@ -1153,6 +1180,10 @@ def change_cards():
         player_id = data['player_id']
         card_ids = [card['id'] for card in data['cards']]
         card_type = data.get('card_type', 'main')  # Default to main cards
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if game:
@@ -1215,6 +1246,7 @@ def change_cards():
 
 
 @games.route('/discard_cards', methods=['POST'])
+@require_token
 def discard_cards():
     """Discard cards when player has too many (return to deck without drawing new ones)."""
     try:
@@ -1224,6 +1256,10 @@ def discard_cards():
         card_ids = [card['id'] for card in data['cards']]
         card_type = data.get('card_type', 'main')  # Default to main cards
         card_ranks = [card['rank'] for card in data['cards']]
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if game:
@@ -1265,11 +1301,16 @@ def discard_cards():
 
 
 @games.route('/update_points', methods=['POST'])
+@require_token
 def update_points():
     try:
         data = request.json
         player_id = data['player_id']
         points = data['points']
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         player = Player.query.get(player_id)
         if not player:
@@ -1287,6 +1328,7 @@ def update_points():
 
 
 @games.route('/advance_figure', methods=['POST'])
+@require_token
 def advance_figure():
     """
     Player advances a figure toward battle. This sets the advancing figure
@@ -1298,6 +1340,10 @@ def advance_figure():
         game_id = data['game_id']
         player_id = data['player_id']
         figure_id = data['figure_id']
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if not game:
@@ -1506,6 +1552,7 @@ def advance_figure():
 
 
 @games.route('/select_defender', methods=['POST'])
+@require_token
 def select_defender():
     """
     The advancing player selects a defending figure from the OPPONENT's figures.
@@ -1517,6 +1564,10 @@ def select_defender():
         game_id = data['game_id']
         player_id = data['player_id']
         figure_id = data['figure_id']
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if not game:
@@ -1622,6 +1673,7 @@ def select_defender():
 
 
 @games.route('/skip_civil_war_second', methods=['POST'])
+@require_token
 def skip_civil_war_second():
     """
     Player skips selecting a second Civil War figure.
@@ -1632,6 +1684,10 @@ def skip_civil_war_second():
         game_id = data['game_id']
         player_id = data['player_id']
         context = data.get('context', 'advance')  # 'advance' or 'defender'
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if not game:
@@ -1680,6 +1736,7 @@ def skip_civil_war_second():
 
 
 @games.route('/cannot_advance_loss', methods=['POST'])
+@require_token
 def cannot_advance_loss():
     """
     Handle the case where a player cannot advance any figure (e.g., all figures
@@ -1690,6 +1747,10 @@ def cannot_advance_loss():
         data = request.json
         game_id = data['game_id']
         player_id = data['player_id']
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if not game:
@@ -1784,6 +1845,7 @@ def cannot_advance_loss():
 
 
 @games.route('/defender_no_figures_loss', methods=['POST'])
+@require_token
 def defender_no_figures_loss():
     """
     Handle the case where the defender has no valid figures for battle selection.
@@ -1795,6 +1857,10 @@ def defender_no_figures_loss():
         data = request.json
         game_id = data['game_id']
         player_id = data['player_id']  # The invader calling this
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if not game:
@@ -1893,6 +1959,7 @@ def defender_no_figures_loss():
 
 
 @games.route('/battle_decision', methods=['POST'])
+@require_token
 def battle_decision():
     """
     Record a player's battle decision (fight or fold), sequential order.
@@ -1909,6 +1976,10 @@ def battle_decision():
 
         if decision not in ('battle', 'fold'):
             return jsonify({'success': False, 'message': 'Invalid decision. Must be "battle" or "fold".'}), 400
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
 
         game = Game.query.get(game_id)
         if not game:
@@ -2886,6 +2957,7 @@ def _start_new_round(game, winner_player):
 # ─────────────────── 3-round battle turn management ───────────────────
 
 @games.route('/play_battle_move', methods=['POST'])
+@require_token
 def play_battle_move():
     """Record a player playing one battle move in the current battle round.
 
@@ -2910,6 +2982,10 @@ def play_battle_move():
 
     if not game_id or not player_id or not battle_move_id:
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:
@@ -3068,6 +3144,7 @@ def get_battle_state():
 
 
 @games.route('/skip_battle_turn', methods=['POST'])
+@require_token
 def skip_battle_turn():
     """Auto-skip a player's battle turn when they have no moves left.
 
@@ -3082,6 +3159,10 @@ def skip_battle_turn():
 
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:
@@ -3172,6 +3253,7 @@ def skip_battle_turn():
 
 
 @games.route('/finish_battle', methods=['POST'])
+@require_token
 def finish_battle():
     """Resolve a 3-round battle and return result + returnable cards.
 
@@ -3198,6 +3280,10 @@ def finish_battle():
 
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:
@@ -3493,6 +3579,7 @@ def finish_battle():
 
 
 @games.route('/finish_battle_pick_card', methods=['POST'])
+@require_token
 def finish_battle_pick_card():
     """Winner picks one card from the returnable pool, rest go to deck.
 
@@ -3512,6 +3599,10 @@ def finish_battle_pick_card():
 
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:
@@ -3653,6 +3744,7 @@ def finish_battle_pick_card():
 
 
 @games.route('/finish_battle_draw', methods=['POST'])
+@require_token
 def finish_battle_draw():
     """Handle the defender's choice after a draw.
 
@@ -3672,6 +3764,10 @@ def finish_battle_draw():
 
     if not game_id or not player_id or not choice:
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
 
     game = Game.query.get(game_id)
     if not game:

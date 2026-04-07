@@ -317,6 +317,10 @@ class LoginScreen(Screen):
     def _apply_login_response(self, response_data):
         self.state.set_msg(response_data.get('message', ''))
         if response_data.get('success'):
+            # Store auth token for all subsequent requests
+            token = response_data.get('token')
+            if token:
+                _http.set_auth_token(token)
             self.state.user_dict = response_data.get('user')
             self.state.game = None
             self.state._last_seen_at = response_data.get('previous_last_active')
@@ -334,6 +338,10 @@ class LoginScreen(Screen):
     def _apply_register_response(self, response_data):
         self.state.set_msg(response_data.get('message', ''))
         if response_data.get('success'):
+            # Store auth token for all subsequent requests
+            token = response_data.get('token')
+            if token:
+                _http.set_auth_token(token)
             self.state.user_dict = response_data.get('user')
             self.state.game = None
             self.state._last_seen_at = None
