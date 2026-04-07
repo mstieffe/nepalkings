@@ -59,6 +59,14 @@ def register(username, password):
         if response.status_code == 409:
             return {'success': False, 'message': 'Registration failed. Username already exists.'}
 
+        # Handle validation errors (400) — read the server's message
+        if response.status_code == 400:
+            try:
+                msg = response.json().get('message', 'Registration failed.')
+            except Exception:
+                msg = 'Registration failed.'
+            return {'success': False, 'message': msg}
+
         # If the status code is not 200, raise an exception for other kinds of errors
         response.raise_for_status()
 

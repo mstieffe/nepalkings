@@ -24,6 +24,12 @@ battle_shop.settings = settings
 app = Flask(__name__)
 app.config['SECRET_KEY'] = settings.SECRET_KEY
 
+# ── Proxy fix (PythonAnywhere / reverse-proxy environments) ──
+# Without this, request.remote_addr returns the proxy IP and ALL clients
+# share a single rate-limit bucket — exhausting it almost immediately.
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
 # ── CORS ──
 cors_origins = settings.CORS_ORIGINS
 if cors_origins != '*':
