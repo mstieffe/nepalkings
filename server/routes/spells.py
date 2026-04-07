@@ -197,7 +197,8 @@ def cast_spell():
             
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error casting spell: {str(e)}'}), 500
+        logger.exception('Error casting spell')
+        return jsonify({'success': False, 'message': 'Error casting spell'}), 500
 
 
 @spells.route('/counter_spell', methods=['POST'])
@@ -273,7 +274,8 @@ def counter_spell():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error countering spell: {str(e)}'}), 500
+        logger.exception('Error countering spell')
+        return jsonify({'success': False, 'message': 'Error countering spell'}), 500
 
 
 @spells.route('/allow_spell', methods=['POST'])
@@ -356,7 +358,8 @@ def allow_spell():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error allowing spell: {str(e)}'}), 500
+        logger.exception('Error allowing spell')
+        return jsonify({'success': False, 'message': 'Error allowing spell'}), 500
 
 
 @spells.route('/get_active_spells', methods=['GET'])
@@ -443,7 +446,8 @@ def remove_spell_effect():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error removing spell: {str(e)}'}), 500
+        logger.exception('Error removing spell')
+        return jsonify({'success': False, 'message': 'Error removing spell'}), 500
 
 
 @spells.route('/end_infinite_hammer', methods=['POST'])
@@ -531,7 +535,8 @@ def end_infinite_hammer():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error ending Infinite Hammer: {str(e)}'}), 500
+        logger.exception('Error ending Infinite Hammer')
+        return jsonify({'success': False, 'message': 'Error ending Infinite Hammer'}), 500
 
 
 # Helper functions
@@ -615,8 +620,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
                 db.session.rollback()
-                spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Failed to draw side cards')
+                spell_effect['effect'] = 'Failed to draw cards'
+                spell_effect['error'] = True
         
         elif spell.spell_name == 'Draw 2 MainCards':
             try:
@@ -632,8 +638,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
                 db.session.rollback()
-                spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Failed to draw main cards')
+                spell_effect['effect'] = 'Failed to draw cards'
+                spell_effect['error'] = True
         
         elif spell.spell_name == 'Fill up to 10':
             try:
@@ -672,9 +679,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     logger.debug(f"[FILL UP TO 10] Already at {main_hand_count} cards, no draw needed")
             except Exception as e:
                 db.session.rollback()
-                logger.error(f"[FILL UP TO 10] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Fill up to 10 failed')
+                spell_effect['effect'] = 'Failed to draw cards'
+                spell_effect['error'] = True
         
         elif spell.spell_name == 'Dump Cards':
             try:
@@ -746,8 +753,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
                 db.session.rollback()
-                spell_effect['effect'] = f'Failed to dump cards: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Failed to dump cards')
+                spell_effect['effect'] = 'Failed to dump cards'
+                spell_effect['error'] = True
         
         elif 'Forced Deal' in spell.spell_name:
             # Exchange 2 random cards with opponent
@@ -836,11 +844,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         
             except Exception as e:
                 db.session.rollback()
-                spell_effect['effect'] = f'Failed to force deal: {str(e)}'
-                spell_effect['error'] = str(e)
-                logger.error(f"[FORCED DEAL] EXCEPTION: {str(e)}")
-                import traceback
-                traceback.print_exc()
+                logger.exception('Forced Deal failed')
+                spell_effect['effect'] = 'Failed to force deal'
+                spell_effect['error'] = True
         
     elif spell.spell_type == 'enchantment':
         # Figure enchantment spells
@@ -1017,8 +1023,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         
                     except Exception as e:
                         db.session.rollback()
-                        spell_effect['effect'] = f'Failed to destroy figure: {str(e)}'
-                        spell_effect['error'] = str(e)
+                        logger.exception('Failed to destroy figure')
+                        spell_effect['effect'] = 'Failed to destroy figure'
+                        spell_effect['error'] = True
                         spell.is_active = False
                 
                 # Only store enchantment data for non-Explosion spells (Explosion destroys the figure)
@@ -1071,9 +1078,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['defender_turns'] = defender_player.turns_left
             except Exception as e:
                 db.session.rollback()
-                logger.error(f"[CEASEFIRE SPELL] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to activate ceasefire: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Ceasefire spell failed')
+                spell_effect['effect'] = 'Failed to activate ceasefire'
+                spell_effect['error'] = True
         
         elif spell.spell_name == 'Invader Swap':
             try:
@@ -1109,9 +1116,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['invader_swapped'] = True
             except Exception as e:
                 db.session.rollback()
-                logger.error(f"[INVADER SWAP] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to swap invader: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Invader Swap failed')
+                spell_effect['effect'] = 'Failed to swap invader'
+                spell_effect['error'] = True
         
         elif spell.spell_name in ('Civil War', 'Peasant War', 'Blitzkrieg'):
             try:
@@ -1187,9 +1194,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     logger.debug(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
             except Exception as e:
                 db.session.rollback()
-                logger.error(f"[{spell.spell_name.upper()}] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to activate {spell.spell_name}: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception(f'{spell.spell_name} failed')
+                spell_effect['effect'] = f'Failed to activate {spell.spell_name}'
+                spell_effect['error'] = True
     
     logger.debug(f"[_EXECUTE_SPELL] Returning spell_effect: {spell_effect}")
     return spell_effect

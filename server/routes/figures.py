@@ -289,7 +289,8 @@ def create_figure():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error creating figure: {str(e)}'}), 400
+        logger.exception('Error creating figure')
+        return jsonify({'success': False, 'message': 'Error creating figure'}), 400
 
 
 @figures.route('/update_figure', methods=['POST'])
@@ -387,7 +388,8 @@ def update_figure():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error updating figure: {str(e)}'}), 400
+        logger.exception('Error updating figure')
+        return jsonify({'success': False, 'message': 'Error updating figure'}), 400
 
 
 @figures.route('/get_figure', methods=['GET'])
@@ -405,7 +407,8 @@ def get_figure():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error retrieving figure: {str(e)}'}), 400
+        logger.exception('Error retrieving figure')
+        return jsonify({'success': False, 'message': 'Error retrieving figure'}), 400
 
 
 @figures.route('/get_figures', methods=['GET'])
@@ -423,7 +426,8 @@ def get_figures():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error retrieving figures: {str(e)}'}), 400
+        logger.exception('Error retrieving figures')
+        return jsonify({'success': False, 'message': 'Error retrieving figures'}), 400
 
 
 
@@ -527,7 +531,8 @@ def delete_figure():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error deleting figure: {str(e)}'}), 400
+        logger.exception('Error deleting figure')
+        return jsonify({'success': False, 'message': 'Error deleting figure'}), 400
 
 
 @figures.route('/pickup_figure', methods=['POST'])
@@ -665,7 +670,8 @@ def pickup_figure():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error picking up figure: {str(e)}'}), 400
+        logger.exception('Error picking up figure')
+        return jsonify({'success': False, 'message': 'Error picking up figure'}), 400
 
 
 @figures.route('/upgrade_figure', methods=['POST'])
@@ -876,4 +882,5 @@ def upgrade_figure():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error upgrading figure: {str(e)}'}), 400
+        logger.exception('Error upgrading figure')
+        return jsonify({'success': False, 'message': 'Error upgrading figure'}), 400

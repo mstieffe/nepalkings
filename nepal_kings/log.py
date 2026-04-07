@@ -15,10 +15,19 @@ any other module logs.  After that every module simply creates its own
 through the hierarchy automatically.
 """
 
+import glob
 import logging
+import logging.handlers
 import os
 import sys
 from datetime import datetime
+
+# ── Tunables ────────────────────────────────────────────────────────
+_MAX_LOG_BYTES   = 5 * 1024 * 1024   # 5 MB per log file
+_BACKUP_COUNT    = 3                  # keep current + 3 rotated files
+_OLD_LOG_MAX_AGE = 7 * 86400         # delete log files older than 7 days
+
+_IS_WEB = sys.platform == "emscripten"
 
 # ── Public API ──────────────────────────────────────────────────────
 
@@ -33,6 +42,7 @@ def setup(*, debug: bool = False, log_dir: str | None = None):
         Directory for a rotating log file.  When *None* (the default)
         only console output is produced — identical to the old ``print()``
         behaviour.  Pass ``~/.nepalkings`` for persistent file logging.
+        Ignored on web/emscripten (no real filesystem).
     """
     root = logging.getLogger('nk')
     if root.handlers:          # already configured — avoid duplicate handlers
@@ -48,13 +58,22 @@ def setup(*, debug: bool = False, log_dir: str | None = None):
     ))
     root.addHandler(console)
 
-    # ── Optional file handler ──
-    if log_dir:
+    # ── Rotating file handler (desktop only) ──
+    if log_dir and not _IS_WEB:
         log_dir = os.path.expanduser(log_dir)
         os.makedirs(log_dir, exist_ok=True)
+
+        # Purge old session log files before creating a new one
+        _purge_old_logs(log_dir)
+
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filepath = os.path.join(log_dir, f'nepalkings_{stamp}.log')
-        fh = logging.FileHandler(filepath, encoding='utf-8')
+        fh = logging.handlers.RotatingFileHandler(
+            filepath,
+            maxBytes=_MAX_LOG_BYTES,
+            backupCount=_BACKUP_COUNT,
+            encoding='utf-8',
+        )
         fh.setLevel(logging.DEBUG)      # file always captures everything
         fh.setFormatter(logging.Formatter(
             '%(asctime)s [%(levelname)-7s] %(name)s: %(message)s',
@@ -62,3 +81,14 @@ def setup(*, debug: bool = False, log_dir: str | None = None):
         ))
         root.addHandler(fh)
         root.info(f"File logging enabled: {filepath}")
+
+
+def _purge_old_logs(log_dir: str):
+    """Delete ``nepalkings_*.log*`` files older than ``_OLD_LOG_MAX_AGE``."""
+    now = datetime.now().timestamp()
+    for path in glob.glob(os.path.join(log_dir, 'nepalkings_*.log*')):
+        try:
+            if now - os.path.getmtime(path) > _OLD_LOG_MAX_AGE:
+                os.remove(path)
+        except OSError:
+            pass

@@ -3,6 +3,8 @@
 # server.py
 from flask import Flask
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from models import db
 import logging
 import signal
@@ -20,7 +22,29 @@ spells.settings = settings
 battle_shop.settings = settings
 
 app = Flask(__name__)
-CORS(app)  # Allow cross-origin requests from game clients
+app.config['SECRET_KEY'] = settings.SECRET_KEY
+
+# ── CORS ──
+cors_origins = settings.CORS_ORIGINS
+if cors_origins != '*':
+    cors_origins = [o.strip() for o in cors_origins.split(',')]
+CORS(app, origins=cors_origins, allow_headers=['Content-Type', 'Authorization'])
+
+# ── Rate limiting ──
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[settings.RATE_LIMIT_DEFAULT],
+    storage_uri='memory://',
+)
+
+# ── Security response headers ──
+@app.after_request
+def _set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 # ── Logging configuration ──
 # Central logging setup.  All server modules use named loggers under the
@@ -124,6 +148,10 @@ app.register_blueprint(msg, url_prefix='/msg')
 app.register_blueprint(figures, url_prefix='/figures')
 app.register_blueprint(spells, url_prefix='/spells')
 app.register_blueprint(battle_shop, url_prefix='/battle_shop')
+
+# ── Stricter rate limits for auth-sensitive endpoints ──
+limiter.limit(settings.RATE_LIMIT_LOGIN)(app.view_functions['auth.login'])
+limiter.limit(settings.RATE_LIMIT_REGISTER)(app.view_functions['auth.register'])
 
 if __name__ == '__main__':
     def _graceful_shutdown(signum, frame):

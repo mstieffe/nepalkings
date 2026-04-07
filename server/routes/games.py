@@ -781,7 +781,8 @@ def get_games():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to fetch games')
+        return jsonify({'success': False, 'message': 'Failed to fetch games'}), 400
 
 
 @games.route('/get_game', methods=['GET'])
@@ -801,7 +802,8 @@ def get_game():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to fetch game')
+        return jsonify({'success': False, 'message': 'Failed to fetch game'}), 400
 
 
 @games.route('/start_turn', methods=['POST'])
@@ -869,10 +871,8 @@ def start_turn():
 
     except Exception as e:
         db.session.rollback()
-        logger.debug(f"[START_TURN] Exception occurred: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'message': f'An error occurred: {str(e)}'}), 400
+        logger.exception('Failed to start turn')
+        return jsonify({'success': False, 'message': 'Failed to start turn'}), 400
 
 
 @games.route('/create_game', methods=['POST'])
@@ -1023,7 +1023,8 @@ def create_game():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to create game: {str(e)}'}), 400
+        logger.exception('Failed to create game')
+        return jsonify({'success': False, 'message': 'Failed to create game'}), 400
 
 
 @games.route('/delete_game', methods=['POST'])
@@ -1063,7 +1064,8 @@ def delete_game():
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to delete game')
+        return jsonify({'success': False, 'message': 'Failed to delete game'}), 400
 
     return jsonify({'success': True, 'message': 'Game deleted successfully'})
 
@@ -1084,7 +1086,8 @@ def get_hand():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': 'An error occurred: {}'.format(str(e))}), 400
+        logger.exception('Failed to get hand')
+        return jsonify({'success': False, 'message': 'Failed to get hand'}), 400
 
 
 @games.route('/draw_cards', methods=['POST'])
@@ -1112,7 +1115,8 @@ def draw_cards():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to draw cards, Error: {str(e)}'}), 400
+        logger.exception('Failed to draw cards')
+        return jsonify({'success': False, 'message': 'Failed to draw cards'}), 400
 
 
 @games.route('/return_cards', methods=['POST'])
@@ -1139,7 +1143,8 @@ def return_cards():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to return cards, Error: {str(e)}'}), 400
+        logger.exception('Failed to return cards')
+        return jsonify({'success': False, 'message': 'Failed to return cards'}), 400
     
 @games.route('/change_cards', methods=['POST'])
 def change_cards():
@@ -1206,7 +1211,8 @@ def change_cards():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to change cards: {str(e)}"}), 400
+        logger.exception('Failed to change cards')
+        return jsonify({'success': False, 'message': 'Failed to change cards'}), 400
 
 
 @games.route('/discard_cards', methods=['POST'])
@@ -1255,7 +1261,8 @@ def discard_cards():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to discard cards: {str(e)}"}), 400
+        logger.exception('Failed to discard cards')
+        return jsonify({'success': False, 'message': 'Failed to discard cards'}), 400
 
 
 @games.route('/update_points', methods=['POST'])
@@ -1276,7 +1283,8 @@ def update_points():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to update points: {str(e)}"}), 400
+        logger.exception('Failed to update points')
+        return jsonify({'success': False, 'message': 'Failed to update points'}), 400
 
 
 @games.route('/advance_figure', methods=['POST'])
@@ -1494,7 +1502,8 @@ def advance_figure():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to advance figure: {str(e)}"}), 400
+        logger.exception('Failed to advance figure')
+        return jsonify({'success': False, 'message': 'Failed to advance figure'}), 400
 
 
 @games.route('/select_defender', methods=['POST'])
@@ -1609,7 +1618,8 @@ def select_defender():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to select defender: {str(e)}"}), 400
+        logger.exception('Failed to select defender')
+        return jsonify({'success': False, 'message': 'Failed to select defender'}), 400
 
 
 @games.route('/skip_civil_war_second', methods=['POST'])
@@ -1666,7 +1676,8 @@ def skip_civil_war_second():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to skip: {str(e)}"}), 400
+        logger.exception('Failed to skip civil war second')
+        return jsonify({'success': False, 'message': 'Failed to skip'}), 400
 
 
 @games.route('/cannot_advance_loss', methods=['POST'])
@@ -1769,7 +1780,8 @@ def cannot_advance_loss():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to process auto-loss: {str(e)}"}), 400
+        logger.exception('Failed to process auto-loss')
+        return jsonify({'success': False, 'message': 'Failed to process auto-loss'}), 400
 
 
 @games.route('/defender_no_figures_loss', methods=['POST'])
@@ -1877,7 +1889,8 @@ def defender_no_figures_loss():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f"Failed to process defender auto-loss: {str(e)}"}), 400
+        logger.exception('Failed to process defender auto-loss')
+        return jsonify({'success': False, 'message': 'Failed to process defender auto-loss'}), 400
 
 
 @games.route('/battle_decision', methods=['POST'])
@@ -2010,8 +2023,8 @@ def battle_decision():
 
     except Exception as e:
         db.session.rollback()
-        logger.error(f"[BATTLE_DECISION] Error: {str(e)}")
-        return jsonify({'success': False, 'message': f"Failed to process battle decision: {str(e)}"}), 400
+        logger.exception('Failed to process battle decision')
+        return jsonify({'success': False, 'message': 'Failed to process battle decision'}), 400
 
 
 def _check_figure_resource_deficit(figure, player_id, game_id):
@@ -3874,4 +3887,5 @@ def game_results():
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error fetching results: {str(e)}'}), 400
+        logger.exception('Failed to fetch game results')
+        return jsonify({'success': False, 'message': 'Failed to fetch game results'}), 400

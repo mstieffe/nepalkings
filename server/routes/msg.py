@@ -3,10 +3,17 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy.orm import joinedload
 from models import db, LogEntry, ChatMessage
+import logging
 
 import server_settings as settings
 
 msg = Blueprint('msg', __name__)
+
+logger = logging.getLogger('nepalkings.routes.msg')
+
+# ── Message length limits ──
+_MAX_LOG_MESSAGE = 500
+_MAX_CHAT_MESSAGE = 1000
 
 @msg.route('/add_log_entry', methods=['POST'])
 def add_log_entry():
@@ -16,7 +23,7 @@ def add_log_entry():
         player_id = data.get('player_id')  # Optional, as system messages may not have a player
         round_number = data['round_number']
         turn_number = data['turn_number']
-        message = data['message']
+        message = data['message'][:_MAX_LOG_MESSAGE] if data.get('message') else ''
         author = data['author']
         type = data['type']
 
@@ -36,7 +43,8 @@ def add_log_entry():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to add log entry: {str(e)}'}), 400
+        logger.exception('Failed to add log entry')
+        return jsonify({'success': False, 'message': 'Failed to add log entry'}), 400
 
 @msg.route('/get_log_entries', methods=['GET'])
 def get_log_entries():
@@ -52,7 +60,8 @@ def get_log_entries():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to get log entries: {str(e)}'}), 400
+        logger.exception('Failed to get log entries')
+        return jsonify({'success': False, 'message': 'Failed to get log entries'}), 400
 
 
 @msg.route('/add_chat_message', methods=['POST'])
@@ -62,7 +71,7 @@ def add_chat_message():
         game_id = data['game_id']
         sender_id = data['sender_id']
         receiver_id = data['receiver_id']
-        message = data['message']
+        message = data['message'][:_MAX_CHAT_MESSAGE] if data.get('message') else ''
 
         chat_message = ChatMessage(
             game_id=game_id,
@@ -77,7 +86,8 @@ def add_chat_message():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to send chat message: {str(e)}'}), 400
+        logger.exception('Failed to send chat message')
+        return jsonify({'success': False, 'message': 'Failed to send chat message'}), 400
 
 
 @msg.route('/get_chat_messages', methods=['GET'])
@@ -94,4 +104,5 @@ def get_chat_messages():
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Failed to get chat messages: {str(e)}'}), 400
+        logger.exception('Failed to get chat messages')
+        return jsonify({'success': False, 'message': 'Failed to get chat messages'}), 400
