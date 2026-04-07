@@ -1011,7 +1011,6 @@ def create_game():
         challenge.game_id = game.id
         db.session.commit()
 
-        logger = logging.getLogger('nepalkings.games')
         logger.info(f"Challenge {challenge.id} accepted → game {game.id} "
                     f"(status={challenge.status}, game_id={challenge.game_id})")
 
