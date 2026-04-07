@@ -21,6 +21,7 @@ import logging.handlers
 import os
 import sys
 from datetime import datetime
+from typing import Optional
 
 # ── Tunables ────────────────────────────────────────────────────────
 _MAX_LOG_BYTES   = 5 * 1024 * 1024   # 5 MB per log file
@@ -31,7 +32,7 @@ _IS_WEB = sys.platform == "emscripten"
 
 # ── Public API ──────────────────────────────────────────────────────
 
-def setup(*, debug: bool = False, log_dir: str | None = None):
+def setup(*, debug: bool = False, log_dir: Optional[str] = None):
     """Initialise the root ``nk`` logger.
 
     Parameters

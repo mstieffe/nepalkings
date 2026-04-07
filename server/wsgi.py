@@ -17,6 +17,22 @@ _dir = os.path.dirname(os.path.abspath(__file__))
 if _dir not in sys.path:
     sys.path.insert(0, _dir)
 
+# Auto-install missing dependencies from requirements.txt on first load
+def _ensure_dependencies():
+    req_file = os.path.join(_dir, 'requirements.txt')
+    if not os.path.exists(req_file):
+        return
+    try:
+        import flask_limiter  # noqa: F401
+    except ImportError:
+        import subprocess
+        pip = os.path.expanduser('~/.virtualenvs/nepalkings/bin/pip')
+        if not os.path.exists(pip):
+            pip = sys.executable.replace('python', 'pip')
+        subprocess.check_call([pip, 'install', '-r', req_file, '-q'])
+
+_ensure_dependencies()
+
 # Production defaults — override via PythonAnywhere environment variables
 os.environ.setdefault('DROP_TABLES_ON_STARTUP', 'False')
 os.environ.setdefault('DB_URL', f'sqlite:///{os.path.join(_dir, "instance", "nepalkings.db")}')
