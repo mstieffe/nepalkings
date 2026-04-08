@@ -296,6 +296,51 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
             })
             action_id += 1
 
+    # 2b) Counter-advance — opponent has advanced but AI hasn't responded yet.
+    # Blitzkrieg prevents counter-advance; otherwise AI may choose to counter-advance.
+    elif (not infinite_hammer_active and not game_dict.get('ceasefire_active') and
+          game_dict.get('advancing_figure_id') and
+          game_dict.get('advancing_player_id') != ai_player.get('id') and
+          not game_dict.get('defending_figure_id')):
+        modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+        has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+        has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+        # Check if the opponent's advancing figure has cannot_be_blocked
+        adv_fig_id = game_dict.get('advancing_figure_id')
+        adv_fig = next((f for f in opponent.get('figures', []) if f['id'] == adv_fig_id), None)
+        advancing_cannot_be_blocked = adv_fig.get('cannot_be_blocked', False) if adv_fig else False
+        if not has_blitzkrieg and not advancing_cannot_be_blocked:
+            resting = set(game_dict.get('resting_figure_ids', []))
+            from ai.game_state import compute_resource_totals as _crt
+            _eff_prod, _tot_req = _crt(ai_player.get('figures', []))
+            for fig in ai_player.get('figures', []):
+                fig_id = fig['id']
+                if fig.get('cannot_defend'):
+                    continue
+                if fig_id in resting:
+                    continue
+                if (has_peasant_war or has_civil_war) and fig.get('field') != 'village':
+                    continue
+                fig_reqs = fig.get('requires') or {}
+                in_deficit = False
+                for res in fig_reqs:
+                    if _tot_req.get(res, 0) > _eff_prod.get(res, 0):
+                        in_deficit = True
+                        break
+                if in_deficit:
+                    continue
+                power = _est_figure_power(fig)
+                field = fig.get('field', '?')
+                actions.append({
+                    'id': action_id,
+                    'type': 'advance_figure',
+                    'description': (f"Counter-advance {fig['name']} ({field}, power≈{power}) — "
+                                    f"defend against opponent's advancing figure"),
+                    'params': {'figure_id': fig_id},
+                })
+                action_id += 1
+
     # 3) Cast spells — blocked during Infinite Hammer
     if not infinite_hammer_active:
         spell_actions, action_id = _enum_spells(game_dict, ai_player, opponent, action_id)

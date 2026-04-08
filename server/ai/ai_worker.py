@@ -81,10 +81,6 @@ def trigger_ai_if_needed(game_id, app=None):
     """
     if not settings.AI_ENABLED:
         return
-    
-    if not settings.AI_OPENAI_API_KEY:
-        logger.info(f"AI trigger skipped for game {game_id}: no API key")
-        return
 
     # Import here to avoid circular imports
     from models import Game, User
@@ -244,6 +240,23 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 actions = enumerate_actions(game_dict, ai_player_id, phase)
             if not actions:
                 logger.warning(f"AI has no actions in phase {phase} for game {game_id}")
+                # Special case: if AI is invader in select_defender phase with no valid
+                # opponent figures, call the defender_no_figures_loss endpoint
+                if phase == 'select_defender':
+                    logger.info(f"AI calling defender_no_figures_loss for game {game_id}")
+                    try:
+                        resp = _ai_post(f'{settings.SERVER_URL}/games/defender_no_figures_loss',
+                                        ai_player_id, json={
+                                            'game_id': game_id,
+                                            'player_id': ai_player_id,
+                                        }, timeout=15)
+                        result = resp.json()
+                        if result.get('success'):
+                            logger.info(f"defender_no_figures_loss succeeded for game {game_id}")
+                            break
+                        logger.warning(f"defender_no_figures_loss failed: {result.get('message')}")
+                    except Exception as e:
+                        logger.error(f"defender_no_figures_loss error: {e}", exc_info=True)
                 break
             
             # If only one action, take it without LLM
@@ -266,10 +279,10 @@ def _ai_game_loop(app, game_id, ai_player_id):
                         if _execute_action(app, game_id, ai_player_id, alt):
                             fallback_success = True
                             break
-                if not fallback_success and chosen['type'] == 'build_figure':
+                if not fallback_success and chosen['type'] in ('build_figure', 'advance_figure'):
                     fallback = next((a for a in actions if a['type'] == 'change_cards'), None)
                     if fallback:
-                        logger.info("AI falling back to change_cards")
+                        logger.info(f"AI falling back to change_cards after failed {chosen['type']}")
                         _execute_action(app, game_id, ai_player_id, fallback)
                 # If confirm_battle_moves failed, try gamble or buy to reach 3 moves
                 if not fallback_success and chosen['type'] == 'confirm_battle_moves':
