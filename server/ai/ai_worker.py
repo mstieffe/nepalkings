@@ -241,7 +241,9 @@ def _ai_game_loop(app, game_id, ai_player_id):
             if not actions:
                 logger.warning(f"AI has no actions in phase {phase} for game {game_id}")
                 # Special case: if AI is invader in select_defender phase with no valid
-                # opponent figures, call the defender_no_figures_loss endpoint
+                # opponent figures, call the defender_no_figures_loss endpoint.
+                # Note: detect_phase only returns 'select_defender' when the AI is the
+                # advancing player (invader), so this call is always from the correct role.
                 if phase == 'select_defender':
                     logger.info(f"AI calling defender_no_figures_loss for game {game_id}")
                     try:

@@ -246,6 +246,7 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
 
     # 2) Advance a figure (if ceasefire is off and AI has eligible figures)
     # Blocked during Infinite Hammer
+    from ai.game_state import compute_resource_totals as _crt
     if not infinite_hammer_active and not game_dict.get('ceasefire_active') and not game_dict.get('advancing_figure_id'):
         resting = set(game_dict.get('resting_figure_ids', []))
         # Check battle modifier restrictions on advance
@@ -253,7 +254,6 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
         has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
         has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
         # Compute which figures are in deficit (cannot advance)
-        from ai.game_state import compute_resource_totals as _crt
         _eff_prod, _tot_req = _crt(ai_player.get('figures', []))
         for fig in ai_player.get('figures', []):
             fig_id = fig['id']
@@ -312,7 +312,6 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
         advancing_cannot_be_blocked = adv_fig.get('cannot_be_blocked', False) if adv_fig else False
         if not has_blitzkrieg and not advancing_cannot_be_blocked:
             resting = set(game_dict.get('resting_figure_ids', []))
-            from ai.game_state import compute_resource_totals as _crt
             _eff_prod, _tot_req = _crt(ai_player.get('figures', []))
             for fig in ai_player.get('figures', []):
                 fig_id = fig['id']
