@@ -23,6 +23,10 @@ logger = logging.getLogger('nepalkings.ai.worker')
 
 # Global LLM client (lazy-initialized)
 _llm_client = None
+# Cache mapping AI player IDs to AI user IDs so auth headers can be built
+# from worker threads without touching the Flask-bound DB session.
+_ai_player_user_ids = {}
+_ai_player_user_ids_lock = threading.Lock()
 # Lock to prevent multiple AI threads for the same game
 _active_games = set()
 _active_games_lock = threading.Lock()
@@ -58,11 +62,12 @@ def _get_llm_client():
 
 def _ai_headers(ai_player_id):
     """Return auth headers for requests made on behalf of an AI player."""
-    from models import Player
-    player = Player.query.get(ai_player_id)
-    if player:
-        return get_ai_auth_headers(player.user_id)
-    return {}
+    with _ai_player_user_ids_lock:
+        ai_user_id = _ai_player_user_ids.get(ai_player_id)
+    if ai_user_id is None:
+        logger.warning(f"Missing AI user mapping for player_id={ai_player_id}")
+        return {}
+    return get_ai_auth_headers(ai_user_id)
 
 
 def _ai_post(url, ai_player_id, **kwargs):
@@ -103,6 +108,10 @@ def trigger_ai_if_needed(game_id, app=None):
     
     if not ai_player:
         return
+
+    # Cache player->user mapping for auth headers used by background thread.
+    with _ai_player_user_ids_lock:
+        _ai_player_user_ids[ai_player.id] = ai_player.user_id
     
     # Check if the AI actually needs to act right now
     game_dict = game.serialize()
