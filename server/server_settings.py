@@ -73,6 +73,8 @@ AI_CHAT_ENABLED = os.getenv('AI_CHAT_ENABLED', 'True').lower() == 'true'
 AI_CHAT_CHANCE = float(os.getenv('AI_CHAT_CHANCE', '0.22'))
 AI_CHAT_MIN_SECONDS_BETWEEN = float(os.getenv('AI_CHAT_MIN_SECONDS_BETWEEN', '35'))
 AI_CHAT_MAX_PER_GAME = int(os.getenv('AI_CHAT_MAX_PER_GAME', '12'))
+AI_CHAT_LLM_TEMPERATURE = float(os.getenv('AI_CHAT_LLM_TEMPERATURE', '0.75'))
+AI_CHAT_LLM_MAX_TOKENS = int(os.getenv('AI_CHAT_LLM_MAX_TOKENS', '90'))
 # Blocks non-battle actions when advance+defender are locked and game is waiting
 # for fight/fold resolution. Enabled by default; set env var to False to disable.
 BATTLE_RESOLUTION_HARD_LOCK_ENABLED = os.getenv('BATTLE_RESOLUTION_HARD_LOCK_ENABLED', 'True').lower() == 'true'

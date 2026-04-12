@@ -30,7 +30,19 @@ class LLMClient:
         Returns the raw text response from the LLM.
         """
         if self.provider == 'openai':
-            return self._call_openai(system_prompt, user_prompt, temperature)
+            return self._call_openai(system_prompt, user_prompt, temperature, max_tokens=800)
+        raise ValueError(f"Unknown LLM provider: {self.provider}")
+
+    def generate_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.6,
+        max_tokens: int = 140,
+    ) -> str:
+        """Generate free-form text (non-JSON) for flavor outputs like AI chat."""
+        if self.provider == 'openai':
+            return self._call_openai(system_prompt, user_prompt, temperature, max_tokens=max_tokens)
         raise ValueError(f"Unknown LLM provider: {self.provider}")
 
     def _get_openai_client(self):
@@ -43,12 +55,19 @@ class LLMClient:
                 raise RuntimeError("openai package not installed. Run: pip install openai")
         return self._openai_client
 
-    def _call_openai(self, system_prompt: str, user_prompt: str, temperature: float = 0.4) -> str:
+    def _call_openai(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.4,
+        max_tokens: int = 800,
+    ) -> str:
         """Call OpenAI Chat Completions API."""
         client = self._get_openai_client()
         timeout_seconds = max(float(settings.AI_LLM_TIMEOUT_SECONDS), 1.0)
         max_retries = max(int(settings.AI_LLM_MAX_RETRIES), 0)
         backoff_seconds = max(float(settings.AI_LLM_RETRY_BACKOFF_SECONDS), 0.0)
+        token_cap = max(16, int(max_tokens))
 
         for attempt in range(max_retries + 1):
             try:
@@ -59,7 +78,7 @@ class LLMClient:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=temperature,
-                    max_tokens=800,
+                    max_tokens=token_cap,
                     timeout=timeout_seconds,
                 )
                 content = response.choices[0].message.content.strip()
