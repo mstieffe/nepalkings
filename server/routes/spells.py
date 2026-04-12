@@ -86,6 +86,13 @@ def cast_spell():
     
     if not game or not player:
         return jsonify({'success': False, 'message': 'Game or player not found'}), 404
+
+    # Lock spell casting while a counterable spell is pending resolution.
+    if game.pending_spell_id:
+        return jsonify({
+            'success': False,
+            'message': 'Cannot cast a new spell while a counterable spell is pending'
+        }), 400
     
     # Block during active battle
     if game.battle_confirmed or game.battle_decisions:

@@ -190,3 +190,87 @@ class TestActiveSpells:
         assert s['spell_name'] == 'Poison'
         assert s['is_active'] is True
         assert s['effect_data'] == {'power_modifier': -6}
+
+
+class TestCounterableSpellFlow:
+    def test_only_waiting_player_can_allow_pending_spell(self, client, db, app, spell_game, token_sp1, token_sp2):
+        from models import Game
+
+        game, p1, p2, _, _ = spell_game
+        cast_resp = _cast(client, token_sp1, game, p1, {
+            'spell_name': 'Civil War',
+            'spell_type': 'tactics',
+            'spell_family_name': 'Civil War',
+            'suit': 'Clubs',
+            'cards': [],
+            'counterable': True,
+            'possible_during_ceasefire': True,
+        })
+        cast_data = cast_resp.get_json()
+        assert cast_data.get('success') is True, cast_data
+
+        db.session.refresh(game)
+        pending_spell_id = cast_data.get('spell_id')
+        assert pending_spell_id is not None
+        assert game.pending_spell_id == pending_spell_id
+        assert game.waiting_for_counter_player_id == p2.id
+
+        # Caster cannot resolve their own pending counterable spell.
+        wrong_player_resp = client.post(
+            '/spells/allow_spell',
+            data=json.dumps({
+                'player_id': p1.id,
+                'game_id': game.id,
+                'pending_spell_id': pending_spell_id,
+            }),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token_sp1}'},
+        )
+        wrong_player_data = wrong_player_resp.get_json()
+        assert wrong_player_data.get('success') is False
+
+        # Defender allows; pending state must be cleared.
+        allow_resp = client.post(
+            '/spells/allow_spell',
+            data=json.dumps({
+                'player_id': p2.id,
+                'game_id': game.id,
+                'pending_spell_id': pending_spell_id,
+            }),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token_sp2}'},
+        )
+        allow_data = allow_resp.get_json()
+        assert allow_data.get('success') is True, allow_data
+
+        db.session.refresh(game)
+        assert game.pending_spell_id is None
+        assert game.waiting_for_counter_player_id is None
+
+    def test_pending_counterable_spell_blocks_new_spell_cast(self, client, db, app, spell_game, token_sp1):
+        game, p1, _, _, _ = spell_game
+
+        first_resp = _cast(client, token_sp1, game, p1, {
+            'spell_name': 'Peasant War',
+            'spell_type': 'tactics',
+            'spell_family_name': 'Peasant War',
+            'suit': 'Spades',
+            'cards': [],
+            'counterable': True,
+            'possible_during_ceasefire': True,
+        })
+        first_data = first_resp.get_json()
+        assert first_data.get('success') is True, first_data
+
+        second_resp = _cast(client, token_sp1, game, p1, {
+            'spell_name': 'Draw 2 MainCards',
+            'spell_type': 'greed',
+            'spell_family_name': 'Draw 2 MainCards',
+            'suit': 'Hearts',
+            'cards': [],
+            'counterable': False,
+            'possible_during_ceasefire': True,
+        })
+        second_data = second_resp.get_json()
+        assert second_data.get('success') is False
+        assert 'pending' in second_data.get('message', '').lower()

@@ -24,19 +24,18 @@ class TestAIUsers:
 
     def test_ai_auth_headers_generated(self, app, db):
         """get_ai_auth_headers returns a valid Bearer token for an AI user."""
-        from models import User
-        from werkzeug.security import generate_password_hash
         from ai import get_ai_auth_headers, init_ai_users
+        import server_settings as settings
+        from models import User
 
-        # Create a fresh AI user to avoid name conflicts
-        ai_user = User(
-            username='[AI] HeaderBot',
-            password_hash=generate_password_hash('secret'),
-            gold=999999,
+        # Tokens are generated when AI users are initialized.
+        init_ai_users()
+
+        ai_user = User.query.filter_by(
+            username=settings.AI_USERNAMES[0],
             is_ai=True,
-        )
-        db.session.add(ai_user)
-        db.session.commit()
+        ).first()
+        assert ai_user is not None
 
         headers = get_ai_auth_headers(ai_user.id)
         assert 'Authorization' in headers

@@ -52,36 +52,51 @@ def _headers(token):
     return {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
 
 
-def _get_hand_card(db, player_id, rank=None, suit=None, exclude_ids=None):
+def _get_hand_card(db, game_id, player_id, rank=None, suit=None, exclude_ids=None):
     """Get a card from a player's hand (not in deck, not part of figure)."""
     from models import MainCard
-    q = MainCard.query.filter_by(player_id=player_id, in_deck=False, part_of_figure=False)
+
+    q = MainCard.query.filter_by(
+        player_id=player_id,
+        in_deck=False,
+        part_of_figure=False,
+        part_of_battle_move=False,
+    )
     if rank:
         q = q.filter(MainCard.rank == rank)
     if suit:
         q = q.filter(MainCard.suit == suit)
     if exclude_ids:
         q = q.filter(~MainCard.id.in_(exclude_ids))
-    return q.first()
+    card = q.first()
+    if card:
+        return card
+
+    # Deterministic fallback: pull a valid card from this game's card pool.
+    q = MainCard.query.filter_by(
+        game_id=game_id,
+        part_of_figure=False,
+        part_of_battle_move=False,
+    )
+    if rank:
+        q = q.filter(MainCard.rank == rank)
+    if suit:
+        q = q.filter(MainCard.suit == suit)
+    if exclude_ids:
+        q = q.filter(~MainCard.id.in_(exclude_ids))
+    card = q.first()
+    if not card:
+        return None
+
+    card.player_id = player_id
+    card.in_deck = False
+    db.session.commit()
+    return card
 
 
 def _build_king_figure(client, db, game, player, token, suit='Clubs', name='Himalaya King'):
     """Helper: place a king-type castle figure using the /figures/create_figure endpoint."""
-    from models import MainCard
-    # Get K card for the suit
-    king_card = MainCard.query.filter_by(
-        player_id=player.id, in_deck=False, part_of_figure=False,
-        rank='K', suit=suit
-    ).first()
-    if king_card is None:
-        # If player doesn't have a K in hand, query any in the game for test flexibility
-        king_card = MainCard.query.filter_by(
-            game_id=game.id, in_deck=True, rank='K', suit=suit
-        ).first()
-        if king_card:
-            king_card.player_id = player.id
-            king_card.in_deck = False
-            db.session.commit()
+    king_card = _get_hand_card(db, game.id, player.id, rank='K', suit=suit)
     assert king_card is not None, f"No {suit} King available"
 
     payload = {
@@ -136,19 +151,10 @@ class TestBuildFigure:
         assert p1.turns_left == turns_before - 1
 
     def test_build_figure_requires_auth(self, client, db, app, game_with_players):
-        from models import MainCard
         import json
         game, p1, _, _, _ = game_with_players
-        king_card = MainCard.query.filter_by(
-            player_id=p1.id, in_deck=False, rank='K'
-        ).first()
-        if king_card is None:
-            king_card = MainCard.query.filter_by(
-                game_id=game.id, in_deck=True, rank='K'
-            ).first()
-            king_card.player_id = p1.id
-            king_card.in_deck = False
-            db.session.commit()
+        king_card = _get_hand_card(db, game.id, p1.id, rank='K')
+        assert king_card is not None
         payload = {
             'player_id': p1.id,
             'game_id': game.id,

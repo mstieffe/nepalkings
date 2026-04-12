@@ -151,6 +151,7 @@ class TestGameOver:
         winner_player.points = game.stake
         db.session.commit()
         _check_game_over(game)
+        db.session.commit()
         db.session.refresh(winner_user)
         assert winner_user.gold == gold_before + game.stake * 2
 
