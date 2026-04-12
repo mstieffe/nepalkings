@@ -18,6 +18,8 @@ def reset_ai_worker_state():
         ai_worker._ai_watchdog_retries.clear()
     with ai_worker._game_strategies_lock:
         ai_worker._game_strategies.clear()
+    with ai_worker._planner_events_lock:
+        ai_worker._planner_events.clear()
     with ai_worker._ai_chat_lock:
         ai_worker._ai_chat_states.clear()
 
@@ -32,6 +34,8 @@ def reset_ai_worker_state():
         ai_worker._ai_watchdog_retries.clear()
     with ai_worker._game_strategies_lock:
         ai_worker._game_strategies.clear()
+    with ai_worker._planner_events_lock:
+        ai_worker._planner_events.clear()
     with ai_worker._ai_chat_lock:
         ai_worker._ai_chat_states.clear()
 
@@ -157,6 +161,211 @@ def test_ask_llm_for_action_falls_back_to_first_on_invalid_action(monkeypatch):
     assert chosen['id'] == 1
 
 
+def test_ask_llm_for_action_uses_planner_recommendation_fallback(monkeypatch):
+    class StubClient:
+        def choose_action(self, _system_prompt, _user_prompt, temperature=0.4):
+            return '{"action": 999}'
+
+    monkeypatch.setattr(ai_worker, '_get_llm_client', lambda: StubClient())
+    monkeypatch.setattr(ai_worker, 'serialize_game_for_llm', lambda *_args, **_kwargs: 'state')
+    monkeypatch.setattr(ai_worker, 'format_actions_for_llm', lambda _actions: 'actions')
+    monkeypatch.setattr(
+        ai_worker,
+        'generate_strategy_plans',
+        lambda *_args, **_kwargs: [{'plan_id': 1, 'seed_action_id': 2, 'total_score': 5.0, 'turn_steps': ['a', 'b']}],
+    )
+    monkeypatch.setattr(ai_worker, 'format_strategy_plans_for_prompt', lambda _plans: 'PLANS')
+    monkeypatch.setattr(ai_worker, 'recommended_action_id', lambda _plans: 2)
+
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_ENABLED', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_PLANS', 5)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', 2)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', 1)
+
+    actions = [
+        {'id': 1, 'type': 'change_cards', 'description': 'swap low cards', 'params': {}},
+        {'id': 2, 'type': 'advance_figure', 'description': 'advance strongest', 'params': {'figure_id': 7}},
+    ]
+
+    game_dict = {
+        'id': 5,
+        'players': [
+            {'id': 1, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+            {'id': 2, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+        ],
+    }
+    chosen = ai_worker._ask_llm_for_action(game_dict, ai_player_id=1, phase='normal_turn', actions=actions)
+
+    assert chosen['id'] == 2
+
+
+def test_ask_llm_for_action_appends_strategy_plans_to_prompt(monkeypatch):
+    captured = {'prompt': ''}
+
+    class StubClient:
+        def choose_action(self, _system_prompt, user_prompt, temperature=0.4):
+            captured['prompt'] = user_prompt
+            return '{"action": 1}'
+
+    monkeypatch.setattr(ai_worker, '_get_llm_client', lambda: StubClient())
+    monkeypatch.setattr(ai_worker, 'serialize_game_for_llm', lambda *_args, **_kwargs: 'state')
+    monkeypatch.setattr(ai_worker, 'format_actions_for_llm', lambda _actions: 'actions')
+    monkeypatch.setattr(
+        ai_worker,
+        'generate_strategy_plans',
+        lambda *_args, **_kwargs: [{'plan_id': 1, 'seed_action_id': 1, 'total_score': 1.0, 'turn_steps': ['now']}],
+    )
+    monkeypatch.setattr(ai_worker, 'format_strategy_plans_for_prompt', lambda _plans: '\n=== STRATEGY PLAN CANDIDATES ===\nPLAN 1')
+
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_ENABLED', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_PLANS', 5)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', 2)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', 1)
+
+    actions = [
+        {'id': 1, 'type': 'change_cards', 'description': 'swap low cards', 'params': {}},
+    ]
+
+    game_dict = {
+        'id': 6,
+        'players': [
+            {'id': 1, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+            {'id': 2, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+        ],
+    }
+    ai_worker._ask_llm_for_action(game_dict, ai_player_id=1, phase='normal_turn', actions=actions)
+
+    assert 'STRATEGY PLAN CANDIDATES' in captured['prompt']
+
+
+def test_ask_llm_for_action_shadow_mode_does_not_append_strategy_plans_to_prompt(monkeypatch):
+    captured = {'prompt': ''}
+
+    class StubClient:
+        def choose_action(self, _system_prompt, user_prompt, temperature=0.4):
+            captured['prompt'] = user_prompt
+            return '{"action": 1}'
+
+    monkeypatch.setattr(ai_worker, '_get_llm_client', lambda: StubClient())
+    monkeypatch.setattr(ai_worker, 'serialize_game_for_llm', lambda *_args, **_kwargs: 'state')
+    monkeypatch.setattr(ai_worker, 'format_actions_for_llm', lambda _actions: 'actions')
+    monkeypatch.setattr(
+        ai_worker,
+        'generate_strategy_plans',
+        lambda *_args, **_kwargs: [{'plan_id': 1, 'seed_action_id': 1, 'total_score': 1.0, 'turn_steps': ['now']}],
+    )
+    monkeypatch.setattr(ai_worker, 'format_strategy_plans_for_prompt', lambda _plans: '\n=== STRATEGY PLAN CANDIDATES ===\nPLAN 1')
+
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_ENABLED', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_SHADOW_MODE', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_PLANS', 5)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', 2)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', 1)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS', 9999.0)
+
+    actions = [
+        {'id': 1, 'type': 'change_cards', 'description': 'swap low cards', 'params': {}},
+    ]
+
+    game_dict = {
+        'id': 7,
+        'players': [
+            {'id': 1, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+            {'id': 2, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+        ],
+    }
+    ai_worker._ask_llm_for_action(game_dict, ai_player_id=1, phase='normal_turn', actions=actions)
+
+    assert 'STRATEGY PLAN CANDIDATES' not in captured['prompt']
+
+
+def test_ask_llm_for_action_shadow_mode_invalid_action_uses_first_not_planner(monkeypatch):
+    class StubClient:
+        def choose_action(self, _system_prompt, _user_prompt, temperature=0.4):
+            return '{"action": 999}'
+
+    monkeypatch.setattr(ai_worker, '_get_llm_client', lambda: StubClient())
+    monkeypatch.setattr(ai_worker, 'serialize_game_for_llm', lambda *_args, **_kwargs: 'state')
+    monkeypatch.setattr(ai_worker, 'format_actions_for_llm', lambda _actions: 'actions')
+    monkeypatch.setattr(
+        ai_worker,
+        'generate_strategy_plans',
+        lambda *_args, **_kwargs: [{'plan_id': 1, 'seed_action_id': 2, 'total_score': 5.0, 'turn_steps': ['a', 'b']}],
+    )
+    monkeypatch.setattr(ai_worker, 'recommended_action_id', lambda _plans: 2)
+
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_ENABLED', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_SHADOW_MODE', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_PLANS', 5)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', 2)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', 1)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS', 9999.0)
+
+    actions = [
+        {'id': 1, 'type': 'change_cards', 'description': 'swap low cards', 'params': {}},
+        {'id': 2, 'type': 'advance_figure', 'description': 'advance strongest', 'params': {'figure_id': 7}},
+    ]
+
+    game_dict = {
+        'id': 8,
+        'players': [
+            {'id': 1, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+            {'id': 2, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+        ],
+    }
+    chosen = ai_worker._ask_llm_for_action(game_dict, ai_player_id=1, phase='normal_turn', actions=actions)
+
+    assert chosen['id'] == 1
+
+
+def test_ask_llm_for_action_logs_runtime_warning_when_planner_slow(monkeypatch, caplog):
+    class StubClient:
+        def choose_action(self, _system_prompt, _user_prompt, temperature=0.4):
+            return '{"action": 1}'
+
+    monkeypatch.setattr(ai_worker, '_get_llm_client', lambda: StubClient())
+    monkeypatch.setattr(ai_worker, 'serialize_game_for_llm', lambda *_args, **_kwargs: 'state')
+    monkeypatch.setattr(ai_worker, 'format_actions_for_llm', lambda _actions: 'actions')
+    monkeypatch.setattr(
+        ai_worker,
+        'generate_strategy_plans',
+        lambda *_args, **_kwargs: [{'plan_id': 1, 'seed_action_id': 1, 'total_score': 1.0, 'turn_steps': ['now']}],
+    )
+    monkeypatch.setattr(ai_worker, 'format_strategy_plans_for_prompt', lambda _plans: 'PLANS')
+
+    perf_values = iter([100.0, 100.25])
+    monkeypatch.setattr(ai_worker.time, 'perf_counter', lambda: next(perf_values))
+
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_ENABLED', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_SHADOW_MODE', False)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_PLANS', 5)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', 2)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', 1)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS', 120.0)
+
+    actions = [
+        {'id': 1, 'type': 'change_cards', 'description': 'swap low cards', 'params': {}},
+    ]
+
+    game_dict = {
+        'id': 9,
+        'players': [
+            {'id': 1, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+            {'id': 2, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+        ],
+    }
+
+    with caplog.at_level('WARNING'):
+        ai_worker._ask_llm_for_action(game_dict, ai_player_id=1, phase='normal_turn', actions=actions)
+
+    assert 'runtime exceeded warning threshold' in caplog.text
+
+
 def test_handle_finish_battle_draw_picks_high_value_card(monkeypatch):
     calls = []
 
@@ -239,3 +448,67 @@ assistant: "Opponent, your line is cracked already."
     message = ai_worker._extract_ai_chat_line(raw)
 
     assert message == 'Opponent, your line is cracked already.'
+
+
+def test_get_ai_debug_snapshot_returns_recent_notes_and_events():
+    game_id = 321
+
+    with ai_worker._game_strategies_lock:
+        ai_worker._game_strategies[game_id] = ['n1', 'n2', 'n3']
+    with ai_worker._planner_events_lock:
+        ai_worker._planner_events[game_id] = [
+            {'type': 'planner_generated', 'plans': 4},
+            {'type': 'planner_shadow_comparison', 'match': True},
+            {'type': 'planner_runtime_warning', 'runtime_ms': 190.0},
+        ]
+
+    snapshot = ai_worker.get_ai_debug_snapshot(game_id, max_notes=2, max_events=2)
+
+    assert snapshot['strategy_notes'] == ['n2', 'n3']
+    assert len(snapshot['planner_events']) == 2
+    assert snapshot['planner_events'][0]['type'] == 'planner_shadow_comparison'
+    assert snapshot['planner_events'][1]['type'] == 'planner_runtime_warning'
+
+
+def test_ask_llm_for_action_records_shadow_comparison_event(monkeypatch):
+    class StubClient:
+        def choose_action(self, _system_prompt, _user_prompt, temperature=0.4):
+            return '{"action": 1}'
+
+    monkeypatch.setattr(ai_worker, '_get_llm_client', lambda: StubClient())
+    monkeypatch.setattr(ai_worker, 'serialize_game_for_llm', lambda *_args, **_kwargs: 'state')
+    monkeypatch.setattr(ai_worker, 'format_actions_for_llm', lambda _actions: 'actions')
+    monkeypatch.setattr(
+        ai_worker,
+        'generate_strategy_plans',
+        lambda *_args, **_kwargs: [{'plan_id': 1, 'seed_action_id': 2, 'total_score': 3.1, 'turn_steps': ['x', 'y']}],
+    )
+    monkeypatch.setattr(ai_worker, 'recommended_action_id', lambda _plans: 2)
+
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_ENABLED', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_SHADOW_MODE', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_PLANS', 5)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', 2)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', 1)
+    monkeypatch.setattr(ai_worker.settings, 'AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS', 9999.0)
+
+    actions = [
+        {'id': 1, 'type': 'change_cards', 'description': 'swap low cards', 'params': {}},
+        {'id': 2, 'type': 'advance_figure', 'description': 'advance strongest', 'params': {'figure_id': 7}},
+    ]
+
+    game_dict = {
+        'id': 77,
+        'players': [
+            {'id': 1, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+            {'id': 2, 'turns_left': 2, 'main_hand': [], 'side_hand': [], 'figures': []},
+        ],
+    }
+    ai_worker._ask_llm_for_action(game_dict, ai_player_id=1, phase='normal_turn', actions=actions)
+
+    snapshot = ai_worker.get_ai_debug_snapshot(77, max_notes=5, max_events=20)
+    event_types = [e.get('type') for e in snapshot['planner_events']]
+
+    assert 'planner_generated' in event_types
+    assert 'planner_shadow_comparison' in event_types

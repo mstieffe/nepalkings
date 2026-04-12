@@ -854,6 +854,56 @@ def get_game():
         return jsonify({'success': False, 'message': 'Failed to fetch game'}), 400
 
 
+@games.route('/get_ai_debug', methods=['GET'])
+@require_token
+def get_ai_debug():
+    """Return ephemeral AI reasoning and planner telemetry for a game.
+
+    Access is restricted to users participating in the game.
+    """
+    try:
+        game_id = request.args.get('game_id', type=int)
+        if not game_id:
+            return jsonify({'success': False, 'message': 'Missing game_id'}), 400
+
+        game = db.session.get(Game, game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        participant_user_ids = [p.user_id for p in game.players]
+        if g.user_id not in participant_user_ids:
+            return jsonify({'success': False, 'message': 'Forbidden'}), 403
+
+        max_notes = request.args.get('max_notes', default=20, type=int)
+        max_events = request.args.get('max_events', default=40, type=int)
+
+        ai_player_id = None
+        ai_username = None
+        for p in game.players:
+            user = db.session.get(User, p.user_id)
+            if user and user.is_ai:
+                ai_player_id = p.id
+                ai_username = user.username
+                break
+
+        from ai.ai_worker import get_ai_debug_snapshot
+
+        snapshot = get_ai_debug_snapshot(game_id, max_notes=max_notes, max_events=max_events)
+
+        return jsonify({
+            'success': True,
+            'game_id': game_id,
+            'ai_player_id': ai_player_id,
+            'ai_username': ai_username,
+            'ai_debug': snapshot,
+        })
+
+    except Exception:
+        db.session.rollback()
+        logger.exception('Failed to fetch AI debug data')
+        return jsonify({'success': False, 'message': 'Failed to fetch AI debug data'}), 400
+
+
 @games.route('/start_turn', methods=['POST'])
 @require_token
 def start_turn():

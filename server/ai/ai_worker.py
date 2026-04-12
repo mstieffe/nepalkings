@@ -19,6 +19,11 @@ from ai import get_ai_auth_headers
 from ai.llm_client import LLMClient, parse_action_response
 from ai.game_state import serialize_game_for_llm
 from ai.action_enum import detect_phase, enumerate_actions, format_actions_for_llm
+from ai.strategy_planner import (
+    format_strategy_plans_for_prompt,
+    generate_strategy_plans,
+    recommended_action_id,
+)
 from ai.prompts import SYSTEM_PROMPT, PHASE_PROMPTS
 
 logger = logging.getLogger('nepalkings.ai.worker')
@@ -41,6 +46,11 @@ _pending_retrigger = set()  # Games that need rechecking after current loop
 # Per-game strategy memory — persists across LLM calls within a game
 _game_strategies = {}  # game_id → list of strategy notes
 _game_strategies_lock = threading.Lock()
+# Per-game planner telemetry events for debugging/rollout visibility
+_planner_events = {}  # game_id -> [event, ...]
+_planner_events_lock = threading.Lock()
+# Keep event buffers bounded to prevent memory growth.
+_MAX_PLANNER_EVENTS_PER_GAME = 80
 # Per-game chat cadence state for AI flavor messages
 _ai_chat_states = {}  # game_id -> {'count': int, 'last_sent_at': float, 'last_turn_marker': tuple}
 _ai_chat_lock = threading.Lock()
@@ -74,6 +84,53 @@ def _get_llm_client():
             api_key=settings.AI_OPENAI_API_KEY,
         )
     return _llm_client
+
+
+def _record_planner_event(game_id, event_type, payload=None):
+    """Append a bounded planner telemetry event for a game."""
+    if not game_id:
+        return
+
+    event = {
+        'timestamp': round(time.time(), 3),
+        'type': str(event_type),
+    }
+    if isinstance(payload, dict):
+        event.update(payload)
+
+    with _planner_events_lock:
+        if game_id not in _planner_events:
+            _planner_events[game_id] = []
+        _planner_events[game_id].append(event)
+        if len(_planner_events[game_id]) > _MAX_PLANNER_EVENTS_PER_GAME:
+            _planner_events[game_id] = _planner_events[game_id][-_MAX_PLANNER_EVENTS_PER_GAME:]
+
+
+def get_ai_debug_snapshot(game_id, max_notes=20, max_events=40):
+    """Return in-memory AI reasoning and planner telemetry for a game.
+
+    Used by rollout diagnostics routes. Data is ephemeral and cleared after game
+    completion or server restart.
+    """
+    try:
+        max_notes = max(1, min(int(max_notes), 200))
+    except (TypeError, ValueError):
+        max_notes = 20
+
+    try:
+        max_events = max(1, min(int(max_events), 200))
+    except (TypeError, ValueError):
+        max_events = 40
+
+    with _game_strategies_lock:
+        notes = list(_game_strategies.get(game_id, []))[-max_notes:]
+    with _planner_events_lock:
+        events = list(_planner_events.get(game_id, []))[-max_events:]
+
+    return {
+        'strategy_notes': notes,
+        'planner_events': events,
+    }
 
 
 def _ai_headers(ai_player_id):
@@ -257,6 +314,8 @@ def _ai_game_loop(app, game_id, ai_player_id):
                     # Clean up strategy memory for finished games
                     with _game_strategies_lock:
                         _game_strategies.pop(game_id, None)
+                    with _planner_events_lock:
+                        _planner_events.pop(game_id, None)
                     with _ai_chat_lock:
                         _ai_chat_states.pop(game_id, None)
                     break
@@ -848,8 +907,85 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
         phase_instruction = PHASE_PROMPTS.get(phase, "Choose the best action.")
         strategy_memory = _get_strategy_memory(game_id) if game_id else ""
         log_digest = _get_game_log_digest(prompt_game_dict, ai_player_id)
+
+        strategy_plans = []
+        strategy_plans_text = ""
+        planner_runtime_ms = None
+        planner_shadow_mode = bool(settings.AI_STRATEGY_PLANNER_SHADOW_MODE)
+        if settings.AI_STRATEGY_PLANNER_ENABLED:
+            planner_started = time.perf_counter()
+            try:
+                strategy_plans = generate_strategy_plans(
+                    prompt_game_dict,
+                    ai_player_id,
+                    phase,
+                    actions,
+                    max_plans=settings.AI_STRATEGY_PLANNER_MAX_PLANS,
+                    max_main_draws_per_turn=settings.AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN,
+                    max_side_draws_per_turn=settings.AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN,
+                )
+                planner_runtime_ms = (time.perf_counter() - planner_started) * 1000.0
+
+                if not planner_shadow_mode:
+                    strategy_plans_text = format_strategy_plans_for_prompt(strategy_plans)
+
+                top_plan = strategy_plans[0] if strategy_plans else {}
+                logger.info(
+                    "AI planner generated plans "
+                    f"(game={game_id}, phase={phase}, plans={len(strategy_plans)}, "
+                    f"runtime_ms={planner_runtime_ms:.2f}, "
+                    f"top_seed={top_plan.get('seed_action_id')}, "
+                    f"top_score={top_plan.get('total_score')}, "
+                    f"shadow={planner_shadow_mode})"
+                )
+                _record_planner_event(
+                    game_id,
+                    'planner_generated',
+                    {
+                        'phase': phase,
+                        'plans': len(strategy_plans),
+                        'runtime_ms': round(planner_runtime_ms, 3),
+                        'top_seed_action_id': top_plan.get('seed_action_id'),
+                        'top_score': top_plan.get('total_score'),
+                        'shadow_mode': planner_shadow_mode,
+                    },
+                )
+
+                if planner_runtime_ms > settings.AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS:
+                    logger.warning(
+                        "AI planner runtime exceeded warning threshold "
+                        f"(game={game_id}, phase={phase}, runtime_ms={planner_runtime_ms:.2f}, "
+                        f"threshold_ms={settings.AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS:.2f})"
+                    )
+                    _record_planner_event(
+                        game_id,
+                        'planner_runtime_warning',
+                        {
+                            'phase': phase,
+                            'runtime_ms': round(planner_runtime_ms, 3),
+                            'threshold_ms': round(settings.AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS, 3),
+                        },
+                    )
+            except Exception as planner_error:
+                planner_runtime_ms = (time.perf_counter() - planner_started) * 1000.0
+                logger.warning(f"Strategy planner failed for game {game_id}: {planner_error}")
+                _record_planner_event(
+                    game_id,
+                    'planner_failure',
+                    {
+                        'phase': phase,
+                        'runtime_ms': round(planner_runtime_ms, 3),
+                        'error': str(planner_error),
+                        'shadow_mode': planner_shadow_mode,
+                    },
+                )
+                strategy_plans = []
+                strategy_plans_text = ""
         
-        user_prompt = f"{game_state_text}{log_digest}{strategy_memory}\n\n{actions_text}\n\n{phase_instruction}"
+        user_prompt = (
+            f"{game_state_text}{log_digest}{strategy_memory}{strategy_plans_text}\n\n"
+            f"{actions_text}\n\n{phase_instruction}"
+        )
         
         # Call LLM with phase-appropriate temperature
         temperature = PHASE_TEMPERATURES.get(phase, 0.4)
@@ -862,8 +998,63 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
         # Find the matching action
         chosen = next((a for a in actions if a['id'] == action_id), None)
         if not chosen:
-            logger.warning(f"LLM chose invalid action {action_id}, defaulting to first")
-            chosen = actions[0]
+            fallback = actions[0]
+            used_planner_fallback = False
+            if (
+                settings.AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK
+                and not planner_shadow_mode
+            ):
+                rec_action_id = recommended_action_id(strategy_plans)
+                if rec_action_id is not None:
+                    rec_action = next((a for a in actions if a['id'] == rec_action_id), None)
+                    if rec_action:
+                        fallback = rec_action
+                        used_planner_fallback = True
+            logger.warning(
+                f"LLM chose invalid action {action_id}, "
+                f"fallback={fallback.get('id')}:{fallback.get('type')}"
+            )
+            _record_planner_event(
+                game_id,
+                'invalid_action_fallback',
+                {
+                    'phase': phase,
+                    'invalid_action_id': action_id,
+                    'fallback_action_id': fallback.get('id'),
+                    'fallback_action_type': fallback.get('type'),
+                    'used_planner_fallback': used_planner_fallback,
+                    'shadow_mode': planner_shadow_mode,
+                },
+            )
+            chosen = fallback
+
+        if not plan and strategy_plans:
+            top_plan = strategy_plans[0]
+            seed = top_plan.get('seed_action_id')
+            score = top_plan.get('total_score')
+            step_preview = ' | '.join((top_plan.get('turn_steps') or [])[:3])
+            plan = f"seed={seed}, score={score}; {step_preview}"
+
+        if strategy_plans and planner_shadow_mode:
+            rec_action_id = recommended_action_id(strategy_plans)
+            match = rec_action_id == chosen.get('id')
+            runtime_str = f"{planner_runtime_ms:.2f}" if planner_runtime_ms is not None else "n/a"
+            logger.info(
+                "AI planner shadow comparison "
+                f"(game={game_id}, phase={phase}, recommended={rec_action_id}, "
+                f"chosen={chosen.get('id')}, match={match}, runtime_ms={runtime_str})"
+            )
+            _record_planner_event(
+                game_id,
+                'planner_shadow_comparison',
+                {
+                    'phase': phase,
+                    'recommended_action_id': rec_action_id,
+                    'chosen_action_id': chosen.get('id'),
+                    'match': bool(match),
+                    'runtime_ms': round(planner_runtime_ms, 3) if planner_runtime_ms is not None else None,
+                },
+            )
         
         logger.info(f"LLM chose action {action_id}: {chosen['type']} — {chosen['description'][:80]}")
         

@@ -25,6 +25,9 @@ DROP_TABLES_ON_STARTUP = os.getenv('DROP_TABLES_ON_STARTUP', 'False').lower() ==
 # Debug logging
 DEBUG_ENABLED = os.getenv('DEBUG_ENABLED', 'False').lower() == 'true'
 DEBUG_LOG_PATH = os.getenv('DEBUG_LOG_PATH', '/tmp/nepalkings_debug.log')
+DEBUG_LOG_TO_FILE = os.getenv('DEBUG_LOG_TO_FILE', 'False').lower() == 'true'
+DEBUG_LOG_MAX_BYTES = int(os.getenv('DEBUG_LOG_MAX_BYTES', '5242880'))  # 5 MB
+DEBUG_LOG_BACKUP_COUNT = int(os.getenv('DEBUG_LOG_BACKUP_COUNT', '3'))
 
 # Game Logic
 NUM_MAIN_CARDS_START = 12
@@ -75,6 +78,18 @@ AI_CHAT_MIN_SECONDS_BETWEEN = float(os.getenv('AI_CHAT_MIN_SECONDS_BETWEEN', '35
 AI_CHAT_MAX_PER_GAME = int(os.getenv('AI_CHAT_MAX_PER_GAME', '12'))
 AI_CHAT_LLM_TEMPERATURE = float(os.getenv('AI_CHAT_LLM_TEMPERATURE', '0.75'))
 AI_CHAT_LLM_MAX_TOKENS = int(os.getenv('AI_CHAT_LLM_MAX_TOKENS', '90'))
+
+# Strategy planner (bounded multi-turn planning context for the LLM)
+AI_STRATEGY_PLANNER_ENABLED = os.getenv('AI_STRATEGY_PLANNER_ENABLED', 'True').lower() == 'true'
+AI_STRATEGY_PLANNER_MAX_PLANS = int(os.getenv('AI_STRATEGY_PLANNER_MAX_PLANS', '5'))
+AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN = int(os.getenv('AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', '2'))
+AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN = int(os.getenv('AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', '1'))
+AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK = (
+    os.getenv('AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK', 'True').lower() == 'true'
+)
+AI_STRATEGY_PLANNER_SHADOW_MODE = os.getenv('AI_STRATEGY_PLANNER_SHADOW_MODE', 'False').lower() == 'true'
+AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS = float(os.getenv('AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS', '120.0'))
+
 # Blocks non-battle actions when advance+defender are locked and game is waiting
 # for fight/fold resolution. Enabled by default; set env var to False to disable.
 BATTLE_RESOLUTION_HARD_LOCK_ENABLED = os.getenv('BATTLE_RESOLUTION_HARD_LOCK_ENABLED', 'True').lower() == 'true'

@@ -7,6 +7,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from models import db
 import logging
+from logging.handlers import RotatingFileHandler
 import signal
 import sys
 
@@ -62,6 +63,25 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
 )
 logger = logging.getLogger('nepalkings')
+
+if settings.DEBUG_LOG_TO_FILE:
+    try:
+        file_handler = RotatingFileHandler(
+            settings.DEBUG_LOG_PATH,
+            maxBytes=max(int(settings.DEBUG_LOG_MAX_BYTES), 1024),
+            backupCount=max(int(settings.DEBUG_LOG_BACKUP_COUNT), 1),
+        )
+        file_handler.setLevel(logging.DEBUG if settings.DEBUG_ENABLED else logging.INFO)
+        file_handler.setFormatter(
+            logging.Formatter(
+                '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S',
+            )
+        )
+        logging.getLogger().addHandler(file_handler)
+        logger.info(f"File logging enabled at {settings.DEBUG_LOG_PATH}")
+    except Exception:
+        logger.exception(f"Failed to enable file logging at {settings.DEBUG_LOG_PATH}")
 
 # Disable Flask's default per-request logging (very noisy)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
