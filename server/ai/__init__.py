@@ -58,14 +58,14 @@ def init_ai_users():
 
 def is_ai_user(user_id):
     """Check if a user_id belongs to an AI player."""
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     return user is not None and user.is_ai
 
 
 def get_ai_player_in_game(game):
     """Return the Player object for the AI in this game, or None."""
     for player in game.players:
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         if user and user.is_ai:
             return player
     return None

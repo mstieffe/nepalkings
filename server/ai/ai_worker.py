@@ -113,8 +113,8 @@ def _schedule_watchdog_retry(app, game_id, ai_player_id, reason):
                 time.sleep(delay_seconds)
 
             with app.app_context():
-                from models import Game
-                game = Game.query.get(game_id)
+                from models import Game, db
+                game = db.session.get(Game, game_id)
                 if not game or game.state == 'finished':
                     _clear_watchdog_retry(game_id)
                     return
@@ -165,16 +165,16 @@ def trigger_ai_if_needed(game_id, app=None):
         return
 
     # Import here to avoid circular imports
-    from models import Game, User
+    from models import Game, User, db
     
     # Quick check: does this game have an AI player who needs to act?
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game or game.state == 'finished':
         return
     
     ai_player = None
     for player in game.players:
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         if user and user.is_ai:
             ai_player = player
             break
@@ -249,8 +249,8 @@ def _ai_game_loop(app, game_id, ai_player_id):
             iteration += 1
             
             with app.app_context():
-                from models import Game
-                game = Game.query.get(game_id)
+                from models import Game, db
+                game = db.session.get(Game, game_id)
                 if not game or game.state == 'finished':
                     logger.info(f"AI loop exit: game {game_id} is finished/gone")
                     _clear_watchdog_retry(game_id)
@@ -277,7 +277,8 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 # flips the turn while we're winding down
                 time.sleep(3)
                 with app.app_context():
-                    game = Game.query.get(game_id)
+                    from models import Game, db
+                    game = db.session.get(Game, game_id)
                     if game and game.state != 'finished':
                         game_dict = game.serialize()
                         phase = detect_phase(game_dict, ai_player_id)
@@ -304,7 +305,8 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 called_start_turn = True
                 # Re-fetch game state after start_turn (cards may have been filled)
                 with app.app_context():
-                    game = Game.query.get(game_id)
+                    from models import Game, db
+                    game = db.session.get(Game, game_id)
                     if not game or game.state == 'finished':
                         _clear_watchdog_retry(game_id)
                         break
@@ -417,8 +419,8 @@ def _ai_game_loop(app, game_id, ai_player_id):
         elif unsuccessful_exit:
             try:
                 with app.app_context():
-                    from models import Game
-                    game = Game.query.get(game_id)
+                    from models import Game, db
+                    game = db.session.get(Game, game_id)
                     if not game or game.state == 'finished':
                         _clear_watchdog_retry(game_id)
                     else:
@@ -1093,8 +1095,8 @@ def _exec_change_cards(app, game_id, ai_player_id):
     Only swap low-value or duplicate cards we can't use.
     """
     with app.app_context():
-        from models import Game, MainCard
-        game = Game.query.get(game_id)
+        from models import Game, MainCard, db
+        game = db.session.get(Game, game_id)
         if not game:
             return False
         

@@ -1159,8 +1159,8 @@ def _enum_counter_spell(game_dict, ai_player, opponent):
     # Get pending spell name from the DB (we're inside app_context)
     spell_name = '?'
     try:
-        from models import ActiveSpell
-        pending = ActiveSpell.query.get(pending_spell_id)
+        from models import ActiveSpell, db
+        pending = db.session.get(ActiveSpell, pending_spell_id)
         if pending:
             spell_name = pending.spell_name
     except Exception as e:
