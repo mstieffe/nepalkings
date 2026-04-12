@@ -69,6 +69,10 @@ AI_OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')  # OpenAI API key
 AI_MODEL = os.getenv('AI_MODEL', 'gpt-4.1-mini')  # LLM model name
 AI_PROVIDER = os.getenv('AI_PROVIDER', 'openai')  # LLM provider
 AI_ENABLED = os.getenv('AI_ENABLED', 'True').lower() == 'true'
+AI_CHAT_ENABLED = os.getenv('AI_CHAT_ENABLED', 'True').lower() == 'true'
+AI_CHAT_CHANCE = float(os.getenv('AI_CHAT_CHANCE', '0.22'))
+AI_CHAT_MIN_SECONDS_BETWEEN = float(os.getenv('AI_CHAT_MIN_SECONDS_BETWEEN', '35'))
+AI_CHAT_MAX_PER_GAME = int(os.getenv('AI_CHAT_MAX_PER_GAME', '12'))
 
 # LLM reliability
 AI_LLM_TIMEOUT_SECONDS = float(os.getenv('AI_LLM_TIMEOUT_SECONDS', '12'))

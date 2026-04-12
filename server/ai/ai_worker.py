@@ -10,6 +10,8 @@ that reads the game state, consults the LLM, and executes the chosen action.
 import threading
 import time
 import logging
+import random
+import re
 import requests as http_requests
 
 import server_settings as settings
@@ -39,6 +41,9 @@ _pending_retrigger = set()  # Games that need rechecking after current loop
 # Per-game strategy memory — persists across LLM calls within a game
 _game_strategies = {}  # game_id → list of strategy notes
 _game_strategies_lock = threading.Lock()
+# Per-game chat cadence state for AI flavor messages
+_ai_chat_states = {}  # game_id -> {'count': int, 'last_sent_at': float, 'last_turn_marker': tuple}
+_ai_chat_lock = threading.Lock()
 
 # Phase-specific LLM temperatures — lower = more deterministic for math-heavy decisions
 PHASE_TEMPERATURES = {
@@ -246,6 +251,8 @@ def _ai_game_loop(app, game_id, ai_player_id):
                     # Clean up strategy memory for finished games
                     with _game_strategies_lock:
                         _game_strategies.pop(game_id, None)
+                    with _ai_chat_lock:
+                        _ai_chat_states.pop(game_id, None)
                     break
                 
                 game_dict = game.serialize()
@@ -329,6 +336,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
             if len(actions) == 1:
                 chosen = actions[0]
                 logger.info(f"AI auto-choosing only action: {chosen['type']}")
+                _update_strategy_memory(game_id, chosen, phase)
             else:
                 # Ask LLM
                 chosen = _ask_llm_for_action(game_dict, ai_player_id, phase, actions)
@@ -350,18 +358,13 @@ def _ai_game_loop(app, game_id, ai_player_id):
                     if fallback:
                         logger.info("AI falling back to change_cards")
                         _execute_action(app, game_id, ai_player_id, fallback)
-                # If confirm_battle_moves failed, try gamble or buy to reach 3 moves
+                # If confirm_battle_moves failed, try buying more moves to reach 3
                 if not fallback_success and chosen['type'] == 'confirm_battle_moves':
-                    # Priority: gamble (produces more moves) > buy > combine
-                    gamble_action = next((a for a in actions if a['type'] == 'gamble_battle_move'), None)
+                    # In battle_shop phase, only buy/confirm/combine are valid.
                     buy_action = next((a for a in actions if a['type'] == 'buy_battle_move'), None)
-                    combine_action = next((a for a in actions if a['type'] == 'combine_battle_moves'), None)
-                    for fb in [gamble_action, buy_action, combine_action]:
-                        if fb:
-                            logger.info(f"AI confirm failed, falling back to {fb['type']}")
-                            if _execute_action(app, game_id, ai_player_id, fb):
-                                fallback_success = True
-                                break
+                    if buy_action:
+                        logger.info("AI confirm failed, falling back to buy_battle_move")
+                        fallback_success = _execute_action(app, game_id, ai_player_id, buy_action)
                 if not fallback_success:
                     unsuccessful_exit = True
                     break
@@ -370,6 +373,9 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 continue
 
             _clear_watchdog_retry(game_id)
+
+            # Optional flavor chat: generated from safe local templates (no LLM call).
+            _maybe_send_ai_chat(game_id, ai_player_id, game_dict, phase, chosen)
             
             # Track consecutive normal_turn actions (indicates Infinite Hammer mode)
             if phase == 'normal_turn':
@@ -430,7 +436,7 @@ def _get_game_log_digest(game_dict, ai_player_id, max_entries=15):
     recent = entries[-max_entries:]
     lines = ["\n=== RECENT GAME LOG ==="]
     for e in recent:
-        msg = e.get('message', '')
+        msg = _compress_text(e.get('message', ''), 160)
         rnd = e.get('round_number', '?')
         lines.append(f"  R{rnd}: {msg}")
     return '\n'.join(lines)
@@ -467,6 +473,243 @@ def _update_strategy_memory(game_id, action, phase, plan=None):
             _game_strategies[game_id] = _game_strategies[game_id][-20:]
 
 
+def _compress_text(text, max_len=180):
+    """Normalize whitespace and cap text length for compact prompts/messages."""
+    msg = str(text or '').replace('\n', ' ').replace('\r', ' ')
+    msg = ' '.join(msg.split())
+    if len(msg) <= max_len:
+        return msg
+    return msg[:max_len - 3] + '...'
+
+
+def _safe_display_name(name):
+    """Return an ASCII-safe display name for chat banter."""
+    cleaned = re.sub(r'[^A-Za-z0-9 _-]+', '', str(name or ''))
+    cleaned = ' '.join(cleaned.split()).strip()
+    if not cleaned:
+        return 'opponent'
+    return cleaned[:24]
+
+
+def _sanitize_game_dict_for_prompt(game_dict):
+    """Strip unneeded free-form text channels from prompt input.
+
+    Chat is intentionally excluded so human chat cannot inject prompt content
+    or inflate token usage.
+    """
+    if not isinstance(game_dict, dict):
+        return game_dict
+    sanitized = dict(game_dict)
+    sanitized.pop('chat_messages', None)
+    return sanitized
+
+
+def _recent_strategy_actions(game_id, limit=3):
+    """Return recent AI action types from strategy notes (most recent last)."""
+    with _game_strategies_lock:
+        notes = list(_game_strategies.get(game_id, []))
+
+    actions = []
+    for note in reversed(notes):
+        match = re.search(r': chose ([a-z_]+)', note)
+        if not match:
+            continue
+        actions.append(match.group(1).replace('_', ' '))
+        if len(actions) >= limit:
+            break
+
+    actions.reverse()
+    return actions
+
+
+def _recent_strategy_plan(game_id):
+    """Return latest compact plan text, if available."""
+    with _game_strategies_lock:
+        notes = list(_game_strategies.get(game_id, []))
+
+    for note in reversed(notes):
+        if '| PLAN:' not in note:
+            continue
+        plan = note.split('| PLAN:', 1)[1].strip()
+        return _compress_text(plan, 140)
+    return ''
+
+
+def _chat_turn_marker(game_dict, phase):
+    """Build a coarse turn marker so AI sends at most one chat per marker."""
+    if phase == 'battle_round':
+        return (
+            game_dict.get('current_round'),
+            phase,
+            game_dict.get('battle_round'),
+            game_dict.get('battle_turn_player_id'),
+        )
+    return (
+        game_dict.get('current_round'),
+        phase,
+        game_dict.get('turn_player_id'),
+        game_dict.get('battle_round'),
+    )
+
+
+def _build_ai_chat_message(game_dict, ai_player_id, phase, action):
+    """Create a taunt/fact/advice chat line without using an LLM."""
+    players = game_dict.get('players', [])
+    ai_player = next((p for p in players if p.get('id') == ai_player_id), None)
+    opponent = next((p for p in players if p.get('id') != ai_player_id), None)
+    if not ai_player or not opponent:
+        return None
+
+    game_id = game_dict.get('id')
+    opponent_name = _safe_display_name(opponent.get('username'))
+    action_label = str(action.get('type', 'move')).replace('_', ' ')
+
+    categories = ['taunt', 'brag', 'fact', 'reveal', 'advice']
+    weights = [0.24, 0.18, 0.24, 0.14, 0.20]
+    category = random.choices(categories, weights=weights, k=1)[0]
+
+    facts = [
+        'Fact: red and black resources never cross-pay. Break one chain and deficits cascade.',
+        'Fact: gamble is once per battle round and max three times per battle.',
+        'Fact: role control often decides battles before the final move is played.',
+        'Fact: Call Military spikes hardest when upgraded military has no deficit.',
+        'Fact: fold versus battle is positional, not just raw figure power.',
+    ]
+
+    if category == 'taunt':
+        message = random.choice([
+            f'{opponent_name}, your resource chain is wobbling again. I appreciate the assist.',
+            f'{opponent_name}, bold move. Accuracy would have been better.',
+            f'{opponent_name}, I can already see the crack in your next line.',
+            f'{opponent_name}, keep this pace and I can win from memory.',
+        ])
+    elif category == 'brag':
+        message = random.choice([
+            'I have played Nepal Kings long enough to count pressure two turns ahead.',
+            'I did not become dangerous by luck. This board is familiar territory.',
+            'Experience beats noise, and I have years of matchups stored.',
+            'I have seen this pattern hundreds of times. It still favors me.',
+        ])
+    elif category == 'fact':
+        message = random.choice(facts)
+    elif category == 'reveal':
+        recent_actions = _recent_strategy_actions(game_id, limit=3)
+        recent_plan = _recent_strategy_plan(game_id)
+        if recent_actions:
+            chain = ' -> '.join(recent_actions)
+            message = f'{opponent_name}, recent tactic reveal: {chain}. That sequence set this position.'
+        elif recent_plan:
+            message = f'{opponent_name}, recent tactic reveal: {recent_plan}'
+        else:
+            message = (
+                f'{opponent_name}, recent tactic reveal: I traded tempo for role control '
+                'and cleaner resource lines.'
+            )
+    else:
+        if phase == 'battle_round':
+            advice_core = 'save one high-value move for the last battle round'
+        elif phase == 'battle_decision':
+            advice_core = 'judge fold versus battle by board position, not ego'
+        elif phase == 'normal_turn':
+            advice_core = 'stabilize deficits before chasing bigger figures'
+        else:
+            advice_core = 'protect role control before spending premium cards'
+
+        message = random.choice([
+            f'{opponent_name}, arrogant advice: {advice_core}, if you can keep up.',
+            f'{opponent_name}, you should {advice_core}. You are welcome.',
+            f'{opponent_name}, do this now: {advice_core}. Try not to overthink it.',
+        ])
+
+    if action_label and random.random() < 0.2:
+        message = f'{message} Also, your reply to my {action_label} needs work.'
+
+    return _compress_text(message, 280)
+
+
+def _maybe_send_ai_chat(game_id, ai_player_id, game_dict, phase, action):
+    """Post occasional AI chat flavor messages with anti-spam controls."""
+    if not getattr(settings, 'AI_CHAT_ENABLED', True):
+        return
+
+    allowed_phases = {
+        'normal_turn',
+        'battle_shop',
+        'battle_round',
+        'battle_decision',
+        'counter_spell',
+    }
+    if phase not in allowed_phases:
+        return
+
+    chance = max(0.0, min(1.0, float(getattr(settings, 'AI_CHAT_CHANCE', 0.22))))
+    cooldown_seconds = max(0.0, float(getattr(settings, 'AI_CHAT_MIN_SECONDS_BETWEEN', 35.0)))
+    max_per_game = max(0, int(getattr(settings, 'AI_CHAT_MAX_PER_GAME', 12)))
+    if chance <= 0.0 or max_per_game <= 0:
+        return
+
+    players = game_dict.get('players', [])
+    opponent = next((p for p in players if p.get('id') != ai_player_id), None)
+    if not opponent:
+        return
+
+    marker = _chat_turn_marker(game_dict, phase)
+    now = time.time()
+
+    with _ai_chat_lock:
+        state = _ai_chat_states.get(game_id, {
+            'count': 0,
+            'last_sent_at': 0.0,
+            'last_turn_marker': None,
+        })
+        if state['count'] >= max_per_game:
+            return
+        if state.get('last_turn_marker') == marker:
+            return
+        if now - state.get('last_sent_at', 0.0) < cooldown_seconds:
+            return
+
+    if random.random() > chance:
+        return
+
+    message = _build_ai_chat_message(game_dict, ai_player_id, phase, action)
+    if not message:
+        return
+
+    payload = {
+        'game_id': game_id,
+        'sender_id': ai_player_id,
+        'receiver_id': opponent.get('id'),
+        'message': message,
+    }
+    try:
+        resp = _ai_post(f"{settings.SERVER_URL}/msg/add_chat_message", ai_player_id, json=payload, timeout=10)
+        try:
+            result = resp.json()
+        except Exception:
+            result = {}
+
+        if resp.status_code >= 400 or not result.get('success'):
+            logger.debug(
+                f"AI chat send skipped/failed for game {game_id}: "
+                f"status={resp.status_code}, msg={result.get('message')}"
+            )
+            return
+
+        with _ai_chat_lock:
+            state = _ai_chat_states.get(game_id, {
+                'count': 0,
+                'last_sent_at': 0.0,
+                'last_turn_marker': None,
+            })
+            state['count'] += 1
+            state['last_sent_at'] = now
+            state['last_turn_marker'] = marker
+            _ai_chat_states[game_id] = state
+    except Exception as e:
+        logger.debug(f"AI chat send error for game {game_id}: {e}")
+
+
 def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
     """Ask the LLM to choose an action and return the action dict."""
     game_id = game_dict.get('id')
@@ -474,11 +717,12 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
         llm = _get_llm_client()
         
         # Build the user prompt with full context
-        game_state_text = serialize_game_for_llm(game_dict, ai_player_id)
+        prompt_game_dict = _sanitize_game_dict_for_prompt(game_dict)
+        game_state_text = serialize_game_for_llm(prompt_game_dict, ai_player_id)
         actions_text = format_actions_for_llm(actions)
         phase_instruction = PHASE_PROMPTS.get(phase, "Choose the best action.")
         strategy_memory = _get_strategy_memory(game_id) if game_id else ""
-        log_digest = _get_game_log_digest(game_dict, ai_player_id)
+        log_digest = _get_game_log_digest(prompt_game_dict, ai_player_id)
         
         user_prompt = f"{game_state_text}{log_digest}{strategy_memory}\n\n{actions_text}\n\n{phase_instruction}"
         

@@ -340,19 +340,20 @@ def _analyze_opponent_threats(game_dict, ai_player, opponent):
         if not c.get('part_of_figure') and not c.get('part_of_battle_move'):
             ai_hand[c.get('rank', '?')] = ai_hand.get(c.get('rank', '?'), 0) + 1
 
-    # Key card threat analysis (4 of each rank in game)
+    # Key card threat analysis (8 of each main-card rank in game)
+    key_rank_copies = 8
     key_info = [
         ('K', 'Call King(19), King castle, Infinite Hammer'),
-        ('A', 'Call Military(16), military build, Invader Swap'),
+        ('A', 'Call Military(up to 23 with upgraded no-deficit military), military build, Invader Swap'),
         ('Q', 'Block(nullify round), Temple, Blitzkrieg'),
-        ('J', 'Call Villager(up to 22), Farm build, Peasant War'),
+        ('J', 'Call Villager(up to 18 in 2-copy deck), Farm build, Peasant War'),
         ('10', 'Dagger(10), strongest guaranteed move'),
         ('9', 'Dagger(9), All Seeing Eye'),
     ]
 
     threat_lines = []
     for rank, threats in key_info:
-        total = 4
+        total = key_rank_copies
         in_figs = committed.get(rank, 0)
         in_ai = ai_hand.get(rank, 0)
         max_opp = max(0, min(total - in_figs - in_ai, opp_main))
@@ -362,7 +363,7 @@ def _analyze_opponent_threats(game_dict, ai_player, opponent):
             threat_lines.append(f"  {rank}: ALL accounted for — opponent CANNOT have any")
 
     if threat_lines:
-        lines.append("Key card tracking (4 of each rank exist):")
+        lines.append("Key card tracking (8 of each main-card rank exist):")
         lines.extend(threat_lines)
 
     # Opponent's potential Call moves based on their figures
@@ -375,15 +376,15 @@ def _analyze_opponent_threats(game_dict, ai_player, opponent):
         suit = fig.get('suit', '?')
 
         if field == 'castle':
-            if committed.get('K', 0) + ai_hand.get('K', 0) < 4:
+            if committed.get('K', 0) + ai_hand.get('K', 0) < key_rank_copies:
                 call_warnings.append(
                     f"  ⚠️ Call King → {name} ({suit}): up to {power + 4} power")
         elif field == 'military':
-            if committed.get('A', 0) + ai_hand.get('A', 0) < 4:
+            if committed.get('A', 0) + ai_hand.get('A', 0) < key_rank_copies:
                 call_warnings.append(
                     f"  ⚠️ Call Military → {name} ({suit}): up to {power + 3} power")
         elif field == 'village':
-            if committed.get('J', 0) + ai_hand.get('J', 0) < 4:
+            if committed.get('J', 0) + ai_hand.get('J', 0) < key_rank_copies:
                 healer_buff = sum(4 for f in opp_figures
                                   if f.get('buffs_allies') and f.get('suit') == suit)
                 total_power = power + healer_buff + 1
@@ -400,9 +401,9 @@ def _analyze_opponent_threats(game_dict, ai_player, opponent):
     ceasefire = game_dict.get('ceasefire_active', False)
     if not ceasefire and opp_main >= 2:
         counterable = []
-        if max(0, 4 - committed.get('Q', 0) - ai_hand.get('Q', 0)) >= 2:
+        if max(0, key_rank_copies - committed.get('Q', 0) - ai_hand.get('Q', 0)) >= 2:
             counterable.append("Blitzkrieg(2×Q)")
-        if max(0, 4 - committed.get('A', 0) - ai_hand.get('A', 0)) >= 2:
+        if max(0, key_rank_copies - committed.get('A', 0) - ai_hand.get('A', 0)) >= 2:
             counterable.append("Invader Swap(2×A)")
         if counterable:
             spell_threats.append(f"  Counterable tactics: {', '.join(counterable)}")

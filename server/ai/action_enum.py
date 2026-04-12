@@ -526,8 +526,8 @@ def _enum_battle_decision(game_dict, ai_player, opponent):
 
 def _enum_battle_shop(game_dict, ai_player, opponent):
     """
-    AI buys battle moves from hand cards, can gamble/combine, and confirms.
-    Returns buy + gamble + combine + confirm actions.
+    AI buys battle moves from hand cards, can combine, and confirms.
+    Returns buy + combine + confirm actions.
     """
     actions = []
     action_id = 1
@@ -649,46 +649,9 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
                     })
                     action_id += 1
     
-    # ── Gamble: sacrifice 1 weak move → draw 2 random (max 3 per battle) ──
-    gamble_counts = game_dict.get('battle_gamble_counts') or {}
-    already_gambled = gamble_counts.get(str(ai_player['id']), 0) >= 3
-    if ai_moves and not already_gambled:
-        for move in ai_moves:
-            if move.get('family_name') == 'Double Dagger':
-                continue  # Don't gamble double daggers
-            move_val = move.get('value', 0)
-            move_name = move.get('family_name', move.get('name', '?'))
-            # Flag unmatched Call moves as prime gamble targets
-            family = move.get('family_name', '')
-            if family in ('Call King', 'Call Military', 'Call Villager'):
-                rank_map = {'Call King': 'K', 'Call Military': 'A', 'Call Villager': 'J'}
-                rank = rank_map.get(family, '')
-                card_suit = move.get('suit', '')
-                eff_power, fig_name = _call_power(rank, card_suit, family)
-                if fig_name:
-                    desc = f"Gamble: sacrifice {move_name}(calls {fig_name}, eff_power≈{eff_power}) → draw 2 random. BAD gamble — keep this Call!"
-                else:
-                    base = {'K': 4, 'A': 3, 'J': 1}.get(rank, 0)
-                    desc = f"Gamble: sacrifice {move_name}(NO matching figure, value={base}) → draw 2 random. GREAT gamble target!"
-            elif move_val >= 9:
-                desc = f"Gamble: sacrifice {move_name}(value={move_val}) → draw 2 random. Risky — {move_val} is already strong."
-            else:
-                desc = f"Gamble: sacrifice {move_name}(value={move_val}) → draw 2 random. Decent gamble — low value card."
-            actions.append({
-                'id': action_id,
-                'type': 'gamble_battle_move',
-                'description': desc,
-                'params': {
-                    'battle_move_id': move['id'],
-                },
-            })
-            action_id += 1
-    
     # Only offer confirm when the AI has 3+ moves (server requires exactly 3).
-    # If AI can't reach 3 (no buy, no gamble), offer confirm as deadlock escape.
+    # If AI can't reach 3 (no buy), offer confirm as deadlock escape.
     has_buy_actions = any(a['type'] == 'buy_battle_move' for a in actions)
-    has_gamble_actions = any(a['type'] == 'gamble_battle_move' for a in actions)
-    has_combine_actions = any(a['type'] == 'combine_battle_moves' for a in actions)
     if num_moves >= 3:
         actions.append({
             'id': action_id,
@@ -697,7 +660,7 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
             'params': {},
         })
         action_id += 1
-    elif not has_buy_actions and not has_gamble_actions:
+    elif not has_buy_actions:
         # True deadlock — no way to reach 3 moves, offer confirm as escape hatch
         actions.append({
             'id': action_id,
@@ -706,13 +669,6 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
             'params': {},
         })
         action_id += 1
-    else:
-        # < 3 moves but CAN still buy/gamble — tell LLM it must reach 3
-        if has_gamble_actions and not has_buy_actions:
-            # Mark gamble actions as mandatory
-            for a in actions:
-                if a['type'] == 'gamble_battle_move':
-                    a['description'] = "⚠️ MUST GAMBLE to reach 3 moves! " + a['description']
     
     return actions
 
@@ -733,6 +689,33 @@ def _figure_power_from_dict(fig):
         return 15
     cards = fig.get('cards', fig.get('cards_to_figure', []))
     return sum(c.get('value', 0) for c in cards)
+
+
+def _get_player_gamble_state(game_dict, player_id):
+    """Return (used_count, used_rounds_set) for a player's battle gambles."""
+    gamble_counts = game_dict.get('battle_gamble_counts') or {}
+    raw_state = gamble_counts.get(str(player_id), 0)
+
+    used_count = 0
+    used_rounds = set()
+
+    if isinstance(raw_state, dict):
+        try:
+            used_count = int(raw_state.get('count', 0) or 0)
+        except (TypeError, ValueError):
+            used_count = 0
+        for raw_round in raw_state.get('rounds', []):
+            try:
+                used_rounds.add(int(raw_round))
+            except (TypeError, ValueError):
+                continue
+    else:
+        try:
+            used_count = int(raw_state or 0)
+        except (TypeError, ValueError):
+            used_count = 0
+
+    return used_count, used_rounds
 
 
 def _get_best_call_figure(move, game_dict, ai_player):
@@ -785,7 +768,7 @@ def _get_best_call_figure(move, game_dict, ai_player):
 
 
 def _enum_battle_round(game_dict, ai_player, opponent):
-    """AI plays a battle move or skips."""
+    """AI plays a battle move, may gamble once this round, or skips."""
     actions = []
     action_id = 1
     
@@ -826,6 +809,56 @@ def _enum_battle_round(game_dict, ai_player, opponent):
             'params': params,
         })
         action_id += 1
+
+    # ── Gamble in battle rounds: once per round, up to 3 per battle ──
+    used_count, used_rounds = _get_player_gamble_state(game_dict, ai_player['id'])
+    current_round_int = int(current_round or 0)
+    can_gamble_this_round = current_round_int not in used_rounds and used_count < 3
+
+    if ai_moves and can_gamble_this_round:
+        for move in ai_moves:
+            if move.get('family_name') == 'Double Dagger':
+                continue  # Don't gamble double daggers
+
+            family = move.get('family_name', '')
+            move_name = move.get('family_name', move.get('name', '?'))
+            move_val = move.get('value', 0)
+
+            if family in _CALL_FIELD_MAP:
+                call_fig = _get_best_call_figure(move, game_dict, ai_player)
+                if call_fig:
+                    fig_power = _figure_power_from_dict(call_fig)
+                    suit_bonus = move_val if move.get('suit') == call_fig.get('suit') else 0
+                    eff_power = fig_power + suit_bonus
+                    desc = (
+                        f"Gamble this round: sacrifice {move_name}(calls {call_fig.get('name', '?')}, "
+                        f"eff_power≈{eff_power}) → draw 2 random. BAD gamble — keep this Call!"
+                    )
+                else:
+                    desc = (
+                        f"Gamble this round: sacrifice {move_name}(NO eligible figure, value={move_val}) "
+                        f"→ draw 2 random. GREAT gamble target!"
+                    )
+            elif move_val >= 9:
+                desc = (
+                    f"Gamble this round: sacrifice {move_name}(value={move_val}) → draw 2 random. "
+                    f"Risky — {move_val} is already strong."
+                )
+            else:
+                desc = (
+                    f"Gamble this round: sacrifice {move_name}(value={move_val}) → draw 2 random. "
+                    f"Decent gamble — low value card."
+                )
+
+            actions.append({
+                'id': action_id,
+                'type': 'gamble_battle_move',
+                'description': desc,
+                'params': {
+                    'battle_move_id': move['id'],
+                },
+            })
+            action_id += 1
     
     # Can only skip if no unplayed moves remain
     if not ai_moves:

@@ -2540,7 +2540,8 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
 
         base
         + healer_buff           (NOT affected by Temple)
-        + (support + wall)      (zeroed if Temple blocks)
+        + support               (zeroed if Temple blocks)
+        + wall                  (NOT affected by Temple)
         + enchantment
         − DA penalty            (handled externally, not here)
 

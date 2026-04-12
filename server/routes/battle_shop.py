@@ -286,6 +286,9 @@ def _family_for_rank(rank):
 def gamble_battle_move():
     """Gamble: sacrifice one battle move and draw two random replacements.
 
+    This action is only allowed DURING active battle rounds (not in battle shop).
+    A player can gamble at most once per battle round, up to 3 times per battle.
+
     • Returns the sacrificed move's card to the player's hand (un-reserves it).
     • Draws 2 cards from the main-card deck at random (cards still in deck).
     • Creates 2 new BattleMove records from those cards.
@@ -315,11 +318,44 @@ def gamble_battle_move():
     if not player or player.game_id != game_id:
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
 
-    # Enforce gamble limit: max 3 gambles per player per battle (once per move slot)
+    # Gambling is a battle-round action, not a battle-shop action.
+    if not game.battle_confirmed:
+        return jsonify({'success': False, 'message': 'Gamble is only available during active battle rounds'}), 400
+
+    if game.battle_turn_player_id != player_id:
+        return jsonify({'success': False, 'message': 'It is not your turn in the battle'}), 400
+
+    # Enforce gamble limits: once per round, max 3 per battle.
     gamble_counts = game.battle_gamble_counts or {}
     pid_str = str(player_id)
-    if gamble_counts.get(pid_str, 0) >= 3:
-        return jsonify({'success': False, 'message': 'You can only gamble 3 times per battle (once per move)'}), 400
+    player_gamble_state = gamble_counts.get(pid_str, 0)
+
+    if isinstance(player_gamble_state, dict):
+        try:
+            used_count = int(player_gamble_state.get('count', 0) or 0)
+        except (TypeError, ValueError):
+            used_count = 0
+        used_rounds = []
+        for r in player_gamble_state.get('rounds', []):
+            try:
+                used_rounds.append(int(r))
+            except (TypeError, ValueError):
+                continue
+        used_rounds = sorted(set(used_rounds))
+    else:
+        try:
+            used_count = int(player_gamble_state or 0)
+        except (TypeError, ValueError):
+            used_count = 0
+        used_rounds = []
+
+    current_round = int(game.battle_round or 0)
+
+    if current_round in used_rounds:
+        return jsonify({'success': False, 'message': 'You can only gamble once per battle round'}), 400
+
+    if used_count >= 3:
+        return jsonify({'success': False, 'message': 'You can only gamble 3 times per battle (once per round)'}), 400
 
     # Find the battle move to sacrifice
     bm = BattleMove.query.get(battle_move_id)
@@ -378,8 +414,12 @@ def gamble_battle_move():
         db.session.flush()  # get move.id
         new_moves.append(move.serialize())
 
-    # Track gamble count for this player
-    gamble_counts[pid_str] = gamble_counts.get(pid_str, 0) + 1
+    # Track gamble usage for this player (count + rounds used)
+    used_rounds = sorted(set(used_rounds + [current_round]))
+    gamble_counts[pid_str] = {
+        'count': used_count + 1,
+        'rounds': used_rounds,
+    }
     game.battle_gamble_counts = gamble_counts
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(game, 'battle_gamble_counts')
