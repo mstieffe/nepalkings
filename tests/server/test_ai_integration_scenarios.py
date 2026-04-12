@@ -221,3 +221,69 @@ def test_trigger_post_battle_pick_phase_invokes_pick_handler(app, db, monkeypatc
     ai_worker.trigger_ai_if_needed(game.id, app=app)
 
     assert picked == [(game.id, ai_player.id)]
+
+
+def test_loop_failure_schedules_watchdog_retry_when_ai_still_owns_turn(app, db, monkeypatch):
+    _reset_worker_state()
+    game, ai_player = _create_game_with_ai(db)
+    _patch_common_loop_controls(monkeypatch)
+
+    # trigger check, loop iteration, final unsuccessful-exit phase check.
+    monkeypatch.setattr(
+        ai_worker,
+        'detect_phase',
+        _sequence(['battle_shop', 'battle_shop', 'battle_shop']),
+    )
+
+    monkeypatch.setattr(
+        ai_worker,
+        'enumerate_actions',
+        lambda *_args, **_kwargs: [
+            {'id': 1, 'type': 'unknown_action', 'description': 'force failure', 'params': {}}
+        ],
+    )
+    monkeypatch.setattr(ai_worker, '_execute_action', lambda *_args, **_kwargs: False)
+
+    scheduled = []
+    monkeypatch.setattr(
+        ai_worker,
+        '_schedule_watchdog_retry',
+        lambda _app, gid, pid, reason: scheduled.append((gid, pid, reason)),
+    )
+
+    ai_worker.trigger_ai_if_needed(game.id, app=app)
+
+    assert scheduled == [(game.id, ai_player.id, 'loop_failure')]
+
+
+def test_loop_failure_does_not_schedule_watchdog_when_no_actionable_phase(app, db, monkeypatch):
+    _reset_worker_state()
+    game, ai_player = _create_game_with_ai(db)
+    _patch_common_loop_controls(monkeypatch)
+
+    # trigger check, loop iteration, final unsuccessful-exit phase check -> None.
+    monkeypatch.setattr(
+        ai_worker,
+        'detect_phase',
+        _sequence(['battle_shop', 'battle_shop', None]),
+    )
+
+    monkeypatch.setattr(
+        ai_worker,
+        'enumerate_actions',
+        lambda *_args, **_kwargs: [
+            {'id': 1, 'type': 'unknown_action', 'description': 'force failure', 'params': {}}
+        ],
+    )
+    monkeypatch.setattr(ai_worker, '_execute_action', lambda *_args, **_kwargs: False)
+
+    scheduled = []
+    monkeypatch.setattr(
+        ai_worker,
+        '_schedule_watchdog_retry',
+        lambda _app, gid, pid, reason: scheduled.append((gid, pid, reason)),
+    )
+
+    ai_worker.trigger_ai_if_needed(game.id, app=app)
+
+    assert scheduled == []
