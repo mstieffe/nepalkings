@@ -2,6 +2,7 @@
 # See LICENSE file in the project root for full license information.
 """Tests for authentication routes: register, login, token validation."""
 import pytest
+from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
 
 
@@ -137,3 +138,75 @@ class TestGetUsers:
     def test_get_user_not_found(self, client):
         resp = client.get('/auth/get_user?username=doesnotexist')
         assert resp.status_code == 404
+
+
+class TestEmailVerification:
+    def test_verify_email_success_marks_user_verified(self, client, db):
+        from models import User
+
+        user = User(
+            username='verify_user',
+            password_hash=generate_password_hash('pass123'),
+            email='verify@example.com',
+            email_verified=False,
+            email_verification_token='verify-token-123',
+            email_verification_sent_at=datetime.utcnow(),
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        resp = client.get('/auth/verify_email?token=verify-token-123')
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data.get('success') is True
+
+        db.session.refresh(user)
+        assert user.email_verified is True
+        assert user.email_verification_token is None
+
+    def test_verify_email_rejects_expired_token(self, client, db):
+        from models import User
+
+        user = User(
+            username='expired_verify',
+            password_hash=generate_password_hash('pass123'),
+            email='expired@example.com',
+            email_verified=False,
+            email_verification_token='expired-token-123',
+            email_verification_sent_at=datetime.utcnow() - timedelta(hours=72),
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        resp = client.get('/auth/verify_email?token=expired-token-123')
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert data.get('success') is False
+        assert 'expired' in data.get('message', '').lower()
+
+        db.session.refresh(user)
+        assert user.email_verified is False
+        assert user.email_verification_token is None
+
+
+class TestRankings:
+    def test_get_rankings_returns_users_with_stats(self, client, two_users):
+        u1, u2 = two_users
+
+        resp = client.get('/auth/get_rankings')
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data.get('success') is True
+
+        rankings = data.get('rankings', [])
+        entry_by_name = {entry['username']: entry for entry in rankings}
+        assert u1.username in entry_by_name
+        assert u2.username in entry_by_name
+
+        for username in (u1.username, u2.username):
+            entry = entry_by_name[username]
+            assert 'gold' in entry
+            assert 'total_games' in entry
+            assert 'wins' in entry
+            assert 'losses' in entry
+            assert 'is_online' in entry

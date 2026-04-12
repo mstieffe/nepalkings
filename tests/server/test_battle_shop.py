@@ -495,3 +495,156 @@ class TestBattlePrepFlow:
         data = resp.get_json()
         assert data.get('success') is False
         assert 'must play a battle move' in data.get('message', '').lower()
+
+
+class TestBattleShopAdvancedActions:
+    def test_get_battle_moves_returns_players_moves(self, client, db, app, game_with_player, auth_token_bs):
+        game, p1, _, _, _ = game_with_player
+
+        card = _get_hand_card_by_rank(db, game.id, p1.id, 'J')
+        assert card is not None
+        buy = _buy_move(client, auth_token_bs, game, p1, card)
+        move_id = buy.get_json()['battle_move']['id']
+
+        resp = client.get(f'/battle_shop/get_battle_moves?game_id={game.id}&player_id={p1.id}')
+        data = resp.get_json()
+
+        assert data.get('success') is True
+        assert any(m.get('id') == move_id for m in data.get('battle_moves', []))
+
+    def test_gamble_battle_move_replaces_one_with_two_and_locks_second_gamble_same_round(
+        self,
+        client,
+        db,
+        app,
+        game_with_player,
+        auth_token_bs,
+    ):
+        from models import BattleMove
+
+        game, p1, _, _, _ = game_with_player
+
+        card = _get_hand_card_by_rank(db, game.id, p1.id, 'Q')
+        assert card is not None
+        buy = _buy_move(client, auth_token_bs, game, p1, card)
+        battle_move_id = buy.get_json()['battle_move']['id']
+
+        game.battle_confirmed = True
+        game.battle_round = 0
+        game.battle_turn_player_id = p1.id
+        db.session.commit()
+
+        gamble_resp = client.post(
+            '/battle_shop/gamble_battle_move',
+            data=json.dumps(
+                {
+                    'game_id': game.id,
+                    'player_id': p1.id,
+                    'battle_move_id': battle_move_id,
+                }
+            ),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        gamble_data = gamble_resp.get_json()
+        assert gamble_data.get('success') is True, gamble_data
+        assert len(gamble_data.get('new_moves', [])) == 2
+
+        db.session.refresh(game)
+        assert BattleMove.query.filter_by(game_id=game.id, player_id=p1.id).count() == 2
+        player_gamble_state = game.battle_gamble_counts.get(str(p1.id), {}) if game.battle_gamble_counts else {}
+        assert player_gamble_state.get('count') == 1
+        assert 0 in player_gamble_state.get('rounds', [])
+
+        second_try_resp = client.post(
+            '/battle_shop/gamble_battle_move',
+            data=json.dumps(
+                {
+                    'game_id': game.id,
+                    'player_id': p1.id,
+                    'battle_move_id': gamble_data['new_moves'][0]['id'],
+                }
+            ),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        second_try_data = second_try_resp.get_json()
+        assert second_try_data.get('success') is False
+        assert 'once per battle round' in second_try_data.get('message', '').lower()
+
+    def test_dismantle_double_dagger_restores_two_daggers(
+        self,
+        client,
+        db,
+        app,
+        game_with_player,
+        auth_token_bs,
+    ):
+        from models import BattleMove
+
+        game, p1, _, _, _ = game_with_player
+
+        first = None
+        for rank in ('7', '8', '9', '10'):
+            first = _get_hand_card_by_rank(db, game.id, p1.id, rank)
+            if first:
+                break
+        assert first is not None
+
+        first_suit = first.suit.value if hasattr(first.suit, 'value') else str(first.suit)
+        preferred_suits = ['Hearts', 'Diamonds'] if first_suit in {'Hearts', 'Diamonds'} else ['Clubs', 'Spades']
+
+        second = None
+        for rank in ('7', '8', '9', '10'):
+            second = _get_hand_card_by_rank(
+                db,
+                game.id,
+                p1.id,
+                rank,
+                exclude_ids=[first.id],
+                preferred_suits=preferred_suits,
+            )
+            if second:
+                break
+        assert second is not None
+
+        move_a = _buy_move(client, auth_token_bs, game, p1, first).get_json()['battle_move']['id']
+        move_b = _buy_move(client, auth_token_bs, game, p1, second).get_json()['battle_move']['id']
+
+        combine_resp = client.post(
+            '/battle_shop/combine_battle_moves',
+            data=json.dumps(
+                {
+                    'game_id': game.id,
+                    'player_id': p1.id,
+                    'move_id_a': move_a,
+                    'move_id_b': move_b,
+                }
+            ),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        combine_data = combine_resp.get_json()
+        assert combine_data.get('success') is True, combine_data
+        dd_id = combine_data['combined_move']['id']
+
+        dismantle_resp = client.post(
+            '/battle_shop/dismantle_battle_move',
+            data=json.dumps(
+                {
+                    'game_id': game.id,
+                    'player_id': p1.id,
+                    'battle_move_id': dd_id,
+                }
+            ),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        dismantle_data = dismantle_resp.get_json()
+        assert dismantle_data.get('success') is True, dismantle_data
+        assert dismantle_data.get('removed_id') == dd_id
+        assert len(dismantle_data.get('restored_moves', [])) == 2
+        assert all(m.get('family_name') == 'Dagger' for m in dismantle_data['restored_moves'])
+
+        live_moves = BattleMove.query.filter_by(game_id=game.id, player_id=p1.id).all()
+        assert len(live_moves) == 2

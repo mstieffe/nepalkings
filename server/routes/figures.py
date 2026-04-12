@@ -543,9 +543,11 @@ def delete_figure():
         side_cards = SideCard.query.filter(SideCard.id.in_(side_card_ids)).all()
 
         # Return cards to the deck and update card attributes
-        from game_service.deck import DeckManager
-        DeckManager.return_cards_to_deck(main_cards)
-        DeckManager.return_cards_to_deck(side_cards)
+        from game_service.deck_manager import DeckManager
+        if main_cards:
+            DeckManager.return_cards_to_deck(main_cards)
+        if side_cards:
+            DeckManager.return_cards_to_deck(side_cards)
 
         for card in main_cards + side_cards:
             card.part_of_figure = False

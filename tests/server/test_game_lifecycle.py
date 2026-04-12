@@ -199,3 +199,362 @@ class TestGameResultsRoute:
 
         assert resp.status_code == 404
         assert data.get('success') is False
+
+
+class TestGameRouteCoverage:
+    def test_get_games_lists_games_for_username(self, client, created_game, two_users):
+        u1, _ = two_users
+
+        resp = client.get(f'/games/get_games?username={u1.username}')
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert any(g.get('id') == created_game['id'] for g in data.get('games', []))
+
+    def test_get_game_returns_serialized_game(self, client, created_game):
+        resp = client.get(f"/games/get_game?game_id={created_game['id']}")
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('game', {}).get('id') == created_game['id']
+
+    def test_get_hand_returns_players_main_and_side_cards(self, client, db, created_game, two_users):
+        from models import Player
+
+        u1, _ = two_users
+        player = Player.query.filter_by(game_id=created_game['id'], user_id=u1.id).first()
+        assert player is not None
+
+        resp = client.get(f'/games/get_hand?player_id={player.id}')
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True
+        assert isinstance(data.get('main_hand', []), list)
+        assert isinstance(data.get('side_hand', []), list)
+
+    def test_update_points_route_increments_points(self, client, db, created_game, two_users, auth_headers_user1):
+        from models import Player
+
+        u1, _ = two_users
+        player = Player.query.filter_by(game_id=created_game['id'], user_id=u1.id).first()
+        assert player is not None
+        points_before = player.points
+
+        resp = client.post(
+            '/games/update_points',
+            json={'player_id': player.id, 'points': 5},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True
+        assert data.get('points') == points_before + 5
+
+    def test_draw_and_return_cards_routes(self, client, db, created_game, two_users, auth_headers_user1):
+        from models import Player, SideCard
+
+        u1, _ = two_users
+        player = Player.query.filter_by(game_id=created_game['id'], user_id=u1.id).first()
+        assert player is not None
+
+        draw_resp = client.post(
+            '/games/draw_cards',
+            data={
+                'game_id': str(created_game['id']),
+                'player_id': str(player.id),
+                'card_type': 'side',
+                'num_cards': '1',
+            },
+            headers=auth_headers_user1,
+        )
+        draw_data = draw_resp.get_json()
+        assert draw_data.get('success') is True, draw_data
+        assert len(draw_data.get('cards', [])) == 1
+
+        drawn_id = draw_data['cards'][0]['id']
+        return_resp = client.post(
+            '/games/return_cards',
+            data={
+                'card_ids': [str(drawn_id)],
+                'card_type': 'side',
+            },
+            headers=auth_headers_user1,
+        )
+        return_data = return_resp.get_json()
+        assert return_data.get('success') is True, return_data
+
+        card = SideCard.query.get(drawn_id)
+        assert card is not None
+        assert card.in_deck is True
+
+    def test_change_cards_route_draws_replacements_and_decrements_turns(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Game, MainCard, Player
+
+        u1, _ = two_users
+        player = Player.query.filter_by(game_id=created_game['id'], user_id=u1.id).first()
+        game = Game.query.get(created_game['id'])
+        assert player is not None
+        assert game is not None
+
+        card = MainCard.query.filter_by(
+            game_id=game.id,
+            player_id=player.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=False,
+        ).first()
+        assert card is not None
+
+        game.turn_player_id = player.id
+        player.turns_left = 3
+        db.session.commit()
+
+        resp = client.post(
+            '/games/change_cards',
+            json={
+                'game_id': game.id,
+                'player_id': player.id,
+                'cards': [{'id': card.id}],
+                'card_type': 'main',
+            },
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert data.get('success') is True, data
+        assert len(data.get('new_cards', [])) == 1
+        assert data.get('turns_left') == 2
+
+    def test_discard_cards_route_returns_selected_cards_to_deck(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import MainCard, Player
+
+        u1, _ = two_users
+        player = Player.query.filter_by(game_id=created_game['id'], user_id=u1.id).first()
+        assert player is not None
+
+        card = MainCard.query.filter_by(
+            game_id=created_game['id'],
+            player_id=player.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=False,
+        ).first()
+        assert card is not None
+
+        rank_val = card.rank.value if hasattr(card.rank, 'value') else str(card.rank)
+
+        resp = client.post(
+            '/games/discard_cards',
+            json={
+                'game_id': created_game['id'],
+                'player_id': player.id,
+                'cards': [{'id': card.id, 'rank': rank_val}],
+                'card_type': 'main',
+            },
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert data.get('success') is True, data
+        db.session.refresh(card)
+        assert card.in_deck is True
+
+    def test_delete_game_route_removes_game(self, client, db, created_game, auth_headers_user1):
+        from models import Game
+
+        resp = client.post(
+            '/games/delete_game',
+            data={'game_id': str(created_game['id'])},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert data.get('success') is True, data
+        assert Game.query.get(created_game['id']) is None
+
+    def test_start_turn_route_returns_turn_payload(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Game, Player
+
+        u1, _ = two_users
+        game = Game.query.get(created_game['id'])
+        player = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        assert game is not None
+        assert player is not None
+
+        game.turn_player_id = player.id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/start_turn',
+            json={'game_id': game.id, 'player_id': player.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+
+    def test_select_defender_sets_defending_figure(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Figure, Game, Player
+
+        u1, u2 = two_users
+        game = Game.query.get(created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        assert game is not None
+        assert p1 is not None
+        assert p2 is not None
+
+        attacker_figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).first()
+        defender_figure = Figure.query.filter_by(game_id=game.id, player_id=p2.id).first()
+        assert attacker_figure is not None
+        assert defender_figure is not None
+
+        game.advancing_figure_id = attacker_figure.id
+        game.advancing_player_id = p1.id
+        game.turn_player_id = p1.id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/select_defender',
+            json={'game_id': game.id, 'player_id': p1.id, 'figure_id': defender_figure.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+        assert data.get('game', {}).get('defending_figure_id') == defender_figure.id
+
+    def test_skip_civil_war_second_flips_turn_for_advance_context(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Game, Player
+
+        u1, u2 = two_users
+        game = Game.query.get(created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        assert game is not None
+        assert p1 is not None
+        assert p2 is not None
+
+        game.turn_player_id = p1.id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/skip_civil_war_second',
+            json={'game_id': game.id, 'player_id': p1.id, 'context': 'advance'},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+        assert data.get('game', {}).get('turn_player_id') == p2.id
+
+    def test_cannot_advance_loss_awards_points_to_opponent(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Game, Player
+
+        u1, u2 = two_users
+        game = Game.query.get(created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        assert game is not None
+        assert p1 is not None
+        assert p2 is not None
+
+        game.turn_player_id = p1.id
+        game.stake = 99
+        points_before = p2.points
+        db.session.commit()
+
+        resp = client.post(
+            '/games/cannot_advance_loss',
+            json={'game_id': game.id, 'player_id': p1.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+        db.session.refresh(p2)
+        assert p2.points == points_before + 10
+
+    def test_defender_no_figures_loss_awards_points_to_invader(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Game, Player
+
+        u1, u2 = two_users
+        game = Game.query.get(created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        assert game is not None
+        assert p1 is not None
+        assert p2 is not None
+
+        game.turn_player_id = p1.id
+        game.advancing_player_id = p1.id
+        game.stake = 99
+        points_before = p1.points
+        db.session.commit()
+
+        resp = client.post(
+            '/games/defender_no_figures_loss',
+            json={'game_id': game.id, 'player_id': p1.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+        db.session.refresh(p1)
+        assert p1.points == points_before + 10

@@ -384,3 +384,78 @@ class TestPendingSpellRoutes:
         assert game.waiting_for_counter_player_id is None
         assert p1.turns_left == p1_turns_before
         assert p2.turns_left == p2_turns_before
+
+
+class TestSpellManagementRoutes:
+    def test_remove_spell_effect_deactivates_spell(self, client, db, app, spell_game, token_sp1):
+        from models import ActiveSpell
+
+        game, p1, _, _, _ = spell_game
+        spell = ActiveSpell(
+            game_id=game.id,
+            player_id=p1.id,
+            spell_name='Test Aura',
+            spell_type='enchantment',
+            spell_family_name='Test Aura',
+            suit='Hearts',
+            cast_round=game.current_round,
+            is_active=True,
+        )
+        db.session.add(spell)
+        db.session.commit()
+
+        resp = client.post(
+            '/spells/remove_spell_effect',
+            data=json.dumps({'spell_id': spell.id}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token_sp1}'},
+        )
+        data = resp.get_json()
+        assert data.get('success') is True, data
+
+        db.session.refresh(spell)
+        assert spell.is_active is False
+
+    def test_end_infinite_hammer_deactivates_spell_consumes_turn_and_flips_turn(
+        self,
+        client,
+        db,
+        app,
+        spell_game,
+        token_sp1,
+    ):
+        from models import ActiveSpell
+
+        game, p1, p2, _, _ = spell_game
+        p1.turns_left = 3
+        game.turn_player_id = p1.id
+
+        hammer = ActiveSpell(
+            game_id=game.id,
+            player_id=p1.id,
+            spell_name='Infinite Hammer',
+            spell_type='greed',
+            spell_family_name='Infinite Hammer',
+            suit='Spades',
+            cast_round=game.current_round,
+            is_active=True,
+            effect_data={'actions': [{'description': 'played combo'}]},
+        )
+        db.session.add(hammer)
+        db.session.commit()
+
+        resp = client.post(
+            '/spells/end_infinite_hammer',
+            data=json.dumps({'game_id': game.id, 'player_id': p1.id}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token_sp1}'},
+        )
+        data = resp.get_json()
+        assert data.get('success') is True, data
+
+        db.session.refresh(hammer)
+        db.session.refresh(p1)
+        db.session.refresh(game)
+        assert hammer.is_active is False
+        assert p1.turns_left == 2
+        assert game.turn_player_id == p2.id

@@ -94,7 +94,16 @@ def _get_hand_card(db, game_id, player_id, rank=None, suit=None, exclude_ids=Non
     return card
 
 
-def _build_king_figure(client, db, game, player, token, suit='Clubs', name='Himalaya King'):
+def _build_king_figure(
+    client,
+    db,
+    game,
+    player,
+    token,
+    suit='Clubs',
+    name='Himalaya King',
+    upgrade_family_name=None,
+):
     """Helper: place a king-type castle figure using the /figures/create_figure endpoint."""
     king_card = _get_hand_card(db, game.id, player.id, rank='K', suit=suit)
     assert king_card is not None, f"No {suit} King available"
@@ -108,7 +117,7 @@ def _build_king_figure(client, db, game, player, token, suit='Clubs', name='Hima
         'name': name,
         'suit': suit,
         'description': '',
-        'upgrade_family_name': None,
+        'upgrade_family_name': upgrade_family_name,
         'produces': {'villager_black': 2, 'warrior_black': 1},
         'requires': {},
         'cards': [{'id': king_card.id, 'type': 'main', 'role': 'key'}],
@@ -228,3 +237,154 @@ class TestPickUpFigure:
                            headers={'Authorization': f'Bearer {auth_token_p1}'})
         data = resp.get_json()
         assert data.get('success') is False
+
+
+class TestFigureRouteCoverage:
+    def test_get_figure_returns_serialized_figure(self, client, db, app, game_with_players, auth_token_p1):
+        from models import Figure
+
+        game, p1, _, _, _ = game_with_players
+        _build_king_figure(client, db, game, p1, auth_token_p1)
+        figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).order_by(Figure.id.desc()).first()
+        assert figure is not None
+
+        resp = client.get(f'/figures/get_figure?figure_id={figure.id}')
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True
+        assert data.get('figure', {}).get('id') == figure.id
+
+    def test_get_figures_returns_players_figures(self, client, db, app, game_with_players, auth_token_p1):
+        from models import Figure
+
+        game, p1, _, _, _ = game_with_players
+        _build_king_figure(client, db, game, p1, auth_token_p1)
+        created = Figure.query.filter_by(game_id=game.id, player_id=p1.id).order_by(Figure.id.desc()).first()
+        assert created is not None
+
+        resp = client.get(f'/figures/get_figures?player_id={p1.id}')
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True
+        assert any(fig.get('id') == created.id for fig in data.get('figures', []))
+
+    def test_update_figure_changes_name_and_consumes_turn(self, client, db, app, game_with_players, auth_token_p1):
+        from models import Figure
+
+        game, p1, _, _, _ = game_with_players
+        turns_before = p1.turns_left
+
+        _build_king_figure(client, db, game, p1, auth_token_p1)
+        figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).order_by(Figure.id.desc()).first()
+        assert figure is not None
+
+        resp = client.post(
+            '/figures/update_figure',
+            json={
+                'figure_id': figure.id,
+                'name': 'Updated Himalaya King',
+                'description': 'updated description',
+            },
+            headers={'Authorization': f'Bearer {auth_token_p1}'},
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+
+        db.session.refresh(figure)
+        db.session.refresh(p1)
+        assert figure.name == 'Updated Himalaya King'
+        assert p1.turns_left == turns_before - 2  # one build action + one update action
+
+    def test_delete_figure_removes_figure_and_returns_cards_to_deck(
+        self,
+        client,
+        db,
+        app,
+        game_with_players,
+        auth_token_p1,
+    ):
+        from models import Figure, MainCard
+
+        game, p1, _, _, _ = game_with_players
+        _build_king_figure(client, db, game, p1, auth_token_p1)
+        figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).order_by(Figure.id.desc()).first()
+        assert figure is not None
+
+        figure_card_id = figure.cards[0].card_id
+
+        resp = client.post(
+            '/figures/delete_figure',
+            json={
+                'figure_id': figure.id,
+                'player_id': p1.id,
+                'game_id': game.id,
+            },
+            headers={'Authorization': f'Bearer {auth_token_p1}'},
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+        assert Figure.query.get(figure.id) is None
+
+        card = MainCard.query.get(figure_card_id)
+        assert card is not None
+        assert card.part_of_figure is False
+        assert card.in_deck is True
+
+    def test_upgrade_figure_creates_upgraded_family_figure(
+        self,
+        client,
+        db,
+        app,
+        game_with_players,
+        auth_token_p1,
+    ):
+        from models import Figure, MainCard
+
+        game, p1, _, _, _ = game_with_players
+        build_resp = _build_king_figure(
+            client,
+            db,
+            game,
+            p1,
+            auth_token_p1,
+            name='Himalaya King',
+            upgrade_family_name='Himalaya Emperor',
+        )
+        build_data = build_resp.get_json()
+        assert build_data.get('success') is True, build_data
+
+        figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).order_by(Figure.id.desc()).first()
+        assert figure is not None
+        key_card_id = figure.cards[0].card_id
+
+        upgrade_card = _get_hand_card(db, game.id, p1.id, exclude_ids=[key_card_id])
+        assert upgrade_card is not None
+        assert isinstance(upgrade_card, MainCard)
+
+        resp = client.post(
+            '/figures/upgrade_figure',
+            json={
+                'figure_id': figure.id,
+                'player_id': p1.id,
+                'game_id': game.id,
+                'upgrade_card_id': upgrade_card.id,
+                'upgrade_card_type': 'main',
+                'produces': {'villager_black': 3},
+                'requires': {},
+            },
+            headers={'Authorization': f'Bearer {auth_token_p1}'},
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+        new_figure = data.get('new_figure', {})
+        assert new_figure.get('family_name') == 'Himalaya Emperor'
+        assert new_figure.get('name') == 'Himalaya Emperor'
+        assert len(new_figure.get('cards', [])) == 2

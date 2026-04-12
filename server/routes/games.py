@@ -1083,8 +1083,10 @@ def create_game():
 @require_token
 def delete_game():
     try:
-        game_id = request.form.get('game_id')
-        game = Game.query.options(joinedload('players').joinedload('main_hand')).get(game_id)
+        game_id = request.form.get('game_id', type=int)
+        game = Game.query.options(
+            joinedload(Game.players).joinedload(Player.main_hand)
+        ).get(game_id)
 
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
