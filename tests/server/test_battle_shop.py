@@ -366,3 +366,132 @@ class TestBattlePrepFlow:
         data = resp.get_json()
         assert data.get('success') is False
         assert 'not your turn' in data.get('message', '').lower()
+
+    def test_get_battle_state_hides_unplayed_opponent_moves(
+        self,
+        client,
+        db,
+        app,
+        game_with_player,
+        auth_token_bs,
+        auth_token_bs_p2,
+    ):
+        from models import BattleMove
+
+        game, p1, p2, _, _ = game_with_player
+
+        p1_card = _get_hand_card_by_rank(db, game.id, p1.id, 'J')
+        p2_card = _get_hand_card_by_rank(db, game.id, p2.id, 'Q')
+        assert p1_card is not None
+        assert p2_card is not None
+
+        p1_move_resp = _buy_move(client, auth_token_bs, game, p1, p1_card)
+        p2_move_resp = _buy_move(client, auth_token_bs_p2, game, p2, p2_card)
+        p1_move_id = p1_move_resp.get_json()['battle_move']['id']
+        p2_move_id = p2_move_resp.get_json()['battle_move']['id']
+
+        p1_move = BattleMove.query.get(p1_move_id)
+        p2_move = BattleMove.query.get(p2_move_id)
+        p1_move.played_round = 0
+
+        game.battle_confirmed = True
+        game.battle_round = 0
+        game.battle_turn_player_id = p2.id
+        db.session.commit()
+
+        state_resp = client.get(
+            f'/games/get_battle_state?game_id={game.id}&player_id={p1.id}'
+        )
+        state_data = state_resp.get_json()
+
+        assert state_data.get('success') is True
+        assert state_data.get('battle_round') == 0
+        assert state_data.get('battle_turn_player_id') == p2.id
+
+        own_move = next(m for m in state_data['player_moves'] if m['id'] == p1_move_id)
+        assert own_move.get('family_name') == 'Call Villager'
+        assert own_move.get('played_round') == 0
+
+        hidden_opp_move = next(m for m in state_data['opponent_moves'] if m['id'] == p2_move_id)
+        assert hidden_opp_move.get('played_round') is None
+        assert 'family_name' not in hidden_opp_move
+        assert 'rank' not in hidden_opp_move
+        assert 'value' not in hidden_opp_move
+
+        # Once the opponent move is played, it should be revealed.
+        p2_move.played_round = 0
+        db.session.commit()
+
+        revealed_resp = client.get(
+            f'/games/get_battle_state?game_id={game.id}&player_id={p1.id}'
+        )
+        revealed_data = revealed_resp.get_json()
+        revealed_opp_move = next(m for m in revealed_data['opponent_moves'] if m['id'] == p2_move_id)
+        assert revealed_opp_move.get('family_name') == 'Block'
+        assert revealed_opp_move.get('played_round') == 0
+
+    def test_skip_battle_turn_advances_round_when_other_player_already_played(
+        self,
+        client,
+        db,
+        app,
+        game_with_player,
+        auth_token_bs,
+        auth_token_bs_p2,
+    ):
+        from models import BattleMove
+
+        game, p1, p2, _, _ = game_with_player
+
+        p2_card = _get_hand_card_by_rank(db, game.id, p2.id, 'J')
+        assert p2_card is not None
+        p2_move = _buy_move(client, auth_token_bs_p2, game, p2, p2_card)
+        p2_move_obj = BattleMove.query.get(p2_move.get_json()['battle_move']['id'])
+        p2_move_obj.played_round = 0
+
+        game.battle_confirmed = True
+        game.battle_round = 0
+        game.battle_turn_player_id = p1.id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/skip_battle_turn',
+            data=json.dumps({'game_id': game.id, 'player_id': p1.id}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        data = resp.get_json()
+        assert data.get('success') is True, data
+        assert data.get('battle_round') == 1
+        assert data.get('battle_turn_player_id') == game.invader_player_id
+        assert 0 in data.get('battle_skipped_rounds', {}).get(str(p1.id), [])
+
+    def test_skip_battle_turn_rejects_when_player_has_unplayed_moves(
+        self,
+        client,
+        db,
+        app,
+        game_with_player,
+        auth_token_bs,
+    ):
+        game, p1, _, _, _ = game_with_player
+
+        p1_card = _get_hand_card_by_rank(db, game.id, p1.id, 'Q')
+        assert p1_card is not None
+        buy_resp = _buy_move(client, auth_token_bs, game, p1, p1_card)
+        assert buy_resp.get_json().get('success') is True
+
+        game.battle_confirmed = True
+        game.battle_round = 0
+        game.battle_turn_player_id = p1.id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/skip_battle_turn',
+            data=json.dumps({'game_id': game.id, 'player_id': p1.id}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        data = resp.get_json()
+        assert data.get('success') is False
+        assert 'must play a battle move' in data.get('message', '').lower()

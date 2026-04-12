@@ -283,3 +283,104 @@ class TestCounterableSpellFlow:
         second_data = second_resp.get_json()
         assert second_data.get('success') is False
         assert 'pending' in second_data.get('message', '').lower()
+
+
+class TestPendingSpellRoutes:
+    def test_get_pending_spell_returns_serialized_spell(self, client, db, app, spell_game, token_sp1):
+        game, p1, _, _, _ = spell_game
+
+        cast_resp = _cast(client, token_sp1, game, p1, {
+            'spell_name': 'Poison',
+            'spell_type': 'enchantment',
+            'spell_family_name': 'Poison',
+            'suit': 'Clubs',
+            'cards': [],
+            'counterable': True,
+            'possible_during_ceasefire': True,
+        })
+        cast_data = cast_resp.get_json()
+        assert cast_data.get('success') is True, cast_data
+        pending_spell_id = cast_data.get('spell_id')
+        assert pending_spell_id is not None
+
+        get_resp = client.get(f'/spells/get_pending_spell?spell_id={pending_spell_id}')
+        get_data = get_resp.get_json()
+
+        assert get_data.get('success') is True
+        assert get_data['spell'].get('id') == pending_spell_id
+        assert get_data['spell'].get('is_pending') is True
+        assert get_data['spell'].get('spell_name') == 'Poison'
+
+    def test_counter_spell_clears_pending_state_without_losing_turns(
+        self,
+        client,
+        db,
+        app,
+        spell_game,
+        token_sp1,
+        token_sp2,
+    ):
+        from models import ActiveSpell, MainCard
+
+        game, p1, p2, _, _ = spell_game
+        p1_turns_before = p1.turns_left
+        p2_turns_before = p2.turns_left
+
+        cast_resp = _cast(client, token_sp1, game, p1, {
+            'spell_name': 'Civil War',
+            'spell_type': 'tactics',
+            'spell_family_name': 'Civil War',
+            'suit': 'Clubs',
+            'cards': [],
+            'counterable': True,
+            'possible_during_ceasefire': True,
+        })
+        cast_data = cast_resp.get_json()
+        assert cast_data.get('success') is True, cast_data
+        pending_spell_id = cast_data.get('spell_id')
+        assert pending_spell_id is not None
+
+        counter_card = MainCard.query.filter_by(
+            player_id=p2.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=False,
+        ).first()
+        assert counter_card is not None
+
+        counter_resp = client.post(
+            '/spells/counter_spell',
+            data=json.dumps({
+                'player_id': p2.id,
+                'game_id': game.id,
+                'pending_spell_id': pending_spell_id,
+                'counter_spell_name': 'Block',
+                'counter_spell_type': 'tactics',
+                'counter_spell_family_name': 'Block',
+                'counter_cards': [{
+                    'id': counter_card.id,
+                    'rank': counter_card.rank.value,
+                    'suit': counter_card.suit.value,
+                    'value': counter_card.value,
+                }],
+            }),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {token_sp2}'},
+        )
+        counter_data = counter_resp.get_json()
+        assert counter_data.get('success') is True, counter_data
+        assert counter_data.get('original_spell_cancelled') is True
+        assert counter_data.get('no_turn_lost') is True
+
+        db.session.refresh(game)
+        db.session.refresh(p1)
+        db.session.refresh(p2)
+
+        pending_spell = ActiveSpell.query.get(pending_spell_id)
+        assert pending_spell is not None
+        assert pending_spell.is_pending is False
+        assert pending_spell.is_active is False
+        assert game.pending_spell_id is None
+        assert game.waiting_for_counter_player_id is None
+        assert p1.turns_left == p1_turns_before
+        assert p2.turns_left == p2_turns_before

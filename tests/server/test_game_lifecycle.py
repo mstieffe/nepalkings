@@ -169,3 +169,33 @@ class TestGameOver:
         assert result['game_over'] is True
         # The owner of the destroyed figure should be the loser
         assert result['loser_player_id'] == checkmate_fig.player_id
+
+
+class TestGameResultsRoute:
+    def test_game_results_returns_finished_game_stats(self, client, db, created_game):
+        from models import Game, User
+        from routes.games import _check_game_over
+
+        game = Game.query.get(created_game['id'])
+        winner_player = game.players[0]
+        winner_player.points = game.stake
+        db.session.commit()
+
+        result = _check_game_over(game)
+        assert result is not None
+        db.session.commit()
+
+        winner_user = User.query.get(winner_player.user_id)
+        resp = client.get(f'/games/game_results?username={winner_user.username}')
+        data = resp.get_json()
+
+        assert data.get('success') is True, data
+        assert data.get('wins', 0) >= 1
+        assert any(r.get('game_id') == game.id for r in data.get('results', []))
+
+    def test_game_results_returns_404_for_unknown_user(self, client):
+        resp = client.get('/games/game_results?username=unknown_player')
+        data = resp.get_json()
+
+        assert resp.status_code == 404
+        assert data.get('success') is False
