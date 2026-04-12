@@ -488,9 +488,23 @@ class Game:
             self._last_advance_notified_id = self.advancing_figure_id
             self.pending_opponent_turn_summary = None
         
-        # Skip advance/defender detection while battle is confirmed or in progress
-        # (prevents stale flags from re-triggering after battle resolution)
-        battle_active = game_dict.get('battle_confirmed', False) or self.in_battle_phase
+        # Sync local in-battle flag from server state.
+        # If a client misses a cleanup path after battle resolution, a stale
+        # in_battle_phase=True would block all future battle-ready detection.
+        server_battle_confirmed = game_dict.get('battle_confirmed', False)
+        server_battle_turn_player_id = game_dict.get('battle_turn_player_id')
+        if self.in_battle_phase and not server_battle_confirmed and server_battle_turn_player_id is None:
+            logger.warning("[BATTLE_PHASE] Clearing stale in_battle_phase based on server state")
+            self.in_battle_phase = False
+            self.battle_turns_left = 0
+
+        # Skip advance/defender detection while a battle is active on the
+        # server (prevents stale flags from re-triggering after resolution).
+        battle_active = (
+            server_battle_confirmed
+            or bool(game_dict.get('battle_decisions'))
+            or bool(game_dict.get('fold_outcome'))
+        )
 
         # Check for Civil War modifier (needed for defender-pick guard below)
         modifiers = self.battle_modifier if isinstance(self.battle_modifier, list) else []

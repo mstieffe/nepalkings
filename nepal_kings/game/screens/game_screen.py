@@ -2341,6 +2341,17 @@ class GameScreen(Screen):
             # Waiting for opponent's decision (invader chose battle, waiting for defender)
             self.state.game.waiting_for_battle_decision = True
 
+    def _can_submit_battle_decision(self):
+        """Return True if local state represents an unresolved battle decision phase."""
+        game = self.state.game
+        if not game:
+            return False
+        if not game.advancing_figure_id or not game.defending_figure_id:
+            return False
+        if game.battle_confirmed or game.fold_outcome:
+            return False
+        return True
+
     def _reset_battle_state(self):
         """Reset all battle-related state after fold or loss."""
         self.state.game.pending_battle_ready = False
@@ -3862,15 +3873,13 @@ class GameScreen(Screen):
                         field_screen._update_defender_selectable()
                     self.state.game.defender_selection_dialogue_shown = True
                 # Handle battle ready 'to battle!' response — submit battle decision
-                elif (response == 'to battle!' and self.state.game and
-                      self.state.game.pending_battle_ready):
+                elif response == 'to battle!' and self._can_submit_battle_decision():
                     self.dialogue_box = None
                     self._submit_battle_decision('battle')
                     self.show_next_queued_notification()
                     return
                 # Handle battle ready 'fold' response — submit fold decision
-                elif (response == 'fold' and self.state.game and
-                      self.state.game.pending_battle_ready):
+                elif response == 'fold' and self._can_submit_battle_decision():
                     self.dialogue_box = None
                     self._submit_battle_decision('fold')
                     self.show_next_queued_notification()
