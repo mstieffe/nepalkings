@@ -75,6 +75,20 @@ def _guard_non_battle_action(game, *, action_label='action', player_id=None):
             'reason': 'battle_resolution_locked'
         }), 400
 
+    # Counterable spell lock: while waiting for allow/counter, block figure
+    # mutations (including build + instant-charge) until spell resolves.
+    if game.pending_spell_id and game.waiting_for_counter_player_id:
+        logger.info(
+            f"[SPELL_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} "
+            f"reason=pending_counter_spell pending_spell_id={game.pending_spell_id}"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed while a counterable spell is pending. Resolve allow/counter first.',
+            'reason': 'pending_counter_spell'
+        }), 400
+
     return None
 
 @figures.route('/create_figure', methods=['POST'])

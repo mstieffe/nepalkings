@@ -256,6 +256,13 @@ def detect_phase(game_dict: dict, ai_player_id: int) -> str:
     if game_dict.get('waiting_for_counter_player_id') == ai_player_id:
         return 'counter_spell'
 
+    # If AI cast a counterable spell and is waiting for opponent response,
+    # it must not take any further normal actions until allow/counter resolves.
+    if (game_dict.get('pending_spell_id') and
+            game_dict.get('waiting_for_counter_player_id') and
+            game_dict.get('waiting_for_counter_player_id') != ai_player_id):
+        return None
+
     # Battle round — AI's turn to play a battle move
     if (game_dict.get('battle_confirmed') and
             game_dict.get('battle_turn_player_id') == ai_player_id):
