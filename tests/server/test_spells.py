@@ -193,6 +193,15 @@ class TestActiveSpells:
 
 
 class TestCounterableSpellFlow:
+    """Pending counterable spell lifecycle regression scenarios.
+
+    Test oracle (desired outcomes):
+    - Counterable cast stores pending_spell_id on the game and sets waiting player.
+    - Only the waiting (opposing) player can allow the pending spell.
+    - Allowing the pending spell clears game pending-spell state fields.
+    - While a pending spell exists, subsequent spell casts are rejected.
+    """
+
     def test_only_waiting_player_can_allow_pending_spell(self, client, db, app, spell_game, token_sp1, token_sp2):
         from models import Game
 

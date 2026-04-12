@@ -272,6 +272,15 @@ class TestReturnBattleMove:
 
 
 class TestBattlePrepFlow:
+    """Battle prep and battle-turn guard regression scenarios.
+
+    Test oracle (desired outcomes):
+    - First confirmation succeeds but keeps battle pending until both players confirm.
+    - Second confirmation starts round 0 and sets battle turn to invader.
+    - Confirmation flags are recorded for both players in battle_moves_confirmed.
+    - play_battle_move rejects submissions from the non-active battle turn player.
+    """
+
     def test_confirm_battle_moves_waits_for_both_players(
         self,
         client,
