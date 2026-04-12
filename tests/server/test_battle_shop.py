@@ -283,6 +283,12 @@ class TestBattlePrepFlow:
     ):
         game, p1, p2, _, _ = game_with_player
 
+        # In battle-prep phase, battle_confirmed is set while per-round turns
+        # have not started yet (battle_turn_player_id remains None).
+        game.battle_confirmed = True
+        game.battle_turn_player_id = None
+        db.session.commit()
+
         _buy_three_moves(client, db, auth_token_bs, game, p1)
         _buy_three_moves(client, db, auth_token_bs_p2, game, p2)
 
