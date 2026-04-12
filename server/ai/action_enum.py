@@ -689,6 +689,51 @@ def _check_build_deficit_impact(new_fig, existing_figures, current_produces, cur
     return ""
 
 
+def _has_resource_deficit(total_produces, total_requires):
+    """Return True if any resource requirement exceeds production."""
+    for res, need in (total_requires or {}).items():
+        if need > (total_produces or {}).get(res, 0):
+            return True
+    return False
+
+
+def _is_high_impact_build_option(build_option, current_produces, current_requires):
+    """Heuristic gate for high-impact Infinite Hammer follow-up builds."""
+    deficit_warn = _check_build_deficit_impact(
+        build_option,
+        [],
+        current_produces,
+        current_requires,
+    )
+    # Never count builds that create a new deficit chain.
+    if 'CREATES' in deficit_warn:
+        return False
+
+    recipe = build_option.get('recipe') or {}
+    field = recipe.get('field')
+    name = str(build_option.get('name', '')).lower()
+    number_value = int(build_option.get('number_value') or 0)
+
+    produces = build_option.get('produces') or {}
+    total_production = sum(v for v in produces.values() if isinstance(v, (int, float)) and v > 0)
+    if total_production >= 2:
+        return True
+
+    # Premium board-impact families.
+    if any(token in name for token in ('fortress', 'elite', 'temple', 'king')):
+        return True
+
+    # Strong military spike builds.
+    if field == 'military' and number_value >= 9:
+        return True
+
+    # If currently in deficit, a non-deficit producer build is valuable.
+    if _has_resource_deficit(current_produces, current_requires) and total_production > 0:
+        return True
+
+    return False
+
+
 def _enum_battle_decision(game_dict, ai_player, opponent):
     """AI decides to fold or battle, with rich context about the figures involved."""
     # Find the advancing and defending figures
@@ -1434,7 +1479,8 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
             break
 
     # Infinite Hammer — 1× K (main, any suit)
-    # Only offer if there are at least 2 builds available AFTER removing the K card
+    # Only offer when it enables at least 2 HIGH-IMPACT builds/upgrades after
+    # paying the K cost. This prevents empty/low-value hammer turns.
     k_cards = main_by_rank.get('K', [])
     if k_cards:
         c = k_cards[0]
@@ -1445,11 +1491,19 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
         remaining_side = [card for card in ai_player.get('side_hand', [])
                           if not card.get('part_of_figure') and not card.get('part_of_battle_move')]
         post_hammer_builds = find_buildable_figures(remaining_main, remaining_side, ai_figures)
-        if len(post_hammer_builds) >= 2:
+
+        from ai.game_state import compute_resource_totals as _crt
+        curr_prod, curr_req = _crt(ai_figures)
+        impactful_builds = [
+            b for b in post_hammer_builds
+            if _is_high_impact_build_option(b, curr_prod, curr_req)
+        ]
+
+        if len(impactful_builds) >= 2:
             actions.append({
                 'id': action_id, 'type': 'cast_spell',
                 'description': (f"Spell: Infinite Hammer (cost: K{c['suit'][:1]}) — unlimited builds this turn! "
-                                f"⚠️ Uses a K card. {len(post_hammer_builds)} builds available after casting."),
+                                f"⚠️ Uses a K card. {len(impactful_builds)} high-impact builds available after casting."),
                 'params': {
                     'spell_name': 'Infinite Hammer', 'spell_type': 'enchantment',
                     'spell_family_name': 'Infinite Hammer', 'suit': c['suit'],

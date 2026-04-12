@@ -47,7 +47,7 @@ _ai_chat_lock = threading.Lock()
 
 # Phase-specific LLM temperatures — lower = more deterministic for math-heavy decisions
 PHASE_TEMPERATURES = {
-    'normal_turn': 0.4,       # Balanced — strategic + math
+    'normal_turn': 0.25,      # Lower variance for better strategic discipline
     'select_defender': 0.3,   # Target evaluation
     'battle_decision': 0.2,   # Pure math: fold vs battle
     'battle_shop': 0.3,       # Card evaluation + combinatorics
