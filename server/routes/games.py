@@ -40,7 +40,7 @@ def _ai_trigger_hook(response):
                 _ai_logger.warning(f"AI trigger error in games hook: {e}")
     return response
 
-def _guard_battle_active(game):
+def _guard_battle_active(game, *, player_id=None, action_label='action'):
     """Return an error response if a battle is in progress, else None.
 
     A battle is "in progress" when:
@@ -52,7 +52,34 @@ def _guard_battle_active(game):
     cast spell, pickup/upgrade figure) while a battle is being resolved.
     """
     if game.battle_confirmed or game.battle_decisions:
-        return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
+        logger.info(
+            f"[BATTLE_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} reason=active_battle"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed during an active battle',
+            'reason': 'active_battle'
+        }), 400
+
+    # Optional hard lock: once both battle figures are selected and the game is
+    # waiting for fight/fold, only battle-resolution actions should proceed.
+    if (
+        settings.BATTLE_RESOLUTION_HARD_LOCK_ENABLED
+        and game.advancing_figure_id
+        and game.defending_figure_id
+        and not game.battle_confirmed
+    ):
+        logger.info(
+            f"[BATTLE_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} reason=battle_resolution_locked"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed while battle resolution is pending. Choose fight/fold first.',
+            'reason': 'battle_resolution_locked'
+        }), 400
+
     return None
 
 
@@ -1125,6 +1152,10 @@ def draw_cards():
         if err:
             return err
 
+        battle_err = _guard_battle_active(game, player_id=player_id, action_label='draw_cards')
+        if battle_err:
+            return battle_err
+
         # Draw cards using DeckManager
         #from game_service.deck import DeckManager
         cards = DeckManager.draw_cards_from_deck(game, player, num_cards, card_type)
@@ -1161,6 +1192,12 @@ def return_cards():
         if err:
             return err
 
+        game = Game.query.get(cards[0].game_id)
+        if game:
+            battle_err = _guard_battle_active(game, player_id=player_id, action_label='return_cards')
+            if battle_err:
+                return battle_err
+
         # Return the cards using DeckManager
         #from game_service.deck import DeckManager
         DeckManager.return_cards_to_deck(cards)
@@ -1189,7 +1226,7 @@ def change_cards():
 
         game = Game.query.get(game_id)
         if game:
-            battle_err = _guard_battle_active(game)
+            battle_err = _guard_battle_active(game, player_id=player_id, action_label='change_cards')
             if battle_err:
                 return battle_err
 
@@ -1265,7 +1302,7 @@ def discard_cards():
 
         game = Game.query.get(game_id)
         if game:
-            battle_err = _guard_battle_active(game)
+            battle_err = _guard_battle_active(game, player_id=player_id, action_label='discard_cards')
             if battle_err:
                 return battle_err
 
@@ -1360,7 +1397,7 @@ def advance_figure():
             return jsonify({'success': False, 'message': 'Not your turn'}), 400
 
         # Block advance during an active battle
-        battle_err = _guard_battle_active(game)
+        battle_err = _guard_battle_active(game, player_id=player_id, action_label='advance_figure')
         if battle_err:
             return battle_err
 
@@ -1583,6 +1620,10 @@ def select_defender():
         if game.advancing_player_id != player_id:
             return jsonify({'success': False, 'message': 'Only the advancing player can select the defender'}), 400
 
+        # Defender selection must happen on the advancing player's turn.
+        if game.turn_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Not your turn to select defender'}), 400
+
         # Validate figure belongs to the OPPONENT (not the advancing player)
         figure = Figure.query.get(figure_id)
         if not figure:
@@ -1623,7 +1664,24 @@ def select_defender():
                 # Second defender pick — validate same color
                 first_defender = Figure.query.get(game.defending_figure_id)
                 if first_defender and first_defender.color != figure.color:
-                    return jsonify({'success': False, 'message': 'Second defender must be the same color as the first'}), 400
+                    # Graceful fallback: keep first defender only and proceed.
+                    # This avoids deadlocks from accidental wrong-color picks.
+                    msg = (f"Civil War requires same-color defenders. "
+                           f"Keeping first defender only: {first_defender.name}.")
+                    logger.info(f"[CIVIL_WAR] Wrong-color second defender rejected. "
+                                f"game={game_id}, invader={player_id}, first={first_defender.id}, "
+                                f"first_color={first_defender.color}, attempted={figure_id}, "
+                                f"attempted_color={figure.color}")
+                    return jsonify({
+                        'success': True,
+                        'figure_name': first_defender.name,
+                        'civil_war_need_second': False,
+                        'civil_war_color': first_defender.color,
+                        'is_second_pick': False,
+                        'civil_war_second_rejected': True,
+                        'message': msg,
+                        'game': game.serialize()
+                    })
                 game.defending_figure_id_2 = figure_id
                 is_second_pick = True
             else:

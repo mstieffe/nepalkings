@@ -42,6 +42,41 @@ def _ai_trigger_hook(response):
     return response
 
 
+def _guard_spell_mutation(game, *, action_label='spell_action', player_id=None):
+    """Block non-battle spell mutations during active battle and pre-decision lock."""
+    if not game:
+        return None
+
+    if game.battle_confirmed or game.battle_decisions:
+        logger.info(
+            f"[BATTLE_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} reason=active_battle"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed during an active battle',
+            'reason': 'active_battle'
+        }), 400
+
+    if (
+        settings.BATTLE_RESOLUTION_HARD_LOCK_ENABLED
+        and game.advancing_figure_id
+        and game.defending_figure_id
+        and not game.battle_confirmed
+    ):
+        logger.info(
+            f"[BATTLE_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} reason=battle_resolution_locked"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed while battle resolution is pending. Choose fight/fold first.',
+            'reason': 'battle_resolution_locked'
+        }), 400
+
+    return None
+
+
 @spells.route('/cast_spell', methods=['POST'])
 @require_token
 def cast_spell():
@@ -89,9 +124,9 @@ def cast_spell():
     if not game or not player:
         return jsonify({'success': False, 'message': 'Game or player not found'}), 404
     
-    # Block during active battle
-    if game.battle_confirmed or game.battle_decisions:
-        return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
+    battle_err = _guard_spell_mutation(game, action_label='cast_spell', player_id=player_id)
+    if battle_err:
+        return battle_err
     
     # Verify it's player's turn
     if game.turn_player_id != player_id:
@@ -457,6 +492,11 @@ def remove_spell_effect():
     err = verify_player_ownership(spell.player_id)
     if err:
         return err
+
+    game = Game.query.get(spell.game_id)
+    battle_err = _guard_spell_mutation(game, action_label='remove_spell_effect', player_id=spell.player_id)
+    if battle_err:
+        return battle_err
     
     try:
         spell.is_active = False
@@ -499,6 +539,14 @@ def end_infinite_hammer():
     try:
         # Expire session to get the latest ActiveSpell data with all accumulated actions
         db.session.expire_all()
+
+        game = Game.query.get(game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        battle_err = _guard_spell_mutation(game, action_label='end_infinite_hammer', player_id=player_id)
+        if battle_err:
+            return battle_err
         
         # Find the active Infinite Hammer spell for this player
         active_hammer = ActiveSpell.query.filter_by(
@@ -524,9 +572,6 @@ def end_infinite_hammer():
             player.turns_left -= 1
         
         # Flip the turn to the opponent
-        game = Game.query.get(game_id)
-        if not game:
-            return jsonify({'success': False, 'message': 'Game not found'}), 404
         
         if game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id

@@ -22,6 +22,130 @@ def _has_active_infinite_hammer(game_dict, ai_player):
     return False
 
 
+def _modifier_caster_id(modifier):
+    """Best-effort caster ID extraction from battle modifier metadata."""
+    for key in ('caster_id', 'caster_player_id', 'player_id'):
+        raw = modifier.get(key)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _has_own_war_modifier(game_dict, ai_player):
+    """True if AI currently has its own Civil War/Peasant War battle modifier active."""
+    ai_id = ai_player.get('id')
+    if ai_id is None:
+        return False
+
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    for mod in modifiers:
+        if mod.get('type') not in ('Civil War', 'Peasant War'):
+            continue
+        if _modifier_caster_id(mod) == ai_id:
+            return True
+    return False
+
+
+def _enum_forced_counter_advance(game_dict, ai_player, action_id):
+    """Enumerate legal counter-advance actions for the defender side."""
+    actions = []
+
+    # Counter-advance window: opponent has advanced, it's AI turn, battle not yet confirmed.
+    if not game_dict.get('advancing_figure_id'):
+        return actions, action_id
+    if game_dict.get('advancing_player_id') == ai_player.get('id'):
+        return actions, action_id
+    if game_dict.get('turn_player_id') != ai_player.get('id'):
+        return actions, action_id
+    if game_dict.get('battle_confirmed'):
+        return actions, action_id
+
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+    # Blitzkrieg and unblockable advances cannot be counter-advanced.
+    if has_blitzkrieg:
+        return actions, action_id
+
+    advancing_fig_id = game_dict.get('advancing_figure_id')
+    advancing_fig = None
+    for p in game_dict.get('players', []):
+        for f in p.get('figures', []):
+            if f.get('id') == advancing_fig_id:
+                advancing_fig = f
+                break
+        if advancing_fig:
+            break
+    if advancing_fig and advancing_fig.get('cannot_be_blocked'):
+        return actions, action_id
+
+    # Non-Civil-War: once defender is selected, no more counter-advance choices.
+    if not has_civil_war and game_dict.get('defending_figure_id'):
+        return actions, action_id
+
+    # Civil War second pick handling.
+    required_color = None
+    selected_ids = set()
+    if has_civil_war:
+        d1 = game_dict.get('defending_figure_id')
+        d2 = game_dict.get('defending_figure_id_2')
+        if d1 and d2:
+            return actions, action_id
+        if d1 and not d2:
+            selected_ids.add(d1)
+            first = next((f for f in ai_player.get('figures', []) if f.get('id') == d1), None)
+            required_color = first.get('color') if first else None
+
+    resting_ids = set(game_dict.get('resting_figure_ids', []))
+
+    # Skip figures in resource deficit (server rejects counter-advance for them).
+    from ai.game_state import compute_resource_totals as _crt
+    eff_prod, tot_req = _crt(ai_player.get('figures', []))
+
+    for fig in ai_player.get('figures', []):
+        fig_id = fig.get('id')
+        if fig_id in selected_ids:
+            continue
+        if fig_id in resting_ids:
+            continue
+
+        # Peasant/Civil War allow only village defenders.
+        if (has_peasant_war or has_civil_war) and fig.get('field') != 'village':
+            continue
+        if required_color and fig.get('color') != required_color:
+            continue
+
+        reqs = fig.get('requires') or {}
+        in_deficit = any(tot_req.get(res, 0) > eff_prod.get(res, 0) for res in reqs)
+        if in_deficit:
+            continue
+
+        power = _est_figure_power(fig)
+        if required_color:
+            desc = (
+                f"COUNTER-ADVANCE (Civil War second pick): {fig.get('name', '?')} "
+                f"(power≈{power}, color={required_color})"
+            )
+        else:
+            desc = f"COUNTER-ADVANCE now: {fig.get('name', '?')} (power≈{power})"
+
+        actions.append({
+            'id': action_id,
+            'type': 'advance_figure',
+            'description': desc,
+            'params': {'figure_id': fig_id},
+        })
+        action_id += 1
+
+    return actions, action_id
+
+
 def _est_power(fig):
     """Estimate figure power (sum of card values, castle=15)."""
     if not fig:
@@ -188,6 +312,13 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
     # Compute current resource balance for deficit analysis
     from ai.game_state import compute_resource_totals
     current_produces, current_requires = compute_resource_totals(ai_player.get('figures', []))
+
+    # Force counter-advance after own Civil War/Peasant War when legal, so AI
+    # consistently leverages its own tactics spell investment.
+    if not infinite_hammer_active and _has_own_war_modifier(game_dict, ai_player):
+        forced_actions, _next_id = _enum_forced_counter_advance(game_dict, ai_player, action_id)
+        if forced_actions:
+            return forced_actions
 
     # 1) Build figures
     buildable = find_buildable_figures(

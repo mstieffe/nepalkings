@@ -42,6 +42,41 @@ def _has_active_infinite_hammer(player_id, game_id):
     ).filter(ActiveSpell.spell_name.like('%Infinite Hammer%')).first()
     return active_hammer is not None
 
+
+def _guard_non_battle_action(game, *, action_label='action', player_id=None):
+    """Block non-battle mutations during active battle and optional pre-decision lock."""
+    if not game:
+        return None
+
+    if game.battle_confirmed or game.battle_decisions:
+        logger.info(
+            f"[BATTLE_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} reason=active_battle"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed during an active battle',
+            'reason': 'active_battle'
+        }), 400
+
+    if (
+        settings.BATTLE_RESOLUTION_HARD_LOCK_ENABLED
+        and game.advancing_figure_id
+        and game.defending_figure_id
+        and not game.battle_confirmed
+    ):
+        logger.info(
+            f"[BATTLE_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} reason=battle_resolution_locked"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed while battle resolution is pending. Choose fight/fold first.',
+            'reason': 'battle_resolution_locked'
+        }), 400
+
+    return None
+
 @figures.route('/create_figure', methods=['POST'])
 @require_token
 def create_figure():
@@ -54,10 +89,10 @@ def create_figure():
         if err:
             return err
 
-        # Block during active battle
         game = Game.query.get(game_id)
-        if game and (game.battle_confirmed or game.battle_decisions):
-            return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
+        battle_err = _guard_non_battle_action(game, action_label='create_figure', player_id=player_id)
+        if battle_err:
+            return battle_err
 
         family_name = data['family_name']
         field = data.get('field', None)
@@ -318,6 +353,11 @@ def update_figure():
         if err:
             return err
 
+        game = Game.query.get(figure.game_id)
+        battle_err = _guard_non_battle_action(game, action_label='update_figure', player_id=figure.player_id)
+        if battle_err:
+            return battle_err
+
         # Update figure fields
         figure.name = data.get('name', figure.name)
         figure.suit = data.get('suit', figure.suit)
@@ -464,6 +504,15 @@ def delete_figure():
         if err:
             return err
 
+        game_for_guard = Game.query.get(game_id or figure.game_id)
+        battle_err = _guard_non_battle_action(
+            game_for_guard,
+            action_label='delete_figure',
+            player_id=player_id or figure.player_id,
+        )
+        if battle_err:
+            return battle_err
+
         # Retrieve associated cards
         card_associations = CardToFigure.query.filter_by(figure_id=figure.id).all()
         card_ids = [assoc.card_id for assoc in card_associations]
@@ -567,11 +616,10 @@ def pickup_figure():
         if err:
             return err
 
-        # Block during active battle
-        if game_id:
-            game = Game.query.get(game_id)
-            if game and (game.battle_confirmed or game.battle_decisions):
-                return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
+        game = Game.query.get(game_id) if game_id else None
+        battle_err = _guard_non_battle_action(game, action_label='pickup_figure', player_id=player_id)
+        if battle_err:
+            return battle_err
         
         if not figure_id:
             return jsonify({'success': False, 'message': 'Figure ID is required'}), 400
@@ -713,11 +761,10 @@ def upgrade_figure():
         upgrade_card_id = data.get('upgrade_card_id')
         upgrade_card_type = data.get('upgrade_card_type')  # 'main' or 'side'
 
-        # Block during active battle
-        if game_id:
-            game = Game.query.get(game_id)
-            if game and (game.battle_confirmed or game.battle_decisions):
-                return jsonify({'success': False, 'message': 'Action not allowed during an active battle'}), 400
+        game = Game.query.get(game_id) if game_id else None
+        battle_err = _guard_non_battle_action(game, action_label='upgrade_figure', player_id=player_id)
+        if battle_err:
+            return battle_err
         
         if not all([figure_id, player_id, game_id, upgrade_card_id, upgrade_card_type]):
             return jsonify({'success': False, 'message': 'Missing required parameters'}), 400

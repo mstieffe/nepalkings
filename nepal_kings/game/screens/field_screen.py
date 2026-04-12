@@ -640,7 +640,18 @@ class FieldScreen(SubScreen):
                                     self.load_figures()
                                     self.defender_selection_mode = False
                                     self._reset_defender_selectable()
-                                    self.state.set_msg(f"Selected {target_figure.name} as opponent's defender.")
+                                    selected_name = result.get('figure_name', target_figure.name)
+                                    if result.get('civil_war_second_rejected'):
+                                        self.make_dialogue_box(
+                                            message=result.get(
+                                                'message',
+                                                'Civil War requires same-color defenders. Keeping first defender only.'
+                                            ),
+                                            actions=['ok'],
+                                            icon='magic',
+                                            title='Civil War'
+                                        )
+                                    self.state.set_msg(f"Selected {selected_name} as opponent's defender.")
                                     self.game.pending_defender_selection = False
                                     logger.debug(f"[SELECT_DEFENDER] Success: defender={target_figure.name} (id={target_figure.id}), "
                                           f"pending_battle_ready={self.game.pending_battle_ready}, "

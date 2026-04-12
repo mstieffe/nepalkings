@@ -73,6 +73,9 @@ AI_CHAT_ENABLED = os.getenv('AI_CHAT_ENABLED', 'True').lower() == 'true'
 AI_CHAT_CHANCE = float(os.getenv('AI_CHAT_CHANCE', '0.22'))
 AI_CHAT_MIN_SECONDS_BETWEEN = float(os.getenv('AI_CHAT_MIN_SECONDS_BETWEEN', '35'))
 AI_CHAT_MAX_PER_GAME = int(os.getenv('AI_CHAT_MAX_PER_GAME', '12'))
+# Blocks non-battle actions when advance+defender are locked and game is waiting
+# for fight/fold resolution. Keep disabled by default for safe rollout.
+BATTLE_RESOLUTION_HARD_LOCK_ENABLED = os.getenv('BATTLE_RESOLUTION_HARD_LOCK_ENABLED', 'True').lower() == 'true'
 
 # LLM reliability
 AI_LLM_TIMEOUT_SECONDS = float(os.getenv('AI_LLM_TIMEOUT_SECONDS', '12'))
