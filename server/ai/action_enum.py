@@ -146,6 +146,78 @@ def _enum_forced_counter_advance(game_dict, ai_player, action_id):
     return actions, action_id
 
 
+def _find_figure_by_id(game_dict, figure_id):
+    """Find a serialized figure in game_dict by ID."""
+    if figure_id is None:
+        return None
+    for player in game_dict.get('players', []):
+        for fig in player.get('figures', []):
+            if fig.get('id') == figure_id:
+                return fig
+    return None
+
+
+def _selectable_defender_targets_if_ai_passes(game_dict, ai_player):
+    """Figures the invader could choose if AI does not counter-advance now."""
+    targets = [f for f in ai_player.get('figures', []) if not f.get('cannot_be_targeted')]
+
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+    if has_peasant_war:
+        targets = [f for f in targets if f.get('field') == 'village']
+
+    if has_civil_war:
+        advancing_fig = _find_figure_by_id(game_dict, game_dict.get('advancing_figure_id'))
+        required_color = advancing_fig.get('color') if advancing_fig else None
+        targets = [f for f in targets if f.get('field') == 'village']
+        if required_color:
+            targets = [f for f in targets if f.get('color') == required_color]
+
+    # Match server behavior: checkmate figures are selectable only when no
+    # non-checkmate alternative exists.
+    non_checkmate = [f for f in targets if not f.get('checkmate')]
+    if non_checkmate:
+        targets = non_checkmate
+
+    return targets
+
+
+def _should_force_defender_counter_advance(game_dict, ai_player):
+    """Return (force, reason) for defender-side counter-advance policy."""
+    targets = _selectable_defender_targets_if_ai_passes(game_dict, ai_player)
+
+    # If the invader effectively has no choice, passing is less risky.
+    if len(targets) <= 1:
+        return False, 'single_target'
+
+    # Resource-deficit figures are especially vulnerable because being selected
+    # can immediately trigger auto-loss on the server.
+    from ai.game_state import compute_resource_totals as _crt
+    eff_prod, tot_req = _crt(ai_player.get('figures', []))
+    for fig in targets:
+        reqs = fig.get('requires') or {}
+        in_deficit = any(tot_req.get(res, 0) > eff_prod.get(res, 0) for res in reqs)
+        if in_deficit:
+            return True, 'deficit_target_exposed'
+
+    # If invader has multiple defender options and power spread is large,
+    # they can pick the weak one. Force counter-advance in that case.
+    powers = [_est_figure_power(f) for f in targets]
+    if powers and (max(powers) - min(powers) >= 4):
+        return True, 'vulnerable_target_spread'
+
+    # Fortress posture is the main exception where spending the turn elsewhere
+    # can be acceptable when no obvious vulnerable target exists.
+    has_fortress = any(f.get('field') == 'castle' for f in ai_player.get('figures', []))
+    if has_fortress:
+        return False, 'fortress_safe_to_pass'
+
+    # Default policy: deny the invader free defender selection control.
+    return True, 'default_prefer_counter_advance'
+
+
 def _est_power(fig):
     """Estimate figure power (sum of card values, castle=15)."""
     if not fig:
@@ -319,6 +391,28 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
         forced_actions, _next_id = _enum_forced_counter_advance(game_dict, ai_player, action_id)
         if forced_actions:
             return forced_actions
+
+    # General defender policy: in most cases, counter-advance is better than
+    # spending the turn and letting the invader choose your defender.
+    if not infinite_hammer_active:
+        counter_actions, next_action_id = _enum_forced_counter_advance(game_dict, ai_player, action_id)
+        if counter_actions:
+            force_counter, reason = _should_force_defender_counter_advance(game_dict, ai_player)
+            if force_counter:
+                return counter_actions
+
+            if reason == 'single_target':
+                suffix = " - Optional: invader has only one practical defender target."
+            elif reason == 'fortress_safe_to_pass':
+                suffix = " - Optional: fortress posture lowers risk if you pass."
+            else:
+                suffix = " - Preferred defensive line: deny invader defender-choice control."
+
+            for action in counter_actions:
+                action['description'] = f"{action['description']}{suffix}"
+
+            actions.extend(counter_actions)
+            action_id = next_action_id
 
     # 1) Build figures
     buildable = find_buildable_figures(
