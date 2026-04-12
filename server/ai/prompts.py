@@ -297,14 +297,22 @@ DECISION FRAMEWORK (check in this order):
    - NEVER build a consumer (military, village) if the resources aren't available — it will enter deficit and be USELESS.
    - Use lowest-value number cards for economy builds, save high numbers for battle.
 3. **Should you cast a spell?** Spells cost a turn but can be powerful:
-   - **Poison/Health Boost** (2×3 side): +6/−6 power swing. Cast on your strongest attacker or opponent's key figure. Great BEFORE advancing!
-   - **Infinite Hammer** (1×K): Unlimited builds this turn — use when you have 2+ builds available. ⚠️ Costs a K card!
-   - **Draw 2 Main/Side** (1×8 or 1×2): Cheap card draw. Good early when building up.
-   - **Blitzkrieg/Invader Swap** (2×Q or 2×A): Powerful positional spells but cost rare cards. Only cast when the position advantage is critical. COUNTERABLE!
-   - **Fill up to 10** (1×10): Only when hand is very small (< 6 cards).
-   - **All Seeing Eye** (2×9): Reveals opponent's cards. Rarely worth the cost of two 9-Daggers.
-   - **Explosion** (4×6 side): Destroys any non-Maharaja figure. Devastating if you have the cards!
-   - **AVOID**: Dump Cards (4×7) — costs 4 cards and is unpredictable. Peasant War/Civil War — niche.
+    - **Draw 2 Main (1×8)**: Best when main hand is thin or weak AND you don't have a stronger immediate action.
+    - **Draw 2 Side (1×2)**: Best when side cards are low and you need side-card recipes (Healer/Wall/Cavalry/Archer or side-based spells).
+    - **Fill up to 10 (1×10)**: Best when main hand is very low (<=6) and you need options fast; avoid if the 10 is crucial for battle.
+    - **Forced Deal (2×4 same color)**: Use when your hand quality is poor but opponent likely has stronger battle cards; high-variance reset.
+    - **Dump Cards (4×7 same color)**: Full reset when BOTH hands are stale and your position benefits more from a redraw than the opponent's.
+    - **Poison (2×3 black)**: Cast before advancing/battle to weaken opponent's key defender or strongest support hub by −6.
+    - **Health Boost (2×3 red)**: Cast before advancing/battle to push your attacker over winning thresholds (+6).
+    - **All Seeing Eye (2×9 same color)**: Use when hidden information matters (fold vs battle, target choice, spell counter risk).
+    - **Explosion (4×6 same color)**: Use to delete a high-impact non-Maharaja figure (elite military, fortress, or key economy piece).
+    - **Infinite Hammer (1×K)**: Best when you can chain 2+ high-impact builds/upgrades this turn and swing the board/economy.
+    - **Ceasefire (7+8+9 or 8+9+10 same color, COUNTERABLE)**: Use when behind and you need safe rebuild time, or ahead and want to stabilize.
+    - **Peasant War (2×J same color, COUNTERABLE)**: Use when your village + healer setup is stronger than opponent's military setup.
+    - **Civil War (2×5 same color, COUNTERABLE)**: Use when you can field stronger village matchups (up to 2-vs-2 village battle).
+    - **Invader Swap (2×A same color, COUNTERABLE)**: Use to seize initiative when current invader role is unfavorable to you.
+    - **Blitzkrieg (2×Q same color, COUNTERABLE)**: Use for immediate offensive tempo when you have a strong attacker ready now.
+    - **Card opportunity cost**: K/A/Q are premium battle/build cards; cast these spells only when positional gain clearly outweighs that loss.
 4. **Should you change cards?** Only if hand has no viable builds, no good spells, and no strong battle cards (K/A/10/9).
    - When changing, keep K, A, 10, 9, Q. Swap 7, 8, excess J.
 5. **Review your strategy notes**: What did you plan last turn? Continue executing that plan.
