@@ -70,5 +70,14 @@ AI_MODEL = os.getenv('AI_MODEL', 'gpt-4.1-mini')  # LLM model name
 AI_PROVIDER = os.getenv('AI_PROVIDER', 'openai')  # LLM provider
 AI_ENABLED = os.getenv('AI_ENABLED', 'True').lower() == 'true'
 
+# LLM reliability
+AI_LLM_TIMEOUT_SECONDS = float(os.getenv('AI_LLM_TIMEOUT_SECONDS', '12'))
+AI_LLM_MAX_RETRIES = int(os.getenv('AI_LLM_MAX_RETRIES', '2'))
+AI_LLM_RETRY_BACKOFF_SECONDS = float(os.getenv('AI_LLM_RETRY_BACKOFF_SECONDS', '1.0'))
+
+# Watchdog retries for failed AI loops while AI still owns the turn
+AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
+AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
+
 
 

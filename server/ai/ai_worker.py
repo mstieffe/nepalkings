@@ -21,12 +21,17 @@ from ai.prompts import SYSTEM_PROMPT, PHASE_PROMPTS
 
 logger = logging.getLogger('nepalkings.ai.worker')
 
+_AI_INTERNAL_REQUEST_HEADER = 'X-NepalKings-AI-Internal'
+
 # Global LLM client (lazy-initialized)
 _llm_client = None
 # Cache mapping AI player IDs to AI user IDs so auth headers can be built
 # from worker threads without touching the Flask-bound DB session.
 _ai_player_user_ids = {}
 _ai_player_user_ids_lock = threading.Lock()
+# Watchdog retry budget per game when AI loop exits unsuccessfully
+_ai_watchdog_retries = {}
+_ai_watchdog_lock = threading.Lock()
 # Lock to prevent multiple AI threads for the same game
 _active_games = set()
 _active_games_lock = threading.Lock()
@@ -70,10 +75,67 @@ def _ai_headers(ai_player_id):
     return get_ai_auth_headers(ai_user_id)
 
 
+def _clear_watchdog_retry(game_id):
+    """Reset watchdog retry counter for a game."""
+    with _ai_watchdog_lock:
+        _ai_watchdog_retries.pop(game_id, None)
+
+
+def _schedule_watchdog_retry(app, game_id, ai_player_id, reason):
+    """Schedule a delayed AI retrigger when a loop exits unsuccessfully."""
+    max_retries = max(int(settings.AI_WATCHDOG_MAX_RETRIES), 0)
+    delay_seconds = max(float(settings.AI_WATCHDOG_RETRY_DELAY), 0.0)
+
+    with _ai_watchdog_lock:
+        attempt = _ai_watchdog_retries.get(game_id, 0) + 1
+        if attempt > max_retries:
+            logger.error(
+                f"AI watchdog exhausted for game {game_id} "
+                f"after {max_retries} retries (reason={reason})"
+            )
+            return
+        _ai_watchdog_retries[game_id] = attempt
+
+    def _retry():
+        try:
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+
+            with app.app_context():
+                from models import Game
+                game = Game.query.get(game_id)
+                if not game or game.state == 'finished':
+                    _clear_watchdog_retry(game_id)
+                    return
+
+                game_dict = game.serialize()
+                phase = detect_phase(game_dict, ai_player_id)
+                if not phase:
+                    _clear_watchdog_retry(game_id)
+                    return
+
+                logger.warning(
+                    f"AI watchdog retry {attempt}/{max_retries} for game {game_id} "
+                    f"(reason={reason}, phase={phase})"
+                )
+                trigger_ai_if_needed(game_id, app=app)
+        except Exception as e:
+            logger.error(f"AI watchdog retry crashed for game {game_id}: {e}", exc_info=True)
+
+    threading.Thread(
+        target=_retry,
+        daemon=True,
+        name=f"ai-watchdog-{game_id}-{attempt}",
+    ).start()
+
+
 def _ai_post(url, ai_player_id, **kwargs):
     """POST with AI authentication headers. Defaults timeout to 15s."""
     kwargs.setdefault('timeout', 15)
-    return http_requests.post(url, headers=_ai_headers(ai_player_id), **kwargs)
+    headers = kwargs.pop('headers', {}) or {}
+    headers.update(_ai_headers(ai_player_id))
+    headers[_AI_INTERNAL_REQUEST_HEADER] = '1'
+    return http_requests.post(url, headers=headers, **kwargs)
 
 
 def trigger_ai_if_needed(game_id, app=None):
@@ -170,6 +232,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
         iteration = 0
         called_start_turn = False
         consecutive_normal_turns = 0  # Track Infinite Hammer multi-build sequences
+        unsuccessful_exit = False
         
         while iteration < max_iterations:
             iteration += 1
@@ -179,6 +242,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 game = Game.query.get(game_id)
                 if not game or game.state == 'finished':
                     logger.info(f"AI loop exit: game {game_id} is finished/gone")
+                    _clear_watchdog_retry(game_id)
                     # Clean up strategy memory for finished games
                     with _game_strategies_lock:
                         _game_strategies.pop(game_id, None)
@@ -216,6 +280,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                         called_start_turn = False
                         continue
                 logger.info(f"AI loop exit: no action needed in game {game_id}")
+                _clear_watchdog_retry(game_id)
                 break
             
             logger.info(f"AI acting in game {game_id}: phase={phase}, iteration={iteration}")
@@ -228,10 +293,12 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 with app.app_context():
                     game = Game.query.get(game_id)
                     if not game or game.state == 'finished':
+                        _clear_watchdog_retry(game_id)
                         break
                     game_dict = game.serialize()
                 phase = detect_phase(game_dict, ai_player_id)
                 if not phase:
+                    _clear_watchdog_retry(game_id)
                     break
             
             # Handle finish_battle phase (calculate total_diff, call endpoint)
@@ -241,11 +308,13 @@ def _ai_game_loop(app, game_id, ai_player_id):
                     # After finish_battle, check if we need to pick a card or handle draw
                     time.sleep(1)
                     continue  # Loop will detect post_battle_pick or exit
+                unsuccessful_exit = True
                 break
             
             # Handle post_battle_pick (winner picks a card)
             if phase == 'post_battle_pick':
                 _handle_post_battle_pick(app, game_id, ai_player_id)
+                _clear_watchdog_retry(game_id)
                 break  # After picking, new round starts — turn might be ours or opponent's
             
             # Enumerate legal actions (needs app context for DB queries, e.g. counter_spell)
@@ -253,6 +322,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 actions = enumerate_actions(game_dict, ai_player_id, phase)
             if not actions:
                 logger.warning(f"AI has no actions in phase {phase} for game {game_id}")
+                unsuccessful_exit = True
                 break
             
             # If only one action, take it without LLM
@@ -293,10 +363,13 @@ def _ai_game_loop(app, game_id, ai_player_id):
                                 fallback_success = True
                                 break
                 if not fallback_success:
+                    unsuccessful_exit = True
                     break
                 # Fallback action succeeded — continue loop
                 time.sleep(settings.AI_THINK_DELAY)
                 continue
+
+            _clear_watchdog_retry(game_id)
             
             # Track consecutive normal_turn actions (indicates Infinite Hammer mode)
             if phase == 'normal_turn':
@@ -315,6 +388,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 time.sleep(settings.AI_THINK_DELAY)
     
     except Exception as e:
+        unsuccessful_exit = True
         logger.error(f"AI thread error for game {game_id}: {e}", exc_info=True)
     finally:
         retrigger = False
@@ -327,6 +401,24 @@ def _ai_game_loop(app, game_id, ai_player_id):
             logger.info(f"Processing pending retrigger for game {game_id} after thread exit")
             with app.app_context():
                 trigger_ai_if_needed(game_id, app=app)
+        elif unsuccessful_exit:
+            try:
+                with app.app_context():
+                    from models import Game
+                    game = Game.query.get(game_id)
+                    if not game or game.state == 'finished':
+                        _clear_watchdog_retry(game_id)
+                    else:
+                        game_dict = game.serialize()
+                        phase = detect_phase(game_dict, ai_player_id)
+                        if phase and game_dict.get('turn_player_id') == ai_player_id:
+                            _schedule_watchdog_retry(app, game_id, ai_player_id, reason='loop_failure')
+                        else:
+                            _clear_watchdog_retry(game_id)
+            except Exception as e:
+                logger.error(f"Failed to schedule AI watchdog for game {game_id}: {e}", exc_info=True)
+        else:
+            _clear_watchdog_retry(game_id)
 
 
 def _get_game_log_digest(game_dict, ai_player_id, max_entries=15):

@@ -8,6 +8,9 @@ for adding other providers (Anthropic, Google, local models).
 """
 import logging
 import json
+import time
+
+import server_settings as settings
 
 logger = logging.getLogger('nepalkings.ai.llm')
 
@@ -43,22 +46,40 @@ class LLMClient:
     def _call_openai(self, system_prompt: str, user_prompt: str, temperature: float = 0.4) -> str:
         """Call OpenAI Chat Completions API."""
         client = self._get_openai_client()
-        try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=temperature,
-                max_tokens=800,
-            )
-            content = response.choices[0].message.content.strip()
-            logger.debug(f"LLM response ({self.model}, t={temperature}): {content[:200]}")
-            return content
-        except Exception as e:
-            logger.error(f"LLM call failed ({self.provider}/{self.model}): {e}")
-            raise
+        timeout_seconds = max(float(settings.AI_LLM_TIMEOUT_SECONDS), 1.0)
+        max_retries = max(int(settings.AI_LLM_MAX_RETRIES), 0)
+        backoff_seconds = max(float(settings.AI_LLM_RETRY_BACKOFF_SECONDS), 0.0)
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=temperature,
+                    max_tokens=800,
+                    timeout=timeout_seconds,
+                )
+                content = response.choices[0].message.content.strip()
+                logger.debug(f"LLM response ({self.model}, t={temperature}): {content[:200]}")
+                return content
+            except Exception as e:
+                if attempt >= max_retries:
+                    logger.error(
+                        f"LLM call failed ({self.provider}/{self.model}) "
+                        f"after {max_retries + 1} attempt(s): {e}"
+                    )
+                    raise
+
+                sleep_seconds = backoff_seconds * (2 ** attempt)
+                logger.warning(
+                    f"LLM call attempt {attempt + 1}/{max_retries + 1} failed: {e}. "
+                    f"Retrying in {sleep_seconds:.1f}s"
+                )
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
 
 
 def parse_action_response(response_text: str) -> dict:

@@ -17,6 +17,8 @@ _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 def _ai_trigger_hook(response):
     """After every POST, check if an AI player needs to act."""
     if request.method == 'POST' and settings.AI_ENABLED:
+        if request.headers.get('X-NepalKings-AI-Internal') == '1':
+            return response
         game_id = None
         try:
             if request.is_json and request.json:
