@@ -148,7 +148,7 @@ class TestBuildFigure:
         # The king card used should now be marked as part of figure
         figure = data['figure']
         card_id = figure['cards'][0]['card_id']
-        card = MainCard.query.get(card_id)
+        card = db.session.get(MainCard, card_id)
         assert card.part_of_figure is True
 
     def test_build_figure_consumes_player_turn(self, client, db, app, game_with_players, auth_token_p1):
@@ -202,7 +202,7 @@ class TestPickUpFigure:
         assert fig is not None
         # The card should currently be part of figure
         ctf = fig.cards[0]
-        card = MainCard.query.get(ctf.card_id)
+        card = db.session.get(MainCard, ctf.card_id)
         assert card.part_of_figure is True
 
         payload = {'player_id': p1.id, 'game_id': game.id, 'figure_id': fig.id}
@@ -226,7 +226,7 @@ class TestPickUpFigure:
         client.post('/figures/pickup_figure', data=json.dumps(payload),
                     content_type='application/json',
                     headers={'Authorization': f'Bearer {auth_token_p1}'})
-        assert Figure.query.get(fig_id) is None
+        assert db.session.get(Figure, fig_id) is None
 
     def test_pick_up_figure_fails_when_not_found(self, client, db, app, game_with_players, auth_token_p1):
         import json
@@ -329,9 +329,9 @@ class TestFigureRouteCoverage:
 
         assert resp.status_code == 200
         assert data.get('success') is True, data
-        assert Figure.query.get(figure.id) is None
+        assert db.session.get(Figure, figure.id) is None
 
-        card = MainCard.query.get(figure_card_id)
+        card = db.session.get(MainCard, figure_card_id)
         assert card is not None
         assert card.part_of_figure is False
         assert card.in_deck is True

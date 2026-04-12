@@ -833,7 +833,7 @@ def get_games():
 def get_game():
     try:
         game_id = request.args.get('game_id')
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
 
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 400
@@ -870,7 +870,7 @@ def start_turn():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 400
 
@@ -929,7 +929,7 @@ def start_turn():
 def create_game():
     try:
         challenge_id = request.form.get('challenge_id')
-        challenge = Challenge.query.get(challenge_id)
+        challenge = db.session.get(Challenge, challenge_id)
 
         if not challenge:
             return jsonify({'success': False, 'message': 'Challenge not found'}), 400
@@ -938,8 +938,8 @@ def create_game():
             return jsonify({'success': False, 'message': 'Forbidden'}), 403
 
         # Get the users from the challenge
-        user1 = User.query.get(challenge.challenger_id)
-        user2 = User.query.get(challenge.challenged_id)
+        user1 = db.session.get(User, challenge.challenger_id)
+        user2 = db.session.get(User, challenge.challenged_id)
 
         if not user1 or not user2:
             return jsonify({'success': False, 'message': 'One or both players do not exist'}), 400
@@ -1086,7 +1086,7 @@ def delete_game():
         game_id = request.form.get('game_id', type=int)
         game = Game.query.options(
             joinedload(Game.players).joinedload(Player.main_hand)
-        ).get(game_id)
+        ).filter_by(id=game_id).first()
 
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
@@ -1158,8 +1158,8 @@ def draw_cards():
         card_type = request.form.get('card_type', 'main')  # 'main' or 'side'
         num_cards = int(request.form.get('num_cards', 1))  # Number of cards to draw
 
-        game = Game.query.get(game_id)
-        player = Player.query.get(player_id)
+        game = db.session.get(Game, game_id)
+        player = db.session.get(Player, player_id)
 
         if not game or not player:
             return jsonify({'success': False, 'message': 'Invalid game or player'}), 400
@@ -1208,7 +1208,7 @@ def return_cards():
         if err:
             return err
 
-        game = Game.query.get(cards[0].game_id)
+        game = db.session.get(Game, cards[0].game_id)
         if game:
             battle_err = _guard_battle_active(game, player_id=player_id, action_label='return_cards')
             if battle_err:
@@ -1240,7 +1240,7 @@ def change_cards():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if game:
             battle_err = _guard_battle_active(game, player_id=player_id, action_label='change_cards')
             if battle_err:
@@ -1264,21 +1264,21 @@ def change_cards():
 
         # Now draw replacements
         new_cards = DeckManager.draw_cards_from_deck(
-            Game.query.get(game_id), Player.query.get(player_id),
+            db.session.get(Game, game_id), db.session.get(Player, player_id),
             len(card_ids), card_type)
 
         # Update turns left for the player
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         player.turns_left -= 1
 
         # flip turn player id
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
         
         # Create log entry
         from models import User, LogEntry
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         log_entry = LogEntry(
             game_id=game_id,
@@ -1316,7 +1316,7 @@ def discard_cards():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if game:
             battle_err = _guard_battle_active(game, player_id=player_id, action_label='discard_cards')
             if battle_err:
@@ -1332,9 +1332,9 @@ def discard_cards():
         selected_cards = []
         for card_id, card_rank in zip(card_ids, card_ranks):
             if card_rank in side_card_ranks:
-                card = SideCard.query.get(card_id)
+                card = db.session.get(SideCard, card_id)
             else:
-                card = MainCard.query.get(card_id)
+                card = db.session.get(MainCard, card_id)
             
             if card:
                 selected_cards.append(card)
@@ -1367,7 +1367,7 @@ def update_points():
         if err:
             return err
 
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 400
 
@@ -1624,7 +1624,7 @@ def select_defender():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -1641,7 +1641,7 @@ def select_defender():
             return jsonify({'success': False, 'message': 'Not your turn to select defender'}), 400
 
         # Validate figure belongs to the OPPONENT (not the advancing player)
-        figure = Figure.query.get(figure_id)
+        figure = db.session.get(Figure, figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 400
         if figure.player_id == player_id:
@@ -1678,7 +1678,7 @@ def select_defender():
                 if figure_id == game.defending_figure_id:
                     return jsonify({'success': False, 'message': 'This figure is already selected'}), 400
                 # Second defender pick — validate same color
-                first_defender = Figure.query.get(game.defending_figure_id)
+                first_defender = db.session.get(Figure, game.defending_figure_id)
                 if first_defender and first_defender.color != figure.color:
                     # Graceful fallback: keep first defender only and proceed.
                     # This avoids deadlocks from accidental wrong-color picks.
@@ -1723,10 +1723,10 @@ def select_defender():
         defender_owner_id = figure.player_id
         if _check_figure_resource_deficit(figure, defender_owner_id, game.id):
             # Defender's figure has a deficit — defender auto-loses the battle
-            invader_player = Player.query.get(player_id)
-            defender_player = Player.query.get(defender_owner_id)
-            invader_user = User.query.get(invader_player.user_id)
-            defender_user = User.query.get(defender_player.user_id)
+            invader_player = db.session.get(Player, player_id)
+            defender_player = db.session.get(Player, defender_owner_id)
+            invader_user = db.session.get(User, invader_player.user_id)
+            defender_user = db.session.get(User, defender_player.user_id)
             invader_name = invader_user.username if invader_user else f"Player {player_id}"
             defender_name = defender_user.username if defender_user else f"Player {defender_owner_id}"
             return _resolve_deficit_loss(game, invader_player, defender_player, invader_name, defender_name, figure.name)
@@ -1765,11 +1765,11 @@ def skip_civil_war_second():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
 
@@ -1784,7 +1784,7 @@ def skip_civil_war_second():
             game.turn_player_id = other_player.id
 
         # Log
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         log_entry = LogEntry(
             game_id=game_id,
@@ -1828,11 +1828,11 @@ def cannot_advance_loss():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
 
@@ -1841,12 +1841,12 @@ def cannot_advance_loss():
             return jsonify({'success': False, 'message': 'Not your turn'}), 400
 
         # Get player info for logging
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
 
         # Get opponent
         opponent = next((p for p in game.players if p.id != player_id), None)
-        opponent_user = User.query.get(opponent.user_id) if opponent else None
+        opponent_user = db.session.get(User, opponent.user_id) if opponent else None
         opponent_name = opponent_user.username if opponent_user else "Opponent"
 
         # Award points to winner (same as fold)
@@ -1938,11 +1938,11 @@ def defender_no_figures_loss():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
 
@@ -1955,12 +1955,12 @@ def defender_no_figures_loss():
             return jsonify({'success': False, 'message': 'Only the advancing player can report this'}), 400
 
         # Get invader info
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
 
         # Get defender (opponent) info
         opponent = next((p for p in game.players if p.id != player_id), None)
-        opponent_user = User.query.get(opponent.user_id) if opponent else None
+        opponent_user = db.session.get(User, opponent.user_id) if opponent else None
         opponent_name = opponent_user.username if opponent_user else "Opponent"
 
         # Award points to winner (same as fold)

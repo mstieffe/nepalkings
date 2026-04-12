@@ -132,7 +132,7 @@ class TestGameOver:
         """Manually set a player to points >= stake and verify check_game_over triggers."""
         from models import Player, Game
         from routes.games import _check_game_over
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         player = game.players[0]
         player.points = game.stake
         db.session.commit()
@@ -144,9 +144,9 @@ class TestGameOver:
     def test_game_over_awards_gold_to_winner(self, app, db, created_game):
         from models import Player, Game, User
         from routes.games import _check_game_over
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         winner_player = game.players[0]
-        winner_user = User.query.get(winner_player.user_id)
+        winner_user = db.session.get(User, winner_player.user_id)
         gold_before = winner_user.gold
         winner_player.points = game.stake
         db.session.commit()
@@ -158,7 +158,7 @@ class TestGameOver:
     def test_checkmate_triggers_game_over(self, app, db, created_game):
         from models import Figure, Game
         from routes.games import _check_checkmate_loss
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         # Find the Himalaya Maharaja (checkmate=True)
         checkmate_fig = Figure.query.filter_by(
             game_id=game.id, checkmate=True
@@ -176,7 +176,7 @@ class TestGameResultsRoute:
         from models import Game, User
         from routes.games import _check_game_over
 
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         winner_player = game.players[0]
         winner_player.points = game.stake
         db.session.commit()
@@ -185,7 +185,7 @@ class TestGameResultsRoute:
         assert result is not None
         db.session.commit()
 
-        winner_user = User.query.get(winner_player.user_id)
+        winner_user = db.session.get(User, winner_player.user_id)
         resp = client.get(f'/games/game_results?username={winner_user.username}')
         data = resp.get_json()
 
@@ -285,7 +285,7 @@ class TestGameRouteCoverage:
         return_data = return_resp.get_json()
         assert return_data.get('success') is True, return_data
 
-        card = SideCard.query.get(drawn_id)
+        card = db.session.get(SideCard, drawn_id)
         assert card is not None
         assert card.in_deck is True
 
@@ -301,7 +301,7 @@ class TestGameRouteCoverage:
 
         u1, _ = two_users
         player = Player.query.filter_by(game_id=created_game['id'], user_id=u1.id).first()
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         assert player is not None
         assert game is not None
 
@@ -386,7 +386,7 @@ class TestGameRouteCoverage:
         data = resp.get_json()
 
         assert data.get('success') is True, data
-        assert Game.query.get(created_game['id']) is None
+        assert db.session.get(Game, created_game['id']) is None
 
     def test_start_turn_route_returns_turn_payload(
         self,
@@ -399,7 +399,7 @@ class TestGameRouteCoverage:
         from models import Game, Player
 
         u1, _ = two_users
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         player = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
         assert game is not None
         assert player is not None
@@ -428,7 +428,7 @@ class TestGameRouteCoverage:
         from models import Figure, Game, Player
 
         u1, u2 = two_users
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
         p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
         assert game is not None
@@ -467,7 +467,7 @@ class TestGameRouteCoverage:
         from models import Game, Player
 
         u1, u2 = two_users
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
         p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
         assert game is not None
@@ -499,7 +499,7 @@ class TestGameRouteCoverage:
         from models import Game, Player
 
         u1, u2 = two_users
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
         p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
         assert game is not None
@@ -534,7 +534,7 @@ class TestGameRouteCoverage:
         from models import Game, Player
 
         u1, u2 = two_users
-        game = Game.query.get(created_game['id'])
+        game = db.session.get(Game, created_game['id'])
         p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
         p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
         assert game is not None

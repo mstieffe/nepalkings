@@ -103,7 +103,7 @@ def create_figure():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         battle_err = _guard_non_battle_action(game, action_label='create_figure', player_id=player_id)
         if battle_err:
             return battle_err
@@ -159,18 +159,18 @@ def create_figure():
 
             # Update card's part_of_figure attribute
             if card['type'] == 'main':
-                main_card = MainCard.query.get(card['id'])
+                main_card = db.session.get(MainCard, card['id'])
                 if main_card:
                     main_card.part_of_figure = True
             elif card['type'] == 'side':
-                side_card = SideCard.query.get(card['id'])
+                side_card = db.session.get(SideCard, card['id'])
                 if side_card:
                     side_card.part_of_figure = True
 
         db.session.flush()
 
         # Update turns left for the player
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         
         # Check if Infinite Hammer is active for this player
         has_infinite_hammer = _has_active_infinite_hammer(player_id, game_id)
@@ -181,7 +181,7 @@ def create_figure():
             # For instant charge advance (invader), turns_left is overwritten to 0 below.
             is_ic_counter = False
             if instant_charge_advance:
-                game_check = Game.query.get(game_id)
+                game_check = db.session.get(Game, game_id)
                 if game_check and game_check.advancing_figure_id and game_check.advancing_player_id != player_id:
                     is_ic_counter = True
             if not is_ic_counter:
@@ -190,7 +190,7 @@ def create_figure():
         db.session.commit()
 
         # flip turn player id only if Infinite Hammer is not active
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         other_player = game.players[0] if game.players[0].id != player_id else game.players[1]
 
         # Handle instant charge advance (build + advance in one action)
@@ -234,7 +234,7 @@ def create_figure():
 
                     # Check if advancing figure has cannot_be_blocked
                     if is_counter_advance and game.advancing_figure_id:
-                        adv_fig = Figure.query.get(game.advancing_figure_id)
+                        adv_fig = db.session.get(Figure, game.advancing_figure_id)
                         if adv_fig and adv_fig.cannot_be_blocked:
                             instant_charge_result = {'success': False, 'message': 'Cannot counter-advance: opponent\'s figure cannot be blocked'}
 
@@ -259,7 +259,7 @@ def create_figure():
                             # Ensure turn flips to opponent for counter-advance window,
                             # even if Infinite Hammer would normally keep the turn.
                             game.turn_player_id = other_player.id
-                        ic_user = User.query.get(player.user_id)
+                        ic_user = db.session.get(User, player.user_id)
                         ic_username = ic_user.username if ic_user else f"Player {player_id}"
                         action_type = 'counter_advance' if is_counter_advance else 'advance'
                         advance_log = LogEntry(
@@ -315,7 +315,7 @@ def create_figure():
                 db.session.commit()
 
         # Create log entry
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         card_count = len(cards)
         field_str = field if field else "their hand"
@@ -359,7 +359,7 @@ def update_figure():
         if not figure_id:
             return jsonify({'success': False, 'message': 'Figure ID is required'}), 400
 
-        figure = Figure.query.get(figure_id)
+        figure = db.session.get(Figure, figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 404
 
@@ -367,7 +367,7 @@ def update_figure():
         if err:
             return err
 
-        game = Game.query.get(figure.game_id)
+        game = db.session.get(Game, figure.game_id)
         battle_err = _guard_non_battle_action(game, action_label='update_figure', player_id=figure.player_id)
         if battle_err:
             return battle_err
@@ -396,8 +396,8 @@ def update_figure():
         db.session.commit()
 
         # Update turns left and flip turn player
-        player = Player.query.get(figure.player_id)
-        game = Game.query.get(figure.game_id)
+        player = db.session.get(Player, figure.player_id)
+        game = db.session.get(Game, figure.game_id)
         if not player or not game:
             return jsonify({'success': False, 'message': 'Player or game not found'}), 404
 
@@ -466,7 +466,7 @@ def get_figure():
         if not figure_id:
             return jsonify({'success': False, 'message': 'Figure ID is required'}), 400
 
-        figure = Figure.query.get(figure_id)
+        figure = db.session.get(Figure, figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 404
 
@@ -510,7 +510,7 @@ def delete_figure():
         if not figure_id:
             return jsonify({'success': False, 'message': 'Figure ID is required'}), 400
 
-        figure = Figure.query.get(figure_id)
+        figure = db.session.get(Figure, figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 404
 
@@ -518,7 +518,7 @@ def delete_figure():
         if err:
             return err
 
-        game_for_guard = Game.query.get(game_id or figure.game_id)
+        game_for_guard = db.session.get(Game, game_id or figure.game_id)
         battle_err = _guard_non_battle_action(
             game_for_guard,
             action_label='delete_figure',
@@ -563,7 +563,7 @@ def delete_figure():
         db.session.flush()
 
         # Update turns left for the player
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         
         # Check if Infinite Hammer is active for this player
         has_infinite_hammer = _has_active_infinite_hammer(player_id, game_id)
@@ -574,7 +574,7 @@ def delete_figure():
         db.session.commit()
 
         # flip turn player id only if Infinite Hammer is not active
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not has_infinite_hammer and game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
             db.session.commit()
@@ -632,7 +632,7 @@ def pickup_figure():
         if err:
             return err
 
-        game = Game.query.get(game_id) if game_id else None
+        game = db.session.get(Game, game_id) if game_id else None
         battle_err = _guard_non_battle_action(game, action_label='pickup_figure', player_id=player_id)
         if battle_err:
             return battle_err
@@ -640,7 +640,7 @@ def pickup_figure():
         if not figure_id:
             return jsonify({'success': False, 'message': 'Figure ID is required'}), 400
 
-        figure = Figure.query.get(figure_id)
+        figure = db.session.get(Figure, figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 404
         
@@ -681,7 +681,7 @@ def pickup_figure():
         field_partition = figure.field if figure.field else 'field'
 
         # Update turns left for the player
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
         
@@ -692,7 +692,7 @@ def pickup_figure():
             player.turns_left -= 1
         
         # Get game and flip turn player id only if Infinite Hammer is not active
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
         
@@ -732,7 +732,7 @@ def pickup_figure():
                 db.session.commit()
         
         # Create log entry
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         
         log_entry = LogEntry(
@@ -777,7 +777,7 @@ def upgrade_figure():
         upgrade_card_id = data.get('upgrade_card_id')
         upgrade_card_type = data.get('upgrade_card_type')  # 'main' or 'side'
 
-        game = Game.query.get(game_id) if game_id else None
+        game = db.session.get(Game, game_id) if game_id else None
         battle_err = _guard_non_battle_action(game, action_label='upgrade_figure', player_id=player_id)
         if battle_err:
             return battle_err
@@ -786,7 +786,7 @@ def upgrade_figure():
             return jsonify({'success': False, 'message': 'Missing required parameters'}), 400
 
         # Get the figure
-        figure = Figure.query.get(figure_id)
+        figure = db.session.get(Figure, figure_id)
         if not figure:
             return jsonify({'success': False, 'message': 'Figure not found'}), 404
         
@@ -800,9 +800,9 @@ def upgrade_figure():
 
         # Verify the player owns the upgrade card
         if upgrade_card_type == 'main':
-            upgrade_card = MainCard.query.get(upgrade_card_id)
+            upgrade_card = db.session.get(MainCard, upgrade_card_id)
         else:
-            upgrade_card = SideCard.query.get(upgrade_card_id)
+            upgrade_card = db.session.get(SideCard, upgrade_card_id)
         
         if not upgrade_card or upgrade_card.player_id != player_id:
             return jsonify({'success': False, 'message': 'Upgrade card not found or does not belong to player'}), 403
@@ -833,11 +833,11 @@ def upgrade_figure():
         # Set part_of_figure = True for the old cards (they're going into the new figure)
         for card_info in old_cards:
             if card_info['type'] == 'main':
-                card = MainCard.query.get(card_info['id'])
+                card = db.session.get(MainCard, card_info['id'])
                 if card:
                     card.part_of_figure = True
             else:
-                card = SideCard.query.get(card_info['id'])
+                card = db.session.get(SideCard, card_info['id'])
                 if card:
                     card.part_of_figure = True
 
@@ -895,7 +895,7 @@ def upgrade_figure():
         logger.info(f"[UPGRADE_FIGURE] Serialized: {new_figure_serialized}")
 
         # Update turns left for the player
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
         
@@ -906,7 +906,7 @@ def upgrade_figure():
             player.turns_left -= 1
         
         # Get game and flip turn player id only if Infinite Hammer is not active
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
         
@@ -914,7 +914,7 @@ def upgrade_figure():
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
         
         # Create log entry BEFORE Infinite Hammer tracking
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         
         log_entry = LogEntry(

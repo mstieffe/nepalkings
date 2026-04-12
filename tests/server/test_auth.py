@@ -150,7 +150,7 @@ class TestEmailVerification:
             email='verify@example.com',
             email_verified=False,
             email_verification_token='verify-token-123',
-            email_verification_sent_at=datetime.utcnow(),
+            email_verification_sent_at=datetime.now(),
         )
         db.session.add(user)
         db.session.commit()
@@ -173,7 +173,7 @@ class TestEmailVerification:
             email='expired@example.com',
             email_verified=False,
             email_verification_token='expired-token-123',
-            email_verification_sent_at=datetime.utcnow() - timedelta(hours=72),
+            email_verification_sent_at=datetime.now() - timedelta(hours=72),
         )
         db.session.add(user)
         db.session.commit()
