@@ -568,10 +568,12 @@ class Game:
             logger.info(f"[BATTLE_READY] Figures set: advancing={self.advancing_figure_id}/{self.advancing_figure_id_2}, defending={self.defending_figure_id}/{self.defending_figure_id_2}")
 
         # Detect fold outcome from opponent's battle decision (polling detection)
+        was_battle_moves_phase = self.battle_moves_phase
         previous_fold_outcome = self.fold_outcome
         previous_battle_confirmed = self.battle_confirmed
         self.battle_decisions = game_dict.get('battle_decisions')
         self.battle_confirmed = game_dict.get('battle_confirmed', False)
+        self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
         self.auto_loss_reason = game_dict.get('auto_loss_reason')
@@ -596,6 +598,7 @@ class Game:
         # Update server-authoritative battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
+        self._sync_battle_moves_phase_from_server()
 
         # Reset fold tracking when server clears fold state (new round started)
         if previous_fold_outcome and not self.fold_outcome:
@@ -614,12 +617,13 @@ class Game:
             self.waiting_for_battle_decision = False
             logger.info(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
 
-        # Detect opponent confirmed battle moves while we are waiting
-        previous_bm_confirmed = self.battle_moves_confirmed
-        self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
-        if (self.waiting_for_opponent_battle_moves and
-                self.battle_moves_confirmed and
-                len(self.battle_moves_confirmed) >= 2):
+        # Detect transition from move-selection to active battle rounds.
+        player_ids = [str(p.get('id')) for p in (self.players or []) if p.get('id') is not None]
+        confirmed = self.battle_moves_confirmed or {}
+        all_confirmed = bool(player_ids) and all(confirmed.get(pid) for pid in player_ids)
+        if (was_battle_moves_phase and
+            all_confirmed and
+            self.battle_turn_player_id is not None):
             self.both_battle_moves_ready = True
             self.waiting_for_opponent_battle_moves = False
             logger.debug(f"[BATTLE_MOVES] Both players confirmed battle moves — proceed to battle")
@@ -780,6 +784,7 @@ class Game:
         # Update battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
+        self._sync_battle_moves_phase_from_server()
         
         # Check if we're waiting for this player to counter
         if self.pending_spell_id and self.waiting_for_counter_player_id:
@@ -1144,6 +1149,36 @@ class Game:
                 spell_data.get('player_id') == self.player_id):
                 return True
         return False
+
+    def _sync_battle_moves_phase_from_server(self):
+        """Synchronize battle-move selection flags from server battle fields.
+
+        Selection phase is authoritative when battle is confirmed but the first
+        battle turn has not been assigned yet (battle_turn_player_id is None).
+        """
+        in_selection_phase = bool(
+            self.battle_confirmed and
+            self.battle_turn_player_id is None and
+            not self.fold_outcome
+        )
+
+        if in_selection_phase:
+            confirmed = self.battle_moves_confirmed or {}
+            my_pid = str(self.player_id) if self.player_id is not None else None
+            player_ids = [str(p.get('id')) for p in (self.players or []) if p.get('id') is not None]
+            all_ready = bool(player_ids) and all(confirmed.get(pid) for pid in player_ids)
+            self.battle_moves_phase = True
+            self.battle_moves_ready = bool(my_pid and confirmed.get(my_pid))
+            self.waiting_for_opponent_battle_moves = bool(self.battle_moves_ready and not all_ready)
+            self.both_battle_moves_ready = False
+            return
+
+        # Outside selection phase, clear local waiting flags.
+        self.battle_moves_phase = False
+        self.battle_moves_ready = False
+        self.waiting_for_opponent_battle_moves = False
+        if not self.battle_confirmed:
+            self.both_battle_moves_ready = False
 
     def is_battle_active(self) -> bool:
         """Return True while a battle is actually in progress (confirmed → resolution).

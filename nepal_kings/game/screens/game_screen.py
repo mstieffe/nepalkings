@@ -523,6 +523,7 @@ class GameScreen(Screen):
         
         # Reconnect: detect active battle on server that the client missed
         self.check_battle_reconnect()
+        self._enforce_battle_navigation_state()
         
         # Check for ceasefire ended notification AFTER action results
         # so it appears after the success message of the action that caused it
@@ -2121,16 +2122,17 @@ class GameScreen(Screen):
             bmc = self.state.game.battle_moves_confirmed or {}
             player_ids = [str(p['id']) for p in self.state.game.players]
             both_moves_ready = all(bmc.get(pid) for pid in player_ids)
+            battle_started = both_moves_ready and self.state.game.battle_turn_player_id is not None
             my_moves_ready = bmc.get(str(self.state.game.player_id))
 
-            if both_moves_ready:
+            if battle_started:
                 # Both players already confirmed moves — go straight to battle
                 self.battle_button.locked = False
                 self.state.subscreen = 'battle'
                 logger.info("[BATTLE_READY] Reconnect: both moves confirmed — entering battle screen")
             elif my_moves_ready:
                 # We confirmed but opponent hasn't — go to battle shop in waiting mode
-                self.battle_button.locked = False
+                self.battle_button.locked = True
                 self.state.game.battle_moves_phase = True
                 self.state.game.battle_moves_ready = True
                 self.state.game.waiting_for_opponent_battle_moves = True
@@ -2143,7 +2145,7 @@ class GameScreen(Screen):
                 logger.info("[BATTLE_READY] Reconnect: our moves confirmed — waiting for opponent")
             else:
                 # Neither confirmed yet — enter battle shop normally
-                self.battle_button.locked = False
+                self.battle_button.locked = True
                 self.state.game.auto_proceed_to_battle = True
                 logger.info("[BATTLE_READY] Reconnect: battle confirmed, moves not yet selected")
             return
@@ -2620,6 +2622,7 @@ class GameScreen(Screen):
         self.state.game.battle_moves_ready = False
         self.state.game.waiting_for_opponent_battle_moves = False
         self.state.game.both_battle_moves_ready = False
+        self.battle_button.locked = True
         self.state.subscreen = 'battle_shop'
 
         # Reload bought moves in the battle shop screen
@@ -2639,12 +2642,40 @@ class GameScreen(Screen):
 
     def check_battle_moves_ready(self):
         """Check if both players have confirmed their battle moves (polling detection)."""
-        if not self.state.game or not self.state.game.both_battle_moves_ready:
+        if not self.state.game:
+            return
+
+        game = self.state.game
+        server_started_battle = bool(game.battle_confirmed and game.battle_turn_player_id is not None)
+        should_enter_battle = bool(
+            game.both_battle_moves_ready or
+            (self.state.subscreen == 'battle_shop' and server_started_battle)
+        )
+        if not should_enter_battle:
             return
 
         self.state.game.both_battle_moves_ready = False
         self.state.game.battle_moves_phase = False
+        self.battle_button.locked = False
         self.state.subscreen = 'battle'
+
+    def _enforce_battle_navigation_state(self):
+        """Keep battle/battle-shop navigation aligned with server battle phase."""
+        if not self.state.game:
+            return
+
+        game = self.state.game
+        in_move_selection = bool(game.battle_confirmed and game.battle_turn_player_id is None and not game.fold_outcome)
+        if in_move_selection:
+            # Battle rounds have not started yet: keep arena locked and route
+            # accidental battle-screen entries back to battle shop.
+            self.battle_button.locked = True
+            if self.state.subscreen == 'battle':
+                self.state.subscreen = 'battle_shop'
+            return
+
+        if game.battle_confirmed and game.battle_turn_player_id is not None:
+            self.battle_button.locked = False
 
     def check_battle_reconnect(self):
         """Detect an active 3-round battle on the server that the client isn't showing.

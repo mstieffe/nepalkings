@@ -2135,6 +2135,14 @@ def battle_decision():
                 # Both chose to fight — proceed to battle
                 game.battle_confirmed = True
                 game.battle_decisions = None
+                # Enter a fresh battle-moves selection phase.
+                # These fields can contain stale values after reconnects or
+                # interrupted clients and must be reset before confirmations.
+                game.battle_moves_confirmed = None
+                game.battle_round = 0
+                game.battle_turn_player_id = None
+                game.battle_skipped_rounds = None
+                game.battle_gamble_counts = None
 
                 # Auto-fill both players' hands before entering battle shop
                 invader_player = Player.query.get(game.advancing_player_id)

@@ -37,6 +37,26 @@ def _ai_trigger_hook(response):
 MAX_BATTLE_MOVES = 3
 
 
+def _is_battle_move_selection_phase(game):
+    """Return True while players are selecting/confirming pre-battle moves."""
+    return bool(game and game.battle_confirmed and game.battle_turn_player_id is None)
+
+
+def _guard_confirmed_selection_locked(game, player_id):
+    """Block editing pre-battle moves after this player pressed Ready."""
+    if not _is_battle_move_selection_phase(game):
+        return None
+
+    confirmed = game.battle_moves_confirmed or {}
+    if confirmed.get(str(player_id)):
+        return jsonify({
+            'success': False,
+            'message': 'Your battle moves are already confirmed and cannot be changed.',
+            'reason': 'battle_moves_locked'
+        }), 400
+    return None
+
+
 @battle_shop.route('/buy_battle_move', methods=['POST'])
 @require_token
 def buy_battle_move():
@@ -72,6 +92,17 @@ def buy_battle_move():
     player = Player.query.get(player_id)
     if not player or player.game_id != game_id:
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
+
+    # Once active rounds start, battle moves are fixed.
+    if game.battle_confirmed and game.battle_turn_player_id is not None:
+        return jsonify({
+            'success': False,
+            'message': 'Cannot buy battle moves after battle rounds have started.'
+        }), 400
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
 
     # Check max battle moves
     existing_moves = BattleMove.query.filter_by(game_id=game_id, player_id=player_id).count()
@@ -162,6 +193,16 @@ def return_battle_move():
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+    if game.battle_confirmed and game.battle_turn_player_id is not None:
+        return jsonify({
+            'success': False,
+            'message': 'Cannot return battle moves after battle rounds have started.'
+        }), 400
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
+
     # Un-reserve the card
     if battle_move.card_type == 'side':
         card = SideCard.query.get(battle_move.card_id)
@@ -226,6 +267,20 @@ def confirm_battle_moves():
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+    if not game.battle_confirmed:
+        return jsonify({
+            'success': False,
+            'message': 'Battle move confirmation is only available during battle preparation.'
+        }), 400
+
+    # Idempotent: if battle already started, treat this as already ready.
+    if game.battle_turn_player_id is not None:
+        return jsonify({
+            'success': True,
+            'both_ready': True,
+            'game': game.serialize(),
+        })
+
     # Verify the player has exactly MAX_BATTLE_MOVES battle moves
     move_count = BattleMove.query.filter_by(game_id=game_id, player_id=player_id).count()
     if move_count < MAX_BATTLE_MOVES:
@@ -235,16 +290,35 @@ def confirm_battle_moves():
         }), 400
 
     # Record this player's confirmation
-    confirmed = dict(game.battle_moves_confirmed) if game.battle_moves_confirmed else {}
+    player_ids = [str(p.id) for p in game.players]
+    raw_confirmed = dict(game.battle_moves_confirmed) if game.battle_moves_confirmed else {}
+    # Keep only current players to avoid stale confirmation maps.
+    confirmed = {pid: bool(raw_confirmed.get(pid)) for pid in player_ids if raw_confirmed.get(pid)}
     confirmed[str(player_id)] = True
     game.battle_moves_confirmed = confirmed
 
     # Check if both players have confirmed
-    player_ids = [str(p.id) for p in game.players]
     both_ready = all(confirmed.get(pid) for pid in player_ids)
+
+    # Safety: even if confirmation flags are set, ensure each player still has
+    # the required number of moves before battle rounds can start.
+    if both_ready:
+        not_ready_ids = []
+        for pid in player_ids:
+            pid_int = int(pid)
+            cnt = BattleMove.query.filter_by(game_id=game_id, player_id=pid_int).count()
+            if cnt < MAX_BATTLE_MOVES:
+                not_ready_ids.append(pid)
+
+        if not_ready_ids:
+            for pid in not_ready_ids:
+                confirmed.pop(pid, None)
+            game.battle_moves_confirmed = confirmed
+            both_ready = False
 
     # Initialize 3-round battle tracking when both players are ready
     if both_ready:
+        game.battle_moves_confirmed = {pid: True for pid in player_ids}
         game.battle_round = 0
         game.battle_turn_player_id = game.invader_player_id
         # Reset played_round on all battle moves so they start as "in hand"
@@ -313,6 +387,10 @@ def gamble_battle_move():
     game = Game.query.get(game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
 
     player = Player.query.get(player_id)
     if not player or player.game_id != game_id:
@@ -484,6 +562,10 @@ def combine_battle_moves():
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
+
     bm_a = BattleMove.query.get(move_id_a)
     bm_b = BattleMove.query.get(move_id_b)
 
@@ -574,6 +656,10 @@ def dismantle_battle_move():
     game = Game.query.get(game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
 
     dd = BattleMove.query.get(battle_move_id)
     if not dd:
