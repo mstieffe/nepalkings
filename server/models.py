@@ -4,10 +4,14 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy_utils import ChoiceType
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 import server_settings as server_config
 
 db = SQLAlchemy()
+
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class ChallengeStatus(enum.Enum):
   OPEN = "open"
@@ -22,7 +26,7 @@ class Challenge(db.Model):
   stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
   turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
   game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=True)  # Set when challenge is accepted
-  date = db.Column(db.DateTime, default=datetime.utcnow)
+  date = db.Column(db.DateTime, default=_utcnow)
 
   def serialize(self):
     return {
@@ -81,7 +85,7 @@ class User(db.Model):
     def serialize(self):
         is_online = self.is_ai  # AI users are always "online"
         if not is_online and self.last_active:
-            is_online = (datetime.utcnow() - self.last_active).total_seconds() < 60
+            is_online = (_utcnow() - self.last_active).total_seconds() < 60
         return {
             'id': self.id,
             'username': self.username,
@@ -108,7 +112,7 @@ class Game(db.Model):
         foreign_keys='Player.game_id'  # Specify the foreign key explicitly
     )
     state = db.Column(db.String(20), nullable=False, default='open')  # 'open' | 'finished'
-    date = db.Column(db.DateTime, default=datetime.utcnow)
+    date = db.Column(db.DateTime, default=_utcnow)
     stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
     turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
     winner_player_id = db.Column(db.Integer, nullable=True)  # Player who won the game
@@ -235,11 +239,11 @@ class Player(db.Model):
     received_messages = db.relationship('ChatMessage', foreign_keys='ChatMessage.receiver_id', backref='receiver', lazy=True)
 
     def serialize(self):
-        user = User.query.get(self.user_id)
+        user = db.session.get(User, self.user_id)
         username = user.username if user else None
         is_online = False
         if user and user.last_active:
-            is_online = (datetime.utcnow() - user.last_active).total_seconds() < 60
+            is_online = (_utcnow() - user.last_active).total_seconds() < 60
 
         # Query cards directly to avoid SQLAlchemy relationship caching issues
         main_hand_cards = MainCard.query.filter_by(
@@ -353,9 +357,9 @@ class CardToFigure(db.Model):
 
         # Fetch card details based on card type
         if self.card_type == 'main':
-            card = MainCard.query.get(self.card_id)
+            card = db.session.get(MainCard, self.card_id)
         elif self.card_type == 'side':
-            card = SideCard.query.get(self.card_id)
+            card = db.session.get(SideCard, self.card_id)
         else:
             card = None
 
@@ -393,7 +397,7 @@ class Figure(db.Model):
     cannot_be_blocked = db.Column(db.Boolean, default=False, nullable=False)  # Cannot be counter-advanced when advancing
     rest_after_attack = db.Column(db.Boolean, default=False, nullable=False)  # Must rest one round after battle
     cards = db.relationship('CardToFigure', backref='figure', lazy=True)
-    date_created = db.Column(db.DateTime, default=datetime.utcnow)
+    date_created = db.Column(db.DateTime, default=_utcnow)
 
     def serialize(self):
         return {
@@ -425,7 +429,7 @@ class LogEntry(db.Model):
     message = db.Column(db.String(500), nullable=False)  # Description of the event
     author = db.Column(db.String(80), nullable=False)  # Who logged the event (e.g., "system", "player_name")
     type = db.Column(db.String(50), nullable=False)  # Event type (e.g., "move", "draw", "figure", etc.)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)  # When the event occurred
+    timestamp = db.Column(db.DateTime, default=_utcnow)  # When the event occurred
 
     def serialize(self):
         return {
@@ -447,7 +451,7 @@ class ChatMessage(db.Model):
     sender_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)  # Sender of the message
     receiver_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)  # Receiver of the message
     message = db.Column(db.String(1000), nullable=False)  # Content of the message
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)  # When the message was sent
+    timestamp = db.Column(db.DateTime, default=_utcnow)  # When the message was sent
 
     def serialize(self):
         return {
@@ -476,7 +480,7 @@ class ActiveSpell(db.Model):
     is_pending = db.Column(db.Boolean, default=False)  # True if waiting for counter
     counterable = db.Column(db.Boolean, default=False)  # Whether this spell can be countered
     effect_data = db.Column(db.JSON, nullable=True)  # JSON data for spell-specific effects
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
     
     # Relationship to player
     caster = db.relationship('Player', foreign_keys=[player_id], backref='cast_spells')
@@ -520,7 +524,7 @@ class BattleMove(db.Model):
     value_b = db.Column(db.Integer, nullable=True)
     played_round = db.Column(db.Integer, nullable=True)  # None=in hand, 0/1/2=played in that battle round
     call_figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)  # figure called
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
 
     # Relationships
     player = db.relationship('Player', backref='battle_moves', foreign_keys=[player_id])
@@ -567,7 +571,7 @@ class GameResult(db.Model):
     stake = db.Column(db.Integer, nullable=False)  # The gold stake / point threshold
     gold_awarded = db.Column(db.Integer, nullable=False)  # Gold given to winner (2 × stake)
     rounds_played = db.Column(db.Integer, nullable=False)
-    finished_at = db.Column(db.DateTime, default=datetime.utcnow)
+    finished_at = db.Column(db.DateTime, default=_utcnow)
 
     def serialize(self):
         return {

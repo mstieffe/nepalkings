@@ -114,10 +114,10 @@ def _create_battle_draw_game(client, db, two_users, auth_headers_user1, auth_hea
     create_data = create_game.get_json()
     assert create_data.get('success') is True, create_data
 
-    game = Game.query.get(create_data['game']['id'])
+    game = db.session.get(Game, create_data['game']['id'])
     assert game is not None
 
-    invader = Player.query.get(game.invader_player_id)
+    invader = db.session.get(Player, game.invader_player_id)
     defender = next(p for p in game.players if p.id != invader.id)
     assert invader is not None
     assert defender is not None
@@ -231,7 +231,7 @@ class TestFinishBattleDraw:
         assert data.get('choice') == 'destroy'
 
         db.session.refresh(game)
-        assert Figure.query.get(extra_fig.id) is None
+        assert db.session.get(Figure, extra_fig.id) is None
         assert game.current_round == round_before + 1
         assert game.invader_player_id == defender.id
         assert game.advancing_figure_id is None
@@ -262,8 +262,8 @@ class TestFinishBattleDraw:
         invader_move = _buy_move(client, invader_headers, game.id, invader.id, invader_card)
         defender_move = _buy_move(client, defender_headers, game.id, defender.id, defender_card)
 
-        invader_bm = BattleMove.query.get(invader_move['id'])
-        defender_bm = BattleMove.query.get(defender_move['id'])
+        invader_bm = db.session.get(BattleMove, invader_move['id'])
+        defender_bm = db.session.get(BattleMove, defender_move['id'])
         invader_bm.played_round = 0
         defender_bm.played_round = 0
         db.session.commit()
@@ -289,7 +289,7 @@ class TestFinishBattleDraw:
         db.session.refresh(defender)
         db.session.refresh(invader)
 
-        picked = MainCard.query.get(invader_card.id)
+        picked = db.session.get(MainCard, invader_card.id)
         assert picked is not None
         assert picked.player_id == defender.id
         assert picked.in_deck is False

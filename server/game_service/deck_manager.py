@@ -26,8 +26,8 @@ class DeckManager:
     @staticmethod
     def return_card_to_deck(card):
         """Return a single card to the deck by updating its state in the database."""
-        from models import Game
-        game = Game.query.get(card.game_id)
+        from models import Game, db
+        game = db.session.get(Game, card.game_id)
         if not game:
             raise ValueError(f"Game with id {card.game_id} not found")
         deck = DeckManager.get_deck_for_game(game)
@@ -78,8 +78,8 @@ class DeckManager:
         game_id = cards[0].game_id
         
         # Query the game from the database
-        from models import Game
-        game = Game.query.get(game_id)
+        from models import Game, db
+        game = db.session.get(Game, game_id)
         
         if not game:
             raise ValueError(f"Game with id {game_id} not found")

@@ -7,7 +7,7 @@ Server-side spell routes for handling spell casting, countering, and management.
 import logging
 from flask import Blueprint, request, jsonify, current_app, g
 from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult
-from datetime import datetime
+from datetime import datetime, timezone
 from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
@@ -19,6 +19,10 @@ logger = logging.getLogger('nepalkings.routes.spells')
 spells = Blueprint('spells', __name__)
 
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
+
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 @spells.after_request
 def _ai_trigger_hook(response):
@@ -132,8 +136,8 @@ def cast_spell():
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
     
     # Get game and player
-    game = Game.query.get(game_id)
-    player = Player.query.get(player_id)
+    game = db.session.get(Game, game_id)
+    player = db.session.get(Player, player_id)
     
     if not game or not player:
         return jsonify({'success': False, 'message': 'Game or player not found'}), 404
@@ -297,8 +301,8 @@ def counter_spell():
     if err:
         return err
     
-    game = Game.query.get(game_id)
-    pending_spell = ActiveSpell.query.get(pending_spell_id)
+    game = db.session.get(Game, game_id)
+    pending_spell = db.session.get(ActiveSpell, pending_spell_id)
     
     if not game or not pending_spell:
         return jsonify({'success': False, 'message': 'Game or spell not found'}), 404
@@ -321,7 +325,7 @@ def counter_spell():
         game.waiting_for_counter_player_id = None
         
         # Add log entry before commit
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         _add_spell_log_entry(
             game_id, player_id, game.current_round,
             player.turns_left, counter_spell_name, 'spell_countered',
@@ -373,8 +377,8 @@ def allow_spell():
     if err:
         return err
     
-    game = Game.query.get(game_id)
-    pending_spell = ActiveSpell.query.get(pending_spell_id)
+    game = db.session.get(Game, game_id)
+    pending_spell = db.session.get(ActiveSpell, pending_spell_id)
     
     if not game or not pending_spell:
         return jsonify({'success': False, 'message': 'Game or spell not found'}), 404
@@ -393,11 +397,11 @@ def allow_spell():
         game.waiting_for_counter_player_id = None
         
         # Execute the spell
-        caster = Player.query.get(pending_spell.player_id)
+        caster = db.session.get(Player, pending_spell.player_id)
         spell_effect = _execute_spell(pending_spell, game, caster)
         
         # Add log entry before commit
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         _add_spell_log_entry(
             game_id, player_id, game.current_round,
             player.turns_left, pending_spell.spell_name, 'spell_allowed',
@@ -477,7 +481,7 @@ def get_pending_spell():
     if not spell_id:
         return jsonify({'success': False, 'message': 'spell_id required'}), 400
     
-    spell = ActiveSpell.query.get(spell_id)
+    spell = db.session.get(ActiveSpell, spell_id)
     
     if not spell:
         return jsonify({'success': False, 'message': 'Spell not found'}), 404
@@ -505,7 +509,7 @@ def remove_spell_effect():
     if not spell_id:
         return jsonify({'success': False, 'message': 'spell_id required'}), 400
     
-    spell = ActiveSpell.query.get(spell_id)
+    spell = db.session.get(ActiveSpell, spell_id)
     
     if not spell:
         return jsonify({'success': False, 'message': 'Spell not found'}), 404
@@ -514,7 +518,7 @@ def remove_spell_effect():
     if err:
         return err
 
-    game = Game.query.get(spell.game_id)
+    game = db.session.get(Game, spell.game_id)
     battle_err = _guard_spell_mutation(game, action_label='remove_spell_effect', player_id=spell.player_id)
     if battle_err:
         return battle_err
@@ -561,7 +565,7 @@ def end_infinite_hammer():
         # Expire session to get the latest ActiveSpell data with all accumulated actions
         db.session.expire_all()
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -588,7 +592,7 @@ def end_infinite_hammer():
         active_hammer.is_active = False
         
         # Decrement turns_left (Infinite Hammer consumes one turn)
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if player and player.turns_left > 0:
             player.turns_left -= 1
         
@@ -598,7 +602,7 @@ def end_infinite_hammer():
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
         
         # Create log entry
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         
         # Build action summary for log
@@ -650,14 +654,17 @@ def _validate_and_mark_spell_cards(player_id, cards_data):
         side_card_ranks = ['2', '3', '4', '5', '6']
         
         for card_data in cards_data:
-            card_id = card_data['id']
+            try:
+                card_id = int(card_data['id'])
+            except (TypeError, ValueError):
+                return False
             card_rank = card_data['rank']
             
             # Determine which table to query based on rank
             if card_rank in side_card_ranks:
-                card = SideCard.query.get(card_id)
+                card = db.session.get(SideCard, card_id)
             else:
-                card = MainCard.query.get(card_id)
+                card = db.session.get(MainCard, card_id)
             
             if not card:
                 return False
@@ -969,7 +976,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
             spell_effect['target_figure_id'] = spell.target_figure_id
             
             # Get target figure to validate it exists
-            target_figure = Figure.query.get(spell.target_figure_id)
+            target_figure = db.session.get(Figure, spell.target_figure_id)
             if not target_figure:
                 spell_effect['effect'] = 'Target figure not found'
                 spell_effect['error'] = 'Invalid target'
@@ -1043,15 +1050,15 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         # Check checkmate before deleting the figure
                         checkmate_game_over = None
                         if getattr(target_figure, 'checkmate', False) and game.state != 'finished':
-                            loser_player = Player.query.get(target_figure.player_id)
+                            loser_player = db.session.get(Player, target_figure.player_id)
                             winner_player = [p for p in game.players if p.id != loser_player.id][0]
                             stake = game.stake or settings.DEFAULT_GAME_STAKE
                             gold_awarded = stake * 2
                             game.state = 'finished'
                             game.winner_player_id = winner_player.id
-                            game.finished_at = datetime.utcnow()
-                            winner_user = User.query.get(winner_player.user_id)
-                            loser_user = User.query.get(loser_player.user_id)
+                            game.finished_at = _utcnow()
+                            winner_user = db.session.get(User, winner_player.user_id)
+                            loser_user = db.session.get(User, loser_player.user_id)
                             if winner_user:
                                 winner_user.gold += gold_awarded
                             winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
@@ -1148,7 +1155,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
         if spell.spell_name == 'Ceasefire':
             try:
                 # Give both players 3 additional turns
-                invader_player = Player.query.get(game.invader_player_id)
+                invader_player = db.session.get(Player, game.invader_player_id)
                 defender_player = next((p for p in game.players if p.id != game.invader_player_id), None)
                 
                 if not invader_player or not defender_player:
@@ -1185,7 +1192,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['effect'] = 'Failed to swap invader: opponent not found'
                     spell_effect['error'] = 'Player not found'
                 else:
-                    old_invader = Player.query.get(old_invader_id)
+                    old_invader = db.session.get(Player, old_invader_id)
                     old_invader_name = old_invader.serialize()['username'] if old_invader else 'Unknown'
                     new_invader_name = new_invader.serialize()['username']
                     
@@ -1216,7 +1223,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
         
         elif spell.spell_name in ('Civil War', 'Peasant War', 'Blitzkrieg'):
             try:
-                invader_player = Player.query.get(game.invader_player_id)
+                invader_player = db.session.get(Player, game.invader_player_id)
                 defender_player = next((p for p in game.players if p.id != game.invader_player_id), None)
                 
                 if not invader_player or not defender_player:
@@ -1230,7 +1237,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         old_invader_id = game.invader_player_id
                         game.invader_player_id = caster.id
                         # Reassign invader/defender player references after swap
-                        invader_player = Player.query.get(caster.id)
+                        invader_player = db.session.get(Player, caster.id)
                         defender_player = next((p for p in game.players if p.id != caster.id), None)
                         logger.info(f"[BLITZKRIEG] Invader swapped from player {old_invader_id} to caster {caster.id}")
                         spell_effect['invader_swapped'] = True

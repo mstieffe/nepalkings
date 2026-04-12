@@ -127,7 +127,7 @@ class TestResourceValidationDB:
         db.session.delete(fig)
         db.session.commit()
 
-        assert Figure.query.get(fig_id) is None
+        assert db.session.get(Figure, fig_id) is None
 
 
 # ---------------------------------------------------------------------------

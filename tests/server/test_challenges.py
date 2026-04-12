@@ -108,7 +108,7 @@ class TestRemoveChallenge:
             'challenge_id': str(challenge.id),
         }, headers=auth_headers_user1)
         assert resp.get_json()['success'] is True
-        assert Challenge.query.get(challenge.id) is None
+        assert db.session.get(Challenge, challenge.id) is None
 
     def test_remove_challenge_fails_when_not_participant(self, client, db, two_users, auth_headers_user1, app):
         from models import User, Challenge

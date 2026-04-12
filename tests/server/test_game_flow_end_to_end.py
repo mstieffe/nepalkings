@@ -118,10 +118,10 @@ class TestFullGameFlow:
         assert create_data.get('success') is True, create_data
 
         game_id = create_data['game']['id']
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         assert game is not None
 
-        invader = Player.query.get(game.invader_player_id)
+        invader = db.session.get(Player, game.invader_player_id)
         defender = next(p for p in game.players if p.id != invader.id)
         assert invader is not None
         assert defender is not None
@@ -428,9 +428,9 @@ class TestFullGameFlow:
 
         # Winner should own the picked loot card.
         if picked_card['card_type'] == 'side':
-            owned_card = SideCard.query.get(picked_card['id'])
+            owned_card = db.session.get(SideCard, picked_card['id'])
         else:
-            owned_card = MainCard.query.get(picked_card['id'])
+            owned_card = db.session.get(MainCard, picked_card['id'])
         assert owned_card is not None
         assert owned_card.player_id == invader.id
         assert owned_card.in_deck is False

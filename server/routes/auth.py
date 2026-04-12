@@ -7,7 +7,7 @@ import smtplib
 import functools
 import logging
 from email.mime.text import MIMEText
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, g
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
@@ -19,6 +19,10 @@ import server_settings as settings
 auth = Blueprint('auth', __name__)
 
 logger = logging.getLogger('nepalkings.routes.auth')
+
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 # ── Validation constants ──
 _USERNAME_MIN = 3
@@ -119,7 +123,7 @@ def verify_player_ownership(player_id):
     Returns a JSON error response tuple on failure, or None on success.
     Must be called inside a route protected by @require_token.
     """
-    player = Player.query.get(player_id)
+    player = db.session.get(Player, player_id)
     if not player:
         return jsonify({'success': False, 'message': 'Player not found'}), 404
     if player.user_id != g.user_id:
@@ -240,7 +244,7 @@ def register():
             email=email,
             email_verified=False,
             email_verification_token=verification_token,
-            email_verification_sent_at=datetime.utcnow() if email else None,
+            email_verification_sent_at=_utcnow() if email else None,
         )
         db.session.add(user)
         db.session.commit()
@@ -287,7 +291,7 @@ def login():
 
         # Capture the previous last_active before updating (for offline-badge detection)
         previous_last_active = user.last_active
-        user.last_active = datetime.utcnow()
+        user.last_active = _utcnow()
         db.session.commit()
 
         token = generate_token(user.id)
@@ -324,7 +328,7 @@ def verify_email():
         return jsonify({'success': False, 'message': 'Invalid or expired verification token'}), 400
 
     if user.email_verification_sent_at:
-        age = datetime.utcnow() - user.email_verification_sent_at
+        age = _utcnow() - user.email_verification_sent_at
         if age > timedelta(hours=_VERIFY_TOKEN_MAX_AGE_HOURS):
             user.email_verification_token = None
             db.session.commit()
@@ -344,10 +348,10 @@ def verify_email():
 @require_token
 def heartbeat():
     try:
-        user = User.query.get(g.user_id)
+        user = db.session.get(User, g.user_id)
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
-        user.last_active = datetime.utcnow()
+        user.last_active = _utcnow()
         db.session.commit()
         return jsonify({'success': True})
     except Exception as e:
@@ -368,7 +372,7 @@ def get_rankings():
             wins = 0
             losses = 0
             for p in player_entries:
-                game = Game.query.get(p.game_id)
+                game = db.session.get(Game, p.game_id)
                 if game and game.state == 'finished':
                     total += 1
                     if game.winner_player_id == p.id:
@@ -377,7 +381,7 @@ def get_rankings():
                         losses += 1
             is_online = False
             if user.last_active:
-                is_online = (datetime.utcnow() - user.last_active).total_seconds() < 60
+                is_online = (_utcnow() - user.last_active).total_seconds() < 60
             rankings.append({
                 'username': user.username,
                 'gold': user.gold,

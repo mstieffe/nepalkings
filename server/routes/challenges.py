@@ -15,7 +15,7 @@ logger = logging.getLogger('nepalkings.routes.challenges')
 def remove_challenge():
     try:
         challenge_id = request.form.get('challenge_id')
-        challenge = Challenge.query.get(challenge_id)
+        challenge = db.session.get(Challenge, challenge_id)
         if not challenge:
             return jsonify({'success': False, 'message': 'Challenge not found'}), 400
 
@@ -95,7 +95,7 @@ def _schedule_ai_accept(challenge_id, app):
             import logging
             logger = logging.getLogger('nepalkings.ai')
 
-            challenge = Challenge.query.get(challenge_id)
+            challenge = db.session.get(Challenge, challenge_id)
             if not challenge or challenge.status.value != 'open':
                 logger.info(f"AI auto-accept skipped: challenge {challenge_id} no longer open")
                 return

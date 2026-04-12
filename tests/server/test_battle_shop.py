@@ -266,7 +266,7 @@ class TestReturnBattleMove:
                            headers={'Authorization': f'Bearer {auth_token_bs}'})
         data = resp.get_json()
         assert data.get('success') is True
-        assert BattleMove.query.get(move_id) is None
+        assert db.session.get(BattleMove, move_id) is None
         db.session.refresh(card)
         assert card.part_of_battle_move is False
 
@@ -390,8 +390,8 @@ class TestBattlePrepFlow:
         p1_move_id = p1_move_resp.get_json()['battle_move']['id']
         p2_move_id = p2_move_resp.get_json()['battle_move']['id']
 
-        p1_move = BattleMove.query.get(p1_move_id)
-        p2_move = BattleMove.query.get(p2_move_id)
+        p1_move = db.session.get(BattleMove, p1_move_id)
+        p2_move = db.session.get(BattleMove, p2_move_id)
         p1_move.played_round = 0
 
         game.battle_confirmed = True
@@ -446,7 +446,7 @@ class TestBattlePrepFlow:
         p2_card = _get_hand_card_by_rank(db, game.id, p2.id, 'J')
         assert p2_card is not None
         p2_move = _buy_move(client, auth_token_bs_p2, game, p2, p2_card)
-        p2_move_obj = BattleMove.query.get(p2_move.get_json()['battle_move']['id'])
+        p2_move_obj = db.session.get(BattleMove, p2_move.get_json()['battle_move']['id'])
         p2_move_obj.played_round = 0
 
         game.battle_confirmed = True

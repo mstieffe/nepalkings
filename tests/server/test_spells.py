@@ -376,7 +376,7 @@ class TestPendingSpellRoutes:
         db.session.refresh(p1)
         db.session.refresh(p2)
 
-        pending_spell = ActiveSpell.query.get(pending_spell_id)
+        pending_spell = db.session.get(ActiveSpell, pending_spell_id)
         assert pending_spell is not None
         assert pending_spell.is_pending is False
         assert pending_spell.is_active is False

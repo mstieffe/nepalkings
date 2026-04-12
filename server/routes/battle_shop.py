@@ -85,11 +85,11 @@ def buy_battle_move():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-    player = Player.query.get(player_id)
+    player = db.session.get(Player, player_id)
     if not player or player.game_id != game_id:
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
 
@@ -111,9 +111,9 @@ def buy_battle_move():
 
     # Find and validate the card
     if card_type == 'side':
-        card = SideCard.query.get(card_id)
+        card = db.session.get(SideCard, card_id)
     else:
-        card = MainCard.query.get(card_id)
+        card = db.session.get(MainCard, card_id)
 
     if not card:
         return jsonify({'success': False, 'message': 'Card not found'}), 404
@@ -178,7 +178,7 @@ def return_battle_move():
     if not all([game_id, player_id, battle_move_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-    battle_move = BattleMove.query.get(battle_move_id)
+    battle_move = db.session.get(BattleMove, battle_move_id)
     if not battle_move:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
 
@@ -189,7 +189,7 @@ def return_battle_move():
     if battle_move.game_id != game_id or battle_move.player_id != player_id:
         return jsonify({'success': False, 'message': 'Battle move does not belong to this player'}), 400
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -205,9 +205,9 @@ def return_battle_move():
 
     # Un-reserve the card
     if battle_move.card_type == 'side':
-        card = SideCard.query.get(battle_move.card_id)
+        card = db.session.get(SideCard, battle_move.card_id)
     else:
-        card = MainCard.query.get(battle_move.card_id)
+        card = db.session.get(MainCard, battle_move.card_id)
 
     if card:
         card.part_of_battle_move = False
@@ -263,7 +263,7 @@ def confirm_battle_moves():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -384,7 +384,7 @@ def gamble_battle_move():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -392,7 +392,7 @@ def gamble_battle_move():
     if lock_err:
         return lock_err
 
-    player = Player.query.get(player_id)
+    player = db.session.get(Player, player_id)
     if not player or player.game_id != game_id:
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
 
@@ -436,7 +436,7 @@ def gamble_battle_move():
         return jsonify({'success': False, 'message': 'You can only gamble 3 times per battle (once per round)'}), 400
 
     # Find the battle move to sacrifice
-    bm = BattleMove.query.get(battle_move_id)
+    bm = db.session.get(BattleMove, battle_move_id)
     if not bm:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
     if bm.game_id != game_id or bm.player_id != player_id:
@@ -444,9 +444,9 @@ def gamble_battle_move():
 
     # 1. Un-reserve the sacrificed card
     if bm.card_type == 'side':
-        old_card = SideCard.query.get(bm.card_id)
+        old_card = db.session.get(SideCard, bm.card_id)
     else:
-        old_card = MainCard.query.get(bm.card_id)
+        old_card = db.session.get(MainCard, bm.card_id)
     if old_card:
         old_card.part_of_battle_move = False
 
@@ -558,7 +558,7 @@ def combine_battle_moves():
     if move_id_a == move_id_b:
         return jsonify({'success': False, 'message': 'Cannot combine a move with itself'}), 400
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -566,8 +566,8 @@ def combine_battle_moves():
     if lock_err:
         return lock_err
 
-    bm_a = BattleMove.query.get(move_id_a)
-    bm_b = BattleMove.query.get(move_id_b)
+    bm_a = db.session.get(BattleMove, move_id_a)
+    bm_b = db.session.get(BattleMove, move_id_b)
 
     if not bm_a or not bm_b:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
@@ -653,7 +653,7 @@ def dismantle_battle_move():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -661,7 +661,7 @@ def dismantle_battle_move():
     if lock_err:
         return lock_err
 
-    dd = BattleMove.query.get(battle_move_id)
+    dd = db.session.get(BattleMove, battle_move_id)
     if not dd:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
 from game_service.deck_manager import DeckManager
 from routes.auth import require_token, verify_player_ownership
@@ -17,6 +17,10 @@ logger = logging.getLogger('nepalkings.routes.games')
 games = Blueprint('games', __name__)
 
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
+
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 @games.after_request
 def _ai_trigger_hook(response):
@@ -108,7 +112,7 @@ def _check_and_update_ceasefire(game):
     if not game.ceasefire_active:
         return False
     
-    invader = Player.query.get(game.invader_player_id)
+    invader = db.session.get(Player, game.invader_player_id)
     if not invader:
         return False
 
@@ -164,7 +168,7 @@ def _check_and_update_ceasefire(game):
 
 def _is_ceasefire_active(game_id):
     """Check if ceasefire is currently active for a game."""
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return False
     return game.ceasefire_active
@@ -209,7 +213,7 @@ def _check_checkmate_loss(game, destroyed_figure):
         return None
 
     # The owner of the checkmate figure loses
-    loser_player = Player.query.get(destroyed_figure.player_id)
+    loser_player = db.session.get(Player, destroyed_figure.player_id)
     winner_player = [p for p in game.players if p.id != loser_player.id][0]
 
     return _finalize_game_over(game, winner_player, reason='checkmate',
@@ -230,12 +234,12 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
     # Mark game as finished
     game.state = 'finished'
     game.winner_player_id = winner_player.id
-    game.finished_at = datetime.utcnow()
+    game.finished_at = _utcnow()
 
     # Award gold: winner gets 2× stake, loser gets nothing (already bet their stake)
     gold_awarded = stake * 2
-    winner_user = User.query.get(winner_player.user_id)
-    loser_user = User.query.get(loser_player.user_id)
+    winner_user = db.session.get(User, winner_player.user_id)
+    loser_user = db.session.get(User, loser_player.user_id)
 
     if winner_user:
         winner_user.gold += gold_awarded
@@ -317,11 +321,11 @@ def _build_game_over_info_from_finished(game):
     stake = game.stake or settings.DEFAULT_GAME_STAKE
     gold_awarded = stake * 2
 
-    winner_player = Player.query.get(game.winner_player_id)
+    winner_player = db.session.get(Player, game.winner_player_id)
     loser_player = [p for p in game.players if p.id != winner_player.id][0]
 
-    winner_user = User.query.get(winner_player.user_id)
-    loser_user = User.query.get(loser_player.user_id)
+    winner_user = db.session.get(User, winner_player.user_id)
+    loser_user = db.session.get(User, loser_player.user_id)
 
     winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
     loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
@@ -780,7 +784,7 @@ def _get_opponent_turn_summary(game, current_player_id):
             ).order_by(ActiveSpell.id.desc()).first()
             
             if poison_spell and poison_spell.target_figure_id:
-                target_figure = Figure.query.get(poison_spell.target_figure_id)
+                target_figure = db.session.get(Figure, poison_spell.target_figure_id)
                 if target_figure and target_figure.player_id == current_player_id:
                     target_name = (poison_spell.effect_data or {}).get('target_figure_name', target_figure.name)
                     action_data['affects_player'] = True
@@ -1400,11 +1404,11 @@ def advance_figure():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
 
@@ -1430,7 +1434,7 @@ def advance_figure():
             return jsonify({'success': False, 'message': 'Cannot advance during ceasefire'}), 400
 
         # Validate figure belongs to this player
-        figure = Figure.query.get(figure_id)
+        figure = db.session.get(Figure, figure_id)
         if not figure or figure.player_id != player_id:
             return jsonify({'success': False, 'message': 'Figure not found or not yours'}), 400
 
@@ -1454,7 +1458,7 @@ def advance_figure():
 
         # Cannot counter-advance if advancing figure has cannot_be_blocked
         if is_counter_advance and game.advancing_figure_id:
-            advancing_fig = Figure.query.get(game.advancing_figure_id)
+            advancing_fig = db.session.get(Figure, game.advancing_figure_id)
             if advancing_fig and advancing_fig.cannot_be_blocked:
                 return jsonify({'success': False, 'message': 'Cannot counter-advance: opponent\'s figure cannot be blocked'}), 400
 
@@ -1478,7 +1482,7 @@ def advance_figure():
                     if figure_id == game.defending_figure_id:
                         return jsonify({'success': False, 'message': 'This figure is already selected'}), 400
                     # Second counter-advance pick — validate same color
-                    first_figure = Figure.query.get(game.defending_figure_id)
+                    first_figure = db.session.get(Figure, game.defending_figure_id)
                     if first_figure and first_figure.color != figure.color:
                         return jsonify({'success': False, 'message': 'Second figure must be the same color as the first'}), 400
                     game.defending_figure_id_2 = figure_id
@@ -1511,7 +1515,7 @@ def advance_figure():
                     if figure_id == game.advancing_figure_id:
                         return jsonify({'success': False, 'message': 'This figure is already selected'}), 400
                     # Second advance pick — validate same color
-                    first_figure = Figure.query.get(game.advancing_figure_id)
+                    first_figure = db.session.get(Figure, game.advancing_figure_id)
                     if first_figure and first_figure.color != figure.color:
                         return jsonify({'success': False, 'message': 'Second figure must be the same color as the first'}), 400
                     game.advancing_figure_id_2 = figure_id
@@ -1574,7 +1578,7 @@ def advance_figure():
             game.turn_player_id = other_player.id
 
         # Create log entry
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         action_type = 'counter_advance' if is_counter_advance else 'advance'
         pick_suffix = " (2nd Civil War pick)" if is_second_pick else ""
@@ -2057,11 +2061,11 @@ def battle_decision():
         if err:
             return err
 
-        game = Game.query.get(game_id)
+        game = db.session.get(Game, game_id)
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
 
@@ -2079,10 +2083,10 @@ def battle_decision():
         decisions = dict(game.battle_decisions) if game.battle_decisions else {}
 
         # Get player info
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         opponent = next((p for p in game.players if p.id != player_id), None)
-        opponent_user = User.query.get(opponent.user_id) if opponent else None
+        opponent_user = db.session.get(User, opponent.user_id) if opponent else None
         opponent_name = opponent_user.username if opponent_user else "Opponent"
 
         # Log the decision
@@ -2128,8 +2132,8 @@ def battle_decision():
 
             if decision == 'fold':
                 # Defender folds — invader (advancing player) wins
-                invader_player = Player.query.get(game.advancing_player_id)
-                invader_user = User.query.get(invader_player.user_id)
+                invader_player = db.session.get(Player, game.advancing_player_id)
+                invader_user = db.session.get(User, invader_player.user_id)
                 winner_name = invader_user.username if invader_user else "Invader"
                 loser_name = username
                 return _resolve_fold(game, invader_player, player, winner_name, loser_name)
@@ -2147,7 +2151,7 @@ def battle_decision():
                 game.battle_gamble_counts = None
 
                 # Auto-fill both players' hands before entering battle shop
-                invader_player = Player.query.get(game.advancing_player_id)
+                invader_player = db.session.get(Player, game.advancing_player_id)
                 defender_player = player  # current player is the defender
                 auto_fill_invader = _check_and_fill_minimum_cards(game, invader_player)
                 auto_fill_defender = _check_and_fill_minimum_cards(game, defender_player)
@@ -2391,9 +2395,9 @@ def _compute_figure_base_power(figure):
     total = 0
     for assoc in card_assocs:
         if assoc.card_type == 'main':
-            card = MainCard.query.get(assoc.card_id)
+            card = db.session.get(MainCard, assoc.card_id)
         else:
-            card = SideCard.query.get(assoc.card_id)
+            card = db.session.get(SideCard, assoc.card_id)
         if card:
             total += card.value
     return total
@@ -2453,9 +2457,9 @@ def _compute_support_bonus(figure, all_figures, game_id):
             for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
                 if assoc.role == CardRole.KEY:
                     if assoc.card_type == 'main':
-                        card = MainCard.query.get(assoc.card_id)
+                        card = db.session.get(MainCard, assoc.card_id)
                     else:
-                        card = SideCard.query.get(assoc.card_id)
+                        card = db.session.get(SideCard, assoc.card_id)
                     if card:
                         total += card.value
     return total
@@ -2519,7 +2523,7 @@ def _compute_wall_defence_total(walls):
     for f in walls:
         for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
             if assoc.card_type == 'side':
-                card = SideCard.query.get(assoc.card_id)
+                card = db.session.get(SideCard, assoc.card_id)
                 if card:
                     total += card.value
     return total
@@ -2577,7 +2581,7 @@ def _find_all_archer_da(player_id, all_figures, battle_ids, game_id):
         number_val = 0
         for assoc in assocs:
             if assoc.role == CardRole.NUMBER and assoc.card_type == 'side':
-                card = SideCard.query.get(assoc.card_id)
+                card = db.session.get(SideCard, assoc.card_id)
                 if card:
                     number_val = card.value
                     break
@@ -2585,7 +2589,7 @@ def _find_all_archer_da(player_id, all_figures, battle_ids, game_id):
             # Fallback: use any side card value (shouldn't normally happen)
             for assoc in assocs:
                 if assoc.card_type == 'side':
-                    card = SideCard.query.get(assoc.card_id)
+                    card = db.session.get(SideCard, assoc.card_id)
                     if card:
                         number_val = card.value
                         break
@@ -2672,7 +2676,7 @@ def _compute_move_effective_value(move, all_figures, game,
         call_fig = next(
             (f for f in all_figures if f.id == move.call_figure_id), None)
         if not call_fig:
-            call_fig = Figure.query.get(move.call_figure_id)
+            call_fig = db.session.get(Figure, move.call_figure_id)
         if call_fig:
             fig_power = _compute_figure_base_power(call_fig)
             healer = _compute_healer_buff(call_fig, own_healers)
@@ -2695,9 +2699,9 @@ def _compute_server_total_diff(game):
     * Wall defence only applies to the DEFENDING side
     * Block zeroes the entire round
     """
-    adv_fig = (Figure.query.get(game.advancing_figure_id)
+    adv_fig = (db.session.get(Figure, game.advancing_figure_id)
                if game.advancing_figure_id else None)
-    def_fig = (Figure.query.get(game.defending_figure_id)
+    def_fig = (db.session.get(Figure, game.defending_figure_id)
                if game.defending_figure_id else None)
     if not adv_fig or not def_fig:
         return 0
@@ -2737,14 +2741,14 @@ def _compute_server_total_diff(game):
         def_healers, def_wall_total)
 
     if game.advancing_figure_id_2:
-        f2 = Figure.query.get(game.advancing_figure_id_2)
+        f2 = db.session.get(Figure, game.advancing_figure_id_2)
         if f2:
             adv_power += _compute_figure_full_power(
                 f2, all_figures, enchant_spells,
                 def_pid, battle_ids, game.id,
                 adv_healers, 0)
     if game.defending_figure_id_2:
-        f2 = Figure.query.get(game.defending_figure_id_2)
+        f2 = db.session.get(Figure, game.defending_figure_id_2)
         if f2:
             def_power += _compute_figure_full_power(
                 f2, all_figures, enchant_spells,
@@ -2755,7 +2759,7 @@ def _compute_server_total_diff(game):
     # Build list of defender targets
     def_targets = [def_fig]
     if game.defending_figure_id_2:
-        f2 = Figure.query.get(game.defending_figure_id_2)
+        f2 = db.session.get(Figure, game.defending_figure_id_2)
         if f2:
             def_targets.append(f2)
 
@@ -2775,7 +2779,7 @@ def _compute_server_total_diff(game):
     # Build list of advancing targets
     adv_targets = [adv_fig]
     if game.advancing_figure_id_2:
-        f2 = Figure.query.get(game.advancing_figure_id_2)
+        f2 = db.session.get(Figure, game.advancing_figure_id_2)
         if f2:
             adv_targets.append(f2)
 
@@ -2872,9 +2876,9 @@ def _collect_battle_move_cards(game_id):
     for bm in moves:
         # Primary card
         if bm.card_type == 'side':
-            card = SideCard.query.get(bm.card_id)
+            card = db.session.get(SideCard, bm.card_id)
         else:
-            card = MainCard.query.get(bm.card_id)
+            card = db.session.get(MainCard, bm.card_id)
         if card:
             cards.append((card, bm.card_type))
 
@@ -2882,9 +2886,9 @@ def _collect_battle_move_cards(game_id):
         if bm.card_id_b is not None:
             ct_b = bm.card_type_b or 'main'
             if ct_b == 'side':
-                card_b = SideCard.query.get(bm.card_id_b)
+                card_b = db.session.get(SideCard, bm.card_id_b)
             else:
-                card_b = MainCard.query.get(bm.card_id_b)
+                card_b = db.session.get(MainCard, bm.card_id_b)
             if card_b:
                 cards.append((card_b, ct_b))
     return cards, moves
@@ -2901,9 +2905,9 @@ def _destroy_figure_and_collect_cards(figure):
     cards = []
     for assoc in card_assocs:
         if assoc.card_type == 'main':
-            card = MainCard.query.get(assoc.card_id)
+            card = db.session.get(MainCard, assoc.card_id)
         else:
-            card = SideCard.query.get(assoc.card_id)
+            card = db.session.get(SideCard, assoc.card_id)
         if card:
             card.part_of_figure = False
             card.player_id = None
@@ -2946,7 +2950,7 @@ def _collect_resting_figure_ids(game):
     for fig_id in (game.advancing_figure_id, game.advancing_figure_id_2,
                    game.defending_figure_id, game.defending_figure_id_2):
         if fig_id is not None:
-            fig = Figure.query.get(fig_id)
+            fig = db.session.get(Figure, fig_id)
             if fig and fig.rest_after_attack:
                 resting.append(fig_id)
     return resting or None
@@ -2973,9 +2977,9 @@ def _return_unplayed_battle_move_cards(game_id):
     for bm in unplayed:
         # Primary card
         if bm.card_type == 'side':
-            card = SideCard.query.get(bm.card_id)
+            card = db.session.get(SideCard, bm.card_id)
         else:
-            card = MainCard.query.get(bm.card_id)
+            card = db.session.get(MainCard, bm.card_id)
         if card:
             card.part_of_battle_move = False
             card.in_deck = False
@@ -2984,9 +2988,9 @@ def _return_unplayed_battle_move_cards(game_id):
         if bm.card_id_b is not None:
             ct_b = bm.card_type_b or 'main'
             if ct_b == 'side':
-                card_b = SideCard.query.get(bm.card_id_b)
+                card_b = db.session.get(SideCard, bm.card_id_b)
             else:
-                card_b = MainCard.query.get(bm.card_id_b)
+                card_b = db.session.get(MainCard, bm.card_id_b)
             if card_b:
                 card_b.part_of_battle_move = False
                 card_b.in_deck = False
@@ -3072,7 +3076,7 @@ def play_battle_move():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -3086,7 +3090,7 @@ def play_battle_move():
                         'message': "It is not your turn in the battle"}), 400
 
     # Look up the battle move
-    move = BattleMove.query.get(battle_move_id)
+    move = db.session.get(BattleMove, battle_move_id)
     if not move:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
     if move.game_id != game_id or move.player_id != player_id:
@@ -3103,9 +3107,9 @@ def play_battle_move():
     # accidentally sacrificed / auto-removed while the battle continues.
     # The card stays in the DB (in_deck=True) for post-battle resolution.
     if move.card_type == 'side':
-        card = SideCard.query.get(move.card_id)
+        card = db.session.get(SideCard, move.card_id)
     else:
-        card = MainCard.query.get(move.card_id)
+        card = db.session.get(MainCard, move.card_id)
     if card:
         card.in_deck = True
 
@@ -3113,9 +3117,9 @@ def play_battle_move():
     if move.card_id_b is not None:
         ct_b = move.card_type_b or 'main'
         if ct_b == 'side':
-            card_b = SideCard.query.get(move.card_id_b)
+            card_b = db.session.get(SideCard, move.card_id_b)
         else:
-            card_b = MainCard.query.get(move.card_id_b)
+            card_b = db.session.get(MainCard, move.card_id_b)
         if card_b:
             card_b.in_deck = True
 
@@ -3149,8 +3153,8 @@ def play_battle_move():
     db.session.commit()
 
     # Log the battle move
-    player = Player.query.get(player_id)
-    user = User.query.get(player.user_id) if player else None
+    player = db.session.get(Player, player_id)
+    user = db.session.get(User, player.user_id) if player else None
     username = user.username if user else f"Player {player_id}"
     log_entry = LogEntry(
         game_id=game_id,
@@ -3192,7 +3196,7 @@ def get_battle_state():
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -3249,7 +3253,7 @@ def skip_battle_turn():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -3309,8 +3313,8 @@ def skip_battle_turn():
     db.session.commit()
 
     # Log the battle skip
-    player_obj = Player.query.get(player_id)
-    user = User.query.get(player_obj.user_id) if player_obj else None
+    player_obj = db.session.get(Player, player_id)
+    user = db.session.get(User, player_obj.user_id) if player_obj else None
     username = user.username if user else f"Player {player_id}"
     skip_round = skipped[pid_key][-1]
     log_entry = LogEntry(
@@ -3370,7 +3374,7 @@ def finish_battle():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -3382,8 +3386,8 @@ def finish_battle():
 
     # Idempotency: if battle was already resolved by the other client
     # (figures destroyed, fold_winner_id set), return the cached result.
-    adv_figure = Figure.query.get(game.advancing_figure_id) if game.advancing_figure_id else None
-    def_figure = Figure.query.get(game.defending_figure_id) if game.defending_figure_id else None
+    adv_figure = db.session.get(Figure, game.advancing_figure_id) if game.advancing_figure_id else None
+    def_figure = db.session.get(Figure, game.defending_figure_id) if game.defending_figure_id else None
 
     if (not adv_figure or not def_figure) and game.fold_winner_id:
         logger.info(f"[FINISH_BATTLE] Battle already resolved for game {game_id} (figure destroyed)")
@@ -3407,9 +3411,9 @@ def finish_battle():
             all_cards = bm_cards + [(c, 'main') for c in orphaned_main] + [(c, 'side') for c in orphaned_side]
             returnable_cards = [_serialize_battle_card(c, ct) for c, ct in all_cards]
 
-        other_user = User.query.get(other_player.user_id)
+        other_user = db.session.get(User, other_player.user_id)
         other_name = other_user.username if other_user else f"Player {other_player.id}"
-        player_user_inner = User.query.get(player.user_id)
+        player_user_inner = db.session.get(User, player.user_id)
         player_name_inner = player_user_inner.username if player_user_inner else f"Player {player_id}"
 
         saved = game.last_battle_result or {}
@@ -3434,9 +3438,9 @@ def finish_battle():
         # already-resolved response so the second client can show the result.
         saved = game.last_battle_result or {}
 
-        player_user_fb = User.query.get(player.user_id)
+        player_user_fb = db.session.get(User, player.user_id)
         player_name_fb = player_user_fb.username if player_user_fb else f"Player {player_id}"
-        other_user_fb = User.query.get(other_player.user_id)
+        other_user_fb = db.session.get(User, other_player.user_id)
         other_name_fb = other_user_fb.username if other_user_fb else f"Player {other_player.id}"
 
         # Use saved result if available, otherwise infer from invader status
@@ -3500,12 +3504,12 @@ def finish_battle():
         loser_figure = opponent_figure if total_diff > 0 else player_figure
 
     # Get user names
-    winner_user = User.query.get(winner_player.user_id)
-    loser_user = User.query.get(loser_player.user_id)
+    winner_user = db.session.get(User, winner_player.user_id)
+    loser_user = db.session.get(User, loser_player.user_id)
     winner_name = winner_user.username if winner_user else f"Player {winner_player.id}"
     loser_name = loser_user.username if loser_user else f"Player {loser_player.id}"
 
-    player_user = User.query.get(player.user_id)
+    player_user = db.session.get(User, player.user_id)
     player_name = player_user.username if player_user else f"Player {player_id}"
 
     # Return unplayed battle move cards to their owners (only played
@@ -3557,7 +3561,7 @@ def finish_battle():
             # loser is invader → loser_figure_2 is advancing_figure_id_2
             loser_fig_2_id = game.advancing_figure_id_2 if total_diff > 0 else game.defending_figure_id_2
         if loser_fig_2_id:
-            loser_figure_2 = Figure.query.get(loser_fig_2_id)
+            loser_figure_2 = db.session.get(Figure, loser_fig_2_id)
         if loser_figure_2:
             points_awarded += _compute_figure_base_power(loser_figure_2)
 
@@ -3689,7 +3693,7 @@ def finish_battle_pick_card():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -3717,9 +3721,9 @@ def finish_battle_pick_card():
     picked_card_info = None
     if picked_card_id:
         if picked_card_type == 'side':
-            picked = SideCard.query.get(picked_card_id)
+            picked = db.session.get(SideCard, picked_card_id)
         else:
-            picked = MainCard.query.get(picked_card_id)
+            picked = db.session.get(MainCard, picked_card_id)
         if picked and picked.game_id == game_id:
             picked_card_info = {
                 'suit': picked.suit.value,
@@ -3787,7 +3791,7 @@ def finish_battle_pick_card():
 
     # Read the actual winner BEFORE _clear_battle_state clears fold_winner_id
     winner_id = game.fold_winner_id
-    winner = Player.query.get(winner_id) if winner_id else player
+    winner = db.session.get(Player, winner_id) if winner_id else player
     if not winner or winner.game_id != game_id:
         winner = player  # fallback
 
@@ -3854,7 +3858,7 @@ def finish_battle_draw():
     if err:
         return err
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
@@ -3864,14 +3868,14 @@ def finish_battle_draw():
 
     other_player = [p for p in game.players if p.id != player_id][0]
 
-    player_user = User.query.get(player.user_id)
-    other_user = User.query.get(other_player.user_id)
+    player_user = db.session.get(User, player.user_id)
+    other_user = db.session.get(User, other_player.user_id)
     player_name = player_user.username if player_user else f"Player {player_id}"
     other_name = other_user.username if other_user else f"Player {other_player.id}"
 
     # Determine opponent's figure (the invader's figure, since player is defender)
-    opponent_figure = Figure.query.get(game.advancing_figure_id) if game.advancing_figure_id else None
-    opponent_figure_2 = Figure.query.get(game.advancing_figure_id_2) if game.advancing_figure_id_2 else None
+    opponent_figure = db.session.get(Figure, game.advancing_figure_id) if game.advancing_figure_id else None
+    opponent_figure_2 = db.session.get(Figure, game.advancing_figure_id_2) if game.advancing_figure_id_2 else None
 
     result_msg = ""
 
@@ -3921,9 +3925,9 @@ def finish_battle_draw():
         # Pick one card from the battle move cards
         if picked_card_id:
             if picked_card_type == 'side':
-                picked = SideCard.query.get(picked_card_id)
+                picked = db.session.get(SideCard, picked_card_id)
             else:
-                picked = MainCard.query.get(picked_card_id)
+                picked = db.session.get(MainCard, picked_card_id)
             if picked and picked.game_id == game_id:
                 picked.player_id = player_id
                 picked.in_deck = False
