@@ -112,3 +112,121 @@ def test_best_figure_targets_returns_capped_non_impossible_targets():
 
     assert len(targets) <= 3
     assert all(t['impossible'] is False for t in targets)
+
+
+def test_best_figure_targets_forwards_draw_limits_to_estimator(monkeypatch):
+    captured = {}
+
+    def fake_estimate(
+        game_dict,
+        ai_player_id,
+        remaining_turns=None,
+        max_main_draws_per_turn=2,
+        max_side_draws_per_turn=1,
+    ):
+        captured['game_id'] = game_dict.get('id')
+        captured['ai_player_id'] = ai_player_id
+        captured['remaining_turns'] = remaining_turns
+        captured['max_main_draws_per_turn'] = max_main_draws_per_turn
+        captured['max_side_draws_per_turn'] = max_side_draws_per_turn
+        return [
+            {
+                'impossible': False,
+                'resource_blocked': False,
+                'build_now': False,
+                'name': 'Small Rice Farm',
+                'suit': 'Hearts',
+            }
+        ]
+
+    monkeypatch.setattr('ai.figure_completion.estimate_figure_completion', fake_estimate)
+
+    game = _base_game_dict()
+    targets = best_figure_targets(
+        game,
+        AI_ID,
+        remaining_turns=4,
+        max_results=3,
+        max_main_draws_per_turn=7,
+        max_side_draws_per_turn=3,
+    )
+
+    assert len(targets) == 1
+    assert captured['game_id'] == 50
+    assert captured['ai_player_id'] == AI_ID
+    assert captured['remaining_turns'] == 4
+    assert captured['max_main_draws_per_turn'] == 7
+    assert captured['max_side_draws_per_turn'] == 3
+
+
+def test_estimate_figure_completion_adapts_draw_rate_from_hand_quality():
+    game_low_quality = _base_game_dict()
+    game_low_quality['players'][0]['main_hand'] = [
+        {'id': 31, 'rank': '2', 'suit': 'Clubs', 'value': 2, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 32, 'rank': '3', 'suit': 'Spades', 'value': 3, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 33, 'rank': '4', 'suit': 'Diamonds', 'value': 4, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 34, 'rank': '5', 'suit': 'Clubs', 'value': 5, 'part_of_figure': False, 'part_of_battle_move': False},
+    ]
+    game_low_quality['main_cards'] = [
+        {'rank': 'J', 'suit': 'Hearts', 'in_deck': True},
+        {'rank': '10', 'suit': 'Hearts', 'in_deck': True},
+        {'rank': '9', 'suit': 'Hearts', 'in_deck': True},
+    ]
+
+    low_estimates = estimate_figure_completion(game_low_quality, AI_ID, max_main_draws_per_turn=2)
+    low_rice_farm = _find_estimate(low_estimates, 'Small Rice Farm', 'Hearts')
+
+    game_high_quality = _base_game_dict()
+    game_high_quality['players'][0]['main_hand'] = [
+        {'id': 41, 'rank': 'A', 'suit': 'Hearts', 'value': 14, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 42, 'rank': 'K', 'suit': 'Hearts', 'value': 13, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 43, 'rank': 'Q', 'suit': 'Hearts', 'value': 12, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 44, 'rank': 'J', 'suit': 'Clubs', 'value': 11, 'part_of_figure': False, 'part_of_battle_move': False},
+    ]
+    game_high_quality['main_cards'] = list(game_low_quality['main_cards'])
+
+    high_estimates = estimate_figure_completion(game_high_quality, AI_ID, max_main_draws_per_turn=2)
+    high_rice_farm = _find_estimate(high_estimates, 'Small Rice Farm', 'Hearts')
+
+    assert low_rice_farm['assumed_main_draws_per_turn'] == 2
+    assert high_rice_farm['assumed_main_draws_per_turn'] == 1
+
+
+def test_estimate_figure_completion_scales_main_draw_cap_with_large_hand():
+    game = _base_game_dict()
+    game['players'][0]['main_hand'] = [
+        {
+            'id': 100 + idx,
+            'rank': rank,
+            'suit': suit,
+            'value': value,
+            'part_of_figure': False,
+            'part_of_battle_move': False,
+        }
+        for idx, (rank, suit, value) in enumerate(
+            [
+                ('2', 'Clubs', 2),
+                ('3', 'Spades', 3),
+                ('4', 'Diamonds', 4),
+                ('5', 'Clubs', 5),
+                ('6', 'Spades', 6),
+                ('7', 'Diamonds', 7),
+                ('8', 'Clubs', 8),
+                ('2', 'Spades', 2),
+                ('3', 'Diamonds', 3),
+                ('4', 'Clubs', 4),
+                ('5', 'Spades', 5),
+                ('6', 'Diamonds', 6),
+            ]
+        )
+    ]
+    game['main_cards'] = [
+        {'rank': 'J', 'suit': 'Hearts', 'in_deck': True},
+        {'rank': '10', 'suit': 'Hearts', 'in_deck': True},
+        {'rank': '9', 'suit': 'Hearts', 'in_deck': True},
+    ]
+
+    estimates = estimate_figure_completion(game, AI_ID, max_main_draws_per_turn=2)
+    rice_farm = _find_estimate(estimates, 'Small Rice Farm', 'Hearts')
+
+    assert rice_farm['assumed_main_draws_per_turn'] > 2

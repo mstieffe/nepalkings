@@ -48,6 +48,38 @@ def msg_game(db):
 
 
 @pytest.fixture
+def msg_ai_game(db):
+    from game_service.deck import Deck
+    from models import Game, Player, User
+    from werkzeug.security import generate_password_hash
+
+    human = User(username='msg_human_ai', password_hash=generate_password_hash('p'), gold=120)
+    ai_user = User(username='[AI] msg_bot', password_hash=generate_password_hash('p'), gold=120, is_ai=True)
+    db.session.add_all([human, ai_user])
+    db.session.commit()
+
+    game = Game(current_round=1, stake=35)
+    db.session.add(game)
+    db.session.commit()
+
+    p_human = Player(user_id=human.id, game_id=game.id, turns_left=6, points=0)
+    p_ai = Player(user_id=ai_user.id, game_id=game.id, turns_left=6, points=0)
+    db.session.add_all([p_human, p_ai])
+    db.session.commit()
+
+    game.turn_player_id = p_human.id
+    game.invader_player_id = p_human.id
+    db.session.commit()
+
+    deck = Deck(game)
+    deck.create()
+    deck.shuffle()
+    deck.deal_cards([p_human, p_ai], num_main_cards=12, num_side_cards=0)
+
+    return game, p_human, p_ai
+
+
+@pytest.fixture
 def msg_token_p1(app, msg_game):
     from routes.auth import generate_token
 
@@ -61,6 +93,14 @@ def msg_token_p2(app, msg_game):
 
     _, _, p2 = msg_game
     return generate_token(p2.user_id)
+
+
+@pytest.fixture
+def msg_token_human_vs_ai(app, msg_ai_game):
+    from routes.auth import generate_token
+
+    _, p_human, _ = msg_ai_game
+    return generate_token(p_human.user_id)
 
 
 class TestChatMessages:
@@ -116,6 +156,52 @@ class TestChatMessages:
         assert get_data['chat_messages'][0]['sender_id'] == p1.id
         assert get_data['chat_messages'][0]['receiver_id'] == p2.id
         assert len(get_data['chat_messages'][0]['message']) == 1000
+
+    def test_add_chat_message_to_ai_explain_command_appends_ai_auto_messages(
+        self,
+        client,
+        msg_ai_game,
+        msg_token_human_vs_ai,
+        monkeypatch,
+    ):
+        game, p_human, p_ai = msg_ai_game
+
+        monkeypatch.setattr(
+            'ai.ai_worker.handle_explain_chat_control',
+            lambda **_kwargs: [
+                'Explain settings updated. cadence=turn, depth=extensive.',
+                'Tactical explain (manual, extensive): Candidate 1: advance strongest.',
+            ],
+        )
+
+        add_resp = client.post(
+            '/msg/add_chat_message',
+            data=json.dumps(
+                {
+                    'game_id': game.id,
+                    'sender_id': p_human.id,
+                    'receiver_id': p_ai.id,
+                    'message': 'explain yourself mode turn depth extensive',
+                }
+            ),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {msg_token_human_vs_ai}'},
+        )
+        add_data = add_resp.get_json()
+
+        assert add_data.get('success') is True
+        assert len(add_data.get('ai_auto_messages') or []) == 2
+        assert all(m['sender_id'] == p_ai.id for m in add_data['ai_auto_messages'])
+        assert all(m['receiver_id'] == p_human.id for m in add_data['ai_auto_messages'])
+
+        get_resp = client.get(f'/msg/get_chat_messages?game_id={game.id}')
+        get_data = get_resp.get_json()
+
+        assert get_data.get('success') is True
+        assert len(get_data['chat_messages']) == 3
+        sender_ids = [m['sender_id'] for m in get_data['chat_messages']]
+        assert sender_ids.count(p_human.id) == 1
+        assert sender_ids.count(p_ai.id) == 2
 
 
 class TestLogEntries:

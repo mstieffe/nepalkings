@@ -164,6 +164,8 @@ def _estimate_target_figure_for_action(
                 'power_estimate': est_power,
                 'completion_probability': target.get('completion_probability', 0.0),
                 'resource_blocked': target.get('resource_blocked', False),
+                'assumed_main_draws_per_turn': target.get('assumed_main_draws_per_turn'),
+                'assumed_side_draws_per_turn': target.get('assumed_side_draws_per_turn'),
             }
 
     if top_targets:
@@ -177,6 +179,8 @@ def _estimate_target_figure_for_action(
             'power_estimate': _estimate_recipe_power(t),
             'completion_probability': t.get('completion_probability', 0.0),
             'resource_blocked': t.get('resource_blocked', False),
+            'assumed_main_draws_per_turn': t.get('assumed_main_draws_per_turn'),
+            'assumed_side_draws_per_turn': t.get('assumed_side_draws_per_turn'),
         }
 
     current_figs = ai_player.get('figures', [])
@@ -356,6 +360,8 @@ def generate_strategy_plans(
         ai_player_id,
         remaining_turns=horizon_turns,
         max_results=max(6, max_plans),
+        max_main_draws_per_turn=max_main_draws_per_turn,
+        max_side_draws_per_turn=max_side_draws_per_turn,
     )
     opponent_snapshot = build_opponent_belief_snapshot(game_dict, ai_player_id)
     likely_opp = (opponent_snapshot.get('likely_battle_figures') or [None])[0]

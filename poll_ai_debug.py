@@ -12,12 +12,16 @@ Usage examples:
 
 3) Poll every 2 seconds and print full snapshots:
    python poll_ai_debug.py --username alice --password secret --interval 2 --show-all
+
+4) Show verbose per-candidate plan details:
+    python poll_ai_debug.py --username alice --password secret --show-candidates --verbose
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from typing import Any
@@ -30,8 +34,23 @@ def _fail(msg: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
+def _connection_hint(url: str) -> str:
+    """Return a short actionable hint for connection failures."""
+    lower = str(url or "").lower()
+    if "localhost" in lower or "127.0.0.1" in lower:
+        return (
+            "No server is listening on localhost. Start a local server, or use "
+            "--server-url https://nepalkings.pythonanywhere.com"
+        )
+    return "Check that the server is reachable and the URL is correct"
+
+
 def _post_form(url: str, data: dict[str, Any], timeout: float) -> dict[str, Any]:
-    resp = requests.post(url, data=data, timeout=timeout)
+    try:
+        resp = requests.post(url, data=data, timeout=timeout)
+    except requests.exceptions.RequestException as exc:
+        _fail(f"Connection failed for {url}: {exc}. {_connection_hint(url)}")
+
     try:
         payload = resp.json()
     except Exception:
@@ -45,7 +64,11 @@ def _post_form(url: str, data: dict[str, Any], timeout: float) -> dict[str, Any]
 
 
 def _get_json(url: str, params: dict[str, Any] | None, headers: dict[str, str], timeout: float) -> dict[str, Any]:
-    resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+    except requests.exceptions.RequestException as exc:
+        _fail(f"Connection failed for {url}: {exc}. {_connection_hint(url)}")
+
     try:
         payload = resp.json()
     except Exception:
@@ -103,6 +126,91 @@ def select_game_id(games: list[dict[str, Any]]) -> int:
         _fail("Could not determine game id from get_games response")
 
 
+def _latest_candidate_summaries(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
+    """Return the newest candidate summaries from planner events, if present."""
+    for event in reversed(events or []):
+        if not isinstance(event, dict):
+            continue
+        candidates = event.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            return candidates, str(event.get("type") or "unknown")
+    return [], None
+
+
+def _format_candidate_verbose_lines(candidate: dict[str, Any]) -> list[str]:
+    """Render full candidate details for human-friendly verbose output."""
+    lines: list[str] = []
+
+    strategy = candidate.get("strategy_name")
+    if strategy:
+        lines.append(f"      strategy: {strategy}")
+
+    expected_power_diff = candidate.get("expected_power_diff")
+    expected_bm_power = candidate.get("expected_battle_move_power")
+    lines.append(
+        "      expected: "
+        f"power_diff={expected_power_diff} "
+        f"battle_move_power={expected_bm_power}"
+    )
+
+    planned_figure = candidate.get("planned_battle_figure")
+    if isinstance(planned_figure, dict) and planned_figure:
+        lines.append(
+            "      planned_figure: "
+            f"{planned_figure.get('name')} ({planned_figure.get('field')}, "
+            f"state={planned_figure.get('state')}, "
+            f"power~{planned_figure.get('power_estimate')})"
+        )
+        if (
+            planned_figure.get('assumed_main_draws_per_turn') is not None
+            or planned_figure.get('assumed_side_draws_per_turn') is not None
+        ):
+            lines.append(
+                "      assumed_draws_per_turn: "
+                f"main={planned_figure.get('assumed_main_draws_per_turn')} "
+                f"side={planned_figure.get('assumed_side_draws_per_turn')}"
+            )
+
+    likely_opp = candidate.get("likely_opponent_figure")
+    if isinstance(likely_opp, dict) and likely_opp:
+        lines.append(
+            "      likely_opponent: "
+            f"{likely_opp.get('name')} "
+            f"(power~{likely_opp.get('power_estimate')}, p={likely_opp.get('probability')})"
+        )
+
+    planned_moves = candidate.get("planned_battle_moves")
+    if isinstance(planned_moves, list) and planned_moves:
+        move_text = ", ".join(
+            f"{m.get('rank')}{str(m.get('suit') or '')[:1]}({m.get('value')})"
+            for m in planned_moves
+            if isinstance(m, dict)
+        )
+        if move_text:
+            lines.append(f"      planned_moves: {move_text}")
+
+    score_breakdown = candidate.get("score_breakdown")
+    if isinstance(score_breakdown, dict) and score_breakdown:
+        breakdown_text = ", ".join(
+            f"{k}={v}"
+            for k, v in score_breakdown.items()
+        )
+        lines.append(f"      score_breakdown: {breakdown_text}")
+
+    turn_steps = candidate.get("turn_steps")
+    if isinstance(turn_steps, list) and turn_steps:
+        lines.append("      turn_steps:")
+        for idx, step in enumerate(turn_steps, start=1):
+            lines.append(f"        {idx}. {step}")
+
+    notes = candidate.get("notes")
+    if isinstance(notes, list) and notes:
+        for note in notes:
+            lines.append(f"      note: {note}")
+
+    return lines
+
+
 def fetch_ai_debug(
     server_url: str,
     token: str,
@@ -127,7 +235,11 @@ def fetch_ai_debug(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Poll AI reasoning and planner rollout telemetry")
-    parser.add_argument("--server-url", default="http://localhost:5000", help="Base server URL")
+    parser.add_argument(
+        "--server-url",
+        default=os.getenv("POLL_AI_SERVER_URL", "https://nepalkings.pythonanywhere.com"),
+        help="Base server URL",
+    )
     parser.add_argument("--username", required=True, help="Human username")
     parser.add_argument("--password", help="Human password (required if --token not provided)")
     parser.add_argument("--token", help="Existing bearer token (skips login)")
@@ -138,7 +250,20 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=8.0, help="HTTP timeout in seconds")
     parser.add_argument("--once", action="store_true", help="Fetch one snapshot and exit")
     parser.add_argument("--show-all", action="store_true", help="Print full JSON each poll")
+    parser.add_argument(
+        "--show-candidates",
+        action="store_true",
+        help="Print compact planner candidate summaries when available",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="When showing candidates, print full candidate details",
+    )
     args = parser.parse_args()
+
+    if args.verbose:
+        args.show_candidates = True
 
     server_url = args.server_url.rstrip("/")
     token = args.token
@@ -188,6 +313,28 @@ def main() -> None:
                     print(f"  latest_note: {note}")
                 if event is not None:
                     print(f"  latest_event: {json.dumps(event, ensure_ascii=True)}")
+                if args.show_candidates:
+                    candidates, source_event_type = _latest_candidate_summaries(events)
+                    if candidates:
+                        print(f"  candidates ({len(candidates)}) from {source_event_type}:")
+                        for cand in candidates:
+                            print(
+                                "    - "
+                                f"plan={cand.get('plan_id')} "
+                                f"action={cand.get('seed_action_id')} "
+                                f"score={cand.get('total_score')} "
+                                f"feas={cand.get('feasibility_probability')} "
+                                f"type={cand.get('action_type')}"
+                            )
+                            if cand.get("action_description"):
+                                print(f"      action_desc: {cand.get('action_description')}")
+                            if cand.get("step_preview"):
+                                print(f"      step_preview: {cand.get('step_preview')}")
+                            if args.verbose:
+                                for line in _format_candidate_verbose_lines(cand):
+                                    print(line)
+                    else:
+                        print("  candidates: none yet")
             else:
                 print(f"[{stamp}] no change (notes={len(notes)}, events={len(events)})")
 

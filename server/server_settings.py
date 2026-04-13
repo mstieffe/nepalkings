@@ -82,6 +82,8 @@ AI_CHAT_LLM_MAX_TOKENS = int(os.getenv('AI_CHAT_LLM_MAX_TOKENS', '90'))
 # Strategy planner (bounded multi-turn planning context for the LLM)
 AI_STRATEGY_PLANNER_ENABLED = os.getenv('AI_STRATEGY_PLANNER_ENABLED', 'True').lower() == 'true'
 AI_STRATEGY_PLANNER_MAX_PLANS = int(os.getenv('AI_STRATEGY_PLANNER_MAX_PLANS', '5'))
+# Base per-turn draw caps used by planner heuristics. Effective assumed draws
+# can scale higher with larger free hands via adaptive cap logic.
 AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN = int(os.getenv('AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', '2'))
 AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN = int(os.getenv('AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', '1'))
 AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK = (

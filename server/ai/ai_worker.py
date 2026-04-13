@@ -19,6 +19,7 @@ from ai import get_ai_auth_headers
 from ai.llm_client import LLMClient, parse_action_response
 from ai.game_state import serialize_game_for_llm
 from ai.action_enum import detect_phase, enumerate_actions, format_actions_for_llm
+from ai.card_change_strategy import select_main_cards_to_swap, summarize_main_change
 from ai.strategy_planner import (
     format_strategy_plans_for_prompt,
     generate_strategy_plans,
@@ -53,6 +54,8 @@ _planner_events_lock = threading.Lock()
 _MAX_PLANNER_EVENTS_PER_GAME = 80
 # Per-game chat cadence state for AI flavor messages
 _ai_chat_states = {}  # game_id -> {'count': int, 'last_sent_at': float, 'last_turn_marker': tuple}
+# Per-game tactical explain preferences configured via chat commands.
+_ai_explain_states = {}  # game_id -> {'mode': str, 'depth': str, 'last_marker': tuple | None}
 _ai_chat_lock = threading.Lock()
 
 # Phase-specific LLM temperatures — lower = more deterministic for math-heavy decisions
@@ -72,6 +75,38 @@ AI_CHAT_SYSTEM_PROMPT = (
     "Write exactly one short in-character chat line. "
     "Return only plain message text, with no JSON, no markdown, no labels, and no explanations."
 )
+
+_AI_EXPLAIN_DEFAULT_MODE = 'off'
+_AI_EXPLAIN_DEFAULT_DEPTH = 'standard'
+
+_AI_EXPLAIN_MODE_ALIASES = {
+    'off': 'off',
+    'disable': 'off',
+    'disabled': 'off',
+    'stop': 'off',
+    'manual': 'manual',
+    'ondemand': 'manual',
+    'on_demand': 'manual',
+    'turn': 'turn',
+    'turns': 'turn',
+    'battle': 'battle',
+    'combat': 'battle',
+}
+
+_AI_EXPLAIN_DEPTH_ALIASES = {
+    'brief': 'brief',
+    'short': 'brief',
+    'quick': 'brief',
+    'standard': 'standard',
+    'normal': 'standard',
+    'default': 'standard',
+    'detailed': 'detailed',
+    'detail': 'detailed',
+    'deep': 'detailed',
+    'extensive': 'extensive',
+    'verbose': 'extensive',
+    'full': 'extensive',
+}
 
 
 def _get_llm_client():
@@ -104,6 +139,90 @@ def _record_planner_event(game_id, event_type, payload=None):
         _planner_events[game_id].append(event)
         if len(_planner_events[game_id]) > _MAX_PLANNER_EVENTS_PER_GAME:
             _planner_events[game_id] = _planner_events[game_id][-_MAX_PLANNER_EVENTS_PER_GAME:]
+
+
+def _planner_candidate_summaries(plans, actions, max_candidates=5):
+    """Return JSON-safe candidate summaries for telemetry events.
+
+    Includes compact headline fields and verbose plan details so operators can
+    inspect full candidate content via debug tooling when needed.
+    """
+    if not plans:
+        return []
+
+    try:
+        max_candidates = max(1, min(int(max_candidates), 20))
+    except (TypeError, ValueError):
+        max_candidates = 5
+
+    def _clip(text, max_len=140):
+        msg = str(text or '').replace('\n', ' ').replace('\r', ' ')
+        msg = ' '.join(msg.split())
+        if len(msg) <= max_len:
+            return msg
+        return msg[: max_len - 3] + '...'
+
+    action_by_id = {}
+    for action in actions or []:
+        try:
+            aid = int(action.get('id'))
+        except (TypeError, ValueError):
+            continue
+        action_by_id[aid] = action
+
+    summaries = []
+    for plan in (plans or [])[:max_candidates]:
+        raw_action_id = plan.get('seed_action_id')
+        try:
+            seed_action_id = int(raw_action_id)
+        except (TypeError, ValueError):
+            seed_action_id = raw_action_id
+
+        matched_action = action_by_id.get(seed_action_id) if isinstance(seed_action_id, int) else None
+        steps = plan.get('turn_steps') or []
+        step_preview = _clip(' | '.join(str(s) for s in steps[:2]), 180)
+        planned_moves = plan.get('planned_battle_moves') or []
+        if not isinstance(planned_moves, list):
+            planned_moves = []
+
+        planned_figure = plan.get('planned_battle_figure')
+        if not isinstance(planned_figure, dict):
+            planned_figure = None
+
+        likely_opp = plan.get('likely_opponent_figure')
+        if not isinstance(likely_opp, dict):
+            likely_opp = None
+
+        score_breakdown = plan.get('score_breakdown') or {}
+        if not isinstance(score_breakdown, dict):
+            score_breakdown = {}
+
+        notes = plan.get('notes') or []
+        if not isinstance(notes, list):
+            notes = []
+
+        summaries.append(
+            {
+                'plan_id': plan.get('plan_id'),
+                'seed_action_id': seed_action_id,
+                'strategy_name': plan.get('strategy_name'),
+                'action_type': (matched_action or {}).get('type'),
+                'action_description': _clip((matched_action or {}).get('description'), 120),
+                'total_score': plan.get('total_score'),
+                'feasibility_probability': plan.get('feasibility_probability'),
+                'expected_power_diff': plan.get('expected_power_diff'),
+                'expected_battle_move_power': plan.get('expected_battle_move_power'),
+                'step_preview': step_preview,
+                'turn_steps': [str(s) for s in steps],
+                'planned_battle_moves': planned_moves,
+                'planned_battle_figure': planned_figure,
+                'likely_opponent_figure': likely_opp,
+                'score_breakdown': score_breakdown,
+                'notes': [str(n) for n in notes],
+            }
+        )
+
+    return summaries
 
 
 def get_ai_debug_snapshot(game_id, max_notes=20, max_events=40):
@@ -318,6 +437,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                         _planner_events.pop(game_id, None)
                     with _ai_chat_lock:
                         _ai_chat_states.pop(game_id, None)
+                        _ai_explain_states.pop(game_id, None)
                     break
                 
                 game_dict = game.serialize()
@@ -548,6 +668,351 @@ def _compress_text(text, max_len=180):
     if len(msg) <= max_len:
         return msg
     return msg[:max_len - 3] + '...'
+
+
+def _default_explain_state():
+    """Return default explain settings for a game."""
+    return {
+        'mode': _AI_EXPLAIN_DEFAULT_MODE,
+        'depth': _AI_EXPLAIN_DEFAULT_DEPTH,
+        'last_marker': None,
+    }
+
+
+def _get_explain_state(game_id):
+    """Read explain settings for a game, initializing defaults if needed."""
+    with _ai_chat_lock:
+        state = _ai_explain_states.get(game_id)
+        if not isinstance(state, dict):
+            state = _default_explain_state()
+            _ai_explain_states[game_id] = state
+        return dict(state)
+
+
+def _parse_explain_chat_directive(message):
+    """Parse explain-mode command phrases from player chat text."""
+    text = str(message or '').strip()
+    lowered = text.lower()
+    is_explain = 'explain' in lowered or 'analysis mode' in lowered
+    if not is_explain:
+        return {
+            'is_explain': False,
+            'mode': None,
+            'depth': None,
+            'manual_request': False,
+            'help_requested': False,
+        }
+
+    tokens = re.findall(r'[a-z0-9_]+', lowered)
+    mode = None
+    depth = None
+
+    for idx, token in enumerate(tokens):
+        if token == 'mode' and idx + 1 < len(tokens):
+            mode = _AI_EXPLAIN_MODE_ALIASES.get(tokens[idx + 1], mode)
+        elif token in _AI_EXPLAIN_MODE_ALIASES:
+            mode = _AI_EXPLAIN_MODE_ALIASES[token]
+
+        if token == 'depth' and idx + 1 < len(tokens):
+            depth = _AI_EXPLAIN_DEPTH_ALIASES.get(tokens[idx + 1], depth)
+        elif token in _AI_EXPLAIN_DEPTH_ALIASES:
+            depth = _AI_EXPLAIN_DEPTH_ALIASES[token]
+
+    explicit_manual = (
+        'explain yourself' in lowered
+        or 'why did' in lowered
+        or 'why you' in lowered
+        or 'thinking' in tokens
+        or 'reason' in tokens
+        or 'reasons' in tokens
+        or 'now' in tokens
+    )
+    help_requested = ('help' in tokens) or ('commands' in tokens)
+    config_only = (mode is not None) or (depth is not None)
+    manual_request = explicit_manual or (is_explain and not config_only and not help_requested)
+
+    return {
+        'is_explain': True,
+        'mode': mode,
+        'depth': depth,
+        'manual_request': bool(manual_request),
+        'help_requested': bool(help_requested),
+    }
+
+
+def _fmt_number(value, digits=2):
+    """Format numeric planner values safely for chat output."""
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return 'n/a'
+
+
+def _fmt_probability(value):
+    """Format probability-like values as percentages."""
+    try:
+        return f"{float(value) * 100.0:.0f}%"
+    except (TypeError, ValueError):
+        return 'n/a'
+
+
+def _latest_candidate_event(events):
+    """Return newest planner event that contains candidate summaries."""
+    for event in reversed(events or []):
+        if not isinstance(event, dict):
+            continue
+        candidates = event.get('candidates')
+        if isinstance(candidates, list) and candidates:
+            return event, candidates
+    return None, []
+
+
+def _latest_planner_choice_event(events):
+    """Return newest planner_choice event, if present."""
+    for event in reversed(events or []):
+        if not isinstance(event, dict):
+            continue
+        if event.get('type') == 'planner_choice':
+            return event
+    return None
+
+
+def _candidate_action_label(candidate):
+    """Return a readable action label for candidate summaries."""
+    label = _compress_text(candidate.get('action_description', ''), 120)
+    if label:
+        return label
+
+    action_type = str(candidate.get('action_type') or '').strip()
+    if action_type:
+        return action_type.replace('_', ' ')
+
+    action_id = candidate.get('seed_action_id')
+    return f"action {action_id}" if action_id is not None else 'unknown action'
+
+
+def _candidate_sequence(candidate, max_steps=3):
+    """Render a compact turn-sequence preview for one plan candidate."""
+    steps = [str(s) for s in (candidate.get('turn_steps') or []) if str(s).strip()]
+    if steps:
+        return _compress_text(' -> '.join(steps[:max_steps]), 220)
+
+    preview = _compress_text(candidate.get('step_preview', ''), 220)
+    if preview:
+        return preview
+    return 'no sequence available'
+
+
+def _candidate_move_preview(candidate, max_moves=3):
+    """Render compact planned battle-move snippets for explanation text."""
+    moves = candidate.get('planned_battle_moves')
+    if not isinstance(moves, list) or not moves:
+        return ''
+
+    rendered = []
+    for move in moves[:max_moves]:
+        if not isinstance(move, dict):
+            continue
+        rank = str(move.get('rank') or '?')
+        suit = str(move.get('suit') or '')
+        value = move.get('value')
+        short = suit[:1].upper() if suit else ''
+        rendered.append(f"{rank}{short}({_fmt_number(value, 0)})")
+
+    return ', '.join(rendered)
+
+
+def _build_tactical_explain_messages(game_id, depth='standard', reason='manual'):
+    """Build one or more tactical explanation messages from planner telemetry."""
+    depth_key = _AI_EXPLAIN_DEPTH_ALIASES.get(str(depth or '').lower(), _AI_EXPLAIN_DEFAULT_DEPTH)
+    snapshot = get_ai_debug_snapshot(game_id, max_notes=8, max_events=80)
+    notes = list(snapshot.get('strategy_notes') or [])
+    events = list(snapshot.get('planner_events') or [])
+
+    _, candidates = _latest_candidate_event(events)
+    if not candidates:
+        if notes:
+            return [_compress_text(f"Tactical explain ({reason}): {notes[-1]}", 980)]
+        return [
+            "Tactical explain: I do not have planner candidates yet. "
+            "Ask again right after my next decision."
+        ]
+
+    choice_event = _latest_planner_choice_event(events)
+    top = candidates[0]
+
+    top_line = _candidate_action_label(top)
+    top_score = _fmt_number(top.get('total_score'), 2)
+    top_feas = _fmt_probability(top.get('feasibility_probability'))
+    top_diff = _fmt_number(top.get('expected_power_diff'), 1)
+    sequence = _candidate_sequence(top, max_steps=3)
+
+    summary = (
+        f"Tactical explain ({reason}, {depth_key}): top line is {top_line} "
+        f"(score={top_score}, feasibility={top_feas}, expected_power_diff={top_diff}). "
+        f"Sequence: {sequence}."
+    )
+
+    if isinstance(choice_event, dict):
+        rec_action_id = choice_event.get('recommended_action_id')
+        chosen_action_id = choice_event.get('chosen_action_id')
+        match = choice_event.get('chosen_matches_recommended')
+        if rec_action_id is not None and chosen_action_id is not None:
+            match_text = '' if match is None else f", match={bool(match)}"
+            summary += (
+                f" Planner recommendation={rec_action_id}, "
+                f"executed={chosen_action_id}{match_text}."
+            )
+
+    messages = [_compress_text(summary, 980)]
+    if depth_key == 'brief':
+        return messages
+
+    detail_bits = []
+    planned_figure = top.get('planned_battle_figure')
+    if isinstance(planned_figure, dict) and planned_figure:
+        detail_bits.append(
+            "Target figure: "
+            f"{planned_figure.get('name')} "
+            f"({planned_figure.get('field')}, state={planned_figure.get('state')}, "
+            f"power~{_fmt_number(planned_figure.get('power_estimate'), 1)})."
+        )
+
+    planned_moves = _candidate_move_preview(top)
+    if planned_moves:
+        detail_bits.append(f"Planned battle moves: {planned_moves}.")
+
+    score_breakdown = top.get('score_breakdown')
+    if isinstance(score_breakdown, dict) and score_breakdown:
+        pairs = []
+        for key, value in list(score_breakdown.items())[:5]:
+            pairs.append(f"{key}={_fmt_number(value, 2)}")
+        detail_bits.append(f"Score factors: {', '.join(pairs)}.")
+
+    notes_text = top.get('notes')
+    if isinstance(notes_text, list) and notes_text:
+        detail_bits.append(f"Planner notes: {'; '.join(str(n) for n in notes_text[:2])}.")
+
+    if detail_bits:
+        messages.append(_compress_text(' '.join(detail_bits), 980))
+
+    if depth_key == 'detailed':
+        alternates = []
+        for idx, candidate in enumerate(candidates[1:3], start=2):
+            alternates.append(
+                f"Alt {idx}: {_candidate_action_label(candidate)} "
+                f"(score={_fmt_number(candidate.get('total_score'), 2)}, "
+                f"feasibility={_fmt_probability(candidate.get('feasibility_probability'))}), "
+                f"seq={_candidate_sequence(candidate, max_steps=2)}."
+            )
+        if alternates:
+            messages.append(_compress_text(' '.join(alternates), 980))
+        return messages
+
+    if depth_key == 'extensive':
+        messages = messages[:1]
+        for idx, candidate in enumerate(candidates[:3], start=1):
+            candidate_line = (
+                f"Candidate {idx}: {_candidate_action_label(candidate)}; "
+                f"score={_fmt_number(candidate.get('total_score'), 2)}; "
+                f"feasibility={_fmt_probability(candidate.get('feasibility_probability'))}; "
+                f"expected_power_diff={_fmt_number(candidate.get('expected_power_diff'), 1)}; "
+                f"sequence={_candidate_sequence(candidate, max_steps=4)}"
+            )
+
+            fig = candidate.get('planned_battle_figure')
+            if isinstance(fig, dict) and fig:
+                candidate_line += (
+                    f"; target={fig.get('name')}({fig.get('field')}, "
+                    f"state={fig.get('state')}, power~{_fmt_number(fig.get('power_estimate'), 1)})"
+                )
+
+            move_preview = _candidate_move_preview(candidate)
+            if move_preview:
+                candidate_line += f"; moves={move_preview}"
+
+            notes_list = candidate.get('notes')
+            if isinstance(notes_list, list) and notes_list:
+                candidate_line += f"; note={_compress_text(notes_list[0], 140)}"
+
+            messages.append(_compress_text(candidate_line + '.', 980))
+
+    return messages
+
+
+def _format_explain_settings_message(state, changed_mode=False, changed_depth=False):
+    """Build confirmation/status chat text for explain setting changes."""
+    mode = str(state.get('mode') or _AI_EXPLAIN_DEFAULT_MODE)
+    depth = str(state.get('depth') or _AI_EXPLAIN_DEFAULT_DEPTH)
+    cadence_hint = {
+        'off': 'Automatic tactical explanations are disabled.',
+        'manual': 'I will explain only when explicitly asked.',
+        'turn': 'I will explain on my normal-turn decisions.',
+        'battle': 'I will explain during battle phases.',
+    }.get(mode, 'Explain cadence is active.')
+
+    prefix = 'Explain settings updated.' if (changed_mode or changed_depth) else 'Explain settings.'
+    return _compress_text(f"{prefix} cadence={mode}, depth={depth}. {cadence_hint}", 980)
+
+
+def handle_explain_chat_control(game_id, ai_player_id, human_player_id, message):
+    """Handle human explain-mode chat commands and return AI reply lines."""
+    _ = (ai_player_id, human_player_id)
+    parsed = _parse_explain_chat_directive(message)
+    if not parsed.get('is_explain'):
+        return []
+
+    current = _get_explain_state(game_id)
+    next_state = dict(current)
+
+    requested_mode = parsed.get('mode')
+    requested_depth = parsed.get('depth')
+    if requested_mode:
+        next_state['mode'] = requested_mode
+    if requested_depth:
+        next_state['depth'] = requested_depth
+
+    changed_mode = current.get('mode') != next_state.get('mode')
+    changed_depth = current.get('depth') != next_state.get('depth')
+
+    with _ai_chat_lock:
+        stored = _ai_explain_states.get(game_id)
+        if not isinstance(stored, dict):
+            stored = _default_explain_state()
+        stored.update(next_state)
+        _ai_explain_states[game_id] = stored
+        next_state = dict(stored)
+
+    responses = []
+    if parsed.get('help_requested'):
+        responses.append(
+            _compress_text(
+                "Explain commands: 'explain yourself', 'explain mode off/manual/turn/battle', "
+                "'explain depth brief/standard/detailed/extensive', "
+                "or combine them, e.g. 'explain mode turn depth extensive'.",
+                980,
+            )
+        )
+
+    if changed_mode or changed_depth or not parsed.get('manual_request'):
+        responses.append(
+            _format_explain_settings_message(
+                next_state,
+                changed_mode=changed_mode,
+                changed_depth=changed_depth,
+            )
+        )
+
+    if parsed.get('manual_request'):
+        responses.extend(
+            _build_tactical_explain_messages(
+                game_id,
+                depth=next_state.get('depth') or _AI_EXPLAIN_DEFAULT_DEPTH,
+                reason='manual',
+            )
+        )
+
+    return [msg for msg in responses if str(msg or '').strip()][:5]
 
 
 def _safe_display_name(name):
@@ -811,6 +1276,104 @@ def _build_ai_chat_message(game_dict, ai_player_id, phase, action):
     return _compress_text(message, 280)
 
 
+def _send_ai_chat_messages(game_id, ai_player_id, receiver_id, messages, timeout=10):
+    """Send one or more AI chat lines and return how many succeeded."""
+    sent_count = 0
+    for raw in messages or []:
+        text = _compress_text(raw, 980).strip()
+        if not text:
+            continue
+
+        payload = {
+            'game_id': game_id,
+            'sender_id': ai_player_id,
+            'receiver_id': receiver_id,
+            'message': text,
+        }
+        try:
+            resp = _ai_post(
+                f"{settings.SERVER_URL}/msg/add_chat_message",
+                ai_player_id,
+                json=payload,
+                timeout=timeout,
+            )
+            try:
+                result = resp.json()
+            except Exception:
+                result = {}
+
+            status_code = int(getattr(resp, 'status_code', 200))
+            if status_code >= 400 or not result.get('success'):
+                logger.debug(
+                    f"AI chat send skipped/failed for game {game_id}: "
+                    f"status={status_code}, msg={result.get('message')}"
+                )
+                continue
+
+            sent_count += 1
+        except Exception as e:
+            logger.debug(f"AI chat send error for game {game_id}: {e}")
+
+    return sent_count
+
+
+def _phase_allows_auto_explain(mode, phase):
+    """Return whether explain cadence mode should emit for this phase."""
+    if mode == 'turn':
+        return phase == 'normal_turn'
+    if mode == 'battle':
+        return phase in {'battle_shop', 'battle_round', 'battle_decision', 'counter_spell'}
+    return False
+
+
+def _maybe_send_auto_explain_chat(game_id, ai_player_id, game_dict, phase):
+    """Emit tactical explanation chat based on configured explain cadence."""
+    explain_state = _get_explain_state(game_id)
+    mode = explain_state.get('mode')
+    if mode in ('off', 'manual'):
+        return False
+    if not _phase_allows_auto_explain(mode, phase):
+        return False
+
+    players = game_dict.get('players', [])
+    opponent = next((p for p in players if p.get('id') != ai_player_id), None)
+    if not opponent:
+        return False
+
+    marker = ('auto_explain', mode) + tuple(_chat_turn_marker(game_dict, phase))
+    with _ai_chat_lock:
+        state = _ai_explain_states.get(game_id)
+        if not isinstance(state, dict):
+            state = _default_explain_state()
+            _ai_explain_states[game_id] = state
+        if state.get('last_marker') == marker:
+            return False
+
+    messages = _build_tactical_explain_messages(
+        game_id,
+        depth=explain_state.get('depth') or _AI_EXPLAIN_DEFAULT_DEPTH,
+        reason=f'auto-{mode}',
+    )
+    sent_count = _send_ai_chat_messages(
+        game_id,
+        ai_player_id,
+        opponent.get('id'),
+        messages[:4],
+        timeout=10,
+    )
+    if sent_count <= 0:
+        return False
+
+    with _ai_chat_lock:
+        state = _ai_explain_states.get(game_id)
+        if not isinstance(state, dict):
+            state = _default_explain_state()
+        state['last_marker'] = marker
+        _ai_explain_states[game_id] = state
+
+    return True
+
+
 def _maybe_send_ai_chat(game_id, ai_player_id, game_dict, phase, action):
     """Post occasional AI chat flavor messages with anti-spam controls."""
     if not getattr(settings, 'AI_CHAT_ENABLED', True):
@@ -824,6 +1387,10 @@ def _maybe_send_ai_chat(game_id, ai_player_id, game_dict, phase, action):
         'counter_spell',
     }
     if phase not in allowed_phases:
+        return
+
+    # Explain cadence has priority over random flavor banter.
+    if _maybe_send_auto_explain_chat(game_id, ai_player_id, game_dict, phase):
         return
 
     chance = max(0.0, min(1.0, float(getattr(settings, 'AI_CHAT_CHANCE', 0.22))))
@@ -860,38 +1427,26 @@ def _maybe_send_ai_chat(game_id, ai_player_id, game_dict, phase, action):
     if not message:
         return
 
-    payload = {
-        'game_id': game_id,
-        'sender_id': ai_player_id,
-        'receiver_id': opponent.get('id'),
-        'message': message,
-    }
-    try:
-        resp = _ai_post(f"{settings.SERVER_URL}/msg/add_chat_message", ai_player_id, json=payload, timeout=10)
-        try:
-            result = resp.json()
-        except Exception:
-            result = {}
+    sent_count = _send_ai_chat_messages(
+        game_id,
+        ai_player_id,
+        opponent.get('id'),
+        [message],
+        timeout=10,
+    )
+    if sent_count <= 0:
+        return
 
-        if resp.status_code >= 400 or not result.get('success'):
-            logger.debug(
-                f"AI chat send skipped/failed for game {game_id}: "
-                f"status={resp.status_code}, msg={result.get('message')}"
-            )
-            return
-
-        with _ai_chat_lock:
-            state = _ai_chat_states.get(game_id, {
-                'count': 0,
-                'last_sent_at': 0.0,
-                'last_turn_marker': None,
-            })
-            state['count'] += 1
-            state['last_sent_at'] = now
-            state['last_turn_marker'] = marker
-            _ai_chat_states[game_id] = state
-    except Exception as e:
-        logger.debug(f"AI chat send error for game {game_id}: {e}")
+    with _ai_chat_lock:
+        state = _ai_chat_states.get(game_id, {
+            'count': 0,
+            'last_sent_at': 0.0,
+            'last_turn_marker': None,
+        })
+        state['count'] += 1
+        state['last_sent_at'] = now
+        state['last_turn_marker'] = marker
+        _ai_chat_states[game_id] = state
 
 
 def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
@@ -909,6 +1464,8 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
         log_digest = _get_game_log_digest(prompt_game_dict, ai_player_id)
 
         strategy_plans = []
+        planner_candidate_summaries = []
+        planner_recommended_action_id = None
         strategy_plans_text = ""
         planner_runtime_ms = None
         planner_shadow_mode = bool(settings.AI_STRATEGY_PLANNER_SHADOW_MODE)
@@ -925,6 +1482,12 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
                     max_side_draws_per_turn=settings.AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN,
                 )
                 planner_runtime_ms = (time.perf_counter() - planner_started) * 1000.0
+                planner_candidate_summaries = _planner_candidate_summaries(
+                    strategy_plans,
+                    actions,
+                    max_candidates=settings.AI_STRATEGY_PLANNER_MAX_PLANS,
+                )
+                planner_recommended_action_id = recommended_action_id(strategy_plans)
 
                 if not planner_shadow_mode:
                     strategy_plans_text = format_strategy_plans_for_prompt(strategy_plans)
@@ -947,6 +1510,8 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
                         'runtime_ms': round(planner_runtime_ms, 3),
                         'top_seed_action_id': top_plan.get('seed_action_id'),
                         'top_score': top_plan.get('total_score'),
+                        'recommended_action_id': planner_recommended_action_id,
+                        'candidates': planner_candidate_summaries,
                         'shadow_mode': planner_shadow_mode,
                     },
                 )
@@ -1004,7 +1569,7 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
                 settings.AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK
                 and not planner_shadow_mode
             ):
-                rec_action_id = recommended_action_id(strategy_plans)
+                rec_action_id = planner_recommended_action_id
                 if rec_action_id is not None:
                     rec_action = next((a for a in actions if a['id'] == rec_action_id), None)
                     if rec_action:
@@ -1035,8 +1600,26 @@ def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
             step_preview = ' | '.join((top_plan.get('turn_steps') or [])[:3])
             plan = f"seed={seed}, score={score}; {step_preview}"
 
+        if strategy_plans:
+            rec_action_id = planner_recommended_action_id
+            chosen_action_id = chosen.get('id')
+            _record_planner_event(
+                game_id,
+                'planner_choice',
+                {
+                    'phase': phase,
+                    'recommended_action_id': rec_action_id,
+                    'chosen_action_id': chosen_action_id,
+                    'chosen_action_type': chosen.get('type'),
+                    'chosen_matches_recommended': rec_action_id == chosen_action_id,
+                    'candidate_count': len(planner_candidate_summaries),
+                    'candidates': planner_candidate_summaries,
+                    'shadow_mode': planner_shadow_mode,
+                },
+            )
+
         if strategy_plans and planner_shadow_mode:
-            rec_action_id = recommended_action_id(strategy_plans)
+            rec_action_id = planner_recommended_action_id
             match = rec_action_id == chosen.get('id')
             runtime_str = f"{planner_runtime_ms:.2f}" if planner_runtime_ms is not None else "n/a"
             logger.info(
@@ -1281,9 +1864,8 @@ def _exec_build_figure(base, game_id, ai_player_id, params):
 def _exec_change_cards(app, game_id, ai_player_id):
     """Change cards via POST /games/change_cards.
     
-    Smart card selection: keep high-value battle cards (K, A, 10, 9) and
-    key cards needed for building (J for village, Q for temple, A for military).
-    Only swap low-value or duplicate cards we can't use.
+    Uses shared heuristic with action enumeration so the announced swap
+    suggestion and executed card selection stay aligned.
     """
     with app.app_context():
         from models import Game, MainCard, db
@@ -1303,42 +1885,13 @@ def _exec_change_cards(app, game_id, ai_player_id):
     if not free_cards:
         logger.warning("No cards to change")
         return False
-    
-    # Rank cards by value for keeping: K(4), A(3), 10, 9, Q, 8, J, 7
-    # Keep: K (battle=4, Maharaja build), A (battle=3, military build),
-    #        10 (battle=10), 9 (battle=9), Q (temple build, battle block)
-    # Swap: 7, 8, and excess duplicates
-    KEEP_RANKS = {'K', 'A', '10', '9'}
-    MAYBE_KEEP = {'Q', 'J'}  # Keep 1-2 of each for building
 
-    to_swap = []
-    kept_counts = {}
-    
-    # Sort: highest value last so we process low-value first
-    sorted_cards = sorted(free_cards, key=lambda c: c.value or 0)
-    
-    for card in sorted_cards:
-        rank = card.rank
-        kept_counts[rank] = kept_counts.get(rank, 0)
-        
-        if rank in KEEP_RANKS:
-            # Always keep K, A, 10, 9
-            kept_counts[rank] += 1
-            continue
-        elif rank in MAYBE_KEEP:
-            # Keep up to 2 of Q and J
-            if kept_counts[rank] < 2:
-                kept_counts[rank] += 1
-                continue
-        # Swap 7s, 8s, and excess Q/J
-        to_swap.append(card.id)
-    
-    if not to_swap:
-        # Nothing worth swapping — swap lowest value card anyway
-        to_swap = [sorted_cards[0].id]
-    
+    summary = summarize_main_change(free_cards)
+    to_swap = select_main_cards_to_swap(free_cards)
+
     logger.info(f"Smart change: swapping {len(to_swap)} of {len(free_cards)} cards "
-                f"(keeping {len(free_cards) - len(to_swap)} high-value cards)")
+                f"(keeping {len(free_cards) - len(to_swap)} high-value cards, "
+                f"low_rank={summary.get('low_rank_count', 0)})")
     
     base = settings.SERVER_URL
     resp = _ai_post(f'{base}/games/change_cards', ai_player_id, json={

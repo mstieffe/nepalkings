@@ -193,3 +193,24 @@ def test_enumerate_actions_battle_round_offers_skip_when_no_unplayed_moves():
 
     assert 'skip_battle_turn' in action_types
     assert 'play_battle_move' not in action_types
+
+
+def test_enumerate_actions_normal_turn_change_cards_description_uses_swap_summary():
+    game_dict = _base_game_dict(ai_id=9, opp_id=10)
+    game_dict['turn_player_id'] = 9
+    game_dict['players'][0]['main_hand'] = [
+        {'id': 1, 'rank': 'K', 'suit': 'Hearts', 'value': 4, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 2, 'rank': 'A', 'suit': 'Hearts', 'value': 3, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 3, 'rank': '10', 'suit': 'Clubs', 'value': 10, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 4, 'rank': '9', 'suit': 'Diamonds', 'value': 9, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 5, 'rank': 'Q', 'suit': 'Clubs', 'value': 12, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 6, 'rank': 'J', 'suit': 'Spades', 'value': 11, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 7, 'rank': '8', 'suit': 'Hearts', 'value': 8, 'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 8, 'rank': '7', 'suit': 'Hearts', 'value': 7, 'part_of_figure': False, 'part_of_battle_move': False},
+    ]
+
+    actions = enumerate_actions(game_dict, 9, 'normal_turn')
+    change_action = next(a for a in actions if a['type'] == 'change_cards')
+
+    assert '2 suggested swaps' in change_action['description']
+    assert '2 low-rank of 8 free cards' in change_action['description']

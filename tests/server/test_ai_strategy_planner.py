@@ -130,3 +130,65 @@ def test_recommended_action_id_returns_seed_action_of_best_plan():
     rec = recommended_action_id(plans)
 
     assert rec == 3
+
+
+def test_generate_strategy_plans_forwards_draw_limits_to_target_selection(monkeypatch):
+    captured = {}
+
+    def fake_best_figure_targets(
+        game_dict,
+        ai_player_id,
+        remaining_turns=None,
+        max_results=6,
+        max_main_draws_per_turn=2,
+        max_side_draws_per_turn=1,
+    ):
+        captured['remaining_turns'] = remaining_turns
+        captured['max_results'] = max_results
+        captured['max_main_draws_per_turn'] = max_main_draws_per_turn
+        captured['max_side_draws_per_turn'] = max_side_draws_per_turn
+        return [
+            {
+                'family_name': 'Gorkha Warriors',
+                'name': 'Gorkha Warriors',
+                'field': 'military',
+                'suit': 'Hearts',
+                'card_state': 'build_possible_with_probability',
+                'power_estimate': 11,
+                'completion_probability': 0.6,
+                'resource_blocked': False,
+                'impossible': False,
+            }
+        ]
+
+    def fake_belief_snapshot(_game_dict, _ai_player_id):
+        return {
+            'likely_battle_figures': [
+                {'name': 'Opp Military', 'power_estimate': 9, 'probability': 0.6}
+            ],
+            'active_battle_modifiers': [],
+        }
+
+    monkeypatch.setattr('ai.strategy_planner.best_figure_targets', fake_best_figure_targets)
+    monkeypatch.setattr('ai.strategy_planner.build_opponent_belief_snapshot', fake_belief_snapshot)
+
+    game = _planner_game_dict()
+    actions = [
+        {'id': 1, 'type': 'change_cards', 'description': 'change weak cards', 'params': {}},
+    ]
+
+    plans = generate_strategy_plans(
+        game,
+        ai_player_id=1,
+        phase='normal_turn',
+        actions=actions,
+        max_plans=1,
+        max_main_draws_per_turn=7,
+        max_side_draws_per_turn=3,
+    )
+
+    assert len(plans) == 1
+    assert captured['remaining_turns'] == 3
+    assert captured['max_results'] == 6
+    assert captured['max_main_draws_per_turn'] == 7
+    assert captured['max_side_draws_per_turn'] == 3
