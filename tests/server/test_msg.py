@@ -203,6 +203,42 @@ class TestChatMessages:
         assert sender_ids.count(p_human.id) == 1
         assert sender_ids.count(p_ai.id) == 2
 
+    def test_add_chat_message_help_to_ai_appends_short_manual(
+        self,
+        client,
+        msg_ai_game,
+        msg_token_human_vs_ai,
+        monkeypatch,
+    ):
+        game, p_human, p_ai = msg_ai_game
+
+        monkeypatch.setattr(
+            'ai.ai_worker.handle_explain_chat_control',
+            lambda **_kwargs: [
+                "AI explain help: 'explain yourself' and 'explain mode turn'.",
+            ],
+        )
+
+        add_resp = client.post(
+            '/msg/add_chat_message',
+            data=json.dumps(
+                {
+                    'game_id': game.id,
+                    'sender_id': p_human.id,
+                    'receiver_id': p_ai.id,
+                    'message': 'help',
+                }
+            ),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {msg_token_human_vs_ai}'},
+        )
+        add_data = add_resp.get_json()
+
+        assert add_data.get('success') is True
+        assert len(add_data.get('ai_auto_messages') or []) == 1
+        assert add_data['ai_auto_messages'][0]['sender_id'] == p_ai.id
+        assert add_data['ai_auto_messages'][0]['receiver_id'] == p_human.id
+
 
 class TestLogEntries:
     def test_add_and_get_log_entries_with_truncation(

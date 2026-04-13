@@ -689,21 +689,50 @@ def _get_explain_state(game_id):
         return dict(state)
 
 
+def _is_help_only_chat_request(lowered, tokens):
+    """Return whether a plain chat help message should trigger AI command help."""
+    raw = str(lowered or '').strip()
+    normalized = ' '.join(tokens or [])
+
+    if raw in {'?', '/help'}:
+        return True
+
+    single_words = {'help', 'commands', 'command', 'manual', 'cmds', 'aihelp'}
+    if len(tokens) == 1 and (tokens[0] in single_words):
+        return True
+
+    short_phrases = {
+        'ai help',
+        'help ai',
+        'bot help',
+        'help bot',
+        'ai commands',
+        'commands ai',
+        'strategos help',
+        'help strategos',
+    }
+    return normalized in short_phrases
+
+
 def _parse_explain_chat_directive(message):
     """Parse explain-mode command phrases from player chat text."""
     text = str(message or '').strip()
     lowered = text.lower()
+    tokens = re.findall(r'[a-z0-9_]+', lowered)
+
     is_explain = 'explain' in lowered or 'analysis mode' in lowered
-    if not is_explain:
+    help_only = _is_help_only_chat_request(lowered, tokens)
+
+    if not is_explain and not help_only:
         return {
             'is_explain': False,
             'mode': None,
             'depth': None,
             'manual_request': False,
             'help_requested': False,
+            'help_only': False,
         }
 
-    tokens = re.findall(r'[a-z0-9_]+', lowered)
     mode = None
     depth = None
 
@@ -727,7 +756,7 @@ def _parse_explain_chat_directive(message):
         or 'reasons' in tokens
         or 'now' in tokens
     )
-    help_requested = ('help' in tokens) or ('commands' in tokens)
+    help_requested = ('help' in tokens) or ('commands' in tokens) or bool(help_only)
     config_only = (mode is not None) or (depth is not None)
     manual_request = explicit_manual or (is_explain and not config_only and not help_requested)
 
@@ -737,6 +766,7 @@ def _parse_explain_chat_directive(message):
         'depth': depth,
         'manual_request': bool(manual_request),
         'help_requested': bool(help_requested),
+        'help_only': bool(help_only),
     }
 
 
@@ -955,6 +985,19 @@ def _format_explain_settings_message(state, changed_mode=False, changed_depth=Fa
     return _compress_text(f"{prefix} cadence={mode}, depth={depth}. {cadence_hint}", 980)
 
 
+def _format_explain_help_message(state):
+    """Build short chat-friendly manual for AI explain commands."""
+    mode = str((state or {}).get('mode') or _AI_EXPLAIN_DEFAULT_MODE)
+    depth = str((state or {}).get('depth') or _AI_EXPLAIN_DEFAULT_DEPTH)
+    return _compress_text(
+        "AI explain help: 'explain yourself' (one-time reason), "
+        "'explain mode off/manual/turn/battle', "
+        "'explain depth brief/standard/detailed/extensive'. "
+        f"Current: cadence={mode}, depth={depth}.",
+        980,
+    )
+
+
 def handle_explain_chat_control(game_id, ai_player_id, human_player_id, message):
     """Handle human explain-mode chat commands and return AI reply lines."""
     _ = (ai_player_id, human_player_id)
@@ -985,16 +1028,17 @@ def handle_explain_chat_control(game_id, ai_player_id, human_player_id, message)
 
     responses = []
     if parsed.get('help_requested'):
+        responses.append(_format_explain_help_message(next_state))
+
+    if changed_mode or changed_depth:
         responses.append(
-            _compress_text(
-                "Explain commands: 'explain yourself', 'explain mode off/manual/turn/battle', "
-                "'explain depth brief/standard/detailed/extensive', "
-                "or combine them, e.g. 'explain mode turn depth extensive'.",
-                980,
+            _format_explain_settings_message(
+                next_state,
+                changed_mode=changed_mode,
+                changed_depth=changed_depth,
             )
         )
-
-    if changed_mode or changed_depth or not parsed.get('manual_request'):
+    elif not parsed.get('manual_request') and not parsed.get('help_requested'):
         responses.append(
             _format_explain_settings_message(
                 next_state,

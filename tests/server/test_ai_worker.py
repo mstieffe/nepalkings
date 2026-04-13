@@ -617,6 +617,19 @@ def test_handle_explain_chat_control_updates_mode_and_depth_without_manual():
     assert state['depth'] == 'extensive'
 
 
+def test_handle_explain_chat_control_plain_help_returns_short_manual():
+    responses = ai_worker.handle_explain_chat_control(
+        game_id=900,
+        ai_player_id=22,
+        human_player_id=11,
+        message='help',
+    )
+
+    assert len(responses) == 1
+    assert 'AI explain help:' in responses[0]
+    assert 'explain mode off/manual/turn/battle' in responses[0]
+
+
 def test_handle_explain_chat_control_extensive_includes_candidate_sequences():
     with ai_worker._planner_events_lock:
         ai_worker._planner_events[902] = [
