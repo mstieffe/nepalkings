@@ -138,6 +138,7 @@ Everything you need to run, build, deploy, and maintain Nepal Kings.
 9. [Changing the App Icon](#changing-the-app-icon)
 10. [Configuration & Settings](#configuration--settings)
 11. [Troubleshooting](#troubleshooting)
+12. [AI Opponent Internals](#ai-opponent-internals)
 
 ---
 
@@ -587,3 +588,12 @@ cd server
 ./RESET_DATABASE.sh
 ```
 **Warning:** This deletes all game data.
+
+---
+
+## AI Opponent Internals
+
+For a complete technical deep dive of the AI opponent architecture, planning system,
+chat explain commands, telemetry endpoints, and troubleshooting, see:
+
+- [AI_OPPONENT_README.md](AI_OPPONENT_README.md)
