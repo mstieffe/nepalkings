@@ -1033,6 +1033,66 @@ class GuideBookScreen(SubScreen):
                     'equal the sum of both figures\' base power.',
                 ],
             },
+
+            # ── 11  AI Chat Help ──────────────────────────────────
+            {
+                'title': 'AI Chat Help',
+                'content': [
+                    {'icon_text': _gb + 'msg_active.png',
+                     'text': 'You can ask the AI to explain its tactical '
+                     'choices directly in chat. Commands are sent as '
+                     'normal chat messages to the AI player.'},
+                    '',
+                    {'heading': 'Quick Start'},
+                    {'bullet': 'Type "explain yourself" to get an immediate '
+                     'tactical explanation of the latest planner choice.'},
+                    {'bullet': 'Type "explain mode turn depth extensive" '
+                     'to receive automatic deep explanations each AI '
+                     'normal turn.'},
+                    '',
+                    {'heading': 'Explain Modes'},
+                    {'table': {
+                        'headers': ['Mode', 'What it does'],
+                        'rows': [
+                            ['off', 'Disables automatic tactical explanations.'],
+                            ['manual', 'Explains only when you ask.'],
+                            ['turn', 'Auto-explains during AI normal-turn decisions.'],
+                            ['battle', 'Auto-explains during battle phases.'],
+                        ],
+                        'col_widths': [0.20, 0.80],
+                    }},
+                    '',
+                    {'heading': 'Depth Levels'},
+                    {'table': {
+                        'headers': ['Depth', 'Detail level'],
+                        'rows': [
+                            ['brief', 'One concise top-line reason.'],
+                            ['standard', 'Top line plus key tactical detail.'],
+                            ['detailed', 'Adds alternative candidate comparisons.'],
+                            ['extensive', 'Includes candidate sequences and expanded plan details.'],
+                        ],
+                        'col_widths': [0.24, 0.76],
+                    }},
+                    '',
+                    {'heading': 'Command Examples'},
+                    {'bullet': 'explain yourself'},
+                    {'bullet': 'explain mode manual'},
+                    {'bullet': 'explain mode turn'},
+                    {'bullet': 'explain mode battle depth detailed'},
+                    {'bullet': 'explain depth extensive'},
+                    {'bullet': 'explain mode off'},
+                    {'bullet': 'analysis mode turn depth extensive'},
+                    {'bullet': 'explain help'},
+                    '',
+                    {'heading': 'Accepted Synonyms'},
+                    {'bullet': 'Mode: disable/disabled/stop -> off, '
+                     'ondemand/on_demand -> manual, turns -> turn, '
+                     'combat -> battle.'},
+                    {'bullet': 'Depth: short/quick -> brief, '
+                     'normal/default -> standard, detail/deep -> detailed, '
+                     'verbose/full -> extensive.'},
+                ],
+            },
         ]
 
     # ════════════════════════════════════════════════════════════════════
