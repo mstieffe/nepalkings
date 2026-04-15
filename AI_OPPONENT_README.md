@@ -335,8 +335,78 @@ total_score    = feasibility_probability * offensive_value + turns_pressure - ri
 Where:
 
 - `turns_pressure` increases when few turns remain.
-- Modifier bonus rewards tactical spell/modifier synergy.
+- Modifier bonus rewards tactical spell/modifier synergy (see below).
 - Lower feasibility is penalized.
+
+### Modifier bonus breakdown
+
+The `modifier_bonus` component of the scoring formula is computed by
+`_modifier_bonus()` and adapts to the current board state.  It combines
+several independent sub-bonuses:
+
+#### Maharaja advance penalty (-3.0)
+
+Advancing a figure with `checkmate=True` risks instant game loss if the
+battle is lost.  The scorer applies a flat -3.0 penalty to discourage
+reckless Maharaja advances.
+
+#### Same-suit build promotion (+0.8 per match)
+
+Building a figure whose suit matches existing friendly figures earns
++0.8 per matching figure already on the field.  This promotes suit
+concentration and maximizes support-bonus synergy in battle.
+
+#### Tactical spells (fixed bonuses)
+
+| Spell | Bonus | Rationale |
+|---|---|---|
+| Blitzkrieg | +3.5 | Attacker picks the defender's battle figure |
+| Infinite Hammer | +2.0 | Extra action economy |
+| Blitzkrieg + advance combo | +1.5 | Advancing while Blitzkrieg is active |
+
+#### War spells (state-dependent)
+
+Peasant War and Civil War share a base bonus of +2.5.  When the
+opponent's total military power exceeds our own by more than 5, an
+additional bonus kicks in:
+
+```text
+extra = min(3.0, (opp_military_power - own_military_power) * 0.3)
+```
+
+This rewards war spells when the opponent has a clear military advantage,
+because they force village-only battles that bypass hostile military
+superiority.
+
+**Civil War village-pair check:**  Civil War additionally checks whether
+the AI has at least two village figures of the same color.  If yes, a
++1.0 bonus is added.  If no valid pair exists, a -4.0 penalty is applied
+(net negative), heavily discouraging the AI from wasting the spell.
+
+#### Invader Swap (role-dependent)
+
+| Condition | Bonus | Rationale |
+|---|---|---|
+| AI is invader, has defensive figures | min(4.0, defensive_power × 0.3) | Forces opponent into our prepared defenses |
+| AI is invader, no defensive figures | +0.5 | Swapping away initiative without defenses is risky |
+| AI is defender | +1.0 | Flat baseline; not the defensive-play case |
+
+Defensive power sums the power of figures with `cannot_attack=True` or
+`must_be_attacked=True` (fortresses, walls).
+
+#### Targeted enchantment spells (power-proportional)
+
+| Spell | Formula | Target |
+|---|---|---|
+| Poison | min(6.0, target_power × 0.4) | Strongest opponent figure |
+| Health Boost | min(6.0, target_power × 0.3 + 3.0) | Strongest own figure |
+| Explosion | target_power × 0.4 + resource_value × 1.5 | Highest-impact opponent figure |
+
+Poison scales linearly with the target's power (capped at the actual
+6-point damage dealt).  Health Boost has a +3.0 floor to keep weak-figure
+boosts viable.  Explosion combines raw combat removal with resource-chain
+disruption — destroying a resource-producing figure is worth more than a
+pure military target of equal power.
 
 ### Figure completion probabilities
 

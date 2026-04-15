@@ -2,10 +2,23 @@
 # See LICENSE file in the project root for full license information.
 """Tests for resource production: castle figures produce slots that village/military figures consume."""
 import pytest
+from unittest.mock import patch, MagicMock
 
 
 class TestCastleFigureProduction:
     """Verify the produces dict on castle figures matches the spec."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_pygame_image_load(self):
+        """Prevent pygame.image.load from hitting the filesystem.
+
+        The castle_config import chain triggers config.settings →
+        dialogue_box_settings which calls pygame.image.load at module
+        level.  We stub it to return a MagicMock surface so the import
+        succeeds regardless of the working directory.
+        """
+        with patch('pygame.image.load', return_value=MagicMock()):
+            yield
 
     def _get_figure(self, db, game_id, name):
         from models import Figure

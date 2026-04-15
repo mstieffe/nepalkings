@@ -168,6 +168,30 @@ def _estimate_target_figure_for_action(
                 'assumed_side_draws_per_turn': target.get('assumed_side_draws_per_turn'),
             }
 
+    # For change_cards: pick the target figure with the highest
+    # (probability * power) product — this steers the single change_cards
+    # plan toward the goal that benefits most from fresh cards.
+    if action_type == 'change_cards' and top_targets:
+        best = max(
+            top_targets,
+            key=lambda t: (
+                float(t.get('completion_probability', 0.0))
+                * _estimate_recipe_power(t)
+            ),
+        )
+        return {
+            'figure_id': None,
+            'name': best.get('name'),
+            'field': best.get('field'),
+            'suit': best.get('suit'),
+            'state': best.get('card_state'),
+            'power_estimate': _estimate_recipe_power(best),
+            'completion_probability': best.get('completion_probability', 0.0),
+            'resource_blocked': best.get('resource_blocked', False),
+            'assumed_main_draws_per_turn': best.get('assumed_main_draws_per_turn'),
+            'assumed_side_draws_per_turn': best.get('assumed_side_draws_per_turn'),
+        }
+
     if top_targets:
         t = top_targets[0]
         return {
@@ -245,19 +269,158 @@ def _action_feasibility(action: dict[str, Any], target: dict[str, Any] | None) -
     return 1.0
 
 
-def _modifier_bonus(action: dict[str, Any], active_modifiers: list[str]) -> float:
-    bonus = 0.0
+def _modifier_bonus(
+    action: dict[str, Any],
+    active_modifiers: list[str],
+    opp_figures: list[dict[str, Any]] | None = None,
+    own_figures: list[dict[str, Any]] | None = None,
+    game_dict: dict[str, Any] | None = None,
+    ai_player_id: int | None = None,
+) -> float:
+    """Compute action bonus using board state when available.
 
-    if action.get('type') == 'cast_spell':
+    For targeted spells (Poison, Health Boost, Explosion) the bonus is
+    derived from the *actual* target figure power so the scorer naturally
+    prefers high-value targets and avoids wasting spells on weak ones.
+    Tactical spells (Blitzkrieg, War, Hammer) keep rule-derived constants
+    because their value is structural, not figure-dependent.
+    """
+    bonus = 0.0
+    opp_figures = opp_figures or []
+    own_figures = own_figures or []
+
+    action_type = action.get('type')
+
+    # ── (1) Maharaja advance penalty ──
+    # Advancing a checkmate figure risks instant game loss if the battle
+    # is lost.  Apply a penalty proportional to the risk.
+    if action_type == 'advance_figure':
+        params = action.get('params', {}) or {}
+        fig_id = params.get('figure_id')
+        if fig_id is not None:
+            fig = next((f for f in own_figures if f.get('id') == fig_id), None)
+            if fig and fig.get('checkmate'):
+                bonus -= 3.0
+
+    # ── (2) Same-suit build promotion ──
+    # Building a figure whose suit matches existing figures increases
+    # support bonus potential in battle.  Each same-suit figure already
+    # on the field adds a small bonus.
+    if action_type == 'build_figure':
+        params = action.get('params', {}) or {}
+        build_suit = params.get('suit')
+        if build_suit:
+            same_suit_count = sum(
+                1 for f in own_figures
+                if (f.get('suit') or '').lower() == build_suit.lower()
+            )
+            bonus += same_suit_count * 0.8
+
+    if action_type == 'cast_spell':
         desc = str(action.get('description', ''))
+        params = action.get('params', {}) or {}
+        spell_name = params.get('spell_family_name', params.get('spell_name', ''))
+        target_fid = params.get('target_figure_id')
+
+        # ── Tactical spells: rule-derived structural advantage ──
         if 'Blitzkrieg' in desc:
             bonus += 3.5
-        if 'Peasant War' in desc or 'Civil War' in desc:
-            bonus += 2.5
         if 'Infinite Hammer' in desc:
             bonus += 2.0
 
-    if 'Blitzkrieg' in active_modifiers and action.get('type') == 'advance_figure':
+        # ── (4) Peasant War / Civil War: state-dependent bonus ──
+        # Base value is 2.5, but increases when the opponent's military
+        # is clearly stronger than ours (war spells force village-only
+        # battles, bypassing the opponent's military advantage).
+        if 'Peasant War' in desc or 'Civil War' in desc:
+            bonus += 2.5
+            opp_mil_power = sum(
+                _figure_power(f) for f in opp_figures
+                if f.get('field') == 'military' and not f.get('cannot_attack')
+            )
+            own_mil_power = sum(
+                _figure_power(f) for f in own_figures
+                if f.get('field') == 'military' and not f.get('cannot_attack')
+            )
+            if opp_mil_power > own_mil_power + 5:
+                # Opponent's military clearly outguns ours → war spells
+                # are more valuable because they sidestep that advantage.
+                bonus += min(3.0, (opp_mil_power - own_mil_power) * 0.3)
+
+            # ── (5) Civil War: require two same-color village figures ──
+            # Civil War lets each player pick 2 village figures of the
+            # same color.  If we don't have two, the spell is wasted.
+            if 'Civil War' in desc:
+                from collections import Counter
+                village_colors = Counter(
+                    f.get('color') for f in own_figures
+                    if f.get('field') == 'village'
+                )
+                max_same_color = max(village_colors.values()) if village_colors else 0
+                if max_same_color < 2:
+                    # We can't field two village figures → penalise heavily
+                    bonus -= 4.0
+                else:
+                    # We have a valid pair → small extra incentive
+                    bonus += 1.0
+
+        # ── (3) Invader Swap with strong defense ──
+        # If the AI is currently the invader and has strong defensive
+        # figures (fortress, wall, or high-power military with
+        # cannot_attack), swapping roles forces the opponent to advance
+        # into our prepared defenses.
+        if spell_name == 'Invader Swap':
+            is_invader = False
+            if game_dict and ai_player_id is not None:
+                is_invader = game_dict.get('invader_player_id') == ai_player_id
+            if is_invader:
+                # Sum defensive strength: fortress/wall power + wall bonus
+                defensive_power = sum(
+                    _figure_power(f) for f in own_figures
+                    if f.get('cannot_attack') or f.get('must_be_attacked')
+                )
+                if defensive_power > 0:
+                    # Strong defense makes role swap very attractive
+                    bonus += min(4.0, defensive_power * 0.3)
+                else:
+                    # No special defenses → Invader Swap is risky, mild
+                    # baseline because swapping away initiative is costly
+                    bonus += 0.5
+            else:
+                # We're already defender → swapping to become invader is
+                # sometimes useful but not the defensive play this rule
+                # is about.  Flat baseline.
+                bonus += 1.0
+
+        # ── Targeted enchantment spells: state-dependent impact ──
+        if spell_name == 'Poison' and target_fid is not None:
+            fig = next((f for f in opp_figures if f.get('id') == target_fid), None)
+            if fig:
+                fig_power = _figure_power(fig)
+                bonus += min(6.0, fig_power * 0.4)
+            else:
+                bonus += 3.0
+
+        elif spell_name == 'Health Boost' and target_fid is not None:
+            fig = next((f for f in own_figures if f.get('id') == target_fid), None)
+            if fig:
+                fig_power = _figure_power(fig)
+                bonus += min(6.0, fig_power * 0.3 + 3.0)
+            else:
+                bonus += 3.0
+
+        elif spell_name == 'Explosion' and target_fid is not None:
+            fig = next((f for f in opp_figures if f.get('id') == target_fid), None)
+            if fig:
+                fig_power = _figure_power(fig)
+                resource_value = sum(
+                    int(v) for v in (fig.get('produces') or {}).values()
+                )
+                bonus += fig_power * 0.4 + resource_value * 1.5
+            else:
+                bonus += 5.0
+
+    if 'Blitzkrieg' in active_modifiers and action_type == 'advance_figure':
         bonus += 1.5
 
     return bonus
@@ -378,7 +541,15 @@ def generate_strategy_plans(
         opp_power = float(likely_opp.get('power_estimate') if likely_opp else 0.0)
         expected_power_diff = own_power - opp_power
 
-        mod_bonus = _modifier_bonus(action, opponent_snapshot.get('active_battle_modifiers', []))
+        opp_player = _find_opponent(game_dict, ai_player_id)
+        mod_bonus = _modifier_bonus(
+            action,
+            opponent_snapshot.get('active_battle_modifiers', []),
+            opp_figures=opp_player.get('figures', []) if opp_player else [],
+            own_figures=ai_player.get('figures', []),
+            game_dict=game_dict,
+            ai_player_id=ai_player_id,
+        )
         turns_pressure = max(0.0, (4.0 - horizon_turns) * 0.5)
         total_score, score_breakdown = _score_plan(
             feasibility=feasibility,
