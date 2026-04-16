@@ -78,11 +78,16 @@ def _find_opponent(game_dict: dict[str, Any], ai_player_id: int) -> dict[str, An
     return next((p for p in game_dict.get('players', []) if p.get('id') != ai_player_id), None)
 
 
-def _figure_power(fig: dict[str, Any]) -> int:
+def _figure_power(fig: dict[str, Any], all_figures: list[dict[str, Any]] | None = None) -> int:
     if fig.get('field') == 'castle':
-        return 15
-    cards = fig.get('cards', fig.get('cards_to_figure', []))
-    return sum(int(c.get('value') or c.get('card_value') or 0) for c in cards)
+        base = 15
+    else:
+        cards = fig.get('cards', fig.get('cards_to_figure', []))
+        base = sum(int(c.get('value') or c.get('card_value') or 0) for c in cards)
+    if all_figures:
+        from ai.game_state import compute_support_bonus
+        base += compute_support_bonus(fig, all_figures)
+    return base
 
 
 def _extract_power_from_action_description(action: dict[str, Any]) -> int | None:
@@ -129,7 +134,8 @@ def _estimate_target_figure_for_action(
 
     if action_type == 'advance_figure':
         fid = params.get('figure_id')
-        fig = next((f for f in ai_player.get('figures', []) if f.get('id') == fid), None)
+        ai_figs = ai_player.get('figures', [])
+        fig = next((f for f in ai_figs if f.get('id') == fid), None)
         if fig:
             return {
                 'figure_id': fig.get('id'),
@@ -137,7 +143,7 @@ def _estimate_target_figure_for_action(
                 'field': fig.get('field'),
                 'suit': fig.get('suit'),
                 'state': 'already_built',
-                'power_estimate': _figure_power(fig),
+                'power_estimate': _figure_power(fig, ai_figs),
             }
 
     if action_type == 'build_figure':
@@ -209,14 +215,14 @@ def _estimate_target_figure_for_action(
 
     current_figs = ai_player.get('figures', [])
     if current_figs:
-        strongest = max(current_figs, key=_figure_power)
+        strongest = max(current_figs, key=lambda f: _figure_power(f, current_figs))
         return {
             'figure_id': strongest.get('id'),
             'name': strongest.get('name'),
             'field': strongest.get('field'),
             'suit': strongest.get('suit'),
             'state': 'already_built',
-            'power_estimate': _figure_power(strongest),
+            'power_estimate': _figure_power(strongest, current_figs),
         }
 
     return None
@@ -306,17 +312,20 @@ def _modifier_bonus(
 
     # ── (2) Same-suit build promotion ──
     # Building a figure whose suit matches existing figures increases
-    # support bonus potential in battle.  Each same-suit figure already
-    # on the field adds a small bonus.
+    # support bonus potential in battle.  Estimate the support bonus
+    # the new figure would receive from existing same-suit allies.
     if action_type == 'build_figure':
         params = action.get('params', {}) or {}
         build_suit = params.get('suit')
+        build_field = params.get('field', '').lower()
         if build_suit:
-            same_suit_count = sum(
-                1 for f in own_figures
-                if (f.get('suit') or '').lower() == build_suit.lower()
-            )
-            bonus += same_suit_count * 0.8
+            from ai.game_state import compute_support_bonus
+            # Create a lightweight stub for the new figure to estimate its
+            # incoming support from existing allies.
+            stub = {'id': None, 'suit': build_suit, 'field': build_field,
+                    'name': params.get('name', ''), 'player_id': None}
+            est_support = compute_support_bonus(stub, own_figures)
+            bonus += min(est_support * 0.5, 5.0)
 
     if action_type == 'cast_spell':
         desc = str(action.get('description', ''))
@@ -337,11 +346,11 @@ def _modifier_bonus(
         if 'Peasant War' in desc or 'Civil War' in desc:
             bonus += 2.5
             opp_mil_power = sum(
-                _figure_power(f) for f in opp_figures
+                _figure_power(f, opp_figures) for f in opp_figures
                 if f.get('field') == 'military' and not f.get('cannot_attack')
             )
             own_mil_power = sum(
-                _figure_power(f) for f in own_figures
+                _figure_power(f, own_figures) for f in own_figures
                 if f.get('field') == 'military' and not f.get('cannot_attack')
             )
             if opp_mil_power > own_mil_power + 5:
@@ -378,7 +387,7 @@ def _modifier_bonus(
             if is_invader:
                 # Sum defensive strength: fortress/wall power + wall bonus
                 defensive_power = sum(
-                    _figure_power(f) for f in own_figures
+                    _figure_power(f, own_figures) for f in own_figures
                     if f.get('cannot_attack') or f.get('must_be_attacked')
                 )
                 if defensive_power > 0:
@@ -398,7 +407,7 @@ def _modifier_bonus(
         if spell_name == 'Poison' and target_fid is not None:
             fig = next((f for f in opp_figures if f.get('id') == target_fid), None)
             if fig:
-                fig_power = _figure_power(fig)
+                fig_power = _figure_power(fig, opp_figures)
                 bonus += min(6.0, fig_power * 0.4)
             else:
                 bonus += 3.0
@@ -406,7 +415,7 @@ def _modifier_bonus(
         elif spell_name == 'Health Boost' and target_fid is not None:
             fig = next((f for f in own_figures if f.get('id') == target_fid), None)
             if fig:
-                fig_power = _figure_power(fig)
+                fig_power = _figure_power(fig, own_figures)
                 bonus += min(6.0, fig_power * 0.3 + 3.0)
             else:
                 bonus += 3.0
@@ -414,7 +423,7 @@ def _modifier_bonus(
         elif spell_name == 'Explosion' and target_fid is not None:
             fig = next((f for f in opp_figures if f.get('id') == target_fid), None)
             if fig:
-                fig_power = _figure_power(fig)
+                fig_power = _figure_power(fig, opp_figures)
                 resource_value = sum(
                     int(v) for v in (fig.get('produces') or {}).values()
                 )

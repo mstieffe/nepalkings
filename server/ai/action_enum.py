@@ -139,7 +139,7 @@ def _enum_forced_counter_advance(game_dict, ai_player, action_id):
         if fig.get('must_be_attacked'):
             continue
 
-        power = _est_figure_power(fig)
+        power = _est_figure_power(fig, ai_player.get('figures', []))
         if required_color:
             desc = (
                 f"COUNTER-ADVANCE (Civil War second pick): {fig.get('name', '?')} "
@@ -223,7 +223,8 @@ def _should_force_defender_counter_advance(game_dict, ai_player):
 
     # If invader has multiple defender options and power spread is large,
     # they can pick the weak one. Force counter-advance in that case.
-    powers = [_est_figure_power(f) for f in targets]
+    ai_figs = ai_player.get('figures', [])
+    powers = [_est_figure_power(f, ai_figs) for f in targets]
     if powers and (max(powers) - min(powers) >= 4):
         return True, 'vulnerable_target_spread'
 
@@ -237,14 +238,19 @@ def _should_force_defender_counter_advance(game_dict, ai_player):
     return True, 'default_prefer_counter_advance'
 
 
-def _est_power(fig):
-    """Estimate figure power (sum of card values, castle=15)."""
+def _est_power(fig, all_figures=None):
+    """Estimate figure power including support bonus (castle=15 base)."""
     if not fig:
         return 0
     if fig.get('field') == 'castle':
-        return 15
-    cards = fig.get('cards_to_figure', [])
-    return sum(c.get('card_value', c.get('value', 0)) for c in cards)
+        base = 15
+    else:
+        cards = fig.get('cards_to_figure', [])
+        base = sum(c.get('card_value', c.get('value', 0)) for c in cards)
+    if all_figures:
+        from ai.game_state import compute_support_bonus
+        base += compute_support_bonus(fig, all_figures)
+    return base
 
 
 def detect_phase(game_dict: dict, ai_player_id: int) -> str:
@@ -536,7 +542,7 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
                     break
             if in_deficit:
                 continue
-            power = _est_figure_power(fig)
+            power = _est_figure_power(fig, ai_player.get('figures', []))
             field = fig.get('field', '?')
             checkmate_warn = " ⚠️ CHECKMATE RISK" if fig.get('checkmate') else ""
             modifier_note = ""
@@ -625,7 +631,7 @@ def _enum_select_defender(game_dict, ai_player, opponent):
     ai_power = 0
     for fig in ai_player.get('figures', []):
         if fig['id'] == adv_fig_id:
-            ai_power = _est_figure_power(fig)
+            ai_power = _est_figure_power(fig, ai_player.get('figures', []))
             break
 
     # Check battle modifier restrictions on defender selection
@@ -671,8 +677,9 @@ def _enum_select_defender(game_dict, ai_player, opponent):
     if must_attack:
         eligible = must_attack
 
+    opp_figs = opponent.get('figures', [])
     for fig in eligible:
-        fig_power = _est_figure_power(fig)
+        fig_power = _est_figure_power(fig, opp_figs)
         diff = ai_power - fig_power
         field = fig.get('field', '?')
         abilities = []
@@ -694,7 +701,7 @@ def _enum_select_defender(game_dict, ai_player, opponent):
     # Fallback: if no non-checkmate targets, allow checkmate figures
     if not actions and checkmate_fallback:
         for fig in checkmate_fallback:
-            fig_power = _est_figure_power(fig)
+            fig_power = _est_figure_power(fig, opp_figs)
             diff = ai_power - fig_power
             field = fig.get('field', '?')
             actions.append({
@@ -709,12 +716,17 @@ def _enum_select_defender(game_dict, ai_player, opponent):
     return actions
 
 
-def _est_figure_power(fig):
-    """Quick power estimate: castle=15, else sum of card values."""
+def _est_figure_power(fig, all_figures=None):
+    """Quick power estimate including support bonus (castle=15 base)."""
     if fig.get('field') == 'castle':
-        return 15
-    cards = fig.get('cards_to_figure', [])
-    return sum(c.get('card_value', c.get('value', 0)) for c in cards)
+        base = 15
+    else:
+        cards = fig.get('cards_to_figure', [])
+        base = sum(c.get('card_value', c.get('value', 0)) for c in cards)
+    if all_figures:
+        from ai.game_state import compute_support_bonus
+        base += compute_support_bonus(fig, all_figures)
+    return base
 
 
 def _check_build_deficit_impact(new_fig, existing_figures, current_produces, current_requires):
@@ -822,8 +834,8 @@ def _enum_battle_decision(game_dict, ai_player, opponent):
             else:
                 ai_fig = f
 
-    ai_power = _est_power(ai_fig)
-    opp_power = _est_power(opp_fig)
+    ai_power = _est_power(ai_fig, ai_player.get('figures', []))
+    opp_power = _est_power(opp_fig, opponent.get('figures', []))
     ai_fig_name = ai_fig['name'] if ai_fig else '?'
     opp_fig_name = opp_fig['name'] if opp_fig else '?'
 
@@ -895,7 +907,7 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
             if fig_color != card_color:
                 continue
             # Base figure power
-            power = _est_power(fig)
+            power = _est_power(fig, ai_figures)
             # Healer buff: +4 per same-suit Healer for village figures
             # (Healer buffs are added to base power, so called villagers benefit)
             if target_field == 'village':
@@ -1019,12 +1031,17 @@ _RED_SUITS = {'Hearts', 'Diamonds'}
 _BLACK_SUITS = {'Clubs', 'Spades'}
 
 
-def _figure_power_from_dict(fig):
-    """Compute base power from a serialized figure dict."""
+def _figure_power_from_dict(fig, all_figures=None):
+    """Compute power including support bonus from a serialized figure dict."""
     if fig.get('field') == 'castle':
-        return 15
-    cards = fig.get('cards', fig.get('cards_to_figure', []))
-    return sum(c.get('value', 0) for c in cards)
+        base = 15
+    else:
+        cards = fig.get('cards', fig.get('cards_to_figure', []))
+        base = sum(c.get('value', 0) for c in cards)
+    if all_figures:
+        from ai.game_state import compute_support_bonus
+        base += compute_support_bonus(fig, all_figures)
+    return base
 
 
 def _get_player_gamble_state(game_dict, player_id):
@@ -1095,7 +1112,7 @@ def _get_best_call_figure(move, game_dict, ai_player):
             continue
         if not bm_is_red and fig_suit not in _BLACK_SUITS:
             continue
-        power = _figure_power_from_dict(fig)
+        power = _figure_power_from_dict(fig, ai_player.get('figures', []))
         if power > best_power:
             best_power = power
             best_fig = fig
@@ -1122,7 +1139,7 @@ def _enum_battle_round(game_dict, ai_player, opponent):
         call_fig = _get_best_call_figure(move, game_dict, ai_player) if family in _CALL_FIELD_MAP else None
         if call_fig:
             params['call_figure_id'] = call_fig['id']
-            fig_power = _figure_power_from_dict(call_fig)
+            fig_power = _figure_power_from_dict(call_fig, ai_player.get('figures', []))
             combined = fig_power + (move.get('value', 0) or 0)
             desc = (f"Play {family} "
                     f"(card={move.get('value', '?')}) + "
@@ -1163,7 +1180,7 @@ def _enum_battle_round(game_dict, ai_player, opponent):
             if family in _CALL_FIELD_MAP:
                 call_fig = _get_best_call_figure(move, game_dict, ai_player)
                 if call_fig:
-                    fig_power = _figure_power_from_dict(call_fig)
+                    fig_power = _figure_power_from_dict(call_fig, ai_player.get('figures', []))
                     suit_bonus = move_val if move.get('suit') == call_fig.get('suit') else 0
                     eff_power = fig_power + suit_bonus
                     desc = (
@@ -1472,7 +1489,7 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
         for fig in opp_figures:
             if fig.get('checkmate'):
                 continue  # Can't poison Maharaja
-            fig_power = _est_figure_power(fig)
+            fig_power = _est_figure_power(fig, opp_figures)
             desc_cards = '+'.join(f"{c['rank']}{c['suit'][:1]}" for c in poison_cards)
             actions.append({
                 'id': action_id, 'type': 'cast_spell',
@@ -1492,7 +1509,7 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
         for fig in ai_figures:
             if fig.get('checkmate'):
                 continue  # Can't boost Maharaja (immune to spells)
-            fig_power = _est_figure_power(fig)
+            fig_power = _est_figure_power(fig, ai_figures)
             desc_cards = '+'.join(f"{c['rank']}{c['suit'][:1]}" for c in hb_cards)
             actions.append({
                 'id': action_id, 'type': 'cast_spell',
@@ -1531,7 +1548,7 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
             for fig in opp_figures:
                 if fig.get('checkmate'):
                     continue
-                fig_power = _est_figure_power(fig)
+                fig_power = _est_figure_power(fig, opp_figures)
                 desc_cards = '+'.join(f"{c['rank']}{c['suit'][:1]}" for c in cards)
                 actions.append({
                     'id': action_id, 'type': 'cast_spell',
