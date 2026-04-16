@@ -42,7 +42,8 @@ class BattleMoveDetailBox:
     def __init__(self, window, battle_move_data, families_by_name, game,
                  is_battle_context=False, eligible_figures=None, move_index=None,
                  gamble_disabled=False, use_disabled=False, combine_disabled=False,
-                 combinable_daggers=None, dismantle_disabled=False):
+                 combinable_daggers=None, dismantle_disabled=False,
+                 best_figure_index=0):
         """
         :param window: pygame surface
         :param battle_move_data: server dict with keys: id, family_name, suit, rank, value, card_id, card_type
@@ -56,6 +57,7 @@ class BattleMoveDetailBox:
         :param combine_disabled: True to grey out the combine button
         :param combinable_daggers: list of dagger move dicts eligible to combine with this dagger
         :param dismantle_disabled: True to grey out the dismantle button
+        :param best_figure_index: index of the strongest eligible figure (default 0)
         """
         self.window = window
         self.bm = battle_move_data
@@ -138,7 +140,7 @@ class BattleMoveDetailBox:
         self.suit_icon = self._load_suit_icon(battle_move_data['suit'])
 
         # ── Figure selector assets (pre-scale only, no positioning) ──
-        self.fig_selector_index = 0
+        self.fig_selector_index = best_figure_index if best_figure_index < len(self.eligible_figures) else 0
         self.fig_arrow_left = None
         self.fig_arrow_right = None
         self.fig_icons = {}

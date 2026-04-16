@@ -11,6 +11,7 @@ from routes.auth import require_token, verify_player_ownership
 
 battle_shop = Blueprint('battle_shop', __name__)
 
+logger = logging.getLogger('nepalkings.server')
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 
 @battle_shop.after_request
@@ -501,6 +502,14 @@ def gamble_battle_move():
     game.battle_gamble_counts = gamble_counts
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(game, 'battle_gamble_counts')
+
+    drew_desc = ', '.join(
+        '{}/{}/{} id={}'.format(m.get('family_name'), m.get('suit'), m.get('rank'), m.get('id'))
+        for m in new_moves
+    )
+    logger.info(f"[GAMBLE] game={game_id} player={player_id} round={current_round} "
+                f"sacrificed_bm={battle_move_id} ({sacrificed_data.get('family_name')}/{sacrificed_data.get('suit')}) "
+                f"drew=[{drew_desc}]")
 
     db.session.commit()
 

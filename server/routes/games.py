@@ -594,7 +594,8 @@ def _get_opponent_turn_summary(game, current_player_id):
     
     summary = {
         'opponent_name': opponent.serialize()['username'],
-        'action': None
+        'action': None,
+        'log_id': recent_log.id,  # for client-side deduplication
     }
     
     # Analyze the most recent log to determine the action
@@ -889,6 +890,18 @@ def start_turn():
         # If this is game_start, return it immediately (regardless of whose turn it is)
         if opponent_turn_summary and opponent_turn_summary.get('action') == 'game_start':
             logger.debug(f"[START_TURN] Returning game_start notification for player {player_id}")
+            # Write a LogEntry so subsequent polls don't repeat the welcome
+            log_entry = LogEntry(
+                game_id=game.id,
+                player_id=player_id,
+                round_number=game.current_round,
+                turn_number=player.turns_left,
+                message="Game started.",
+                author="System",
+                type='game_start'
+            )
+            db.session.add(log_entry)
+            db.session.commit()
             return jsonify({
                 'success': True,
                 'auto_fill': None,
@@ -2657,7 +2670,11 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
                             battle_ids, game_id):
         support = 0
 
-    return base + healer_buff + support + wall + enchant
+    total = base + healer_buff + support + wall + enchant
+    logger.debug(f"[FIG_POWER] {figure.name}(id={figure.id},suit={figure.suit}) "
+          f"base={base} healer={healer_buff} support={support} "
+          f"wall={wall} enchant={enchant} total={total}")
+    return total
 
 
 def _compute_move_effective_value(move, all_figures, game,
@@ -2688,7 +2705,7 @@ def _compute_move_effective_value(move, all_figures, game,
     return bm_value
 
 
-def _compute_server_total_diff(game):
+def _compute_server_total_diff(game, return_breakdown=False):
     """Authoritative total_diff from DB.  Positive = invader wins.
 
     Mirrors the client's ``_get_total_diff()`` logic exactly:
@@ -2698,6 +2715,9 @@ def _compute_server_total_diff(game):
       first matching call figure in rounds — never both)
     * Wall defence only applies to the DEFENDING side
     * Block zeroes the entire round
+
+    If *return_breakdown* is True, returns ``(total, breakdown_dict)``
+    instead of just ``total``.
     """
     adv_fig = (db.session.get(Figure, game.advancing_figure_id)
                if game.advancing_figure_id else None)
@@ -2862,6 +2882,23 @@ def _compute_server_total_diff(game):
     logger.debug(f"[SERVER_TOTAL_DIFF] game={game.id} "
           f"fig_diff={fig_diff} (adv={adv_power} def={def_power}) "
           f"round_diff={round_diff} total={total}")
+
+    if return_breakdown:
+        breakdown = {
+            'adv_fig': adv_fig.name if adv_fig else None,
+            'adv_fig_suit': adv_fig.suit if adv_fig else None,
+            'def_fig': def_fig.name if def_fig else None,
+            'def_fig_suit': def_fig.suit if def_fig else None,
+            'adv_power': adv_power,
+            'def_power': def_power,
+            'adv_da_applied': adv_da_applied,
+            'def_da_applied': def_da_applied,
+            'def_wall_total': def_wall_total,
+            'fig_diff': fig_diff,
+            'round_diff': round_diff,
+            'total': total,
+        }
+        return total, breakdown
     return total
 
 
@@ -2974,6 +3011,8 @@ def _return_unplayed_battle_move_cards(game_id):
     unplayed = BattleMove.query.filter_by(game_id=game_id).filter(
         BattleMove.played_round.is_(None)
     ).all()
+    if unplayed:
+        logger.info(f"[RETURN_UNPLAYED] game={game_id} returning {len(unplayed)} unplayed BM cards to owners")
     for bm in unplayed:
         # Primary card
         if bm.card_type == 'side':
@@ -2983,6 +3022,7 @@ def _return_unplayed_battle_move_cards(game_id):
         if card:
             card.part_of_battle_move = False
             card.in_deck = False
+            logger.debug(f"[RETURN_UNPLAYED] bm_id={bm.id} card_id={card.id} ({bm.family_name}/{bm.suit}) → player {bm.player_id}")
 
         # Second card (Double Dagger)
         if bm.card_id_b is not None:
@@ -3102,6 +3142,17 @@ def play_battle_move():
     move.played_round = game.battle_round
     if call_figure_id:
         move.call_figure_id = call_figure_id
+        # Log call figure details for debugging (Bug #4)
+        call_fig = db.session.get(Figure, call_figure_id)
+        if call_fig:
+            logger.info(f"[PLAY_BM] game={game_id} player={player_id} bm_id={battle_move_id} "
+                        f"family={move.family_name} suit={move.suit} round={game.battle_round} "
+                        f"call_figure_id={call_figure_id} call_fig_name={call_fig.name} call_fig_suit={call_fig.suit}")
+        else:
+            logger.warning(f"[PLAY_BM] game={game_id} call_figure_id={call_figure_id} NOT FOUND")
+    else:
+        logger.info(f"[PLAY_BM] game={game_id} player={player_id} bm_id={battle_move_id} "
+                    f"family={move.family_name} suit={move.suit} round={game.battle_round} (no call figure)")
 
     # Remove the card(s) from the player's hand so they can't be
     # accidentally sacrificed / auto-removed while the battle continues.
@@ -3472,7 +3523,8 @@ def finish_battle():
     is_invader = (game.invader_player_id == player_id)
 
     # ── Server-authoritative total_diff ──
-    server_diff = _compute_server_total_diff(game)
+    server_diff, breakdown = _compute_server_total_diff(game,
+                                                        return_breakdown=True)
     # server_diff > 0 means invader wins; convert to caller's perspective
     total_diff = server_diff if is_invader else -server_diff
 
@@ -3480,10 +3532,10 @@ def finish_battle():
     # Compare client value with server value (both in caller perspective)
     diff_delta = abs(total_diff - client_total_diff)
     if diff_delta != 0:
-        level = "WARNING" if diff_delta > 0 else "INFO"
         logger.warning(f"[FINISH_BATTLE] ⚠️  DISCREPANCY: player={player_id} "
               f"client_diff={client_total_diff} server_diff(caller)={total_diff} "
               f"delta={diff_delta}  (server is authoritative)")
+        logger.warning(f"[FINISH_BATTLE] ⚠️  BREAKDOWN: {breakdown}")
     logger.info(f"[FINISH_BATTLE] player={player_id} is_invader={is_invader} "
           f"client_diff={client_total_diff} server_diff={server_diff} "
           f"used_diff={total_diff}")

@@ -1009,6 +1009,27 @@ class BattleScreen(SubScreen):
                 max_power = total
         return max_power
 
+    def _get_best_figure_index(self, eligible, bm_suit, bm_value):
+        """Return the index of the strongest eligible figure for a Call move.
+
+        Uses the same power formula as ``_get_panel_display_power`` so the
+        carousel default matches the value shown on the panel icon.
+        """
+        if not eligible:
+            return 0
+        best_idx = 0
+        best_power = -1
+        for i, fig in enumerate(eligible):
+            base = fig.get_value()
+            buffs = self._get_buffs_allies_bonus(fig, is_player=True)
+            defence = self._get_buffs_allies_defence_bonus(is_player=True)
+            bonus = bm_value if fig.suit == bm_suit else 0
+            total = base + buffs + defence + bonus
+            if total > best_power:
+                best_power = total
+                best_idx = i
+        return best_idx
+
     # ────────────────── power calculations ─────────────────────
 
     def _get_figure_total_power(self, figure, figure_icon):
@@ -1189,13 +1210,50 @@ class BattleScreen(SubScreen):
                     o_info = (f"{o.get('family_name')}(v={o.get('value')},s={o.get('suit')},"
                               f"call={o.get('call_figure_id')},"
                               f"cf={'yes' if o.get('_call_figure') else 'no'})" if o else "None")
-                    logger.debug(f"[CLIENT_ROUND_{i}] p={p_info} p_eff={p_val} "
-                          f"o={o_info} o_eff={o_val} rd={rd}")
+                    # Include call figure breakdown for diagnosing discrepancies
+                    p_cf_info = ""
+                    if p and p.get('_call_figure'):
+                        cf = p['_call_figure']
+                        p_cf_info = (f" cf_name={cf.name} cf_suit={cf.suit} "
+                                     f"cf_base={cf.get_value()} "
+                                     f"cf_buffs={self._get_buffs_allies_bonus(cf, True)} "
+                                     f"cf_da={self._get_da_call_penalty(False, i)}")
+                    o_cf_info = ""
+                    if o and o.get('_call_figure'):
+                        cf = o['_call_figure']
+                        o_cf_info = (f" cf_name={cf.name} cf_suit={cf.suit} "
+                                     f"cf_base={cf.get_value()} "
+                                     f"cf_buffs={self._get_buffs_allies_bonus(cf, False)} "
+                                     f"cf_da={self._get_da_call_penalty(True, i)}")
+                    logger.debug(f"[CLIENT_ROUND_{i}] p={p_info} p_eff={p_val}{p_cf_info} "
+                          f"o={o_info} o_eff={o_val}{o_cf_info} rd={rd}")
         if verbose:
             p_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
+            p_power_2 = self._get_figure_total_power(self.player_figure_2, self.player_figure_icon_2)
             o_power = self._get_figure_total_power(self.opponent_figure, self.opponent_figure_icon)
+            o_power_2 = self._get_figure_total_power(self.opponent_figure_2, self.opponent_figure_icon_2)
+            # Component breakdown for main battle figures
+            def _fig_breakdown(fig, icon):
+                if not fig:
+                    return "None"
+                base = fig.get_value()
+                buffs = getattr(icon, 'buffs_allies_bonus', 0) if icon else 0
+                bonus = icon.battle_bonus_received if icon else 0
+                blocked = getattr(icon, 'battle_bonus_blocked', False) if icon else False
+                if blocked:
+                    bonus = 0
+                defence = getattr(icon, 'buffs_allies_defence_bonus', 0) if icon else 0
+                enchant = fig.get_total_enchantment_modifier()
+                da = getattr(icon, 'distance_attack_penalty', 0) if icon else 0
+                return (f"{fig.name}(suit={fig.suit},base={base},buffs={buffs},"
+                        f"support={bonus},blocked={blocked},wall={defence},"
+                        f"enchant={enchant},da={da})")
+            logger.debug(f"[CLIENT_FIG] player={_fig_breakdown(self.player_figure, self.player_figure_icon)} "
+                  f"player2={_fig_breakdown(self.player_figure_2, self.player_figure_icon_2)} "
+                  f"opponent={_fig_breakdown(self.opponent_figure, self.opponent_figure_icon)} "
+                  f"opponent2={_fig_breakdown(self.opponent_figure_2, self.opponent_figure_icon_2)}")
             logger.debug(f"[CLIENT_TOTAL_DIFF] fig_diff={fig_diff} "
-                  f"(player={p_power} opponent={o_power}) total={total} "
+                  f"(player={p_power}+{p_power_2} opponent={o_power}+{o_power_2}) total={total} "
                   f"is_invader={self.player_is_invader}")
         return total
 
@@ -1595,6 +1653,8 @@ class BattleScreen(SubScreen):
                     combine_disabled=combine_off,
                     combinable_daggers=combinable,
                     dismantle_disabled=dismantle_off,
+                    best_figure_index=self._get_best_figure_index(
+                        eligible, bm_suit, move.get('value', 0)),
                 )
                 break
 
