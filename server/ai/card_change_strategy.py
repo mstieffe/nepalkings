@@ -11,6 +11,9 @@ KEEP_RANKS = {'K', 'Q'}                           # Only kings and queens are al
 MAYBE_KEEP_RANKS: set[str] = set()                  # Nothing else gets conditional keep
 LOW_MAIN_RANKS = {'7', '8'}
 
+KEEP_SIDE_RANKS = {'2'}                            # Rank 2 is key for Healers, Carpenter, Stone Mason
+LOW_SIDE_RANKS: set[str] = set()                   # All side ranks (3-6) have figure/spell uses
+
 _RANK_VALUE_FALLBACK = {
     '2': 2,
     '3': 3,
@@ -214,6 +217,156 @@ def compute_tactic_protected_ids(
             num_options = {str(r).upper() for r in recipe.get('number_card_options', [])}
             # Find the highest-value matching number card
             best_card: tuple[int, int] | None = None  # (card_id, value)
+            for card in free_cards:
+                cid = _field(card, 'id')
+                try:
+                    cid = int(cid)
+                except (TypeError, ValueError):
+                    continue
+                if cid in claimed:
+                    continue
+                card_rank = normalize_rank(_field(card, 'rank'))
+                card_suit = str(_field(card, 'suit', ''))
+                if card_rank in num_options and card_suit == suit:
+                    val = _card_numeric_value(card)
+                    if best_card is None or val > best_card[1]:
+                        best_card = (cid, val)
+            if best_card is not None:
+                protected.add(best_card[0])
+                claimed.add(best_card[0])
+
+    return protected
+
+
+# ---------------------------------------------------------------------------
+# Side-card swap helpers
+# ---------------------------------------------------------------------------
+
+def select_side_cards_to_swap(
+    cards: list[Any],
+    protect_ids: set[int] | None = None,
+) -> list[int]:
+    """Return side-card IDs that should be swapped.
+
+    ``protect_ids`` — card IDs needed for a tactic target (figures or
+    spells).  These are never swapped.
+    """
+    protect_ids = protect_ids or set()
+    sorted_cards = sorted(cards or [], key=_card_numeric_value)
+
+    to_swap: list[int] = []
+
+    for card in sorted_cards:
+        rank = normalize_rank(_field(card, 'rank'))
+        card_id = _field(card, 'id')
+
+        # Tactic-protected cards are never swapped
+        try:
+            if int(card_id) in protect_ids:
+                continue
+        except (TypeError, ValueError):
+            pass
+
+        if rank in KEEP_SIDE_RANKS:
+            continue
+
+        try:
+            to_swap.append(int(card_id))
+        except (TypeError, ValueError):
+            continue
+
+    # Always swap at least one card when called
+    if not to_swap and sorted_cards:
+        lowest_id = _field(sorted_cards[0], 'id')
+        try:
+            to_swap = [int(lowest_id)]
+        except (TypeError, ValueError):
+            to_swap = []
+
+    return to_swap
+
+
+def summarize_side_change(
+    cards: list[Any],
+    protect_ids: set[int] | None = None,
+) -> dict[str, int]:
+    """Return summary counters for side-card change action text."""
+    free_count = len(cards or [])
+    to_swap = select_side_cards_to_swap(cards or [], protect_ids=protect_ids)
+
+    return {
+        'free_count': int(free_count),
+        'swap_count': int(len(to_swap)),
+    }
+
+
+def compute_side_tactic_protected_ids(
+    free_cards: list[Any],
+    targets: list[dict[str, Any]],
+    max_targets: int = 3,
+) -> set[int]:
+    """Identify side-hand card IDs that should be kept for figure building.
+
+    Mirrors ``compute_tactic_protected_ids`` but for side-type key ranks
+    and side-type number cards.
+    """
+    if not free_cards or not targets:
+        return set()
+
+    protected: set[int] = set()
+    claimed: set[int] = set()
+
+    for target in targets[:max(1, int(max_targets))]:
+        missing = target.get('missing_side') or {}
+        suit = target.get('suit')
+        if not suit:
+            continue
+
+        from ai.figure_recipes import FIGURE_RECIPES
+        family = target.get('family_name', '')
+        recipe = next(
+            (r for r in FIGURE_RECIPES if r.get('family_name') == family),
+            None,
+        )
+        if not recipe:
+            continue
+
+        # Collect all required (rank, suit) for side cards in this recipe
+        required_side_keys: list[tuple[str, str]] = []
+        for rank, card_type in recipe.get('key_ranks', []):
+            if card_type == 'side':
+                required_side_keys.append((str(rank).upper(), suit))
+
+        # Determine which are already in hand (not in missing)
+        held_keys: list[tuple[str, str]] = []
+        for rank, s in required_side_keys:
+            key = f"{rank}_{s}"
+            if missing.get(key, 0) <= 0:
+                held_keys.append((rank, s))
+
+        # Match held recipe keys to actual card IDs
+        for req_rank, req_suit in held_keys:
+            for card in free_cards:
+                cid = _field(card, 'id')
+                try:
+                    cid = int(cid)
+                except (TypeError, ValueError):
+                    continue
+                if cid in claimed:
+                    continue
+                card_rank = normalize_rank(_field(card, 'rank'))
+                card_suit = str(_field(card, 'suit', ''))
+                if card_rank == req_rank and card_suit == req_suit:
+                    protected.add(cid)
+                    claimed.add(cid)
+                    break
+
+        # Protect side number cards needed for this target
+        needs_number = bool(recipe.get('needs_number_card'))
+        num_type = recipe.get('number_card_type', 'main')
+        if needs_number and num_type == 'side':
+            num_options = {str(r).upper() for r in recipe.get('number_card_options', [])}
+            best_card: tuple[int, int] | None = None
             for card in free_cards:
                 cid = _field(card, 'id')
                 try:

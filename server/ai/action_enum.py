@@ -7,7 +7,7 @@ Determines the current game phase and lists all legal actions
 the AI can take, formatted for the LLM to choose from.
 """
 import logging
-from ai.card_change_strategy import summarize_main_change
+from ai.card_change_strategy import summarize_main_change, summarize_side_change
 from ai.figure_recipes import find_buildable_figures
 
 logger = logging.getLogger('nepalkings.ai.actions')
@@ -592,8 +592,26 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
             'id': action_id,
             'type': 'change_cards',
             'description': (
-                "Change cards — swap selected cards for new ones "
+                "Change main cards — swap selected cards for new ones "
                 f"({swap_count} suggested swaps; {low} low-rank of {total_free} free cards)"
+            ),
+            'params': {},
+        })
+        action_id += 1
+
+    # 4b) Change side cards — same blocking rules as main cards
+    if not infinite_hammer_active and not must_advance:
+        free_side = [c for c in ai_player.get('side_hand', [])
+                     if not c.get('part_of_figure') and not c.get('part_of_battle_move')]
+        side_summary = summarize_side_change(free_side)
+        side_swap = side_summary.get('swap_count', 0)
+        side_free = side_summary.get('free_count', len(free_side))
+        actions.append({
+            'id': action_id,
+            'type': 'change_side_cards',
+            'description': (
+                "Change side cards — swap selected side cards for new ones "
+                f"({side_swap} suggested swaps of {side_free} free side cards)"
             ),
             'params': {},
         })

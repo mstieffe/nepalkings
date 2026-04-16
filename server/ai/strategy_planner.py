@@ -177,7 +177,7 @@ def _estimate_target_figure_for_action(
     # For change_cards: pick the target figure with the highest
     # (probability * power) product — this steers the single change_cards
     # plan toward the goal that benefits most from fresh cards.
-    if action_type == 'change_cards' and top_targets:
+    if action_type in ('change_cards', 'change_side_cards') and top_targets:
         best = max(
             top_targets,
             key=lambda t: (
@@ -263,7 +263,7 @@ def _action_feasibility(action: dict[str, Any], target: dict[str, Any] | None) -
             return 0.05
         return float(target.get('completion_probability', 0.0))
 
-    if t == 'change_cards':
+    if t in ('change_cards', 'change_side_cards'):
         if target:
             return max(0.35, min(0.95, float(target.get('completion_probability', 0.5))))
         return 0.4
@@ -459,7 +459,7 @@ def _build_turn_steps(
                 steps.append(f"advance {target_name} if legal; otherwise stabilize resources")
             else:
                 steps.append(f"prepare battle moves and pressure {opp_name}")
-        elif action.get('type') == 'change_cards':
+        elif action.get('type') in ('change_cards', 'change_side_cards'):
             if turn_idx == 2:
                 steps.append(f"build {target_name} with highest completion probability")
             elif turn_idx == 3:

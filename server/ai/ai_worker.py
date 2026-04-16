@@ -20,9 +20,12 @@ from ai.llm_client import LLMClient, parse_action_response
 from ai.game_state import enrich_figures_with_skills, serialize_game_for_llm
 from ai.action_enum import detect_phase, enumerate_actions, format_actions_for_llm
 from ai.card_change_strategy import (
+    compute_side_tactic_protected_ids,
     compute_tactic_protected_ids,
     select_main_cards_to_swap,
+    select_side_cards_to_swap,
     summarize_main_change,
+    summarize_side_change,
 )
 from ai.strategy_planner import (
     format_strategy_plans_for_prompt,
@@ -1711,6 +1714,8 @@ def _execute_action(app, game_id, ai_player_id, action):
             return _exec_build_figure(base, game_id, ai_player_id, params)
         elif action_type == 'change_cards':
             return _exec_change_cards(app, game_id, ai_player_id)
+        elif action_type == 'change_side_cards':
+            return _exec_change_side_cards(app, game_id, ai_player_id)
         elif action_type == 'advance_figure':
             return _exec_advance_figure(base, game_id, ai_player_id, params)
         elif action_type == 'select_defender':
@@ -1969,6 +1974,64 @@ def _exec_change_cards(app, game_id, ai_player_id):
         logger.info(f"Changed {len(to_swap)} cards")
         return True
     logger.warning(f"Change cards failed: {result.get('message')}")
+    return False
+
+
+def _exec_change_side_cards(app, game_id, ai_player_id):
+    """Change side cards via POST /games/change_cards with card_type='side'.
+
+    Mirrors ``_exec_change_cards`` but operates on the side hand.
+    """
+    with app.app_context():
+        from models import Game, SideCard, db
+        game = db.session.get(Game, game_id)
+        if not game:
+            return False
+
+        hand_cards = SideCard.query.filter_by(
+            player_id=ai_player_id,
+            in_deck=False,
+        ).all()
+
+        free_cards = [c for c in hand_cards
+                      if not c.part_of_figure and not c.part_of_battle_move]
+
+        game_dict = enrich_figures_with_skills(game.serialize())
+
+    if not free_cards:
+        logger.warning("No side cards to change")
+        return False
+
+    from ai.figure_completion import best_figure_targets
+    targets = best_figure_targets(game_dict, ai_player_id, max_results=3)
+    free_dicts = [{'id': c.id, 'rank': c.rank.value if hasattr(c.rank, 'value') else c.rank,
+                   'suit': c.suit.value if hasattr(c.suit, 'value') else c.suit,
+                   'value': c.value} for c in free_cards]
+    protect_ids = compute_side_tactic_protected_ids(free_dicts, targets, max_targets=3)
+
+    if protect_ids:
+        logger.info(f"Side tactic-protected card IDs: {protect_ids}")
+
+    summary = summarize_side_change(free_cards, protect_ids=protect_ids)
+    to_swap = select_side_cards_to_swap(free_cards, protect_ids=protect_ids)
+
+    logger.info(f"Smart side change: swapping {len(to_swap)} of {len(free_cards)} side cards "
+                f"(keeping {len(free_cards) - len(to_swap)} cards, "
+                f"tactic_protected={len(protect_ids)}, "
+                f"swap_count={summary.get('swap_count', 0)})")
+
+    base = settings.SERVER_URL
+    resp = _ai_post(f'{base}/games/change_cards', ai_player_id, json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'cards': [{'id': cid} for cid in to_swap],
+        'card_type': 'side',
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Changed {len(to_swap)} side cards")
+        return True
+    logger.warning(f"Change side cards failed: {result.get('message')}")
     return False
 
 
