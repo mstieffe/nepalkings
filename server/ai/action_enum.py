@@ -1490,6 +1490,8 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
     hb_cards = _pick(side_by_rank_color, '3', 'red', 2)
     if hb_cards and ai_figures:
         for fig in ai_figures:
+            if fig.get('checkmate'):
+                continue  # Can't boost Maharaja (immune to spells)
             fig_power = _est_figure_power(fig)
             desc_cards = '+'.join(f"{c['rank']}{c['suit'][:1]}" for c in hb_cards)
             actions.append({

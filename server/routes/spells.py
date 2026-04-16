@@ -241,6 +241,16 @@ def cast_spell():
             # Execute spell immediately
             spell_effect = _execute_spell(active_spell, game, player)
             
+            # Check if spell execution failed (e.g., invalid target)
+            if spell_effect.get('error'):
+                active_spell.is_active = False
+                db.session.commit()
+                return jsonify({
+                    'success': False,
+                    'message': spell_effect.get('effect', 'Spell execution failed'),
+                    'spell_effect': spell_effect,
+                }), 400
+            
             # Add log entry before commit
             _add_spell_log_entry(
                 game_id, player_id, game.current_round,
@@ -995,12 +1005,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 if getattr(target_figure, 'checkmate', False):
                     spell_effect['effect'] = f'{target_figure.name} is immune to spells (Checkmate)'
                     spell_effect['error'] = 'Invalid target: Checkmate figures are immune to spells'
-                    db.session.commit()
-                    return jsonify({
-                        'success': False, 
-                        'message': f'{target_figure.name} is immune to spells!',
-                        'spell_effect': spell_effect
-                    }), 400
+                    return spell_effect
                 
                 # Determine spell icon filename based on spell name
                 spell_icon = 'default_spell_icon.png'
