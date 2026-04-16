@@ -1605,10 +1605,11 @@ class GameScreen(Screen):
         if self.state.game.battle_confirmed:
             return
         
-        # Force advance when: 1 or fewer turns left, ceasefire not active,
-        # no active advance already, and dialogue not already shown.
-        # Any player (invader or defender) on their last turn must advance.
-        if (self.state.game.current_player.get('turns_left', 0) <= 1 and
+        # Force advance when: invader, 1 or fewer turns left, ceasefire not
+        # active, no active advance already, and dialogue not already shown.
+        # Only the INVADER must advance on their last turn — not the defender.
+        if (self.state.game.invader and
+            self.state.game.current_player.get('turns_left', 0) <= 1 and
             not self.state.game.ceasefire_active and
             not self.state.game.advancing_figure_id and
             not self.state.game.forced_advance_dialogue_shown):
