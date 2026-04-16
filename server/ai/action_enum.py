@@ -445,62 +445,64 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
             actions.extend(counter_actions)
             action_id = next_action_id
 
-    # 1) Build figures — blocked when invader must advance
-    #    (except instant_charge_advance builds which are build+advance)
-    if not must_advance:
-        buildable = find_buildable_figures(
-            ai_player.get('main_hand', []),
-            ai_player.get('side_hand', []),
-            ai_player.get('figures', []),
-        )
-        # Build lookup of card details from hand for enriching build descriptions
-        card_lookup = {}
-        for c in ai_player.get('main_hand', []):
-            card_lookup[c['id']] = c
-        for c in ai_player.get('side_hand', []):
-            card_lookup[c['id']] = c
+    # 1) Build figures
+    # On invader's final turn, only keep instant-charge builds (build+advance).
+    buildable = find_buildable_figures(
+        ai_player.get('main_hand', []),
+        ai_player.get('side_hand', []),
+        ai_player.get('figures', []),
+    )
+    # Build lookup of card details from hand for enriching build descriptions
+    card_lookup = {}
+    for c in ai_player.get('main_hand', []):
+        card_lookup[c['id']] = c
+    for c in ai_player.get('side_hand', []):
+        card_lookup[c['id']] = c
 
-        for fig in buildable:
-            recipe = fig['recipe']
-            # Show what cards are being consumed so AI can evaluate the trade-off
-            card_strs = []
-            total_val = 0
-            for c in fig.get('cards', []):
-                card_detail = card_lookup.get(c.get('id'), {})
-                r = card_detail.get('rank', '?')
-                s = card_detail.get('suit', '?')[:1]
-                v = card_detail.get('value', 0)
-                card_strs.append(f"{r}{s}({v})")
-                total_val += v
-            cards_desc = '+'.join(card_strs) if card_strs else '?'
+    for fig in buildable:
+        if must_advance and not fig.get('recipe', {}).get('special_flags', {}).get('instant_charge', False):
+            continue
+
+        recipe = fig['recipe']
+        # Show what cards are being consumed so AI can evaluate the trade-off
+        card_strs = []
+        total_val = 0
+        for c in fig.get('cards', []):
+            card_detail = card_lookup.get(c.get('id'), {})
+            r = card_detail.get('rank', '?')
+            s = card_detail.get('suit', '?')[:1]
+            v = card_detail.get('value', 0)
+            card_strs.append(f"{r}{s}({v})")
+            total_val += v
+        cards_desc = '+'.join(card_strs) if card_strs else '?'
+        
+        # Check if building this figure would cause or worsen a deficit
+        deficit_warn = _check_build_deficit_impact(
+            fig, ai_player.get('figures', []), current_produces, current_requires)
             
-            # Check if building this figure would cause or worsen a deficit
-            deficit_warn = _check_build_deficit_impact(
-                fig, ai_player.get('figures', []), current_produces, current_requires)
-            
-            actions.append({
-                'id': action_id,
-                'type': 'build_figure',
-                'description': (f"Build {fig['display_name']} [cards: {cards_desc}, power={total_val}] "
-                                f"— produces: {fig['produces']}, requires: {fig['requires']}"
-                                f"{deficit_warn}"),
-                'params': {
-                    'family_name': recipe['family_name'],
-                    'field': recipe['field'],
-                    'color': recipe['color'],
-                    'name': fig['name'],
-                    'suit': fig['suit'],
-                    'description': '',
-                    'upgrade_family_name': recipe.get('upgrade_family_name'),
-                    'produces': fig['produces'],
-                    'requires': fig['requires'],
-                    'cards': fig['cards'],
-                    'instant_charge_advance': recipe.get('special_flags', {}).get('instant_charge', False),
-                    'cannot_be_blocked': recipe.get('special_flags', {}).get('cannot_be_blocked', False),
-                    'rest_after_attack': recipe.get('special_flags', {}).get('rest_after_attack', False),
-                },
-            })
-            action_id += 1
+        actions.append({
+            'id': action_id,
+            'type': 'build_figure',
+            'description': (f"Build {fig['display_name']} [cards: {cards_desc}, power={total_val}] "
+                            f"— produces: {fig['produces']}, requires: {fig['requires']}"
+                            f"{deficit_warn}"),
+            'params': {
+                'family_name': recipe['family_name'],
+                'field': recipe['field'],
+                'color': recipe['color'],
+                'name': fig['name'],
+                'suit': fig['suit'],
+                'description': '',
+                'upgrade_family_name': recipe.get('upgrade_family_name'),
+                'produces': fig['produces'],
+                'requires': fig['requires'],
+                'cards': fig['cards'],
+                'instant_charge_advance': recipe.get('special_flags', {}).get('instant_charge', False),
+                'cannot_be_blocked': recipe.get('special_flags', {}).get('cannot_be_blocked', False),
+                'rest_after_attack': recipe.get('special_flags', {}).get('rest_after_attack', False),
+            },
+        })
+        action_id += 1
 
     # 2) Advance a figure (if ceasefire is off and AI has eligible figures)
     # Blocked during Infinite Hammer
