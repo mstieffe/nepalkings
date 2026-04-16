@@ -127,6 +127,12 @@ def _enum_forced_counter_advance(game_dict, ai_player, action_id):
         if in_deficit:
             continue
 
+        # Skip must_be_attacked figures (e.g. Fortress) — the opponent would
+        # be forced to select them as defender anyway, so counter-advancing
+        # with them wastes a turn.  Collect them as fallback only.
+        if fig.get('must_be_attacked'):
+            continue
+
         power = _est_figure_power(fig)
         if required_color:
             desc = (

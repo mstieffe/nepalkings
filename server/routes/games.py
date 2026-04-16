@@ -963,7 +963,14 @@ def start_turn():
         logger.debug(f"[START_TURN] Checking turn: game.turn_player_id={game.turn_player_id} (type={type(game.turn_player_id)}), player_id={player_id} (type={type(player_id)})")
         if game.turn_player_id != player_id:
             logger.debug(f"[START_TURN] Turn mismatch: game.turn_player_id={game.turn_player_id}, player_id={player_id}")
-            return jsonify({'success': False, 'message': 'Not your turn'}), 400
+            # Still return opponent_turn_summary so notifications aren't lost
+            # when the AI plays faster than the client can call start_turn.
+            opponent_turn_summary = _get_opponent_turn_summary(game, player_id)
+            return jsonify({
+                'success': True,
+                'auto_fill': None,
+                'opponent_turn_summary': opponent_turn_summary,
+            })
 
         logger.debug(f"[START_TURN] Turn check passed, calling _check_and_fill_minimum_cards")
         
