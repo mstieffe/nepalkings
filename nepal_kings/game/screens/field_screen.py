@@ -98,6 +98,11 @@ class FieldScreen(SubScreen):
         self.last_figure_ids = set()
         self.last_enchantment_state = {}
         self.last_player_id = None
+        self._last_figures_version = -1
+        self.categorized_figures = {
+            'self': {'castle': [], 'village': [], 'military': []},
+            'opponent': {'castle': [], 'village': [], 'military': []}
+        }
         self.figure_detail_box = None
         self.figure_pending_pickup = None
         self.figure_pending_upgrade = None
@@ -2025,6 +2030,8 @@ class FieldScreen(SubScreen):
 
                         # Calculate positions and separate into layers: regular, selected, hovered
                         for i, figure in enumerate(figures):
+                            if figure.id not in self.icon_cache:
+                                continue
                             icon = self.icon_cache[figure.id]
                             icon_x = compartment.left + 0.5*settings.FIELD_ICON_WIDTH 
                             icon_y = icon_y_start + i * icon_spacing
