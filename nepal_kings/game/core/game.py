@@ -136,6 +136,7 @@ class Game:
         self.battle_ready_shown = False  # Track if battle-ready notification was shown
         self.pending_battle_ready = False  # True when both advancing and defending figures are set
         self.battle_ready_shown = False  # Track if battle ready notification was shown
+        self._last_polled_advancing = None  # Last advancing_figure_id seen by _apply_game_dict (not affected by update_from_dict)
 
         # Civil War second figure selection tracking
         self.civil_war_awaiting_second = False  # True when waiting for second advance figure
@@ -435,12 +436,16 @@ class Game:
             self.pending_spell = None
 
         # Update advance/battle state
-        previous_advancing = self.advancing_figure_id
+        # Use _last_polled_advancing (updated only here) instead of
+        # self.advancing_figure_id which update_from_dict may have already
+        # changed, hiding the set→None transition that resets battle_ready_shown.
+        previous_advancing = self._last_polled_advancing
         self.advancing_figure_id = game_dict.get('advancing_figure_id')
         self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
         self.advancing_player_id = game_dict.get('advancing_player_id')
         self.defending_figure_id = game_dict.get('defending_figure_id')
         self.defending_figure_id_2 = game_dict.get('defending_figure_id_2')
+        self._last_polled_advancing = self.advancing_figure_id
         
         # Clear forced advance once an advance is underway
         if self.pending_forced_advance and self.advancing_figure_id:
