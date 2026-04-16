@@ -325,7 +325,7 @@ def _modifier_bonus(
             stub = {'id': None, 'suit': build_suit, 'field': build_field,
                     'name': params.get('name', ''), 'player_id': None}
             est_support = compute_support_bonus(stub, own_figures)
-            bonus += min(est_support * 0.5, 5.0)
+            bonus += est_support
 
     if action_type == 'cast_spell':
         desc = str(action.get('description', ''))
