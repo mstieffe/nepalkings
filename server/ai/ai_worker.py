@@ -1920,7 +1920,6 @@ def _exec_change_cards(app, game_id, ai_player_id):
     """
     with app.app_context():
         from models import Game, MainCard, db
-        from ai.action_enum import enrich_figures_with_skills
         game = db.session.get(Game, game_id)
         if not game:
             return False
