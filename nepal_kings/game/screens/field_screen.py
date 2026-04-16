@@ -2044,10 +2044,12 @@ class FieldScreen(SubScreen):
                                 all_regular.append((icon, icon_x, icon_y))
 
             # Draw in global z-order layers: regular -> selected -> hovered
-            for icon, icon_x, icon_y in all_regular:
+            # Reverse regular so bottom icons are drawn first and top icons
+            # paint over them, keeping each figure's lower info box visible.
+            for icon, icon_x, icon_y in reversed(all_regular):
                 icon.draw(icon_x, icon_y)
 
-            for icon, icon_x, icon_y in all_selected:
+            for icon, icon_x, icon_y in reversed(all_selected):
                 icon.draw(icon_x, icon_y)
 
             if all_hovered:

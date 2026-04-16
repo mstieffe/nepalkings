@@ -15,6 +15,7 @@ class Hand:
     def __init__(self, window, state, x: float = 0.0, y: float = 0.0, type="main_card", hidden=False):
         self.window = window
         self.font = settings.get_font(settings.FONT_SIZE_DETAIL)
+        self.font_small = settings.get_font(int(settings.FONT_SIZE_DETAIL * 0.85))
         self.state = state
         self.game = state.game if state else None
         self.type = type
@@ -485,8 +486,23 @@ class Hand:
             # Draw the background addon frame behind the cards
             self.window.blit(self.background_image_addon, (self.x - self.backgorund_dx, self.y - self.backgorund_dy))
 
-            self.draw_text(f'{str(len(self.cards))}/{self.num_slots} cards', settings.BLACK, self.text_occupied_slots_x,
-                           self.y + settings.CARD_HEIGHT * 1.04 + settings.TINY_SPACER_Y + settings.HAND_CARD_COUNT_Y_NUDGE)
+            card_count_y = self.y + settings.CARD_HEIGHT * 1.04 + settings.TINY_SPACER_Y + settings.HAND_CARD_COUNT_Y_NUDGE
+            player_text = f'{str(len(self.cards))}/{self.num_slots} cards'
+            self.draw_text(player_text, settings.BLACK, self.text_occupied_slots_x, card_count_y)
+
+            # Draw opponent card count to the right
+            try:
+                opp_main, opp_side = self.game.get_hand(is_opponent=True)
+                opp_count = len(opp_main) if self.type == "main_card" else len(opp_side)
+                player_surface = self.font.render(player_text, True, settings.BLACK)
+                opp_x = self.text_occupied_slots_x + player_surface.get_width() + settings.CARD_WIDTH * 0.3
+                opp_text = f'(opp: {opp_count})'
+                opp_surface = self.font_small.render(opp_text, True, (40, 40, 40))
+                opp_rect = opp_surface.get_rect()
+                opp_rect.bottomleft = (opp_x, card_count_y + player_surface.get_height())
+                self.window.blit(opp_surface, opp_rect)
+            except Exception:
+                pass
 
             for button in self.buttons:
                 button.draw()
