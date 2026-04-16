@@ -1733,6 +1733,8 @@ def _execute_action(app, game_id, ai_player_id, action):
             return _exec_cast_spell(base, game_id, ai_player_id, params)
         elif action_type == 'end_infinite_hammer':
             return _exec_end_infinite_hammer(base, game_id, ai_player_id)
+        elif action_type == 'cannot_advance_loss':
+            return _exec_cannot_advance_loss(base, game_id, ai_player_id)
         else:
             logger.error(f"Unknown action type: {action_type}")
             return False
@@ -2167,4 +2169,18 @@ def _exec_end_infinite_hammer(base, game_id, ai_player_id):
         logger.info("Ended Infinite Hammer mode")
         return True
     logger.warning(f"End Infinite Hammer failed: {result.get('message')}")
+    return False
+
+
+def _exec_cannot_advance_loss(base, game_id, ai_player_id):
+    """Trigger auto-loss when no figures can advance via POST /games/cannot_advance_loss."""
+    resp = _ai_post(f'{base}/games/cannot_advance_loss', ai_player_id, json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info("Cannot advance — auto-loss triggered")
+        return True
+    logger.warning(f"Cannot advance loss failed: {result.get('message')}")
     return False

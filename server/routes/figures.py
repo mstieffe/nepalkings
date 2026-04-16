@@ -6,6 +6,7 @@ from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, S
 import logging
 import server_settings as settings
 from routes.auth import require_token, verify_player_ownership
+from routes.games import _guard_must_advance
 
 logger = logging.getLogger('nepalkings.routes.figures')
 
@@ -121,6 +122,13 @@ def create_figure():
         instant_charge_advance = data.get('instant_charge_advance', False)
         cannot_be_blocked = data.get('cannot_be_blocked', False)
         rest_after_attack = data.get('rest_after_attack', False)
+
+        # Invader must advance on last turn — building is only allowed
+        # if the figure has instant_charge_advance (build + advance)
+        if not instant_charge_advance:
+            must_adv = _guard_must_advance(game, player_id, action_label='create_figure')
+            if must_adv:
+                return must_adv
 
         logger.debug(f"Creating {name}: produces={produces}, requires={requires}")
 
@@ -372,6 +380,10 @@ def update_figure():
         if battle_err:
             return battle_err
 
+        must_adv = _guard_must_advance(game, figure.player_id, action_label='update_figure')
+        if must_adv:
+            return must_adv
+
         # Update figure fields
         figure.name = data.get('name', figure.name)
         figure.suit = data.get('suit', figure.suit)
@@ -527,6 +539,10 @@ def delete_figure():
         if battle_err:
             return battle_err
 
+        must_adv = _guard_must_advance(game_for_guard, player_id or figure.player_id, action_label='delete_figure')
+        if must_adv:
+            return must_adv
+
         # Retrieve associated cards
         card_associations = CardToFigure.query.filter_by(figure_id=figure.id).all()
         card_ids = [assoc.card_id for assoc in card_associations]
@@ -636,6 +652,10 @@ def pickup_figure():
         battle_err = _guard_non_battle_action(game, action_label='pickup_figure', player_id=player_id)
         if battle_err:
             return battle_err
+
+        must_adv = _guard_must_advance(game, player_id, action_label='pickup_figure')
+        if must_adv:
+            return must_adv
         
         if not figure_id:
             return jsonify({'success': False, 'message': 'Figure ID is required'}), 400
@@ -781,6 +801,10 @@ def upgrade_figure():
         battle_err = _guard_non_battle_action(game, action_label='upgrade_figure', player_id=player_id)
         if battle_err:
             return battle_err
+
+        must_adv = _guard_must_advance(game, player_id, action_label='upgrade_figure')
+        if must_adv:
+            return must_adv
         
         if not all([figure_id, player_id, game_id, upgrade_card_id, upgrade_card_type]):
             return jsonify({'success': False, 'message': 'Missing required parameters'}), 400

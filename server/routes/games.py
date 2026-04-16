@@ -101,6 +101,60 @@ def _guard_battle_active(game, *, player_id=None, action_label='action'):
     return None
 
 
+def _guard_must_advance(game, player_id, *, action_label='action'):
+    """Block non-advance actions when the invader is on their last turn.
+
+    The invader MUST advance (or trigger cannot_advance_loss) on their
+    final turn.  Returns an error response if blocked, else ``None``.
+    """
+    if not game:
+        return None
+
+    # Only applies to the invader
+    if game.invader_player_id != player_id:
+        return None
+
+    player = db.session.get(Player, player_id)
+    if not player or player.turns_left > 1:
+        return None
+
+    # Check whether the invader has at least one figure that CAN advance.
+    # If none can advance, the player will use cannot_advance_loss instead,
+    # so we should not block their other actions here.
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+    figures = Figure.query.filter_by(player_id=player_id, game_id=game.id).all()
+    resting_ids = set(game.resting_figure_ids or [])
+    has_advanceable = False
+    for fig in figures:
+        if fig.cannot_attack:
+            continue
+        if fig.id in resting_ids:
+            continue
+        if (has_peasant_war or has_civil_war) and fig.field != 'village':
+            continue
+        if _check_figure_resource_deficit(fig, player_id, game.id):
+            continue
+        has_advanceable = True
+        break
+
+    if not has_advanceable:
+        return None
+
+    logger.info(
+        f"[MUST_ADVANCE] blocked action={action_label} route={request.path} "
+        f"game={game.id} player={player_id} reason=invader_must_advance "
+        f"turns_left={player.turns_left}"
+    )
+    return jsonify({
+        'success': False,
+        'message': 'You must advance a figure on your last turn as the invader.',
+        'reason': 'must_advance'
+    }), 400
+
+
 def _check_and_update_ceasefire(game):
     """
     Check if ceasefire should end and update game state accordingly.
@@ -1327,6 +1381,10 @@ def change_cards():
             battle_err = _guard_battle_active(game, player_id=player_id, action_label='change_cards')
             if battle_err:
                 return battle_err
+
+            must_adv = _guard_must_advance(game, player_id, action_label='change_cards')
+            if must_adv:
+                return must_adv
 
         logger.debug(f"Changing {card_type} cards for player {player_id} in game {game_id}")
         logger.debug(f"Selected card IDs: {card_ids}")

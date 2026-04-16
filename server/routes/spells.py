@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
 from routes.auth import require_token, verify_player_ownership
+from routes.games import _guard_must_advance
 
 logger = logging.getLogger('nepalkings.routes.spells')
 
@@ -156,6 +157,11 @@ def cast_spell():
     # Verify it's player's turn
     if game.turn_player_id != player_id:
         return jsonify({'success': False, 'message': 'Not your turn'}), 403
+
+    # Invader must advance on last turn — no spells allowed
+    must_adv = _guard_must_advance(game, player_id, action_label='cast_spell')
+    if must_adv:
+        return must_adv
     
     # Block tactics spells when an advance is in progress
     if spell_type == 'tactics' and game.advancing_figure_id:
