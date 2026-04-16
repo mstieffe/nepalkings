@@ -78,6 +78,11 @@ Human POST -> Route after_request hook -> trigger_ai_if_needed
   - Bounded candidate plan generation and scoring.
   - Recommended action extraction and prompt formatting.
 
+- `server/ai/card_change_strategy.py`
+  - Shared keep/swap heuristics for main and side card changes.
+  - Tactic-protected card ID computation for figure building targets.
+  - `KEEP_RANKS` (main: K, Q) and `KEEP_SIDE_RANKS` (side: 2) policies.
+
 - `server/ai/figure_completion.py`
   - Figure completion probabilities using adaptive draw assumptions.
   - Build feasibility and resource-gap analysis.
@@ -264,7 +269,8 @@ If selected action is invalid:
 Worker executes through server endpoints, for example:
 
 - `build_figure` -> `/figures/create_figure`
-- `change_cards` -> `/games/change_cards`
+- `change_cards` -> `/games/change_cards` (main cards)
+- `change_side_cards` -> `/games/change_cards` (side cards, `card_type='side'`)
 - `advance_figure` -> `/games/advance_figure`
 - `select_defender` -> `/games/select_defender`
 - `battle_decision` -> `/games/battle_decision`
