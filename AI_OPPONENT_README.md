@@ -73,6 +73,7 @@ Human POST -> Route after_request hook -> trigger_ai_if_needed
 - `server/ai/game_state.py`
   - Builds the textual game summary used in LLM prompts.
   - Includes own hand detail, visible board state, and threat analysis.
+  - `compute_support_bonus()` calculates same-field support bonus for figures.
 
 - `server/ai/strategy_planner.py`
   - Bounded candidate plan generation and scoring.
@@ -337,6 +338,18 @@ offensive_value = expected_power_diff + 0.35 * expected_battle_move_power + modi
 risk_penalty   = (1 - feasibility_probability) * 4.0
 total_score    = feasibility_probability * offensive_value + turns_pressure - risk_penalty
 ```
+
+### Support bonus in power estimates
+
+All AI power estimate functions (`_est_power`, `_est_figure_power`,
+`_figure_power`, `_figure_power_from_dict`) include support bonus.
+`compute_support_bonus()` in `game_state.py` computes the bonus a figure
+receives from friendly figures on the same field.  The full support value
+is added to base power — no cap is applied.  This affects:
+
+- Action scoring in `strategy_planner.py` (expected power diff).
+- Build promotion in `action_enum.py` (figure value assessment).
+- Threat analysis in `game_state.py` (board state summary for LLM).
 
 Where:
 
