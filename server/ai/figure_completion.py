@@ -288,9 +288,6 @@ def estimate_figure_completion(
     estimates: list[FigureCompletionEstimate] = []
 
     for recipe in FIGURE_RECIPES:
-        if recipe.get('field') == 'castle':
-            continue
-
         for suit in recipe.get('suits', []):
             required_main: Counter[tuple[str | None, str | None]] = Counter()
             required_side: Counter[tuple[str | None, str | None]] = Counter()

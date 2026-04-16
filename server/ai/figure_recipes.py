@@ -308,10 +308,6 @@ def find_buildable_figures(main_hand, side_hand, existing_figures):
     buildable = []
     
     for recipe in FIGURE_RECIPES:
-        # Skip castle figures (only created at game start)
-        if recipe['field'] == 'castle':
-            continue
-        
         for suit in recipe['suits']:
             # Find matching key cards
             key_cards_needed = list(recipe['key_ranks'])  # copy
