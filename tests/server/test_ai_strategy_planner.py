@@ -782,13 +782,13 @@ def test_modifier_bonus_blitzkrieg_unchanged():
 # ── Maharaja advance penalty ──────────────────────────────────────────
 
 def test_maharaja_advance_penalty():
-    """Advancing a checkmate figure (Maharaja) should receive a -3.0 penalty.
+    """Advancing a checkmate figure (Maharaja) should receive a -8.0 penalty.
 
     Setup: Two advance_figure actions for figures of equal power — one
     with checkmate=True and one without.
 
     Reasoning: Losing a checkmate figure means instant game loss.  The
-    scorer should discourage advancing it unless no alternative exists.
+    scorer should strongly discourage advancing it unless no alternative exists.
 
     Regression: Ensures the Maharaja penalty remains active.
     """
@@ -806,7 +806,7 @@ def test_maharaja_advance_penalty():
     }
     bonus_m = _modifier_bonus(action_maharaja, [], own_figures=own_figures)
     bonus_n = _modifier_bonus(action_normal, [], own_figures=own_figures)
-    assert bonus_m == -3.0, f'Maharaja penalty should be -3.0, got {bonus_m}'
+    assert bonus_m == -8.0, f'Maharaja penalty should be -8.0, got {bonus_m}'
     assert bonus_n == 0.0, f'Normal figure bonus should be 0.0, got {bonus_n}'
 
 
@@ -814,12 +814,12 @@ def test_maharaja_advance_with_blitzkrieg():
     """Blitzkrieg combo still adds +1.5 but Maharaja penalty still applies.
 
     With Blitzkrieg active, advancing any figure gets +1.5, but a
-    checkmate figure gets -3.0 + 1.5 = -1.5 net.
+    checkmate figure gets -8.0 + 1.5 = -6.5 net.
     """
     own = [{'id': 1, 'field': 'military', 'cards': [{'value': 8}], 'checkmate': True}]
     action = {'type': 'advance_figure', 'params': {'figure_id': 1}}
     bonus = _modifier_bonus(action, ['Blitzkrieg'], own_figures=own)
-    assert bonus == -1.5, f'Expected -1.5, got {bonus}'
+    assert bonus == -6.5, f'Expected -6.5, got {bonus}'
 
 
 # ── Same-suit build promotion ────────────────────────────────────────

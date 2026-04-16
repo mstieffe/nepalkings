@@ -7,8 +7,8 @@ from __future__ import annotations
 from typing import Any
 
 
-KEEP_RANKS = {'K', 'A', '10', '9'}
-MAYBE_KEEP_RANKS = {'Q', 'J'}
+KEEP_RANKS = {'K', 'Q'}                           # Only kings and queens are always kept
+MAYBE_KEEP_RANKS: set[str] = set()                  # Nothing else gets conditional keep
 LOW_MAIN_RANKS = {'7', '8'}
 
 _RANK_VALUE_FALLBACK = {

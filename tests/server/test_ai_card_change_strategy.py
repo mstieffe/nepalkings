@@ -31,7 +31,8 @@ def test_select_main_cards_to_swap_handles_enum_ranks_without_over_swapping():
 
     to_swap = select_main_cards_to_swap(cards)
 
-    assert set(to_swap) == {7, 8}
+    # Only K (id=1) and Q (id=5) are kept; everything else is swapped
+    assert set(to_swap) == {2, 3, 4, 6, 7, 8}
 
 
 def test_select_main_cards_to_swap_swaps_one_card_when_everything_is_keepable():
@@ -43,8 +44,9 @@ def test_select_main_cards_to_swap_swaps_one_card_when_everything_is_keepable():
 
     to_swap = select_main_cards_to_swap(cards)
 
-    assert len(to_swap) == 1
-    assert to_swap[0] == 2
+    # A and 10 are no longer kept; both are swapped
+    assert len(to_swap) == 2
+    assert set(to_swap) == {2, 3}
 
 
 def test_summarize_main_change_reports_swap_and_low_rank_counts():
@@ -63,4 +65,4 @@ def test_summarize_main_change_reports_swap_and_low_rank_counts():
 
     assert summary['free_count'] == 8
     assert summary['low_rank_count'] == 2
-    assert summary['swap_count'] == 2
+    assert summary['swap_count'] == 6  # Only K and Q kept, 6 swapped

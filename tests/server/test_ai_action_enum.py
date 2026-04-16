@@ -212,7 +212,7 @@ def test_enumerate_actions_normal_turn_change_cards_description_uses_swap_summar
     actions = enumerate_actions(game_dict, 9, 'normal_turn')
     change_action = next(a for a in actions if a['type'] == 'change_cards')
 
-    assert '2 suggested swaps' in change_action['description']
+    assert '6 suggested swaps' in change_action['description']
     assert '2 low-rank of 8 free cards' in change_action['description']
 
 

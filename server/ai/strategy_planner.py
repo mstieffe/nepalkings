@@ -293,14 +293,16 @@ def _modifier_bonus(
 
     # ── (1) Maharaja advance penalty ──
     # Advancing a checkmate figure risks instant game loss if the battle
-    # is lost.  Apply a penalty proportional to the risk.
+    # is lost.  Apply a heavy penalty so the AI strongly prefers any
+    # alternative figure — even one with slightly lower raw power —
+    # since same-suit support bonuses often close the gap anyway.
     if action_type == 'advance_figure':
         params = action.get('params', {}) or {}
         fig_id = params.get('figure_id')
         if fig_id is not None:
             fig = next((f for f in own_figures if f.get('id') == fig_id), None)
             if fig and fig.get('checkmate'):
-                bonus -= 3.0
+                bonus -= 8.0
 
     # ── (2) Same-suit build promotion ──
     # Building a figure whose suit matches existing figures increases
