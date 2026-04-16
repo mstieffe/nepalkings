@@ -15,7 +15,7 @@ RED_CROSS_WIDTH = int(0.02 * SCREEN_WIDTH)
 RED_CROSS_HEIGHT = int(0.02 * SCREEN_WIDTH)
 
 # Vertical nudge for the "X/Y cards" text below each hand (negative = up)
-HAND_CARD_COUNT_Y_NUDGE = int(-0.008 * SCREEN_HEIGHT)
+HAND_CARD_COUNT_Y_NUDGE = int(-0.016 * SCREEN_HEIGHT)
 
 #CARD_HEIGHT = CARD_WIDTH * test_card.get_height() / test_card.get_width()
 

@@ -490,7 +490,7 @@ class Hand:
             player_text = f'{str(len(self.cards))}/{self.num_slots} cards'
             self.draw_text(player_text, settings.BLACK, self.text_occupied_slots_x, card_count_y)
 
-            # Draw opponent card count to the right
+            # Draw opponent card count to the right, baseline-aligned with player text
             try:
                 opp_main, opp_side = self.game.get_hand(is_opponent=True)
                 opp_count = len(opp_main) if self.type == "main_card" else len(opp_side)
@@ -499,7 +499,8 @@ class Hand:
                 opp_text = f'(opp: {opp_count})'
                 opp_surface = self.font_small.render(opp_text, True, (40, 40, 40))
                 opp_rect = opp_surface.get_rect()
-                opp_rect.bottomleft = (opp_x, card_count_y + player_surface.get_height())
+                # Align baselines: both fonts share the same top y
+                opp_rect.topleft = (opp_x, card_count_y)
                 self.window.blit(opp_surface, opp_rect)
             except Exception:
                 pass
