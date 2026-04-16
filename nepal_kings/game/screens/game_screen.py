@@ -2379,8 +2379,12 @@ class GameScreen(Screen):
         self.state.game.waiting_for_defender_pick_shown = False
         # Clear fold result flag so it doesn't suppress future turn notifications
         self.state.game.pending_fold_result = False
-        # Suppress the next turn notification since battle/fold result was already shown
-        self.state.game.suppress_next_turn_summary = True
+        # Suppress the next turn notification only if it's our turn now.
+        # The fold/battle result dialogue already told us everything; the
+        # immediate _handle_start_turn would just repeat it.  But if it's
+        # the opponent's turn, our first _handle_start_turn fires only after
+        # they complete an action — that's a genuine notification we must show.
+        self.state.game.suppress_next_turn_summary = bool(self.state.game.turn)
         self.state.game.civil_war_awaiting_second = False
         self.state.game.civil_war_defender_second = False
         self.state.game.civil_war_required_color = None

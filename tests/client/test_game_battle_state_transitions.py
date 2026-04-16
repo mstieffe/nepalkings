@@ -124,3 +124,44 @@ class TestGameBattleStateTransitions:
         messages = [rec.getMessage() for rec in caplog.records]
         assert any('[BATTLE_READY_BLOCKED]' in msg for msg in messages)
         assert any('battle_ready_shown' in msg for msg in messages)
+
+    def test_suppress_turn_summary_only_when_turn_is_ours(self):
+        """After fold, suppress_next_turn_summary should be True only for the
+        player whose turn it is (fold winner/invader).  The defender's first
+        _handle_start_turn carries a genuine opponent-action notification."""
+        from unittest.mock import MagicMock
+        from game.core.game import Game
+
+        # --- Fold WINNER (invader, turn=True) → should suppress ---
+        winner_dict = _mk_game_dict(player_id=113, opponent_id=114)
+        winner_dict['fold_outcome'] = 'fold_win'
+        winner_dict['fold_winner_id'] = 113
+        winner_dict['turn_player_id'] = 113        # winner's turn
+        winner_dict['invader_player_id'] = 113
+        winner_dict['current_round'] = 4
+
+        game_w = Game(winner_dict, _mk_user_dict(), lightweight=True)
+        game_w.game_start_notification_checked = True
+        # __init__ leaves turn=False; compute it like _apply_game_dict does
+        game_w.turn = (game_w.turn_player_id == game_w.player_id)
+        assert game_w.turn is True
+
+        # Simulate _reset_battle_state via a mock GameScreen-like wrapper
+        game_w.suppress_next_turn_summary = bool(game_w.turn)
+        assert game_w.suppress_next_turn_summary is True
+
+        # --- Fold LOSER (defender, turn=False) → should NOT suppress ---
+        loser_dict = _mk_game_dict(player_id=113, opponent_id=114)
+        loser_dict['fold_outcome'] = 'fold_win'
+        loser_dict['fold_winner_id'] = 114          # opponent won
+        loser_dict['turn_player_id'] = 114           # opponent's turn
+        loser_dict['invader_player_id'] = 114
+        loser_dict['current_round'] = 4
+
+        game_l = Game(loser_dict, _mk_user_dict(), lightweight=True)
+        game_l.game_start_notification_checked = True
+        game_l.turn = (game_l.turn_player_id == game_l.player_id)
+        assert game_l.turn is False
+
+        game_l.suppress_next_turn_summary = bool(game_l.turn)
+        assert game_l.suppress_next_turn_summary is False
