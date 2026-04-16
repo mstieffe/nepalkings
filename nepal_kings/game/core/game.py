@@ -136,7 +136,8 @@ class Game:
         self.battle_ready_shown = False  # Track if battle-ready notification was shown
         self.pending_battle_ready = False  # True when both advancing and defending figures are set
         self.battle_ready_shown = False  # Track if battle ready notification was shown
-        self._last_polled_advancing = None  # Last advancing_figure_id seen by _apply_game_dict (not affected by update_from_dict)
+        self._last_polled_advancing = self.advancing_figure_id  # Poll-only advance snapshot (not affected by update_from_dict)
+        self._last_battle_ready_block_signature = None  # Dedup repeated "battle ready blocked" diagnostics across polls
 
         # Civil War second figure selection tracking
         self.civil_war_awaiting_second = False  # True when waiting for second advance figure
@@ -568,6 +569,43 @@ class Game:
             elif (self.advancing_player_id == self.player_id and
                   not is_now_our_turn):
                 battle_ready = False
+
+        # High-signal diagnostics for "no fight/fold dialogue" incidents.
+        # Log once per distinct blocked state to avoid poll spam.
+        if self.advancing_figure_id and self.defending_figure_id:
+            if battle_ready:
+                self._last_battle_ready_block_signature = None
+            else:
+                blocked_reasons = []
+                if battle_active:
+                    blocked_reasons.append('battle_active')
+                if self.pending_battle_ready:
+                    blocked_reasons.append('pending_battle_ready')
+                if self.battle_ready_shown:
+                    blocked_reasons.append('battle_ready_shown')
+                if has_civil_war and self.civil_war_awaiting_second:
+                    blocked_reasons.append('civil_war_invader_second_pending')
+                if has_civil_war and self.civil_war_defender_second:
+                    blocked_reasons.append('civil_war_defender_second_pending')
+                if (has_civil_war and self.advancing_player_id == self.player_id
+                        and not is_now_our_turn):
+                    blocked_reasons.append('civil_war_turn_not_returned')
+
+                signature = (
+                    self.advancing_figure_id,
+                    self.defending_figure_id,
+                    tuple(blocked_reasons),
+                    self.advancing_player_id,
+                    game_dict.get('turn_player_id'),
+                )
+                if signature != self._last_battle_ready_block_signature:
+                    logger.warning(
+                        f"[BATTLE_READY_BLOCKED] adv={self.advancing_figure_id}/{self.advancing_figure_id_2} "
+                        f"def={self.defending_figure_id}/{self.defending_figure_id_2} "
+                        f"reasons={blocked_reasons or ['unknown']} "
+                        f"advancing_player={self.advancing_player_id} turn_player={game_dict.get('turn_player_id')}"
+                    )
+                    self._last_battle_ready_block_signature = signature
         
         if battle_ready:
             self.pending_battle_ready = True
