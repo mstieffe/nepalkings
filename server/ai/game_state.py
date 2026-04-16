@@ -98,13 +98,32 @@ def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
     for fig in opponent['figures']:
         lines.append(_describe_figure(fig, show_cards=False))
     
-    # Opponent's hand size (no card details)
-    opp_main = len(opponent.get('main_hand', []))
-    opp_side = len(opponent.get('side_hand', []))
-    lines.append(f"\nOpponent has {opp_main} main cards and {opp_side} side cards in hand.")
+    # Check if AI has an active All Seeing Eye spell
+    has_all_seeing_eye = any(
+        'All Seeing Eye' in s.get('spell_name', '')
+        and s.get('player_id') == ai_player_id
+        and s.get('is_active')
+        for s in game_dict.get('active_spells', [])
+    )
+
+    opp_main = opponent.get('main_hand', [])
+    opp_side = opponent.get('side_hand', [])
+
+    if has_all_seeing_eye and opp_main:
+        lines.append(f"\n👁️ ALL SEEING EYE ACTIVE — opponent's cards revealed!")
+        lines.append(f"Opponent main hand ({len(opp_main)}): {_summarize_cards(opp_main)}")
+        if opp_side:
+            lines.append(f"Opponent side hand ({len(opp_side)}): {_summarize_cards(opp_side)}")
+        # Show opponent's figure card details too
+        lines.append(f"\nOpponent's figure cards (revealed):")
+        for fig in opponent['figures']:
+            lines.append(_describe_figure(fig, show_cards=True))
+    else:
+        lines.append(f"\nOpponent has {len(opp_main)} main cards and {len(opp_side)} side cards in hand.")
     
-    # Opponent threat analysis — infer possible cards and battle potential
-    lines.append(_analyze_opponent_threats(game_dict, ai_player, opponent))
+    # Opponent threat analysis — skip when All Seeing Eye provides perfect info
+    if not has_all_seeing_eye:
+        lines.append(_analyze_opponent_threats(game_dict, ai_player, opponent))
     
     # Battle state if active
     if game_dict.get('advancing_figure_id'):
