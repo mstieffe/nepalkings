@@ -2376,6 +2376,8 @@ class GameScreen(Screen):
         self.state.game.defender_selection_dialogue_shown = False
         self.state.game.pending_waiting_for_defender_pick = False
         self.state.game.waiting_for_defender_pick_shown = False
+        # Clear fold result flag so it doesn't suppress future turn notifications
+        self.state.game.pending_fold_result = False
         # Suppress the next turn notification since battle/fold result was already shown
         self.state.game.suppress_next_turn_summary = True
         self.state.game.civil_war_awaiting_second = False
