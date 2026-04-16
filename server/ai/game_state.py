@@ -8,7 +8,30 @@ description that the LLM can understand and reason about.
 """
 import logging
 
+from ai.figure_recipes import FAMILY_SKILLS
+
 logger = logging.getLogger('nepalkings.ai.game_state')
+
+
+def enrich_figures_with_skills(game_dict: dict) -> dict:
+    """Inject family-based skill flags into every serialized figure.
+
+    Figure.serialize() only stores checkmate, cannot_be_blocked, and
+    rest_after_attack in the DB.  The remaining nine skill flags
+    (cannot_attack, must_be_attacked, cannot_defend, cannot_be_targeted,
+    instant_charge, blocks_bonus, distance_attack, buffs_allies,
+    buffs_allies_defence) are derived from the figure's family_name.
+
+    This must be called once on the game_dict before any AI logic touches it.
+    """
+    for player in game_dict.get('players', []):
+        for fig in player.get('figures', []):
+            skills = FAMILY_SKILLS.get(fig.get('family_name'), {})
+            for key, val in skills.items():
+                # Don't overwrite DB-authoritative columns
+                if key not in fig:
+                    fig[key] = val
+    return game_dict
 
 
 def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
@@ -193,6 +216,18 @@ def _describe_figure(fig: dict, show_cards: bool = True) -> str:
         abilities.append('ranged')
     if fig.get('buffs_allies'):
         abilities.append('buff-allies')
+    if fig.get('buffs_allies_defence'):
+        abilities.append('buff-allies-defence')
+    if fig.get('blocks_bonus'):
+        abilities.append('blocks-bonus')
+    if fig.get('cannot_defend'):
+        abilities.append('cannot-defend')
+    if fig.get('cannot_be_targeted'):
+        abilities.append('cannot-be-targeted')
+    if fig.get('instant_charge'):
+        abilities.append('instant-charge')
+    if fig.get('rest_after_attack'):
+        abilities.append('rest-after-attack')
     if abilities:
         parts.append(f"[{', '.join(abilities)}]")
     

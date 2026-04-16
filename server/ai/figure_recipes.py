@@ -214,7 +214,7 @@ FIGURE_RECIPES = [
         'number_card_type': 'side',
         'produces_fn': lambda suit, num: {},
         'requires_fn': lambda suit, num: {'warrior_black': 1, 'material_black': num},
-        'special_flags': {'cannot_attack': True, 'buffs_allies_defence': True},
+        'special_flags': {'cannot_attack': True, 'cannot_defend': True, 'buffs_allies_defence': True, 'cannot_be_targeted': True},
     },
 
     # ── MILITARY — Cavalry ──
@@ -230,7 +230,7 @@ FIGURE_RECIPES = [
         'number_card_type': 'side',
         'produces_fn': lambda suit, num: {},
         'requires_fn': lambda suit, num: {'warrior_red': 1, 'material_red': num},
-        'special_flags': {'instant_charge': True, 'cannot_be_blocked': True, 'rest_after_attack': True},
+        'special_flags': {'instant_charge': True, 'cannot_be_blocked': True, 'rest_after_attack': True, 'cannot_defend': True},
     },
 
     # ── MILITARY — Archers ──
@@ -263,6 +263,24 @@ FIGURE_RECIPES = [
         'special_flags': {'distance_attack': True},
     },
 ]
+
+# ── Complete family_name → skill flags lookup ──
+# Includes upgrade families not present in FIGURE_RECIPES.
+# Auto-populated from recipes + manual upgrade entries.
+FAMILY_SKILLS = {r['family_name']: dict(r.get('special_flags', {})) for r in FIGURE_RECIPES}
+FAMILY_SKILLS.update({
+    # Upgrade families (inherit parent skills)
+    'Stone Fortress':        {'cannot_attack': True, 'must_be_attacked': True},
+    'Elite Gorkha Warriors': {'instant_charge': True},
+    'Shield Manufactory':    {'cannot_attack': True, 'blocks_bonus': True},
+    'Sword Manufactory':     {'cannot_attack': True, 'blocks_bonus': True},
+    # Castle upgrades
+    'Himalaya Maharaja':     {'checkmate': True},
+    'Djungle Maharaja':      {'checkmate': True},
+    # Farms / material producers (no special flags, but ensure key exists)
+    'Large Yack Farm':       {},
+    'Large Rice Farm':       {},
+})
 
 
 def find_buildable_figures(main_hand, side_hand, existing_figures):

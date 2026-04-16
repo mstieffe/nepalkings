@@ -127,6 +127,12 @@ def _enum_forced_counter_advance(game_dict, ai_player, action_id):
         if in_deficit:
             continue
 
+        # Skip figures that cannot participate in battle as attackers or defenders
+        if fig.get('cannot_attack'):
+            continue
+        if fig.get('cannot_defend'):
+            continue
+
         # Skip must_be_attacked figures (e.g. Fortress) — the opponent would
         # be forced to select them as defender anyway, so counter-advancing
         # with them wastes a turn.  Collect them as fallback only.
@@ -166,7 +172,8 @@ def _find_figure_by_id(game_dict, figure_id):
 
 def _selectable_defender_targets_if_ai_passes(game_dict, ai_player):
     """Figures the invader could choose if AI does not counter-advance now."""
-    targets = [f for f in ai_player.get('figures', []) if not f.get('cannot_be_targeted')]
+    targets = [f for f in ai_player.get('figures', [])
+               if not f.get('cannot_be_targeted') and not f.get('cannot_defend')]
 
     modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
     has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
@@ -187,6 +194,11 @@ def _selectable_defender_targets_if_ai_passes(game_dict, ai_player):
     non_checkmate = [f for f in targets if not f.get('checkmate')]
     if non_checkmate:
         targets = non_checkmate
+
+    # must_be_attacked: if any target has this flag, invader must pick one of those.
+    must_attack = [f for f in targets if f.get('must_be_attacked')]
+    if must_attack:
+        targets = must_attack
 
     return targets
 
@@ -608,9 +620,13 @@ def _enum_select_defender(game_dict, ai_player, opponent):
                 break
 
     checkmate_fallback = []
+    eligible = []
     for fig in opponent.get('figures', []):
         # Skip figures that can't be targeted
         if fig.get('cannot_be_targeted'):
+            continue
+        # Skip figures that cannot defend
+        if fig.get('cannot_defend'):
             continue
         # Checkmate figures are normally skipped; keep as fallback
         if fig.get('checkmate'):
@@ -625,6 +641,15 @@ def _enum_select_defender(game_dict, ai_player, opponent):
                 continue
             if civil_war_color and fig.get('color') != civil_war_color:
                 continue
+        eligible.append(fig)
+
+    # Enforce must_be_attacked: if any eligible figure has this flag,
+    # the invader MUST pick one of those (server rejects other choices).
+    must_attack = [f for f in eligible if f.get('must_be_attacked')]
+    if must_attack:
+        eligible = must_attack
+
+    for fig in eligible:
         fig_power = _est_figure_power(fig)
         diff = ai_power - fig_power
         field = fig.get('field', '?')

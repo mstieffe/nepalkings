@@ -17,7 +17,7 @@ import requests as http_requests
 import server_settings as settings
 from ai import get_ai_auth_headers
 from ai.llm_client import LLMClient, parse_action_response
-from ai.game_state import serialize_game_for_llm
+from ai.game_state import enrich_figures_with_skills, serialize_game_for_llm
 from ai.action_enum import detect_phase, enumerate_actions, format_actions_for_llm
 from ai.card_change_strategy import select_main_cards_to_swap, summarize_main_change
 from ai.strategy_planner import (
@@ -295,7 +295,7 @@ def _schedule_watchdog_retry(app, game_id, ai_player_id, reason):
                     _clear_watchdog_retry(game_id)
                     return
 
-                game_dict = game.serialize()
+                game_dict = enrich_figures_with_skills(game.serialize())
                 phase = detect_phase(game_dict, ai_player_id)
                 if not phase:
                     _clear_watchdog_retry(game_id)
@@ -363,7 +363,7 @@ def trigger_ai_if_needed(game_id, app=None):
         _ai_player_user_ids[ai_player.id] = ai_player.user_id
     
     # Check if the AI actually needs to act right now
-    game_dict = game.serialize()
+    game_dict = enrich_figures_with_skills(game.serialize())
     if not game_dict:
         logger.warning(f"AI trigger: game.serialize() returned None/empty for game {game_id}")
         return
@@ -440,7 +440,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                         _ai_explain_states.pop(game_id, None)
                     break
                 
-                game_dict = game.serialize()
+                game_dict = enrich_figures_with_skills(game.serialize())
             
             phase = detect_phase(game_dict, ai_player_id)
             if not phase:
@@ -459,7 +459,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                     from models import Game, db
                     game = db.session.get(Game, game_id)
                     if game and game.state != 'finished':
-                        game_dict = game.serialize()
+                        game_dict = enrich_figures_with_skills(game.serialize())
                         phase = detect_phase(game_dict, ai_player_id)
                 if phase:
                     logger.info(f"AI detected deferred action in game {game_id}, phase={phase}")
@@ -489,7 +489,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                     if not game or game.state == 'finished':
                         _clear_watchdog_retry(game_id)
                         break
-                    game_dict = game.serialize()
+                    game_dict = enrich_figures_with_skills(game.serialize())
                 phase = detect_phase(game_dict, ai_player_id)
                 if not phase:
                     _clear_watchdog_retry(game_id)
@@ -603,7 +603,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                     if not game or game.state == 'finished':
                         _clear_watchdog_retry(game_id)
                     else:
-                        game_dict = game.serialize()
+                        game_dict = enrich_figures_with_skills(game.serialize())
                         phase = detect_phase(game_dict, ai_player_id)
                         if phase and game_dict.get('turn_player_id') == ai_player_id:
                             _schedule_watchdog_retry(app, game_id, ai_player_id, reason='loop_failure')
