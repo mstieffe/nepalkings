@@ -85,6 +85,7 @@ class Game:
         
         # Opponent turn summary notification (cleared after showing dialogue)
         self.pending_opponent_turn_summary = None
+        self._last_shown_summary_log_id = None  # dedup stale notifications
         
         # Ceasefire ended notification (cleared after showing dialogue)
         self.pending_ceasefire_ended = False
@@ -905,8 +906,16 @@ class Game:
                 elif self.pending_fold_result:
                     logger.debug(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
                 elif opponent_turn_summary:
-                    logger.debug(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
-                    self.pending_opponent_turn_summary = opponent_turn_summary
+                    # Deduplicate: skip if this exact log was already shown
+                    summary_log_id = opponent_turn_summary.get('log_id')
+                    if summary_log_id and summary_log_id == self._last_shown_summary_log_id:
+                        logger.debug(f"[START_TURN] Skipping duplicate opponent turn summary (log_id={summary_log_id})")
+                        self.pending_opponent_turn_summary = None
+                    else:
+                        logger.debug(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
+                        self.pending_opponent_turn_summary = opponent_turn_summary
+                        if summary_log_id:
+                            self._last_shown_summary_log_id = summary_log_id
                 else:
                     logger.debug(f"[START_TURN] No opponent turn summary")
                     self.pending_opponent_turn_summary = None

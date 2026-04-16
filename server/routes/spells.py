@@ -1205,9 +1205,18 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     
                     # Invader starts next turn
                     game.turn_player_id = new_invader.id
+
+                    # Clear any in-progress advance/defend state to prevent
+                    # a stale advancing_player_id from causing a battle
+                    # deadlock after the swap (Bug #3).
+                    game.advancing_figure_id = None
+                    game.advancing_figure_id_2 = None
+                    game.advancing_player_id = None
+                    game.defending_figure_id = None
+                    game.defending_figure_id_2 = None
                     
                     logger.info(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
-                    logger.info(f"[INVADER SWAP] Both players' turns_left set to 2. Invader starts next turn.")
+                    logger.info(f"[INVADER SWAP] Both players' turns_left set to 2. Advance/defend state cleared. Invader starts next turn.")
                     
                     spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 2 turns left. The invader starts next turn.'
                     spell_effect['turn_set'] = True
