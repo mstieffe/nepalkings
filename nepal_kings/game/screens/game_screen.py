@@ -1258,14 +1258,23 @@ class GameScreen(Screen):
                 
                 turn_msg = f"Hello Adventurer!\n\nYou are playing with the {maharaja_name} and start with the {role_text} role. You are fighting {opponent_name}."
                 
-                self.queue_or_show_notification({
+                notification = {
                     'message': turn_msg,
                     'actions': ['ok'],
                     'images': images,
-                    'message_after_images': turn_status,
                     'icon': "welcome",
                     'title': "Game Started"
-                })
+                }
+                if is_invader:
+                    notification['message_after_images'] = turn_status
+                self.queue_or_show_notification(notification)
+
+                # For the defender's first turn the invader has already played.
+                # Re-request start_turn so the real opponent-action summary is
+                # fetched and queued after the welcome dialogue.
+                if summary.get('has_opponent_action'):
+                    logger.info("[WELCOME_MSG] Defender first turn — re-requesting start_turn for opponent action")
+                    self.state.game._start_turn_async()
             
             # Clear the notification
             self.state.game.pending_opponent_turn_summary = None

@@ -573,13 +573,21 @@ def _get_opponent_turn_summary(game, current_player_id):
             
             logger.debug(f"[GAME_START_CHECK] Returning game_start action for player {current_player_id} (is_turn={is_turn}, is_invader={is_invader})")
             
-            return {
+            result = {
                 'action': 'game_start',
                 'opponent_name': opponent.serialize()['username'],
                 'maharaja': maharaja.serialize(),  # Full figure data for FieldFigureIcon
                 'is_turn': is_turn,
                 'is_invader': is_invader
             }
+
+            # For the defender on their first turn, the invader has already
+            # played.  Attach that turn summary so the client can show both
+            # the welcome *and* what the opponent did.
+            if is_turn and not is_invader and recent_log:
+                result['has_opponent_action'] = True
+            
+            return result
         else:
             logger.debug(f"[GAME_START_CHECK] No Maharaja found for player {current_player_id}")
     else:
