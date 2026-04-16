@@ -119,8 +119,7 @@ def _guard_must_advance(game, player_id, *, action_label='action'):
         return None
 
     # Check whether the invader has at least one figure that CAN advance.
-    # If none can advance, the player will use cannot_advance_loss instead,
-    # so we should not block their other actions here.
+    # If none can advance, they must use cannot_advance_loss.
     modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
     has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
     has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
@@ -129,8 +128,6 @@ def _guard_must_advance(game, player_id, *, action_label='action'):
     resting_ids = set(game.resting_figure_ids or [])
     has_advanceable = False
     for fig in figures:
-        if fig.cannot_attack:
-            continue
         if fig.id in resting_ids:
             continue
         if (has_peasant_war or has_civil_war) and fig.field != 'village':
@@ -141,7 +138,16 @@ def _guard_must_advance(game, player_id, *, action_label='action'):
         break
 
     if not has_advanceable:
-        return None
+        logger.info(
+            f"[MUST_ADVANCE] blocked action={action_label} route={request.path} "
+            f"game={game.id} player={player_id} reason=no_figures_to_advance "
+            f"turns_left={player.turns_left}"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'No figures can advance. Use cannot_advance_loss to resolve the turn.',
+            'reason': 'must_advance_no_figures'
+        }), 400
 
     logger.info(
         f"[MUST_ADVANCE] blocked action={action_label} route={request.path} "

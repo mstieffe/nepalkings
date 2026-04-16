@@ -98,6 +98,61 @@ class TestCastSpell:
         data = resp.get_json()
         assert data.get('success') is False
 
+    def test_cast_spell_blocked_when_invader_must_advance(self, client, db, app, spell_game, token_sp1):
+        from models import Figure
+
+        game, p1, _, _, _ = spell_game
+        p1.turns_left = 1
+        game.turn_player_id = p1.id
+        game.invader_player_id = p1.id
+        db.session.add(Figure(
+            player_id=p1.id,
+            game_id=game.id,
+            family_name='must_adv',
+            field='village',
+            color='grey',
+            name='Must Advance Figure',
+            suit='Clubs',
+            produces={},
+            requires={},
+        ))
+        db.session.commit()
+
+        resp = _cast(client, token_sp1, game, p1, {
+            'spell_name': 'Draw 2 MainCards',
+            'spell_type': 'greed',
+            'spell_family_name': 'Draw 2 MainCards',
+            'suit': 'Clubs',
+            'cards': [],
+            'counterable': False,
+            'possible_during_ceasefire': True,
+        })
+        data = resp.get_json()
+
+        assert resp.status_code == 400
+        assert data.get('reason') == 'must_advance'
+
+    def test_cast_spell_blocked_with_no_figures_while_invader_last_turn(self, client, db, app, spell_game, token_sp1):
+        game, p1, _, _, _ = spell_game
+        p1.turns_left = 1
+        game.turn_player_id = p1.id
+        game.invader_player_id = p1.id
+        db.session.commit()
+
+        resp = _cast(client, token_sp1, game, p1, {
+            'spell_name': 'Draw 2 MainCards',
+            'spell_type': 'greed',
+            'spell_family_name': 'Draw 2 MainCards',
+            'suit': 'Clubs',
+            'cards': [],
+            'counterable': False,
+            'possible_during_ceasefire': True,
+        })
+        data = resp.get_json()
+
+        assert resp.status_code == 400
+        assert data.get('reason') == 'must_advance_no_figures'
+
     def test_cast_non_counterable_spell_creates_active_spell(self, client, db, app, spell_game, token_sp1):
         from models import ActiveSpell
         game, p1, _, _, _ = spell_game

@@ -214,3 +214,40 @@ def test_enumerate_actions_normal_turn_change_cards_description_uses_swap_summar
 
     assert '2 suggested swaps' in change_action['description']
     assert '2 low-rank of 8 free cards' in change_action['description']
+
+
+def test_enumerate_actions_invader_last_turn_only_offers_advance():
+    game_dict = _base_game_dict(ai_id=21, opp_id=22)
+    game_dict['turn_player_id'] = 21
+    game_dict['players'][0]['turns_left'] = 1
+    game_dict['players'][0]['figures'] = [
+        {
+            'id': 501,
+            'name': 'Test Figure',
+            'field': 'village',
+            'requires': {},
+            'produces': {},
+        }
+    ]
+
+    actions = enumerate_actions(game_dict, 21, 'normal_turn')
+    action_types = {a['type'] for a in actions}
+
+    assert 'advance_figure' in action_types
+    assert 'build_figure' not in action_types
+    assert 'cast_spell' not in action_types
+    assert 'change_cards' not in action_types
+
+
+def test_enumerate_actions_invader_last_turn_no_figures_offers_auto_loss():
+    game_dict = _base_game_dict(ai_id=31, opp_id=32)
+    game_dict['turn_player_id'] = 31
+    game_dict['players'][0]['turns_left'] = 1
+    game_dict['players'][0]['figures'] = []
+
+    actions = enumerate_actions(game_dict, 31, 'normal_turn')
+    action_types = {a['type'] for a in actions}
+
+    assert 'cannot_advance_loss' in action_types
+    assert 'change_cards' not in action_types
+    assert 'cast_spell' not in action_types

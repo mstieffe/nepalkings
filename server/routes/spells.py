@@ -578,6 +578,10 @@ def end_infinite_hammer():
         battle_err = _guard_spell_mutation(game, action_label='end_infinite_hammer', player_id=player_id)
         if battle_err:
             return battle_err
+
+        must_adv = _guard_must_advance(game, player_id, action_label='end_infinite_hammer')
+        if must_adv:
+            return must_adv
         
         # Find the active Infinite Hammer spell for this player
         active_hammer = ActiveSpell.query.filter_by(
