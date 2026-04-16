@@ -19,7 +19,11 @@ from ai import get_ai_auth_headers
 from ai.llm_client import LLMClient, parse_action_response
 from ai.game_state import enrich_figures_with_skills, serialize_game_for_llm
 from ai.action_enum import detect_phase, enumerate_actions, format_actions_for_llm
-from ai.card_change_strategy import select_main_cards_to_swap, summarize_main_change
+from ai.card_change_strategy import (
+    compute_tactic_protected_ids,
+    select_main_cards_to_swap,
+    summarize_main_change,
+)
 from ai.strategy_planner import (
     format_strategy_plans_for_prompt,
     generate_strategy_plans,
@@ -1911,10 +1915,12 @@ def _exec_change_cards(app, game_id, ai_player_id):
     """Change cards via POST /games/change_cards.
     
     Uses shared heuristic with action enumeration so the announced swap
-    suggestion and executed card selection stay aligned.
+    suggestion and executed card selection stay aligned.  Cards needed for
+    the AI's top figure-building targets are protected from swapping.
     """
     with app.app_context():
         from models import Game, MainCard, db
+        from ai.action_enum import enrich_figures_with_skills
         game = db.session.get(Game, game_id)
         if not game:
             return False
@@ -1927,16 +1933,29 @@ def _exec_change_cards(app, game_id, ai_player_id):
         
         free_cards = [c for c in hand_cards
                       if not c.part_of_figure and not c.part_of_battle_move]
+
+        # Compute tactic-protected card IDs from top figure targets
+        game_dict = enrich_figures_with_skills(game.serialize())
     
     if not free_cards:
         logger.warning("No cards to change")
         return False
 
-    summary = summarize_main_change(free_cards)
-    to_swap = select_main_cards_to_swap(free_cards)
+    from ai.figure_completion import best_figure_targets
+    targets = best_figure_targets(game_dict, ai_player_id, max_results=3)
+    # Serialize free cards as dicts for the target matcher
+    free_dicts = [{'id': c.id, 'rank': c.rank.value if hasattr(c.rank, 'value') else c.rank, 'suit': c.suit.value if hasattr(c.suit, 'value') else c.suit, 'value': c.value} for c in free_cards]
+    protect_ids = compute_tactic_protected_ids(free_dicts, targets, max_targets=3)
+
+    if protect_ids:
+        logger.info(f"Tactic-protected card IDs: {protect_ids}")
+
+    summary = summarize_main_change(free_cards, protect_ids=protect_ids)
+    to_swap = select_main_cards_to_swap(free_cards, protect_ids=protect_ids)
 
     logger.info(f"Smart change: swapping {len(to_swap)} of {len(free_cards)} cards "
-                f"(keeping {len(free_cards) - len(to_swap)} high-value cards, "
+                f"(keeping {len(free_cards) - len(to_swap)} cards, "
+                f"tactic_protected={len(protect_ids)}, "
                 f"low_rank={summary.get('low_rank_count', 0)})")
     
     base = settings.SERVER_URL
