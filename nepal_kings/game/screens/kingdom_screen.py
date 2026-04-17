@@ -238,8 +238,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
         )
 
     def _on_conquer(self, tile):
-        """Conquer action — Phase 11 will implement the actual transition."""
-        logger.info(f'Conquer action for land ({tile.col}, {tile.row})')
+        """Transition to the conquer screen for this land."""
+        self.state.conquer_land_id = tile.land_id
+        self.state.screen = 'conquer'
         self._detail_box = None
 
     def _on_defence(self, tile):
