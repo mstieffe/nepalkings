@@ -342,17 +342,20 @@ def trigger_ai_if_needed(game_id, app=None):
     """
     if not settings.AI_ENABLED:
         return
-    
-    if not settings.AI_OPENAI_API_KEY:
-        logger.info(f"AI trigger skipped for game {game_id}: no API key")
-        return
 
     # Import here to avoid circular imports
     from models import Game, User, db
-    
+
     # Quick check: does this game have an AI player who needs to act?
     game = db.session.get(Game, game_id)
     if not game or game.state == 'finished':
+        return
+
+    # Conquer games use rule-based logic and don't need an API key.
+    # Duel games require the LLM.
+    if game.mode != 'conquer' and not settings.AI_OPENAI_API_KEY:
+        logger.info(f"AI trigger skipped for game {game_id}: no API key")
+        return
         return
     
     ai_player = None
@@ -403,15 +406,169 @@ def trigger_ai_if_needed(game_id, app=None):
                 _active_games.discard(game_id)
             return
     
+    # Pick the right loop — conquer games use simple rule-based logic
+    loop_fn = _conquer_ai_loop if game.mode == 'conquer' else _ai_game_loop
+
     # Spawn background thread
     thread = threading.Thread(
-        target=_ai_game_loop,
+        target=loop_fn,
         args=(app, game_id, ai_player.id),
         daemon=True,
         name=f"ai-game-{game_id}",
     )
     thread.start()
-    logger.info(f"AI thread spawned for game {game_id}, phase={phase}")
+    logger.info(f"AI thread spawned for game {game_id}, phase={phase}, "
+                f"mode={game.mode}")
+
+
+def _conquer_ai_loop(app, game_id, ai_player_id):
+    """Rule-based defender auto-play for conquer-mode games.
+
+    Unlike the LLM-backed ``_ai_game_loop``, this loop makes deterministic
+    decisions: always counter-advance with the pre-configured battle figure,
+    always fight (never fold), auto-confirm pre-populated battle moves, and
+    play them in round order.
+    """
+    try:
+        time.sleep(max(settings.AI_THINK_DELAY * 0.5, 0.3))
+        base = settings.SERVER_URL
+        max_iterations = 15
+
+        for iteration in range(max_iterations):
+            with app.app_context():
+                from models import Game, Player, Figure, BattleMove, db
+                game = db.session.get(Game, game_id)
+                if not game or game.state == 'finished':
+                    logger.info(f"[CONQUER-AI] game {game_id} finished/gone")
+                    break
+
+                game_dict = game.serialize()
+
+            phase = detect_phase(game_dict, ai_player_id)
+            if not phase:
+                # Brief wait for turn flip race
+                time.sleep(1)
+                with app.app_context():
+                    from models import Game, db
+                    game = db.session.get(Game, game_id)
+                    if game and game.state != 'finished':
+                        phase = detect_phase(game.serialize(), ai_player_id)
+                if not phase:
+                    logger.info(f"[CONQUER-AI] no action for game {game_id}")
+                    break
+
+            logger.info(f"[CONQUER-AI] game={game_id} phase={phase} iter={iteration}")
+            time.sleep(0.3)  # Small delay for realism
+
+            if phase == 'normal_turn':
+                # Defender counter-advance: pick the configured battle figure
+                with app.app_context():
+                    from models import Game, Figure, db
+                    game = db.session.get(Game, game_id)
+                    # Find AI's figures that can advance
+                    ai_figures = Figure.query.filter_by(
+                        game_id=game_id, player_id=ai_player_id
+                    ).all()
+                    # Prefer the defending_figure_id if already set
+                    fig_id = None
+                    if game.defending_figure_id:
+                        fig_id = game.defending_figure_id
+                    elif ai_figures:
+                        fig_id = ai_figures[0].id
+
+                if fig_id:
+                    _exec_advance_figure(base, game_id, ai_player_id,
+                                         {'figure_id': fig_id})
+                else:
+                    logger.warning(f"[CONQUER-AI] no figure to advance, game={game_id}")
+                    break
+
+            elif phase == 'select_defender':
+                # AI picks opponent figure — choose first available
+                with app.app_context():
+                    from models import Game, Player, Figure, db
+                    game = db.session.get(Game, game_id)
+                    opp_player = Player.query.filter(
+                        Player.game_id == game_id,
+                        Player.id != ai_player_id
+                    ).first()
+                    if opp_player:
+                        opp_figs = Figure.query.filter_by(
+                            game_id=game_id, player_id=opp_player.id
+                        ).all()
+                        fig_id = opp_figs[0].id if opp_figs else None
+                    else:
+                        fig_id = None
+                if fig_id:
+                    _exec_select_defender(base, game_id, ai_player_id,
+                                          {'figure_id': fig_id})
+
+            elif phase == 'battle_decision':
+                _exec_battle_decision(base, game_id, ai_player_id,
+                                      {'decision': 'battle'})
+
+            elif phase == 'battle_shop':
+                _exec_confirm_battle_moves(base, game_id, ai_player_id)
+
+            elif phase == 'battle_round':
+                # Play the next unplayed move for the current round
+                with app.app_context():
+                    from models import Game, BattleMove, db
+                    game = db.session.get(Game, game_id)
+                    current_round = game.battle_round or 0
+                    moves = BattleMove.query.filter_by(
+                        game_id=game_id, player_id=ai_player_id
+                    ).filter(BattleMove.played_round.is_(None)).order_by(
+                        BattleMove.round_number
+                    ).all()
+                    move = moves[0] if moves else None
+                    move_id = move.id if move else None
+                    call_fig = move.call_figure_id if move else None
+
+                if move_id:
+                    params = {'battle_move_id': move_id}
+                    if call_fig:
+                        params['call_figure_id'] = call_fig
+                    _exec_play_battle_move(base, game_id, ai_player_id, params)
+                else:
+                    logger.warning(f"[CONQUER-AI] no unplayed move, game={game_id}")
+                    break
+
+            elif phase == 'finish_battle':
+                _ai_post(f'{base}/games/finish_battle', ai_player_id, json={
+                    'game_id': game_id, 'player_id': ai_player_id,
+                })
+
+            elif phase == 'post_battle_pick':
+                # AI won — pick arbitrary card
+                with app.app_context():
+                    from models import Game, db
+                    game = db.session.get(Game, game_id)
+                    returnable = game.serialize().get('returnable_cards', [])
+                    card_id = returnable[0]['id'] if returnable else None
+                if card_id:
+                    _ai_post(f'{base}/games/finish_battle_pick_card',
+                             ai_player_id, json={
+                                 'game_id': game_id,
+                                 'player_id': ai_player_id,
+                                 'card_id': card_id,
+                             })
+
+            elif phase == 'counter_spell':
+                # Always allow spells
+                _ai_post(f'{base}/spells/allow_spell', ai_player_id, json={
+                    'game_id': game_id, 'player_id': ai_player_id,
+                })
+
+            else:
+                logger.warning(f"[CONQUER-AI] unhandled phase {phase}, game={game_id}")
+                break
+
+    except Exception:
+        logger.error(f"[CONQUER-AI] crash in game {game_id}", exc_info=True)
+    finally:
+        with _active_games_lock:
+            _active_games.discard(game_id)
 
 
 def _ai_game_loop(app, game_id, ai_player_id):

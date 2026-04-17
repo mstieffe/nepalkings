@@ -6,7 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
 from datetime import datetime, timezone
-from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig
 from game_service.deck_manager import DeckManager
 from routes.auth import require_token, verify_player_ownership
 
@@ -3078,9 +3078,29 @@ def _compute_server_total_diff(game, return_breakdown=False):
               f"diff={adv_val - def_val} cumulative={round_diff}")
 
     total = fig_diff + round_diff
+
+    # ── Conquer mode: land suit bonus for defender ──
+    suit_bonus_applied = 0
+    if game.mode == 'conquer' and game.land_id:
+        land = db.session.get(Land, game.land_id)
+        if land and land.suit_bonus_suit and land.suit_bonus_value:
+            bonus_suit = land.suit_bonus_suit.lower()
+            # Bonus applies to defender's battle figure(s) matching the suit
+            for fig in [def_fig]:
+                if fig and (fig.suit or '').lower() == bonus_suit:
+                    suit_bonus_applied += land.suit_bonus_value
+            if game.defending_figure_id_2:
+                f2 = db.session.get(Figure, game.defending_figure_id_2)
+                if f2 and (f2.suit or '').lower() == bonus_suit:
+                    suit_bonus_applied += land.suit_bonus_value
+            if suit_bonus_applied:
+                total -= suit_bonus_applied  # bonus favours defender (reduces diff)
+                logger.debug(f"[SUIT_BONUS] land={land.id} suit={land.suit_bonus_suit} "
+                      f"bonus={land.suit_bonus_value} applied={suit_bonus_applied}")
+
     logger.debug(f"[SERVER_TOTAL_DIFF] game={game.id} "
           f"fig_diff={fig_diff} (adv={adv_power} def={def_power}) "
-          f"round_diff={round_diff} total={total}")
+          f"round_diff={round_diff} suit_bonus={suit_bonus_applied} total={total}")
 
     if return_breakdown:
         breakdown = {
@@ -3095,6 +3115,7 @@ def _compute_server_total_diff(game, return_breakdown=False):
             'def_wall_total': def_wall_total,
             'fig_diff': fig_diff,
             'round_diff': round_diff,
+            'suit_bonus_applied': suit_bonus_applied,
             'total': total,
         }
         return total, breakdown
@@ -3924,6 +3945,166 @@ def finish_battle():
         return jsonify(response)
 
 
+def _resolve_conquer_battle(game, winner, requesting_player):
+    """Resolve a conquer battle after the single battle round.
+
+    Handles land ownership transfer, card consumption, and attack log.
+    Returns a JSON-serialisable dict for the response.
+    """
+    atk_player = db.session.get(Player, game.invader_player_id)
+    def_player = [p for p in game.players if p.id != atk_player.id][0]
+
+    attacker_won = (winner.id == atk_player.id)
+    attacker_user = db.session.get(User, atk_player.user_id)
+    defender_user = db.session.get(User, def_player.user_id)
+    land = db.session.get(Land, game.land_id)
+
+    saved = game.last_battle_result or {}
+
+    # Mark game as finished
+    game.state = 'finished'
+    game.winner_player_id = winner.id
+    game.finished_at = _utcnow()
+
+    # ── Consume attacker's conquer config cards ──
+    # Battle move cards and modifier cards are consumed (deleted from collection)
+    if game.conquer_config_id:
+        atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
+        if atk_cfg:
+            _consume_config_battle_cards(atk_cfg)
+
+    # ── Card reward/penalty and land transfer ──
+    card_won_suit = None
+    card_won_rank = None
+    card_lost_suit = None
+    card_lost_rank = None
+
+    if attacker_won and land:
+        # Transfer ownership
+        land.owner_user_id = attacker_user.id
+        land.owned_since = _utcnow()
+
+        # Convert attacker's conquer config to defence config for the land
+        if game.conquer_config_id:
+            atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
+            if atk_cfg:
+                atk_cfg.config_type = 'defence'
+                land.defence_config_id = atk_cfg.id
+
+        # Wipe defender's defence config
+        if game.defence_config_id:
+            def_cfg = db.session.get(LandConfig, game.defence_config_id)
+            if def_cfg:
+                _wipe_land_config(def_cfg)
+
+    else:
+        # Defender wins — consume attacker's figure cards
+        if game.conquer_config_id:
+            atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
+            if atk_cfg:
+                _consume_config_figure_cards(atk_cfg)
+
+    # Create attack log
+    log = LandAttackLog(
+        land_id=game.land_id,
+        attacker_user_id=attacker_user.id,
+        defender_user_id=defender_user.id if defender_user else None,
+        result='attacker_won' if attacker_won else 'defender_won',
+        card_won_suit=card_won_suit,
+        card_won_rank=card_won_rank,
+        card_lost_suit=card_lost_suit,
+        card_lost_rank=card_lost_rank,
+    )
+    db.session.add(log)
+
+    result = 'attacker_won' if attacker_won else 'defender_won'
+    logger.info(f"[CONQUER_RESOLVE] game={game.id} land={game.land_id} "
+                f"result={result}")
+
+    return {
+        'success': True,
+        'message': f'Conquer battle resolved: {result}',
+        'conquer_result': result,
+        'attacker_won': attacker_won,
+        'land_id': game.land_id,
+        'points_awarded': saved.get('points_awarded', 0),
+        'destroyed_figure_name': saved.get('destroyed_figure_name', ''),
+        'game': game.serialize(),
+    }
+
+
+def _consume_config_battle_cards(cfg):
+    """Delete collection cards used for battle moves and modifiers in a config."""
+    from models import CollectionCard, LandConfigBattleMove
+
+    moves = LandConfigBattleMove.query.filter_by(config_id=cfg.id).all()
+    card_ids = [m.card_id for m in moves if m.card_id]
+    if cfg.modifier_card_ids:
+        card_ids.extend(cfg.modifier_card_ids)
+
+    if card_ids:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(card_ids)
+        ).delete(synchronize_session='fetch')
+
+    # Delete the move records
+    for m in moves:
+        db.session.delete(m)
+
+
+def _consume_config_figure_cards(cfg):
+    """Delete collection cards used for figures in a config (loser's figures consumed)."""
+    from models import CollectionCard, LandConfigFigure
+
+    figures = LandConfigFigure.query.filter_by(config_id=cfg.id).all()
+    card_ids = []
+    for fig in figures:
+        if fig.card_ids:
+            card_ids.extend(fig.card_ids)
+
+    if card_ids:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(card_ids)
+        ).delete(synchronize_session='fetch')
+
+    # Delete the figure records
+    for fig in figures:
+        db.session.delete(fig)
+
+
+def _wipe_land_config(cfg):
+    """Delete a land config and all its figures, moves, and unlock cards."""
+    from models import CollectionCard, LandConfigFigure, LandConfigBattleMove
+
+    # Collect all card IDs to unlock
+    card_ids = []
+    for fig in cfg.figures:
+        if fig.card_ids:
+            card_ids.extend(fig.card_ids)
+    for move in cfg.battle_moves:
+        if move.card_id:
+            card_ids.append(move.card_id)
+    if cfg.modifier_card_ids:
+        card_ids.extend(cfg.modifier_card_ids)
+    if cfg.spell_card_ids:
+        card_ids.extend(cfg.spell_card_ids)
+
+    # Unlock all cards
+    if card_ids:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(card_ids)
+        ).update({
+            CollectionCard.locked: False,
+            CollectionCard.lock_type: None,
+            CollectionCard.lock_ref_id: None,
+        }, synchronize_session='fetch')
+
+    # Delete figures and moves
+    LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
+    LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
+    db.session.delete(cfg)
+
+
 @games.route('/finish_battle_pick_card', methods=['POST'])
 @require_token
 def finish_battle_pick_card():
@@ -4057,6 +4238,12 @@ def finish_battle_pick_card():
 
     # Clear battle state (this resets fold_winner_id to None)
     _clear_battle_state(game)
+
+    # ── Conquer mode: always resolves after one battle ──
+    if game.mode == 'conquer':
+        conquer_result = _resolve_conquer_battle(game, winner, player)
+        db.session.commit()
+        return jsonify(conquer_result)
 
     # ── Check game-over condition before starting a new round ──
     game_over_info = _check_game_over(game)

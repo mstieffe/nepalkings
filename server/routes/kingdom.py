@@ -7,7 +7,9 @@ import logging
 from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request, g
 
-from models import db, User, Land, LandAttackLog, CollectionCard, LandConfig, LandConfigFigure, LandConfigBattleMove
+from models import (db, User, Land, LandAttackLog, CollectionCard,
+                    LandConfig, LandConfigFigure, LandConfigBattleMove,
+                    Game, Player, Figure, BattleMove, CardToFigure, ActiveSpell)
 from routes.auth import require_token
 import server_settings as config
 
@@ -1176,3 +1178,405 @@ def defence_set_auto_gamble():
     db.session.commit()
 
     return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Conquer Battle — Phase 13
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_figures_from_config(cfg_figures, player, game):
+    """Create Figure + CardToFigure records from LandConfigFigure list.
+
+    Returns a list of created Figure objects (flushed, with IDs).
+    """
+    figures = []
+    for cfg_fig in cfg_figures:
+        fig = Figure(
+            player_id=player.id,
+            game_id=game.id,
+            family_name=cfg_fig.family_name,
+            name=cfg_fig.name,
+            suit=cfg_fig.suit,
+            color=cfg_fig.color,
+            field=cfg_fig.field,
+            description=cfg_fig.description or '',
+            upgrade_family_name=cfg_fig.upgrade_family_name,
+            produces=cfg_fig.produces,
+            requires=cfg_fig.requires,
+            checkmate=cfg_fig.checkmate,
+            cannot_be_blocked=cfg_fig.cannot_be_blocked,
+            rest_after_attack=cfg_fig.rest_after_attack,
+        )
+        db.session.add(fig)
+        db.session.flush()
+
+        for role in (cfg_fig.card_roles or []):
+            ctf = CardToFigure(
+                figure_id=fig.id,
+                card_id=0,  # virtual card — no real card in conquer mode
+                card_type='main',
+                role=role,
+            )
+            db.session.add(ctf)
+
+        figures.append(fig)
+    return figures
+
+
+def _build_figures_from_template(template_figures, player, game):
+    """Create Figure records from AI template figure dicts.
+
+    Returns a list of created Figure objects (flushed, with IDs).
+    """
+    figures = []
+    for tpl_fig in template_figures:
+        fig = Figure(
+            player_id=player.id,
+            game_id=game.id,
+            family_name=tpl_fig['family_name'],
+            name=tpl_fig.get('name', tpl_fig['family_name']),
+            suit=tpl_fig['suit'],
+            color=tpl_fig['color'],
+            field=tpl_fig['field'],
+            description=tpl_fig.get('description', ''),
+            upgrade_family_name=tpl_fig.get('upgrade_family_name'),
+            produces=tpl_fig.get('produces'),
+            requires=tpl_fig.get('requires'),
+            checkmate=tpl_fig.get('checkmate', False),
+            cannot_be_blocked=tpl_fig.get('cannot_be_blocked', False),
+            rest_after_attack=tpl_fig.get('rest_after_attack', False),
+        )
+        db.session.add(fig)
+        db.session.flush()
+
+        for role in tpl_fig.get('card_roles', []):
+            ctf = CardToFigure(
+                figure_id=fig.id,
+                card_id=0,
+                card_type='main',
+                role=role,
+            )
+            db.session.add(ctf)
+
+        figures.append(fig)
+    return figures
+
+
+def _build_battle_moves_from_config(cfg_moves, player, game, config_figure_map=None):
+    """Create BattleMove records from LandConfigBattleMove list.
+
+    config_figure_map: optional dict mapping LandConfigFigure.id -> Figure.id
+    for resolving call_figure_id.
+    """
+    for cfg_move in cfg_moves:
+        call_fig_id = None
+        if cfg_move.call_figure_id and config_figure_map:
+            call_fig_id = config_figure_map.get(cfg_move.call_figure_id)
+
+        move = BattleMove(
+            game_id=game.id,
+            player_id=player.id,
+            family_name=cfg_move.family_name,
+            card_id=0,  # virtual card
+            card_type='main',
+            suit=cfg_move.suit,
+            rank=cfg_move.rank,
+            value=cfg_move.value,
+            call_figure_id=call_fig_id,
+        )
+        db.session.add(move)
+
+
+def _build_battle_moves_from_template(template_moves, player, game,
+                                      template_figures=None, game_figures=None):
+    """Create BattleMove records from AI template move dicts.
+
+    template_figures and game_figures are parallel lists to resolve
+    call_figure references by index.
+    """
+    for tpl_move in template_moves:
+        call_fig_id = None
+        # Resolve call figure for Call Villager/Call Military/Call King
+        if tpl_move['family_name'] in ('Call Villager', 'Call Military', 'Call King'):
+            field_map = {
+                'Call Villager': 'village',
+                'Call Military': 'military',
+                'Call King': 'castle',
+            }
+            target_field = field_map[tpl_move['family_name']]
+            if game_figures:
+                for gf in game_figures:
+                    if gf.field == target_field:
+                        call_fig_id = gf.id
+                        break
+
+        move = BattleMove(
+            game_id=game.id,
+            player_id=player.id,
+            family_name=tpl_move['family_name'],
+            card_id=0,  # virtual card
+            card_type=tpl_move.get('card_type', 'main'),
+            suit=tpl_move['suit'],
+            rank=tpl_move['rank'],
+            value=tpl_move['value'],
+            call_figure_id=call_fig_id,
+        )
+        db.session.add(move)
+
+
+def _get_or_create_ai_user():
+    """Get the AI user for unowned land battles."""
+    ai_username = config.AI_USERNAMES[0] if config.AI_USERNAMES else '[AI] Strategos'
+    ai_user = User.query.filter_by(username=ai_username).first()
+    if not ai_user:
+        from werkzeug.security import generate_password_hash
+        ai_user = User(
+            username=ai_username,
+            password_hash=generate_password_hash('ai_internal'),
+            gold=config.AI_INITIAL_GOLD,
+        )
+        db.session.add(ai_user)
+        db.session.flush()
+    return ai_user
+
+
+# ── POST /kingdom/conquer/start_battle ───────────────────────────────────────
+
+@kingdom.route('/conquer/start_battle', methods=['POST'])
+@require_token
+def conquer_start_battle():
+    """Start a conquer battle for a land.
+
+    Expects JSON: { land_id }
+
+    Creates a Game with mode='conquer', pre-populates figures and battle
+    moves from the attacker's conquer config and the defender's defence
+    config (or AI template for unowned lands).
+    """
+    from kingdom_service import check_land_config_deficit
+
+    data = request.json
+    land_id = data.get('land_id')
+
+    if not land_id:
+        return jsonify({'success': False, 'message': 'land_id is required'}), 400
+
+    user = db.session.get(User, g.user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+
+    land = db.session.get(Land, land_id)
+    if not land:
+        return jsonify({'success': False, 'message': 'Land not found'}), 404
+
+    if land.owner_user_id == user.id:
+        return jsonify({'success': False, 'message': 'Cannot conquer your own land'}), 400
+
+    # Cooldown check
+    if user.last_conquer_at:
+        elapsed = (_utcnow() - user.last_conquer_at).total_seconds()
+        if elapsed < config.CONQUER_COOLDOWN_SECONDS:
+            remaining = int(config.CONQUER_COOLDOWN_SECONDS - elapsed)
+            return jsonify({'success': False,
+                            'message': f'Conquer on cooldown. {remaining}s remaining.'}), 400
+
+    # Load attacker's conquer config
+    atk_cfg = LandConfig.query.filter_by(
+        user_id=user.id, config_type='conquer', land_id=land_id
+    ).first()
+    if not atk_cfg:
+        return jsonify({'success': False, 'message': 'No conquer config found'}), 400
+
+    atk_figures = LandConfigFigure.query.filter_by(config_id=atk_cfg.id).all()
+    atk_moves = LandConfigBattleMove.query.filter_by(config_id=atk_cfg.id).all()
+
+    if not atk_figures:
+        return jsonify({'success': False, 'message': 'Conquer config has no figures'}), 400
+    if not atk_moves:
+        return jsonify({'success': False, 'message': 'Conquer config has no battle moves'}), 400
+
+    # Validate attacker figures aren't ALL in deficit
+    non_deficit_figures = [
+        f for f in atk_figures
+        if not check_land_config_deficit(f, atk_figures)
+    ]
+    if not non_deficit_figures:
+        return jsonify({'success': False,
+                        'message': 'All figures have resource deficit'}), 400
+
+    # Determine defender
+    is_ai_land = land.owner_user_id is None
+    defender_user = None
+    def_cfg = None
+    template = None
+
+    if is_ai_land:
+        defender_user = _get_or_create_ai_user()
+        # Load AI template
+        templates = config.AI_DEFENCE_TEMPLATES.get(land.tier, [])
+        tpl_idx = land.ai_template_index or 0
+        if tpl_idx < len(templates):
+            template = templates[tpl_idx]
+        else:
+            template = templates[0] if templates else None
+        if not template:
+            return jsonify({'success': False,
+                            'message': 'No AI template available for this land'}), 400
+    else:
+        defender_user = db.session.get(User, land.owner_user_id)
+        if not defender_user:
+            return jsonify({'success': False, 'message': 'Defender not found'}), 400
+        def_cfg = LandConfig.query.filter_by(
+            user_id=defender_user.id, config_type='defence', land_id=land_id
+        ).first()
+        if not def_cfg:
+            return jsonify({'success': False,
+                            'message': 'Defender has no defence config'}), 400
+
+    # ── Create the Game ──
+    game = Game(
+        mode='conquer',
+        land_id=land_id,
+        conquer_config_id=atk_cfg.id,
+        defence_config_id=def_cfg.id if def_cfg else None,
+        state='open',
+        stake=0,
+        current_round=1,
+        ceasefire_active=False,
+        battle_confirmed=False,
+    )
+    db.session.add(game)
+    db.session.flush()
+
+    # Create players
+    atk_player = Player(user_id=user.id, game_id=game.id,
+                        turns_left=1, points=0)
+    def_player = Player(user_id=defender_user.id, game_id=game.id,
+                        turns_left=1, points=0)
+    db.session.add_all([atk_player, def_player])
+    db.session.flush()
+
+    # Set attacker as invader and turn player
+    game.invader_player_id = atk_player.id
+    game.turn_player_id = atk_player.id
+
+    # ── Build attacker figures & moves ──
+    atk_game_figures = _build_figures_from_config(atk_figures, atk_player, game)
+
+    # Map config figure IDs -> game figure IDs for call_figure resolution
+    cfg_fig_map = {}
+    for cfg_fig, game_fig in zip(atk_figures, atk_game_figures):
+        cfg_fig_map[cfg_fig.id] = game_fig.id
+
+    _build_battle_moves_from_config(atk_moves, atk_player, game,
+                                    config_figure_map=cfg_fig_map)
+
+    # ── Build defender figures & moves ──
+    if is_ai_land:
+        def_game_figures = _build_figures_from_template(
+            template['figures'], def_player, game)
+        _build_battle_moves_from_template(
+            template['battle_moves'], def_player, game,
+            template_figures=template['figures'],
+            game_figures=def_game_figures)
+
+        # Set defender battle figure from template
+        battle_fig_idx = template.get('battle_figure_index', 0)
+        if battle_fig_idx < len(def_game_figures):
+            game.defending_figure_id = def_game_figures[battle_fig_idx].id
+
+        # Set battle modifier from template
+        if template.get('battle_modifier'):
+            game.battle_modifier = template['battle_modifier']
+
+        # Set spell from template
+        if template.get('spell'):
+            spell_data = template['spell']
+            target_fig_id = None
+            if spell_data.get('spell_target_figure_id') is not None:
+                tgt_idx = spell_data['spell_target_figure_id']
+                if isinstance(tgt_idx, int) and tgt_idx < len(def_game_figures):
+                    target_fig_id = def_game_figures[tgt_idx].id
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name=spell_data.get('spell_name', ''),
+                spell_type='enchantment',
+                spell_family_name=spell_data.get('spell_name', ''),
+                suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
+                target_figure_id=target_fig_id,
+                cast_round=1,
+                is_active=True,
+                is_pending=False,
+            )
+            db.session.add(spell)
+
+    else:
+        def_config_figures = LandConfigFigure.query.filter_by(
+            config_id=def_cfg.id).all()
+        def_config_moves = LandConfigBattleMove.query.filter_by(
+            config_id=def_cfg.id).all()
+
+        def_game_figures = _build_figures_from_config(
+            def_config_figures, def_player, game)
+
+        def_cfg_fig_map = {}
+        for cfg_fig, game_fig in zip(def_config_figures, def_game_figures):
+            def_cfg_fig_map[cfg_fig.id] = game_fig.id
+
+        _build_battle_moves_from_config(
+            def_config_moves, def_player, game,
+            config_figure_map=def_cfg_fig_map)
+
+        # Set defender battle figure from config
+        if def_cfg.battle_figure_id:
+            mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id)
+            if mapped_id:
+                game.defending_figure_id = mapped_id
+        if def_cfg.battle_figure_id_2:
+            mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id_2)
+            if mapped_id:
+                game.defending_figure_id_2 = mapped_id
+
+        # Set battle modifier from defence config
+        if def_cfg.battle_modifier:
+            game.battle_modifier = def_cfg.battle_modifier
+
+        # Set spell from defence config
+        if def_cfg.spell_name:
+            target_fig_id = None
+            if def_cfg.spell_target_figure_id:
+                target_fig_id = def_cfg_fig_map.get(
+                    def_cfg.spell_target_figure_id)
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name=def_cfg.spell_name,
+                spell_type='enchantment',
+                spell_family_name=def_cfg.spell_name,
+                suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
+                target_figure_id=target_fig_id,
+                cast_round=1,
+                is_active=True,
+                is_pending=False,
+            )
+            db.session.add(spell)
+
+    # Merge attacker modifier if no defender modifier
+    if not game.battle_modifier and atk_cfg.battle_modifier:
+        game.battle_modifier = atk_cfg.battle_modifier
+
+    # Set cooldown
+    user.last_conquer_at = _utcnow()
+
+    db.session.commit()
+
+    logger.info(f"[CONQUER] Battle started: game={game.id} land={land_id} "
+                f"attacker={user.username} defender={defender_user.username} "
+                f"ai_land={is_ai_land}")
+
+    return jsonify({
+        'success': True,
+        'game_id': game.id,
+        'game': game.serialize(),
+    })
