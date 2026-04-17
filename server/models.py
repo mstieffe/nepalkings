@@ -766,6 +766,11 @@ class LandConfigFigure(db.Model):
     card_roles  = db.Column(db.JSON, nullable=False)          # ['key','key','number'] etc.
     produces    = db.Column(db.JSON, nullable=True)           # Resources produced (same as Figure)
     requires    = db.Column(db.JSON, nullable=True)           # Resources required (same as Figure)
+    description         = db.Column(db.String(255), nullable=True)
+    upgrade_family_name = db.Column(db.String(50), nullable=True)
+    checkmate           = db.Column(db.Boolean, default=False, nullable=False)
+    cannot_be_blocked   = db.Column(db.Boolean, default=False, nullable=False)
+    rest_after_attack   = db.Column(db.Boolean, default=False, nullable=False)
 
     def serialize(self):
         return {
@@ -780,6 +785,11 @@ class LandConfigFigure(db.Model):
             'card_roles': self.card_roles,
             'produces': self.produces or {},
             'requires': self.requires or {},
+            'description': self.description or '',
+            'upgrade_family_name': self.upgrade_family_name,
+            'checkmate': self.checkmate,
+            'cannot_be_blocked': self.cannot_be_blocked,
+            'rest_after_attack': self.rest_after_attack,
         }
 
 

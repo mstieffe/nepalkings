@@ -129,25 +129,43 @@ class LandConfig(db.Model):
 
 #### `LandConfigFigure`
 Figures built in a conquer/defence configuration.
+Mirrors all gameplay-relevant fields from the duel `Figure` model so that conquer/defence
+figures behave identically (skills, info box, upgrades, etc.).
 ```python
 class LandConfigFigure(db.Model):
-    id              = db.Column(db.Integer, primary_key=True)
-    config_id       = db.Column(db.Integer, db.ForeignKey('land_config.id'), nullable=False)
-    family_name     = db.Column(db.String(50), nullable=False)
-    name            = db.Column(db.String(50), nullable=False)
-    suit            = db.Column(db.String(10), nullable=False)
-    color           = db.Column(db.String(10), nullable=False)  # 'offensive'|'defensive'
-    field           = db.Column(db.String(10), nullable=False)  # 'castle'|'village'|'military'
-    card_ids        = db.Column(db.JSON, nullable=False)         # [collection_card.id, ...]
-    card_roles      = db.Column(db.JSON, nullable=False)         # ['key','key','number'] etc.
-    produces        = db.Column(db.JSON, nullable=True)          # Resources produced (same as Figure)
-    requires        = db.Column(db.JSON, nullable=True)          # Resources required (same as Figure)
+    id                  = db.Column(db.Integer, primary_key=True)
+    config_id           = db.Column(db.Integer, db.ForeignKey('land_config.id'), nullable=False)
+    family_name         = db.Column(db.String(50), nullable=False)
+    name                = db.Column(db.String(50), nullable=False)
+    suit                = db.Column(db.String(10), nullable=False)
+    color               = db.Column(db.String(10), nullable=False)  # 'offensive'|'defensive'
+    field               = db.Column(db.String(10), nullable=False)  # 'castle'|'village'|'military'
+    card_ids            = db.Column(db.JSON, nullable=False)         # [collection_card.id, ...]
+    card_roles          = db.Column(db.JSON, nullable=False)         # ['key','key','number'] etc.
+    produces            = db.Column(db.JSON, nullable=True)          # Resources produced
+    requires            = db.Column(db.JSON, nullable=True)          # Resources required
+    description         = db.Column(db.String(255), nullable=True)
+    upgrade_family_name = db.Column(db.String(50), nullable=True)
+    checkmate           = db.Column(db.Boolean, default=False)       # Maharaja: loss on death
+    cannot_be_blocked   = db.Column(db.Boolean, default=False)       # Prevents counter-advance
+    rest_after_attack   = db.Column(db.Boolean, default=False)       # Rests 1 round after battle
 ```
+**Skills not stored as columns** (`cannot_attack`, `must_be_attacked`, `distance_attack`,
+`buffs_allies`, `buffs_allies_defence`, `blocks_bonus`, `cannot_defend`, `instant_charge`,
+`cannot_be_targeted`) are derived from `family_name` via `FAMILY_SKILLS` lookup — same as duel
+`Figure` model.
+
 **Resource deficit**: conquer/defence figures obey the same deficit rules as duel figures.
 `kingdom_service.check_land_config_deficit(figure, all_config_figures)` uses the same iterative
 algorithm as `_check_figure_resource_deficit` in `routes/games.py`. A figure in deficit **cannot
 be selected as battle figure** and is shown greyed-out with the broken-state icon on the
 conquer/defence field screen.
+
+**Figure detail info box**: Clicking a figure on the conquer/defence field opens the same
+`FigureDetailBox` used in duel mode — showing cards, power, skills, production/requirements,
+deficit status. Upgrade button shown when `upgrade_family_name` is set. On the conquer/defence
+screens the action buttons adapt: no "Advance" (handled separately), but "Remove Figure"
+(unlocks collection cards) and "Upgrade" (if applicable) are available.
 ```
 
 #### `LandConfigBattleMove`
@@ -595,8 +613,11 @@ Inherits `SubScreen` (displayed as overlay from KingdomScreen).
   - But only player figures (no opponent side)
   - Data source: `LandConfig` figures from server
   - **Resource deficit**: figures in deficit are greyed out with the broken-state icon, just like in duel mode. Use `kingdom_service.get_config_deficit_map(config_id)` to annotate each figure.
+  - **Figure detail info box**: clicking a field figure opens `FigureDetailBox` (same component as duel mode) showing cards, power, skills, production/requirements, deficit status. Action buttons: "Remove Figure" (unlocks cards), "Upgrade" (if `upgrade_family_name` set).
+  - **Skills display**: `FigureIcon` renders skill icons from `family_name` → `FAMILY_SKILLS` / `SKILL_KEYS` lookup — identical to duel rendering.
+  - **Support bonus**: shown in figure icons via existing `get_battle_bonus()` logic (calculated from same-field same-suit figures in the config).
 - **Build** button → opens `BuildFigureScreen` with `CollectionCardSource` and `mode='conquer'`
-  - On successful build: server creates `LandConfigFigure` with `produces`/`requires` (from recipe), locks cards
+  - On successful build: server creates `LandConfigFigure` with all fields from recipe (`produces`, `requires`, `description`, `upgrade_family_name`, `checkmate`, `cannot_be_blocked`, `rest_after_attack`), locks cards
   - Returns to conquer screen (not staying on build screen)
 
 **Layout — Right Half: Battle Configuration**
@@ -618,7 +639,7 @@ Inherits `SubScreen` (displayed as overlay from KingdomScreen).
 #### `POST /kingdom/conquer/build_figure`
 Same logic as `/figures/create_figure` but:
 - Reads from `CollectionCard` instead of `MainCard`
-- Creates `LandConfigFigure` (with `produces`/`requires` from recipe) instead of `Figure`
+- Creates `LandConfigFigure` (with all recipe fields: `produces`/`requires`, `description`, `upgrade_family_name`, `checkmate`, `cannot_be_blocked`, `rest_after_attack`) instead of `Figure`
 - Locks the collection cards
 - Returns updated conquer config
 
@@ -657,6 +678,8 @@ Very similar to `ConquerScreen` but with these differences:
 - Same compartment display as conquer
 - Same build button (but `mode='defence'`, calls defence endpoints)
 - **Resource deficit**: same as conquer — figures in deficit are greyed out with the broken-state icon.
+- **Figure detail info box**: clicking a field figure opens `FigureDetailBox` — same as conquer/duel. Shows cards, power, skills, production/requirements, deficit status. Action buttons: "Remove Figure", "Upgrade".
+- **Skills & support bonus**: rendered identically to conquer field (via `family_name` → skill lookup).
 
 **Right Half: Battle Configuration**
 - **Battle Moves** section — same as conquer
@@ -734,6 +757,8 @@ Params: `{land_id}`
    - Create 2 `Player` records: attacker (user) + defender (land owner or AI user)
    - `turns_left = 1` for both players
    - Pre-populate `Figure` records from conquer/defence config figures
+     - **Copy ALL fields**: `family_name`, `name`, `suit`, `color`, `field`, `description`, `upgrade_family_name`, `produces`, `requires`, `checkmate`, `cannot_be_blocked`, `rest_after_attack`
+     - Skills derived from `family_name` will work automatically on the client (same `SKILL_KEYS` / `FAMILY_SKILLS` lookup)
    - Pre-populate `BattleMove` records from conquer/defence config moves
    - Set `battle_modifier` from configs (merge — attacker's + defender's)
    - If defender has spell: create `ActiveSpell` for it
