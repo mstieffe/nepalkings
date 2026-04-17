@@ -79,6 +79,7 @@ class Game:
         
         # Track if game start notification was shown (needs to be shown once per player)
         self.game_start_notification_checked = False
+        self._game_start_pending = False  # True while game_start request is in flight / unprocessed
         
         # Auto-fill notification (cleared after showing dialogue)
         self.pending_auto_fill = None
@@ -699,6 +700,15 @@ class Game:
             logger.info(f"[GAME_START] First update — player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
             self._start_turn_async()
             self.game_start_notification_checked = True
+            self._game_start_pending = True
+        
+        # Suppress all turn-change detection while game_start is in flight /
+        # unprocessed.  Without this guard, a fast AI opponent causes a race:
+        # the turn-change _start_turn_async and the game_start _start_turn_async
+        # both write to pending_opponent_turn_summary and the last writer wins,
+        # potentially losing the opponent action notification.
+        elif self._game_start_pending:
+            pass
         
         # Check if turn changed to current player - call start_turn endpoint
         elif not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:

@@ -1269,12 +1269,19 @@ class GameScreen(Screen):
                     notification['message_after_images'] = turn_status
                 self.queue_or_show_notification(notification)
 
+                # Clear the pending flag so turn-change detection resumes.
+                self.state.game._game_start_pending = False
+
                 # For the defender's first turn the invader has already played.
-                # Re-request start_turn so the real opponent-action summary is
-                # fetched and queued after the welcome dialogue.
-                if summary.get('has_opponent_action'):
+                # Use the live turn state (updated by polling) rather than the
+                # potentially stale is_turn from the server response — a fast
+                # AI opponent may have played between the request and now.
+                if not is_invader and self.state.game.turn:
                     logger.info("[WELCOME_MSG] Defender first turn — re-requesting start_turn for opponent action")
                     self.state.game._start_turn_async()
+            else:
+                # Safety: clear flag even if maharaja wasn't found
+                self.state.game._game_start_pending = False
             
             # Clear the notification
             self.state.game.pending_opponent_turn_summary = None
