@@ -12,7 +12,7 @@ import signal
 import sys
 
 import server_settings as settings
-from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection
+from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection, kingdom
 
 games.settings = settings
 challenges.settings = settings
@@ -195,6 +195,7 @@ app.register_blueprint(figures, url_prefix='/figures')
 app.register_blueprint(spells, url_prefix='/spells')
 app.register_blueprint(battle_shop, url_prefix='/battle_shop')
 app.register_blueprint(collection, url_prefix='/collection')
+app.register_blueprint(kingdom, url_prefix='/kingdom')
 
 # ── Stricter rate limits for auth-sensitive endpoints ──
 limiter.limit(settings.RATE_LIMIT_LOGIN)(app.view_functions['auth.login'])

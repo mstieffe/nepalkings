@@ -9,3 +9,4 @@ from .figures import figures
 from .spells import spells
 from .battle_shop import battle_shop
 from .collection import collection
+from .kingdom import kingdom
