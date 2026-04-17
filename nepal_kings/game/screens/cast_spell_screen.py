@@ -18,11 +18,16 @@ logger = logging.getLogger('nk.screens.cast_spell')
 class CastSpellScreen(SubScreen):
     """Screen for casting spells by selecting spell families and cards."""
 
-    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None):
+    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None,
+                 card_source=None, mode='duel'):
         super().__init__(window, state.game, x, y, title)
 
         self.state = state
         self.game = state.game
+
+        from game.core.card_source import GameCardSource
+        self.card_source = card_source or GameCardSource(self.game)
+        self.mode = mode
         
         # Initialize spell manager and load spells
         self.spell_manager = SpellManager()
@@ -293,7 +298,7 @@ class CastSpellScreen(SubScreen):
         :param spell: The spell with dummy cards
         :return: List of real cards from hand, or None if not all cards available
         """
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         
         # Filter to only cards belonging to this player
@@ -441,7 +446,7 @@ class CastSpellScreen(SubScreen):
     
     def update_spell_icon_states(self):
         """Update the active state of spell icons based on castable spells."""
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         
         # Filter to only cards belonging to this player
@@ -636,7 +641,7 @@ class CastSpellScreen(SubScreen):
         :param spell_family: The SpellFamily to check
         :return: List of castable spells
         """
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         
         # Filter to only cards belonging to this player
@@ -670,7 +675,7 @@ class CastSpellScreen(SubScreen):
         :param spell: The spell to check
         :return: Tuple of (given_cards, missing_cards)
         """
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         
         # Filter to only cards belonging to this player

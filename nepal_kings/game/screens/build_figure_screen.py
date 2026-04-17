@@ -10,6 +10,7 @@ from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
+from game.core.card_source import GameCardSource
 from utils.utils import ColorTogglePill
 import logging
 
@@ -20,7 +21,8 @@ logger = logging.getLogger('nk.screens.build_figure')
 class BuildFigureScreen(SubScreen):
     """Screen for building a figure by selecting figures and suits."""
 
-    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None):
+    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None,
+                 card_source=None, mode='duel'):
         super().__init__(window, state.game, x, y, title)
 
         # Initialize the figure manager and load figures
@@ -28,6 +30,8 @@ class BuildFigureScreen(SubScreen):
 
         self.state = state
         self.game = state.game
+        self.card_source = card_source or GameCardSource(self.game)
+        self.mode = mode
 
         # Map display names to internal color names
         self.color_mapping = {
@@ -688,7 +692,7 @@ class BuildFigureScreen(SubScreen):
         :param figure: The Figure object with dummy cards.
         :return: A list of real Card objects mapped from the player's hand.
         """
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
 
         # Create a list of available cards (will remove as we use them)
@@ -718,7 +722,7 @@ class BuildFigureScreen(SubScreen):
     def get_figures_in_hand(self, figure_family):
         """Get figures in the player's hand."""
         # Get all cards in the player's hand
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
 
         # Count occurrences of each card in the hand
@@ -739,7 +743,7 @@ class BuildFigureScreen(SubScreen):
     def get_missing_cards(self, figure):
         """Get missing cards for a figure."""
         # Get all cards in the player's hand
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
 
         # Count occurrences of each card in the hand using tuples
@@ -767,7 +771,7 @@ class BuildFigureScreen(SubScreen):
 
     def get_given_cards_for_figure(self, figure):
         """Get given cards for a specific figure."""
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         hand_counter = Counter(card.to_tuple() for card in hand_cards)
 

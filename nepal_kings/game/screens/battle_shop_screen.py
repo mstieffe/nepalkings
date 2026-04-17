@@ -28,10 +28,15 @@ class BattleShopScreen(SubScreen):
     Buying / returning is NOT a turn action.
     """
 
-    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None):
+    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None,
+                 card_source=None, mode='duel'):
         super().__init__(window, state.game, x, y, title)
         self.state = state
         self.game = state.game
+
+        from game.core.card_source import GameCardSource
+        self.card_source = card_source or GameCardSource(self.game)
+        self.mode = mode
 
         # Manager
         self.battle_move_manager = BattleMoveManager()
@@ -267,7 +272,7 @@ class BattleShopScreen(SubScreen):
 
     def _get_hand_cards(self):
         """Get all cards currently in the player's hand (excluding battle-move cards)."""
-        main, side = self.game.get_hand()
+        main, side = self.card_source.get_cards()
         return main + side
 
     # ---------------------------------------------------------------- update
@@ -586,7 +591,7 @@ class BattleShopScreen(SubScreen):
         """Load all player figures + resource data for Call-move eligibility."""
         try:
             families = self.figure_manager.families
-            self._player_figures = self.game.get_figures(families, is_opponent=False)
+            self._player_figures = self.card_source.get_figures(families, is_opponent=False)
             self._resources_data = self.game.calculate_resources(families, is_opponent=False)
             self._figures_loaded_game_key = (getattr(self.game, 'game_id', None),
                                               getattr(self.game, 'player_id', None),
