@@ -181,10 +181,12 @@ class MenuScreenMixin:
         if not cls._chrome_cache:
             raw_bg = pygame.image.load(settings.GAME_MENU_BG_IMG_PATH).convert()
             raw_gold = pygame.image.load(settings.GAME_MENU_GOLD_ICON_PATH).convert_alpha()
+            raw_booster = pygame.image.load(settings.GAME_MENU_BOOSTER_ICON_PATH).convert_alpha()
             sz = settings.GAME_MENU_GOLD_ICON_SZ
             cls._chrome_cache = {
-                'bg':   pygame.transform.smoothscale(raw_bg, (_SW, _SH)),
-                'gold': pygame.transform.smoothscale(raw_gold, (sz, sz)),
+                'bg':      pygame.transform.smoothscale(raw_bg, (_SW, _SH)),
+                'gold':    pygame.transform.smoothscale(raw_gold, (sz, sz)),
+                'booster': pygame.transform.smoothscale(raw_booster, (sz, sz)),
             }
         return cls._chrome_cache
 
@@ -193,6 +195,7 @@ class MenuScreenMixin:
         cache = self._load_chrome_cache()
         self._bg = cache['bg']
         self._gold_icon = cache['gold']
+        self._booster_icon = cache['booster']
         self._gold_font = settings.get_font(settings.GAME_MENU_GOLD_FONT_SIZE)
 
         # Icon buttons (top-right): home at top, settings at bottom, logout just above settings
@@ -218,9 +221,10 @@ class MenuScreenMixin:
     # ── draw helpers ────────────────────────────────────────────────
 
     def _draw_menu_chrome(self):
-        """Draw background + gold display.  Call FIRST in render()."""
+        """Draw background + gold display + booster pack display.  Call FIRST in render()."""
         self.window.blit(self._bg, (0, 0))
         self._draw_gold()
+        self._draw_booster_packs()
 
     def _draw_menu_overlay(self):
         """Draw icon buttons + messages.  Call LAST in render()."""
@@ -260,6 +264,46 @@ class MenuScreenMixin:
         ix = mx + pad_x
         iy = my + pad_y + (ch - icon_sz) // 2
         self.window.blit(self._gold_icon, (ix, iy))
+
+        tx = ix + icon_sz + gap
+        ty = my + pad_y + (ch - text_surf.get_height()) // 2
+        self.window.blit(text_surf, (tx, ty))
+
+    def _draw_booster_packs(self):
+        """Booster pack icon + count, positioned below the gold display."""
+        packs = 0
+        if self.state.user_dict:
+            packs = self.state.user_dict.get('booster_packs', 0)
+
+        icon_sz  = settings.GAME_MENU_GOLD_ICON_SZ
+        pad_x    = settings.GAME_MENU_GOLD_BOX_PAD_X
+        pad_y    = settings.GAME_MENU_GOLD_BOX_PAD_Y
+        gap      = settings.GAME_MENU_GOLD_ICON_TEXT_GAP
+        mx       = settings.GAME_MENU_GOLD_MARGIN_X
+
+        text_surf = self._gold_font.render(str(packs), True, settings.GAME_MENU_GOLD_TEXT_CLR)
+
+        cw = icon_sz + gap + text_surf.get_width()
+        ch = max(icon_sz, text_surf.get_height())
+        bw = pad_x * 2 + cw
+        bh = pad_y * 2 + ch
+
+        # Position below gold box: gold_margin_y + gold_box_h + small gap
+        gold_text = self._gold_font.render('0', True, (0, 0, 0))
+        gold_ch = max(icon_sz, gold_text.get_height())
+        gold_bh = pad_y * 2 + gold_ch
+        booster_gap = int(0.008 * _SH)
+        my = settings.GAME_MENU_GOLD_MARGIN_Y + gold_bh + booster_gap
+
+        box = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        box.fill(settings.GAME_MENU_GOLD_BOX_BG_CLR)
+        pygame.draw.rect(box, settings.GAME_MENU_GOLD_BOX_BORDER_CLR,
+                         box.get_rect(), settings.GAME_MENU_GOLD_BOX_BORDER_W)
+        self.window.blit(box, (mx, my))
+
+        ix = mx + pad_x
+        iy = my + pad_y + (ch - icon_sz) // 2
+        self.window.blit(self._booster_icon, (ix, iy))
 
         tx = ix + icon_sz + gap
         ty = my + pad_y + (ch - text_surf.get_height()) // 2

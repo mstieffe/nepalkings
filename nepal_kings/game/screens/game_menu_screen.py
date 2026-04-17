@@ -50,7 +50,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
         btn_x = (_SW - _btn_w) // 2
         title_h = self._title_surf.get_height() + settings.GAME_MENU_TITLE_PAD_BOTTOM
-        n_btns = 3
+        n_btns = 4
         content_h = title_h + n_btns * _btn_h + (n_btns - 1) * _btn_gap
         box_h = settings.GAME_MENU_BOX_PAD_TOP + content_h + settings.GAME_MENU_BOX_PAD_BOTTOM
         box_w = _btn_w + settings.GAME_MENU_BOX_PAD_X * 2
@@ -61,15 +61,17 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
         first_btn_y = self._box_rect.y + settings.GAME_MENU_BOX_PAD_TOP + title_h
 
-        self.button_new  = Button(self.window, btn_x, first_btn_y,
-                                  "New Game", width=_btn_w, height=_btn_h)
-        self.button_load = Button(self.window, btn_x, first_btn_y + _btn_h + _btn_gap,
-                                  "Load Game", width=_btn_w, height=_btn_h)
-        self.button_rankings = Button(self.window, btn_x, first_btn_y + 2 * (_btn_h + _btn_gap),
+        self.button_duel = Button(self.window, btn_x, first_btn_y,
+                                  "Duel", width=_btn_w, height=_btn_h)
+        self.button_kingdom = Button(self.window, btn_x, first_btn_y + _btn_h + _btn_gap,
+                                  "Kingdom", width=_btn_w, height=_btn_h)
+        self.button_collection = Button(self.window, btn_x, first_btn_y + 2 * (_btn_h + _btn_gap),
+                                  "Collection", width=_btn_w, height=_btn_h)
+        self.button_rankings = Button(self.window, btn_x, first_btn_y + 3 * (_btn_h + _btn_gap),
                                   "Rankings", width=_btn_w, height=_btn_h)
 
         # Apply custom button images
-        for btn in (self.button_new, self.button_load, self.button_rankings):
+        for btn in (self.button_duel, self.button_kingdom, self.button_collection, self.button_rankings):
             btn.button_image = pygame.transform.smoothscale(
                 self._btn_img, (btn.rect.width, btn.rect.height))
             btn.button_image_small = pygame.transform.smoothscale(
@@ -83,7 +85,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             raw = pygame.image.load(settings.GAME_MENU_GLOW_DIR + colour + '.png').convert_alpha()
             self._menu_glows[colour] = pygame.transform.smoothscale(raw, (glow_w, glow_h))
 
-        self.menu_buttons += [self.button_new, self.button_load, self.button_rankings]
+        self.menu_buttons += [self.button_duel, self.button_kingdom,
+                              self.button_collection, self.button_rankings]
 
         # ── Badge polling ───────────────────────────────────────────
         self._badge_timer = 0
@@ -145,12 +148,12 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         self.window.blit(self._title_surf, (title_x, title_y))
 
         # Menu buttons – custom draw with glow behind
-        for btn in (self.button_new, self.button_load, self.button_rankings):
+        for btn in (self.button_duel, self.button_kingdom, self.button_collection, self.button_rankings):
             self._draw_menu_button(btn)
 
-        # Badges
-        self._draw_badge(self.button_load, self.state.badge_new_games)
-        self._draw_badge(self.button_new, self.state.badge_new_challenges)
+        # Aggregate duel badge (new games + new challenges)
+        duel_badge = self.state.badge_new_games + self.state.badge_new_challenges
+        self._draw_badge(self.button_duel, duel_badge)
 
         # Messages / dialogue / icon buttons (overlay)
         self._draw_menu_overlay()
@@ -408,31 +411,15 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
     def handle_button_clicks(self):
         """Handle clicks on the menu buttons."""
-        if self.button_new.collide():
-            # Mark current challenges as seen
-            self.state.badge_new_challenges = 0
-            try:
-                username = self.state.user_dict.get('username') if self.state.user_dict else None
-                if username:
-                    user = fetch_user(username)
-                    received = user.get('challenges_received', [])
-                    self.state._known_challenge_ids = {c['id'] for c in received}
-            except Exception:
-                pass
-            self.state.screen = 'new_game'
-            logger.debug("New Game button clicked")
-        elif self.button_load.collide():
-            # Mark current games as seen
-            self.state.badge_new_games = 0
-            try:
-                username = self.state.user_dict.get('username') if self.state.user_dict else None
-                if username:
-                    game_dicts = fetch_user_games(username)
-                    self.state._known_game_ids = {g['id'] for g in game_dicts}
-            except Exception:
-                pass
-            self.state.screen = 'load_game'
-            logger.debug("Load Game button clicked")
+        if self.button_duel.collide():
+            self.state.screen = 'duel_menu'
+            logger.debug("Duel button clicked")
+        elif self.button_kingdom.collide():
+            self.state.screen = 'kingdom'
+            logger.debug("Kingdom button clicked")
+        elif self.button_collection.collide():
+            self.state.screen = 'collection'
+            logger.debug("Collection button clicked")
         elif self.button_rankings.collide():
             self.state.screen = 'rankings'
             logger.debug("Rankings button clicked")
