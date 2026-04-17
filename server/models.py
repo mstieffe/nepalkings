@@ -764,6 +764,8 @@ class LandConfigFigure(db.Model):
     field       = db.Column(db.String(10), nullable=False)   # 'castle'|'village'|'military'
     card_ids    = db.Column(db.JSON, nullable=False)          # [collection_card.id, ...]
     card_roles  = db.Column(db.JSON, nullable=False)          # ['key','key','number'] etc.
+    produces    = db.Column(db.JSON, nullable=True)           # Resources produced (same as Figure)
+    requires    = db.Column(db.JSON, nullable=True)           # Resources required (same as Figure)
 
     def serialize(self):
         return {
@@ -776,6 +778,8 @@ class LandConfigFigure(db.Model):
             'field': self.field,
             'card_ids': self.card_ids,
             'card_roles': self.card_roles,
+            'produces': self.produces or {},
+            'requires': self.requires or {},
         }
 
 

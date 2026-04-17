@@ -140,6 +140,14 @@ class LandConfigFigure(db.Model):
     field           = db.Column(db.String(10), nullable=False)  # 'castle'|'village'|'military'
     card_ids        = db.Column(db.JSON, nullable=False)         # [collection_card.id, ...]
     card_roles      = db.Column(db.JSON, nullable=False)         # ['key','key','number'] etc.
+    produces        = db.Column(db.JSON, nullable=True)          # Resources produced (same as Figure)
+    requires        = db.Column(db.JSON, nullable=True)          # Resources required (same as Figure)
+```
+**Resource deficit**: conquer/defence figures obey the same deficit rules as duel figures.
+`kingdom_service.check_land_config_deficit(figure, all_config_figures)` uses the same iterative
+algorithm as `_check_figure_resource_deficit` in `routes/games.py`. A figure in deficit **cannot
+be selected as battle figure** and is shown greyed-out with the broken-state icon on the
+conquer/defence field screen.
 ```
 
 #### `LandConfigBattleMove`
@@ -586,8 +594,9 @@ Inherits `SubScreen` (displayed as overlay from KingdomScreen).
 - Reuse `FieldScreen` rendering logic (compartments: castle, village, military)
   - But only player figures (no opponent side)
   - Data source: `LandConfig` figures from server
+  - **Resource deficit**: figures in deficit are greyed out with the broken-state icon, just like in duel mode. Use `kingdom_service.get_config_deficit_map(config_id)` to annotate each figure.
 - **Build** button → opens `BuildFigureScreen` with `CollectionCardSource` and `mode='conquer'`
-  - On successful build: server creates `LandConfigFigure`, locks cards
+  - On successful build: server creates `LandConfigFigure` with `produces`/`requires` (from recipe), locks cards
   - Returns to conquer screen (not staying on build screen)
 
 **Layout — Right Half: Battle Configuration**
@@ -600,8 +609,8 @@ Inherits `SubScreen` (displayed as overlay from KingdomScreen).
   - Only `Blitzkrieg` available for conquer
   - Selection carousel similar to spell selection (with card cost)
 - **"To Battle!"** button:
-  - Enabled when: ≥1 figure on field AND 3 battle moves selected
-  - Greyed out otherwise
+  - Enabled when: ≥1 non-deficit figure on field AND 3 battle moves selected
+  - Greyed out otherwise (show tooltip if all figures are in deficit)
   - On click: initiates land battle (Phase 15)
 
 ### 11.2 Server Endpoints: `server/routes/kingdom.py`
@@ -609,7 +618,7 @@ Inherits `SubScreen` (displayed as overlay from KingdomScreen).
 #### `POST /kingdom/conquer/build_figure`
 Same logic as `/figures/create_figure` but:
 - Reads from `CollectionCard` instead of `MainCard`
-- Creates `LandConfigFigure` instead of `Figure`
+- Creates `LandConfigFigure` (with `produces`/`requires` from recipe) instead of `Figure`
 - Locks the collection cards
 - Returns updated conquer config
 
@@ -630,11 +639,12 @@ Set battle modifier for conquer config. Validate card availability.
 Clear modifier, unlock cards.
 
 #### `GET /kingdom/conquer/config`
-Returns current conquer configuration.
+Returns current conquer configuration. Each figure in the response includes a `has_deficit` flag
+computed via `kingdom_service.get_config_deficit_map(config_id)`.
 
 **Shared Logic**: Extract common figure-building validation into `server/kingdom_service.py` helper functions, reusing the same card-matching and figure-family validation that `server/routes/figures.py` uses. Do NOT duplicate that logic.
 
-**Tests**: `tests/server/test_conquer_config.py` — build/remove figures, buy/return moves, card locking.
+**Tests**: `tests/server/test_conquer_config.py` — build/remove figures, buy/return moves, card locking, **resource deficit detection**.
 
 ---
 
@@ -646,6 +656,7 @@ Very similar to `ConquerScreen` but with these differences:
 **Left Half: Defence Field**
 - Same compartment display as conquer
 - Same build button (but `mode='defence'`, calls defence endpoints)
+- **Resource deficit**: same as conquer — figures in deficit are greyed out with the broken-state icon.
 
 **Right Half: Battle Configuration**
 - **Battle Moves** section — same as conquer
@@ -656,8 +667,9 @@ Very similar to `ConquerScreen` but with these differences:
   - **Edit** button → opens figure selection overlay:
     - Show all figures on defence field
     - Grey out figures incompatible with current battle modifier
+    - **Grey out figures with resource deficit** (cannot be selected as battle figure)
     - Click to select → confirm → assign as battle figure
-    - Civil War: select TWO same-color figures
+    - Civil War: select TWO same-color figures (neither may have deficit)
   - Constraint validation:
     - If modifier changes and invalidates current battle figure → auto-clear selection
     - If battle figure selected → spell cannot be selected (and vice versa)
@@ -685,6 +697,9 @@ Mirror conquer endpoints but for defence:
 - `POST /kingdom/defence/{land_id}/set_auto_gamble`
 - `GET /kingdom/defence/{land_id}/config`
 
+All figure-returning endpoints include a `has_deficit` flag for each figure via
+`kingdom_service.get_config_deficit_map(config_id)`.
+
 ### 12.3 Constraint Validation (Server-Side)
 Implement in `server/kingdom_service.py`:
 - `validate_battle_figure_for_modifier(figure, modifier)` → bool
@@ -692,9 +707,12 @@ Implement in `server/kingdom_service.py`:
   - Peasant War: no restriction on figure
   - No modifier: any figure valid
 - `validate_spell_no_battle_figure(config)` → bool
+- `check_land_config_deficit(figure, all_config_figures)` → bool
+  - Same iterative algorithm as duel deficit check
+  - Called by `set_battle_figure` to reject figures in deficit
 - These validators are called on every mutation endpoint
 
-**Tests**: `tests/server/test_defence_config.py` — all endpoints, constraint validation (modifier ↔ battle figure, spell ↔ battle figure exclusion, civil war same-color).
+**Tests**: `tests/server/test_defence_config.py` — all endpoints, constraint validation (modifier ↔ battle figure, spell ↔ battle figure exclusion, civil war same-color, **resource deficit rejection**).
 
 ---
 
@@ -708,7 +726,10 @@ Params: `{land_id}`
 **Flow:**
 1. Validate cooldown (`user.last_conquer_at + CONQUER_COOLDOWN_SECONDS < now`)
 2. Load attacker's conquer config + defender's defence config (or AI template)
-3. Create a new `Game` record with `mode='conquer'`:
+3. **Validate resource deficits**: reject if the attacker's selected battle figure(s) have
+   a deficit (via `kingdom_service.check_land_config_deficit`). A conquer with all field
+   figures in deficit is also rejected.
+4. Create a new `Game` record with `mode='conquer'`:
    - `state='open'`, `stake=0`
    - Create 2 `Player` records: attacker (user) + defender (land owner or AI user)
    - `turns_left = 1` for both players
@@ -737,6 +758,7 @@ After `start_battle` returns:
    - Hide "Change Cards" button (`mode != 'duel'`)
    - Hide turn counter (only 1 turn)
    - Auto-advance flow: player is invader with 1 turn → immediately prompted to select battle figure and advance
+   - **Resource deficit**: figures copied into the Game still carry `produces`/`requires` — the standard deficit check applies during the battle (greyed-out icons, cannot advance/fight)
    - Skip ceasefire logic
 4. **Defender auto-play** (server-side, not LLM):
    - New `server/kingdom_service.py::auto_play_defender(game)`:

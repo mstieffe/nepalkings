@@ -7,7 +7,7 @@ import random
 from datetime import datetime, timezone
 
 import server_settings as config
-from models import db, Land, CollectionCard
+from models import db, Land, CollectionCard, LandConfigFigure
 
 
 def _utcnow():
@@ -143,3 +143,75 @@ def validate_battle_figure_for_modifier(figure_color, figure_color_2, modifier):
         return figure_color == figure_color_2
     # Peasant War / Blitzkrieg have no figure color constraint
     return True
+
+
+# ── Resource Deficit ─────────────────────────────────────────────────────────
+
+def check_land_config_deficit(figure, all_config_figures):
+    """Check if a LandConfigFigure has a resource deficit within its config.
+
+    Uses the same iterative algorithm as ``_check_figure_resource_deficit``
+    in ``routes/games.py``: figures in deficit don't contribute production,
+    re-evaluated until stable.
+
+    Parameters
+    ----------
+    figure : LandConfigFigure
+        The figure to check.
+    all_config_figures : list[LandConfigFigure]
+        All figures in the same LandConfig (including *figure*).
+
+    Returns
+    -------
+    bool
+        ``True`` if *figure* has at least one required resource in deficit.
+    """
+    if not figure.requires:
+        return False
+
+    # Total requires across ALL figures in this config
+    total_requires = {}
+    for fig in all_config_figures:
+        if fig.requires:
+            for res, amount in fig.requires.items():
+                total_requires[res] = total_requires.get(res, 0) + amount
+
+    # Iteratively exclude production from deficit figures until stable
+    excluded = set()
+    stable = False
+    while not stable:
+        stable = True
+        total_produces = {}
+        for i, fig in enumerate(all_config_figures):
+            if i in excluded:
+                continue
+            if fig.produces:
+                for res, amount in fig.produces.items():
+                    total_produces[res] = total_produces.get(res, 0) + amount
+        for i, fig in enumerate(all_config_figures):
+            if i in excluded:
+                continue
+            if not fig.requires:
+                continue
+            for res_name in fig.requires:
+                if total_requires.get(res_name, 0) > total_produces.get(res_name, 0):
+                    excluded.add(i)
+                    stable = False
+                    break
+
+    # Check if the target figure's required resources are in deficit
+    for resource_name in figure.requires:
+        total_req = total_requires.get(resource_name, 0)
+        total_prod = total_produces.get(resource_name, 0)
+        if total_req > total_prod:
+            return True
+    return False
+
+
+def get_config_deficit_map(config_id):
+    """Return a dict mapping LandConfigFigure.id → bool (True = deficit).
+
+    Useful for annotating an entire config's figures at once.
+    """
+    figures = LandConfigFigure.query.filter_by(config_id=config_id).all()
+    return {fig.id: check_land_config_deficit(fig, figures) for fig in figures}
