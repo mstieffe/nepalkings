@@ -34,6 +34,7 @@ from config.battle_shop_settings import *
 from config.battle_screen_settings import *
 from config.guide_book_settings import *
 from config.game_menu_settings import *
+from config.collection_settings import *
 
 def get_x(relative_position):
     return SCREEN_WIDTH * relative_position
