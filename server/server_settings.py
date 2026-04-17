@@ -166,12 +166,13 @@ GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS = 7 * 24  # Cap at 7 days of uncollected 
 # Templates are lists of dicts per tier; one is randomly assigned to each land at
 # map seeding time.  Full template schema is defined in kingdom_service.py.
 AI_DEFENCE_TEMPLATES = {
-    1: [  # Tier 1 — weak
+    1: [  # Tier 1 — weak: one farm figure, basic battle moves
         {
             'figures': [
-                {'family_name': 'Village', 'suit': 'Hearts', 'color': 'offensive',
+                {'family_name': 'Small Rice Farm', 'suit': 'Hearts', 'color': 'offensive',
                  'field': 'village',
-                 'cards': [{'rank': 'Q', 'suit': 'Hearts', 'role': 'key'},
+                 'produces': {'food_red': 8}, 'requires': {'villager_red': 1},
+                 'cards': [{'rank': 'J', 'suit': 'Hearts', 'role': 'key'},
                            {'rank': '8', 'suit': 'Hearts', 'role': 'number'}]},
             ],
             'battle_moves': [
@@ -185,16 +186,17 @@ AI_DEFENCE_TEMPLATES = {
             'auto_gamble': False,
         },
     ],
-    2: [  # Tier 2 — medium
+    2: [  # Tier 2 — medium: king + farm, auto-gamble
         {
             'figures': [
-                {'family_name': 'Military', 'suit': 'Spades', 'color': 'defensive',
-                 'field': 'military',
-                 'cards': [{'rank': 'K', 'suit': 'Spades', 'role': 'key'},
-                           {'rank': '9', 'suit': 'Spades', 'role': 'number'}]},
-                {'family_name': 'Village', 'suit': 'Clubs', 'color': 'defensive',
+                {'family_name': 'Himalaya King', 'suit': 'Spades', 'color': 'defensive',
+                 'field': 'castle',
+                 'produces': {'villager_black': 2, 'warrior_black': 1}, 'requires': {},
+                 'cards': [{'rank': 'K', 'suit': 'Spades', 'role': 'key'}]},
+                {'family_name': 'Small Yack Farm', 'suit': 'Clubs', 'color': 'defensive',
                  'field': 'village',
-                 'cards': [{'rank': 'Q', 'suit': 'Clubs', 'role': 'key'},
+                 'produces': {'food_black': 8}, 'requires': {'villager_black': 1},
+                 'cards': [{'rank': 'J', 'suit': 'Clubs', 'role': 'key'},
                            {'rank': '8', 'suit': 'Clubs', 'role': 'number'}]},
             ],
             'battle_moves': [
@@ -208,28 +210,30 @@ AI_DEFENCE_TEMPLATES = {
             'auto_gamble': True,
         },
     ],
-    3: [  # Tier 3 — strong
+    3: [  # Tier 3 — strong: king + fortress + farm, auto-gamble
         {
             'figures': [
-                {'family_name': 'Military', 'suit': 'Hearts', 'color': 'offensive',
+                {'family_name': 'Djungle King', 'suit': 'Hearts', 'color': 'offensive',
+                 'field': 'castle',
+                 'produces': {'villager_red': 2, 'warrior_red': 1}, 'requires': {},
+                 'cards': [{'rank': 'K', 'suit': 'Hearts', 'role': 'key'}]},
+                {'family_name': 'Gorkha Warriors', 'suit': 'Hearts', 'color': 'offensive',
                  'field': 'military',
+                 'produces': {}, 'requires': {'warrior_red': 1, 'food_red': 10},
                  'cards': [{'rank': 'A', 'suit': 'Hearts', 'role': 'key'},
                            {'rank': '10', 'suit': 'Hearts', 'role': 'number'}]},
-                {'family_name': 'Castle', 'suit': 'Diamonds', 'color': 'offensive',
-                 'field': 'castle',
-                 'cards': [{'rank': 'K', 'suit': 'Diamonds', 'role': 'key'},
-                           {'rank': '9', 'suit': 'Diamonds', 'role': 'number'}]},
-                {'family_name': 'Village', 'suit': 'Hearts', 'color': 'offensive',
+                {'family_name': 'Small Rice Farm', 'suit': 'Diamonds', 'color': 'offensive',
                  'field': 'village',
-                 'cards': [{'rank': 'Q', 'suit': 'Hearts', 'role': 'key'},
-                           {'rank': '8', 'suit': 'Hearts', 'role': 'number'}]},
+                 'produces': {'food_red': 9}, 'requires': {'villager_red': 1},
+                 'cards': [{'rank': 'J', 'suit': 'Diamonds', 'role': 'key'},
+                           {'rank': '9', 'suit': 'Diamonds', 'role': 'number'}]},
             ],
             'battle_moves': [
                 {'family_name': 'Strike', 'rank': '10', 'suit': 'Hearts', 'round_index': 0},
                 {'family_name': 'Strike', 'rank': '9', 'suit': 'Diamonds', 'round_index': 1},
                 {'family_name': 'Strike', 'rank': '10', 'suit': 'Diamonds', 'round_index': 2},
             ],
-            'battle_figure_index': 0,
+            'battle_figure_index': 1,
             'battle_modifier': None,
             'spell': None,
             'auto_gamble': True,
