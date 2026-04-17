@@ -183,3 +183,48 @@ def get_kingdom_rankings():
         db.session.rollback()
         logger.error(f'Kingdom rankings failed: {e}')
         return jsonify({'success': False, 'message': 'Failed to fetch kingdom rankings'}), 500
+
+
+# ── GET /kingdom/map ────────────────────────────────────────────────────────
+
+@kingdom.route('/map', methods=['GET'])
+@require_token
+def get_kingdom_map():
+    """Return all lands with ownership info for the hex map.
+
+    Response includes per-land data (tier, gold rate, suit bonus, owner)
+    and aggregate stats for the requesting user.
+    """
+    user = db.session.get(User, g.user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    lands = Land.query.order_by(Land.row, Land.col).all()
+
+    my_total_gold_rate = 0.0
+    my_lands_count = 0
+    lands_data = []
+
+    for land in lands:
+        is_mine = (land.owner_user_id == user.id)
+        if is_mine:
+            my_total_gold_rate += land.gold_rate
+            my_lands_count += 1
+
+        land_dict = land.serialize()
+        land_dict['is_mine'] = is_mine
+        lands_data.append(land_dict)
+
+    # Conquer cooldown
+    cooldown_remaining = 0
+    if user.last_conquer_at:
+        elapsed = (_utcnow() - user.last_conquer_at).total_seconds()
+        remaining = config.CONQUER_COOLDOWN_SECONDS - elapsed
+        cooldown_remaining = max(0, int(remaining))
+
+    return jsonify({
+        'lands': lands_data,
+        'my_total_gold_rate': round(my_total_gold_rate, 1),
+        'my_lands_count': my_lands_count,
+        'conquer_cooldown_remaining': cooldown_remaining,
+    })
