@@ -105,5 +105,120 @@ AI_LLM_RETRY_BACKOFF_SECONDS = float(os.getenv('AI_LLM_RETRY_BACKOFF_SECONDS', '
 AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
 AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 
+# ── v2.0: Collection & Boosters ──
+STARTER_BOOSTER_PACKS = 3                   # Free packs on registration
+BOOSTER_PACK_PRICE = 100                    # Gold cost per pack
+BOOSTER_PACK_CARDS = 3                      # Cards drawn per pack
+DUEL_WINNER_BOOSTER_PACKS = 2              # Packs awarded to duel winner
+DUEL_LOSER_BOOSTER_PACKS = 1              # Packs awarded to duel loser
+
+BOOSTER_TIER_PROBABILITIES = {              # Probability of drawing each tier
+    1: 0.60,   # common
+    2: 0.30,   # uncommon
+    3: 0.10,   # rare
+}
+BOOSTER_TIER_RANKS = {                      # Card ranks per tier
+    1: ['7', '8', '9', '10'],
+    2: ['J', 'Q'],
+    3: ['K', 'A'],
+}
+
+# Selling prices — key cards = value × multiplier, number cards = face value
+KEY_CARD_RANKS = ['J', 'Q', 'K', 'A']
+CARD_SELL_KEY_MULTIPLIER = 10               # J→10, Q→20, K→40, A→30
+
+# ── v2.0: Kingdom ──
+KINGDOM_MAP_COLS = 13
+KINGDOM_MAP_ROWS = 7                        # ~91 hexes
+LAND_TIER_PROBABILITIES = {1: 0.55, 2: 0.30, 3: 0.15}
+LAND_GOLD_RATE_RANGES = {                   # Gold per hour (min, max) per tier
+    1: (1, 3),
+    2: (3, 7),
+    3: (7, 15),
+}
+LAND_SUIT_BONUS_RANGES = {                  # Suit combat bonus (min, max) per tier
+    1: (1, 3),
+    2: (3, 6),
+    3: (5, 10),
+}
+CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(6 * 3600)))
+GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS = 7 * 24  # Cap at 7 days of uncollected gold
+
+# ── v2.0: AI Defence Templates ──
+# Each template defines a pre-built defence configuration for unowned (AI) lands.
+# Templates are lists of dicts per tier; one is randomly assigned to each land at
+# map seeding time.  Full template schema is defined in kingdom_service.py.
+AI_DEFENCE_TEMPLATES = {
+    1: [  # Tier 1 — weak
+        {
+            'figures': [
+                {'family_name': 'Village', 'suit': 'Hearts', 'color': 'offensive',
+                 'field': 'village',
+                 'cards': [{'rank': 'Q', 'suit': 'Hearts', 'role': 'key'},
+                           {'rank': '8', 'suit': 'Hearts', 'role': 'number'}]},
+            ],
+            'battle_moves': [
+                {'family_name': 'Strike', 'rank': '7', 'suit': 'Spades', 'round_index': 0},
+                {'family_name': 'Strike', 'rank': '8', 'suit': 'Hearts', 'round_index': 1},
+                {'family_name': 'Strike', 'rank': '7', 'suit': 'Clubs', 'round_index': 2},
+            ],
+            'battle_figure_index': 0,
+            'battle_modifier': None,
+            'spell': None,
+            'auto_gamble': False,
+        },
+    ],
+    2: [  # Tier 2 — medium
+        {
+            'figures': [
+                {'family_name': 'Military', 'suit': 'Spades', 'color': 'defensive',
+                 'field': 'military',
+                 'cards': [{'rank': 'K', 'suit': 'Spades', 'role': 'key'},
+                           {'rank': '9', 'suit': 'Spades', 'role': 'number'}]},
+                {'family_name': 'Village', 'suit': 'Clubs', 'color': 'defensive',
+                 'field': 'village',
+                 'cards': [{'rank': 'Q', 'suit': 'Clubs', 'role': 'key'},
+                           {'rank': '8', 'suit': 'Clubs', 'role': 'number'}]},
+            ],
+            'battle_moves': [
+                {'family_name': 'Strike', 'rank': '9', 'suit': 'Spades', 'round_index': 0},
+                {'family_name': 'Strike', 'rank': '10', 'suit': 'Clubs', 'round_index': 1},
+                {'family_name': 'Strike', 'rank': '8', 'suit': 'Spades', 'round_index': 2},
+            ],
+            'battle_figure_index': 0,
+            'battle_modifier': None,
+            'spell': None,
+            'auto_gamble': True,
+        },
+    ],
+    3: [  # Tier 3 — strong
+        {
+            'figures': [
+                {'family_name': 'Military', 'suit': 'Hearts', 'color': 'offensive',
+                 'field': 'military',
+                 'cards': [{'rank': 'A', 'suit': 'Hearts', 'role': 'key'},
+                           {'rank': '10', 'suit': 'Hearts', 'role': 'number'}]},
+                {'family_name': 'Castle', 'suit': 'Diamonds', 'color': 'offensive',
+                 'field': 'castle',
+                 'cards': [{'rank': 'K', 'suit': 'Diamonds', 'role': 'key'},
+                           {'rank': '9', 'suit': 'Diamonds', 'role': 'number'}]},
+                {'family_name': 'Village', 'suit': 'Hearts', 'color': 'offensive',
+                 'field': 'village',
+                 'cards': [{'rank': 'Q', 'suit': 'Hearts', 'role': 'key'},
+                           {'rank': '8', 'suit': 'Hearts', 'role': 'number'}]},
+            ],
+            'battle_moves': [
+                {'family_name': 'Strike', 'rank': '10', 'suit': 'Hearts', 'round_index': 0},
+                {'family_name': 'Strike', 'rank': '9', 'suit': 'Diamonds', 'round_index': 1},
+                {'family_name': 'Strike', 'rank': '10', 'suit': 'Diamonds', 'round_index': 2},
+            ],
+            'battle_figure_index': 0,
+            'battle_modifier': None,
+            'spell': None,
+            'auto_gamble': True,
+        },
+    ],
+}
+
 
 
