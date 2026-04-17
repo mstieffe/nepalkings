@@ -245,6 +245,8 @@ def register():
             email_verified=False,
             email_verification_token=verification_token,
             email_verification_sent_at=_utcnow() if email else None,
+            booster_packs=settings.STARTER_BOOSTER_PACKS,
+            booster_packs_side=settings.STARTER_BOOSTER_PACKS_SIDE,
         )
         db.session.add(user)
         db.session.commit()
