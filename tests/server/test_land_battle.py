@@ -698,3 +698,95 @@ class TestConquerAutoPlay:
 
             assert len(spawned_targets) == 1
             assert spawned_targets[0] is aw._ai_game_loop
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  AI Template Card Rewards (Phase 15.3)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestAITemplateCardRewards:
+    """Card rewards when beating an AI-owned land."""
+
+    def _start_battle_and_resolve(self, app, db, attacker_wins=True):
+        """Helper: start a conquer battle and call _resolve_conquer_battle."""
+        from routes.games import _resolve_conquer_battle
+
+        user = _make_user(db)
+        land = _make_land(db, tier=1)
+        cfg = _make_conquer_config(db, user, land)
+
+        client = app.test_client()
+        headers = _auth_headers(app, user)
+        resp = client.post('/kingdom/conquer/start_battle',
+                           json={'land_id': land.id}, headers=headers)
+        data = resp.get_json()
+        game = db.session.get(Game, data['game_id'])
+
+        atk_player = db.session.get(Player, game.invader_player_id)
+        def_player = [p for p in game.players if p.id != atk_player.id][0]
+
+        winner = atk_player if attacker_wins else def_player
+        result = _resolve_conquer_battle(game, winner, atk_player)
+        db.session.commit()
+        return result, user, land, game, cfg
+
+    def test_attacker_wins_ai_land_gets_card(self, app, db):
+        """Attacker beating an AI land receives a card from the template."""
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=True)
+
+            assert result['attacker_won'] is True
+            assert result['conquer_result'] == 'attacker_won'
+
+            # A card was won
+            log = LandAttackLog.query.filter_by(land_id=land.id).first()
+            assert log is not None
+            assert log.card_won_suit is not None
+            assert log.card_won_rank is not None
+
+            # A CollectionCard was created for the attacker
+            from models import CollectionCard
+            new_cards = CollectionCard.query.filter_by(
+                user_id=user.id, locked=False
+            ).all()
+            rewarded = [c for c in new_cards
+                        if c.suit == log.card_won_suit
+                        and c.rank == log.card_won_rank]
+            assert len(rewarded) >= 1
+
+    def test_attacker_wins_ai_land_transfers_ownership(self, app, db):
+        """Attacker winning transfers land ownership."""
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=True)
+
+            db.session.refresh(land)
+            assert land.owner_user_id == user.id
+
+    def test_defender_wins_attacker_loses_key_card(self, app, db):
+        """When defender wins, attacker loses a key card."""
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=False)
+
+            assert result['attacker_won'] is False
+            log = LandAttackLog.query.filter_by(land_id=land.id).first()
+            assert log is not None
+            assert log.card_lost_suit is not None
+            assert log.card_lost_rank is not None
+
+            # Land ownership unchanged (still unowned)
+            db.session.refresh(land)
+            assert land.owner_user_id is None
+
+    def test_attacker_wins_config_converted_to_defence(self, app, db):
+        """Attacker's conquer config becomes the new defence config."""
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=True)
+
+            db.session.refresh(cfg)
+            assert cfg.config_type == 'defence'
+            db.session.refresh(land)
+            assert land.defence_config_id == cfg.id

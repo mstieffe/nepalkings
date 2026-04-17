@@ -1334,6 +1334,7 @@ def _get_or_create_ai_user():
             username=ai_username,
             password_hash=generate_password_hash('ai_internal'),
             gold=config.AI_INITIAL_GOLD,
+            is_ai=True,
         )
         db.session.add(ai_user)
         db.session.flush()

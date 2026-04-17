@@ -6,7 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
 from datetime import datetime, timezone
-from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, CollectionCard
 from game_service.deck_manager import DeckManager
 from routes.auth import require_token, verify_player_ownership
 
@@ -3948,9 +3948,12 @@ def finish_battle():
 def _resolve_conquer_battle(game, winner, requesting_player):
     """Resolve a conquer battle after the single battle round.
 
-    Handles land ownership transfer, card consumption, and attack log.
-    Returns a JSON-serialisable dict for the response.
+    Handles land ownership transfer, card consumption, card rewards,
+    and attack log.  Returns a JSON-serialisable dict for the response.
     """
+    import random as _random
+    import server_settings as _cfg
+
     atk_player = db.session.get(Player, game.invader_player_id)
     def_player = [p for p in game.players if p.id != atk_player.id][0]
 
@@ -3958,6 +3961,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     attacker_user = db.session.get(User, atk_player.user_id)
     defender_user = db.session.get(User, def_player.user_id)
     land = db.session.get(Land, game.land_id)
+    is_ai_land = defender_user and defender_user.is_ai
 
     saved = game.last_battle_result or {}
 
@@ -3966,30 +3970,81 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     game.winner_player_id = winner.id
     game.finished_at = _utcnow()
 
-    # ── Consume attacker's conquer config cards ──
-    # Battle move cards and modifier cards are consumed (deleted from collection)
+    # ── Consume attacker's conquer config battle-move cards ──
     if game.conquer_config_id:
         atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
         if atk_cfg:
             _consume_config_battle_cards(atk_cfg)
 
-    # ── Card reward/penalty and land transfer ──
+    # ── Card reward / penalty ──
     card_won_suit = None
     card_won_rank = None
     card_lost_suit = None
     card_lost_rank = None
 
-    if attacker_won and land:
-        # Transfer ownership
-        land.owner_user_id = attacker_user.id
-        land.owned_since = _utcnow()
+    if attacker_won:
+        # ── Attacker wins: gets a card from the defender ──
+        if is_ai_land and land:
+            # AI land: create a new CollectionCard from the template
+            templates = _cfg.AI_DEFENCE_TEMPLATES.get(land.tier, [])
+            tpl_idx = land.ai_template_index or 0
+            tpl = templates[tpl_idx] if tpl_idx < len(templates) else (
+                templates[0] if templates else None)
+            if tpl:
+                # Collect all template cards
+                all_cards = []
+                for fig in tpl.get('figures', []):
+                    all_cards.extend(fig.get('cards', []))
+                if all_cards:
+                    picked = _random.choice(all_cards)
+                    rank_values = {'A': 3, 'K': 4, 'Q': 2, 'J': 1,
+                                   '10': 10, '9': 9, '8': 8, '7': 7,
+                                   '6': 6, '5': 5, '4': 4, '3': 3, '2': 2}
+                    new_cc = CollectionCard(
+                        user_id=attacker_user.id,
+                        suit=picked['suit'],
+                        rank=picked['rank'],
+                        value=rank_values.get(picked['rank'], 0),
+                        locked=False,
+                    )
+                    db.session.add(new_cc)
+                    card_won_suit = picked['suit']
+                    card_won_rank = picked['rank']
+        else:
+            # Player land: take a random key card from defender's config
+            if game.defence_config_id:
+                def_cfg = db.session.get(LandConfig, game.defence_config_id)
+                if def_cfg:
+                    key_cards = []
+                    for fig in def_cfg.figures:
+                        if fig.card_ids and fig.card_roles:
+                            for cid, role in zip(fig.card_ids, fig.card_roles):
+                                if role == 'key':
+                                    key_cards.append(cid)
+                    if key_cards:
+                        chosen_id = _random.choice(key_cards)
+                        cc = db.session.get(CollectionCard, chosen_id)
+                        if cc:
+                            card_won_suit = cc.suit
+                            card_won_rank = cc.rank
+                            # Transfer to attacker
+                            cc.user_id = attacker_user.id
+                            cc.locked = False
+                            cc.lock_type = None
+                            cc.lock_ref_id = None
 
-        # Convert attacker's conquer config to defence config for the land
+        # Transfer land ownership
+        if land:
+            land.owner_user_id = attacker_user.id
+            land.owned_since = _utcnow()
+
+        # Convert attacker's conquer config to defence config
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
                 atk_cfg.config_type = 'defence'
-                land.defence_config_id = atk_cfg.id
+                if land:
+                    land.defence_config_id = atk_cfg.id
 
         # Wipe defender's defence config
         if game.defence_config_id:
@@ -3998,17 +4053,40 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 _wipe_land_config(def_cfg)
 
     else:
-        # Defender wins — consume attacker's figure cards
+        # ── Defender wins: attacker loses a key card ──
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
+                key_cards = []
+                for fig in atk_cfg.figures:
+                    if fig.card_ids and fig.card_roles:
+                        for cid, role in zip(fig.card_ids, fig.card_roles):
+                            if role == 'key':
+                                key_cards.append(cid)
+                if key_cards:
+                    chosen_id = _random.choice(key_cards)
+                    cc = db.session.get(CollectionCard, chosen_id)
+                    if cc:
+                        card_lost_suit = cc.suit
+                        card_lost_rank = cc.rank
+                        if is_ai_land:
+                            # AI defender: just delete the card
+                            db.session.delete(cc)
+                        else:
+                            # Player defender: transfer to defender
+                            cc.user_id = defender_user.id
+                            cc.locked = False
+                            cc.lock_type = None
+                            cc.lock_ref_id = None
+
+                # Consume attacker's figure cards (destroyed)
                 _consume_config_figure_cards(atk_cfg)
 
     # Create attack log
     log = LandAttackLog(
         land_id=game.land_id,
         attacker_user_id=attacker_user.id,
-        defender_user_id=defender_user.id if defender_user else None,
+        defender_user_id=defender_user.id if defender_user and not is_ai_land else None,
         result='attacker_won' if attacker_won else 'defender_won',
         card_won_suit=card_won_suit,
         card_won_rank=card_won_rank,
