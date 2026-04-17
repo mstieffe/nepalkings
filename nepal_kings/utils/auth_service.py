@@ -23,6 +23,16 @@ def fetch_rankings():
     except Exception:
         return []
 
+
+def fetch_kingdom_rankings():
+    """Fetch the kingdom leaderboard data for all players."""
+    try:
+        response = requests.get(f'{settings.SERVER_URL}/kingdom/rankings', timeout=5)
+        response.raise_for_status()
+        return response.json().get('rankings', [])
+    except Exception:
+        return []
+
 def login(username, password):
     try:
         response = requests.post(f'{settings.SERVER_URL}/auth/login', data={'username': username, 'password': password}, timeout=10)
