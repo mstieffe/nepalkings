@@ -244,6 +244,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._detail_box = None
 
     def _on_defence(self, tile):
-        """Defence config action — Phase 12 will implement the actual transition."""
-        logger.info(f'Defence config action for land ({tile.col}, {tile.row})')
+        """Transition to the defence screen for this owned land."""
+        self.state.defence_land_id = tile.land_id
+        self.state.screen = 'defence'
         self._detail_box = None
