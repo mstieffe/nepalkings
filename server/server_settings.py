@@ -106,21 +106,38 @@ AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
 AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 
 # ── v2.0: Collection & Boosters ──
-STARTER_BOOSTER_PACKS = 3                   # Free packs on registration
-BOOSTER_PACK_PRICE = 100                    # Gold cost per pack
-BOOSTER_PACK_CARDS = 3                      # Cards drawn per pack
+STARTER_BOOSTER_PACKS = 3                   # Free main-card packs on registration
+STARTER_BOOSTER_PACKS_SIDE = 2              # Free side-card packs on registration
+BOOSTER_PACK_PRICE = 100                    # Gold cost per main pack
+BOOSTER_PACK_SIDE_PRICE = 100               # Gold cost per side pack
+BOOSTER_PACK_CARDS = 3                      # Cards drawn per pack (both types)
 DUEL_WINNER_BOOSTER_PACKS = 2              # Packs awarded to duel winner
 DUEL_LOSER_BOOSTER_PACKS = 1              # Packs awarded to duel loser
+DUEL_BOOSTER_REWARD_PROBABILITIES = {       # Probability of reward type per pack
+    'main': 0.60,
+    'side': 0.40,
+}
 
-BOOSTER_TIER_PROBABILITIES = {              # Probability of drawing each tier
+BOOSTER_TIER_PROBABILITIES = {              # Probability of drawing each tier (main)
     1: 0.60,   # common
     2: 0.30,   # uncommon
     3: 0.10,   # rare
 }
-BOOSTER_TIER_RANKS = {                      # Card ranks per tier
+BOOSTER_TIER_RANKS = {                      # Card ranks per tier (main)
     1: ['7', '8', '9', '10'],
     2: ['J', 'Q'],
     3: ['K', 'A'],
+}
+
+BOOSTER_SIDE_TIER_PROBABILITIES = {         # Probability of drawing each tier (side)
+    1: 0.60,   # common
+    2: 0.30,   # uncommon
+    3: 0.10,   # rare
+}
+BOOSTER_SIDE_TIER_RANKS = {                 # Card ranks per tier (side)
+    1: ['2', '3'],
+    2: ['4', '5'],
+    3: ['6'],
 }
 
 # Selling prices — key cards = value × multiplier, number cards = face value

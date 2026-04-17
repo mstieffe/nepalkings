@@ -255,10 +255,16 @@ class TestUserV2Fields:
         u1, _ = two_users
         assert u1.booster_packs == 0
 
+    def test_booster_packs_side_default(self, db, two_users):
+        u1, _ = two_users
+        assert u1.booster_packs_side == 0
+
     def test_booster_packs_in_serialize(self, db, two_users):
         u1, _ = two_users
         u1.booster_packs = 5
+        u1.booster_packs_side = 3
         db.session.commit()
 
         d = u1.serialize()
         assert d['booster_packs'] == 5
+        assert d['booster_packs_side'] == 3

@@ -7,7 +7,9 @@ import server_settings as config
 class TestV2ServerSettings:
     def test_booster_pack_constants(self):
         assert config.STARTER_BOOSTER_PACKS >= 0
+        assert config.STARTER_BOOSTER_PACKS_SIDE >= 0
         assert config.BOOSTER_PACK_PRICE > 0
+        assert config.BOOSTER_PACK_SIDE_PRICE > 0
         assert config.BOOSTER_PACK_CARDS > 0
         assert config.DUEL_WINNER_BOOSTER_PACKS >= 0
         assert config.DUEL_LOSER_BOOSTER_PACKS >= 0
@@ -16,9 +18,25 @@ class TestV2ServerSettings:
         total = sum(config.BOOSTER_TIER_PROBABILITIES.values())
         assert abs(total - 1.0) < 1e-6
 
+    def test_booster_side_tier_probabilities_sum_to_one(self):
+        total = sum(config.BOOSTER_SIDE_TIER_PROBABILITIES.values())
+        assert abs(total - 1.0) < 1e-6
+
     def test_booster_tier_ranks_nonempty(self):
         for tier, ranks in config.BOOSTER_TIER_RANKS.items():
             assert len(ranks) > 0, f"Tier {tier} has no ranks"
+
+    def test_booster_side_tier_ranks_nonempty(self):
+        for tier, ranks in config.BOOSTER_SIDE_TIER_RANKS.items():
+            assert len(ranks) > 0, f"Side tier {tier} has no ranks"
+
+    def test_duel_booster_reward_probabilities_sum_to_one(self):
+        total = sum(config.DUEL_BOOSTER_REWARD_PROBABILITIES.values())
+        assert abs(total - 1.0) < 1e-6
+
+    def test_duel_booster_reward_probabilities_keys(self):
+        assert 'main' in config.DUEL_BOOSTER_REWARD_PROBABILITIES
+        assert 'side' in config.DUEL_BOOSTER_REWARD_PROBABILITIES
 
     def test_key_card_ranks(self):
         assert 'J' in config.KEY_CARD_RANKS

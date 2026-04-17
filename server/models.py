@@ -79,6 +79,7 @@ class User(db.Model):
     email_verification_sent_at = db.Column(db.DateTime, nullable=True)
     # v2.0: Collection & Kingdom
     booster_packs = db.Column(db.Integer, nullable=False, default=0)
+    booster_packs_side = db.Column(db.Integer, nullable=False, default=0)
     last_gold_collection = db.Column(db.DateTime, nullable=True)
     last_conquer_at = db.Column(db.DateTime, nullable=True)
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
@@ -98,6 +99,7 @@ class User(db.Model):
             'is_ai': self.is_ai,
             'email_verified': self.email_verified,
             'booster_packs': self.booster_packs,
+            'booster_packs_side': self.booster_packs_side,
             'challenges_issued': [challenge.serialize() for challenge in self.challenges_issued],
             'challenges_received': [challenge.serialize() for challenge in self.challenges_received]
         }
