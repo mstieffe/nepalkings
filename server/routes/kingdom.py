@@ -1580,3 +1580,89 @@ def conquer_start_battle():
         'game_id': game.id,
         'game': game.serialize(),
     })
+
+
+# ── GET /kingdom/attack_notifications ────────────────────────────────────────
+
+@kingdom.route('/attack_notifications', methods=['GET'])
+@require_token
+def attack_notifications():
+    """Return unseen attack logs where the current user was the defender."""
+    logs = LandAttackLog.query.filter_by(
+        defender_user_id=g.user_id,
+        seen_by_defender=False,
+    ).order_by(LandAttackLog.timestamp.desc()).all()
+
+    result = []
+    for log in logs:
+        land = db.session.get(Land, log.land_id)
+        attacker = db.session.get(User, log.attacker_user_id)
+        entry = log.serialize()
+        entry['land_col'] = land.col if land else None
+        entry['land_row'] = land.row if land else None
+        entry['attacker_username'] = attacker.username if attacker else None
+        result.append(entry)
+
+    return jsonify({'success': True, 'notifications': result})
+
+
+# ── POST /kingdom/attack_notifications/mark_seen ────────────────────────────
+
+@kingdom.route('/attack_notifications/mark_seen', methods=['POST'])
+@require_token
+def attack_notifications_mark_seen():
+    """Mark attack notifications as seen by the defender."""
+    data = request.json or {}
+    notification_ids = data.get('notification_ids', [])
+
+    if not notification_ids or not isinstance(notification_ids, list):
+        return jsonify({'success': False,
+                        'message': 'notification_ids is required'}), 400
+
+    updated = LandAttackLog.query.filter(
+        LandAttackLog.id.in_(notification_ids),
+        LandAttackLog.defender_user_id == g.user_id,
+    ).update({'seen_by_defender': True}, synchronize_session='fetch')
+
+    db.session.commit()
+
+    return jsonify({'success': True, 'marked': updated})
+
+
+# ── GET /kingdom/attack_history ──────────────────────────────────────────────
+
+@kingdom.route('/attack_history', methods=['GET'])
+@require_token
+def attack_history():
+    """Return paginated attack history for the current user (attacker or defender)."""
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 20, type=int), 50)
+
+    query = LandAttackLog.query.filter(
+        db.or_(
+            LandAttackLog.attacker_user_id == g.user_id,
+            LandAttackLog.defender_user_id == g.user_id,
+        )
+    ).order_by(LandAttackLog.timestamp.desc())
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    results = []
+    for log in pagination.items:
+        land = db.session.get(Land, log.land_id)
+        attacker = db.session.get(User, log.attacker_user_id)
+        defender = db.session.get(User, log.defender_user_id) if log.defender_user_id else None
+        entry = log.serialize()
+        entry['land_col'] = land.col if land else None
+        entry['land_row'] = land.row if land else None
+        entry['attacker_username'] = attacker.username if attacker else None
+        entry['defender_username'] = defender.username if defender else 'AI'
+        results.append(entry)
+
+    return jsonify({
+        'success': True,
+        'history': results,
+        'page': pagination.page,
+        'pages': pagination.pages,
+        'total': pagination.total,
+    })
