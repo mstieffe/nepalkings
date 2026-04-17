@@ -2632,6 +2632,19 @@ class GameScreen(Screen):
         opp_stats = stats.get(opp_id) or stats.get(str(opp_id)) or {}
         opp_name = loser_name if is_winner else winner_name
 
+        # Booster pack reward info
+        boosters_key = 'winner_boosters' if is_winner else 'loser_boosters'
+        boosters = game_over_info.get(boosters_key)
+        if boosters:
+            total = boosters.get('main', 0) + boosters.get('side', 0)
+            if total > 0:
+                parts = []
+                if boosters.get('main', 0) > 0:
+                    parts.append(f"{boosters['main']} main")
+                if boosters.get('side', 0) > 0:
+                    parts.append(f"{boosters['side']} side")
+                message_after += f"\nBooster packs: {', '.join(parts)}"
+
         if my_stats or opp_stats:
             stats_lines = [f"\nRounds played: {rounds_played}"]
             stats_lines.append(f"          You / {opp_name}")

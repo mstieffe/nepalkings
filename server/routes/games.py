@@ -310,6 +310,31 @@ def _compute_game_stats(game_id, player_ids):
     return stats
 
 
+def _award_booster_packs(user, total_packs):
+    """Award *total_packs* booster packs to *user*.
+
+    Each pack is randomly assigned as main or side based on
+    DUEL_BOOSTER_REWARD_PROBABILITIES.
+
+    Returns dict ``{'main': N, 'side': M}`` with the breakdown.
+    """
+    if not user or total_packs <= 0:
+        return {'main': 0, 'side': 0}
+
+    probs = settings.DUEL_BOOSTER_REWARD_PROBABILITIES
+    types = list(probs.keys())
+    weights = [probs[t] for t in types]
+
+    awarded = {'main': 0, 'side': 0}
+    for _ in range(total_packs):
+        chosen = random.choices(types, weights=weights, k=1)[0]
+        awarded[chosen] += 1
+
+    user.booster_packs += awarded['main']
+    user.booster_packs_side += awarded['side']
+    return awarded
+
+
 def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_name=None):
     """Finalize a game-over: mark finished, award gold, create GameResult.
 
@@ -336,6 +361,10 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
     if loser_user:
         # Loser already "bet" their stake when the game started — no further deduction
         pass
+
+    # ── Booster pack rewards ────────────────────────────────────────
+    winner_boosters = _award_booster_packs(winner_user, settings.DUEL_WINNER_BOOSTER_PACKS)
+    loser_boosters = _award_booster_packs(loser_user, settings.DUEL_LOSER_BOOSTER_PACKS)
 
     winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
     loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
@@ -401,6 +430,8 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         'stake': stake,
         'rounds_played': game.current_round,
         'stats': game_stats,
+        'winner_boosters': winner_boosters,
+        'loser_boosters': loser_boosters,
     }
 
 
@@ -447,6 +478,8 @@ def _build_game_over_info_from_finished(game):
         'stake': stake,
         'rounds_played': game.current_round,
         'stats': _compute_game_stats(game.id, [winner_player.id, loser_player.id]),
+        'winner_boosters': None,  # not available for reconstructed info
+        'loser_boosters': None,
     }
 
 
