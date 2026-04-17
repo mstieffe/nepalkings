@@ -262,6 +262,7 @@ class BattleScreen(SubScreen):
         self._finish_btn_rect = None
         self._finish_btn_hovered = False
         self._battle_result = None
+        self._game_over_pending = False
         self._returnable_cards = []
         self._awaiting_card_pick = False
         self._awaiting_draw_choice = False
@@ -1002,9 +1003,9 @@ class BattleScreen(SubScreen):
         for fig in eligible:
             base = fig.get_value()
             buffs = self._get_buffs_allies_bonus(fig, is_player=True)
-            defence = self._get_buffs_allies_defence_bonus(is_player=True)
+            # Wall defence does NOT apply to call figures
             bonus = bm_value if fig.suit == bm_suit else 0
-            total = base + buffs + defence + bonus
+            total = base + buffs + bonus
             if total > max_power:
                 max_power = total
         return max_power
@@ -1022,9 +1023,9 @@ class BattleScreen(SubScreen):
         for i, fig in enumerate(eligible):
             base = fig.get_value()
             buffs = self._get_buffs_allies_bonus(fig, is_player=True)
-            defence = self._get_buffs_allies_defence_bonus(is_player=True)
+            # Wall defence does NOT apply to call figures
             bonus = bm_value if fig.suit == bm_suit else 0
-            total = base + buffs + defence + bonus
+            total = base + buffs + bonus
             if total > best_power:
                 best_power = total
                 best_idx = i
@@ -1858,12 +1859,22 @@ class BattleScreen(SubScreen):
         fig_name = result.get('destroyed_figure_name', 'figure')
         loser = result.get('loser_name', 'Opponent')
         self._returnable_cards = result.get('returnable_cards', [])
+        self._game_over_pending = result.get('game_over_pending', False)
 
-        msg = (
-            f"{loser}'s {fig_name} is destroyed!\n"
-            f"You earn {pts} points.\n\n"
-            f"Pick one card from the spoils."
-        )
+        if self._game_over_pending:
+            # Game is ending — show clean victory without card pick
+            msg = (
+                f"{loser}'s {fig_name} is destroyed!\n"
+                f"You earn {pts} points."
+            )
+            actions = ['ok']
+        else:
+            msg = (
+                f"{loser}'s {fig_name} is destroyed!\n"
+                f"You earn {pts} points.\n\n"
+                f"Pick one card from the spoils."
+            )
+            actions = ['pick card']
 
         images = []
 
@@ -1877,7 +1888,7 @@ class BattleScreen(SubScreen):
         if large_icon:
             images.append(large_icon)
 
-        self.make_dialogue_box(msg, actions=['pick card'], icon='victory', title="Victory!", images=images)
+        self.make_dialogue_box(msg, actions=actions, icon='victory', title="Victory!", images=images)
         self._dialogue_callback = self._on_victory_dialogue
 
     def _show_defeat_result(self, result):
@@ -1959,7 +1970,11 @@ class BattleScreen(SubScreen):
     # ─── victory callbacks ───
 
     def _on_victory_dialogue(self, response):
-        """Handle victory dialogue: always opens card picker."""
+        """Handle victory dialogue: opens card picker or skips to game-over."""
+        if getattr(self, '_game_over_pending', False):
+            # Game is ending — skip card pick, finalize immediately
+            self._finalise_winner_pick(None, None)
+            return
         if self._returnable_cards:
             self._show_card_pick_dialogue()
         else:

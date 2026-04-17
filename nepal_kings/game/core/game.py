@@ -382,6 +382,8 @@ class Game:
                     'loser_score': loser_player.get('points', 0),
                     'gold_awarded': self.stake * 2,
                     'stake': self.stake,
+                    'rounds_played': game_dict.get('current_round', 1),
+                    'stats': last_result.get('game_stats', {}),
                 }
                 logger.info(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
         

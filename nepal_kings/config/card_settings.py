@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE, _IS_MOBILE
 
 CARD_IMG_PATH = 'img/cards/'
 RED_CROSS_IMG_PATH = 'img/cards/red_cross.png'
@@ -15,7 +15,7 @@ RED_CROSS_WIDTH = int(0.02 * SCREEN_WIDTH)
 RED_CROSS_HEIGHT = int(0.02 * SCREEN_WIDTH)
 
 # Vertical nudge for the "X/Y cards" text below each hand (negative = up)
-HAND_CARD_COUNT_Y_NUDGE = int(-0.016 * SCREEN_HEIGHT)
+HAND_CARD_COUNT_Y_NUDGE = int(-0.016 * SCREEN_HEIGHT) if _IS_MOBILE else int(-0.008 * SCREEN_HEIGHT)
 
 #CARD_HEIGHT = CARD_WIDTH * test_card.get_height() / test_card.get_width()
 

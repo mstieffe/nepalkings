@@ -1090,6 +1090,9 @@ class GameScreen(Screen):
         """Check for auto-fill notification and show dialogue if needed."""
         if not self.state.game or not self.state.game.pending_auto_fill:
             return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_auto_fill = None
+            return
         
         auto_fill = self.state.game.pending_auto_fill
         main_filled = auto_fill.get('main_cards_filled', 0)
@@ -1127,6 +1130,9 @@ class GameScreen(Screen):
     def check_post_battle_side_cards(self):
         """Check for post-battle side card draw notification and show dialogue."""
         if not self.state.game or not self.state.game.pending_post_battle_side_cards:
+            return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_post_battle_side_cards = None
             return
         
         # Defer side card notification while still on battle screen —
@@ -1166,6 +1172,11 @@ class GameScreen(Screen):
         if not self.state.game or not self.state.game.pending_loot_notification:
             return
 
+        # Suppress loot notification when the game is over
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_loot_notification = None
+            return
+
         # Defer while still on battle screen
         if self.state.subscreen == 'battle':
             logger.debug(f"[LOOT_DEBUG] check_loot_notification: deferred (subscreen=battle)")
@@ -1197,6 +1208,9 @@ class GameScreen(Screen):
     def check_opponent_turn_notification(self):
         """Check for opponent turn summary and show dialogue if needed."""
         if not self.state.game or not self.state.game.pending_opponent_turn_summary:
+            return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_opponent_turn_summary = None
             return
         
         summary = self.state.game.pending_opponent_turn_summary
@@ -1475,6 +1489,9 @@ class GameScreen(Screen):
         """Check if ceasefire ended and show notification if needed."""
         if not self.state.game or not self.state.game.pending_ceasefire_ended:
             return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_ceasefire_ended = False
+            return
         
         # Guard: if ceasefire is actually active now (e.g. transient state during
         # battle resolution), drop the stale notification
@@ -1517,6 +1534,9 @@ class GameScreen(Screen):
     def check_ceasefire_active_notification(self):
         """Show ceasefire-active notification when ceasefire activates."""
         if not self.state.game or not self.state.game.pending_ceasefire_active_notification:
+            return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_ceasefire_active_notification = False
             return
         
         # If ceasefire is no longer active, discard the stale notification
@@ -2548,8 +2568,12 @@ class GameScreen(Screen):
         stake = game_over_info.get('stake', 45)
         reason = game_over_info.get('reason', 'stake')
         checkmate_figure_name = game_over_info.get('checkmate_figure_name', 'Maharaja')
+        rounds_played = game_over_info.get('rounds_played', 0)
 
         is_winner = (game_over_info.get('winner_player_id') == self.state.game.player_id)
+        player_id = self.state.game.player_id
+        winner_pid = game_over_info.get('winner_player_id')
+        loser_pid = game_over_info.get('loser_player_id')
 
         # Pick the gold image to display (normal for victory, greyed with red cross for defeat)
         if is_winner:
@@ -2599,6 +2623,29 @@ class GameScreen(Screen):
                     f"Stake: {stake} gold"
                 )
                 message_after = f"You lost {stake} gold."
+
+        # Build game stats summary
+        stats = game_over_info.get('stats', {})
+        # stats is keyed by player_id (int or str)
+        my_stats = stats.get(player_id) or stats.get(str(player_id)) or {}
+        opp_id = loser_pid if is_winner else winner_pid
+        opp_stats = stats.get(opp_id) or stats.get(str(opp_id)) or {}
+        opp_name = loser_name if is_winner else winner_name
+
+        if my_stats or opp_stats:
+            stats_lines = [f"\nRounds played: {rounds_played}"]
+            stats_lines.append(f"          You / {opp_name}")
+            stat_labels = [
+                ('battles_won', 'Battles won'),
+                ('figures_built', 'Figures built'),
+                ('spells_cast', 'Spells cast'),
+                ('cards_changed', 'Cards changed'),
+            ]
+            for key, label in stat_labels:
+                my_val = my_stats.get(key, 0)
+                opp_val = opp_stats.get(key, 0)
+                stats_lines.append(f"{label}: {my_val} / {opp_val}")
+            message_after += "\n" + "\n".join(stats_lines)
 
         self.queue_or_show_notification({
             'message': message,

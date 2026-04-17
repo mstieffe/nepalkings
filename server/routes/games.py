@@ -280,6 +280,36 @@ def _check_checkmate_loss(game, destroyed_figure):
                                checkmate_figure_name=destroyed_figure.name)
 
 
+def _compute_game_stats(game_id, player_ids):
+    """Compute per-player game stats by counting LogEntry records.
+
+    Returns a dict keyed by player_id with counts for each stat.
+    """
+    stats = {}
+    for pid in player_ids:
+        figures_built = LogEntry.query.filter_by(
+            game_id=game_id, player_id=pid, type='figure_built'
+        ).count()
+        spells_cast = LogEntry.query.filter(
+            LogEntry.game_id == game_id,
+            LogEntry.player_id == pid,
+            LogEntry.type.in_(['spell_cast', 'spell_cast_pending']),
+        ).count()
+        cards_changed = LogEntry.query.filter_by(
+            game_id=game_id, player_id=pid, type='card_changed'
+        ).count()
+        battles_won = LogEntry.query.filter_by(
+            game_id=game_id, player_id=pid, type='battle_win'
+        ).count()
+        stats[pid] = {
+            'figures_built': figures_built,
+            'spells_cast': spells_cast,
+            'cards_changed': cards_changed,
+            'battles_won': battles_won,
+        }
+    return stats
+
+
 def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_name=None):
     """Finalize a game-over: mark finished, award gold, create GameResult.
 
@@ -354,6 +384,9 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
     logger.info(f"[GAME_OVER] Game {game.id} finished ({reason})! Winner: {winner_username} ({winner_player.points}pts) "
           f"Loser: {loser_username} ({loser_player.points}pts) Gold: {gold_awarded}")
 
+    # Gather per-player stats
+    game_stats = _compute_game_stats(game.id, [winner_player.id, loser_player.id])
+
     return {
         'game_over': True,
         'reason': reason,
@@ -366,6 +399,8 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         'loser_score': loser_player.points,
         'gold_awarded': gold_awarded,
         'stake': stake,
+        'rounds_played': game.current_round,
+        'stats': game_stats,
     }
 
 
@@ -410,6 +445,8 @@ def _build_game_over_info_from_finished(game):
         'loser_score': loser_player.points,
         'gold_awarded': gold_awarded,
         'stake': stake,
+        'rounds_played': game.current_round,
+        'stats': _compute_game_stats(game.id, [winner_player.id, loser_player.id]),
     }
 
 
@@ -3826,6 +3863,12 @@ def finish_battle():
                 if p.points >= (game.stake or settings.DEFAULT_GAME_STAKE):
                     game_over_info = True
                     break
+
+        # Pre-compute game stats if game is ending (so the polling client
+        # can display them without a separate request)
+        if game_over_info:
+            game.last_battle_result['game_stats'] = _compute_game_stats(
+                game.id, [winner_player.id, loser_player.id])
 
         db.session.commit()
 
