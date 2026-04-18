@@ -245,10 +245,12 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if self._detail_box:
                 action = self._detail_box.handle_event(event)
                 if action == 'conquer':
-                    logger.info(f'Conquer requested for land {self._detail_box.tile.land_id}')
+                    land_id = self._detail_box.tile.land_id if self._detail_box else '?'
+                    logger.info(f'Conquer requested for land {land_id}')
                     self._detail_box = None
                 elif action == 'defence':
-                    logger.info(f'Defence config requested for land {self._detail_box.tile.land_id}')
+                    land_id = self._detail_box.tile.land_id if self._detail_box else '?'
+                    logger.info(f'Defence config requested for land {land_id}')
                     self._detail_box = None
                 elif action == 'close':
                     self._detail_box = None

@@ -257,7 +257,10 @@ class BattleShopScreen(SubScreen):
         """Fetch bought battle moves from server."""
         if self.mode in ('conquer', 'defence'):
             # In kingdom mode, moves come from the config
-            self.bought_moves = self.game._config.get('battle_moves', [])
+            if self.game:
+                self.bought_moves = self.game._config.get('battle_moves', [])
+            return
+        if not self.game:
             return
         try:
             result = battle_shop_service.get_battle_moves(
