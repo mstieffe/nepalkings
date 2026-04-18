@@ -58,6 +58,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._boosters_side = 0
         self._data_loaded = False
 
+        # Seed from state so counts display immediately while fetch is in flight
+        ud = getattr(self.state, 'user_dict', None) or {}
+        self._gold = ud.get('gold', 0)
+        self._boosters = ud.get('booster_packs', 0)
+        self._boosters_side = ud.get('booster_packs_side', 0)
+
         # ── Build CardImg cache ─────────────────────────────────────
         cw, ch = settings.COLLECTION_CARD_W, settings.COLLECTION_CARD_H
         self._card_imgs = {}   # {(suit,rank): CardImg}
@@ -137,7 +143,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         """Apply fetched collection data dicts."""
         self._cards = {}
         for c in data.get('cards', []):
-            self._cards[(c['suit'], c['rank'])] = c.get('quantity', 0)
+            self._cards[(c['suit'], c['rank'])] = c.get('total', c.get('quantity', 0))
         self._gold = data.get('gold', 0)
         self._boosters = data.get('booster_packs', 0)
         self._boosters_side = data.get('booster_packs_side', 0)
@@ -151,7 +157,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
     # ── grid layout helpers ─────────────────────────────────────────
 
     def _compute_card_positions(self):
-        """Compute (x, y, suit, rank, section) for each card in both sections."""
+        """Compute (x, y, suit, rank, section) for each card — side-by-side layout."""
         suits = settings.SUITS
         cw = settings.COLLECTION_CARD_W
         ch = settings.COLLECTION_CARD_H
@@ -162,44 +168,54 @@ class CollectionScreen(MenuScreenMixin, Screen):
         py = self._panel_rect.y + settings.COLLECTION_PANEL_PAD_Y
 
         section_header_h = int(0.035 * _SH)
-        section_gap = int(0.015 * _SH)
+        section_gap_x = int(0.02 * _SW)   # horizontal gap between main and side sections
 
         positions = []
         self._card_rects = []
-        self._section_headers = []  # [(y, text), ...]
+        self._section_headers = []  # [(x, y, text), ...]
 
         # Apply scroll offset
         offset_y = -self._scroll_y
-        cur_y = py + offset_y
 
-        # ── Main Cards section ──────────────────────────────────────
-        self._section_headers.append((cur_y, 'Main Cards'))
-        cur_y += section_header_h
+        # X origin for cards (after suit labels)
+        cards_x = px + label_w
+
+        # Main section header & side section header on same row
+        header_y = py + offset_y
+        main_header_x = cards_x
+        main_right_edge = cards_x + len(self._main_ranks) * (cw + gx) - gx
+        side_x = main_right_edge + section_gap_x
+        side_header_x = side_x
+
+        self._section_headers.append((main_header_x, header_y, 'Main Cards'))
+        self._section_headers.append((side_header_x, header_y, 'Side Cards'))
+
+        # Card rows start below headers
+        cur_y = header_y + section_header_h
 
         for row_i, suit in enumerate(suits):
-            row_y = cur_y + row_i * (ch + gy)
+            row_y = cur_y + row_i * (ch + gy) + offset_y if row_i > 0 else cur_y
+            if row_i > 0:
+                row_y = cur_y + row_i * (ch + gy)
+            else:
+                row_y = cur_y
+
+            # Main cards
             for col_i, rank in enumerate(self._main_ranks):
-                cx = px + label_w + col_i * (cw + gx)
+                cx = cards_x + col_i * (cw + gx)
                 positions.append((cx, row_y, suit, rank, 'main'))
                 self._card_rects.append((pygame.Rect(cx, row_y, cw, ch), suit, rank, 'main'))
 
-        cur_y += len(suits) * (ch + gy) + section_gap
-
-        # ── Side Cards section ──────────────────────────────────────
-        self._section_headers.append((cur_y, 'Side Cards'))
-        cur_y += section_header_h
-
-        for row_i, suit in enumerate(suits):
-            row_y = cur_y + row_i * (ch + gy)
+            # Side cards (same row, to the right)
             for col_i, rank in enumerate(self._side_ranks):
-                cx = px + label_w + col_i * (cw + gx)
+                cx = side_x + col_i * (cw + gx)
                 positions.append((cx, row_y, suit, rank, 'side'))
                 self._card_rects.append((pygame.Rect(cx, row_y, cw, ch), suit, rank, 'side'))
 
-        cur_y += len(suits) * (ch + gy)
+        last_row_bottom = cur_y + len(suits) * (ch + gy)
 
         # Total content height (for scroll clamping)
-        self._content_height = (cur_y + self._scroll_y) - py
+        self._content_height = (last_row_bottom + self._scroll_y) - py
 
         return positions
 
@@ -253,18 +269,17 @@ class CollectionScreen(MenuScreenMixin, Screen):
         label_w = settings.COLLECTION_SUIT_LABEL_W
         px = self._panel_rect.x + settings.COLLECTION_PANEL_PAD_X
 
-        # Section headers
-        for header_y, header_text in self._section_headers:
+        # Section headers (x, y, text)
+        for header_x, header_y, header_text in self._section_headers:
             if self._panel_rect.y <= header_y <= self._panel_rect.bottom:
                 header_surf = self._section_font.render(header_text, True, (250, 221, 0))
-                self.window.blit(header_surf, (px + label_w, header_y))
+                self.window.blit(header_surf, (header_x, header_y))
 
-        # Suit labels — draw once per section per suit row
+        # Suit labels — draw once per suit row (main + side share the row)
         drawn_suit_rows = set()
         for (cx, cy, suit, rank, section) in positions:
-            row_key = (suit, section, cy)
-            if row_key not in drawn_suit_rows and rank == (
-                    self._main_ranks[0] if section == 'main' else self._side_ranks[0]):
+            row_key = (suit, cy)
+            if row_key not in drawn_suit_rows and section == 'main' and rank == self._main_ranks[0]:
                 drawn_suit_rows.add(row_key)
                 if self._panel_rect.y <= cy <= self._panel_rect.bottom:
                     label = self._suit_font.render(suit[0], True, settings.COLLECTION_SUIT_LABEL_CLR)

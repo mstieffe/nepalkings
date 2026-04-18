@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+from __future__ import annotations
 """
 AI Worker — event-driven background AI player.
 

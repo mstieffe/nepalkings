@@ -169,6 +169,11 @@ with app.app_context():
     
     logger.info("Database initialized")
 
+    # Seed the kingdom hex map (idempotent — skips if already seeded)
+    from kingdom_service import seed_kingdom_map
+    seed_kingdom_map()
+    logger.info("Kingdom map seeding checked")
+
     # Create AI users if enabled
     if settings.AI_ENABLED:
         from ai import init_ai_users
