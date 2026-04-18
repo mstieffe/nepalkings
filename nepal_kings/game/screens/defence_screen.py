@@ -6,8 +6,14 @@ import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
+from game.screens.build_figure_screen import BuildFigureScreen
+from game.screens.battle_shop_screen import BattleShopScreen
+from game.core.card_source import CollectionCardSource
+from game.core.kingdom_game_proxy import KingdomGameProxy
+from game.components.cards.card import Card
 from config import settings
 from utils import http_compat as requests
+from utils import collection_service
 import logging
 
 logger = logging.getLogger('nk.screens.defence')
@@ -35,6 +41,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._config = None        # serialised LandConfig
         self._loading = False
         self._error = None
+
+        # ── Subscreen state ─────────────────────────────────────────
+        self._active_subscreen = None   # 'build_figure' | 'battle_shop' | None
+        self._subscreen_obj = None
+        self._game_proxy = None
 
         # ── Fonts ───────────────────────────────────────────────────
         self._title_font = settings.get_font(int(0.035 * _SH), bold=True)
@@ -273,6 +284,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def render(self):
         self._draw_menu_chrome()
 
+        # If a subscreen is active, render it instead of the config UI
+        if self._active_subscreen and self._subscreen_obj:
+            self._subscreen_obj.draw()
+            self._draw_menu_overlay()
+            return
+
         if self._loading:
             txt = self._label_font.render('Loading defence config…', True, (200, 185, 150))
             self.window.blit(txt, txt.get_rect(center=(_SW // 2, _SH // 2)))
@@ -485,6 +502,78 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 return fig.get('name', fig.get('family_name', '?'))
         return '?'
 
+    # ── Subscreen helpers ──────────────────────────────────────────
+
+    def _build_card_source(self):
+        """Create a CollectionCardSource from the player's collection."""
+        try:
+            data = collection_service.fetch_collection_cards()
+        except Exception as e:
+            logger.error(f'Failed to fetch collection for card source: {e}')
+            return None
+
+        cards = []
+        for c in data.get('cards', []):
+            qty = c.get('quantity', 0)
+            for i in range(qty):
+                cards.append(Card(
+                    rank=c['rank'], suit=c['suit'],
+                    value=settings.RANK_TO_VALUE.get(c['rank'], 0),
+                    id=c.get('id', hash((c['suit'], c['rank'], i))),
+                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                ))
+
+        locked_ids = set()
+        for fig in self._config.get('figures', []):
+            for cid in fig.get('card_ids', []):
+                locked_ids.add(cid)
+        for mv in self._config.get('battle_moves', []):
+            if mv.get('card_id'):
+                locked_ids.add(mv['card_id'])
+
+        return CollectionCardSource(cards, self._config.get('figures', []), locked_ids)
+
+    def _open_build_figure(self):
+        """Open BuildFigureScreen as a subscreen."""
+        card_source = self._build_card_source()
+        if not card_source:
+            self._error = 'Failed to load collection'
+            return
+        self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='defence')
+        self.state.game = self._game_proxy
+        self._subscreen_obj = BuildFigureScreen(
+            self.window, self.state,
+            x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
+            title='Figure Builder', card_source=card_source, mode='defence',
+        )
+        self._subscreen_obj._on_done = self._close_subscreen
+        self._active_subscreen = 'build_figure'
+
+    def _open_battle_shop(self):
+        """Open BattleShopScreen as a subscreen."""
+        card_source = self._build_card_source()
+        if not card_source:
+            self._error = 'Failed to load collection'
+            return
+        self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='defence')
+        self.state.game = self._game_proxy
+        self._subscreen_obj = BattleShopScreen(
+            self.window, self.state,
+            x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
+            title='Battle Shop', card_source=card_source, mode='defence',
+        )
+        self._active_subscreen = 'battle_shop'
+
+    def _close_subscreen(self):
+        """Dismiss the active subscreen and sync config."""
+        if self._game_proxy:
+            self._config = self._game_proxy._config
+        self._active_subscreen = None
+        self._subscreen_obj = None
+        self._game_proxy = None
+        # Refresh config from server to get authoritative state
+        self._load_config()
+
     # ── Readiness check ─────────────────────────────────────────────
 
     def _is_defence_ready(self):
@@ -530,6 +619,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         super().update()
         self._update_icon_buttons()
 
+        # If subscreen is active, delegate
+        if self._active_subscreen and self._subscreen_obj:
+            self._subscreen_obj.update(self._game_proxy)
+            return
+
         target_land = getattr(self.state, 'defence_land_id', None)
         if target_land and target_land != self._land_id:
             self._land_id = target_land
@@ -543,6 +637,15 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def handle_events(self, events):
         super().handle_events(events)
+
+        # If subscreen is active, delegate events
+        if self._active_subscreen and self._subscreen_obj:
+            self._subscreen_obj.handle_events(events)
+            for event in events:
+                if event.type == KEYDOWN and event.key == K_ESCAPE:
+                    self._close_subscreen()
+                    return
+            return
 
         for event in events:
             if self._handle_icon_events(event):
@@ -561,12 +664,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 # Build Figure button
                 if self._btn_build and self._btn_build.collidepoint(pos):
-                    logger.info('Build Figure clicked — would open BuildFigureScreen with CollectionCardSource')
+                    self._open_build_figure()
                     continue
 
                 # Buy Move button
                 if self._btn_buy_move and self._btn_buy_move.collidepoint(pos):
-                    logger.info('Buy Move clicked — would open BattleShopScreen with CollectionCardSource')
+                    self._open_battle_shop()
                     continue
 
                 # Modifier toggle

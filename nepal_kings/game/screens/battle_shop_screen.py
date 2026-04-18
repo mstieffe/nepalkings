@@ -255,6 +255,10 @@ class BattleShopScreen(SubScreen):
     # ----------------------------------------------------------- data helpers
     def _load_bought_moves(self):
         """Fetch bought battle moves from server."""
+        if self.mode in ('conquer', 'defence'):
+            # In kingdom mode, moves come from the config
+            self.bought_moves = self.game._config.get('battle_moves', [])
+            return
         try:
             result = battle_shop_service.get_battle_moves(
                 self.game.game_id, self.game.player_id
@@ -498,16 +502,20 @@ class BattleShopScreen(SubScreen):
             return
 
         card_type = 'side' if move.card.type == 'side_card' else 'main'
-        result = battle_shop_service.buy_battle_move(
-            game_id=self.game.game_id,
-            player_id=self.game.player_id,
-            family_name=move.family.name,
-            card_id=move.card.id,
-            card_type=card_type,
-            suit=move.suit,
-            rank=move.rank,
-            value=move.value,
-        )
+
+        if self.mode in ('conquer', 'defence'):
+            result = self._buy_move_kingdom(move, card_type)
+        else:
+            result = battle_shop_service.buy_battle_move(
+                game_id=self.game.game_id,
+                player_id=self.game.player_id,
+                family_name=move.family.name,
+                card_id=move.card.id,
+                card_type=card_type,
+                suit=move.suit,
+                rank=move.rank,
+                value=move.value,
+            )
 
         if result.get('success'):
             if result.get('game'):
@@ -537,6 +545,32 @@ class BattleShopScreen(SubScreen):
             )
 
         self._pending_buy_move = None
+
+    def _buy_move_kingdom(self, move, card_type):
+        """Buy a battle move via the kingdom config endpoint."""
+        from utils import http_compat as requests
+        land_id = getattr(self.game, 'land_id', None)
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/{self.mode}/buy_battle_move',
+                json={
+                    'land_id': land_id,
+                    'family_name': move.family.name,
+                    'card_id': move.card.id,
+                    'card_type': card_type,
+                    'suit': move.suit,
+                    'rank': move.rank,
+                    'value': move.value,
+                },
+                timeout=15,
+            )
+            result = resp.json()
+            if result.get('success') and result.get('config'):
+                self.game.set_config(result['config'])
+            return result
+        except Exception as e:
+            logger.error(f'Kingdom buy_battle_move error: {e}')
+            return {'success': False, 'message': 'Connection error'}
 
     def _handle_slot_click(self, event):
         """Check if the player clicked on a bought-move slot to open its detail box."""
@@ -702,11 +736,27 @@ class BattleShopScreen(SubScreen):
             return
 
         bm = self.bought_moves[idx]
-        result = battle_shop_service.return_battle_move(
-            game_id=self.game.game_id,
-            player_id=self.game.player_id,
-            battle_move_id=bm['id'],
-        )
+
+        if self.mode in ('conquer', 'defence'):
+            from utils import http_compat as requests
+            try:
+                resp = requests.post(
+                    f'{settings.SERVER_URL}/kingdom/{self.mode}/return_battle_move',
+                    json={'move_id': bm['id']},
+                    timeout=10,
+                )
+                result = resp.json()
+                if result.get('success') and result.get('config'):
+                    self.game.set_config(result['config'])
+            except Exception as e:
+                logger.error(f'Kingdom return_battle_move error: {e}')
+                result = {'success': False, 'message': 'Connection error'}
+        else:
+            result = battle_shop_service.return_battle_move(
+                game_id=self.game.game_id,
+                player_id=self.game.player_id,
+                battle_move_id=bm['id'],
+            )
 
         if result.get('success'):
             if result.get('game'):

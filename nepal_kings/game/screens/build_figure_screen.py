@@ -12,6 +12,7 @@ from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
 from game.core.card_source import GameCardSource
 from utils.utils import ColorTogglePill
+from utils import http_compat as requests
 import logging
 
 logger = logging.getLogger('nk.screens.build_figure')
@@ -70,6 +71,9 @@ class BuildFigureScreen(SubScreen):
 
     def create_figure_in_db(self, selected_figure, instant_charge_advance=False):
         """Insert the selected figure into the database. Returns the server response dict."""
+        if self.mode in ('conquer', 'defence'):
+            return self._create_figure_kingdom(selected_figure)
+
         if getattr(self.game, 'game_over', False):
             return {'success': False, 'message': 'Game is finished'}
 
@@ -120,6 +124,57 @@ class BuildFigureScreen(SubScreen):
         except Exception:
             self.game.unlock_actions()
             raise
+
+    # ── Kingdom (conquer / defence) figure creation ─────────────────
+
+    def _create_figure_kingdom(self, selected_figure):
+        """Build a figure via the kingdom config endpoint."""
+        real_cards = self.map_figure_cards_to_hand(selected_figure)
+        if real_cards is None:
+            return {'success': False, 'message': 'Could not find all cards in collection'}
+
+        selected_figure.cards = real_cards
+        selected_figure.key_cards = [c for c in real_cards if c in selected_figure.key_cards]
+        if selected_figure.number_card is not None:
+            selected_figure.number_card = next(
+                (c for c in real_cards if c == selected_figure.number_card), None)
+        if selected_figure.upgrade_card is not None:
+            selected_figure.upgrade_card = next(
+                (c for c in real_cards if c == selected_figure.upgrade_card), None)
+
+        card_ids = [c.id for c in real_cards]
+        card_roles = []
+        for c in real_cards:
+            if c in selected_figure.key_cards:
+                card_roles.append('key')
+            elif selected_figure.number_card and c == selected_figure.number_card:
+                card_roles.append('number')
+            elif selected_figure.upgrade_card and c == selected_figure.upgrade_card:
+                card_roles.append('upgrade')
+            else:
+                card_roles.append('number')
+
+        land_id = getattr(self.game, 'land_id', None)
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/{self.mode}/build_figure',
+                json={
+                    'land_id': land_id,
+                    'family_name': selected_figure.family_name,
+                    'suit': selected_figure.suit,
+                    'field': selected_figure.field,
+                    'card_ids': card_ids,
+                    'card_roles': card_roles,
+                },
+                timeout=15,
+            )
+            result = resp.json()
+            if result.get('success') and result.get('config'):
+                self.game.set_config(result['config'])
+            return result
+        except Exception as e:
+            logger.error(f'Kingdom build_figure error: {e}')
+            return {'success': False, 'message': 'Connection error'}
 
     def _can_instant_charge_advance(self, figure):
         """
@@ -308,7 +363,7 @@ class BuildFigureScreen(SubScreen):
         super().update(game)
         self.game = game
 
-        if self.game.turn:
+        if self.mode in ('conquer', 'defence') or self.game.turn:
             self.confirm_button.disabled = False
         else:
             self.confirm_button.disabled = True
@@ -479,7 +534,12 @@ class BuildFigureScreen(SubScreen):
 
                 elif response == 'to field':
                     self.dialogue_box = None
-                    self.state.subscreen = "field"
+                    if self.mode in ('conquer', 'defence'):
+                        # Signal parent to dismiss the build subscreen
+                        if hasattr(self, '_on_done') and self._on_done:
+                            self._on_done()
+                    else:
+                        self.state.subscreen = "field"
                 elif response in ['cancel', 'got it!', 'ok']:
                     self.dialogue_box = None
 

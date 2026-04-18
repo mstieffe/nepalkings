@@ -91,6 +91,8 @@ class TestGameScreenDialogueFlow:
                         'message': 'Rival built a figure',
                     },
                 },
+                game_over=False,
+                pending_game_over=False,
             )
         )
 
