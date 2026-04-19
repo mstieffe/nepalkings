@@ -17,10 +17,15 @@ class KingdomGameProxy:
     BattleShopScreen read, but are either no-ops or return safe defaults.
     """
 
-    def __init__(self, config=None, land_id=None, mode='conquer'):
+    def __init__(self, config=None, land_id=None, mode='conquer',
+                 land_suit_bonus_suit=None, land_suit_bonus_value=None):
         self._config = config or {}
         self.land_id = land_id
         self.mode = mode  # 'conquer' or 'defence'
+
+        # Land suit bonus (used by FieldFigureIcon for battle bonus calculation)
+        self.land_suit_bonus_suit = land_suit_bonus_suit
+        self.land_suit_bonus_value = land_suit_bonus_value
 
         # Properties read by SubScreen / BuildFigureScreen / BattleShopScreen
         self.game_id = None

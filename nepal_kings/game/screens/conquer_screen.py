@@ -305,7 +305,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         # Left half: 3 field compartments stacked horizontally
         field_w = int(0.14 * _SW)
-        field_h = int(0.42 * _SH)
+        field_h = int(0.46 * _SH)
         fx = _BOX_X + pad
         for field in ('castle', 'village', 'military'):
             self._field_rects[field] = pygame.Rect(fx, content_top, field_w, field_h)
@@ -346,24 +346,28 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         # Modifier section — icon-based layout
         fsz = self._mod_frame_size
-        mod_section_h = fsz + int(0.02 * _SH)  # frame + label space
-        self._mod_section_y = my
+        # Section label + description height, so icons start below the text
+        lbl_h = self._small_font.get_height()
+        desc_h = self._res_font.get_height()
+        section_text_h = lbl_h + 2 + desc_h + int(0.008 * _SH)
+        self._mod_section_y = my + section_text_h
         # Position modifier icons in a row
         mx = right_x
         for mod_name in ['Blitzkrieg']:
             self._modifier_icon_rects[mod_name] = pygame.Rect(
-                mx, my, fsz, fsz)
+                mx, self._mod_section_y, fsz, fsz)
             mx += fsz + pad
-        my += mod_section_h + pad
+        my = self._mod_section_y + fsz + int(0.025 * _SH) + pad
 
-        # Resource sub-panels below field compartments
+        # Combined resource panel below castle+village field compartments
         castle_r = self._field_rects['castle']
         village_r = self._field_rects['village']
-        res_top = castle_r.bottom + pad
-        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top - int(0.08 * _SH))
-        self._res_castle_rect = pygame.Rect(castle_r.x, res_top, field_w, res_h)
-        self._res_village_rect = pygame.Rect(village_r.x, res_top, field_w, res_h)
-        self._res_rect = None  # no longer used as single panel
+        res_top = castle_r.bottom + pad + int(0.015 * _SH)
+        res_w = village_r.right - castle_r.x
+        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
+        self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
+        self._res_castle_rect = None
+        self._res_village_rect = None
 
         # To Battle — lower right of box
         battle_w = int(0.20 * _SW)
@@ -380,7 +384,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._divider_v_top = top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
         # Horizontal: between battle-move section and modifier section
-        self._divider_h1_y = self._mod_section_y - int(0.01 * _SH)
+        self._divider_h1_y = self._mod_section_y - int(0.025 * _SH)
 
         # X close button (top-right of box)
         _xsz = int(0.028 * _SH)
@@ -534,6 +538,14 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         resources_data = self._calc_resources()
 
+        # Lightweight game proxy so FieldFigureIcon can apply land suit bonus
+        land = self._land or {}
+        game_proxy = KingdomGameProxy(
+            self._config, self._land_id, mode='conquer',
+            land_suit_bonus_suit=land.get('suit_bonus_suit'),
+            land_suit_bonus_value=land.get('suit_bonus_value'),
+        )
+
         for cfg_fig in self._config.get('figures', []):
             fig = self._config_fig_to_figure(cfg_fig, families)
             if fig is None:
@@ -543,12 +555,13 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if fig.id in old_icons:
                 icon = old_icons[fig.id]
                 icon.figure = fig
+                icon.game = game_proxy
                 icon.has_deficit = icon._check_resource_deficit(resources_data)
                 icon.battle_bonus_received = icon._calculate_battle_bonus_received(self._figure_objects)
             else:
                 icon = FieldFigureIcon(
                     window=self.window,
-                    game=None,
+                    game=game_proxy,
                     figure=fig,
                     is_visible=True,
                     all_player_figures=self._figure_objects,
@@ -907,12 +920,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
         isz = self._mod_icon_size
         mx, my_mouse = pygame.mouse.get_pos()
 
-        # Section label
+        # Section label (drawn above the icons)
         lbl = self._small_font.render('Battle Modifier', True, (200, 185, 150))
-        lbl_y = self._mod_section_y - lbl.get_height() - 2
-        right_x = self._right_x
-        self.window.blit(lbl, (right_x, lbl_y))
         desc = self._res_font.render('Spend cards to gain a battle advantage', True, (160, 145, 120))
+        right_x = self._right_x
+        lbl_y = self._mod_section_y - desc.get_height() - 2 - lbl.get_height() - 2
+        self.window.blit(lbl, (right_x, lbl_y))
         self.window.blit(desc, (right_x, lbl_y + lbl.get_height() + 2))
 
         for mod_name, rect in self._modifier_icon_rects.items():
@@ -992,7 +1005,10 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 self._modifier_x_rects.pop(mod_name, None)
 
     def _draw_resources(self):
-        """Draw resource sub-panels below castle and village field compartments."""
+        """Draw a combined resource panel below the field compartments."""
+        if not self._res_rect:
+            return
+
         resources_data = self._calc_resources()
         produces = resources_data.get('produces', {})
         requires = resources_data.get('requires', {})
@@ -1000,15 +1016,19 @@ class ConquerScreen(MenuScreenMixin, Screen):
         icon_s = int(0.019 * _SW)
         pill_font = self._res_font
         pill_min_w = pill_font.size("00/00")[0] + 8
+        rect = self._res_rect
 
-        # Subsection titles above resource panels
-        if self._res_castle_rect:
-            lbl = self._res_font.render('Castle Resources', True, (180, 170, 140))
-            self.window.blit(lbl, (self._res_castle_rect.x, self._res_castle_rect.y - lbl.get_height() - 2))
-        if self._res_village_rect:
-            lbl = self._res_font.render('Village Resources', True, (180, 170, 140))
-            self.window.blit(lbl, (self._res_village_rect.x, self._res_village_rect.y - lbl.get_height() - 2))
+        # Subtitle
+        lbl = self._res_font.render('Resources', True, (180, 170, 140))
+        self.window.blit(lbl, (rect.x, rect.y - lbl.get_height() - 2))
 
+        # Panel background
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (35, 30, 25, 200), surf.get_rect(), border_radius=4)
+        self.window.blit(surf, rect.topleft)
+        pygame.draw.rect(self.window, (140, 130, 110), rect, 1, border_radius=4)
+
+        # Castle resources on the left, village resources on the right
         castle_rows = [
             ('village',  'villager_red_black', [('villager_red', 'villager_black')]),
             ('military', 'warrior_red_black',  [('warrior_red', 'warrior_black')]),
@@ -1019,18 +1039,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
             ('armor',    'sword_shield',       [('armor_red', 'armor_black')]),
         ]
 
-        for rect, rows in [(self._res_castle_rect, castle_rows),
-                            (self._res_village_rect, village_rows)]:
-            if not rect:
-                continue
-            surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            pygame.draw.rect(surf, (35, 30, 25, 200), surf.get_rect(), border_radius=4)
-            self.window.blit(surf, rect.topleft)
-            pygame.draw.rect(self.window, (140, 130, 110), rect, 1, border_radius=4)
-
+        half_w = rect.w // 2
+        for col_offset, rows in [(0, castle_rows), (half_w, village_rows)]:
             y = rect.y + 8
             for label, icon_key, res_pairs in rows:
-                ix = rect.x + 8
+                ix = rect.x + col_offset + 8
                 icon = self._resource_icons.get(icon_key)
                 if icon:
                     self.window.blit(icon, (ix, y))

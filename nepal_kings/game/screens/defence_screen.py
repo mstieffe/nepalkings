@@ -686,6 +686,14 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         resources_data = self._calc_resources()
 
+        # Lightweight game proxy so FieldFigureIcon can apply land suit bonus
+        land = self._land or {}
+        game_proxy = KingdomGameProxy(
+            self._config, self._land_id, mode='conquer',
+            land_suit_bonus_suit=land.get('suit_bonus_suit'),
+            land_suit_bonus_value=land.get('suit_bonus_value'),
+        )
+
         for cfg_fig in self._config.get('figures', []):
             fig = self._config_fig_to_figure(cfg_fig, families)
             if fig is None:
@@ -695,12 +703,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if fig.id in old_icons:
                 icon = old_icons[fig.id]
                 icon.figure = fig
+                icon.game = game_proxy
                 icon.has_deficit = icon._check_resource_deficit(resources_data)
                 icon.battle_bonus_received = icon._calculate_battle_bonus_received(self._figure_objects)
             else:
                 icon = FieldFigureIcon(
                     window=self.window,
-                    game=None,
+                    game=game_proxy,
                     figure=fig,
                     is_visible=True,
                     all_player_figures=self._figure_objects,
