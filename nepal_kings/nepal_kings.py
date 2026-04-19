@@ -135,6 +135,9 @@ class Client:
         return events
 
     async def run_screen(self, screen):
+        scr = self.screens[screen]
+        if hasattr(scr, 'on_enter'):
+            scr.on_enter()
         while self.state.screen == screen:
             events = self.get_events()
 

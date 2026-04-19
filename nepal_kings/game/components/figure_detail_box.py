@@ -133,6 +133,10 @@ class FigureDetailBox:
         # Example actions - customize based on your game logic
         actions = []
         
+        # No actions available when there's no active game (e.g. kingdom config screens)
+        if not self.game:
+            return actions
+
         # Check if this is the player's own figure
         is_own_figure = self.figure.player_id == self.game.player_id
         is_maharaja = 'Maharaja' in self.figure.name
@@ -557,6 +561,8 @@ class FigureDetailBox:
     def _check_upgrade_card_available(self):
         """Check if the upgrade card required for this figure is in the player's hand."""
         if not hasattr(self.figure, 'upgrade_card') or not self.figure.upgrade_card:
+            return False
+        if not self.game:
             return False
         
         # Get player's hand

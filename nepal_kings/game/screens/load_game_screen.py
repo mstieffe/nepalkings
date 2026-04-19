@@ -147,6 +147,14 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         self._rows_bottom = _BOX_Y + _BOX_H - _BOX_PAD
         self._viewport_h = self._rows_bottom - self._rows_top
 
+        # ── X close button (top-right of box) ───────────────────────
+        _xsz = int(0.028 * _SH)
+        _xmargin = int(0.012 * _SW)
+        self._btn_close_rect = pygame.Rect(
+            _BOX_X + _BOX_W - _xsz - _xmargin,
+            _BOX_Y + _xmargin,
+            _xsz, _xsz)
+
     # ── Data ──────────────────────────────────────────────────────
 
     def _refresh_games(self):
@@ -240,7 +248,23 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         else:
             self._draw_rows(cell_pad)
 
+        self._draw_close_x_button()
         self._draw_menu_overlay()
+
+    def _draw_close_x_button(self):
+        r = self._btn_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        txt = _xfont.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
 
     def _draw_rows(self, cell_pad):
         clip = pygame.Rect(_TABLE_X, self._rows_top, _TABLE_W, self._viewport_h)
@@ -396,11 +420,17 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             if self._handle_icon_events(event):
                 continue
 
-            # Click outside content box → back to game menu
+            # X close button
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and self._btn_close_rect.collidepoint(event.pos)):
+                self.state.screen = 'duel_menu'
+                return
+
+            # Click outside content box → back to duel menu
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not _box_rect.collidepoint(event.pos)):
-                self.state.screen = 'game_menu'
+                self.state.screen = 'duel_menu'
                 return
 
             # Scroll wheel

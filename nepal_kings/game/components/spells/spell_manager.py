@@ -73,6 +73,7 @@ class SpellManager:
         frame_hidden_img: pygame.Surface,
         glow_img: pygame.Surface,
         spells: Optional[List[Spell]] = None,
+        mini_game_description: Optional[str] = None,
     ) -> SpellFamily:
         """Create and add a SpellFamily."""
         family = SpellFamily(
@@ -86,6 +87,7 @@ class SpellManager:
             frame_hidden_img=frame_hidden_img,
             glow_img=glow_img,
             spells=spells,
+            mini_game_description=mini_game_description,
         )
         self.add_spell_family(family)
         return family
@@ -109,6 +111,7 @@ class SpellManager:
                     frame_closed_img=self.load_image(settings.SPELL_FRAME_GREYSCALE_IMG_DIR + config["frame_closed_img"]),
                     frame_hidden_img=self.load_image(settings.SPELL_FRAME_HIDDEN_IMG_DIR + config["frame_hidden_img"]),
                     glow_img=self.load_image(settings.SPELL_GLOW_IMG_DIR + config["glow_img"]),
+                    mini_game_description=config.get("mini_game_description"),
                 )
                 
                 # Create spell instances for each suit

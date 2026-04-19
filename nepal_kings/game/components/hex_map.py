@@ -3,6 +3,7 @@
 """Hex-grid map renderer for the Kingdom screen."""
 
 import math
+import os
 import pygame
 from config import settings
 import logging
@@ -44,7 +45,7 @@ class HexTile:
     __slots__ = (
         'land_id', 'col', 'row', 'tier', 'gold_rate',
         'suit_bonus_suit', 'suit_bonus_value',
-        'owner', 'is_mine', 'cx', 'cy',
+        'owner', 'is_mine', 'defence_incomplete', 'cx', 'cy',
     )
 
     def __init__(self, land_dict, cx, cy):
@@ -57,6 +58,7 @@ class HexTile:
         self.suit_bonus_value = land_dict['suit_bonus_value']
         self.owner = land_dict.get('owner')
         self.is_mine = land_dict.get('is_mine', False)
+        self.defence_incomplete = land_dict.get('defence_incomplete', False)
         self.cx = cx
         self.cy = cy
 
@@ -122,6 +124,20 @@ class HexMap:
             self._gold_icon = pygame.transform.smoothscale(raw, (icon_sz, icon_sz))
         except Exception:
             logger.warning('Could not load gold icon for hex map')
+
+        # Pre-load broken/warning icon for incomplete defences
+        # Load at higher resolution to avoid blurriness when scaled up on tiles
+        self._broken_icon_raw = None
+        self._broken_icon = None
+        try:
+            broken_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__)))),
+                'img', 'figures', 'state_icons', 'broken.png')
+            self._broken_icon_raw = pygame.image.load(broken_path).convert_alpha()
+            self._broken_icon = self._broken_icon_raw
+        except Exception:
+            logger.warning('Could not load broken icon for hex map')
 
         # Fonts
         self._label_font = settings.get_font(settings.HEX_LABEL_FONT_SIZE)
@@ -363,6 +379,15 @@ class HexMap:
             name_rect = name_surf.get_rect(centerx=scx, bottom=scy + sz * 0.75)
             self.window.blit(name_surf, name_rect)
 
+        # Broken icon for incomplete defence (only on player's own tiles)
+        if tile.defence_incomplete and self._broken_icon_raw and icon_sz > 6:
+            broken_sz = int(icon_sz * 2)
+            b_icon = pygame.transform.smoothscale(
+                self._broken_icon_raw, (broken_sz, broken_sz))
+            bx = int(scx + sz * 0.20)
+            by = int(scy - sz * 0.65)
+            self.window.blit(b_icon, (bx, by))
+
     # ── Minimap ─────────────────────────────────────────────────────
 
     def _draw_minimap(self):
@@ -373,8 +398,11 @@ class HexMap:
         mm_w = settings.MINIMAP_W
         mm_h = settings.MINIMAP_H
         margin = settings.MINIMAP_MARGIN
-        mm_x = settings.SCREEN_WIDTH - mm_w - margin
-        mm_y = settings.SCREEN_HEIGHT - mm_h - margin
+        if hasattr(self, 'minimap_origin') and self.minimap_origin:
+            mm_x, mm_y = self.minimap_origin
+        else:
+            mm_x = settings.SCREEN_WIDTH - mm_w - margin
+            mm_y = settings.SCREEN_HEIGHT - mm_h - margin
 
         # Background
         mm_surf = pygame.Surface((mm_w, mm_h), pygame.SRCALPHA)

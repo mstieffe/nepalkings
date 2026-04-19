@@ -107,6 +107,9 @@ class Screen:
                     self.state.user = None
                     self.state.user_dict = None
                     self.state.game = None  # Clear game object to prevent stale state
+                    self.state.pending_spell_cast = None
+                    self.state._notified_accepted_challenges = set()
+                    self.state._pending_accepted_challenge = None
                     self.state.set_msg("Logged out")
                 elif self.home_button.collide():
                     self.state.screen = "game_menu"

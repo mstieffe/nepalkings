@@ -445,6 +445,7 @@ class GameScreen(Screen):
         # ── Finished game: read-only mode — skip polling and notifications ──
         if self.state.game.game_over:
             self.state.game.game_over_shown = True  # suppress game-over dialogue
+            self.check_conquer_battle_ended()
 
             # One-time figure fetch for lightweight games (e.g. from async poller)
             if not any(self.state.game.cached_figures_data.values()):
@@ -518,6 +519,7 @@ class GameScreen(Screen):
         # Check for fold outcome and auto-proceed (polling detection for waiting player)
         self.check_fold_result()
         self.check_game_over()
+        self.check_conquer_battle_ended()
         self.check_auto_proceed_to_battle()
         self.check_battle_moves_ready()
         
@@ -1661,12 +1663,32 @@ class GameScreen(Screen):
                 advance_img = pygame.image.load(icon_path).convert_alpha()
                 images.append(advance_img)
             
+            # Build message depending on game mode
+            if self.state.game.mode == 'conquer':
+                opponent = self.state.game.opponent_name or "the defender"
+                tier = self.state.game.land_tier
+                land_label = "Tier {} land".format(tier) if tier else "this land"
+                
+                # Mention battle modifiers if any
+                modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+                modifier_names = [m.get('type') for m in modifiers if m.get('type')]
+                
+                msg = "Battle for {}!\n\nYou are fighting {} for control of {}.".format(
+                    land_label, opponent, land_label)
+                if modifier_names:
+                    msg += "\n\nActive modifier: {}".format(", ".join(modifier_names))
+                msg += "\n\nGo to the field and select a figure to advance."
+                title = "Battle for {}".format(land_label)
+            else:
+                msg = "Last turn!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance, or build a figure with Instant Charge to build and advance in one action."
+                title = "Battle Time"
+            
             self.queue_or_show_notification({
-                'message': "Last turn!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance, or build a figure with Instant Charge to build and advance in one action.",
+                'message': msg,
                 'actions': ['ok'],
                 'images': images if images else None,
                 'icon': None if images else "info",
-                'title': "Battle Time"
+                'title': title
             })
     
     def _check_any_figure_can_advance(self):
@@ -1904,8 +1926,14 @@ class GameScreen(Screen):
 
     def check_own_advance_notification(self):
         """Check if Blitzkrieg combine-advance-and-select is needed.
-        For normal advances, the persistent prompt replaces the dialogue."""
+        For normal advances, the persistent prompt replaces the dialogue.
+        In conquer mode, advance is automatic — suppress notification."""
         if not self.state.game or not self.state.game.pending_own_advance_notification:
+            return
+        
+        # Conquer mode: suppress — advance is automatic
+        if self.state.game.mode == 'conquer':
+            self.state.game.pending_own_advance_notification = False
             return
         
         figure_name = self.state.game.own_advance_figure_name or "your figure"
@@ -1954,6 +1982,11 @@ class GameScreen(Screen):
         if not self.state.game or not self.state.game.pending_advance_notification:
             return
         
+        # Conquer mode: suppress — advance is automatic, no counter-advance
+        if self.state.game.mode == 'conquer':
+            self.state.game.pending_advance_notification = False
+            return
+        
         # Check if advancing figure has cannot_be_blocked
         advancing_fig = None
         advancing_icon = None
@@ -1997,7 +2030,11 @@ class GameScreen(Screen):
         # Message before images: "Your opponent advanced..."
         # Message after images: options/instructions
         message_after = None
-        if 'Blitzkrieg' in modifier_types and not has_cannot_be_blocked:
+        if self.state.game.mode == 'conquer':
+            title = "Opponent Advancing"
+            message = f"Your opponent advanced {advancing_description}!"
+            message_after = "The battle will begin shortly."
+        elif 'Blitzkrieg' in modifier_types and not has_cannot_be_blocked:
             title = "Blitzkrieg — Opponent Advancing"
             message = f"Your opponent advanced {advancing_description}!"
             message_after = (f"Blitzkrieg is active — you cannot counter-advance.\n\n"
@@ -2194,6 +2231,13 @@ class GameScreen(Screen):
             self.state.game.battle_ready_shown = True
             self.state.game.waiting_for_battle_decision = True
             logger.info("[BATTLE_READY] Reconnect: our decision already recorded — resuming wait")
+            return
+        
+        # ── Conquer mode: auto-fight (no fight/fold dialogue) ──
+        if self.state.game.mode == 'conquer':
+            self.state.game.battle_ready_shown = True
+            logger.info("[BATTLE_READY] Conquer mode — auto-submitting 'battle' decision")
+            self._submit_battle_decision('battle')
             return
         
         is_advancing = (self.state.game.advancing_player_id == self.state.game.player_id)
@@ -2560,6 +2604,46 @@ class GameScreen(Screen):
         self.state.game.game_over_shown = True
         self.state.game.pending_game_over = game_over_info
 
+        is_winner = (game_over_info.get('winner_player_id') == self.state.game.player_id)
+
+        # Conquer mode: simplified game-over message (fallback path — normally
+        # handled by battle_screen._handle_conquer_end with richer data)
+        if self.state.game.mode == 'conquer':
+            winner_pid = game_over_info.get('winner_player_id')
+            is_attacker = self.state.game.invader
+            if winner_pid is None:
+                # Draw — no consequences
+                title = "Draw!"
+                icon = 'draw'
+                message = "The battle ended in a draw.\n\nNo consequences — the land remains unchanged."
+            elif is_winner and is_attacker:
+                land_tier = self.state.game.land_tier
+                land_label = "Tier {} land".format(land_tier) if land_tier else "this land"
+                title = "Land Conquered!"
+                icon = 'victory'
+                message = "You have conquered {}!\n\nThe territory is now yours.".format(land_label)
+            elif is_winner and not is_attacker:
+                title = "Defence Successful!"
+                icon = 'victory'
+                message = "You defended your land successfully!"
+            elif not is_winner and is_attacker:
+                title = "Attack Failed"
+                icon = 'defeat'
+                message = "The defender held their ground.\n\nYou did not conquer this land."
+            else:
+                title = "Land Lost!"
+                icon = 'defeat'
+                message = "The attacker has conquered your land."
+
+            self.queue_or_show_notification({
+                'message': message,
+                'actions': ['ok'],
+                'icon': icon,
+                'title': title,
+                'type': 'game_over',
+            })
+            return
+
         winner_name = game_over_info.get('winner_username', 'Winner')
         loser_name = game_over_info.get('loser_username', 'Loser')
         winner_score = game_over_info.get('winner_score', 0)
@@ -2671,10 +2755,26 @@ class GameScreen(Screen):
         })
 
     def _on_game_over_acknowledged(self, response=None):
-        """Handle game-over dialogue acknowledgement — return to game menu."""
-        logger.info("[GAME_OVER] Player acknowledged — returning to game menu")
+        """Handle game-over dialogue acknowledgement — return to game menu or kingdom."""
+        if self.state.game and self.state.game.mode == 'conquer':
+            logger.info("[GAME_OVER] Conquer game acknowledged — returning to kingdom")
+            self.state.game = None
+            self.state.screen = 'kingdom'
+        else:
+            logger.info("[GAME_OVER] Player acknowledged — returning to game menu")
+            self.state.game = None
+            self.state.screen = 'game_menu'
+
+    def check_conquer_battle_ended(self):
+        """Check if a conquer battle just ended (set by battle screen) and route to kingdom."""
+        if not self.state.game:
+            return
+        if not getattr(self.state.game, '_conquer_battle_ended', False):
+            return
+        self.state.game._conquer_battle_ended = False
+        logger.info("[CONQUER] Battle ended — returning to kingdom screen")
         self.state.game = None
-        self.state.screen = 'game_menu'
+        self.state.screen = 'kingdom'
 
     def check_auto_proceed_to_battle(self):
         """Check if both players chose battle (detected via polling for the waiting player)."""
@@ -2700,7 +2800,22 @@ class GameScreen(Screen):
             self._enter_battle_moves_phase()
 
     def _enter_battle_moves_phase(self):
-        """Transition both players into the battle shop for mandatory battle-move selection."""
+        """Transition both players into the battle shop for mandatory battle-move selection.
+        In conquer mode, moves are pre-purchased — auto-confirm and go straight to battle.
+        """
+        if self.state.game and self.state.game.mode == 'conquer':
+            # Conquer mode: moves already selected in config screen — auto-confirm
+            from utils.battle_shop_service import confirm_battle_moves
+            try:
+                confirm_battle_moves(self.state.game.game_id, self.state.game.player_id)
+            except Exception as e:
+                logger.error(f"[CONQUER] Failed to auto-confirm battle moves: {e}")
+            self.state.game.battle_moves_phase = False
+            self.state.game.battle_moves_ready = True
+            self.state.game.waiting_for_opponent_battle_moves = False
+            self.battle_button.locked = False
+            return
+
         self.state.game.battle_moves_phase = True
         self.state.game.battle_moves_ready = False
         self.state.game.waiting_for_opponent_battle_moves = False
@@ -2732,7 +2847,8 @@ class GameScreen(Screen):
         server_started_battle = bool(game.battle_confirmed and game.battle_turn_player_id is not None)
         should_enter_battle = bool(
             game.both_battle_moves_ready or
-            (self.state.subscreen == 'battle_shop' and server_started_battle)
+            (self.state.subscreen == 'battle_shop' and server_started_battle) or
+            (game.mode == 'conquer' and server_started_battle)
         )
         if not should_enter_battle:
             return
@@ -2750,6 +2866,9 @@ class GameScreen(Screen):
         game = self.state.game
         in_move_selection = bool(game.battle_confirmed and game.battle_turn_player_id is None and not game.fold_outcome)
         if in_move_selection:
+            # In conquer mode, moves are already chosen — don't redirect to shop
+            if game.mode == 'conquer':
+                return
             # Battle rounds have not started yet: keep arena locked and route
             # accidental battle-screen entries back to battle shop.
             self.battle_button.locked = True
@@ -2796,12 +2915,21 @@ class GameScreen(Screen):
         """Draw a persistent prompt indicating player must advance a figure."""
         # Create prompt text
         target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE)
-        prompt_text = "BATTLE TIME"
+        
+        if self.state.game.mode == 'conquer':
+            tier = self.state.game.land_tier
+            land_label = "TIER {} LAND".format(tier) if tier else "LAND"
+            prompt_text = "BATTLE FOR {}".format(land_label)
+        else:
+            prompt_text = "BATTLE TIME"
         prompt_surface = target_prompt_font.render(prompt_text, True, (255, 200, 100))  # Orange
         
         # Create instruction text
         cancel_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
-        instruction_text = "Advance a figure on the field, or build+advance with Instant Charge"
+        if self.state.game.mode == 'conquer':
+            instruction_text = "Advance a figure on the field"
+        else:
+            instruction_text = "Advance a figure on the field, or build+advance with Instant Charge"
         instruction_surface = cancel_font.render(instruction_text, True, (255, 230, 150))  # Light orange
         
         # Create background box for better visibility
@@ -3878,12 +4006,13 @@ class GameScreen(Screen):
         if self.waiting_for_counter_response:
             self._draw_counter_spell_waiting_prompt()
         
-        # Draw waiting for battle decision prompt if active
+        # Draw waiting for battle decision prompt if active (skip in conquer mode — AI always fights)
         if self.state.game and not self.dialogue_box:
             fold_active = (self.state.game.fold_outcome or self.state.game.pending_fold_result)
-            if self.state.game.waiting_for_battle_decision and not fold_active:
+            is_conquer = (self.state.game.mode == 'conquer')
+            if not is_conquer and self.state.game.waiting_for_battle_decision and not fold_active:
                 self._draw_waiting_for_battle_decision_prompt()
-            elif (self.state.game.pending_battle_ready and
+            elif (not is_conquer and self.state.game.pending_battle_ready and
                   not self.state.game.battle_ready_shown and
                   self.state.game.advancing_player_id != self.state.game.player_id and
                   not fold_active):

@@ -11,6 +11,15 @@ from game.screens.battle_shop_screen import BattleShopScreen
 from game.core.card_source import CollectionCardSource
 from game.core.kingdom_game_proxy import KingdomGameProxy
 from game.components.cards.card import Card
+from game.components.figures.figure import Figure
+from game.components.figures.figure_icon import FieldFigureIcon
+from game.components.figure_detail_box import FigureDetailBox
+from game.components.figures.figure_manager import FigureManager
+from game.components.battle_moves.battle_move_manager import BattleMoveManager
+from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
+from game.components.battle_moves.battle_move_detail_box import BattleMoveDetailBox
+from game.components.spells.spell_manager import SpellManager
+from game.components.dialogue_box import DialogueBox
 from config import settings
 from utils import http_compat as requests
 from utils import collection_service
@@ -19,6 +28,43 @@ import logging
 logger = logging.getLogger('nk.screens.defence')
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+
+# ── Overall box ─────────────────────────────────────────────────────
+_BOX_PAD    = int(0.020 * _SH)
+_BOX_X      = int(0.04 * _SW)
+_BOX_Y      = int(0.10 * _SH)
+_BOX_W      = int(0.87 * _SW)
+_BOX_BOTTOM = int(0.92 * _SH)
+_BOX_H      = _BOX_BOTTOM - _BOX_Y
+
+
+def _draw_panel(window, rect, corner_r=None):
+    r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
+    surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+    pygame.draw.rect(surf, settings.SUB_SCREEN_PANEL_BG_CLR, surf.get_rect(), border_radius=r)
+    window.blit(surf, rect.topleft)
+    pygame.draw.rect(window, settings.SUB_SCREEN_PANEL_BORDER_CLR, rect,
+                     settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
+
+
+_MODIFIER_CARD_REQS = {
+    'Peasant War': ('J', 2, None),
+    'Civil War':   ('5', 2, None),
+}
+
+_SPELL_CARD_REQS = {
+    'poison':       ('3', 2, 'black'),
+    'health_boost': ('3', 2, 'red'),
+}
+
+_RED_SUITS = {'Hearts', 'Diamonds'}
+_BLACK_SUITS = {'Clubs', 'Spades'}
+
+# Map server spell_name → SpellManager family name
+_SPELL_FAMILY_MAP = {
+    'poison': 'Poison',
+    'health_boost': 'Health Boost',
+}
 
 
 class DefenceScreen(MenuScreenMixin, Screen):
@@ -37,84 +83,387 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         # ── Persistent state ────────────────────────────────────────
         self._land_id = None
-        self._land = None          # server dict
-        self._config = None        # serialised LandConfig
+        self._land = None
+        self._config = None
         self._loading = False
         self._error = None
 
         # ── Subscreen state ─────────────────────────────────────────
-        self._active_subscreen = None   # 'build_figure' | 'battle_shop' | None
+        self._active_subscreen = None
         self._subscreen_obj = None
         self._game_proxy = None
 
-        # ── Fonts ───────────────────────────────────────────────────
-        self._title_font = settings.get_font(int(0.035 * _SH), bold=True)
-        self._label_font = settings.get_font(int(0.022 * _SH))
-        self._value_font = settings.get_font(int(0.022 * _SH), bold=True)
-        self._btn_font = settings.get_font(int(0.020 * _SH), bold=True)
-        self._small_font = settings.get_font(int(0.018 * _SH))
+        # ── Fonts (using font_settings categories) ─────────────────
+        self._title_font = settings.get_font(settings.FS_SUBTITLE, bold=True)
+        self._label_font = settings.get_font(settings.FS_BODY)
+        self._value_font = settings.get_font(settings.FS_BODY, bold=True)
+        self._btn_font = settings.get_font(settings.FS_BUTTON, bold=True)
+        self._small_font = settings.get_font(settings.FS_SMALL)
+        self._res_font = settings.get_font(settings.FS_TINY)
+        self._slot_font = settings.get_font(settings.FS_TINY, bold=True)
 
         # ── Layout rects ────────────────────────────────────────────
-        self._field_rects = {}       # 'castle'/'village'/'military' → Rect
-        self._move_rects = []        # 3 Rects for battle move slots
+        self._field_rects = {}
+        self._move_slots_rect = None
+        self._move_slot_size = int(0.06 * _SH)
         self._btn_build = None
         self._btn_buy_move = None
-        self._btn_modifier = None
-        self._btn_battle_fig = None
-        self._btn_spell = None
         self._btn_auto_gamble = None
-        self._btn_back = None
+        self._btn_close_rect = None
+        self._res_rect = None
+        self._res_castle_rect = None
+        self._res_village_rect = None
+        self._field_title_pos = None
+        self._moves_title_pos = None
+        self._modifier_icon_rects = {}   # mod_name → Rect
+        self._modifier_x_rects = {}      # mod_name → Rect
+        self._final_round_icon_rects = {} # spell/fig key → Rect
+        self._final_round_x_rects = {}    # spell/fig key → Rect
         self._layout_built = False
+        self._hovered_slot = -1
+        self._pending_modifier_confirm = None
+        self._pending_spell_confirm = None
+        self._pending_save_confirm = False
+        self._collection_cards = None
+        self._selecting_battle_fig = False  # True when prompting user to pick a figure
+
+        # ── Figure display (eagerly loaded) ─────────────────────────
+        self._figure_manager = FigureManager()
+        self._move_manager = BattleMoveManager()
+        self._figure_objects = []
+        self._figure_icons = {}
+        self._figure_detail_box = None
+        self._move_detail_box = None
+        self._move_remove_rects = {}   # round_index → Rect for X buttons
+
+        # ── Slot caches for draw_battle_move_icon ───────────────────
+        self._slot_glow_cache = {}
+        self._slot_icon_cache = {}
+        self._slot_frame_cache = {}
+        self._suit_icon_cache = {}
+        self._slot_diamond = None
+        self._init_move_slot_caches()
+
+        # ── Modifier & spell icons (framed, from SpellManager) ──────
+        self._modifier_icons = {}
+        self._spell_icons = {}
+        self._spell_manager = SpellManager()
+        self._init_modifier_icons()
+        self._init_spell_icons()
+
+        # ── Resource icons ──────────────────────────────────────────
+        self._resource_icons = {}
+        self._init_resource_icons()
+
+        # ── Edit icon (for section title buttons) ───────────────────
+        _icon_sz = int(0.025 * _SH)
+        self._edit_icon = pygame.transform.smoothscale(
+            pygame.image.load('img/dialogue_box/icons/edit.png').convert_alpha(),
+            (_icon_sz, _icon_sz),
+        )
+        self._edit_icon_size = _icon_sz
+
+        # ── Broken icon (for incomplete defence indicator) ──────────
+        _broken_sz = int(0.035 * _SH)
+        try:
+            raw = pygame.image.load('img/figures/state_icons/broken.png').convert_alpha()
+            self._broken_icon = pygame.transform.smoothscale(raw, (_broken_sz, _broken_sz))
+        except Exception:
+            self._broken_icon = None
+
+        # ── Advance icon (for selected battle figure) ─────────────
+        self._advance_icon = None
+        try:
+            raw = pygame.image.load('img/figures/state_icons/charge.png').convert_alpha()
+            adv_sz = int(self._spell_frame_size * 0.45)
+            self._advance_icon = pygame.transform.smoothscale(raw, (adv_sz, adv_sz))
+        except Exception:
+            pass
+
+        # ── Suit icon for header ─────────────────────────────────
+        self._header_suit_icons = {}
+        _hdr_suit_sz = self._res_font.get_height()
+        for suit_name in ('hearts', 'diamonds', 'clubs', 'spades'):
+            try:
+                raw = pygame.image.load(settings.SUIT_ICON_IMG_PATH + suit_name + '.png').convert_alpha()
+                self._header_suit_icons[suit_name] = pygame.transform.smoothscale(raw, (_hdr_suit_sz, _hdr_suit_sz))
+            except Exception:
+                pass
+
+    # ── Lifecycle ────────────────────────────────────────────────────
+
+    def on_enter(self):
+        """Called each time the defence screen becomes active — reset cached config."""
+        self._land_id = None
+        self._land = None
+        self._config = None
+        self._loading = False
+        self._error = None
+        self._active_subscreen = None
+        self._subscreen_obj = None
+        self._game_proxy = None
+        self._figure_objects = []
+        self._figure_icons = {}
+        self._figure_detail_box = None
+        self._layout_built = False
+        self._hovered_slot = -1
+
+    # ── Asset init ────────────────────────────────────────────────────
+
+    def _init_move_slot_caches(self):
+        """Pre-load glow, icon, frame and suit images for battle move icon rendering."""
+        sw = self._move_slot_size
+        glow_w = int(sw * 1.6)
+        frame_w = int(sw * 1.3)
+        icon_w = sw - 4
+        big = 1.25
+        glow_w_big = int(glow_w * big)
+        frame_w_big = int(frame_w * big)
+        icon_w_big = int(icon_w * big)
+
+        # Glow colours
+        glow_colors = {
+            'green': 'img/game_button/glow/green.png',
+            'blue': 'img/game_button/glow/blue.png',
+            'yellow': 'img/game_button/glow/yellow.png',
+        }
+        for name, path in glow_colors.items():
+            try:
+                img = pygame.image.load(path).convert_alpha()
+                self._slot_glow_cache[name] = pygame.transform.smoothscale(img, (glow_w, glow_w))
+                self._slot_glow_cache[name + '_big'] = pygame.transform.smoothscale(img, (glow_w_big, glow_w_big))
+            except Exception:
+                pass
+
+        # Suit icons
+        for suit_name in ('hearts', 'diamonds', 'clubs', 'spades'):
+            path = settings.SUIT_ICON_IMG_PATH + suit_name + '.png'
+            try:
+                img = pygame.image.load(path).convert_alpha()
+                s = int(sw * 0.3)
+                s_big = int(s * big)
+                self._suit_icon_cache[suit_name] = pygame.transform.smoothscale(img, (s, s))
+                self._suit_icon_cache[suit_name + '_big'] = pygame.transform.smoothscale(img, (s_big, s_big))
+            except Exception:
+                pass
+
+        # Move family icons + frames
+        for fam_name, fam in self._move_manager.families_by_name.items():
+            if fam.icon_img:
+                try:
+                    self._slot_icon_cache[fam_name] = pygame.transform.smoothscale(fam.icon_img, (icon_w, icon_w))
+                    self._slot_icon_cache[fam_name + '_big'] = pygame.transform.smoothscale(fam.icon_img, (icon_w_big, icon_w_big))
+                except Exception:
+                    pass
+            if fam.frame_img:
+                try:
+                    self._slot_frame_cache[fam_name] = pygame.transform.smoothscale(fam.frame_img, (frame_w, frame_w))
+                    self._slot_frame_cache[fam_name + '_big'] = pygame.transform.smoothscale(fam.frame_img, (frame_w_big, frame_w_big))
+                except Exception:
+                    pass
+
+        # Empty diamond placeholder
+        d_size = int(sw * 1.3)
+        self._slot_diamond = pygame.Surface((d_size, d_size), pygame.SRCALPHA)
+        pts = [(d_size // 2, 0), (d_size, d_size // 2), (d_size // 2, d_size), (0, d_size // 2)]
+        pygame.draw.polygon(self._slot_diamond, (60, 60, 60), pts)
+        pygame.draw.polygon(self._slot_diamond, (100, 90, 70), pts, 2)
+
+    def _init_modifier_icons(self):
+        """Load modifier spell icons with frames from SpellManager."""
+        isz = int(0.045 * _SW)
+        fsz = int(isz * 1.4)
+        ssz = int(isz * 0.4)
+        xsz = int(isz * 0.3)
+        self._mod_icon_size = isz
+        self._mod_frame_size = fsz
+
+        # Hover-scaled sizes (15% larger)
+        isz_h = int(isz * 1.15)
+        fsz_h = int(fsz * 1.15)
+
+        for mod_name in ['Peasant War', 'Civil War']:
+            family = self._spell_manager.get_family_by_name(mod_name)
+            if not family:
+                continue
+            self._modifier_icons[mod_name] = {
+                'icon': pygame.transform.smoothscale(family.icon_img, (isz, isz)) if family.icon_img else None,
+                'icon_gray': pygame.transform.smoothscale(family.icon_gray_img, (isz, isz)) if family.icon_gray_img else None,
+                'frame': pygame.transform.smoothscale(family.frame_img, (fsz, fsz)) if family.frame_img else None,
+                'frame_gray': pygame.transform.smoothscale(family.frame_closed_img, (fsz, fsz)) if family.frame_closed_img else None,
+                'icon_hover': pygame.transform.smoothscale(family.icon_img, (isz_h, isz_h)) if family.icon_img else None,
+                'frame_hover': pygame.transform.smoothscale(family.frame_img, (fsz_h, fsz_h)) if family.frame_img else None,
+                'icon_gray_hover': pygame.transform.smoothscale(family.icon_gray_img, (isz_h, isz_h)) if family.icon_gray_img else None,
+                'frame_gray_hover': pygame.transform.smoothscale(family.frame_closed_img, (fsz_h, fsz_h)) if family.frame_closed_img else None,
+                'glow': pygame.transform.smoothscale(family.glow_img, (fsz + 12, fsz + 12)) if family.glow_img else None,
+                'description': family.description,
+                'mini_game_description': family.mini_game_description,
+            }
+
+        # Success badge
+        try:
+            raw = pygame.image.load('img/dialogue_box/icons/success.png').convert_alpha()
+            self._success_badge = pygame.transform.smoothscale(raw, (ssz, ssz))
+        except Exception:
+            self._success_badge = None
+
+        # X-remove surface
+        xf = settings.get_font(xsz, bold=True)
+        self._x_remove_surf = xf.render('X', True, (220, 60, 60))
+
+        # Unified X-button size for all icon types
+        self._x_btn_sz = max(int(0.016 * _SW), 16)
+
+    def _init_spell_icons(self):
+        """Load spell icons with frames from SpellManager."""
+        isz = self._mod_icon_size
+        fsz = self._mod_frame_size
+        isz_h = int(isz * 1.15)
+        fsz_h = int(fsz * 1.15)
+        self._spell_frame_size = fsz
+
+        for spell_name, family_name in _SPELL_FAMILY_MAP.items():
+            family = self._spell_manager.get_family_by_name(family_name)
+            if not family:
+                continue
+            self._spell_icons[spell_name] = {
+                'icon': pygame.transform.smoothscale(family.icon_img, (isz, isz)) if family.icon_img else None,
+                'icon_gray': pygame.transform.smoothscale(family.icon_gray_img, (isz, isz)) if family.icon_gray_img else None,
+                'frame': pygame.transform.smoothscale(family.frame_img, (fsz, fsz)) if family.frame_img else None,
+                'frame_gray': pygame.transform.smoothscale(family.frame_closed_img, (fsz, fsz)) if family.frame_closed_img else None,
+                'icon_hover': pygame.transform.smoothscale(family.icon_img, (isz_h, isz_h)) if family.icon_img else None,
+                'frame_hover': pygame.transform.smoothscale(family.frame_img, (fsz_h, fsz_h)) if family.frame_img else None,
+                'icon_gray_hover': pygame.transform.smoothscale(family.icon_gray_img, (isz_h, isz_h)) if family.icon_gray_img else None,
+                'frame_gray_hover': pygame.transform.smoothscale(family.frame_closed_img, (fsz_h, fsz_h)) if family.frame_closed_img else None,
+                'glow': pygame.transform.smoothscale(family.glow_img, (fsz + 12, fsz + 12)) if family.glow_img else None,
+                'description': family.description,
+                'mini_game_description': family.mini_game_description,
+            }
+
+    def _init_resource_icons(self):
+        """Load resource icons for inline display."""
+        icon_s = int(0.019 * _SW)
+        for key, path in settings.RESOURCE_ICON_IMG_PATH_DICT.items():
+            try:
+                img = pygame.image.load(path).convert_alpha()
+                self._resource_icons[key] = pygame.transform.smoothscale(img, (icon_s, icon_s))
+            except Exception:
+                pass
 
     # ── Layout ──────────────────────────────────────────────────────
 
     def _build_layout(self):
         pad = int(0.02 * _SW)
-        top = int(0.09 * _SH)
+        top = _BOX_Y + _BOX_PAD + int(0.05 * _SH)   # below title
+
+        # Section title row height
+        section_h = int(0.03 * _SH)
+        content_top = top + section_h + pad
 
         # Left: 3 field compartments
         field_w = int(0.14 * _SW)
-        field_h = int(0.55 * _SH)
-        fx = pad
+        field_h = int(0.46 * _SH)
+        fx = _BOX_X + pad
         for field in ('castle', 'village', 'military'):
-            self._field_rects[field] = pygame.Rect(fx, top, field_w, field_h)
+            self._field_rects[field] = pygame.Rect(fx, content_top, field_w, field_h)
             fx += field_w + pad
 
-        btn_w = int(0.12 * _SW)
-        btn_h = int(0.045 * _SH)
-        self._btn_build = pygame.Rect(pad, top + field_h + pad, btn_w, btn_h)
-
-        # Right: battle moves + modifier + battle figure + spell + auto-gamble
-        right_x = int(0.52 * _SW)
-        move_w = int(0.13 * _SW)
-        move_h = int(0.10 * _SH)
-        my = top
-        self._move_rects = []
-        for i in range(3):
-            self._move_rects.append(pygame.Rect(right_x, my, move_w, move_h))
-            my += move_h + pad
-
-        self._btn_buy_move = pygame.Rect(right_x, my, btn_w, btn_h)
-        my += btn_h + pad
-
-        mod_w = int(0.18 * _SW)
-        self._btn_modifier = pygame.Rect(right_x, my, mod_w, btn_h)
-        my += btn_h + pad
-
-        # Battle figure / spell toggle area
-        self._btn_battle_fig = pygame.Rect(right_x, my, mod_w, btn_h)
-        my += btn_h + pad
-
-        self._btn_spell = pygame.Rect(right_x, my, mod_w, btn_h)
-        my += btn_h + pad
-
-        self._btn_auto_gamble = pygame.Rect(right_x, my, mod_w, btn_h)
-
-        # Back button
-        back_w = int(0.10 * _SW)
-        self._btn_back = pygame.Rect(
-            pad, _SH - int(0.08 * _SH), back_w, btn_h,
+        # Edit icon button next to "Defence Field" section title
+        isz = self._edit_icon_size
+        field_title_surf = self._label_font.render('Defence Field', True, (0, 0, 0))
+        title_w = field_title_surf.get_width()
+        self._field_title_pos = (_BOX_X + pad, top)
+        self._btn_build = pygame.Rect(
+            _BOX_X + pad + title_w + int(0.008 * _SW),
+            top + (field_title_surf.get_height() - isz) // 2,
+            isz, isz,
         )
+
+        btn_h = int(0.045 * _SH)
+
+        # Right column: move slots, buy move, modifier, battle fig, spell, auto-gamble
+        right_x = _BOX_X + pad + 3 * (field_w + pad)
+        self._right_x = right_x
+
+        # Edit icon button next to "Battle Moves" section title
+        moves_title_surf = self._label_font.render('Battle Moves', True, (0, 0, 0))
+        moves_w = moves_title_surf.get_width()
+        self._moves_title_pos = (right_x, top)
+        self._btn_buy_move = pygame.Rect(
+            right_x + moves_w + int(0.008 * _SW),
+            top + (moves_title_surf.get_height() - isz) // 2,
+            isz, isz,
+        )
+
+        sw = self._move_slot_size
+        slot_row_w = int(sw * 2.0) * 2 + int(sw * 1.3)
+        slot_row_h = int(sw * 1.8)
+        self._move_slots_rect = pygame.Rect(right_x, content_top, slot_row_w, slot_row_h)
+        my = content_top + slot_row_h + pad
+
+        # Auto-gamble toggle (in battle moves section)
+        btn_h = int(0.045 * _SH)
+        agw = int(0.14 * _SW)
+        self._btn_auto_gamble = pygame.Rect(right_x, my, agw, btn_h)
+        my += btn_h + pad
+
+        # ── Modifier section (icon grid) ────────────────────────────
+        fsz = self._mod_frame_size
+        # Section label + description height, so icons start below the text
+        lbl_h = self._small_font.get_height()
+        desc_h = self._res_font.get_height()
+        section_text_h = lbl_h + 2 + desc_h + int(0.008 * _SH)
+        self._mod_section_y = my + section_text_h
+        mx = right_x
+        for mod_name in ['Peasant War', 'Civil War']:
+            self._modifier_icon_rects[mod_name] = pygame.Rect(mx, self._mod_section_y, fsz, fsz)
+            mx += fsz + pad
+        my = self._mod_section_y + fsz + int(0.025 * _SH) + pad
+
+        # ── Final-round section (battle figure first, then spells) ──
+        self._final_section_y = my + section_text_h + int(0.01 * _SH)
+        fx = right_x
+        for key in ['battle_figure', 'poison', 'health_boost']:
+            self._final_round_icon_rects[key] = pygame.Rect(fx, self._final_section_y, fsz, fsz)
+            fx += fsz + pad
+        my = self._final_section_y + fsz + int(0.025 * _SH) + pad
+
+        # Combined resource panel below castle+village field compartments
+        castle_r = self._field_rects['castle']
+        village_r = self._field_rects['village']
+        res_top = castle_r.bottom + pad + int(0.015 * _SH)
+        res_w = village_r.right - castle_r.x
+        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
+        self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
+        self._res_castle_rect = None
+        self._res_village_rect = None
+
+        # Save Defence button (bottom-right of box)
+        save_w = int(0.20 * _SW)
+        save_h = int(0.055 * _SH)
+        self._btn_save = pygame.Rect(
+            _BOX_X + _BOX_W - _BOX_PAD - save_w,
+            _BOX_BOTTOM - _BOX_PAD - save_h,
+            save_w, save_h,
+        )
+
+        # ── Divider positions (computed from layout) ────────────────
+        # Vertical divider: between left fields/resources and right battle column
+        self._divider_v_x = right_x - pad // 2
+        self._divider_v_top = top
+        self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
+        # Horizontal: between battle-move section and modifier section
+        self._divider_h1_y = self._mod_section_y - int(0.025 * _SH)
+        # Horizontal: between modifier section and final-round section
+        self._divider_h2_y = self._final_section_y - int(0.025 * _SH)
+
+        # X close button (top-right of box)
+        _xsz = int(0.028 * _SH)
+        _xmargin = int(0.012 * _SW)
+        self._btn_close_rect = pygame.Rect(
+            _BOX_X + _BOX_W - _xsz - _xmargin,
+            _BOX_Y + _xmargin,
+            _xsz, _xsz)
 
         self._layout_built = True
 
@@ -138,6 +487,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._config = data.get('config')
             self._land = data.get('land')
             self._loading = False
+            self._rebuild_figure_objects()
+            self._refresh_collection()
             logger.debug(f'Defence config loaded for land {self._land_id}')
         except Exception as e:
             self._error = 'Connection error'
@@ -156,6 +507,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
+                self._rebuild_figure_objects()
             else:
                 logger.warning(f'Remove figure failed: {data.get("message")}')
         except Exception as e:
@@ -186,6 +538,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
+                self._refresh_collection()
+            else:
+                self.state.set_msg(data.get('message', 'Cannot set modifier'))
         except Exception as e:
             logger.error(f'Set modifier error: {e}')
 
@@ -199,6 +554,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
+                self._refresh_collection()
         except Exception as e:
             logger.error(f'Remove modifier error: {e}')
 
@@ -248,8 +604,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
+                self._refresh_collection()
             else:
-                logger.warning(f'Set spell failed: {data.get("message")}')
+                self.state.set_msg(data.get('message', 'Cannot set spell'))
         except Exception as e:
             logger.error(f'Set spell error: {e}')
 
@@ -263,6 +620,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
+                self._refresh_collection()
         except Exception as e:
             logger.error(f'Clear spell error: {e}')
 
@@ -279,16 +637,152 @@ class DefenceScreen(MenuScreenMixin, Screen):
         except Exception as e:
             logger.error(f'Set auto gamble error: {e}')
 
+    # ── Collection helpers ─────────────────────────────────────────
+
+    def _refresh_collection(self):
+        """Fetch collection cards to determine card availability."""
+        try:
+            data = collection_service.fetch_collection_cards()
+            self._collection_cards = data.get('cards', [])
+        except Exception as e:
+            logger.error(f'Collection fetch error: {e}')
+            self._collection_cards = []
+
+    def _has_cards_for(self, req_key, reqs_dict=None):
+        """Check if player has enough free cards for a requirement."""
+        reqs = (reqs_dict or _MODIFIER_CARD_REQS).get(req_key)
+        if not reqs:
+            return False
+        rank, count, color = reqs
+        cards = self._collection_cards or []
+        red_free = sum(c.get('free', 0) for c in cards
+                       if c.get('rank') == rank and c.get('suit') in _RED_SUITS)
+        black_free = sum(c.get('free', 0) for c in cards
+                         if c.get('rank') == rank and c.get('suit') in _BLACK_SUITS)
+        if color == 'red':
+            return red_free >= count
+        elif color == 'black':
+            return black_free >= count
+        else:
+            return red_free >= count or black_free >= count
+
+    def _card_req_label(self, req_key, reqs_dict=None):
+        """Return a human-readable label for card requirements."""
+        reqs = (reqs_dict or _MODIFIER_CARD_REQS).get(req_key)
+        if not reqs:
+            return ''
+        rank, count, color = reqs
+        color_str = f' ({color})' if color else ''
+        return f'{count}\u00d7 rank {rank}{color_str}'
+
+    # ── Figure conversion ──────────────────────────────────────────
+
+    def _rebuild_figure_objects(self):
+        """Convert config figure dicts into real Figure objects + FieldFigureIcons."""
+        families = self._figure_manager.families
+        self._figure_objects = []
+        old_icons = dict(self._figure_icons)
+        self._figure_icons = {}
+
+        resources_data = self._calc_resources()
+
+        for cfg_fig in self._config.get('figures', []):
+            fig = self._config_fig_to_figure(cfg_fig, families)
+            if fig is None:
+                continue
+            self._figure_objects.append(fig)
+
+            if fig.id in old_icons:
+                icon = old_icons[fig.id]
+                icon.figure = fig
+                icon.has_deficit = icon._check_resource_deficit(resources_data)
+                icon.battle_bonus_received = icon._calculate_battle_bonus_received(self._figure_objects)
+            else:
+                icon = FieldFigureIcon(
+                    window=self.window,
+                    game=None,
+                    figure=fig,
+                    is_visible=True,
+                    all_player_figures=self._figure_objects,
+                    resources_data=resources_data,
+                )
+            self._figure_icons[fig.id] = icon
+
+    def _config_fig_to_figure(self, cfg_fig, families):
+        """Convert a config figure dict to a real Figure object."""
+        family_name = cfg_fig.get('family_name', '')
+        family = families.get(family_name)
+        if not family:
+            return None
+
+        suit = cfg_fig.get('suit', '')
+        name = cfg_fig.get('name', family_name)
+
+        matched = None
+        for fam_fig in family.figures:
+            if fam_fig.suit == suit and fam_fig.name == name:
+                matched = fam_fig
+                break
+        if matched is None:
+            for fam_fig in family.figures:
+                if fam_fig.suit == suit:
+                    matched = fam_fig
+                    break
+
+        key_cards = matched.key_cards if matched else []
+        number_card = matched.number_card if matched else None
+        upgrade_card = matched.upgrade_card if matched else None
+
+        return Figure(
+            name=name,
+            sub_name=matched.sub_name if matched else '',
+            suit=suit,
+            family=family,
+            key_cards=key_cards,
+            number_card=number_card,
+            upgrade_card=upgrade_card,
+            upgrade_family_name=cfg_fig.get('upgrade_family_name'),
+            produces=cfg_fig.get('produces', {}),
+            requires=cfg_fig.get('requires', {}),
+            description=cfg_fig.get('description', ''),
+            id=cfg_fig['id'],
+            cannot_attack=getattr(matched, 'cannot_attack', False) if matched else False,
+            must_be_attacked=getattr(matched, 'must_be_attacked', False) if matched else False,
+            rest_after_attack=cfg_fig.get('rest_after_attack', False),
+            distance_attack=getattr(matched, 'distance_attack', False) if matched else False,
+            buffs_allies=getattr(matched, 'buffs_allies', False) if matched else False,
+            buffs_allies_defence=getattr(matched, 'buffs_allies_defence', False) if matched else False,
+            blocks_bonus=getattr(matched, 'blocks_bonus', False) if matched else False,
+            cannot_defend=getattr(matched, 'cannot_defend', False) if matched else False,
+            instant_charge=getattr(matched, 'instant_charge', False) if matched else False,
+            cannot_be_blocked=cfg_fig.get('cannot_be_blocked', False),
+            cannot_be_targeted=getattr(matched, 'cannot_be_targeted', False) if matched else False,
+            checkmate=cfg_fig.get('checkmate', False),
+            override_base_power=getattr(matched, 'override_base_power', None) if matched else None,
+        )
+
+    def _calc_resources(self):
+        produces = {}
+        requires = {}
+        for fig in self._config.get('figures', []):
+            for res, amt in (fig.get('produces') or {}).items():
+                produces[res] = produces.get(res, 0) + amt
+            for res, amt in (fig.get('requires') or {}).items():
+                requires[res] = requires.get(res, 0) + amt
+        return {'produces': produces, 'requires': requires}
+
     # ── Rendering ───────────────────────────────────────────────────
 
     def render(self):
         self._draw_menu_chrome()
 
-        # If a subscreen is active, render it instead of the config UI
         if self._active_subscreen and self._subscreen_obj:
             self._subscreen_obj.draw()
             self._draw_menu_overlay()
             return
+
+        box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
+        _draw_panel(self.window, box_rect)
 
         if self._loading:
             txt = self._label_font.render('Loading defence config…', True, (200, 185, 150))
@@ -299,7 +793,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if self._error:
             txt = self._label_font.render(self._error, True, (200, 80, 80))
             self.window.blit(txt, txt.get_rect(center=(_SW // 2, _SH // 2)))
-            self._draw_back_button()
+            self._draw_close_x_button()
             self._draw_menu_overlay()
             return
 
@@ -315,154 +809,511 @@ class DefenceScreen(MenuScreenMixin, Screen):
         tier = land.get('tier', '?')
         title = f'Defence Setup — Your Land (Tier {tier})'
         t_surf = self._title_font.render(title, True, (100, 200, 255))
-        self.window.blit(t_surf, t_surf.get_rect(centerx=_SW // 2, top=int(0.025 * _SH)))
+        self.window.blit(t_surf, t_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
+                                                  top=_BOX_Y + _BOX_PAD))
 
-        # ── Field compartments ──────────────────────────────────────
+        # Land specifications
+        gold_rate = land.get('gold_rate', 0)
+        suit = land.get('suit_bonus_suit', '?')
+        bonus = land.get('suit_bonus_value', 0)
+        specs_text = f'Gold: {gold_rate}/hr  |  Suit Bonus: +{bonus} '
+        specs_surf = self._res_font.render(specs_text, True, (180, 170, 140))
+        # Calculate centred position for specs + suit icon
+        suit_icon = self._header_suit_icons.get(suit.lower())
+        total_w = specs_surf.get_width() + (suit_icon.get_width() + 2 if suit_icon else 0)
+        specs_x = _BOX_X + _BOX_W // 2 - total_w // 2
+        specs_y = _BOX_Y + _BOX_PAD + t_surf.get_height() + 4
+        self.window.blit(specs_surf, (specs_x, specs_y))
+        if suit_icon:
+            self.window.blit(suit_icon, (specs_x + specs_surf.get_width() + 2,
+                                        specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
+
         self._draw_field_compartments()
-
-        # ── Battle moves ────────────────────────────────────────────
-        self._draw_battle_moves()
-
-        # ── Modifier ────────────────────────────────────────────────
-        self._draw_modifier()
-
-        # ── Battle figure / spell ───────────────────────────────────
-        self._draw_battle_figure_row()
-        self._draw_spell_row()
-
-        # ── Auto-gamble ─────────────────────────────────────────────
+        self._draw_battle_move_slots()
         self._draw_auto_gamble()
+        self._draw_modifier()
+        self._draw_final_round_section()
+        self._draw_resources()
 
-        # ── Buttons ─────────────────────────────────────────────────
-        self._draw_button(self._btn_build, 'Build Figure', (60, 140, 60))
-        self._draw_button(self._btn_buy_move, 'Buy Move', (60, 100, 160))
+        # Save Defence button
+        ready = self._is_defence_ready()
+        save_clr = (100, 180, 80) if ready else (80, 80, 80)
+        self._draw_button(self._btn_save, 'Save Defence', save_clr)
 
-        self._draw_back_button()
+        # ── Divider lines ───────────────────────────────────────────
+        div_clr = (90, 80, 60)
+        # Vertical divider between left (field/resources) and right (battle) columns
+        pygame.draw.line(self.window, div_clr,
+                         (self._divider_v_x, self._divider_v_top),
+                         (self._divider_v_x, self._divider_v_bottom), 1)
+        # Horizontal divider between battle moves and modifier section
+        pygame.draw.line(self.window, div_clr,
+                         (self._right_x, self._divider_h1_y),
+                         (_BOX_X + _BOX_W - _BOX_PAD, self._divider_h1_y), 1)
+        # Horizontal divider between modifier and final round section
+        pygame.draw.line(self.window, div_clr,
+                         (self._right_x, self._divider_h2_y),
+                         (_BOX_X + _BOX_W - _BOX_PAD, self._divider_h2_y), 1)
+
+        self._draw_section_title('Defence Field', self._field_title_pos, self._btn_build,
+                                description='Place figures to protect your land')
+        self._draw_section_title('Battle Moves', self._moves_title_pos, self._btn_buy_move,
+                                description='Assign cards for each battle round')
+
+        # Incomplete defence indicator (top-left of box)
+        if not self._is_defence_ready() and self._broken_icon:
+            bx = _BOX_X + _BOX_PAD
+            by = _BOX_Y + _BOX_PAD
+            self.window.blit(self._broken_icon, (bx, by))
+            warn = self._small_font.render('Defence incomplete', True, (220, 60, 60))
+            self.window.blit(warn, (bx + self._broken_icon.get_width() + 6,
+                                    by + (self._broken_icon.get_height() - warn.get_height()) // 2))
+
+        # Battle figure selection mode overlay
+        if self._selecting_battle_fig:
+            # Dim the whole box
+            dim = pygame.Surface((_BOX_W, _BOX_H), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, 120))
+            self.window.blit(dim, (_BOX_X, _BOX_Y))
+            # Prompt text
+            prompt = self._label_font.render('Click a figure to select as Battle Figure', True, (255, 220, 80))
+            self.window.blit(prompt, prompt.get_rect(centerx=_BOX_X + _BOX_W // 2,
+                                                     top=_BOX_Y + _BOX_PAD + 4))
+            cancel = self._small_font.render('Click elsewhere to cancel', True, (180, 170, 150))
+            self.window.blit(cancel, cancel.get_rect(centerx=_BOX_X + _BOX_W // 2,
+                                                      top=_BOX_Y + _BOX_PAD + prompt.get_height() + 8))
+            # Re-draw field compartments on top of dim so figures are visible and clickable
+            self._draw_field_compartments()
+
+        self._draw_close_x_button()
+
+        if self._figure_detail_box:
+            self._figure_detail_box.draw()
+        if self._move_detail_box:
+            self._move_detail_box.draw()
+
         self._draw_menu_overlay()
 
     def _draw_field_compartments(self):
-        figures = self._config.get('figures', [])
+        """Draw the three field compartments with FieldFigureIcon rendering."""
+        field_colors = {
+            'castle': settings.FIELD_FILL_COLOR,
+            'village': settings.FIELD_FILL_COLOR,
+            'military': settings.FIELD_FILL_COLOR,
+        }
+
+        all_regular = []
+        all_hovered = None
+
+        battle_fig_ids = set()
+        bf1 = self._config.get('battle_figure_id')
+        bf2 = self._config.get('battle_figure_id_2')
+        if bf1:
+            battle_fig_ids.add(bf1)
+        if bf2:
+            battle_fig_ids.add(bf2)
+
         for field_name, rect in self._field_rects.items():
             surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            surf.fill((30, 30, 35, 200))
+            clr = field_colors.get(field_name, (106, 58, 24))
+            surf.fill((*clr, settings.FIELD_TRANSPARENCY))
             self.window.blit(surf, rect.topleft)
-            pygame.draw.rect(self.window, (120, 100, 70), rect, 1, border_radius=2)
+
+            slot_path = settings.SLOT_ICON_IMG_PATH_DICT.get(field_name)
+            if slot_path:
+                try:
+                    slot_icon = pygame.image.load(slot_path).convert_alpha()
+                    slot_icon.set_alpha(settings.SLOT_ICON_TRANSPARENCY)
+                    slot_s = min(rect.w, rect.h) - 10
+                    slot_icon = pygame.transform.smoothscale(slot_icon, (slot_s, slot_s))
+                    sr = slot_icon.get_rect(center=rect.center)
+                    self.window.blit(slot_icon, sr.topleft)
+                except Exception:
+                    pass
+
+            pygame.draw.rect(self.window, settings.FIELD_BORDER_COLOR, rect,
+                             settings.FIELD_BORDER_WIDTH, border_radius=2)
+
             lbl = self._label_font.render(field_name.upper(), True, (180, 160, 120))
             self.window.blit(lbl, (rect.x + 6, rect.y + 4))
 
-            field_figs = [f for f in figures if f.get('field') == field_name]
-            fy = rect.y + 30
+            field_figs = [f for f in self._figure_objects if f.family.field == field_name]
             for fig in field_figs:
-                self._draw_figure_entry(fig, rect.x + 6, fy, rect.w - 12)
-                fy += int(0.08 * _SH)
+                icon = self._figure_icons.get(fig.id)
+                if not icon:
+                    continue
+                cfg_fig = self._get_config_fig(fig.id)
+                if cfg_fig:
+                    _xbs = self._x_btn_sz
+                    xbtn = pygame.Rect(rect.right - _xbs - 4, rect.y + 4, _xbs, _xbs)
+                    idx = field_figs.index(fig)
+                    xbtn.y += idx * (_xbs + 2)
+                    x_hovered = xbtn.collidepoint(pygame.mouse.get_pos())
+                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                    pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
+                    pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
+                    xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
+                    xt = xf.render('\u00d7', True, tc)
+                    self.window.blit(xt, xt.get_rect(center=xbtn.center))
+                    cfg_fig['_remove_rect'] = xbtn
 
-    def _draw_figure_entry(self, fig, x, y, w):
-        deficit = fig.get('has_deficit', False)
-        is_battle = fig['id'] in (
-            self._config.get('battle_figure_id'),
-            self._config.get('battle_figure_id_2'),
-        )
-        clr = (180, 80, 80) if deficit else (100, 200, 255) if is_battle else (200, 200, 200)
-        name = fig.get('name', fig.get('family_name', '?'))
-        suit = fig.get('suit', '')
-        prefix = '[B] ' if is_battle else ''
-        txt = self._small_font.render(f'{prefix}{name} ({suit})', True, clr)
-        self.window.blit(txt, (x, y))
+                # Mark battle figures with indicator
+                if fig.id in battle_fig_ids:
+                    bf_lbl = self._small_font.render('[B]', True, (100, 200, 255))
+                    self.window.blit(bf_lbl, (rect.x + 6, rect.y + 4 + 18))
 
-        if deficit:
-            dtxt = self._small_font.render('DEFICIT', True, (220, 60, 60))
-            self.window.blit(dtxt, (x + w - dtxt.get_width(), y))
+            if not field_figs:
+                continue
 
-        xbtn = pygame.Rect(x + w - 20, y, 18, 18)
-        pygame.draw.rect(self.window, (140, 50, 50), xbtn, border_radius=2)
-        xt = self._small_font.render('X', True, (255, 255, 255))
-        self.window.blit(xt, xt.get_rect(center=xbtn.center))
-        fig['_remove_rect'] = xbtn
+            frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
+            top_margin = settings.FIGURE_ICON_HEIGHT * 0.42
+            caption_font_size = settings.FIGURE_ICON_FONT_CAPTION_FONT_SIZE
+            caption_h = int(caption_font_size * 2.6)
+            bottom_margin = 0.34 * settings.FIGURE_ICON_HEIGHT + caption_h
 
-    def _draw_battle_moves(self):
+            title_space = 24
+            first_center = rect.top + title_space + top_margin
+            last_center = rect.top + rect.height - bottom_margin
+
+            if len(field_figs) == 1:
+                icon_y_start = (first_center + last_center) / 2
+                icon_spacing = 0
+            else:
+                default_spacing = top_margin + bottom_margin + settings.FIELD_ICON_PADDING_Y
+                max_spacing = (last_center - first_center) / (len(field_figs) - 1)
+                if max_spacing >= default_spacing:
+                    icon_spacing = default_spacing
+                    group_h = (len(field_figs) - 1) * icon_spacing
+                    offset = ((last_center - first_center) - group_h) / 2
+                    icon_y_start = first_center + offset
+                else:
+                    icon_spacing = max_spacing
+                    icon_y_start = first_center
+
+            icon_x = rect.left + 0.5 * rect.w
+            for i, fig in enumerate(field_figs):
+                icon = self._figure_icons.get(fig.id)
+                if not icon:
+                    continue
+                icon_y = icon_y_start + i * icon_spacing
+                if icon.hovered:
+                    all_hovered = (icon, icon_x, icon_y)
+                else:
+                    all_regular.append((icon, icon_x, icon_y))
+
+        for icon, ix, iy in reversed(all_regular):
+            icon.draw(ix, iy)
+        if all_hovered:
+            icon, ix, iy = all_hovered
+            icon.draw(ix, iy)
+
+    def _draw_battle_move_slots(self):
+        """Draw 3 battle move slots as diamond icons."""
         moves = self._config.get('battle_moves', [])
         move_by_round = {m['round_index']: m for m in moves}
+        self._hovered_slot = -1
 
-        label = self._label_font.render('BATTLE MOVES', True, (180, 160, 120))
-        self.window.blit(label, (self._move_rects[0].x, self._move_rects[0].y - 24))
+        sw = self._move_slot_size
+        slot_spacing = int(sw * 2.0)
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()[0]
 
-        for i, rect in enumerate(self._move_rects):
-            surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            surf.fill((30, 30, 35, 200))
-            self.window.blit(surf, rect.topleft)
-            pygame.draw.rect(self.window, (120, 100, 70), rect, 1, border_radius=2)
+        for i in range(3):
+            cx = self._move_slots_rect.x + sw + i * slot_spacing
+            cy = self._move_slots_rect.y + self._move_slots_rect.h // 2
 
             if i in move_by_round:
+                hw = sw * 0.7
+                hh = sw * 0.7
+                is_hovered = (abs(mouse_pos[0] - cx) / hw + abs(mouse_pos[1] - cy) / hh <= 1.0)
+                if is_hovered:
+                    self._hovered_slot = i
+
                 m = move_by_round[i]
-                txt = self._value_font.render(
-                    f"R{i + 1}: {m['family_name']} {m['rank']}{m['suit'][0]}",
-                    True, (200, 200, 200),
+                hovered = is_hovered and not mouse_pressed
+
+                draw_battle_move_icon(
+                    self.window, cx, cy,
+                    m['family_name'], m['suit'], m.get('value', 0),
+                    self._slot_glow_cache, self._slot_icon_cache,
+                    self._slot_frame_cache, self._suit_icon_cache,
+                    self._slot_font, sw,
+                    hovered=hovered,
                 )
-                self.window.blit(txt, (rect.x + 6, rect.y + 8))
-                xbtn = pygame.Rect(rect.right - 24, rect.y + 4, 18, 18)
-                pygame.draw.rect(self.window, (140, 50, 50), xbtn, border_radius=2)
-                xt = self._small_font.render('X', True, (255, 255, 255))
-                self.window.blit(xt, xt.get_rect(center=xbtn.center))
-                m['_remove_rect'] = xbtn
+
+                # X button (upper-right of diamond)
+                xsz = self._x_btn_sz
+                xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
+                x_hovered = xrect.collidepoint(mouse_pos)
+                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                pygame.draw.rect(self.window, bg, xrect, border_radius=3)
+                pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
+                xf = settings.get_font(max(int(xsz * 1.3), 8), bold=True)
+                xt = xf.render('\u00d7', True, tc)
+                self.window.blit(xt, xt.get_rect(center=xrect.center))
+                self._move_remove_rects[i] = xrect
+
+                rlbl = self._small_font.render(f'R{i + 1}', True, (160, 140, 120))
+                self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
             else:
-                txt = self._small_font.render(f'Round {i + 1}: empty', True, (100, 100, 100))
-                self.window.blit(txt, (rect.x + 6, rect.y + rect.h // 2 - 8))
+                dr = self._slot_diamond.get_rect(center=(cx, cy))
+                self.window.blit(self._slot_diamond, dr.topleft)
+                rlbl = self._small_font.render(f'R{i + 1}', True, (100, 100, 100))
+                self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
 
     def _draw_modifier(self):
+        """Draw the modifier section with framed spell icons."""
         mod = self._config.get('battle_modifier')
-        if mod:
-            label = f"Modifier: {mod.get('type', '?')}  [remove]"
-            clr = (200, 180, 80)
-        else:
-            label = 'Set Modifier …'
-            clr = (130, 130, 130)
+        active_type = mod.get('type') if mod else None
+        fsz = self._mod_frame_size
+        mx, my_mouse = pygame.mouse.get_pos()
 
-        rect = self._btn_modifier
-        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        surf.fill((30, 30, 35, 200))
-        self.window.blit(surf, rect.topleft)
-        pygame.draw.rect(self.window, (120, 100, 70), rect, 1, border_radius=2)
-        txt = self._btn_font.render(label, True, clr)
-        self.window.blit(txt, txt.get_rect(center=rect.center))
+        # Section label (drawn above the icons)
+        lbl = self._small_font.render('Battle Modifier', True, (200, 185, 150))
+        desc = self._res_font.render('Spend cards to gain a battle advantage', True, (160, 145, 120))
+        right_x = self._right_x
+        lbl_y = self._mod_section_y - desc.get_height() - 2 - lbl.get_height() - 2
+        self.window.blit(lbl, (right_x, lbl_y))
+        self.window.blit(desc, (right_x, lbl_y + lbl.get_height() + 2))
 
-    def _draw_battle_figure_row(self):
-        bf_id = self._config.get('battle_figure_id')
-        bf_id_2 = self._config.get('battle_figure_id_2')
-        if bf_id:
-            fig_name = self._figure_name(bf_id)
-            label = f'Battle Fig: {fig_name}'
-            if bf_id_2:
-                label += f' + {self._figure_name(bf_id_2)}'
-            label += '  [clear]'
-            clr = (100, 200, 255)
-        else:
-            label = 'Select Battle Figure …'
-            clr = (130, 130, 130)
+        for mod_name, rect in self._modifier_icon_rects.items():
+            icons = self._modifier_icons.get(mod_name)
+            if not icons:
+                continue
 
-        rect = self._btn_battle_fig
-        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        surf.fill((30, 30, 35, 200))
-        self.window.blit(surf, rect.topleft)
-        pygame.draw.rect(self.window, (80, 100, 130), rect, 1, border_radius=2)
-        txt = self._btn_font.render(label, True, clr)
-        self.window.blit(txt, txt.get_rect(center=rect.center))
+            is_purchased = (active_type == mod_name)
+            has_cards = self._has_cards_for(mod_name)
 
-    def _draw_spell_row(self):
+            if is_purchased or has_cards:
+                icon_surf = icons['icon']
+                frame_surf = icons['frame']
+            else:
+                icon_surf = icons['icon_gray']
+                frame_surf = icons['frame_gray']
+
+            cx = rect.x + fsz // 2
+            cy = rect.y + fsz // 2
+
+            # Hover detection (all icons, not just unpurchased)
+            hovered = rect.collidepoint(mx, my_mouse)
+
+            # Active glow (yellow glow behind icon when purchased)
+            if is_purchased and icons.get('glow'):
+                glow_surf = icons['glow']
+                gr = glow_surf.get_rect(center=(cx, cy))
+                self.window.blit(glow_surf, gr.topleft)
+
+            # Select hover-scaled or normal surfaces
+            if hovered and (is_purchased or has_cards):
+                draw_icon = icons.get('icon_hover', icon_surf)
+                draw_frame = icons.get('frame_hover', frame_surf)
+            elif hovered:
+                draw_icon = icons.get('icon_gray_hover', icon_surf)
+                draw_frame = icons.get('frame_gray_hover', frame_surf)
+            else:
+                draw_icon = icon_surf
+                draw_frame = frame_surf
+
+            if draw_icon:
+                ir = draw_icon.get_rect(center=(cx, cy))
+                self.window.blit(draw_icon, ir.topleft)
+            if draw_frame:
+                fr = draw_frame.get_rect(center=(cx, cy))
+                self.window.blit(draw_frame, fr.topleft)
+
+            ntxt = self._res_font.render(mod_name, True,
+                                         (200, 180, 80) if is_purchased else (160, 150, 130))
+            self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
+
+            if is_purchased and self._success_badge:
+                bx = rect.x
+                by = rect.bottom - self._success_badge.get_height()
+                self.window.blit(self._success_badge, (bx, by))
+
+                _xbs = self._x_btn_sz
+                xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
+                self._modifier_x_rects[mod_name] = xrect
+                x_hovered = xrect.collidepoint(mx, my_mouse)
+                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                pygame.draw.rect(self.window, bg, xrect, border_radius=3)
+                pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
+                xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
+                xt = xf.render('\u00d7', True, tc)
+                self.window.blit(xt, xt.get_rect(center=xrect.center))
+            else:
+                self._modifier_x_rects.pop(mod_name, None)
+
+    def _draw_final_round_section(self):
+        """Draw the final round section with battle figure icon first, then spell icons."""
         spell = self._config.get('spell_name')
-        if spell:
-            label = f'Spell: {spell}  [clear]'
-            clr = (180, 100, 220)
-        else:
-            label = 'Set Spell …'
-            clr = (130, 130, 130)
+        bf_id = self._config.get('battle_figure_id')
+        fsz = self._spell_frame_size
+        pad = int(0.02 * _SW)
+        mx, my_mouse = pygame.mouse.get_pos()
 
-        rect = self._btn_spell
-        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        surf.fill((30, 30, 35, 200))
-        self.window.blit(surf, rect.topleft)
-        pygame.draw.rect(self.window, (100, 70, 130), rect, 1, border_radius=2)
-        txt = self._btn_font.render(label, True, clr)
-        self.window.blit(txt, txt.get_rect(center=rect.center))
+        # Section label (drawn above the icons)
+        lbl = self._small_font.render('Final Round', True, (200, 185, 150))
+        desc = self._res_font.render('Choose a spell or battle figure', True, (160, 145, 120))
+        right_x = self._right_x
+        lbl_y = self._final_section_y - desc.get_height() - 2 - lbl.get_height() - 2
+        self.window.blit(lbl, (right_x, lbl_y))
+        self.window.blit(desc, (right_x, lbl_y + lbl.get_height() + 2))
+
+        # Draw icons: battle_figure first, then vertical separator, then spells
+        bf_rect = self._final_round_icon_rects.get('battle_figure')
+
+        # Draw spell icons (poison, health_boost) first so separator and bf draw on top
+        for spell_key, rect in self._final_round_icon_rects.items():
+            if spell_key == 'battle_figure':
+                continue
+
+            icons = self._spell_icons.get(spell_key)
+            if not icons:
+                continue
+
+            is_purchased = (spell == spell_key)
+            has_cards = self._has_cards_for(spell_key, _SPELL_CARD_REQS)
+
+            if is_purchased or has_cards:
+                icon_surf = icons['icon']
+                frame_surf = icons['frame']
+            else:
+                icon_surf = icons['icon_gray']
+                frame_surf = icons['frame_gray']
+
+            cx = rect.x + fsz // 2
+            cy = rect.y + fsz // 2
+
+            # Hover detection (all icons, not just unpurchased)
+            hovered = rect.collidepoint(mx, my_mouse)
+
+            # Active glow (yellow glow behind icon when purchased)
+            if is_purchased and icons.get('glow'):
+                glow_surf = icons['glow']
+                gr = glow_surf.get_rect(center=(cx, cy))
+                self.window.blit(glow_surf, gr.topleft)
+
+            # Select hover-scaled or normal surfaces
+            if hovered and (is_purchased or has_cards):
+                draw_icon = icons.get('icon_hover', icon_surf)
+                draw_frame = icons.get('frame_hover', frame_surf)
+            elif hovered:
+                draw_icon = icons.get('icon_gray_hover', icon_surf)
+                draw_frame = icons.get('frame_gray_hover', frame_surf)
+            else:
+                draw_icon = icon_surf
+                draw_frame = frame_surf
+
+            if draw_icon:
+                ir = draw_icon.get_rect(center=(cx, cy))
+                self.window.blit(draw_icon, ir.topleft)
+            if draw_frame:
+                fr = draw_frame.get_rect(center=(cx, cy))
+                self.window.blit(draw_frame, fr.topleft)
+
+            # Display name
+            display_name = _SPELL_FAMILY_MAP.get(spell_key, spell_key)
+            ntxt = self._res_font.render(display_name, True,
+                                         (180, 100, 220) if is_purchased else (160, 150, 130))
+            self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
+
+            if is_purchased and self._success_badge:
+                bx = rect.x
+                by = rect.bottom - self._success_badge.get_height()
+                self.window.blit(self._success_badge, (bx, by))
+
+                _xbs = self._x_btn_sz
+                xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
+                self._final_round_x_rects[spell_key] = xrect
+                x_hovered = xrect.collidepoint(mx, my_mouse)
+                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                pygame.draw.rect(self.window, bg, xrect, border_radius=3)
+                pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
+                xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
+                xt = xf.render('\u00d7', True, tc)
+                self.window.blit(xt, xt.get_rect(center=xrect.center))
+            else:
+                self._final_round_x_rects.pop(spell_key, None)
+
+        # Vertical separator between battle_figure and first spell icon
+        if bf_rect:
+            sep_x = bf_rect.right + pad // 2
+            sep_y1 = self._final_section_y
+            sep_y2 = self._final_section_y + fsz
+            pygame.draw.line(self.window, (100, 90, 70), (sep_x, sep_y1), (sep_x, sep_y2), 1)
+
+        # Draw battle figure icon last (on top of separator)
+        if bf_rect:
+            self._draw_battle_figure_icon(bf_rect, bf_id, mx, my_mouse)
+
+    def _draw_battle_figure_icon(self, rect, bf_id, mx, my_mouse):
+        """Draw the battle figure slot in the final round section."""
+        fsz = self._spell_frame_size
+        cx = rect.x + fsz // 2
+        cy = rect.y + fsz // 2
+
+        is_selected = bf_id is not None
+
+        if is_selected:
+            # Draw the figure icon if available
+            fig_icon = self._figure_icons.get(bf_id)
+            if fig_icon:
+                fig_icon.draw(cx, cy)
+            else:
+                # Fallback: draw a placeholder with name
+                fig_name = self._figure_name(bf_id)
+                pygame.draw.rect(self.window, (40, 50, 60, 200), rect, border_radius=4)
+                pygame.draw.rect(self.window, (80, 100, 130), rect, 1, border_radius=4)
+                ntxt = self._res_font.render(fig_name, True, (100, 200, 255))
+                self.window.blit(ntxt, ntxt.get_rect(center=(cx, cy)))
+        else:
+            # Empty slot
+            hovered = rect.collidepoint(mx, my_mouse)
+            if hovered:
+                glow = pygame.Surface((fsz + 6, fsz + 6), pygame.SRCALPHA)
+                glow.fill((255, 255, 200, 35))
+                self.window.blit(glow, (rect.x - 3, rect.y - 3))
+            pygame.draw.rect(self.window, (30, 35, 40, 180), rect, border_radius=4)
+            pygame.draw.rect(self.window, (80, 100, 130), rect, 1, border_radius=4)
+
+        # Only show label when slot is empty
+        if not is_selected:
+            ntxt = self._res_font.render('Battle Fig', True, (130, 130, 130))
+            self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
+
+        if is_selected and self._success_badge:
+            bx = rect.x
+            by = rect.bottom - self._success_badge.get_height()
+            self.window.blit(self._success_badge, (bx, by))
+
+            # Draw advance (charge) icon at top-right of figure
+            if self._advance_icon:
+                ax = rect.right - self._advance_icon.get_width()
+                ay = rect.y
+                self.window.blit(self._advance_icon, (ax, ay))
+
+            _xbs = self._x_btn_sz
+            xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
+            self._final_round_x_rects['battle_figure'] = xrect
+            x_hovered = xrect.collidepoint(mx, my_mouse)
+            bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+            bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+            tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+            pygame.draw.rect(self.window, bg, xrect, border_radius=3)
+            pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
+            xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
+            xt = xf.render('\u00d7', True, tc)
+            self.window.blit(xt, xt.get_rect(center=xrect.center))
+        else:
+            self._final_round_x_rects.pop('battle_figure', None)
 
     def _draw_auto_gamble(self):
         enabled = self._config.get('auto_gamble', False)
@@ -477,6 +1328,139 @@ class DefenceScreen(MenuScreenMixin, Screen):
         txt = self._btn_font.render(label, True, clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
+    def _draw_resources(self):
+        """Draw a combined resource panel below the field compartments."""
+        if not self._res_rect:
+            return
+
+        resources_data = self._calc_resources()
+        produces = resources_data.get('produces', {})
+        requires = resources_data.get('requires', {})
+
+        icon_s = int(0.019 * _SW)
+        pill_font = self._res_font
+        pill_min_w = pill_font.size("00/00")[0] + 8
+        rect = self._res_rect
+
+        # Subtitle
+        lbl = self._res_font.render('Resources', True, (180, 170, 140))
+        self.window.blit(lbl, (rect.x, rect.y - lbl.get_height() - 2))
+
+        # Panel background
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (35, 30, 25, 200), surf.get_rect(), border_radius=4)
+        self.window.blit(surf, rect.topleft)
+        pygame.draw.rect(self.window, (140, 130, 110), rect, 1, border_radius=4)
+
+        # Castle resources on the left, village resources on the right
+        castle_rows = [
+            ('village',  'villager_red_black', [('villager_red', 'villager_black')]),
+            ('military', 'warrior_red_black',  [('warrior_red', 'warrior_black')]),
+        ]
+        village_rows = [
+            ('food',     'rice_meat',          [('food_red', 'food_black')]),
+            ('material', 'wood_stone',         [('material_red', 'material_black')]),
+            ('armor',    'sword_shield',       [('armor_red', 'armor_black')]),
+        ]
+
+        half_w = rect.w // 2
+        for col_offset, rows in [(0, castle_rows), (half_w, village_rows)]:
+            y = rect.y + 8
+            for label, icon_key, res_pairs in rows:
+                ix = rect.x + col_offset + 8
+                icon = self._resource_icons.get(icon_key)
+                if icon:
+                    self.window.blit(icon, (ix, y))
+                    ix += icon_s + 6
+
+                for red_key, black_key in res_pairs:
+                    for res_key, pill_clr in [(red_key, (45, 90, 45)), (black_key, (35, 60, 110))]:
+                        req = requires.get(res_key, 0)
+                        prod = produces.get(res_key, 0)
+                        deficit = req > prod
+                        text = f'{req}/{prod}'
+                        t_surf = pill_font.render(text, True, (255, 255, 255))
+                        pw = max(t_surf.get_width() + 8, pill_min_w)
+                        ph = t_surf.get_height() + 4
+                        pr = pygame.Rect(ix, y + (icon_s - ph) // 2, pw, ph)
+                        pill = pygame.Surface((pw, ph), pygame.SRCALPHA)
+                        pygame.draw.rect(pill, (*pill_clr, 220), pill.get_rect(), border_radius=3)
+                        self.window.blit(pill, pr.topleft)
+                        if deficit:
+                            pygame.draw.rect(self.window, (200, 50, 50), pr, 2, border_radius=3)
+                        tr = t_surf.get_rect(center=pr.center)
+                        self.window.blit(t_surf, tr.topleft)
+                        ix += pw + 4
+
+                y += icon_s + 6
+
+    def _build_confirm_message(self):
+        """Build a confirmation message listing locked and consumed cards."""
+        locked = []   # cards returned after battle (figures, battle moves)
+        consumed = [] # cards permanently spent (modifiers, spells)
+        for fig in self._config.get('figures', []):
+            name = fig.get('name', '?')
+            for cid in fig.get('card_ids', []):
+                locked.append(f'\u2022 Card \u2014 {name} (figure)')
+        for mv in self._config.get('battle_moves', []):
+            if mv.get('card_id'):
+                rank = mv.get('rank', '')
+                suit = mv.get('suit', '')
+                rd = mv.get('round_index', 0) + 1
+                if rank and suit:
+                    locked.append(f'\u2022 {rank} {suit} \u2014 Round {rd}')
+                else:
+                    locked.append(f'\u2022 Card \u2014 Round {rd}')
+        mod_ids = self._config.get('modifier_card_ids') or []
+        if mod_ids:
+            mod = self._config.get('battle_modifier', {})
+            mod_name = mod.get('type', 'Modifier') if mod else 'Modifier'
+            for _ in mod_ids:
+                consumed.append(f'\u2022 Card \u2014 {mod_name}')
+        spell_ids = self._config.get('spell_card_ids') or []
+        if spell_ids:
+            spell = self._config.get('spell_name', 'Spell')
+            for _ in spell_ids:
+                consumed.append(f'\u2022 Card \u2014 {spell}')
+
+        parts = []
+        if locked:
+            parts.append(f'Locked cards ({len(locked)}):' + '\n' + '\n'.join(locked))
+        if consumed:
+            parts.append(f'Consumed cards ({len(consumed)}):' + '\n' + '\n'.join(consumed))
+        if not locked and not consumed:
+            parts.append('No cards are used in this configuration.')
+
+        if locked:
+            parts.append('')
+            parts.append('If you lose, locked cards may be taken as loot by the opponent.')
+        return '\n'.join(parts)
+
+    def _on_save_click(self):
+        """Handle click on Save Defence button."""
+        if not self._is_defence_ready():
+            self.dialogue_box = DialogueBox(
+                self.window,
+                'Defence is not complete yet. Please fill all required slots.',
+                actions=['OK'],
+                title='Cannot Save',
+            )
+            return
+        msg = self._build_confirm_message()
+        self._pending_save_confirm = True
+        self.dialogue_box = DialogueBox(
+            self.window,
+            msg,
+            actions=['Confirm', 'Cancel'],
+            title='Save Defence',
+        )
+
+    def _get_config_fig(self, figure_id):
+        for fig in self._config.get('figures', []):
+            if fig['id'] == figure_id:
+                return fig
+        return None
+
     def _draw_button(self, rect, text, color):
         if not rect:
             return
@@ -488,11 +1472,46 @@ class DefenceScreen(MenuScreenMixin, Screen):
         txt = self._btn_font.render(text, True, (255, 255, 255))
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
-    def _draw_back_button(self):
-        if not self._btn_back:
+    def _draw_section_title(self, title, title_pos, icon_rect, description=None):
+        """Draw a section title with an edit icon button next to it."""
+        if not icon_rect:
+            return
+        txt = self._label_font.render(title, True, (200, 185, 150))
+        self.window.blit(txt, title_pos)
+        if description:
+            desc_surf = self._res_font.render(description, True, (160, 145, 120))
+            self.window.blit(desc_surf, (title_pos[0], title_pos[1] + txt.get_height() + 2))
+        # Draw icon with hover highlight
+        isz = self._edit_icon_size
+        mx, my = pygame.mouse.get_pos()
+        hovered = icon_rect.collidepoint(mx, my)
+        if hovered:
+            glow = pygame.Surface((isz + 4, isz + 4), pygame.SRCALPHA)
+            glow.fill((255, 255, 200, 40))
+            self.window.blit(glow, (icon_rect.x - 2, icon_rect.y - 2))
+        self.window.blit(self._edit_icon, icon_rect.topleft)
+
+    def _draw_close_x_button(self):
+        """Draw a small X close button in the top-right corner of the box."""
+        if not self._btn_close_rect:
             if not self._layout_built:
                 self._build_layout()
-        self._draw_button(self._btn_back, 'Back', (80, 80, 80))
+        r = self._btn_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+
+        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        txt = _xfont.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
 
     # ── Helpers ─────────────────────────────────────────────────────
 
@@ -514,7 +1533,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         cards = []
         for c in data.get('cards', []):
-            qty = c.get('quantity', 0)
+            qty = c.get('free', c.get('total', 0))
             for i in range(qty):
                 cards.append(Card(
                     rank=c['rank'], suit=c['suit'],
@@ -562,6 +1581,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
             title='Battle Shop', card_source=card_source, mode='defence',
         )
+        self._subscreen_obj._on_done = self._close_subscreen
         self._active_subscreen = 'battle_shop'
 
     def _close_subscreen(self):
@@ -613,6 +1633,39 @@ class DefenceScreen(MenuScreenMixin, Screen):
             else:
                 self._server_set_modifier(self._MODIFIERS[next_idx])
 
+    # ── Spell cycling ──────────────────────────────────────────────
+
+    _SPELLS = ['poison', 'health_boost']
+
+    def _cycle_spell(self):
+        """Cycle through no spell → poison → health_boost → none."""
+        spell = self._config.get('spell_name')
+        if not spell:
+            # Try to set the first spell; server will check for free cards
+            self._server_set_spell(self._SPELLS[0])
+        else:
+            try:
+                idx = self._SPELLS.index(spell)
+            except ValueError:
+                idx = -1
+            next_idx = idx + 1
+            if next_idx >= len(self._SPELLS):
+                self._server_clear_spell()
+            else:
+                next_spell = self._SPELLS[next_idx]
+                # Clear current first, then set new (unlocks old cards)
+                self._server_clear_spell()
+                if next_spell == 'health_boost':
+                    # Health boost requires a target figure
+                    figs = self._config.get('figures', [])
+                    valid = [f for f in figs if not f.get('has_deficit', False)]
+                    if valid:
+                        self._server_set_spell(next_spell, target_fig_id=valid[0]['id'])
+                    else:
+                        self.state.set_msg('Health boost requires a target figure')
+                else:
+                    self._server_set_spell(next_spell)
+
     # ── Update / events ─────────────────────────────────────────────
 
     def update(self, events):
@@ -635,15 +1688,113 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if self._land_id and not self._config and not self._loading and not self._error:
             self._load_config()
 
+        # Update figure icon hover states
+        for icon in self._figure_icons.values():
+            icon.update()
+
     def handle_events(self, events):
         super().handle_events(events)
+
+        # Handle save / modifier / spell confirmation dialogue responses
+        response = self.state.action.get('status')
+        if response and self._pending_save_confirm:
+            self._pending_save_confirm = False
+            self.reset_action()
+            if response == 'confirm':
+                self.state.screen = 'kingdom'
+            return
+        if response and self._pending_modifier_confirm:
+            mod_name = self._pending_modifier_confirm
+            self._pending_modifier_confirm = None
+            self.reset_action()
+            if response == 'confirm':
+                self._server_set_modifier(mod_name)
+            return
+        if response and self._pending_spell_confirm:
+            spell_key = self._pending_spell_confirm
+            self._pending_spell_confirm = None
+            self.reset_action()
+            if response == 'confirm':
+                if spell_key == 'health_boost':
+                    figs = self._config.get('figures', [])
+                    valid = [f for f in figs if not f.get('has_deficit', False)]
+                    if valid:
+                        self._server_set_spell(spell_key, target_fig_id=valid[0]['id'])
+                    else:
+                        self.state.set_msg('Health boost requires a target figure')
+                else:
+                    self._server_set_spell(spell_key)
+            return
+        if response in ('ok', 'cancel'):
+            self._pending_modifier_confirm = None
+            self._pending_spell_confirm = None
+            self._pending_save_confirm = False
+            self.reset_action()
+            return
 
         # If subscreen is active, delegate events
         if self._active_subscreen and self._subscreen_obj:
             self._subscreen_obj.handle_events(events)
+            _ss_rect = pygame.Rect(
+                settings.SUB_SCREEN_X, settings.SUB_SCREEN_Y,
+                settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH,
+                settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT)
             for event in events:
                 if event.type == KEYDOWN and event.key == K_ESCAPE:
                     self._close_subscreen()
+                    return
+                # Click outside subscreen closes it
+                if event.type == MOUSEBUTTONUP and event.button == 1:
+                    if not _ss_rect.collidepoint(event.pos):
+                        self._close_subscreen()
+                        return
+            return
+
+        # Battle move detail box intercepts events when open
+        if self._move_detail_box:
+            response = self._move_detail_box.handle_events(events)
+            if response:
+                if response == 'return':
+                    move_id = self._move_detail_box.bm.get('id')
+                    self._move_detail_box = None
+                    if move_id:
+                        self._server_return_move(move_id)
+                else:
+                    self._move_detail_box = None
+            return
+
+        # Figure detail box intercepts events when open
+        if self._figure_detail_box:
+            for event in events:
+                if event.type == MOUSEBUTTONUP and event.button == 1:
+                    self._figure_detail_box = None
+                    return
+                if event.type == KEYDOWN and event.key == K_ESCAPE:
+                    self._figure_detail_box = None
+                    return
+            return
+
+        # Battle figure selection mode — click a figure to select it
+        if self._selecting_battle_fig:
+            for event in events:
+                if event.type == MOUSEBUTTONUP and event.button == 1:
+                    # Check if a figure icon was clicked
+                    selected = False
+                    for icon in self._figure_icons.values():
+                        if icon.hovered:
+                            fig = icon.figure
+                            cfg_fig = self._get_config_fig(fig.id)
+                            if cfg_fig and not cfg_fig.get('has_deficit', False):
+                                self._server_set_battle_figure(fig.id)
+                                selected = True
+                            else:
+                                self.state.set_msg('Cannot select a figure in deficit')
+                                selected = True
+                            break
+                    self._selecting_battle_fig = False
+                    return
+                if event.type == KEYDOWN and event.key == K_ESCAPE:
+                    self._selecting_battle_fig = False
                     return
             return
 
@@ -651,16 +1802,36 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if self._handle_icon_events(event):
                 continue
 
+            # Click outside content box → back to kingdom
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and not self.dialogue_box
+                    and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
+                self.state.screen = 'kingdom'
+                return
+
             if event.type == MOUSEBUTTONUP and event.button == 1:
                 pos = event.pos
 
-                # Back button
-                if self._btn_back and self._btn_back.collidepoint(pos):
+                # X close button
+                if self._btn_close_rect and self._btn_close_rect.collidepoint(pos):
                     self.state.screen = 'kingdom'
                     return
 
                 if not self._config:
                     continue
+
+                # Figure icon clicks → open detail box
+                for icon in self._figure_icons.values():
+                    if icon.hovered:
+                        resources_data = self._calc_resources()
+                        self._figure_detail_box = FigureDetailBox(
+                            window=self.window,
+                            figure=icon.figure,
+                            game=None,
+                            all_figures=self._figure_objects,
+                            resources_data=resources_data,
+                        )
+                        break
 
                 # Build Figure button
                 if self._btn_build and self._btn_build.collidepoint(pos):
@@ -672,35 +1843,116 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     self._open_battle_shop()
                     continue
 
-                # Modifier toggle
-                if self._btn_modifier and self._btn_modifier.collidepoint(pos):
-                    self._cycle_modifier()
-                    continue
+                # Modifier icon clicks
+                for mod_name, xrect in list(self._modifier_x_rects.items()):
+                    if xrect.collidepoint(pos):
+                        self._server_remove_modifier()
+                        break
+                else:
+                    for mod_name, rect in self._modifier_icon_rects.items():
+                        if rect.collidepoint(pos):
+                            mod = self._config.get('battle_modifier')
+                            if mod and mod.get('type') == mod_name:
+                                # Show info box for purchased modifier
+                                icons = self._modifier_icons.get(mod_name, {})
+                                desc = icons.get('mini_game_description') or icons.get('description', '')
+                                self.dialogue_box = DialogueBox(
+                                    self.window,
+                                    desc or f'{mod_name} is active.',
+                                    actions=['OK'],
+                                    title=mod_name,
+                                )
+                                break
+                            if self._has_cards_for(mod_name):
+                                req_label = self._card_req_label(mod_name)
+                                self._pending_modifier_confirm = mod_name
+                                self.dialogue_box = DialogueBox(
+                                    self.window,
+                                    f'Spend {req_label} to add {mod_name}?',
+                                    actions=['Confirm', 'Cancel'],
+                                    title='Set Modifier',
+                                )
+                            else:
+                                req_label = self._card_req_label(mod_name)
+                                self.dialogue_box = DialogueBox(
+                                    self.window,
+                                    f'You need {req_label} free cards for {mod_name}.',
+                                    actions=['OK'],
+                                    title='Not Enough Cards',
+                                )
+                            break
 
-                # Battle figure toggle
-                if self._btn_battle_fig and self._btn_battle_fig.collidepoint(pos):
-                    if self._config.get('battle_figure_id'):
-                        self._server_clear_battle_figure()
-                    else:
-                        # Pick first non-deficit figure as battle figure
-                        figs = self._config.get('figures', [])
-                        valid = [f for f in figs if not f.get('has_deficit', False)]
-                        if valid:
-                            self._server_set_battle_figure(valid[0]['id'])
-                    continue
-
-                # Spell toggle
-                if self._btn_spell and self._btn_spell.collidepoint(pos):
-                    if self._config.get('spell_name'):
-                        self._server_clear_spell()
-                    else:
-                        logger.info('Set spell clicked — would open spell selection UI')
-                    continue
+                # Final round icon clicks (spells + battle figure)
+                for key, xrect in list(self._final_round_x_rects.items()):
+                    if xrect.collidepoint(pos):
+                        if key == 'battle_figure':
+                            self._server_clear_battle_figure()
+                        else:
+                            self._server_clear_spell()
+                        break
+                else:
+                    for key, rect in self._final_round_icon_rects.items():
+                        if rect.collidepoint(pos):
+                            if key == 'battle_figure':
+                                if self._config.get('battle_figure_id'):
+                                    break  # already selected — use X
+                                # Enter selection mode — user clicks a figure
+                                figs = self._config.get('figures', [])
+                                valid = [f for f in figs if not f.get('has_deficit', False)]
+                                if valid:
+                                    # Clear spell first (mutually exclusive)
+                                    if self._config.get('spell_name'):
+                                        self._server_clear_spell()
+                                    self._selecting_battle_fig = True
+                                else:
+                                    self.state.set_msg('No valid figures available')
+                            else:
+                                spell = self._config.get('spell_name')
+                                if spell == key:
+                                    # Show info box for purchased spell
+                                    icons = self._spell_icons.get(key, {})
+                                    desc = icons.get('mini_game_description') or icons.get('description', '')
+                                    display_name = _SPELL_FAMILY_MAP.get(key, key)
+                                    self.dialogue_box = DialogueBox(
+                                        self.window,
+                                        desc or f'{display_name} is active.',
+                                        actions=['OK'],
+                                        title=display_name,
+                                    )
+                                    break
+                                if self._has_cards_for(key, _SPELL_CARD_REQS):
+                                    # Clear battle figure first (mutually exclusive)
+                                    if self._config.get('battle_figure_id'):
+                                        self._server_clear_battle_figure()
+                                    req_label = self._card_req_label(key, _SPELL_CARD_REQS)
+                                    display_name = _SPELL_FAMILY_MAP.get(key, key)
+                                    self._pending_spell_confirm = key
+                                    self.dialogue_box = DialogueBox(
+                                        self.window,
+                                        f'Spend {req_label} to cast {display_name}?',
+                                        actions=['Confirm', 'Cancel'],
+                                        title='Set Spell',
+                                    )
+                                else:
+                                    req_label = self._card_req_label(key, _SPELL_CARD_REQS)
+                                    display_name = _SPELL_FAMILY_MAP.get(key, key)
+                                    self.dialogue_box = DialogueBox(
+                                        self.window,
+                                        f'You need {req_label} free cards for {display_name}.',
+                                        actions=['OK'],
+                                        title='Not Enough Cards',
+                                    )
+                            break
 
                 # Auto-gamble toggle
                 if self._btn_auto_gamble and self._btn_auto_gamble.collidepoint(pos):
                     current = self._config.get('auto_gamble', False)
                     self._server_set_auto_gamble(not current)
+                    continue
+
+                # Save Defence button
+                if self._btn_save and self._btn_save.collidepoint(pos):
+                    self._on_save_click()
                     continue
 
                 # Remove figure [X] buttons
@@ -710,12 +1962,32 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         self._server_remove_figure(fig['id'])
                         break
 
-                # Remove battle move [X] buttons
-                for move in self._config.get('battle_moves', []):
-                    xrect = move.get('_remove_rect')
-                    if xrect and xrect.collidepoint(pos):
-                        self._server_return_move(move['id'])
+                # Remove battle move via X button
+                move_removed = False
+                for ri, xrect in self._move_remove_rects.items():
+                    if xrect.collidepoint(pos):
+                        moves = self._config.get('battle_moves', [])
+                        for m in moves:
+                            if m['round_index'] == ri:
+                                self._server_return_move(m['id'])
+                                break
+                        move_removed = True
                         break
+                if move_removed:
+                    continue
+
+                # Click on filled battle move slot → open detail box
+                if self._hovered_slot >= 0:
+                    moves = self._config.get('battle_moves', [])
+                    for m in moves:
+                        if m['round_index'] == self._hovered_slot:
+                            self._move_detail_box = BattleMoveDetailBox(
+                                self.window, m,
+                                self._move_manager.families_by_name,
+                                None,
+                            )
+                            break
+                    continue
 
             # ESC → back to kingdom
             if event.type == KEYDOWN and event.key == K_ESCAPE:

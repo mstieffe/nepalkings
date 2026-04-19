@@ -186,6 +186,7 @@ class Game(db.Model):
     # Battle shop gamble tracking — {str(player_id): count}
     battle_gamble_counts = db.Column(db.JSON, nullable=True)
 
+    land = db.relationship('Land', foreign_keys=[land_id], lazy=True)
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
@@ -198,6 +199,10 @@ class Game(db.Model):
             'state': self.state,
             'mode': self.mode,
             'land_id': self.land_id,
+            'land_tier': self.land.tier if self.land else None,
+            'land_gold_rate': self.land.gold_rate if self.land else None,
+            'land_suit_bonus_suit': self.land.suit_bonus_suit if self.land else None,
+            'land_suit_bonus_value': self.land.suit_bonus_value if self.land else None,
             'date': self.date.isoformat() if self.date else None,
             'stake': self.stake,
             'turn_time_limit': self.turn_time_limit,
@@ -676,6 +681,13 @@ class Land(db.Model):
                 'username': self.owner.username if self.owner else None,
                 'owned_since': self.owned_since.isoformat() if self.owned_since else None,
             }
+        # Resolve AI name from template when land is unowned
+        ai_name = None
+        if not self.owner_user_id and self.ai_template_index is not None:
+            from server_settings import AI_DEFENCE_TEMPLATES
+            templates = AI_DEFENCE_TEMPLATES.get(self.tier, [])
+            if 0 <= self.ai_template_index < len(templates):
+                ai_name = templates[self.ai_template_index].get('ai_name')
         return {
             'id': self.id,
             'col': self.col,
@@ -685,6 +697,7 @@ class Land(db.Model):
             'suit_bonus_suit': self.suit_bonus_suit,
             'suit_bonus_value': self.suit_bonus_value,
             'owner': owner_data,
+            'ai_name': ai_name,
             'defence_config_id': self.defence_config_id,
             'ai_template_index': self.ai_template_index,
         }

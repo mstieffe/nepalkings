@@ -20,6 +20,15 @@ _BADGE_CLR    = (210, 40, 40)
 _BADGE_TXT    = (255, 255, 255)
 
 
+def _draw_panel(window, rect, corner_r=None):
+    r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
+    surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+    pygame.draw.rect(surf, settings.SUB_SCREEN_PANEL_BG_CLR, surf.get_rect(), border_radius=r)
+    window.blit(surf, rect.topleft)
+    pygame.draw.rect(window, settings.SUB_SCREEN_PANEL_BORDER_CLR, rect,
+                     settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
+
+
 class DuelMenuScreen(MenuScreenMixin, Screen):
     def __init__(self, state):
         super().__init__(state)
@@ -78,12 +87,6 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         # Badge font
         self._badge_font = settings.get_font(int(0.018 * _SH * _UI_SCALE), bold=True)
 
-        # ── Pre-render the dark box surface ─────────────────────────
-        self._box_surf = pygame.Surface(
-            (self._box_rect.w, self._box_rect.h), pygame.SRCALPHA)
-        self._box_surf.fill(settings.GAME_MENU_BOX_BG_CLR)
-        pygame.draw.rect(self._box_surf, settings.GAME_MENU_BOX_BORDER_CLR,
-                         self._box_surf.get_rect(), settings.GAME_MENU_BOX_BORDER_W)
 
     # ── helper: draw a menu button with glow BEHIND ─────────────────
     def _draw_menu_button(self, btn):
@@ -127,7 +130,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         self._draw_menu_chrome()
 
         # Dark transparent box
-        self.window.blit(self._box_surf, self._box_rect.topleft)
+        _draw_panel(self.window, self._box_rect)
 
         # Title
         title_x = self._box_rect.centerx - self._title_surf.get_width() // 2
@@ -153,6 +156,12 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         for event in events:
             if self._handle_icon_events(event):
                 continue
+            # Click outside content box → back to game menu
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and not self.dialogue_box
+                    and not self._box_rect.collidepoint(event.pos)):
+                self.state.screen = 'game_menu'
+                return
             if event.type == MOUSEBUTTONUP:
                 self.handle_button_clicks()
 

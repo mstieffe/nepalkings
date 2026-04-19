@@ -46,7 +46,7 @@ INITIAL_TURNS_INVADER = 6
 DEFAULT_GAME_STAKE = 35  # Default gold stake / point threshold to win
 
 # New player starting gold
-INITIAL_GOLD = 100
+INITIAL_GOLD = 1000
 
 # Auth token settings
 # Signed user tokens expire after TOKEN_EXPIRY_SECONDS (default 24 hours).
@@ -106,7 +106,7 @@ AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
 AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 
 # ── v2.0: Collection & Boosters ──
-STARTER_BOOSTER_PACKS = 3                   # Free main-card packs on registration
+STARTER_BOOSTER_PACKS = 5                   # Free main-card packs on registration
 STARTER_BOOSTER_PACKS_SIDE = 2              # Free side-card packs on registration
 BOOSTER_PACK_PRICE = 100                    # Gold cost per main pack
 BOOSTER_PACK_SIDE_PRICE = 100               # Gold cost per side pack
@@ -119,9 +119,9 @@ DUEL_BOOSTER_REWARD_PROBABILITIES = {       # Probability of reward type per pac
 }
 
 BOOSTER_TIER_PROBABILITIES = {              # Probability of drawing each tier (main)
-    1: 0.60,   # common
+    1: 0.30,   # common
     2: 0.30,   # uncommon
-    3: 0.10,   # rare
+    3: 0.40,   # rare
 }
 BOOSTER_TIER_RANKS = {                      # Card ranks per tier (main)
     1: ['7', '8', '9', '10'],
@@ -168,6 +168,7 @@ GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS = 7 * 24  # Cap at 7 days of uncollected 
 AI_DEFENCE_TEMPLATES = {
     1: [  # Tier 1 — weak: one farm figure, basic dagger moves
         {
+            'ai_name': 'Village Guard',
             'figures': [
                 {'family_name': 'Small Rice Farm', 'name': 'Small Rice Farm',
                  'suit': 'Hearts', 'color': 'offensive', 'field': 'village',
@@ -192,6 +193,7 @@ AI_DEFENCE_TEMPLATES = {
     ],
     2: [  # Tier 2 — medium: king + farm, auto-gamble, one Call King move
         {
+            'ai_name': 'Mountain Warden',
             'figures': [
                 {'family_name': 'Himalaya King', 'name': 'Himalaya King',
                  'suit': 'Spades', 'color': 'defensive', 'field': 'castle',
@@ -221,6 +223,7 @@ AI_DEFENCE_TEMPLATES = {
     ],
     3: [  # Tier 3 — strong: king + warriors + farm, Call Military move
         {
+            'ai_name': 'Djungle Warlord',
             'figures': [
                 {'family_name': 'Djungle King', 'name': 'Djungle King',
                  'suit': 'Hearts', 'color': 'offensive', 'field': 'castle',

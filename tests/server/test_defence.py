@@ -345,6 +345,9 @@ class TestDefenceModifier:
     def test_set_peasant_war(self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users
         land = _add_land(db, owner_id=u1.id)
+        # Peasant War requires 2× J same-color
+        _add_collection_card(db, u1.id, 'Hearts', 'J', 11)
+        _add_collection_card(db, u1.id, 'Hearts', 'J', 11)
 
         rv = client.post('/kingdom/defence/set_modifier',
                          headers=auth_headers_user1,
@@ -355,6 +358,9 @@ class TestDefenceModifier:
     def test_set_civil_war(self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users
         land = _add_land(db, owner_id=u1.id)
+        # Civil War requires 2× 5 same-color
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
 
         rv = client.post('/kingdom/defence/set_modifier',
                          headers=auth_headers_user1,
@@ -374,6 +380,9 @@ class TestDefenceModifier:
     def test_remove_modifier(self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users
         land = _add_land(db, owner_id=u1.id)
+        # Peasant War requires 2× J same-color
+        _add_collection_card(db, u1.id, 'Hearts', 'J', 11)
+        _add_collection_card(db, u1.id, 'Hearts', 'J', 11)
 
         client.post('/kingdom/defence/set_modifier',
                     headers=auth_headers_user1,
@@ -393,6 +402,9 @@ class TestDefenceModifier:
         # Set civil war + two same-color figures
         c1 = _add_collection_card(db, u1.id, 'Clubs', 'K', 4)
         c2 = _add_collection_card(db, u1.id, 'Clubs', 'Q', 3)
+        # Civil War requires 2× 5 same-color
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
         _build_figure(client, auth_headers_user1, land.id, [c1.id],
                       produces={'villager_black': 2})
         rv = _build_figure(client, auth_headers_user1, land.id, [c2.id],
@@ -486,6 +498,10 @@ class TestDefenceBattleFigure:
         land, fig_id = self._setup_config_with_figure(
             client, db, u1, auth_headers_user1)
 
+        # Poison requires 2× 3 same-color black
+        _add_collection_card(db, u1.id, 'Clubs', '3', 3)
+        _add_collection_card(db, u1.id, 'Clubs', '3', 3)
+
         # Set spell first
         client.post('/kingdom/defence/set_spell',
                     headers=auth_headers_user1,
@@ -505,6 +521,10 @@ class TestDefenceBattleFigure:
         land, fig_id = self._setup_config_with_figure(
             client, db, u1, auth_headers_user1)
 
+        # Civil War requires 2× 5 same-color
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+
         client.post('/kingdom/defence/set_modifier',
                     headers=auth_headers_user1,
                     json={'land_id': land.id, 'modifier_type': 'Civil War'})
@@ -521,6 +541,9 @@ class TestDefenceBattleFigure:
         land = _add_land(db, owner_id=u1.id)
         c1 = _add_collection_card(db, u1.id, 'Clubs', 'K', 4)
         c2 = _add_collection_card(db, u1.id, 'Hearts', 'K', 4)
+        # Civil War requires 2× 5 same-color
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
 
         rv1 = _build_figure(client, auth_headers_user1, land.id, [c1.id],
                             color='defensive', produces={'villager_black': 2})
@@ -547,6 +570,9 @@ class TestDefenceBattleFigure:
         land = _add_land(db, owner_id=u1.id)
         c1 = _add_collection_card(db, u1.id, 'Clubs', 'K', 4)
         c2 = _add_collection_card(db, u1.id, 'Clubs', 'Q', 3)
+        # Civil War requires 2× 5 same-color
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
 
         rv1 = _build_figure(client, auth_headers_user1, land.id, [c1.id],
                             produces={'villager_black': 2})
@@ -581,6 +607,9 @@ class TestDefenceSpell:
         # Need config first
         client.get(f'/kingdom/defence/config?land_id={land.id}',
                    headers=auth_headers_user1)
+        # Poison requires 2× 3 same-color black
+        _add_collection_card(db, u1.id, 'Clubs', '3', 3)
+        _add_collection_card(db, u1.id, 'Clubs', '3', 3)
 
         rv = client.post('/kingdom/defence/set_spell',
                          headers=auth_headers_user1,
@@ -595,6 +624,9 @@ class TestDefenceSpell:
         land = _add_land(db, owner_id=u1.id)
         client.get(f'/kingdom/defence/config?land_id={land.id}',
                    headers=auth_headers_user1)
+        # Health boost requires 2× 3 same-color red
+        _add_collection_card(db, u1.id, 'Hearts', '3', 3)
+        _add_collection_card(db, u1.id, 'Hearts', '3', 3)
 
         rv = client.post('/kingdom/defence/set_spell',
                          headers=auth_headers_user1,
@@ -608,6 +640,9 @@ class TestDefenceSpell:
         u1, _ = two_users
         land = _add_land(db, owner_id=u1.id)
         c1 = _add_collection_card(db, u1.id, 'Clubs', 'K', 4)
+        # Health boost requires 2× 3 same-color red
+        _add_collection_card(db, u1.id, 'Hearts', '3', 3)
+        _add_collection_card(db, u1.id, 'Hearts', '3', 3)
         rv = _build_figure(client, auth_headers_user1, land.id, [c1.id],
                            produces={'villager_black': 2})
         fig_id = rv.get_json()['config']['figures'][0]['id']
@@ -661,6 +696,9 @@ class TestDefenceSpell:
         land = _add_land(db, owner_id=u1.id)
         client.get(f'/kingdom/defence/config?land_id={land.id}',
                    headers=auth_headers_user1)
+        # Poison requires 2× 3 same-color black
+        _add_collection_card(db, u1.id, 'Clubs', '3', 3)
+        _add_collection_card(db, u1.id, 'Clubs', '3', 3)
 
         client.post('/kingdom/defence/set_spell',
                     headers=auth_headers_user1,

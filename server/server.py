@@ -89,17 +89,25 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 # Configure the database URI and SQLite-specific settings
 app.config['SQLALCHEMY_DATABASE_URI'] = settings.DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,
-    'pool_recycle': 300,
-    'pool_size': 5,           # Max persistent connections
-    'max_overflow': 2,        # Extra connections beyond pool_size
-    'pool_timeout': 10,       # Seconds to wait for a connection before error
-    'connect_args': {
-        'timeout': 30,
-        'check_same_thread': False  # Important for SQLite with Flask
+if ':memory:' in settings.DB_URL:
+    # In-memory SQLite uses StaticPool — pool_size/overflow/timeout are invalid
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'connect_args': {
+            'check_same_thread': False
+        }
     }
-}
+else:
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,
+        'pool_recycle': 300,
+        'pool_size': 5,           # Max persistent connections
+        'max_overflow': 2,        # Extra connections beyond pool_size
+        'pool_timeout': 10,       # Seconds to wait for a connection before error
+        'connect_args': {
+            'timeout': 30,
+            'check_same_thread': False  # Important for SQLite with Flask
+        }
+    }
 db.init_app(app)
 
 # Initialize database tables

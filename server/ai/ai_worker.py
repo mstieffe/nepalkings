@@ -520,7 +520,7 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                     moves = BattleMove.query.filter_by(
                         game_id=game_id, player_id=ai_player_id
                     ).filter(BattleMove.played_round.is_(None)).order_by(
-                        BattleMove.round_number
+                        BattleMove.id
                     ).all()
                     move = moves[0] if moves else None
                     move_id = move.id if move else None
@@ -532,8 +532,11 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                         params['call_figure_id'] = call_fig
                     _exec_play_battle_move(base, game_id, ai_player_id, params)
                 else:
-                    logger.warning(f"[CONQUER-AI] no unplayed move, game={game_id}")
-                    break
+                    # No moves left — skip turn (can happen with incomplete
+                    # defence configs that had fewer than 3 battle moves)
+                    logger.info(f"[CONQUER-AI] no unplayed move, skipping turn game={game_id}")
+                    _ai_post(f'{base}/games/skip_battle_turn', ai_player_id,
+                             json={'game_id': game_id, 'player_id': ai_player_id})
 
             elif phase == 'finish_battle':
                 _ai_post(f'{base}/games/finish_battle', ai_player_id, json={

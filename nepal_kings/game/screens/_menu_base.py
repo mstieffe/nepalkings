@@ -239,85 +239,63 @@ class MenuScreenMixin:
         self._draw_logout_dialogue()
 
     def _draw_gold(self):
-        """Gold icon + amount with a background box (upper-left)."""
-        gold = 0
-        if self.state.user_dict:
-            gold = self.state.user_dict.get('gold', 0)
+        """Gold + booster pack icons in one horizontal box (upper-left)."""
+        ud = self.state.user_dict or {}
+        gold = ud.get('gold', 0)
+        bpacks = ud.get('booster_packs', 0)
+        bpacks_side = ud.get('booster_packs_side', 0)
 
-        icon_sz  = settings.GAME_MENU_GOLD_ICON_SZ
-        pad_x    = settings.GAME_MENU_GOLD_BOX_PAD_X
-        pad_y    = settings.GAME_MENU_GOLD_BOX_PAD_Y
-        gap      = settings.GAME_MENU_GOLD_ICON_TEXT_GAP
-        mx       = settings.GAME_MENU_GOLD_MARGIN_X
-        my       = settings.GAME_MENU_GOLD_MARGIN_Y
+        icon_sz = settings.GAME_MENU_GOLD_ICON_SZ
+        pad_x   = settings.GAME_MENU_GOLD_BOX_PAD_X
+        pad_y   = settings.GAME_MENU_GOLD_BOX_PAD_Y
+        gap     = settings.GAME_MENU_GOLD_ICON_TEXT_GAP
+        mx      = settings.GAME_MENU_GOLD_MARGIN_X
+        my      = settings.GAME_MENU_GOLD_MARGIN_Y
+        sep     = int(0.018 * _SW)  # separator between items
 
-        text_surf = self._gold_font.render(str(gold), True, settings.GAME_MENU_GOLD_TEXT_CLR)
+        items = [
+            (self._gold_icon,         str(gold)),
+            (self._booster_icon,      str(bpacks)),
+            (self._booster_side_icon, str(bpacks_side)),
+        ]
 
-        cw = icon_sz + gap + text_surf.get_width()
-        ch = max(icon_sz, text_surf.get_height())
-        bw = pad_x * 2 + cw
-        bh = pad_y * 2 + ch
+        # Pre-render text surfaces
+        text_surfs = [self._gold_font.render(txt, True, settings.GAME_MENU_GOLD_TEXT_CLR)
+                      for _, txt in items]
 
+        # Compute total content width and row height
+        total_w = 0
+        row_h = 0
+        for i, (icon, _) in enumerate(items):
+            ts = text_surfs[i]
+            total_w += icon_sz + gap + ts.get_width()
+            row_h = max(row_h, icon_sz, ts.get_height())
+        total_w += sep * (len(items) - 1)
+
+        bw = pad_x * 2 + total_w
+        bh = pad_y * 2 + row_h
+
+        # Draw box background
         box = pygame.Surface((bw, bh), pygame.SRCALPHA)
         box.fill(settings.GAME_MENU_GOLD_BOX_BG_CLR)
         pygame.draw.rect(box, settings.GAME_MENU_GOLD_BOX_BORDER_CLR,
                          box.get_rect(), settings.GAME_MENU_GOLD_BOX_BORDER_W)
         self.window.blit(box, (mx, my))
 
-        ix = mx + pad_x
-        iy = my + pad_y + (ch - icon_sz) // 2
-        self.window.blit(self._gold_icon, (ix, iy))
-
-        tx = ix + icon_sz + gap
-        ty = my + pad_y + (ch - text_surf.get_height()) // 2
-        self.window.blit(text_surf, (tx, ty))
+        # Draw each icon + text pair
+        cx = mx + pad_x
+        for i, (icon, _) in enumerate(items):
+            ts = text_surfs[i]
+            iy = my + pad_y + (row_h - icon_sz) // 2
+            self.window.blit(icon, (cx, iy))
+            tx = cx + icon_sz + gap
+            ty = my + pad_y + (row_h - ts.get_height()) // 2
+            self.window.blit(ts, (tx, ty))
+            cx = tx + ts.get_width() + sep
 
     def _draw_booster_packs(self):
-        """Draw main and side booster pack displays below the gold display."""
-        icon_sz  = settings.GAME_MENU_GOLD_ICON_SZ
-        pad_x    = settings.GAME_MENU_GOLD_BOX_PAD_X
-        pad_y    = settings.GAME_MENU_GOLD_BOX_PAD_Y
-        gap      = settings.GAME_MENU_GOLD_ICON_TEXT_GAP
-        mx       = settings.GAME_MENU_GOLD_MARGIN_X
-        booster_gap = int(0.008 * _SH)
-
-        # Compute gold box height for vertical stacking
-        gold_text = self._gold_font.render('0', True, (0, 0, 0))
-        gold_ch = max(icon_sz, gold_text.get_height())
-        gold_bh = pad_y * 2 + gold_ch
-
-        # Draw each booster type
-        items = [
-            (self._booster_icon, 'booster_packs'),
-            (self._booster_side_icon, 'booster_packs_side'),
-        ]
-        y_offset = settings.GAME_MENU_GOLD_MARGIN_Y + gold_bh + booster_gap
-        for icon, key in items:
-            packs = 0
-            if self.state.user_dict:
-                packs = self.state.user_dict.get(key, 0)
-
-            text_surf = self._gold_font.render(str(packs), True, settings.GAME_MENU_GOLD_TEXT_CLR)
-            cw = icon_sz + gap + text_surf.get_width()
-            ch = max(icon_sz, text_surf.get_height())
-            bw = pad_x * 2 + cw
-            bh = pad_y * 2 + ch
-
-            box = pygame.Surface((bw, bh), pygame.SRCALPHA)
-            box.fill(settings.GAME_MENU_GOLD_BOX_BG_CLR)
-            pygame.draw.rect(box, settings.GAME_MENU_GOLD_BOX_BORDER_CLR,
-                             box.get_rect(), settings.GAME_MENU_GOLD_BOX_BORDER_W)
-            self.window.blit(box, (mx, y_offset))
-
-            ix = mx + pad_x
-            iy = y_offset + pad_y + (ch - icon_sz) // 2
-            self.window.blit(icon, (ix, iy))
-
-            tx = ix + icon_sz + gap
-            ty = y_offset + pad_y + (ch - text_surf.get_height()) // 2
-            self.window.blit(text_surf, (tx, ty))
-
-            y_offset += bh + booster_gap
+        """No-op — boosters are now drawn inside _draw_gold."""
+        pass
 
     # ── update / event helpers ──────────────────────────────────────
 
@@ -363,6 +341,9 @@ class MenuScreenMixin:
             self.state.user = None
             self.state.user_dict = None
             self.state.game = None
+            self.state.pending_spell_cast = None
+            self.state._notified_accepted_challenges = set()
+            self.state._pending_accepted_challenge = None
             self.state.set_msg('Logged out')
         elif response is not None:  # 'no' or any other response
             self._logout_dialogue = None

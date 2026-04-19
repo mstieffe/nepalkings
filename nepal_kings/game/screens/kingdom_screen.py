@@ -17,6 +17,23 @@ logger = logging.getLogger('nk.screens.kingdom')
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
+# ── Overall box ─────────────────────────────────────────────────────
+_BOX_PAD    = int(0.020 * _SH)
+_BOX_X      = int(0.04 * _SW)
+_BOX_Y      = int(0.10 * _SH)
+_BOX_W      = int(0.87 * _SW)
+_BOX_BOTTOM = int(0.92 * _SH)
+_BOX_H      = _BOX_BOTTOM - _BOX_Y
+
+
+def _draw_panel(window, rect, corner_r=None):
+    r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
+    surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+    pygame.draw.rect(surf, settings.SUB_SCREEN_PANEL_BG_CLR, surf.get_rect(), border_radius=r)
+    window.blit(surf, rect.topleft)
+    pygame.draw.rect(window, settings.SUB_SCREEN_PANEL_BORDER_CLR, rect,
+                     settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
+
 
 class KingdomScreen(MenuScreenMixin, Screen):
     """Kingdom screen with hex-map, minimap, land detail box, and nav controls."""
@@ -38,36 +55,56 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._notifications = []      # unseen attack notifications
         self._notif_dialogue = None   # DialogueBox showing notifications
 
+        # ── Title ───────────────────────────────────────────────────
+        self._title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
+        self._title_surf = self._title_font.render('Kingdom', True, settings.SUB_SCREEN_TITLE_CLR)
+        self._title_y = _BOX_Y + _BOX_PAD
+
         # ── Fonts ───────────────────────────────────────────────────
         self._info_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE)
         self._nav_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE, bold=True)
 
-        # ── Navigation zoom buttons (bottom-left) ──────────────────
+        # ── Navigation zoom buttons (inside box, bottom-left) ──────
         btn_sz = settings.NAV_BTN_SIZE
         margin = settings.NAV_BTN_MARGIN
-        by = _SH - margin - btn_sz
+        nav_by = _BOX_BOTTOM - _BOX_PAD - btn_sz
 
         self._nav_rects = {
-            'zoom_in':  pygame.Rect(margin, by - btn_sz - margin, btn_sz, btn_sz),
-            'zoom_out': pygame.Rect(margin, by, btn_sz, btn_sz),
+            'zoom_in':  pygame.Rect(_BOX_X + _BOX_PAD, nav_by - btn_sz - margin, btn_sz, btn_sz),
+            'zoom_out': pygame.Rect(_BOX_X + _BOX_PAD, nav_by, btn_sz, btn_sz),
         }
         self._nav_labels = {
             'zoom_in': '+',
             'zoom_out': '\u2212',  # minus sign
         }
 
-        # ── Notifications button (top-right) ───────────────────────
+        # ── X close button (top-right of box) ──────────────────────
+        _xsz = int(0.028 * _SH)
+        _xmargin = int(0.012 * _SW)
+        self._btn_close_rect = pygame.Rect(
+            _BOX_X + _BOX_W - _xsz - _xmargin,
+            _BOX_Y + _xmargin,
+            _xsz, _xsz)
+
+        # ── Notifications button (inside box, top-right, left of X) ─
         notif_w = int(0.12 * _SW)
         notif_h = int(0.04 * _SH)
         self._btn_notif = pygame.Rect(
-            _SW - notif_w - int(0.02 * _SW),
-            int(0.06 * _SH),
+            self._btn_close_rect.x - notif_w - _xmargin,
+            _BOX_Y + _BOX_PAD,
             notif_w, notif_h,
         )
         self._badge_font = settings.get_font(int(0.016 * _SH), bold=True)
         self._notif_btn_font = settings.get_font(int(0.018 * _SH), bold=True)
 
         # ── Track last load time ────────────────────────────────────
+        self._last_load_tick = 0
+
+    # ── Lifecycle ────────────────────────────────────────────────────
+
+    def on_enter(self):
+        """Called each time the kingdom screen becomes active."""
+        self._hex_map = None
         self._last_load_tick = 0
 
     # ── Data loading ────────────────────────────────────────────────
@@ -92,6 +129,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 self._hex_map = HexMap(lands, self.window)
             else:
                 self._hex_map.update_data(lands)
+
+            # Position minimap inside the subscreen box (bottom-right)
+            mm_w = settings.MINIMAP_W
+            mm_h = settings.MINIMAP_H
+            self._hex_map.minimap_origin = (
+                _BOX_X + _BOX_W - mm_w - _BOX_PAD,
+                _BOX_BOTTOM - mm_h - _BOX_PAD,
+            )
 
             self._loading = False
             logger.debug(f'Kingdom map loaded: {len(lands)} lands')
@@ -119,6 +164,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def render(self):
         self._draw_menu_chrome()
 
+        # Outer box
+        box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
+        _draw_panel(self.window, box_rect)
+
+        # Title (centred inside box)
+        tx = _BOX_X + (_BOX_W - self._title_surf.get_width()) // 2
+        self.window.blit(self._title_surf, (tx, self._title_y))
+
         if self._loading:
             txt = self._info_font.render('Loading kingdom map...', True,
                                          settings.KINGDOM_INFO_CLR)
@@ -132,6 +185,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._draw_nav_buttons()
             self._draw_notif_button()
 
+        self._draw_close_x_button()
+
         # Modal layer
         if self._notif_dialogue:
             self._notif_dialogue.draw()
@@ -140,8 +195,23 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         self._draw_menu_overlay()
 
+    def _draw_close_x_button(self):
+        r = self._btn_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        txt = _xfont.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
+
     def _draw_info_bar(self):
-        """Draw production rate / lands count bar at top-centre."""
+        """Draw production rate / lands count bar at top of box, below title."""
         if not self._map_data:
             return
 
@@ -161,8 +231,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         box = pygame.Surface((bw, bh), pygame.SRCALPHA)
         box.fill(settings.KINGDOM_INFO_BG_CLR)
-        bar_x = (_SW - bw) // 2
-        bar_y = int(0.015 * _SH)
+        bar_x = _BOX_X + (_BOX_W - bw) // 2
+        bar_y = _BOX_Y + _BOX_PAD + self._title_surf.get_height() + int(0.005 * _SH)
         self.window.blit(box, (bar_x, bar_y))
         self.window.blit(txt_surf, (bar_x + px, bar_y + py))
 
@@ -232,10 +302,30 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
+        _box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
+
         for event in events:
             # Icon buttons (settings, home, logout) — highest priority
             if self._handle_icon_events(event):
                 continue
+
+            # X close button
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and not self.dialogue_box
+                    and not self._detail_box
+                    and not self._notif_dialogue
+                    and self._btn_close_rect.collidepoint(event.pos)):
+                self.state.screen = 'game_menu'
+                return
+
+            # Click outside content box → back to game menu
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and not self.dialogue_box
+                    and not self._detail_box
+                    and not self._notif_dialogue
+                    and not _box_rect.collidepoint(event.pos)):
+                self.state.screen = 'game_menu'
+                return
 
             # Notification dialogue — handled via update(), skip other events
             if self._notif_dialogue:

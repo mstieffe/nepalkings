@@ -7,7 +7,7 @@ import random
 from datetime import datetime, timezone
 
 import server_settings as config
-from models import db, Land, CollectionCard, LandConfigFigure
+from models import db, Land, CollectionCard, LandConfigFigure, LandConfig, LandConfigBattleMove
 
 
 def _utcnow():
@@ -215,3 +215,48 @@ def get_config_deficit_map(config_id):
     """
     figures = LandConfigFigure.query.filter_by(config_id=config_id).all()
     return {fig.id: check_land_config_deficit(fig, figures) for fig in figures}
+
+
+def check_defence_incomplete(land_id, user_id):
+    """Check if a player's defence config for a land is incomplete.
+
+    A defence is incomplete when:
+    - No defence config exists at all, OR
+    - No figure exists that is not in resource deficit, OR
+    - Fewer than 3 battle moves are configured.
+
+    Returns
+    -------
+    bool
+        ``True`` if the defence is incomplete or missing.
+    """
+    cfg = LandConfig.query.filter_by(
+        user_id=user_id, config_type='defence', land_id=land_id
+    ).first()
+    if not cfg:
+        return True
+
+    figures = LandConfigFigure.query.filter_by(config_id=cfg.id).all()
+    if not figures:
+        return True
+
+    # Check if at least one figure is not in deficit
+    has_valid_figure = any(
+        not check_land_config_deficit(fig, figures) for fig in figures
+    )
+    if not has_valid_figure:
+        return True
+
+    # Check battle moves count
+    move_count = LandConfigBattleMove.query.filter_by(config_id=cfg.id).count()
+    if move_count < 3:
+        return True
+
+    # Check final round configuration (battle figure, spell, or auto-gamble)
+    has_final = (cfg.battle_figure_id is not None
+                 or cfg.spell_name is not None
+                 or cfg.auto_gamble)
+    if not has_final:
+        return True
+
+    return False

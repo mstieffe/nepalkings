@@ -283,8 +283,10 @@ def confirm_battle_moves():
         })
 
     # Verify the player has exactly MAX_BATTLE_MOVES battle moves
+    # (skip for conquer mode — moves are pre-built from config and may be
+    #  incomplete if the defender's config had fewer than 3 moves)
     move_count = BattleMove.query.filter_by(game_id=game_id, player_id=player_id).count()
-    if move_count < MAX_BATTLE_MOVES:
+    if move_count < MAX_BATTLE_MOVES and game.mode != 'conquer':
         return jsonify({
             'success': False,
             'message': f'You must select {MAX_BATTLE_MOVES} battle moves before confirming.'
@@ -303,7 +305,8 @@ def confirm_battle_moves():
 
     # Safety: even if confirmation flags are set, ensure each player still has
     # the required number of moves before battle rounds can start.
-    if both_ready:
+    # (skip for conquer mode — moves are pre-built from config)
+    if both_ready and game.mode != 'conquer':
         not_ready_ids = []
         for pid in player_ids:
             pid_int = int(pid)
@@ -443,6 +446,11 @@ def gamble_battle_move():
     if bm.game_id != game_id or bm.player_id != player_id:
         return jsonify({'success': False, 'message': 'Battle move does not belong to this player'}), 400
 
+    # ── Conquer mode: special gamble flow ──
+    if game.mode == 'conquer':
+        return _gamble_conquer(game, player, bm, gamble_counts, pid_str,
+                               used_count, used_rounds, current_round)
+
     # 1. Un-reserve the sacrificed card
     if bm.card_type == 'side':
         old_card = db.session.get(SideCard, bm.card_id)
@@ -509,6 +517,106 @@ def gamble_battle_move():
     )
     logger.info(f"[GAMBLE] game={game_id} player={player_id} round={current_round} "
                 f"sacrificed_bm={battle_move_id} ({sacrificed_data.get('family_name')}/{sacrificed_data.get('suit')}) "
+                f"drew=[{drew_desc}]")
+
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'sacrificed': sacrificed_data,
+        'new_moves': new_moves,
+        'game': game.serialize(),
+    })
+
+
+def _gamble_conquer(game, player, bm, gamble_counts, pid_str,
+                    used_count, used_rounds, current_round):
+    """Handle gamble for conquer mode.
+
+    Sacrificed card is permanently removed from the player's collection.
+    Two random replacement cards are generated as temporary in-game cards
+    (not added to the collection).
+    """
+    from models import CollectionCard, LandConfig, LandConfigBattleMove
+
+    sacrificed_data = bm.serialize()
+
+    # Find and delete the corresponding CollectionCard via the config
+    cfg_id = game.conquer_config_id
+    if cfg_id:
+        # Match by suit + rank in the config's battle moves
+        cfg_move = LandConfigBattleMove.query.filter_by(
+            config_id=cfg_id, suit=bm.suit, rank=bm.rank,
+        ).first()
+        if cfg_move and cfg_move.card_id:
+            cc = db.session.get(CollectionCard, cfg_move.card_id)
+            if cc:
+                db.session.delete(cc)
+            db.session.delete(cfg_move)
+
+    # Delete the in-game MainCard backing this battle move
+    old_card = db.session.get(MainCard, bm.card_id)
+    if old_card:
+        db.session.delete(old_card)
+
+    # Delete the sacrificed battle move
+    db.session.delete(bm)
+
+    # Generate 2 random temporary replacement cards
+    _SUITS = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
+    _RANKS = ['7', '8', '9', '10', 'J', 'Q', 'A']
+    _RANK_VALUES = {'7': 7, '8': 8, '9': 9, '10': 10, 'J': 1, 'Q': 2, 'A': 3}
+
+    new_moves = []
+    for _ in range(2):
+        suit = random.choice(_SUITS)
+        rank = random.choice(_RANKS)
+        value = _RANK_VALUES.get(rank, 0)
+        family_name = _family_for_rank(rank)
+
+        mc = MainCard(
+            rank=rank,
+            suit=suit,
+            value=value,
+            game_id=game.id,
+            player_id=player.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=True,
+        )
+        db.session.add(mc)
+        db.session.flush()
+
+        move = BattleMove(
+            game_id=game.id,
+            player_id=player.id,
+            family_name=family_name,
+            card_id=mc.id,
+            card_type='main',
+            suit=suit,
+            rank=rank,
+            value=value,
+        )
+        db.session.add(move)
+        db.session.flush()
+        new_moves.append(move.serialize())
+
+    # Track gamble usage
+    used_rounds = sorted(set(used_rounds + [current_round]))
+    gamble_counts[pid_str] = {
+        'count': used_count + 1,
+        'rounds': used_rounds,
+    }
+    game.battle_gamble_counts = gamble_counts
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(game, 'battle_gamble_counts')
+
+    drew_desc = ', '.join(
+        '{}/{}/{} id={}'.format(m.get('family_name'), m.get('suit'), m.get('rank'), m.get('id'))
+        for m in new_moves
+    )
+    logger.info(f"[GAMBLE_CONQUER] game={game.id} player={player.id} round={current_round} "
+                f"sacrificed_bm={bm.id} ({sacrificed_data.get('family_name')}/{sacrificed_data.get('suit')}) "
                 f"drew=[{drew_desc}]")
 
     db.session.commit()

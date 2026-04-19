@@ -488,6 +488,10 @@ def _check_and_fill_minimum_cards(game, player):
     Check if player has minimum required cards and auto-fill if needed.
     Returns fill_info dict with details about what was filled, or None if no fill needed.
     """
+    # Conquer mode has no shared deck — skip auto-fill
+    if game.mode == 'conquer':
+        return None
+
     logger.debug(f"[AUTO-FILL] Starting check for player {player.id} in game {game.id}")
     
     # Count current cards (in hand = not in deck and not part of figure)
@@ -2630,11 +2634,15 @@ def _get_advantage_suit(suit):
     return _SUIT_ADVANTAGE.get(suit)
 
 
-def _compute_support_bonus(figure, all_figures, game_id):
+def _compute_support_bonus(figure, all_figures, game_id,
+                           land_suit_bonus=None):
     """Support bonus from same-player, same-suit figures of appropriate type.
 
     Matches client ``_calculate_battle_bonus_received`` exactly.
     Figures in resource deficit do NOT provide support bonus.
+
+    *land_suit_bonus*: optional ``(suit_str, value_int)`` tuple for conquer
+    mode.  Every figure whose suit matches gets *value* added.
     """
     fig_field = (figure.field or '').lower()
     if fig_field == 'castle':
@@ -2674,6 +2682,13 @@ def _compute_support_bonus(figure, all_figures, game_id):
                         card = db.session.get(SideCard, assoc.card_id)
                     if card:
                         total += card.value
+
+    # Conquer mode: land suit bonus (applied to every matching figure)
+    if land_suit_bonus:
+        bonus_suit, bonus_value = land_suit_bonus
+        if (figure.suit or '').lower() == bonus_suit.lower():
+            total += bonus_value
+
     return total
 
 
@@ -2831,7 +2846,8 @@ def _compute_enchantment_mod(figure_id, enchantment_spells):
 def _compute_figure_full_power(figure, all_figures, enchant_spells,
                                opponent_player_id,
                                battle_ids, game_id,
-                               own_healers, wall_total):
+                               own_healers, wall_total,
+                               land_suit_bonus=None):
     """Full battle-figure power.  Matches client ``_get_figure_total_power``.
 
     Formula::
@@ -2847,6 +2863,7 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
         (from ``_find_healer_figures``).
     *wall_total*: pre-computed wall defence total for the figure's player
         (0 when attacking, since only the defender gets wall defence).
+    *land_suit_bonus*: optional ``(suit, value)`` for conquer mode land bonus.
     """
     if not figure:
         return 0
@@ -2855,8 +2872,9 @@ def _compute_figure_full_power(figure, all_figures, enchant_spells,
     # Healer buff (NOT affected by Temple)
     healer_buff = _compute_healer_buff(figure, own_healers)
 
-    # Support bonus
-    support = _compute_support_bonus(figure, all_figures, game_id)
+    # Support bonus (includes land suit bonus in conquer mode)
+    support = _compute_support_bonus(figure, all_figures, game_id,
+                                     land_suit_bonus=land_suit_bonus)
 
     # Wall defence (pre-computed; 0 for attackers)
     wall = wall_total
@@ -2949,15 +2967,24 @@ def _compute_server_total_diff(game, return_breakdown=False):
     def_walls = _find_wall_figures(def_pid, all_figures, battle_ids, game.id)
     def_wall_total = _compute_wall_defence_total(def_walls)
 
+    # ── Conquer mode: land suit bonus (applied via support bonus) ──
+    land_suit_bonus = None
+    if game.mode == 'conquer' and game.land_id:
+        land = db.session.get(Land, game.land_id)
+        if land and land.suit_bonus_suit and land.suit_bonus_value:
+            land_suit_bonus = (land.suit_bonus_suit, land.suit_bonus_value)
+
     # ── figure power WITHOUT distance-attack (handled below) ──
     adv_power = _compute_figure_full_power(
         adv_fig, all_figures, enchant_spells,
         def_pid, battle_ids, game.id,
-        adv_healers, 0)  # attacker: wall = 0
+        adv_healers, 0,
+        land_suit_bonus=land_suit_bonus)  # attacker: wall = 0
     def_power = _compute_figure_full_power(
         def_fig, all_figures, enchant_spells,
         adv_pid, battle_ids, game.id,
-        def_healers, def_wall_total)
+        def_healers, def_wall_total,
+        land_suit_bonus=land_suit_bonus)
 
     if game.advancing_figure_id_2:
         f2 = db.session.get(Figure, game.advancing_figure_id_2)
@@ -2965,14 +2992,16 @@ def _compute_server_total_diff(game, return_breakdown=False):
             adv_power += _compute_figure_full_power(
                 f2, all_figures, enchant_spells,
                 def_pid, battle_ids, game.id,
-                adv_healers, 0)
+                adv_healers, 0,
+                land_suit_bonus=land_suit_bonus)
     if game.defending_figure_id_2:
         f2 = db.session.get(Figure, game.defending_figure_id_2)
         if f2:
             def_power += _compute_figure_full_power(
                 f2, all_figures, enchant_spells,
                 adv_pid, battle_ids, game.id,
-                def_healers, def_wall_total)
+                def_healers, def_wall_total,
+                land_suit_bonus=land_suit_bonus)
 
     # ── Distance-attack: each eligible archer fires once per battle ──
     # Build list of defender targets
@@ -3079,28 +3108,12 @@ def _compute_server_total_diff(game, return_breakdown=False):
 
     total = fig_diff + round_diff
 
-    # ── Conquer mode: land suit bonus for defender ──
-    suit_bonus_applied = 0
-    if game.mode == 'conquer' and game.land_id:
-        land = db.session.get(Land, game.land_id)
-        if land and land.suit_bonus_suit and land.suit_bonus_value:
-            bonus_suit = land.suit_bonus_suit.lower()
-            # Bonus applies to defender's battle figure(s) matching the suit
-            for fig in [def_fig]:
-                if fig and (fig.suit or '').lower() == bonus_suit:
-                    suit_bonus_applied += land.suit_bonus_value
-            if game.defending_figure_id_2:
-                f2 = db.session.get(Figure, game.defending_figure_id_2)
-                if f2 and (f2.suit or '').lower() == bonus_suit:
-                    suit_bonus_applied += land.suit_bonus_value
-            if suit_bonus_applied:
-                total -= suit_bonus_applied  # bonus favours defender (reduces diff)
-                logger.debug(f"[SUIT_BONUS] land={land.id} suit={land.suit_bonus_suit} "
-                      f"bonus={land.suit_bonus_value} applied={suit_bonus_applied}")
+    # Land suit bonus is now included in each figure's support bonus
+    # (computed inside _compute_figure_full_power via _compute_support_bonus)
 
     logger.debug(f"[SERVER_TOTAL_DIFF] game={game.id} "
           f"fig_diff={fig_diff} (adv={adv_power} def={def_power}) "
-          f"round_diff={round_diff} suit_bonus={suit_bonus_applied} total={total}")
+          f"round_diff={round_diff} land_suit_bonus={land_suit_bonus} total={total}")
 
     if return_breakdown:
         breakdown = {
@@ -3115,7 +3128,7 @@ def _compute_server_total_diff(game, return_breakdown=False):
             'def_wall_total': def_wall_total,
             'fig_diff': fig_diff,
             'round_diff': round_diff,
-            'suit_bonus_applied': suit_bonus_applied,
+            'land_suit_bonus': land_suit_bonus,
             'total': total,
         }
         return total, breakdown
@@ -3790,6 +3803,40 @@ def finish_battle():
 
     if total_diff == 0:
         # ──── DRAW ────
+
+        # Conquer mode draw: no consequences — game ends cleanly
+        if game.mode == 'conquer':
+            _return_unplayed_battle_move_cards(game_id)
+            _delete_all_battle_moves(game_id)
+            _deactivate_all_spells(game)
+            _clear_battle_state(game)
+            game.state = 'finished'
+            game.finished_at = _utcnow()
+            # No winner — draw
+            game.winner_player_id = None
+
+            log_entry = LogEntry(
+                game_id=game.id,
+                player_id=player_id,
+                round_number=game.current_round,
+                turn_number=player.turns_left,
+                message="Conquer battle ended in a draw — no consequences.",
+                author="System",
+                type='battle_draw'
+            )
+            db.session.add(log_entry)
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'outcome': 'draw',
+                'conquer_result': 'draw',
+                'attacker_won': False,
+                'land_id': game.land_id,
+                'message': 'Conquer battle ended in a draw — no consequences.',
+                'game': game.serialize(),
+            })
+
         # Collect remaining (played) battle move cards from BOTH players
         bm_cards, bm_records = _collect_battle_move_cards(game_id)
         # Defender gets to choose: destroy opponent figure, 10 pts, or pick a card
@@ -4099,14 +4146,35 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     logger.info(f"[CONQUER_RESOLVE] game={game.id} land={game.land_id} "
                 f"result={result}")
 
+    # Count total cards the attacker spent (figures + battle moves + modifiers)
+    cards_spent = 0
+    if game.conquer_config_id:
+        atk_cfg_final = db.session.get(LandConfig, game.conquer_config_id)
+        if atk_cfg_final:
+            for fig in atk_cfg_final.figures:
+                if fig.card_ids:
+                    cards_spent += len(fig.card_ids)
+            for mv in atk_cfg_final.battle_moves:
+                if mv.card_id:
+                    cards_spent += 1
+            if atk_cfg_final.modifier_card_ids:
+                cards_spent += len(atk_cfg_final.modifier_card_ids)
+
     return {
         'success': True,
         'message': f'Conquer battle resolved: {result}',
         'conquer_result': result,
         'attacker_won': attacker_won,
         'land_id': game.land_id,
+        'land_gold_rate': land.gold_rate if land else 0,
+        'land_tier': land.tier if land else None,
         'points_awarded': saved.get('points_awarded', 0),
         'destroyed_figure_name': saved.get('destroyed_figure_name', ''),
+        'card_won_suit': card_won_suit,
+        'card_won_rank': card_won_rank,
+        'card_lost_suit': card_lost_suit,
+        'card_lost_rank': card_lost_rank,
+        'cards_spent': cards_spent,
         'game': game.serialize(),
     }
 
@@ -4522,6 +4590,14 @@ def finish_battle_draw():
         type='battle_draw'
     )
     db.session.add(log_entry)
+
+    # ── Conquer mode: resolve after one battle ──
+    if game.mode == 'conquer':
+        # Win/lose draws are handled in finish_battle directly;
+        # if we get here, the defender made their choice — resolve normally.
+        conquer_result = _resolve_conquer_battle(game, player, player)
+        db.session.commit()
+        return jsonify(conquer_result)
 
     # ── Check game-over condition before starting a new round ──
     game_over_info = _check_game_over(game)

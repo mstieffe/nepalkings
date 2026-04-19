@@ -282,10 +282,70 @@ class BattleShopScreen(SubScreen):
         main, side = self.card_source.get_cards()
         return main + side
 
+    def _rebuild_card_source_kingdom(self):
+        """Re-fetch collection and rebuild the card source for kingdom mode."""
+        from utils import collection_service
+        from game.core.card_source import CollectionCardSource
+        try:
+            data = collection_service.fetch_collection_cards()
+        except Exception as e:
+            logger.error(f'Failed to re-fetch collection: {e}')
+            return
+        config = getattr(self.game, '_config', None) or {}
+        cards = []
+        for c in data.get('cards', []):
+            qty = c.get('free', c.get('total', 0))
+            for i in range(qty):
+                cards.append(Card(
+                    rank=c['rank'], suit=c['suit'],
+                    value=settings.RANK_TO_VALUE.get(c['rank'], 0),
+                    id=c.get('id', hash((c['suit'], c['rank'], i))),
+                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                ))
+        locked_ids = set()
+        for fig in config.get('figures', []):
+            for cid in fig.get('card_ids', []):
+                locked_ids.add(cid)
+        for mv in config.get('battle_moves', []):
+            if mv.get('card_id'):
+                locked_ids.add(mv['card_id'])
+        if config.get('modifier_card_ids'):
+            for cid in config['modifier_card_ids']:
+                locked_ids.add(cid)
+        if config.get('spell_card_ids'):
+            for cid in config['spell_card_ids']:
+                locked_ids.add(cid)
+        self.card_source = CollectionCardSource(cards, config.get('figures', []), locked_ids)
+
+    def _sync_card_source_locked(self):
+        """Update the card source's locked set from the current config."""
+        if not hasattr(self.card_source, '_locked') or not self.game:
+            return
+        config = getattr(self.game, '_config', None)
+        if not config:
+            return
+        locked = set()
+        for fig in config.get('figures', []):
+            for cid in fig.get('card_ids', []):
+                locked.add(cid)
+        for mv in config.get('battle_moves', []):
+            if mv.get('card_id'):
+                locked.add(mv['card_id'])
+        if config.get('modifier_card_ids'):
+            for cid in config['modifier_card_ids']:
+                locked.add(cid)
+        if config.get('spell_card_ids'):
+            for cid in config['spell_card_ids']:
+                locked.add(cid)
+        self.card_source._locked = locked
+
     # ---------------------------------------------------------------- update
     def update(self, game):
         super().update(game)
         self.game = game
+        # Keep card_source in sync for GameCardSource (duel mode)
+        if hasattr(self.card_source, 'game'):
+            self.card_source.game = game
 
         # Reload bought moves when the game changes (e.g. loading a saved game)
         current_key = (getattr(game, 'game_id', None),
@@ -525,6 +585,12 @@ class BattleShopScreen(SubScreen):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()
 
+            # Rebuild card source for kingdom mode (re-fetch free counts)
+            if self.mode in ('conquer', 'defence'):
+                self._rebuild_card_source_kingdom()
+            else:
+                self._sync_card_source_locked()
+
             # Refresh the scroll list for the selected family
             if self.selected_family:
                 for btn in self.move_family_buttons:
@@ -553,17 +619,29 @@ class BattleShopScreen(SubScreen):
         """Buy a battle move via the kingdom config endpoint."""
         from utils import http_compat as requests
         land_id = getattr(self.game, 'land_id', None)
+
+        # Auto-assign the next free round_index (0, 1, or 2)
+        used_indices = {m.get('round_index') for m in self.bought_moves}
+        round_index = None
+        for idx in (0, 1, 2):
+            if idx not in used_indices:
+                round_index = idx
+                break
+        if round_index is None:
+            return {'success': False, 'message': 'All 3 move slots are full'}
+
         try:
             resp = requests.post(
                 f'{settings.SERVER_URL}/kingdom/{self.mode}/buy_battle_move',
                 json={
                     'land_id': land_id,
                     'family_name': move.family.name,
-                    'card_id': move.card.id,
+                    'card_id': 0,
                     'card_type': card_type,
                     'suit': move.suit,
                     'rank': move.rank,
                     'value': move.value,
+                    'round_index': round_index,
                 },
                 timeout=15,
             )
@@ -765,6 +843,12 @@ class BattleShopScreen(SubScreen):
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()
+
+            # Rebuild card source for kingdom mode (re-fetch free counts)
+            if self.mode in ('conquer', 'defence'):
+                self._rebuild_card_source_kingdom()
+            else:
+                self._sync_card_source_locked()
 
             # Refresh the scroll list
             if self.selected_family:

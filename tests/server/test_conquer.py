@@ -442,6 +442,9 @@ class TestConquerModifier:
     def test_set_blitzkrieg(self, client, db, two_users, auth_headers_user1):
         u1, u2 = two_users
         land = _add_land(db, owner_id=u2.id)
+        # Blitzkrieg requires 2× Q same-color free cards
+        _add_collection_card(db, u1.id, suit='Hearts', rank='Q', value=12)
+        _add_collection_card(db, u1.id, suit='Hearts', rank='Q', value=12)
 
         rv = client.post('/kingdom/conquer/set_modifier',
                          headers=auth_headers_user1,
@@ -462,6 +465,8 @@ class TestConquerModifier:
     def test_remove_modifier(self, client, db, two_users, auth_headers_user1):
         u1, u2 = two_users
         land = _add_land(db, owner_id=u2.id)
+        _add_collection_card(db, u1.id, suit='Hearts', rank='Q', value=12)
+        _add_collection_card(db, u1.id, suit='Hearts', rank='Q', value=12)
 
         client.post('/kingdom/conquer/set_modifier',
                     headers=auth_headers_user1,

@@ -13,6 +13,10 @@ if SERVER_DIR not in sys.path:
 # Disable AI so tests don't spin up workers
 os.environ.setdefault('AI_ENABLED', 'False')
 
+# Force in-memory DB BEFORE importing server — prevents the real test.db
+# from being initialised at module level when server.py runs db.init_app().
+os.environ['DB_URL'] = 'sqlite:///:memory:'
+
 from server import app as flask_app  # noqa: E402
 from models import db as _db  # noqa: E402
 

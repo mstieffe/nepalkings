@@ -119,16 +119,29 @@ class TestCollectionCardSource:
 
     def test_get_figures_returns_config_figures(self):
         from game.core.card_source import CollectionCardSource
-        figs = [MagicMock(), MagicMock()]
+        figs = [{'family_name': 'King', 'suit': 'Hearts', 'name': 'King', 'id': 1}]
+        mock_family = MagicMock()
+        mock_variant = MagicMock()
+        mock_variant.suit = 'Hearts'
+        mock_variant.name = 'King'
+        mock_variant.key_cards = []
+        mock_variant.number_card = None
+        mock_variant.upgrade_card = None
+        mock_variant.sub_name = ''
+        mock_family.figures = [mock_variant]
+        families = {'King': mock_family}
         src = CollectionCardSource([], config_figures=figs, locked_card_ids=set())
-        assert src.get_figures(['warrior']) == figs
+        result = src.get_figures(families)
+        assert len(result) == 1
+        assert result[0].name == 'King'
+        assert result[0].suit == 'Hearts'
 
-    def test_get_figures_ignores_families_and_is_opponent(self):
-        """CollectionCardSource always returns all config_figures regardless of args."""
+    def test_get_figures_ignores_unknown_families(self):
+        """CollectionCardSource skips config figures with unknown family names."""
         from game.core.card_source import CollectionCardSource
-        figs = [MagicMock()]
+        figs = [{'family_name': 'Unknown', 'suit': 'Hearts', 'name': 'X', 'id': 1}]
         src = CollectionCardSource([], config_figures=figs, locked_card_ids=set())
-        assert src.get_figures([], is_opponent=True) == figs
+        assert src.get_figures({}, is_opponent=True) == []
 
     def test_locked_card_ids_accepts_list(self):
         """locked_card_ids should work even if passed as a list instead of set."""

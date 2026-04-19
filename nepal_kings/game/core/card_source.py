@@ -4,6 +4,11 @@
 with either a duel Game or a kingdom CollectionCard pool."""
 
 from config import settings
+from game.components.figures.figure import Figure
+
+import logging
+
+logger = logging.getLogger('nk.core.card_source')
 
 
 class CardSource:
@@ -25,9 +30,13 @@ class GameCardSource(CardSource):
         self.game = game
 
     def get_cards(self):
+        if self.game is None:
+            return [], []
         return self.game.get_hand()
 
     def get_figures(self, families, is_opponent=False):
+        if self.game is None:
+            return []
         return self.game.get_figures(families, is_opponent)
 
 
@@ -56,4 +65,63 @@ class CollectionCardSource(CardSource):
         return main, side
 
     def get_figures(self, families, is_opponent=False):
-        return self._figures
+        figures = []
+        for cfg_fig in self._figures:
+            fig = self._config_fig_to_figure(cfg_fig, families)
+            if fig is not None:
+                figures.append(fig)
+        return figures
+
+    @staticmethod
+    def _config_fig_to_figure(cfg_fig, families):
+        """Convert a config figure dict to a real Figure object."""
+        family_name = cfg_fig.get('family_name', '')
+        family = families.get(family_name)
+        if not family:
+            return None
+
+        suit = cfg_fig.get('suit', '')
+        name = cfg_fig.get('name', family_name)
+
+        matched = None
+        for fam_fig in family.figures:
+            if fam_fig.suit == suit and fam_fig.name == name:
+                matched = fam_fig
+                break
+        if matched is None:
+            for fam_fig in family.figures:
+                if fam_fig.suit == suit:
+                    matched = fam_fig
+                    break
+
+        key_cards = matched.key_cards if matched else []
+        number_card = matched.number_card if matched else None
+        upgrade_card = matched.upgrade_card if matched else None
+
+        return Figure(
+            name=name,
+            sub_name=matched.sub_name if matched else '',
+            suit=suit,
+            family=family,
+            key_cards=key_cards,
+            number_card=number_card,
+            upgrade_card=upgrade_card,
+            upgrade_family_name=cfg_fig.get('upgrade_family_name'),
+            produces=cfg_fig.get('produces', {}),
+            requires=cfg_fig.get('requires', {}),
+            description=cfg_fig.get('description', ''),
+            id=cfg_fig.get('id'),
+            cannot_attack=getattr(matched, 'cannot_attack', False) if matched else False,
+            must_be_attacked=getattr(matched, 'must_be_attacked', False) if matched else False,
+            rest_after_attack=cfg_fig.get('rest_after_attack', False),
+            distance_attack=getattr(matched, 'distance_attack', False) if matched else False,
+            buffs_allies=getattr(matched, 'buffs_allies', False) if matched else False,
+            buffs_allies_defence=getattr(matched, 'buffs_allies_defence', False) if matched else False,
+            blocks_bonus=getattr(matched, 'blocks_bonus', False) if matched else False,
+            cannot_defend=getattr(matched, 'cannot_defend', False) if matched else False,
+            instant_charge=getattr(matched, 'instant_charge', False) if matched else False,
+            cannot_be_blocked=cfg_fig.get('cannot_be_blocked', False),
+            cannot_be_targeted=getattr(matched, 'cannot_be_targeted', False) if matched else False,
+            checkmate=cfg_fig.get('checkmate', False),
+            override_base_power=getattr(matched, 'override_base_power', None) if matched else None,
+        )

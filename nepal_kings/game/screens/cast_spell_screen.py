@@ -413,6 +413,9 @@ class CastSpellScreen(SubScreen):
         """Update the game state and button components."""
         super().update(game)
         self.game = game
+        # Keep card_source in sync for GameCardSource (duel mode)
+        if hasattr(self.card_source, 'game'):
+            self.card_source.game = game
         
         # Check if confirm button should be disabled
         if not self.game.turn:

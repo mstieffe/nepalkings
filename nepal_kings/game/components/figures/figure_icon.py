@@ -1767,6 +1767,16 @@ class FieldFigureIcon(FigureIcon):
             
             # Sum battle bonuses from other figures
             total_bonus = sum(fig.get_battle_bonus() for fig in same_suit_figures)
+
+            # Conquer mode: land suit bonus for figures matching the land's suit
+            if (self.game and
+                    getattr(self.game, 'mode', 'duel') == 'conquer'):
+                land_suit = getattr(self.game, 'land_suit_bonus_suit', None)
+                land_value = getattr(self.game, 'land_suit_bonus_value', None)
+                if land_suit and land_value:
+                    if (self.figure.suit or '').lower() == land_suit.lower():
+                        total_bonus += land_value
+
             return total_bonus
         except Exception as e:
             # If anything fails, just return 0

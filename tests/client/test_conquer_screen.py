@@ -124,11 +124,11 @@ class TestConquerScreenNavigation:
         screen = ConquerScreen(state)
         screen._build_layout()
 
-        # Simulate click on back button
+        # Simulate click on X close button
         event = pygame.event.Event(
             pygame.MOUSEBUTTONUP,
             button=1,
-            pos=screen._btn_back.center,
+            pos=screen._btn_close_rect.center,
         )
         screen.handle_events([event])
         assert state.screen == 'kingdom'
@@ -146,10 +146,11 @@ class TestConquerScreenNavigation:
 
 class TestModifierToggle:
 
-    def test_set_modifier_calls_server(self):
+    def test_set_modifier_shows_dialogue(self):
         from game.screens.conquer_screen import ConquerScreen
         import pygame
         state = _make_state()
+        state.action = {}
         screen = ConquerScreen(state)
         screen._land_id = 42
         screen._config = {
@@ -157,21 +158,26 @@ class TestModifierToggle:
             'battle_moves': [],
             'battle_modifier': None,
         }
+        screen._collection_cards = [
+            {'suit': 'Hearts', 'rank': 'Q', 'free': 2, 'total': 2, 'locked': 0},
+        ]
         screen._build_layout()
 
-        with patch.object(screen, '_server_set_modifier') as mock_set:
-            event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP,
-                button=1,
-                pos=screen._btn_modifier.center,
-            )
-            screen.handle_events([event])
-            mock_set.assert_called_once()
+        # Click the Blitzkrieg icon → should open confirmation dialogue
+        icon_rect = screen._modifier_icon_rects.get('Blitzkrieg')
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            button=1,
+            pos=icon_rect.center,
+        )
+        screen.handle_events([event])
+        assert screen._pending_modifier_confirm == 'Blitzkrieg'
 
-    def test_remove_modifier_calls_server(self):
+    def test_remove_modifier_via_x_button(self):
         from game.screens.conquer_screen import ConquerScreen
         import pygame
         state = _make_state()
+        state.action = {}
         screen = ConquerScreen(state)
         screen._land_id = 42
         screen._config = {
@@ -180,12 +186,18 @@ class TestModifierToggle:
             'battle_modifier': {'type': 'Blitzkrieg'},
         }
         screen._build_layout()
+        # Simulate X rect being set by draw
+        xw = screen._x_remove_surf.get_width()
+        xh = screen._x_remove_surf.get_height()
+        icon_rect = screen._modifier_icon_rects['Blitzkrieg']
+        screen._modifier_x_rects['Blitzkrieg'] = pygame.Rect(
+            icon_rect.right - xw - 2, icon_rect.y + 2, xw, xh)
 
         with patch.object(screen, '_server_remove_modifier') as mock_rm:
             event = pygame.event.Event(
                 pygame.MOUSEBUTTONUP,
                 button=1,
-                pos=screen._btn_modifier.center,
+                pos=screen._modifier_x_rects['Blitzkrieg'].center,
             )
             screen.handle_events([event])
             mock_rm.assert_called_once()

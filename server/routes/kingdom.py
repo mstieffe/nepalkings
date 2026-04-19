@@ -9,7 +9,8 @@ from flask import Blueprint, jsonify, request, g
 
 from models import (db, User, Land, LandAttackLog, CollectionCard,
                     LandConfig, LandConfigFigure, LandConfigBattleMove,
-                    Game, Player, Figure, BattleMove, CardToFigure, ActiveSpell)
+                    Game, Player, Figure, BattleMove, CardToFigure, ActiveSpell,
+                    MainCard, Suit, MainRank)
 from routes.auth import require_token
 import server_settings as config
 
@@ -197,6 +198,8 @@ def get_kingdom_map():
     Response includes per-land data (tier, gold rate, suit bonus, owner)
     and aggregate stats for the requesting user.
     """
+    from kingdom_service import check_defence_incomplete
+
     user = db.session.get(User, g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
@@ -215,6 +218,9 @@ def get_kingdom_map():
 
         land_dict = land.serialize()
         land_dict['is_mine'] = is_mine
+        if is_mine:
+            land_dict['defence_incomplete'] = check_defence_incomplete(
+                land.id, user.id)
         lands_data.append(land_dict)
 
     # Conquer cooldown
@@ -233,6 +239,59 @@ def get_kingdom_map():
 
 
 # ── Conquer Config Helpers ───────────────────────────────────────────────────
+
+# Card requirements for each modifier/spell: (rank, count, color_constraint)
+# color_constraint: None = any same-color pair, 'red' = Hearts/Diamonds, 'black' = Clubs/Spades
+_RED_SUITS = ('Hearts', 'Diamonds')
+_BLACK_SUITS = ('Clubs', 'Spades')
+
+_MODIFIER_CARD_REQS = {
+    'Blitzkrieg':  ('Q', 2, None),
+    'Peasant War': ('J', 2, None),
+    'Civil War':   ('5', 2, None),
+}
+
+_SPELL_CARD_REQS = {
+    'health_boost': ('3', 2, 'red'),
+    'poison':       ('3', 2, 'black'),
+}
+
+
+def _find_free_cards(user_id, rank, count, color_constraint=None):
+    """Find `count` free (unlocked) collection cards of `rank` with the same suit color.
+
+    Returns a list of card IDs if found, or None if insufficient cards.
+    """
+    query = CollectionCard.query.filter(
+        CollectionCard.user_id == user_id,
+        CollectionCard.rank == rank,
+        CollectionCard.locked == False,
+    )
+    if color_constraint == 'red':
+        query = query.filter(CollectionCard.suit.in_(_RED_SUITS))
+    elif color_constraint == 'black':
+        query = query.filter(CollectionCard.suit.in_(_BLACK_SUITS))
+
+    cards = query.all()
+    if not cards:
+        return None
+
+    # Group by color and find a color group with enough cards
+    red = [c for c in cards if c.suit in _RED_SUITS]
+    black = [c for c in cards if c.suit in _BLACK_SUITS]
+
+    if color_constraint == 'red':
+        pool = red
+    elif color_constraint == 'black':
+        pool = black
+    else:
+        # Pick whichever color has enough
+        pool = red if len(red) >= count else black
+
+    if len(pool) < count:
+        return None
+    return [c.id for c in pool[:count]]
+
 
 def _serialize_config_with_deficit(cfg):
     """Serialize a LandConfig and annotate each figure with has_deficit."""
@@ -311,6 +370,31 @@ def get_conquer_config():
     })
 
 
+# ── Helper: resolve collection cards by suit+rank ────────────────────────────
+
+def _resolve_cards_by_specs(user_id, card_specs):
+    """Resolve card_specs ([{suit, rank}, ...]) to actual CollectionCard rows.
+
+    Returns (card_ids, error_response).  If successful, error_response is None.
+    Each spec consumes one distinct free (unlocked) card of that suit+rank.
+    """
+    card_ids = []
+    # Group specs to handle duplicates efficiently
+    from collections import Counter
+    needed = Counter((s['suit'], s['rank']) for s in card_specs)
+
+    for (suit, rank), count in needed.items():
+        free_cards = CollectionCard.query.filter_by(
+            user_id=user_id, suit=suit, rank=rank, locked=False
+        ).limit(count).all()
+        if len(free_cards) < count:
+            msg = f'Not enough free {suit} {rank} cards (need {count}, have {len(free_cards)})'
+            return None, jsonify({'success': False, 'message': msg}), 400
+        card_ids.extend(c.id for c in free_cards)
+
+    return card_ids, None
+
+
 # ── POST /kingdom/conquer/build_figure ───────────────────────────────────────
 
 @kingdom.route('/conquer/build_figure', methods=['POST'])
@@ -329,20 +413,28 @@ def conquer_build_figure():
     data = request.json
     land_id = data.get('land_id')
     family_name = data.get('family_name')
-    name = data.get('name')
+    name = data.get('name', family_name)      # default to family_name
     suit = data.get('suit')
-    color = data.get('color')
+    color = data.get('color', suit)            # default to suit name
     field = data.get('field')
     card_ids = data.get('card_ids', [])
+    card_specs = data.get('card_specs', [])    # [{suit, rank}, ...]
     card_roles = data.get('card_roles', [])
 
-    if not all([land_id, family_name, name, suit, color, field]):
+    if not all([land_id, family_name, suit, field]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    # Resolve card_specs to real card IDs if card_ids not provided
+    if not card_ids and card_specs:
+        resolved, err = _resolve_cards_by_specs(g.user_id, card_specs)
+        if err:
+            return err
+        card_ids = resolved
 
     if not card_ids:
         return jsonify({'success': False, 'message': 'No cards provided'}), 400
 
-    if len(card_ids) != len(card_roles):
+    if card_roles and len(card_ids) != len(card_roles):
         return jsonify({'success': False, 'message': 'card_ids and card_roles length mismatch'}), 400
 
     land = db.session.get(Land, land_id)
@@ -370,9 +462,9 @@ def conquer_build_figure():
     figure = LandConfigFigure(
         config_id=cfg.id,
         family_name=family_name,
-        name=name,
+        name=name or family_name,
         suit=suit,
-        color=color,
+        color=color or suit,
         field=field,
         card_ids=card_ids,
         card_roles=card_roles,
@@ -463,21 +555,28 @@ def conquer_buy_battle_move():
     value = data.get('value', 0)
     round_index = data.get('round_index')
 
-    if not all([land_id, family_name, card_id, suit, rank]) or round_index is None:
+    if not all([land_id, family_name, suit, rank]) or round_index is None:
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
     if round_index not in (0, 1, 2):
         return jsonify({'success': False, 'message': 'round_index must be 0, 1, or 2'}), 400
 
-    # Verify card belongs to user and is unlocked
-    card = CollectionCard.query.filter_by(
-        id=card_id, user_id=g.user_id
-    ).first()
+    # Resolve card by suit+rank if card_id is not a valid DB ID
+    if not card_id or not isinstance(card_id, int) or card_id < 0:
+        card = CollectionCard.query.filter_by(
+            user_id=g.user_id, suit=suit, rank=rank, locked=False
+        ).first()
+    else:
+        card = CollectionCard.query.filter_by(
+            id=card_id, user_id=g.user_id
+        ).first()
     if not card:
         return jsonify({'success': False, 'message': 'Card not found'}), 404
 
     if card.locked:
         return jsonify({'success': False, 'message': 'Card is already locked'}), 400
+
+    card_id = card.id
 
     cfg = _get_or_create_conquer_config(g.user_id, land_id)
 
@@ -577,8 +676,20 @@ def conquer_set_modifier():
     if cfg.modifier_card_ids:
         _unlock_collection_cards(cfg.modifier_card_ids)
 
+    # Find required free cards for this modifier
+    req = _MODIFIER_CARD_REQS.get(modifier_type)
+    if req:
+        rank, count, color = req
+        card_ids = _find_free_cards(g.user_id, rank, count, color)
+        if card_ids is None:
+            return jsonify({'success': False,
+                            'message': f'{modifier_type} requires {count}× rank {rank} same-color free cards'}), 400
+        _lock_collection_cards(card_ids, 'conquer_modifier', cfg.id)
+        cfg.modifier_card_ids = card_ids
+    else:
+        cfg.modifier_card_ids = None
+
     cfg.battle_modifier = {'type': modifier_type}
-    cfg.modifier_card_ids = None  # Blitzkrieg has no card cost
     db.session.commit()
 
     return jsonify({
@@ -685,18 +796,27 @@ def defence_build_figure():
     data = request.json
     land_id = data.get('land_id')
     family_name = data.get('family_name')
-    name = data.get('name')
+    name = data.get('name', family_name)
     suit = data.get('suit')
-    color = data.get('color')
+    color = data.get('color', suit)
     field = data.get('field')
     card_ids = data.get('card_ids', [])
+    card_specs = data.get('card_specs', [])
     card_roles = data.get('card_roles', [])
 
-    if not all([land_id, family_name, name, suit, color, field]):
+    if not all([land_id, family_name, suit, field]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    # Resolve card_specs to real card IDs if card_ids not provided
+    if not card_ids and card_specs:
+        resolved, err = _resolve_cards_by_specs(g.user_id, card_specs)
+        if err:
+            return err
+        card_ids = resolved
+
     if not card_ids:
         return jsonify({'success': False, 'message': 'No cards provided'}), 400
-    if len(card_ids) != len(card_roles):
+    if card_roles and len(card_ids) != len(card_roles):
         return jsonify({'success': False, 'message': 'card_ids and card_roles length mismatch'}), 400
 
     land, err = _validate_land_ownership(land_id, g.user_id)
@@ -716,7 +836,8 @@ def defence_build_figure():
 
     figure = LandConfigFigure(
         config_id=cfg.id,
-        family_name=family_name, name=name, suit=suit, color=color, field=field,
+        family_name=family_name, name=name or family_name,
+        suit=suit, color=color or suit, field=field,
         card_ids=card_ids, card_roles=card_roles,
         produces=data.get('produces'), requires=data.get('requires'),
         description=data.get('description', ''),
@@ -787,7 +908,7 @@ def defence_buy_battle_move():
     value = data.get('value', 0)
     round_index = data.get('round_index')
 
-    if not all([land_id, family_name, card_id, suit, rank]) or round_index is None:
+    if not all([land_id, family_name, suit, rank]) or round_index is None:
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
     if round_index not in (0, 1, 2):
         return jsonify({'success': False, 'message': 'round_index must be 0, 1, or 2'}), 400
@@ -796,11 +917,19 @@ def defence_buy_battle_move():
     if err:
         return err
 
-    card = CollectionCard.query.filter_by(id=card_id, user_id=g.user_id).first()
+    # Resolve card by suit+rank if card_id is not a valid DB ID
+    if not card_id or not isinstance(card_id, int) or card_id < 0:
+        card = CollectionCard.query.filter_by(
+            user_id=g.user_id, suit=suit, rank=rank, locked=False
+        ).first()
+    else:
+        card = CollectionCard.query.filter_by(id=card_id, user_id=g.user_id).first()
     if not card:
         return jsonify({'success': False, 'message': 'Card not found'}), 404
     if card.locked:
         return jsonify({'success': False, 'message': 'Card is already locked'}), 400
+
+    card_id = card.id
 
     cfg = _get_or_create_defence_config(g.user_id, land_id)
 
@@ -885,8 +1014,20 @@ def defence_set_modifier():
     if cfg.modifier_card_ids:
         _unlock_collection_cards(cfg.modifier_card_ids)
 
+    # Find required free cards for this modifier
+    req = _MODIFIER_CARD_REQS.get(modifier_type)
+    if req:
+        rank, count, color = req
+        card_ids = _find_free_cards(g.user_id, rank, count, color)
+        if card_ids is None:
+            return jsonify({'success': False,
+                            'message': f'{modifier_type} requires {count}× rank {rank} same-color free cards'}), 400
+        _lock_collection_cards(card_ids, 'defence_modifier', cfg.id)
+        cfg.modifier_card_ids = card_ids
+    else:
+        cfg.modifier_card_ids = None
+
     cfg.battle_modifier = {'type': modifier_type}
-    cfg.modifier_card_ids = None
 
     # Auto-clear battle figure if incompatible with new modifier
     if modifier_type == 'Civil War':
@@ -1081,6 +1222,16 @@ def defence_set_spell():
         return jsonify({'success': False,
                         'message': 'Cannot set spell while a battle figure is selected. Clear battle figure first.'}), 400
 
+    # Auto-find spell cards if none provided
+    if not spell_card_ids:
+        req = _SPELL_CARD_REQS.get(spell_name)
+        if req:
+            rank, count, color = req
+            spell_card_ids = _find_free_cards(g.user_id, rank, count, color)
+            if spell_card_ids is None:
+                return jsonify({'success': False,
+                                'message': f'{spell_name} requires {count}× rank {rank} same-color free cards'}), 400
+
     # Verify spell cards belong to user and are unlocked
     if spell_card_ids:
         cards = CollectionCard.query.filter(
@@ -1184,8 +1335,17 @@ def defence_set_auto_gamble():
 #  Conquer Battle — Phase 13
 # ═════════════════════════════════════════════════════════════════════════════
 
+_RANK_TO_VALUE = {
+    '7': 7, '8': 8, '9': 9, '10': 10,
+    'J': 1, 'Q': 2, 'K': 4, 'A': 3,
+}
+
+
 def _build_figures_from_config(cfg_figures, player, game):
     """Create Figure + CardToFigure records from LandConfigFigure list.
+
+    Creates real MainCard records from the collection cards so that
+    CardToFigure.serialize() can include rank/suit/value data.
 
     Returns a list of created Figure objects (flushed, with IDs).
     """
@@ -1210,10 +1370,39 @@ def _build_figures_from_config(cfg_figures, player, game):
         db.session.add(fig)
         db.session.flush()
 
-        for role in (cfg_fig.card_roles or []):
+        card_ids = cfg_fig.card_ids or []
+        card_roles = cfg_fig.card_roles or []
+        for i, role in enumerate(card_roles):
+            # Look up the collection card to get rank/suit/value
+            rank = None
+            suit = cfg_fig.suit
+            value = 0
+            if i < len(card_ids) and card_ids[i]:
+                cc = db.session.get(CollectionCard, card_ids[i])
+                if cc:
+                    rank = cc.rank
+                    suit = cc.suit
+                    value = cc.value
+            if not rank:
+                # Fallback: derive from figure suit and role
+                rank = 'K' if role == 'key' else '10'
+                value = _RANK_TO_VALUE.get(rank, 0)
+
+            mc = MainCard(
+                rank=rank,
+                suit=suit,
+                value=value,
+                game_id=game.id,
+                player_id=player.id,
+                in_deck=False,
+                part_of_figure=True,
+            )
+            db.session.add(mc)
+            db.session.flush()
+
             ctf = CardToFigure(
                 figure_id=fig.id,
-                card_id=0,  # virtual card — no real card in conquer mode
+                card_id=mc.id,
                 card_type='main',
                 role=role,
             )
@@ -1225,6 +1414,9 @@ def _build_figures_from_config(cfg_figures, player, game):
 
 def _build_figures_from_template(template_figures, player, game):
     """Create Figure records from AI template figure dicts.
+
+    Creates real MainCard records from the template's ``cards`` list so that
+    CardToFigure.serialize() can include rank/suit/value data.
 
     Returns a list of created Figure objects (flushed, with IDs).
     """
@@ -1249,10 +1441,32 @@ def _build_figures_from_template(template_figures, player, game):
         db.session.add(fig)
         db.session.flush()
 
-        for role in tpl_fig.get('card_roles', []):
+        tpl_cards = tpl_fig.get('cards', [])
+        card_roles = tpl_fig.get('card_roles', [])
+        for i, role in enumerate(card_roles):
+            if i < len(tpl_cards):
+                rank = tpl_cards[i].get('rank', 'K' if role == 'key' else '10')
+                suit = tpl_cards[i].get('suit', tpl_fig['suit'])
+            else:
+                rank = 'K' if role == 'key' else '10'
+                suit = tpl_fig['suit']
+            value = _RANK_TO_VALUE.get(rank, 0)
+
+            mc = MainCard(
+                rank=rank,
+                suit=suit,
+                value=value,
+                game_id=game.id,
+                player_id=player.id,
+                in_deck=False,
+                part_of_figure=True,
+            )
+            db.session.add(mc)
+            db.session.flush()
+
             ctf = CardToFigure(
                 figure_id=fig.id,
-                card_id=0,
+                card_id=mc.id,
                 card_type='main',
                 role=role,
             )
@@ -1265,19 +1479,33 @@ def _build_figures_from_template(template_figures, player, game):
 def _build_battle_moves_from_config(cfg_moves, player, game, config_figure_map=None):
     """Create BattleMove records from LandConfigBattleMove list.
 
-    config_figure_map: optional dict mapping LandConfigFigure.id -> Figure.id
-    for resolving call_figure_id.
+    Creates a real MainCard for each move so the card appears in the
+    player's hand display.  config_figure_map: optional dict mapping
+    LandConfigFigure.id -> Figure.id for resolving call_figure_id.
     """
     for cfg_move in cfg_moves:
         call_fig_id = None
         if cfg_move.call_figure_id and config_figure_map:
             call_fig_id = config_figure_map.get(cfg_move.call_figure_id)
 
+        mc = MainCard(
+            rank=cfg_move.rank,
+            suit=cfg_move.suit,
+            value=cfg_move.value,
+            game_id=game.id,
+            player_id=player.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=True,
+        )
+        db.session.add(mc)
+        db.session.flush()
+
         move = BattleMove(
             game_id=game.id,
             player_id=player.id,
             family_name=cfg_move.family_name,
-            card_id=0,  # virtual card
+            card_id=mc.id,
             card_type='main',
             suit=cfg_move.suit,
             rank=cfg_move.rank,
@@ -1291,8 +1519,9 @@ def _build_battle_moves_from_template(template_moves, player, game,
                                       template_figures=None, game_figures=None):
     """Create BattleMove records from AI template move dicts.
 
-    template_figures and game_figures are parallel lists to resolve
-    call_figure references by index.
+    Creates a real MainCard for each move.  template_figures and
+    game_figures are parallel lists to resolve call_figure references
+    by index.
     """
     for tpl_move in template_moves:
         call_fig_id = None
@@ -1310,11 +1539,24 @@ def _build_battle_moves_from_template(template_moves, player, game,
                         call_fig_id = gf.id
                         break
 
+        mc = MainCard(
+            rank=tpl_move['rank'],
+            suit=tpl_move['suit'],
+            value=tpl_move['value'],
+            game_id=game.id,
+            player_id=player.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=True,
+        )
+        db.session.add(mc)
+        db.session.flush()
+
         move = BattleMove(
             game_id=game.id,
             player_id=player.id,
             family_name=tpl_move['family_name'],
-            card_id=0,  # virtual card
+            card_id=mc.id,
             card_type=tpl_move.get('card_type', 'main'),
             suit=tpl_move['suit'],
             rank=tpl_move['rank'],
@@ -1488,7 +1730,8 @@ def conquer_start_battle():
 
         # Set battle modifier from template
         if template.get('battle_modifier'):
-            game.battle_modifier = template['battle_modifier']
+            mod = template['battle_modifier']
+            game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
         # Set spell from template
         if template.get('spell'):
@@ -1541,7 +1784,8 @@ def conquer_start_battle():
 
         # Set battle modifier from defence config
         if def_cfg.battle_modifier:
-            game.battle_modifier = def_cfg.battle_modifier
+            mod = def_cfg.battle_modifier
+            game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
         # Set spell from defence config
         if def_cfg.spell_name:
@@ -1565,7 +1809,8 @@ def conquer_start_battle():
 
     # Merge attacker modifier if no defender modifier
     if not game.battle_modifier and atk_cfg.battle_modifier:
-        game.battle_modifier = atk_cfg.battle_modifier
+        mod = atk_cfg.battle_modifier
+        game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
     # Set cooldown
     user.last_conquer_at = _utcnow()

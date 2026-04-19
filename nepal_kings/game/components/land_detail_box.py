@@ -148,6 +148,19 @@ class LandDetailBox:
         except Exception:
             pass
 
+        # Broken icon (for incomplete defence)
+        self._broken_icon = None
+        try:
+            import os
+            broken_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__)))),
+                'img', 'figures', 'state_icons', 'broken.png')
+            raw = pygame.image.load(broken_path).convert_alpha()
+            self._broken_icon = pygame.transform.smoothscale(raw, (icon_sz, icon_sz))
+        except Exception:
+            pass
+
         # Build layout
         self._build_layout()
 
@@ -165,6 +178,10 @@ class LandDetailBox:
         self._lines.append(('spacer', ''))
         self._lines.append(('gold', f'Gold production: {tile.gold_rate:.1f} / hour'))
         self._lines.append(('suit', f'Suit bonus: {tile.suit_bonus_suit} +{tile.suit_bonus_value}'))
+
+        if tile.is_mine and tile.defence_incomplete:
+            self._lines.append(('defence_warning', 'Defence config incomplete!'))
+
         self._lines.append(('spacer', ''))
 
         if tile.owner:
@@ -183,6 +200,8 @@ class LandDetailBox:
                 content_h += self._title_font.get_height() + 4
             elif kind == 'spacer':
                 content_h += int(line_h * 0.4)
+            elif kind == 'defence_warning':
+                content_h += max(self._icon_sz, line_h) + 2
             else:
                 content_h += line_h + 2
 
@@ -202,6 +221,14 @@ class LandDetailBox:
         sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
         self._box_rect = pygame.Rect((sw - w) // 2, (sh - content_h) // 2,
                                      w, content_h)
+
+        # X close button (top-right of box)
+        _xsz = int(0.028 * sh)
+        _xmargin = int(0.012 * sw)
+        self._btn_close_rect = pygame.Rect(
+            self._box_rect.right - _xsz - _xmargin,
+            self._box_rect.y + _xmargin,
+            _xsz, _xsz)
 
         # Create buttons
         btn_x = self._box_rect.centerx - settings.LAND_DETAIL_BTN_W // 2
@@ -236,6 +263,12 @@ class LandDetailBox:
             return None
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            # X close button
+            if self._btn_close_rect and self._btn_close_rect.collidepoint(event.pos):
+                if self._on_close:
+                    self._on_close()
+                return 'close'
+
             for action, btn in self._buttons:
                 if btn.collide() and not btn.disabled:
                     if action == 'conquer' and self._on_conquer:
@@ -325,6 +358,32 @@ class LandDetailBox:
                 surf = self._small_font.render(text, True, settings.LAND_DETAIL_DIM_CLR)
                 self.window.blit(surf, (x, y))
                 y += surf.get_height() + 2
+            elif kind == 'defence_warning':
+                if self._broken_icon:
+                    self.window.blit(self._broken_icon, (x, y))
+                    txt = self._body_font.render(text, True, (220, 60, 60))
+                    self.window.blit(txt, (x + self._icon_sz + 6, y +
+                                          (self._icon_sz - txt.get_height()) // 2))
+                    y += max(self._icon_sz, txt.get_height()) + 2
+                else:
+                    surf = self._body_font.render(text, True, (220, 60, 60))
+                    self.window.blit(surf, (x, y))
+                    y += surf.get_height() + 2
+
+        # Draw X close button
+        r_close = self._btn_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r_close.collidepoint(mouse_pos)
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+        x_surf = pygame.Surface((r_close.w, r_close.h), pygame.SRCALPHA)
+        pygame.draw.rect(x_surf, bg_clr, x_surf.get_rect(), border_radius=4)
+        pygame.draw.rect(x_surf, border_clr, x_surf.get_rect(), 1, border_radius=4)
+        self.window.blit(x_surf, r_close.topleft)
+        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        xt = _xfont.render('\u00d7', True, txt_clr)
+        self.window.blit(xt, xt.get_rect(center=r_close.center))
 
         # Draw buttons
         for _, btn in self._buttons:

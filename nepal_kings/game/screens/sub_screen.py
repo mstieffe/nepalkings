@@ -39,6 +39,17 @@ class SubScreen:
         self.scroll_text_list = []
         self.scroll_text_list_shifter = None
 
+        # Close / X button (top-right of subscreen background)
+        self._on_done = None  # callback set by parent screen
+        self._close_font = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        _cbsz = int(0.028 * settings.SCREEN_HEIGHT)  # square X button
+        _bg_w = settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH
+        _margin = int(0.012 * settings.SCREEN_WIDTH)
+        self._close_rect = pygame.Rect(
+            self.x + _bg_w - _cbsz - _margin,
+            self.y + _margin,
+            _cbsz, _cbsz)
+
     def make_button(self, text, x, y, width: int = None, height: int = None, button_img_active=None, button_img_inactive=None):
         """Helper to create a button."""
         return SubScreenButton(self.window, x, y, text, width=width, height=height, 
@@ -239,6 +250,11 @@ class SubScreen:
         """Handle events like mouse clicks and quit."""
         if self.scroll_text_list_shifter:
             self.scroll_text_list_shifter.handle_events(events)
+        for event in events:
+            if event.type == MOUSEBUTTONUP and getattr(event, 'button', 1) == 1:
+                if self._close_rect.collidepoint(event.pos):
+                    if self._on_done:
+                        self._on_done()
 
     def draw(self):
         """Render buttons, messages, and the dialogue box."""
@@ -264,6 +280,27 @@ class SubScreen:
             button.draw()
             
         self.draw_title()
+        self._draw_close_button()
+
+    def _draw_close_button(self):
+        """Draw a small X button in the top-right corner of the subscreen."""
+        if not self._on_done:
+            return
+        r = self._close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+
+        txt = self._close_font.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
 
     def draw_on_top(self):
 

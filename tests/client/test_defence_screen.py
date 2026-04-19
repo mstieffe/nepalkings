@@ -11,6 +11,8 @@ def _make_state():
     state.screen = 'defence'
     state.defence_land_id = 7
     state.game = MagicMock()
+    state.set_msg = MagicMock()
+    state.action = {}
     return state
 
 
@@ -124,7 +126,7 @@ class TestDefenceScreenNavigation:
         screen._build_layout()
 
         event = pygame.event.Event(
-            pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_back.center)
+            pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_close_rect.center)
         screen.handle_events([event])
         assert state.screen == 'kingdom'
 
@@ -139,52 +141,62 @@ class TestDefenceScreenNavigation:
         assert state.screen == 'kingdom'
 
 
-class TestModifierCycle:
+class TestModifierIcons:
 
-    def test_cycle_no_mod_to_peasant_war(self):
+    def test_set_modifier_shows_dialogue(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
+        state.action = {}
         screen = DefenceScreen(state)
         screen._land_id = 7
         screen._config = _make_config()
         screen._build_layout()
+        # Give enough free cards for Peasant War (2× Jack same-color)
+        screen._collection_cards = [
+            {'suit': 'Hearts', 'rank': 'J', 'free': 2},
+        ]
 
-        with patch.object(screen, '_server_set_modifier') as mock_set:
-            event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_modifier.center)
-            screen.handle_events([event])
-            mock_set.assert_called_once_with('Peasant War')
+        pos = screen._modifier_icon_rects['Peasant War'].center
+        event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
+        screen.handle_events([event])
+        assert screen._pending_modifier_confirm == 'Peasant War'
 
-    def test_cycle_peasant_war_to_civil_war(self):
+    def test_remove_modifier_via_x_button(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
-        screen = DefenceScreen(state)
-        screen._land_id = 7
-        screen._config = _make_config(battle_modifier={'type': 'Peasant War'})
-        screen._build_layout()
-
-        with patch.object(screen, '_server_set_modifier') as mock_set:
-            event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_modifier.center)
-            screen.handle_events([event])
-            mock_set.assert_called_once_with('Civil War')
-
-    def test_cycle_civil_war_to_none(self):
-        from game.screens.defence_screen import DefenceScreen
-        import pygame
-        state = _make_state()
+        state.action = {}
         screen = DefenceScreen(state)
         screen._land_id = 7
         screen._config = _make_config(battle_modifier={'type': 'Civil War'})
         screen._build_layout()
+        # Manually add X rect (normally set during draw)
+        rect = screen._modifier_icon_rects['Civil War']
+        screen._modifier_x_rects['Civil War'] = pygame.Rect(rect.right - 14, rect.y + 2, 12, 12)
 
         with patch.object(screen, '_server_remove_modifier') as mock_rm:
             event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_modifier.center)
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._modifier_x_rects['Civil War'].center)
             screen.handle_events([event])
             mock_rm.assert_called_once()
+
+    def test_no_cards_shows_notification(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+        screen._collection_cards = []  # No cards
+
+        pos = screen._modifier_icon_rects['Peasant War'].center
+        event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
+        screen.handle_events([event])
+        assert screen._pending_modifier_confirm is None
+        assert screen.dialogue_box is not None
 
 
 class TestAutoGambleToggle:
@@ -222,10 +234,11 @@ class TestAutoGambleToggle:
 
 class TestBattleFigureToggle:
 
-    def test_clear_battle_figure(self):
+    def test_clear_battle_figure_via_x(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
+        state.action = {}
         screen = DefenceScreen(state)
         screen._land_id = 7
         screen._config = _make_config(
@@ -233,10 +246,13 @@ class TestBattleFigureToggle:
             battle_figure_id=10,
         )
         screen._build_layout()
+        # Manually add X rect (normally set during draw)
+        rect = screen._final_round_icon_rects['battle_figure']
+        screen._final_round_x_rects['battle_figure'] = pygame.Rect(rect.right - 14, rect.y + 2, 12, 12)
 
         with patch.object(screen, '_server_clear_battle_figure') as mock_cl:
             event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_battle_fig.center)
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._final_round_x_rects['battle_figure'].center)
             screen.handle_events([event])
             mock_cl.assert_called_once()
 
@@ -244,6 +260,7 @@ class TestBattleFigureToggle:
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
+        state.action = {}
         screen = DefenceScreen(state)
         screen._land_id = 7
         screen._config = _make_config(
@@ -254,26 +271,48 @@ class TestBattleFigureToggle:
         )
         screen._build_layout()
 
-        with patch.object(screen, '_server_set_battle_figure') as mock_sb:
-            event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_battle_fig.center)
-            screen.handle_events([event])
-            mock_sb.assert_called_once_with(11)
+        # Clicking the empty battle_figure slot should enter selection mode
+        pos = screen._final_round_icon_rects['battle_figure'].center
+        event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
+        screen.handle_events([event])
+        assert screen._selecting_battle_fig is True
 
 
-class TestSpellToggle:
+class TestSpellIcons:
 
-    def test_clear_spell(self):
+    def test_spell_shows_dialogue_with_cards(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
+        state.action = {}
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+        # 2× rank 3 black for poison
+        screen._collection_cards = [
+            {'suit': 'Spades', 'rank': '3', 'free': 2},
+        ]
+
+        pos = screen._final_round_icon_rects['poison'].center
+        event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
+        screen.handle_events([event])
+        assert screen._pending_spell_confirm == 'poison'
+
+    def test_clear_spell_via_x(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
         screen = DefenceScreen(state)
         screen._land_id = 7
         screen._config = _make_config(spell_name='poison')
         screen._build_layout()
+        rect = screen._final_round_icon_rects['poison']
+        screen._final_round_x_rects['poison'] = pygame.Rect(rect.right - 14, rect.y + 2, 12, 12)
 
         with patch.object(screen, '_server_clear_spell') as mock_cs:
             event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_spell.center)
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._final_round_x_rects['poison'].center)
             screen.handle_events([event])
             mock_cs.assert_called_once()

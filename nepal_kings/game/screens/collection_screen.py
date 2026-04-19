@@ -16,6 +16,14 @@ logger = logging.getLogger('nk.screens.collection')
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
+# ── Overall box ─────────────────────────────────────────────────────
+_BOX_PAD    = int(0.025 * _SH)
+_BOX_X      = int(0.04 * _SW)
+_BOX_Y      = int(0.10 * _SH)
+_BOX_W      = int(0.87 * _SW)
+_BOX_BOTTOM = int(0.92 * _SH)
+_BOX_H      = _BOX_BOTTOM - _BOX_Y
+
 # Sell price helpers (mirror server logic so we can preview locally)
 _KEY_RANKS = ['J', 'Q', 'K', 'A']
 _KEY_MULTIPLIER = 10
@@ -27,6 +35,15 @@ def _sell_price(rank, quantity=1):
     return value * quantity
 
 
+def _draw_panel(window, rect, corner_r=None):
+    r = corner_r or settings.SUB_SCREEN_PANEL_CORNER_R
+    surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+    pygame.draw.rect(surf, settings.SUB_SCREEN_PANEL_BG_CLR, surf.get_rect(), border_radius=r)
+    window.blit(surf, rect.topleft)
+    pygame.draw.rect(window, settings.SUB_SCREEN_PANEL_BORDER_CLR, rect,
+                     settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
+
+
 class CollectionScreen(MenuScreenMixin, Screen):
     """Full collection screen — card grid, sell dialogue, buy/open booster."""
 
@@ -35,9 +52,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self.control_buttons = []
         self._init_menu_chrome()
 
-        # ── Fonts ───────────────────────────────────────────────────
+        # ── Title ───────────────────────────────────────────────────
         self._title_font = settings.get_font(settings.COLLECTION_TITLE_FONT_SIZE, bold=True)
         self._title_surf = self._title_font.render('Collection', True, settings.COLLECTION_TITLE_CLR)
+        self._title_y = _BOX_Y + _BOX_PAD
         self._suit_font = settings.get_font(settings.COLLECTION_SUIT_LABEL_FONT_SIZE)
         self._badge_font = settings.get_font(settings.COLLECTION_BADGE_FONT_SIZE, bold=True)
         self._section_font = settings.get_font(settings.COLLECTION_SUIT_LABEL_FONT_SIZE, bold=True)
@@ -75,11 +93,39 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._grey_overlay = pygame.Surface((cw, ch), pygame.SRCALPHA)
         self._grey_overlay.fill((0, 0, 0, settings.COLLECTION_GREY_ALPHA))
 
-        # ── Card grid panel ─────────────────────────────────────────
+        # ── Action buttons (computed first so panel knows where to stop) ──
+        abw = settings.COLLECTION_ACTION_BTN_W
+        abh = settings.COLLECTION_ACTION_BTN_H
+        abg = settings.COLLECTION_ACTION_BTN_GAP
+        aby = _BOX_BOTTOM - _BOX_PAD - abh
+        btn_w = abw
+        total_ab = btn_w * 4 + abg * 3
+        abx = _BOX_X + (_BOX_W - total_ab) // 2
+        self._btn_open_main_rect = pygame.Rect(abx, aby, btn_w, abh)
+        self._btn_open_side_rect = pygame.Rect(abx + btn_w + abg, aby, btn_w, abh)
+        self._btn_buy_main_rect = pygame.Rect(abx + 2 * (btn_w + abg), aby, btn_w, abh)
+        self._btn_buy_side_rect = pygame.Rect(abx + 3 * (btn_w + abg), aby, btn_w, abh)
+
+        # ── X close button (top-right of box) ──
+        _xsz = int(0.028 * _SH)
+        _xmargin = int(0.012 * _SW)
+        self._btn_close_rect = pygame.Rect(
+            _BOX_X + _BOX_W - _xsz - _xmargin,
+            _BOX_Y + _xmargin,
+            _xsz, _xsz)
+        self._close_font = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+
+        # ── Card grid panel (inside the subscreen box, below title) ──
+        _panel_pad = int(0.02 * _SW)   # inset from outer box edges
+        _title_h = self._title_surf.get_height()
+        _panel_top = _BOX_Y + _BOX_PAD + _title_h + int(0.015 * _SH)
+        _panel_bottom = aby - int(0.015 * _SH)
         self._panel_rect = pygame.Rect(
-            settings.COLLECTION_PANEL_X, settings.COLLECTION_PANEL_Y,
-            settings.COLLECTION_PANEL_W,
-            settings.COLLECTION_PANEL_BOTTOM - settings.COLLECTION_PANEL_Y)
+            _BOX_X + _panel_pad,
+            _panel_top,
+            _BOX_W - _panel_pad * 2,
+            _panel_bottom - _panel_top,
+        )
 
         # Pre-render panel background
         self._panel_surf = pygame.Surface(
@@ -87,21 +133,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._panel_surf.fill((20, 20, 25, 180))
         pygame.draw.rect(self._panel_surf, (80, 75, 65, 200),
                          self._panel_surf.get_rect(), 2)
-
-        # Action buttons — 4 buttons: Open Main, Open Side, Buy Main, Buy Side + Back
-        abw = settings.COLLECTION_ACTION_BTN_W
-        abh = settings.COLLECTION_ACTION_BTN_H
-        abg = settings.COLLECTION_ACTION_BTN_GAP
-        aby = settings.COLLECTION_ACTION_BTN_Y
-        # Narrower buttons to fit 5
-        btn_w = int(abw * 0.85)
-        total_ab = btn_w * 5 + abg * 4
-        abx = (_SW - total_ab) // 2
-        self._btn_open_main_rect = pygame.Rect(abx, aby, btn_w, abh)
-        self._btn_open_side_rect = pygame.Rect(abx + btn_w + abg, aby, btn_w, abh)
-        self._btn_buy_main_rect = pygame.Rect(abx + 2 * (btn_w + abg), aby, btn_w, abh)
-        self._btn_buy_side_rect = pygame.Rect(abx + 3 * (btn_w + abg), aby, btn_w, abh)
-        self._btn_back_rect = pygame.Rect(abx + 4 * (btn_w + abg), aby, btn_w, abh)
 
         # ── Card click rects (computed per frame based on tab) ──────
         self._card_rects = []  # [(rect, suit, rank), ...]
@@ -131,6 +162,22 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Hover tracking for action buttons
         self._hovered_btn = None
         self._clicked_btn = None
+
+    # ── Lifecycle ────────────────────────────────────────────────────
+
+    def on_enter(self):
+        """Called each time the collection screen becomes active — force re-fetch."""
+        self._data_loaded = False
+        self._cards = {}
+        ud = getattr(self.state, 'user_dict', None) or {}
+        self._gold = ud.get('gold', 0)
+        self._boosters = ud.get('booster_packs', 0)
+        self._boosters_side = ud.get('booster_packs_side', 0)
+        self._scroll_y = 0
+        self._sell_card = None
+        self._sell_dialogue = None
+        self._reveal_overlay = None
+        self._fetch_collection()
 
     # ── data fetching ───────────────────────────────────────────────
 
@@ -177,8 +224,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Apply scroll offset
         offset_y = -self._scroll_y
 
-        # X origin for cards (after suit labels)
-        cards_x = px + label_w
+        # X origin for cards (no suit labels)
+        cards_x = px
 
         # Main section header & side section header on same row
         header_y = py + offset_y
@@ -224,9 +271,13 @@ class CollectionScreen(MenuScreenMixin, Screen):
     def render(self):
         self._draw_menu_chrome()
 
-        # Title
-        tx = (_SW - self._title_surf.get_width()) // 2
-        self.window.blit(self._title_surf, (tx, settings.COLLECTION_TITLE_Y))
+        # Outer box
+        box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
+        _draw_panel(self.window, box_rect)
+
+        # Title (centred inside box)
+        tx = _BOX_X + (_BOX_W - self._title_surf.get_width()) // 2
+        self.window.blit(self._title_surf, (tx, self._title_y))
 
         # Card grid panel
         self.window.blit(self._panel_surf, self._panel_rect.topleft)
@@ -247,7 +298,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._draw_action_button(self._btn_buy_side_rect,
                                  f'Buy Side ({settings.BOOSTER_PACK_SIDE_PRICE}g)',
                                  self._gold >= settings.BOOSTER_PACK_SIDE_PRICE)
-        self._draw_action_button(self._btn_back_rect, 'Back', True)
+
+        self._draw_close_x_button()
 
         # Sell dialogue
         if self._sell_dialogue:
@@ -266,7 +318,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
         positions = self._compute_card_positions()
         cw = settings.COLLECTION_CARD_W
         ch = settings.COLLECTION_CARD_H
-        label_w = settings.COLLECTION_SUIT_LABEL_W
         px = self._panel_rect.x + settings.COLLECTION_PANEL_PAD_X
 
         # Section headers (x, y, text)
@@ -274,17 +325,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
             if self._panel_rect.y <= header_y <= self._panel_rect.bottom:
                 header_surf = self._section_font.render(header_text, True, (250, 221, 0))
                 self.window.blit(header_surf, (header_x, header_y))
-
-        # Suit labels — draw once per suit row (main + side share the row)
-        drawn_suit_rows = set()
-        for (cx, cy, suit, rank, section) in positions:
-            row_key = (suit, cy)
-            if row_key not in drawn_suit_rows and section == 'main' and rank == self._main_ranks[0]:
-                drawn_suit_rows.add(row_key)
-                if self._panel_rect.y <= cy <= self._panel_rect.bottom:
-                    label = self._suit_font.render(suit[0], True, settings.COLLECTION_SUIT_LABEL_CLR)
-                    ly = cy + (ch - label.get_height()) // 2
-                    self.window.blit(label, (px, ly))
 
         # Cards
         mouse_pos = pygame.mouse.get_pos()
@@ -361,6 +401,24 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         txt = self._action_font.render(text, True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
+
+    def _draw_close_x_button(self):
+        """Draw a small X close button in the top-right corner of the box."""
+        r = self._btn_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos) and not self._sell_dialogue and not self._reveal_overlay
+
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+
+        txt = self._close_font.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
 
     # ── sell dialogue ───────────────────────────────────────────────
 
@@ -497,12 +555,23 @@ class CollectionScreen(MenuScreenMixin, Screen):
         super().update()
         self._update_icon_buttons()
 
+        # Re-fetch if data never loaded (e.g. screen was created before login)
+        if not self._data_loaded and not self._poller:
+            ud = getattr(self.state, 'user_dict', None) or {}
+            self._gold = ud.get('gold', 0)
+            self._boosters = ud.get('booster_packs', 0)
+            self._boosters_side = ud.get('booster_packs_side', 0)
+            self._fetch_collection()
+
         # Check background poller
         if self._poller and self._poller.has_result():
             try:
                 self._apply_collection_data(self._poller.result)
             except Exception as e:
                 logger.error(f'Failed to apply collection data: {e}')
+            self._poller = None
+        # Clear a failed/stale poller so re-fetch can trigger next frame
+        elif self._poller and not self._poller.busy:
             self._poller = None
 
         # Update reveal overlay
@@ -560,11 +629,19 @@ class CollectionScreen(MenuScreenMixin, Screen):
             if self._handle_icon_events(event):
                 continue
 
+            # Click outside content box → back to game menu
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and not self.dialogue_box
+                    and not self._sell_dialogue
+                    and not self._reveal_overlay
+                    and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
+                self.state.screen = 'game_menu'
+                return
+
             if event.type == MOUSEBUTTONUP:
-                # Action buttons
-                if self._btn_back_rect.collidepoint(event.pos):
+                # X close button
+                if self._btn_close_rect.collidepoint(event.pos):
                     self.state.screen = 'game_menu'
-                    logger.debug("Back button clicked")
                     continue
                 if self._btn_open_main_rect.collidepoint(event.pos):
                     if self._boosters > 0:

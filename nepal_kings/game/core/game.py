@@ -18,6 +18,12 @@ class Game:
     def __init__(self, game_dict, user_dict, lightweight=False):
         self.game_id = game_dict['id']
         self.state = game_dict['state']
+        self.mode = game_dict.get('mode', 'duel')  # 'duel' or 'conquer'
+        self.land_id = game_dict.get('land_id')  # conquer mode only
+        self.land_tier = game_dict.get('land_tier')  # conquer mode only (1-3)
+        self.land_gold_rate = game_dict.get('land_gold_rate')  # conquer mode only
+        self.land_suit_bonus_suit = game_dict.get('land_suit_bonus_suit')  # conquer mode only
+        self.land_suit_bonus_value = game_dict.get('land_suit_bonus_value')  # conquer mode only
         self.date = game_dict['date']
         self.stake = game_dict.get('stake', 45)
         self.turn_time_limit = game_dict.get('turn_time_limit')  # Seconds per turn (None = no limit)
@@ -343,6 +349,7 @@ class Game:
         self.unlock_actions()
         self.game_id = game_dict['id']
         self.state = game_dict['state']
+        self.mode = game_dict.get('mode', self.mode)
         self.date = game_dict['date']
         self.stake = game_dict.get('stake', 45)
         self.winner_player_id = game_dict.get('winner_player_id')
@@ -355,7 +362,8 @@ class Game:
         self.turn_player_id = game_dict.get('turn_player_id')
 
         # Detect game-over from server (opponent might have triggered it)
-        if self.state == 'finished' and not self.game_over and not self.game_over_shown:
+        # Skip for conquer mode — battle_screen handles conquer end directly
+        if self.state == 'finished' and not self.game_over and not self.game_over_shown and self.mode != 'conquer':
             self.game_over = True
             # Build game_over info from server state
             winner_player = None
@@ -944,11 +952,17 @@ class Game:
                 # Also suppress after battle/fold resolution (result dialogue already shown)
                 # Exception: never suppress notifications that directly affect the player
                 # (e.g. Forced Deal card swap, Dump Cards, Poison on player's figure, Explosion)
+                # In conquer mode, suppress all non-game_start turn summaries
                 opponent_turn_summary = data.get('opponent_turn_summary')
                 action_data = opponent_turn_summary.get('action', {}) if opponent_turn_summary and isinstance(opponent_turn_summary.get('action'), dict) else {}
                 affects_player = action_data.get('affects_player', False)
+                action_type = opponent_turn_summary.get('action') if opponent_turn_summary else None
                 
-                if affects_player and opponent_turn_summary:
+                # In conquer mode, suppress empty/normal turn summaries
+                if self.mode == 'conquer' and action_type != 'game_start' and not affects_player:
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — conquer mode")
+                    self.pending_opponent_turn_summary = None
+                elif affects_player and opponent_turn_summary:
                     # Always show notifications that directly affect the player's state
                     logger.debug(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
                     self.pending_opponent_turn_summary = opponent_turn_summary
@@ -1013,7 +1027,7 @@ class Game:
                 type=c.get('type')  # Include the card type
             )
             for c in self.main_cards
-            if c['player_id'] == player_id and not c.get('part_of_figure', False) and not c.get('in_deck', False)
+            if c['player_id'] == player_id and not c.get('in_deck', False) and not c.get('part_of_figure', False)
         ]
 
         # Side hand
@@ -1032,7 +1046,7 @@ class Game:
                 type=c.get('type')  # Include the card type
             )
             for c in self.side_cards
-            if c['player_id'] == player_id and not c.get('part_of_figure', False) and not c.get('in_deck', False)
+            if c['player_id'] == player_id and not c.get('in_deck', False) and not c.get('part_of_figure', False)
         ]
 
         return main_hand, side_hand
@@ -1226,7 +1240,16 @@ class Game:
 
         Selection phase is authoritative when battle is confirmed but the first
         battle turn has not been assigned yet (battle_turn_player_id is None).
+        In conquer mode, moves are pre-purchased — skip the selection phase.
         """
+        # Conquer mode: moves already chosen in the config screen
+        if self.mode == 'conquer':
+            self.battle_moves_phase = False
+            self.battle_moves_ready = True
+            self.waiting_for_opponent_battle_moves = False
+            self.both_battle_moves_ready = False
+            return
+
         in_selection_phase = bool(
             self.battle_confirmed and
             self.battle_turn_player_id is None and

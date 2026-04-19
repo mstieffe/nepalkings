@@ -37,6 +37,8 @@ class KingdomGameProxy:
         self.in_battle_phase = False
         self.both_battle_moves_ready = False
         self.waiting_for_opponent_battle_moves = False
+        self.battle_modifier = []
+        self.infinite_hammer_active = False
 
         # Chat stubs
         self.chat_messages = []

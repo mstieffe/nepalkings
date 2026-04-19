@@ -356,7 +356,8 @@ def _compute_resource_summary(figures: list) -> str:
     return '\n'.join(lines)
 
 
-def compute_support_bonus(figure: dict, all_player_figures: list) -> int:
+def compute_support_bonus(figure: dict, all_player_figures: list,
+                          land_suit_bonus=None) -> int:
     """Compute support bonus a figure receives from same-suit allies.
 
     Mirrors server ``_compute_support_bonus()`` but works with serialized
@@ -370,6 +371,9 @@ def compute_support_bonus(figure: dict, all_player_figures: list) -> int:
     - Village supporter: sum of KEY card values
     - Military figures provide 0 support
     - Figures in resource deficit provide nothing
+
+    *land_suit_bonus*: optional ``(suit_str, value_int)`` for conquer mode.
+    Every figure whose suit matches gets *value* added.
     """
     fig_field = (figure.get('field') or '').lower()
     if fig_field == 'castle':
@@ -416,6 +420,13 @@ def compute_support_bonus(figure: dict, all_player_figures: list) -> int:
             for card in (f.get('cards_to_figure') or f.get('cards') or []):
                 if (card.get('role') or '').lower() == 'key':
                     total += int(card.get('card_value') or card.get('value') or 0)
+
+    # Conquer mode: land suit bonus (applied to every matching figure)
+    if land_suit_bonus:
+        bonus_suit, bonus_value = land_suit_bonus
+        if (figure.get('suit') or '').lower() == bonus_suit.lower():
+            total += bonus_value
+
     return total
 
 

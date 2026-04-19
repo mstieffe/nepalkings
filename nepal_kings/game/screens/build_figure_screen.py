@@ -142,7 +142,7 @@ class BuildFigureScreen(SubScreen):
             selected_figure.upgrade_card = next(
                 (c for c in real_cards if c == selected_figure.upgrade_card), None)
 
-        card_ids = [c.id for c in real_cards]
+        card_specs = [{'suit': c.suit, 'rank': c.rank} for c in real_cards]
         card_roles = []
         for c in real_cards:
             if c in selected_figure.key_cards:
@@ -160,11 +160,20 @@ class BuildFigureScreen(SubScreen):
                 f'{settings.SERVER_URL}/kingdom/{self.mode}/build_figure',
                 json={
                     'land_id': land_id,
-                    'family_name': selected_figure.family_name,
+                    'family_name': selected_figure.family.name,
+                    'name': getattr(selected_figure, 'name', selected_figure.family.name),
                     'suit': selected_figure.suit,
-                    'field': selected_figure.field,
-                    'card_ids': card_ids,
+                    'color': getattr(selected_figure.family, 'color', selected_figure.suit),
+                    'field': selected_figure.family.field,
+                    'card_specs': card_specs,
                     'card_roles': card_roles,
+                    'produces': getattr(selected_figure, 'produces', None),
+                    'requires': getattr(selected_figure, 'requires', None),
+                    'description': getattr(selected_figure, 'description', ''),
+                    'upgrade_family_name': getattr(selected_figure, 'upgrade_family_name', None),
+                    'checkmate': getattr(selected_figure, 'checkmate', False),
+                    'cannot_be_blocked': getattr(selected_figure, 'cannot_be_blocked', False),
+                    'rest_after_attack': getattr(selected_figure, 'rest_after_attack', False),
                 },
                 timeout=15,
             )
@@ -362,6 +371,9 @@ class BuildFigureScreen(SubScreen):
         """Update the game state and button components."""
         super().update(game)
         self.game = game
+        # Keep card_source in sync for GameCardSource (duel mode)
+        if hasattr(self.card_source, 'game'):
+            self.card_source.game = game
 
         if self.mode in ('conquer', 'defence') or self.game.turn:
             self.confirm_button.disabled = False
@@ -405,7 +417,7 @@ class BuildFigureScreen(SubScreen):
             response = self.dialogue_box.update(events)
             if response:
                 
-                logger.debug("Response:", response)
+                logger.debug("Response: %s", response)
                 if response == 'yes':
                     # Block regular build during forced advance
                     if getattr(self.game, 'pending_forced_advance', False):

@@ -68,15 +68,28 @@ class ScoreboardScroll:
     def make_text_dict(self):
         """Create a dictionary of text values to display on the scoreboard."""
         if self.game:
-            scoreboard_dict = {
-                'opponent': self.game.opponent_name,
-                'date': self.game.date,
-                'turns_left': self.game.current_player.get('turns_left', 0),
-                'round': self.game.current_round,  # Assuming `self.game.round` exists
-                'your_score': self.game.current_player.get('points', 0),
-                'opponent_score': self.game.opponent_player.get('points', 0),
-                'stake': getattr(self.game, 'stake', 45),  # Fallback to 45 if 'stake' isn't defined
-            }
+            is_conquer = getattr(self.game, 'mode', 'duel') == 'conquer'
+            if is_conquer:
+                suit = getattr(self.game, 'land_suit_bonus_suit', None) or '?'
+                bonus = getattr(self.game, 'land_suit_bonus_value', None) or 0
+                gold_rate = getattr(self.game, 'land_gold_rate', None) or 0
+                scoreboard_dict = {
+                    'opponent': self.game.opponent_name,
+                    'land_tier': getattr(self.game, 'land_tier', None) or '?',
+                    'gold_rate': gold_rate,
+                    'suit_bonus': f'+{bonus} {suit.title()}',
+                    'turns_left': self.game.current_player.get('turns_left', 0),
+                }
+            else:
+                scoreboard_dict = {
+                    'opponent': self.game.opponent_name,
+                    'date': self.game.date,
+                    'turns_left': self.game.current_player.get('turns_left', 0),
+                    'round': self.game.current_round,
+                    'your_score': self.game.current_player.get('points', 0),
+                    'opponent_score': self.game.opponent_player.get('points', 0),
+                    'stake': getattr(self.game, 'stake', 45),
+                }
         else:
             scoreboard_dict = {
                 'opponent': 'Opponent',
@@ -129,12 +142,14 @@ class ScoreboardScroll:
         self.draw_transparent_line(vertical_line_start, vertical_line_end, self._cross_color, settings.SCOREBOARD_CROSS_WIDTH, self._cross_alpha)
 
     def draw_cell(self, text, value, cell_x, cell_y, value_color=None,
-                  subtitle=None, subtitle_color=None, y_offset=0, text_spacing=None):
+                  subtitle=None, subtitle_color=None, y_offset=0, text_spacing=None,
+                  value_font=None):
         """Draw the text and value in the specified cell.
 
         :param subtitle: optional smaller text drawn below the main label (e.g. "(battle)").
         :param y_offset: extra pixels to push the value centre downward (used for top-row cells).
         :param text_spacing: gap between title bottom and value top.  Defaults to SCOREBOARD_CELL_TEXT_SPACING.
+        :param value_font: optional font override for the value text.
         """
         if value_color is None:
             value_color = self._value_color
@@ -143,7 +158,8 @@ class ScoreboardScroll:
 
         # Render the text and value
         text_obj = self.font_text.render(text, True, self._text_color)
-        value_obj = self.font_number.render(str(value), True, value_color)
+        vfont = value_font or self.font_number
+        value_obj = vfont.render(str(value), True, value_color)
 
         # Centre text horizontally
         text_rect = text_obj.get_rect(centerx=cell_x + self.cell_width // 2)
@@ -173,8 +189,72 @@ class ScoreboardScroll:
         stake_rect = stake_obj.get_rect(center=(self.x + self.width // 2, self.y + self.height - self.stake_section_height // 2))
         self.window.blit(stake_obj, stake_rect)
 
+    def _is_conquer(self):
+        """Check if we're in conquer mode."""
+        return self.game and getattr(self.game, 'mode', 'duel') == 'conquer'
+
     def draw_msg(self):
         """Render the scoreboard content."""
+        if self._is_conquer():
+            self._draw_conquer_msg()
+        else:
+            self._draw_duel_msg()
+
+    def _draw_conquer_msg(self):
+        """Render conquer-mode scoreboard: opponent, tier, suit bonus, turns, gold rate."""
+        top_offset = settings.SCOREBOARD_CELL_VALUE_OFFSET
+        top_spacing = settings.SCOREBOARD_CELL_SUBTITLE_SPACING
+        _bot_extra = settings.SCOREBOARD_BOTTOM_ROW_EXTRA_Y
+        _bot_offset = int(0.008 * settings.SCREEN_HEIGHT) if _IS_MOBILE else 0
+
+        # Top-left: Opponent name
+        opponent_label = self.text_dict.get("opponent", "Opponent")
+        self.draw_cell("Opponent", opponent_label, self.x, self.y,
+                       value_color=(220, 90, 80),
+                       y_offset=top_offset, text_spacing=top_spacing,
+                       value_font=self.font_text)
+
+        # Top-right: Land tier
+        tier = self.text_dict.get("land_tier", "?")
+        self.draw_cell("Land Tier", f'T{tier}', self.x + self.cell_width, self.y,
+                       y_offset=top_offset, text_spacing=top_spacing)
+
+        # Bottom-left: Suit bonus
+        suit_bonus = self.text_dict.get("suit_bonus", "?")
+        self.draw_cell("Suit Bonus", suit_bonus, self.x, self.y + self.cell_height + _bot_extra,
+                       value_color=(180, 160, 120),
+                       y_offset=_bot_offset,
+                       value_font=self.font_text)
+
+        # Bottom-right: Turns left (battle or build-up)
+        in_battle = (getattr(self.game, 'in_battle_phase', False) or
+                     (getattr(self.game, 'battle_confirmed', False) and
+                      getattr(self.game, 'battle_turn_player_id', None) is not None))
+        _mobile = _IS_MOBILE
+        if in_battle:
+            battle_turns = getattr(self.game, 'battle_turns_left', 0)
+            self.draw_cell("Turns Left", battle_turns,
+                           self.x + self.cell_width, self.y + self.cell_height + _bot_extra,
+                           subtitle=None if _mobile else "(battle)",
+                           subtitle_color=(220, 60, 60),
+                           y_offset=_bot_offset)
+        else:
+            self.draw_cell("Turns Left", self.text_dict.get("turns_left", ""),
+                           self.x + self.cell_width, self.y + self.cell_height + _bot_extra,
+                           subtitle=None if _mobile else "(build-up)",
+                           subtitle_color=(90, 115, 150),
+                           y_offset=_bot_offset)
+
+        # Bottom section: Gold production rate
+        gold_rate = self.text_dict.get("gold_rate", 0)
+        gold_text = f'{gold_rate:.1f} gold/hr'
+        gold_obj = self.font_col_names.render(gold_text, True, (250, 221, 0))
+        gold_rect = gold_obj.get_rect(center=(self.x + self.width // 2,
+                                              self.y + self.height - self.stake_section_height // 2))
+        self.window.blit(gold_obj, gold_rect)
+
+    def _draw_duel_msg(self):
+        """Render the standard duel-mode scoreboard content."""
         # Top-row cells share offset + subtitle spacing so labels & values stay aligned
         top_offset = settings.SCOREBOARD_CELL_VALUE_OFFSET
         top_spacing = settings.SCOREBOARD_CELL_SUBTITLE_SPACING
