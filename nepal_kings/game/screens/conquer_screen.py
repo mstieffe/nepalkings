@@ -1238,53 +1238,83 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         return problems
 
-    def _build_confirm_message(self):
-        """Build a confirmation message listing locked and consumed cards."""
-        locked = []   # cards returned after battle (figures, battle moves)
-        consumed = [] # cards permanently spent (modifiers)
+    def _build_confirm_data(self):
+        """Build confirmation data: message text, card images, captions, and after-message."""
+        from game.components.cards.card_img import CardImg
+        cards_by_id = {}
+        for c in (self._collection_cards or []):
+            cards_by_id[c['id']] = c
+
+        images = []
+        captions = []
+        locked_count = 0
+        consumed_count = 0
+
+        # Figures — locked
         for fig in self._config.get('figures', []):
             name = fig.get('name', '?')
             for cid in fig.get('card_ids', []):
-                locked.append(f'\u2022 Card \u2014 {name} (figure)')
+                cc = cards_by_id.get(cid)
+                if cc:
+                    ci = CardImg(self.window, cc['suit'], cc['rank'])
+                    images.append(ci.front_img)
+                    captions.append(name)
+                    locked_count += 1
+
+        # Battle moves — locked
         for mv in self._config.get('battle_moves', []):
             if mv.get('card_id'):
                 rank = mv.get('rank', '')
                 suit = mv.get('suit', '')
                 rd = mv.get('round_index', 0) + 1
                 if rank and suit:
-                    locked.append(f'\u2022 {rank} {suit} \u2014 Round {rd}')
-                else:
-                    locked.append(f'\u2022 Card \u2014 Round {rd}')
+                    ci = CardImg(self.window, suit, rank)
+                    images.append(ci.front_img)
+                    captions.append(f'Round {rd}')
+                    locked_count += 1
+
+        # Modifiers — consumed
         mod_ids = self._config.get('modifier_card_ids') or []
         if mod_ids:
             mod = self._config.get('battle_modifier', {})
             mod_name = mod.get('type', 'Modifier') if mod else 'Modifier'
-            for _ in mod_ids:
-                consumed.append(f'\u2022 Card \u2014 {mod_name}')
+            for cid in mod_ids:
+                cc = cards_by_id.get(cid)
+                if cc:
+                    ci = CardImg(self.window, cc['suit'], cc['rank'])
+                    images.append(ci.front_img)
+                    captions.append(mod_name)
+                    consumed_count += 1
 
+        # Build header message
         parts = []
-        if locked:
-            parts.append(f'Locked cards ({len(locked)}):' + '\n' + '\n'.join(locked))
-        if consumed:
-            parts.append(f'Consumed cards ({len(consumed)}):' + '\n' + '\n'.join(consumed))
-        if not locked and not consumed:
+        if locked_count:
+            parts.append(f'Locked cards: {locked_count}')
+        if consumed_count:
+            parts.append(f'Consumed cards: {consumed_count}')
+        if not locked_count and not consumed_count:
             parts.append('No cards are used in this configuration.')
+        msg = '  |  '.join(parts) if parts else ''
 
-        if locked:
-            parts.append('')
-            parts.append('If you lose, locked cards may be taken as loot by the opponent.')
-        return '\n'.join(parts)
+        after_msg = None
+        if locked_count:
+            after_msg = 'If you lose, locked cards may be taken as loot by the opponent.'
+
+        return msg, images, captions, after_msg
 
     def _on_battle_click(self):
         """Handle click on 'To Battle!' — validate or confirm."""
         if self._is_battle_ready():
-            msg = self._build_confirm_message()
+            msg, images, captions, after_msg = self._build_confirm_data()
             self._pending_battle_confirm = True
             self.dialogue_box = DialogueBox(
                 self.window,
                 msg,
                 actions=['Confirm', 'Cancel'],
                 title='To Battle!',
+                images=images,
+                image_captions=captions,
+                message_after_images=after_msg,
             )
         else:
             problems = self._get_battle_problems()

@@ -98,7 +98,8 @@ class _DlgButton:
 
 class DialogueBox:
     def __init__(self, window, message, actions=None, images=None, icon=None,
-                 title="", auto_close_delay=None, message_after_images=None):
+                 title="", auto_close_delay=None, message_after_images=None,
+                 image_captions=None):
         if actions is None:
             actions = ['ok']
         if images is None:
@@ -108,10 +109,12 @@ class DialogueBox:
         self.message = message
         self.message_after_images = message_after_images
         self.images = images
+        self.image_captions = image_captions or []
         self.icon = None
         self.title = title
         self.font = settings.get_font(settings.FONT_SIZE_DIALOGUE_BOX)
         self.title_font = settings.get_font(settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
+        self.caption_font = settings.get_font(settings.FS_TINY)
         self.actions = actions
         self.auto_close_delay = auto_close_delay
         self.auto_close_timer = pygame.time.get_ticks() if auto_close_delay else None
@@ -158,13 +161,15 @@ class DialogueBox:
         self.content_height = max(self.img_height, self.drawable_object_height) if self.ordered_items else 0
         self.img_spacing = int(0.020 * _SH) if self.ordered_items else 0
         self.drawable_bottom_spacing = int(0.022 * _SH) if self.ordered_items else 0
+        self.caption_height = (self.caption_font.get_height() + int(0.006 * _SH)) if self.image_captions else 0
 
         btn_h = settings.DIALOGUE_BOX_BTN_H if self.actions else 0
         self.button_height = btn_h + _pad_bottom if self.actions else 0
 
         self.box_height = (_pad_top + self.title_height + self._sep_extra +
                            self.text_height + self.img_spacing +
-                           self.content_height + self.drawable_bottom_spacing +
+                           self.content_height + self.caption_height +
+                           self.drawable_bottom_spacing +
                            self.after_text_height + self.button_height +
                            int(0.010 * _SH))
 
@@ -313,16 +318,21 @@ class DialogueBox:
 
             natural_w = sum(widths) + (num - 1) * int(0.008 * _SW)
 
+            # Collect (x, width) for each item so we can draw captions
+            item_positions = []
+
             if natural_w <= max_w:
                 ix = self.rect.centerx - natural_w // 2
-                for t, item in self.ordered_items:
+                for idx, (t, item) in enumerate(self.ordered_items):
                     if t == 'surface':
                         self.window.blit(item, (ix, image_y))
+                        item_positions.append((ix, item.get_width()))
                         ix += item.get_width() + int(0.008 * _SW)
                     else:
                         item.draw_icon(ix, image_y,
                                        settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT,
                                        settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
+                        item_positions.append((ix, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT))
                         ix += settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT + int(0.008 * _SW)
             else:
                 if num == 1:
@@ -335,14 +345,29 @@ class DialogueBox:
                     xp = ix + i * spacing
                     if t == 'surface':
                         self.window.blit(item, (xp, image_y))
+                        item_positions.append((xp, item.get_width()))
                     else:
                         item.draw_icon(xp, image_y,
                                        settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT,
                                        settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT)
+                        item_positions.append((xp, settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT))
+
+            # Captions below each image
+            if self.image_captions:
+                caption_y = image_y + self.content_height + int(0.004 * _SH)
+                for idx, (ix_pos, iw) in enumerate(item_positions):
+                    if idx < len(self.image_captions) and self.image_captions[idx]:
+                        cap_surf = self.caption_font.render(
+                            self.image_captions[idx], True,
+                            settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+                        cap_rect = cap_surf.get_rect(
+                            centerx=int(ix_pos + iw / 2), top=caption_y)
+                        self.window.blit(cap_surf, cap_rect)
 
         # After-images text
         if self.after_lines_surfaces:
-            aty = image_y + self.content_height + self.drawable_bottom_spacing
+            aty = (image_y + self.content_height + self.caption_height +
+                   self.drawable_bottom_spacing)
             for i, line_surf in enumerate(self.after_lines_surfaces):
                 ly = aty + i * self._line_h
                 self.window.blit(line_surf,
