@@ -44,6 +44,18 @@ class ScoreboardScroll:
         self.font_number = settings.get_font(settings.SCOREBOARD_SCROLL_NUMBER_FONT_SIZE, bold=True)
         self.font_subtitle = settings.get_font(settings.SCOREBOARD_SUBTITLE_FONT_SIZE)
 
+        # Pre-load suit icons for conquer mode
+        self._suit_icons = {}
+        suit_icon_size = int(self.font_text.get_height() * 1.1)
+        for suit_name in ('hearts', 'diamonds', 'clubs', 'spades'):
+            try:
+                raw = pygame.image.load(
+                    settings.SUIT_ICON_IMG_PATH + suit_name + '.png').convert_alpha()
+                self._suit_icons[suit_name] = pygame.transform.smoothscale(
+                    raw, (suit_icon_size, suit_icon_size))
+            except Exception:
+                pass
+
         # Load black and golden rectangle glow images (scale directly to target size)
         glow_w, glow_h = int(width * 1.2), int(height * 1.2)
         raw_black = pygame.image.load(settings.GLOW_RECT_IMG_PATH + 'black.png').convert_alpha()
@@ -77,7 +89,8 @@ class ScoreboardScroll:
                     'opponent': self.game.opponent_name,
                     'land_tier': getattr(self.game, 'land_tier', None) or '?',
                     'gold_rate': gold_rate,
-                    'suit_bonus': f'+{bonus} {suit.title()}',
+                    'suit_bonus_value': bonus,
+                    'suit_bonus_suit': suit.lower(),
                     'turns_left': self.game.current_player.get('turns_left', 0),
                 }
             else:
@@ -219,12 +232,26 @@ class ScoreboardScroll:
         self.draw_cell("Land Tier", f'T{tier}', self.x + self.cell_width, self.y,
                        y_offset=top_offset, text_spacing=top_spacing)
 
-        # Bottom-left: Suit bonus
-        suit_bonus = self.text_dict.get("suit_bonus", "?")
-        self.draw_cell("Suit Bonus", suit_bonus, self.x, self.y + self.cell_height + _bot_extra,
+        # Bottom-left: Suit bonus — use suit icon instead of text name
+        bonus_val = self.text_dict.get("suit_bonus_value", 0)
+        bonus_suit = self.text_dict.get("suit_bonus_suit", "")
+        bonus_text = f'+{bonus_val}'
+        self.draw_cell("Suit Bonus", bonus_text, self.x, self.y + self.cell_height + _bot_extra,
                        value_color=(180, 160, 120),
-                       y_offset=_bot_offset,
+                       y_offset=_bot_offset, text_spacing=top_spacing,
                        value_font=self.font_text)
+        # Draw suit icon next to the bonus value
+        suit_icon = self._suit_icons.get(bonus_suit)
+        if suit_icon:
+            # Position icon right of the rendered bonus text
+            val_surf = self.font_text.render(bonus_text, True, (0, 0, 0))
+            val_w = val_surf.get_width()
+            cell_cx = self.x + self.cell_width // 2
+            cell_cy = (self.y + self.cell_height + _bot_extra +
+                       self.cell_height // 2 + _bot_offset)
+            icon_x = cell_cx + val_w // 2 + 2
+            icon_y = cell_cy - suit_icon.get_height() // 2
+            self.window.blit(suit_icon, (icon_x, icon_y))
 
         # Bottom-right: Turns left (battle or build-up)
         in_battle = (getattr(self.game, 'in_battle_phase', False) or
@@ -237,15 +264,15 @@ class ScoreboardScroll:
                            self.x + self.cell_width, self.y + self.cell_height + _bot_extra,
                            subtitle=None if _mobile else "(battle)",
                            subtitle_color=(220, 60, 60),
-                           y_offset=_bot_offset)
+                           y_offset=_bot_offset, text_spacing=top_spacing)
         else:
             self.draw_cell("Turns Left", self.text_dict.get("turns_left", ""),
                            self.x + self.cell_width, self.y + self.cell_height + _bot_extra,
                            subtitle=None if _mobile else "(build-up)",
                            subtitle_color=(90, 115, 150),
-                           y_offset=_bot_offset)
+                           y_offset=_bot_offset, text_spacing=top_spacing)
 
-        # Bottom section: Gold production rate
+        # Bottom section: Gold production rate — draw below the cross/cell area
         gold_rate = self.text_dict.get("gold_rate", 0)
         gold_text = f'{gold_rate:.1f} gold/hr'
         gold_obj = self.font_col_names.render(gold_text, True, (250, 221, 0))
