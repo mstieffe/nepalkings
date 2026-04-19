@@ -384,7 +384,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._divider_v_top = top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
         # Horizontal: between battle-move section and modifier section
-        self._divider_h1_y = self._mod_section_y - int(0.025 * _SH)
+        # Position above the section text (label + desc), not just above icons
+        self._divider_h1_y = self._mod_section_y - section_text_h - int(0.008 * _SH)
 
         # X close button (top-right of box)
         _xsz = int(0.028 * _SH)

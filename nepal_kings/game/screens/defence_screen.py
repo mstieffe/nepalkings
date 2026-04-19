@@ -405,7 +405,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         btn_h = int(0.045 * _SH)
         agw = int(0.14 * _SW)
         self._btn_auto_gamble = pygame.Rect(right_x, my, agw, btn_h)
-        my += btn_h + pad
+        my += btn_h + int(0.005 * _SH)
 
         # ── Modifier section (icon grid) ────────────────────────────
         fsz = self._mod_frame_size
@@ -418,15 +418,15 @@ class DefenceScreen(MenuScreenMixin, Screen):
         for mod_name in ['Peasant War', 'Civil War']:
             self._modifier_icon_rects[mod_name] = pygame.Rect(mx, self._mod_section_y, fsz, fsz)
             mx += fsz + pad
-        my = self._mod_section_y + fsz + int(0.025 * _SH) + pad
+        my = self._mod_section_y + fsz + int(0.012 * _SH)
 
         # ── Final-round section (battle figure first, then spells) ──
-        self._final_section_y = my + section_text_h + int(0.01 * _SH)
+        self._final_section_y = my + section_text_h + int(0.005 * _SH)
         fx = right_x
         for key in ['battle_figure', 'poison', 'health_boost']:
             self._final_round_icon_rects[key] = pygame.Rect(fx, self._final_section_y, fsz, fsz)
             fx += fsz + pad
-        my = self._final_section_y + fsz + int(0.025 * _SH) + pad
+        my = self._final_section_y + fsz + int(0.012 * _SH)
 
         # Combined resource panel below castle+village field compartments
         castle_r = self._field_rects['castle']
@@ -453,9 +453,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._divider_v_top = top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
         # Horizontal: between battle-move section and modifier section
-        self._divider_h1_y = self._mod_section_y - int(0.025 * _SH)
+        self._divider_h1_y = self._mod_section_y - section_text_h - int(0.005 * _SH)
         # Horizontal: between modifier section and final-round section
-        self._divider_h2_y = self._final_section_y - int(0.025 * _SH)
+        self._divider_h2_y = self._final_section_y - section_text_h - int(0.005 * _SH)
 
         # X close button (top-right of box)
         _xsz = int(0.028 * _SH)
@@ -1252,16 +1252,17 @@ class DefenceScreen(MenuScreenMixin, Screen):
             else:
                 self._final_round_x_rects.pop(spell_key, None)
 
+        # Draw battle figure icon
+        if bf_rect:
+            self._draw_battle_figure_icon(bf_rect, bf_id, mx, my_mouse)
+
         # Vertical separator between battle_figure and first spell icon
+        # (drawn AFTER battle figure so it's not covered by the glow)
         if bf_rect:
             sep_x = bf_rect.right + pad // 2
             sep_y1 = self._final_section_y
             sep_y2 = self._final_section_y + fsz
             pygame.draw.line(self.window, (100, 90, 70), (sep_x, sep_y1), (sep_x, sep_y2), 1)
-
-        # Draw battle figure icon last (on top of separator)
-        if bf_rect:
-            self._draw_battle_figure_icon(bf_rect, bf_id, mx, my_mouse)
 
     def _draw_battle_figure_icon(self, rect, bf_id, mx, my_mouse):
         """Draw the battle figure slot in the final round section."""
@@ -1272,10 +1273,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         is_selected = bf_id is not None
 
         if is_selected:
-            # Draw the figure icon if available
+            # Draw the figure icon if available — offset downward so glow
+            # doesn't overlap the section description text above
             fig_icon = self._figure_icons.get(bf_id)
             if fig_icon:
-                fig_icon.draw(cx, cy)
+                fig_icon.draw(cx, cy + int(fsz * 0.15))
             else:
                 # Fallback: draw a placeholder with name
                 fig_name = self._figure_name(bf_id)
