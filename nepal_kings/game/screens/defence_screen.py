@@ -357,7 +357,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         top = _BOX_Y + _BOX_PAD + int(0.05 * _SH)   # below title
 
         # Section title row height — add extra gap below subtitle (gold rate / suit bonus)
-        section_h = int(0.03 * _SH) + int(0.01 * _SH)
+        section_h = int(0.03 * _SH) + int(0.02 * _SH)
         content_top = top + section_h + pad
 
         # Left: 3 field compartments (taller to use space freed by shorter resource box)
@@ -442,7 +442,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         village_r = self._field_rects['village']
         res_top = castle_r.bottom + pad + int(0.02 * _SH)
         res_w = village_r.right - castle_r.x
-        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top - int(0.01 * _SH))
+        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
         self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
         self._res_castle_rect = None
         self._res_village_rect = None
