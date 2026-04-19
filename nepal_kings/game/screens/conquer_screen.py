@@ -1255,22 +1255,20 @@ class ConquerScreen(MenuScreenMixin, Screen):
     def _build_confirm_data(self):
         """Build confirmation data: message text, card images, captions, and after-message."""
         from game.components.cards.card_img import CardImg
-        cards_by_id = {}
-        for c in (self._collection_cards or []):
-            cards_by_id[c['id']] = c
 
         images = []
         captions = []
         locked_count = 0
         consumed_count = 0
 
-        # Figures — locked
+        # Figures — locked (use card_details from server config)
         for fig in self._config.get('figures', []):
             name = fig.get('name', '?')
-            for cid in fig.get('card_ids', []):
-                cc = cards_by_id.get(cid)
-                if cc:
-                    ci = CardImg(self.window, cc['suit'], cc['rank'])
+            for cd in fig.get('card_details', []):
+                suit = cd.get('suit', '')
+                rank = cd.get('rank', '')
+                if suit and rank:
+                    ci = CardImg(self.window, suit, rank)
                     images.append(ci.front_img)
                     captions.append(name)
                     locked_count += 1
@@ -1287,15 +1285,16 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     captions.append(f'Round {rd}')
                     locked_count += 1
 
-        # Modifiers — consumed
-        mod_ids = self._config.get('modifier_card_ids') or []
-        if mod_ids:
+        # Modifiers — consumed (use modifier_card_details from server config)
+        mod_details = self._config.get('modifier_card_details') or []
+        if mod_details:
             mod = self._config.get('battle_modifier', {})
             mod_name = mod.get('type', 'Modifier') if mod else 'Modifier'
-            for cid in mod_ids:
-                cc = cards_by_id.get(cid)
-                if cc:
-                    ci = CardImg(self.window, cc['suit'], cc['rank'])
+            for cd in mod_details:
+                suit = cd.get('suit', '')
+                rank = cd.get('rank', '')
+                if suit and rank:
+                    ci = CardImg(self.window, suit, rank)
                     images.append(ci.front_img)
                     captions.append(mod_name)
                     consumed_count += 1

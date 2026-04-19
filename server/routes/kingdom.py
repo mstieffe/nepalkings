@@ -294,12 +294,33 @@ def _find_free_cards(user_id, rank, count, color_constraint=None):
 
 
 def _serialize_config_with_deficit(cfg):
-    """Serialize a LandConfig and annotate each figure with has_deficit."""
+    """Serialize a LandConfig and annotate each figure with has_deficit + card details."""
     from kingdom_service import get_config_deficit_map
     data = cfg.serialize()
     deficit_map = get_config_deficit_map(cfg.id)
+
+    # Collect all referenced collection-card IDs so we can resolve suit/rank
+    all_card_ids = set()
     for fig in data['figures']:
         fig['has_deficit'] = deficit_map.get(fig['id'], False)
+        all_card_ids.update(fig.get('card_ids') or [])
+    all_card_ids.update(data.get('modifier_card_ids') or [])
+    all_card_ids.update(data.get('spell_card_ids') or [])
+
+    # Bulk-fetch card details once
+    card_map = {}
+    if all_card_ids:
+        cards = CollectionCard.query.filter(CollectionCard.id.in_(all_card_ids)).all()
+        card_map = {c.id: {'suit': c.suit, 'rank': c.rank} for c in cards}
+
+    # Attach per-card details to figures
+    for fig in data['figures']:
+        fig['card_details'] = [card_map.get(cid, {}) for cid in (fig.get('card_ids') or [])]
+
+    # Attach modifier / spell card details at config level
+    data['modifier_card_details'] = [card_map.get(cid, {}) for cid in (data.get('modifier_card_ids') or [])]
+    data['spell_card_details'] = [card_map.get(cid, {}) for cid in (data.get('spell_card_ids') or [])]
+
     return data
 
 
