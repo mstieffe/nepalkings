@@ -1036,8 +1036,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
             # Battle figure advance icon (replaces old [B] indicator)
             if fig.id in battle_fig_ids and self._advance_icon:
                 adv_w = self._advance_icon.get_width()
+                adv_h = self._advance_icon.get_height()
                 adv_x = int(ix - adv_w // 2)
-                adv_y = int(fr_top)
+                adv_y = int(iy - adv_h // 2)
                 self.window.blit(self._advance_icon, (adv_x, adv_y))
 
     def _draw_battle_move_slots(self):
