@@ -403,7 +403,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         # Auto-gamble toggle — placed beside the move slots (same row)
         ag_btn_h = int(0.035 * _SH)
         agw = int(0.10 * _SW)
-        ag_x = right_x + slot_row_w + int(0.012 * _SW)
+        ag_x = right_x + slot_row_w + int(0.025 * _SW)
         ag_y = content_top + (slot_row_h - ag_btn_h) // 2
         self._btn_auto_gamble = pygame.Rect(ag_x, ag_y, agw, ag_btn_h)
 
@@ -427,7 +427,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         # Shift icons a bit to the right for better spacing
         final_x = right_x + int(0.005 * _SW)
         # Use wider gap between battle_figure and spells for separator clearance
-        spell_gap = fsz + pad + int(0.015 * _SW)
+        spell_gap = fsz + pad + int(0.03 * _SW)
         for i, key in enumerate(['battle_figure', 'poison', 'health_boost']):
             if i == 0:
                 ix = final_x
@@ -1035,7 +1035,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
             # Battle figure advance icon (replaces old [B] indicator)
             if fig.id in battle_fig_ids and self._advance_icon:
-                adv_x = int(fr_left)
+                adv_w = self._advance_icon.get_width()
+                adv_x = int(ix - adv_w // 2)
                 adv_y = int(fr_top)
                 self.window.blit(self._advance_icon, (adv_x, adv_y))
 
