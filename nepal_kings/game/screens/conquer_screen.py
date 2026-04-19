@@ -153,7 +153,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         # ── Suit icon for header ─────────────────────────────────
         self._header_suit_icons = {}
-        _hdr_suit_sz = self._res_font.get_height()
+        _hdr_suit_sz = int(self._res_font.get_height() * 1.5)
         for suit_name in ('hearts', 'diamonds', 'clubs', 'spades'):
             try:
                 raw = pygame.image.load(settings.SUIT_ICON_IMG_PATH + suit_name + '.png').convert_alpha()
@@ -299,13 +299,13 @@ class ConquerScreen(MenuScreenMixin, Screen):
         pad = int(0.02 * _SW)
         top = _BOX_Y + _BOX_PAD + int(0.05 * _SH)   # below title
 
-        # Section title row height
-        section_h = int(0.03 * _SH)
+        # Section title row height — extra gap below subtitle (gold rate / suit bonus)
+        section_h = int(0.03 * _SH) + int(0.01 * _SH)
         content_top = top + section_h + pad
 
-        # Left half: 3 field compartments stacked horizontally
+        # Left half: 3 field compartments stacked horizontally (taller)
         field_w = int(0.14 * _SW)
-        field_h = int(0.46 * _SH)
+        field_h = int(0.48 * _SH)
         fx = _BOX_X + pad
         for field in ('castle', 'village', 'military'):
             self._field_rects[field] = pygame.Rect(fx, content_top, field_w, field_h)
@@ -360,11 +360,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
         my = self._mod_section_y + fsz + int(0.025 * _SH) + pad
 
         # Combined resource panel below castle+village field compartments
+        # Slightly smaller height, moved down a bit
         castle_r = self._field_rects['castle']
         village_r = self._field_rects['village']
-        res_top = castle_r.bottom + pad + int(0.015 * _SH)
+        res_top = castle_r.bottom + pad + int(0.02 * _SH)
         res_w = village_r.right - castle_r.x
-        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
+        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top - int(0.01 * _SH))
         self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
         self._res_castle_rect = None
         self._res_village_rect = None
@@ -754,6 +755,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
         all_regular = []
         all_hovered = None
 
+        # Collect icon positions so X buttons can be placed on figure icons
+        icon_positions = {}  # fig.id → (icon_x, icon_y)
+
         for field_name, rect in self._field_rects.items():
             # Background
             surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
@@ -782,32 +786,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
             lbl = self._label_font.render(field_name.upper(), True, (180, 160, 120))
             self.window.blit(lbl, (rect.x + 6, rect.y + 4))
 
-            # [X] remove buttons for figures in this field
-            field_figs = [f for f in self._figure_objects if f.family.field == field_name]
-            for fig in field_figs:
-                icon = self._figure_icons.get(fig.id)
-                if not icon:
-                    continue
-                # Draw remove button at top-right of field rect
-                cfg_fig = self._get_config_fig(fig.id)
-                if cfg_fig:
-                    _xbs = self._x_btn_sz
-                    xbtn = pygame.Rect(rect.right - _xbs - 4, rect.y + 4, _xbs, _xbs)
-                    # Offset for multiple figures
-                    idx = field_figs.index(fig)
-                    xbtn.y += idx * (_xbs + 2)
-                    x_hovered = xbtn.collidepoint(pygame.mouse.get_pos())
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
-                    xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xbtn.center))
-                    cfg_fig['_remove_rect'] = xbtn
-
             # Position figure icons within compartment
+            field_figs = [f for f in self._figure_objects if f.family.field == field_name]
             if not field_figs:
                 continue
 
@@ -842,6 +822,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 if not icon:
                     continue
                 icon_y = icon_y_start + i * icon_spacing
+                icon_positions[fig.id] = (icon_x, icon_y)
                 if icon.hovered:
                     all_hovered = (icon, icon_x, icon_y)
                 else:
@@ -853,6 +834,32 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if all_hovered:
             icon, ix, iy = all_hovered
             icon.draw(ix, iy)
+
+        # Draw X buttons on each figure icon (top-right of frame)
+        _xbs = self._x_btn_sz
+        frame_w = int(settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_WIDTH)
+        frame_h_btn = int(settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT)
+        for fig in self._figure_objects:
+            pos = icon_positions.get(fig.id)
+            if not pos:
+                continue
+            ix, iy = pos
+            fr_left = ix - frame_w // 2
+            fr_top = iy - frame_h_btn // 2
+
+            cfg_fig = self._get_config_fig(fig.id)
+            if cfg_fig:
+                xbtn = pygame.Rect(int(fr_left + frame_w - _xbs - 2), int(fr_top + 2), _xbs, _xbs)
+                x_hovered = xbtn.collidepoint(pygame.mouse.get_pos())
+                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
+                pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
+                xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
+                xt = xf.render('\u00d7', True, tc)
+                self.window.blit(xt, xt.get_rect(center=xbtn.center))
+                cfg_fig['_remove_rect'] = xbtn
 
     def _draw_battle_move_slots(self):
         """Draw 3 battle move slots as diamond icons."""

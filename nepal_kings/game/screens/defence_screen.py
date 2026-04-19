@@ -182,7 +182,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         # ── Suit icon for header ─────────────────────────────────
         self._header_suit_icons = {}
-        _hdr_suit_sz = self._res_font.get_height()
+        _hdr_suit_sz = int(self._res_font.get_height() * 1.5)
         for suit_name in ('hearts', 'diamonds', 'clubs', 'spades'):
             try:
                 raw = pygame.image.load(settings.SUIT_ICON_IMG_PATH + suit_name + '.png').convert_alpha()
@@ -356,13 +356,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
         pad = int(0.02 * _SW)
         top = _BOX_Y + _BOX_PAD + int(0.05 * _SH)   # below title
 
-        # Section title row height
-        section_h = int(0.03 * _SH)
+        # Section title row height — add extra gap below subtitle (gold rate / suit bonus)
+        section_h = int(0.03 * _SH) + int(0.01 * _SH)
         content_top = top + section_h + pad
 
-        # Left: 3 field compartments
+        # Left: 3 field compartments (taller to use space freed by shorter resource box)
         field_w = int(0.14 * _SW)
-        field_h = int(0.46 * _SH)
+        field_h = int(0.48 * _SH)
         fx = _BOX_X + pad
         for field in ('castle', 'village', 'military'):
             self._field_rects[field] = pygame.Rect(fx, content_top, field_w, field_h)
@@ -399,15 +399,17 @@ class DefenceScreen(MenuScreenMixin, Screen):
         slot_row_w = int(sw * 2.0) * 2 + int(sw * 1.3)
         slot_row_h = int(sw * 1.8)
         self._move_slots_rect = pygame.Rect(right_x, content_top, slot_row_w, slot_row_h)
+
+        # Auto-gamble toggle — placed beside the move slots (same row)
+        ag_btn_h = int(0.035 * _SH)
+        agw = int(0.10 * _SW)
+        ag_x = right_x + slot_row_w + int(0.012 * _SW)
+        ag_y = content_top + (slot_row_h - ag_btn_h) // 2
+        self._btn_auto_gamble = pygame.Rect(ag_x, ag_y, agw, ag_btn_h)
+
         my = content_top + slot_row_h + pad
 
-        # Auto-gamble toggle (in battle moves section)
-        btn_h = int(0.045 * _SH)
-        agw = int(0.14 * _SW)
-        self._btn_auto_gamble = pygame.Rect(right_x, my, agw, btn_h)
-        my += btn_h + int(0.005 * _SH)
-
-        # ── Modifier section (icon grid) ────────────────────────────
+        # ── Modifier section (icon grid) — moved up since auto-gamble is beside moves
         fsz = self._mod_frame_size
         # Section label + description height, so icons start below the text
         lbl_h = self._small_font.get_height()
@@ -420,20 +422,27 @@ class DefenceScreen(MenuScreenMixin, Screen):
             mx += fsz + pad
         my = self._mod_section_y + fsz + int(0.012 * _SH)
 
-        # ── Final-round section (battle figure first, then spells) ──
+        # ── Final Action section (battle figure first, then separator, then spells) ──
         self._final_section_y = my + section_text_h + int(0.005 * _SH)
-        fx = right_x
-        for key in ['battle_figure', 'poison', 'health_boost']:
-            self._final_round_icon_rects[key] = pygame.Rect(fx, self._final_section_y, fsz, fsz)
-            fx += fsz + pad
+        # Shift icons a bit to the right for better spacing
+        final_x = right_x + int(0.005 * _SW)
+        # Use wider gap between battle_figure and spells for separator clearance
+        spell_gap = fsz + pad + int(0.015 * _SW)
+        for i, key in enumerate(['battle_figure', 'poison', 'health_boost']):
+            if i == 0:
+                ix = final_x
+            else:
+                ix = final_x + spell_gap + (i - 1) * (fsz + pad)
+            self._final_round_icon_rects[key] = pygame.Rect(ix, self._final_section_y, fsz, fsz)
         my = self._final_section_y + fsz + int(0.012 * _SH)
 
         # Combined resource panel below castle+village field compartments
+        # Slightly smaller height, moved down a bit to leave gap above
         castle_r = self._field_rects['castle']
         village_r = self._field_rects['village']
-        res_top = castle_r.bottom + pad + int(0.015 * _SH)
+        res_top = castle_r.bottom + pad + int(0.02 * _SH)
         res_w = village_r.right - castle_r.x
-        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
+        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top - int(0.01 * _SH))
         self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
         self._res_castle_rect = None
         self._res_village_rect = None
@@ -454,7 +463,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
         # Horizontal: between battle-move section and modifier section
         self._divider_h1_y = self._mod_section_y - section_text_h - int(0.005 * _SH)
-        # Horizontal: between modifier section and final-round section
+        # Horizontal: between modifier section and final action section
         self._divider_h2_y = self._final_section_y - section_text_h - int(0.005 * _SH)
 
         # X close button (top-right of box)
@@ -859,7 +868,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         pygame.draw.line(self.window, div_clr,
                          (self._right_x, self._divider_h1_y),
                          (_BOX_X + _BOX_W - _BOX_PAD, self._divider_h1_y), 1)
-        # Horizontal divider between modifier and final round section
+        # Horizontal divider between modifier and final action section
         pygame.draw.line(self.window, div_clr,
                          (self._right_x, self._divider_h2_y),
                          (_BOX_X + _BOX_W - _BOX_PAD, self._divider_h2_y), 1)
@@ -922,6 +931,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if bf2:
             battle_fig_ids.add(bf2)
 
+        # Collect icon positions so X buttons can be placed on figure icons
+        icon_positions = {}  # fig.id → (icon_x, icon_y)
+
         for field_name, rect in self._field_rects.items():
             surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
             clr = field_colors.get(field_name, (106, 58, 24))
@@ -947,31 +959,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.window.blit(lbl, (rect.x + 6, rect.y + 4))
 
             field_figs = [f for f in self._figure_objects if f.family.field == field_name]
-            for fig in field_figs:
-                icon = self._figure_icons.get(fig.id)
-                if not icon:
-                    continue
-                cfg_fig = self._get_config_fig(fig.id)
-                if cfg_fig:
-                    _xbs = self._x_btn_sz
-                    xbtn = pygame.Rect(rect.right - _xbs - 4, rect.y + 4, _xbs, _xbs)
-                    idx = field_figs.index(fig)
-                    xbtn.y += idx * (_xbs + 2)
-                    x_hovered = xbtn.collidepoint(pygame.mouse.get_pos())
-                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                    pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
-                    pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
-                    xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
-                    xt = xf.render('\u00d7', True, tc)
-                    self.window.blit(xt, xt.get_rect(center=xbtn.center))
-                    cfg_fig['_remove_rect'] = xbtn
-
-                # Mark battle figures with indicator
-                if fig.id in battle_fig_ids:
-                    bf_lbl = self._small_font.render('[B]', True, (100, 200, 255))
-                    self.window.blit(bf_lbl, (rect.x + 6, rect.y + 4 + 18))
 
             if not field_figs:
                 continue
@@ -1007,6 +994,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 if not icon:
                     continue
                 icon_y = icon_y_start + i * icon_spacing
+                icon_positions[fig.id] = (icon_x, icon_y)
                 if icon.hovered:
                     all_hovered = (icon, icon_x, icon_y)
                 else:
@@ -1017,6 +1005,39 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if all_hovered:
             icon, ix, iy = all_hovered
             icon.draw(ix, iy)
+
+        # Draw X buttons on each figure icon (top-right of frame) and advance icon for battle figures
+        _xbs = self._x_btn_sz
+        frame_w = int(settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_WIDTH)
+        frame_h = int(settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT)
+        for fig in self._figure_objects:
+            pos = icon_positions.get(fig.id)
+            if not pos:
+                continue
+            ix, iy = pos
+            # Frame rect centered on icon position
+            fr_left = ix - frame_w // 2
+            fr_top = iy - frame_h // 2
+
+            cfg_fig = self._get_config_fig(fig.id)
+            if cfg_fig:
+                xbtn = pygame.Rect(int(fr_left + frame_w - _xbs - 2), int(fr_top + 2), _xbs, _xbs)
+                x_hovered = xbtn.collidepoint(pygame.mouse.get_pos())
+                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
+                pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
+                xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
+                xt = xf.render('\u00d7', True, tc)
+                self.window.blit(xt, xt.get_rect(center=xbtn.center))
+                cfg_fig['_remove_rect'] = xbtn
+
+            # Battle figure advance icon (replaces old [B] indicator)
+            if fig.id in battle_fig_ids and self._advance_icon:
+                adv_x = int(fr_left)
+                adv_y = int(fr_top)
+                self.window.blit(self._advance_icon, (adv_x, adv_y))
 
     def _draw_battle_move_slots(self):
         """Draw 3 battle move slots as diamond icons."""
@@ -1159,7 +1180,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._modifier_x_rects.pop(mod_name, None)
 
     def _draw_final_round_section(self):
-        """Draw the final round section with battle figure icon first, then spell icons."""
+        """Draw the final action section with battle figure icon first, then spell icons."""
         spell = self._config.get('spell_name')
         bf_id = self._config.get('battle_figure_id')
         fsz = self._spell_frame_size
@@ -1167,7 +1188,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         mx, my_mouse = pygame.mouse.get_pos()
 
         # Section label (drawn above the icons)
-        lbl = self._small_font.render('Final Round', True, (200, 185, 150))
+        lbl = self._small_font.render('Final Action', True, (200, 185, 150))
         desc = self._res_font.render('Choose a spell or battle figure', True, (160, 145, 120))
         right_x = self._right_x
         lbl_y = self._final_section_y - desc.get_height() - 2 - lbl.get_height() - 2
@@ -1336,7 +1357,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         surf.fill((30, 30, 35, 200))
         self.window.blit(surf, rect.topleft)
         pygame.draw.rect(self.window, (70, 120, 70), rect, 1, border_radius=2)
-        txt = self._btn_font.render(label, True, clr)
+        txt = self._small_font.render(label, True, clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
     def _draw_resources(self):
