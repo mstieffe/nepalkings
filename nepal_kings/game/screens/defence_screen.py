@@ -1281,8 +1281,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         # Vertical separator between battle_figure and first spell icon
         # (drawn AFTER battle figure so it's not covered by the glow)
-        if bf_rect:
-            sep_x = bf_rect.right + pad // 2
+        poison_rect = self._final_round_icon_rects.get('poison')
+        if bf_rect and poison_rect:
+            sep_x = (bf_rect.right + poison_rect.x) // 2
             sep_y1 = self._final_section_y
             sep_y2 = self._final_section_y + fsz
             pygame.draw.line(self.window, (100, 90, 70), (sep_x, sep_y1), (sep_x, sep_y2), 1)
