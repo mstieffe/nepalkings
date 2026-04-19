@@ -1295,11 +1295,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
         is_selected = bf_id is not None
 
         if is_selected:
-            # Draw the figure icon if available — offset downward so glow
-            # doesn't overlap the section description text above
+            # Draw the figure icon if available, centred in the slot
             fig_icon = self._figure_icons.get(bf_id)
             if fig_icon:
-                fig_icon.draw(cx, cy + int(fsz * 0.15))
+                fig_icon.draw(cx, cy)
             else:
                 # Fallback: draw a placeholder with name
                 fig_name = self._figure_name(bf_id)
