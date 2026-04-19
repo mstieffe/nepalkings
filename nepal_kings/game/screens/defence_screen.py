@@ -403,7 +403,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         # Auto-gamble toggle — placed beside the move slots (same row)
         ag_btn_h = int(0.035 * _SH)
         agw = int(0.10 * _SW)
-        ag_x = right_x + slot_row_w + int(0.025 * _SW)
+        ag_x = right_x + slot_row_w + int(0.035 * _SW)
         ag_y = content_top + (slot_row_h - ag_btn_h) // 2
         self._btn_auto_gamble = pygame.Rect(ag_x, ag_y, agw, ag_btn_h)
 
@@ -423,7 +423,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         my = self._mod_section_y + fsz + int(0.012 * _SH)
 
         # ── Final Action section (battle figure first, then separator, then spells) ──
-        self._final_section_y = my + section_text_h + int(0.005 * _SH)
+        self._final_section_y = my + section_text_h + int(0.015 * _SH)
         # Shift icons a bit to the right for better spacing
         final_x = right_x + int(0.005 * _SW)
         # Use wider gap between battle_figure and spells for separator clearance
@@ -440,7 +440,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         # Slightly smaller height, moved down a bit to leave gap above
         castle_r = self._field_rects['castle']
         village_r = self._field_rects['village']
-        res_top = castle_r.bottom + pad + int(0.02 * _SH)
+        res_top = castle_r.bottom + pad + int(0.01 * _SH)
         res_w = village_r.right - castle_r.x
         res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
         self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)

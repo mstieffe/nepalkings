@@ -363,7 +363,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         # Slightly smaller height, moved down a bit
         castle_r = self._field_rects['castle']
         village_r = self._field_rects['village']
-        res_top = castle_r.bottom + pad + int(0.02 * _SH)
+        res_top = castle_r.bottom + pad + int(0.01 * _SH)
         res_w = village_r.right - castle_r.x
         res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
         self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
