@@ -354,10 +354,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _build_layout(self):
         pad = int(0.02 * _SW)
-        top = _BOX_Y + _BOX_PAD + int(0.05 * _SH)   # below title
+        top = _BOX_Y + _BOX_PAD + int(0.06 * _SH)   # below title
 
         # Section title row height — add extra gap below subtitle (gold rate / suit bonus)
-        section_h = int(0.03 * _SH) + int(0.02 * _SH)
+        section_h = int(0.03 * _SH) + int(0.01 * _SH)
         content_top = top + section_h + pad
 
         # Left: 3 field compartments (taller to use space freed by shorter resource box)
