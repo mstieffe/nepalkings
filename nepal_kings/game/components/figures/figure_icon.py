@@ -882,6 +882,12 @@ class FieldFigureIcon(FigureIcon):
             advancing_id_2 = getattr(self.game, 'advancing_figure_id_2', None)
             defending_id = getattr(self.game, 'defending_figure_id', None)
             defending_id_2 = getattr(self.game, 'defending_figure_id_2', None)
+
+            # In conquer mode, hide the defending icon until the invader has
+            # actually advanced (advancing_figure_id is set).
+            if getattr(self.game, 'mode', 'duel') == 'conquer' and not advancing_id:
+                defending_id = None
+                defending_id_2 = None
             
             is_advancing = (advancing_id == self.figure.id) or (advancing_id_2 == self.figure.id)
             is_defending = (defending_id == self.figure.id) or (defending_id_2 == self.figure.id)

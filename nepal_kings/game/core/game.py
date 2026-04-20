@@ -958,9 +958,14 @@ class Game:
                 affects_player = action_data.get('affects_player', False)
                 action_type = opponent_turn_summary.get('action') if opponent_turn_summary else None
                 
-                # In conquer mode, suppress empty/normal turn summaries
-                if self.mode == 'conquer' and action_type != 'game_start' and not affects_player:
-                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — conquer mode")
+                # In conquer mode, suppress only truly empty/unknown turn summaries.
+                # Allow spell casts, counter-advances, and player-affecting actions through.
+                action_type_str = action_data.get('type', '') if isinstance(action_data, dict) else ''
+                is_meaningful = (affects_player
+                                 or action_type == 'game_start'
+                                 or action_type_str in ('spell', 'counter_advance', 'advance'))
+                if self.mode == 'conquer' and not is_meaningful:
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — conquer mode (action_type={action_type_str})")
                     self.pending_opponent_turn_summary = None
                 elif affects_player and opponent_turn_summary:
                     # Always show notifications that directly affect the player's state

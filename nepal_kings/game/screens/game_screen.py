@@ -1229,9 +1229,70 @@ class GameScreen(Screen):
         
         # Check for game start notification
         if action == 'game_start':
-            maharaja_data = summary.get('maharaja', {})
             is_turn = summary.get('is_turn', False)
             is_invader = summary.get('is_invader', False)
+
+            # ── Conquer mode game start ──
+            if summary.get('mode') == 'conquer':
+                self.state.game._game_start_pending = False
+                images = []
+
+                # Show drawn cards from own prelude spells
+                own_spells = summary.get('own_prelude_spells', [])
+                own_drawn_cards = summary.get('own_drawn_cards', [])
+                opp_spells = summary.get('opponent_prelude_spells', [])
+
+                from game.components.cards.card import Card
+
+                for card_data in own_drawn_cards:
+                    card = Card(
+                        rank=card_data['rank'],
+                        suit=card_data['suit'],
+                        value=card_data['value'],
+                        id=card_data.get('id'),
+                        type=card_data.get('type', 'main'),
+                    )
+                    card_img = card.make_icon(self.window, self.state.game, 0, 0)
+                    images.append(card_img.front_img)
+
+                # Build message
+                role_text = "invader" if is_invader else "defender"
+                msg = f"Conquer Battle Started!\n\nYou are the {role_text}. You are fighting {opponent_name}."
+
+                message_after = None
+                # Own prelude spell description
+                if own_spells:
+                    spell_names = ', '.join(s['spell_name'] for s in own_spells)
+                    msg += f"\n\nYour prelude spell: {spell_names}"
+
+                # Opponent prelude spell description
+                if opp_spells:
+                    opp_parts = []
+                    for s in opp_spells:
+                        opp_parts.append(s['spell_name'])
+                    message_after = f"Opponent's prelude spell: {', '.join(opp_parts)}"
+
+                # Battle modifiers
+                modifiers = summary.get('battle_modifier') or []
+                if modifiers:
+                    mod_names = ', '.join(m.get('type', '?') for m in modifiers if isinstance(m, dict))
+                    if mod_names:
+                        extra = f"\nBattle modifier: {mod_names}"
+                        message_after = (message_after + extra) if message_after else extra
+
+                self.queue_or_show_notification({
+                    'message': msg,
+                    'actions': ['ok'],
+                    'images': images if images else None,
+                    'icon': 'welcome',
+                    'title': 'Conquer Battle',
+                    'message_after_images': message_after,
+                })
+                self.state.game.pending_opponent_turn_summary = None
+                return
+
+            # ── Duel mode game start ──
+            maharaja_data = summary.get('maharaja', {})
             
             # Create Figure object from maharaja data to generate FieldFigureIcon
             from game.components.figures.figure import Figure
@@ -1927,13 +1988,41 @@ class GameScreen(Screen):
     def check_own_advance_notification(self):
         """Check if Blitzkrieg combine-advance-and-select is needed.
         For normal advances, the persistent prompt replaces the dialogue.
-        In conquer mode, advance is automatic — suppress notification."""
+        In conquer mode, show a confirmation notification."""
         if not self.state.game or not self.state.game.pending_own_advance_notification:
             return
         
-        # Conquer mode: suppress — advance is automatic
+        figure_name = self.state.game.own_advance_figure_name or "your figure"
+
+        # Conquer mode: show a brief advance confirmation
         if self.state.game.mode == 'conquer':
             self.state.game.pending_own_advance_notification = False
+
+            images = []
+            if self.state.game.advancing_figure_id:
+                field_screen = self.subscreens.get('field')
+                if field_screen:
+                    for icon in getattr(field_screen, 'figure_icons', []):
+                        if hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id:
+                            images.append(icon)
+                            break
+
+            modifier_text, modifier_icons = self._get_battle_modifier_info()
+            images.extend(modifier_icons)
+
+            msg = f"You advanced {figure_name} toward battle!"
+            message_after = "Waiting for the defender's response..."
+            if modifier_text:
+                message_after += f"\n\n{modifier_text}"
+
+            self.queue_or_show_notification({
+                'message': msg,
+                'actions': ['ok'],
+                'images': images if images else None,
+                'icon': None if images else "info",
+                'title': "Advancing!",
+                'message_after_images': message_after,
+            })
             return
         
         figure_name = self.state.game.own_advance_figure_name or "your figure"
@@ -1980,11 +2069,6 @@ class GameScreen(Screen):
     def check_opponent_advance_notification(self):
         """Check if opponent advanced a figure and show notification."""
         if not self.state.game or not self.state.game.pending_advance_notification:
-            return
-        
-        # Conquer mode: suppress — advance is automatic, no counter-advance
-        if self.state.game.mode == 'conquer':
-            self.state.game.pending_advance_notification = False
             return
         
         # Check if advancing figure has cannot_be_blocked
@@ -2236,6 +2320,43 @@ class GameScreen(Screen):
         # ── Conquer mode: auto-fight (no fight/fold dialogue) ──
         if self.state.game.mode == 'conquer':
             self.state.game.battle_ready_shown = True
+
+            # Show defender info to the invader before auto-fighting
+            is_invader = (self.state.game.advancing_player_id == self.state.game.player_id)
+            if is_invader:
+                images = []
+                # Find the defending figure icon
+                field_screen = self.subscreens.get('field')
+                defending_fig_name = "the defender's figure"
+                if field_screen and self.state.game.defending_figure_id:
+                    for icon in getattr(field_screen, 'figure_icons', []):
+                        if hasattr(icon, 'figure') and icon.figure.id == self.state.game.defending_figure_id:
+                            defending_fig_name = icon.figure.name
+                            images.append(icon)
+                            break
+
+                msg = f"The defender responds with {defending_fig_name}!"
+
+                # Check for defender counter-spell
+                message_after = None
+                counter_spells = [
+                    s for s in (self.state.game.cached_active_spells or [])
+                    if s.get('player_id') != self.state.game.player_id
+                    and s.get('spell_name') not in ('Draw 2 MainCards', 'Fill 10', 'Dump Cards')
+                ]
+                if counter_spells:
+                    spell_names = ', '.join(s.get('spell_name', '?') for s in counter_spells)
+                    message_after = f"Defender's active spell: {spell_names}"
+
+                self.queue_or_show_notification({
+                    'message': msg,
+                    'actions': ['ok'],
+                    'images': images if images else None,
+                    'icon': None if images else 'info',
+                    'title': 'Defender Response',
+                    'message_after_images': message_after,
+                })
+
             logger.info("[BATTLE_READY] Conquer mode — auto-submitting 'battle' decision")
             self._submit_battle_decision('battle')
             return
@@ -2801,10 +2922,36 @@ class GameScreen(Screen):
 
     def _enter_battle_moves_phase(self):
         """Transition both players into the battle shop for mandatory battle-move selection.
-        In conquer mode, moves are pre-purchased — auto-confirm and go straight to battle.
+        In conquer mode, moves are pre-purchased — auto-confirm unless the
+        player has extra hand cards (from prelude spells) that could be used
+        to buy additional battle moves.
         """
         if self.state.game and self.state.game.mode == 'conquer':
-            # Conquer mode: moves already selected in config screen — auto-confirm
+            # Check if the player has free hand cards (not part of figures)
+            hand_cards = self.main_hand.cards if hasattr(self, 'main_hand') else []
+            if len(hand_cards) > 0:
+                # Player has extra cards — open battle shop so they can use them
+                logger.info(f"[CONQUER] Player has {len(hand_cards)} hand cards — opening battle shop")
+                self.state.game.battle_moves_phase = True
+                self.state.game.battle_moves_ready = False
+                self.state.game.waiting_for_opponent_battle_moves = False
+                self.state.game.both_battle_moves_ready = False
+                self.battle_button.locked = True
+                self.state.subscreen = 'battle_shop'
+                shop = self.subscreens.get('battle_shop')
+                if shop:
+                    shop._load_bought_moves()
+                self.queue_or_show_notification({
+                    'message': "You have extra cards from your prelude spell!\n\n"
+                               "You may buy additional battle moves, or press\n"
+                               "'Ready!' to proceed with your current moves.",
+                    'actions': ['got it!'],
+                    'icon': 'magic',
+                    'title': 'Battle Shop',
+                })
+                return
+
+            # No extra cards — auto-confirm moves
             from utils.battle_shop_service import confirm_battle_moves
             try:
                 confirm_battle_moves(self.state.game.game_id, self.state.game.player_id)

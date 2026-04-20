@@ -692,6 +692,58 @@ def _get_opponent_turn_summary(game, current_player_id):
 
     if should_show_welcome:
         logger.debug(f"[GAME_START_CHECK] Showing welcome for player {current_player_id}")
+
+        is_turn = game.turn_player_id == current_player_id
+        is_invader = game.invader_player_id == current_player_id
+
+        # ── Conquer mode: no Maharaja — include active prelude spells ──
+        if game.mode == 'conquer':
+            # Gather prelude spells for both players
+            prelude_spells = ActiveSpell.query.filter_by(
+                game_id=game.id, is_active=True
+            ).all()
+
+            own_spells = []
+            opponent_spells = []
+            for sp in prelude_spells:
+                spell_info = {
+                    'spell_name': sp.spell_name,
+                    'spell_type': sp.spell_type,
+                    'effect_data': sp.effect_data,
+                }
+                if sp.player_id == current_player_id:
+                    own_spells.append(spell_info)
+                else:
+                    opponent_spells.append(spell_info)
+
+            # Include drawn cards for the current player's greed spells
+            own_drawn_cards = []
+            own_main_cards = MainCard.query.filter_by(
+                game_id=game.id, player_id=current_player_id,
+                part_of_figure=False,
+            ).all()
+            for mc in own_main_cards:
+                own_drawn_cards.append({
+                    'id': mc.id, 'rank': mc.rank,
+                    'suit': mc.suit, 'value': mc.value,
+                    'type': 'main',
+                })
+
+            result = {
+                'action': 'game_start',
+                'opponent_name': opponent.serialize()['username'],
+                'is_turn': is_turn,
+                'is_invader': is_invader,
+                'mode': 'conquer',
+                'own_prelude_spells': own_spells,
+                'opponent_prelude_spells': opponent_spells,
+                'own_drawn_cards': own_drawn_cards,
+                'battle_modifier': game.battle_modifier,
+            }
+            logger.debug(f"[GAME_START_CHECK] Returning conquer game_start for player {current_player_id}")
+            return result
+
+        # ── Duel mode: show Maharaja ──
         # Get the player's Maharaja figure
         maharaja = Figure.query.filter_by(
             player_id=current_player_id,
