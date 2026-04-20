@@ -158,7 +158,7 @@ class TestPreludeSpellIcons:
 
         pos = screen._btn_prelude_edit.center
         event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
-        with patch.object(screen, '_open_prelude_spell_selection') as mock_open:
+        with patch.object(screen, '_open_prelude_spell_screen') as mock_open:
             screen.handle_events([event])
             mock_open.assert_called_once()
 
@@ -278,7 +278,7 @@ class TestCounterSpellIcons:
 
         pos = screen._btn_counter_edit.center
         event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
-        with patch.object(screen, '_open_counter_spell_selection') as mock_open:
+        with patch.object(screen, '_open_counter_spell_screen') as mock_open:
             screen.handle_events([event])
             mock_open.assert_called_once()
 

@@ -8,6 +8,7 @@ from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.battle_shop_screen import BattleShopScreen
+from game.screens.prelude_spell_screen import PreludeSpellScreen
 from game.core.card_source import CollectionCardSource
 from game.core.kingdom_game_proxy import KingdomGameProxy
 from game.components.cards.card import Card
@@ -1207,45 +1208,24 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._subscreen_obj._on_done = self._close_subscreen
         self._active_subscreen = 'battle_shop'
 
-    def _open_prelude_spell_selection(self):
-        """Open a dialogue to cycle through and select a prelude spell."""
-        # Build ordered list of affordable spells
-        affordable = [s for s in _CONQUER_PRELUDE_SPELLS if self._has_cards_for(s)]
-        if not affordable:
-            self.dialogue_box = DialogueBox(
-                self.window,
-                'You do not have enough cards for any prelude spell.',
-                actions=['OK'],
-                title='No Spells Available',
-            )
+    def _open_prelude_spell_screen(self):
+        """Open PreludeSpellScreen as a subscreen."""
+        card_source = self._build_card_source()
+        if not card_source:
+            self._error = 'Failed to load collection'
             return
-
-        self._prelude_spell_choices = affordable
-        self._prelude_spell_choice_idx = 0
-        self._show_prelude_spell_choice(0)
-
-    def _show_prelude_spell_choice(self, idx):
-        """Show a dialogue for the spell at the given index in _prelude_spell_choices."""
-        choices = self._prelude_spell_choices
-        spell_name = choices[idx]
-        req_label = self._card_req_label(spell_name)
-        icons = self._spell_icons.get(spell_name, {})
-        desc = icons.get('mini_game_description') or icons.get('description', '')
-
-        n = len(choices)
-        pos_text = f' ({idx + 1}/{n})' if n > 1 else ''
-        msg = f'{desc}\n\nCost: {req_label}'
-
-        actions = ['Confirm']
-        if n > 1:
-            actions.append('Next')
-        actions.append('Cancel')
-
-        self._pending_prelude_spell = spell_name
-        self.dialogue_box = DialogueBox(
-            self.window, msg, actions=actions,
-            title=f'Prelude Spell: {spell_name}{pos_text}',
+        self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='conquer')
+        self.state.game = self._game_proxy
+        self._subscreen_obj = PreludeSpellScreen(
+            self.window, self.state,
+            x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
+            title='Prelude Spell', card_source=card_source, mode='conquer',
+            allowed_spells=_CONQUER_PRELUDE_SPELLS,
+            server_endpoint='/kingdom/conquer/set_prelude_spell',
+            land_id=self._land_id,
         )
+        self._subscreen_obj._on_done = self._close_subscreen
+        self._active_subscreen = 'prelude_spell'
 
     def _close_subscreen(self):
         """Dismiss the active subscreen and sync config."""
@@ -1479,18 +1459,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 self._start_battle()
             return
         if response and self._pending_prelude_spell:
-            spell_name = self._pending_prelude_spell
+            self._pending_prelude_spell = None
             self.reset_action()
-            if response == 'confirm':
-                self._pending_prelude_spell = None
-                self._server_set_prelude_spell(spell_name)
-            elif response == 'next' and hasattr(self, '_prelude_spell_choices'):
-                choices = self._prelude_spell_choices
-                idx = (self._prelude_spell_choice_idx + 1) % len(choices)
-                self._prelude_spell_choice_idx = idx
-                self._show_prelude_spell_choice(idx)
-            else:
-                self._pending_prelude_spell = None
             return
         if response and self._pending_prelude_clear:
             self._pending_prelude_clear = False
@@ -1609,7 +1579,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 # Prelude spell: edit button or empty slot click
                 if ((self._btn_prelude_edit and self._btn_prelude_edit.collidepoint(pos))
                         or (self._prelude_spell_rect and self._prelude_spell_rect.collidepoint(pos))):
-                    self._open_prelude_spell_selection()
+                    self._open_prelude_spell_screen()
                     continue
 
                 # To Battle
