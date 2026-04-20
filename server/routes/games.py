@@ -724,8 +724,8 @@ def _get_opponent_turn_summary(game, current_player_id):
             ).all()
             for mc in own_main_cards:
                 own_drawn_cards.append({
-                    'id': mc.id, 'rank': mc.rank,
-                    'suit': mc.suit, 'value': mc.value,
+                    'id': mc.id, 'rank': mc.rank.value,
+                    'suit': mc.suit.value, 'value': mc.value,
                     'type': 'main',
                 })
 

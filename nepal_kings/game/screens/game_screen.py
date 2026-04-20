@@ -446,6 +446,8 @@ class GameScreen(Screen):
         if self.state.game.game_over:
             self.state.game.game_over_shown = True  # suppress game-over dialogue
             self.check_conquer_battle_ended()
+            if not self.state.game:
+                return  # conquer ended — game cleared
 
             # One-time figure fetch for lightweight games (e.g. from async poller)
             if not any(self.state.game.cached_figures_data.values()):
