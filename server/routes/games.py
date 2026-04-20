@@ -943,7 +943,6 @@ def _get_opponent_turn_summary(game, current_player_id):
         elif spell_name == 'Dump Cards':
             action_data['affects_player'] = True
             # Get current player's new hand after dump (only cards in hand, not in deck or figures)
-            from models import MainCard, SideCard
             main_cards = MainCard.query.filter_by(
                 player_id=current_player_id, 
                 game_id=game.id,

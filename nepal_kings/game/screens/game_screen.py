@@ -2358,6 +2358,7 @@ class GameScreen(Screen):
                 })
 
             logger.info("[BATTLE_READY] Conquer mode — auto-submitting 'battle' decision")
+            self.state.game.pending_battle_ready = False
             self._submit_battle_decision('battle')
             return
         
@@ -2926,6 +2927,11 @@ class GameScreen(Screen):
         player has extra hand cards (from prelude spells) that could be used
         to buy additional battle moves.
         """
+        # Guard against double-entry (poller can re-trigger via pending_battle_ready)
+        if self.state.game and self.state.game.battle_moves_phase:
+            logger.debug("[BATTLE_MOVES] Already in battle moves phase — skipping")
+            return
+
         if self.state.game and self.state.game.mode == 'conquer':
             # Check if the player has free hand cards (not part of figures
             # or battle moves — battle-move cards are pre-built from config)

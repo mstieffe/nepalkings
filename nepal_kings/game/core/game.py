@@ -1247,12 +1247,28 @@ class Game:
         battle turn has not been assigned yet (battle_turn_player_id is None).
         In conquer mode, moves are pre-purchased — skip the selection phase.
         """
-        # Conquer mode: moves already chosen in the config screen
+        # Conquer mode: moves are pre-purchased in the config screen.
+        # However, if the player has extra hand cards (from prelude spells)
+        # the client opens the battle shop and sets battle_moves_phase=True.
+        # Don't overwrite that — use the server's confirmed state instead.
         if self.mode == 'conquer':
-            self.battle_moves_phase = False
-            self.battle_moves_ready = True
-            self.waiting_for_opponent_battle_moves = False
-            self.both_battle_moves_ready = False
+            if self.battle_confirmed and self.battle_turn_player_id is None:
+                # Battle confirmed but moves not finalized — keep current
+                # battle_moves_phase flag (may be True if shop is open)
+                confirmed = self.battle_moves_confirmed or {}
+                my_pid = str(self.player_id) if self.player_id is not None else None
+                player_ids = [str(p.get('id')) for p in (self.players or []) if p.get('id') is not None]
+                all_ready = bool(player_ids) and all(confirmed.get(pid) for pid in player_ids)
+                if all_ready:
+                    self.both_battle_moves_ready = True
+                elif my_pid and confirmed.get(my_pid):
+                    self.waiting_for_opponent_battle_moves = True
+            elif not self.battle_confirmed:
+                # No battle yet — default conquer state
+                self.battle_moves_phase = False
+                self.battle_moves_ready = True
+                self.waiting_for_opponent_battle_moves = False
+                self.both_battle_moves_ready = False
             return
 
         in_selection_phase = bool(
