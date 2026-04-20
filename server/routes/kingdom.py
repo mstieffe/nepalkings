@@ -1913,12 +1913,16 @@ def _get_or_create_ai_user():
 
 
 def _create_prelude_spell(game, player, spell_name, spell_data, game_figures):
-    """Create an ActiveSpell for a prelude spell.
+    """Create an ActiveSpell for a prelude spell and execute it immediately.
 
     For battle-modifier spells (Peasant War / Civil War / Blitzkrieg) the
     modifier is also appended to ``game.battle_modifier`` so that existing
     game logic (advance restrictions, turn handling, ceasefire) continues to
     work without changes.
+
+    All other prelude spells (greed / enchantment) are executed right away so
+    that their effects (draw cards, dump hands, etc.) are applied before the
+    first turn.
     """
     spell = ActiveSpell(
         game_id=game.id,
@@ -1939,6 +1943,13 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures):
         if not isinstance(game.battle_modifier, list):
             game.battle_modifier = []
         game.battle_modifier.append({'type': spell_name, 'caster_id': player.id})
+    else:
+        # Greed / enchantment prelude spells: execute immediately
+        db.session.flush()
+        from routes.spells import _execute_spell
+        result = _execute_spell(spell, game, player)
+        if result.get('error'):
+            logger.warning(f'Prelude spell {spell_name} execution failed: {result}')
 
 
 # ── POST /kingdom/conquer/start_battle ───────────────────────────────────────
