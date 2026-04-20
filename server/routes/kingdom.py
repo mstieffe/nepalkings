@@ -414,6 +414,30 @@ def _get_or_create_conquer_config(user_id, land_id):
     return cfg
 
 
+def _wipe_config(cfg):
+    """Delete a config and all its children, unlocking every collection card."""
+    card_ids = []
+    for fig in cfg.figures:
+        if fig.card_ids:
+            card_ids.extend(fig.card_ids)
+    for move in cfg.battle_moves:
+        if move.card_id:
+            card_ids.append(move.card_id)
+    if cfg.modifier_card_ids:
+        card_ids.extend(cfg.modifier_card_ids)
+    if cfg.spell_card_ids:
+        card_ids.extend(cfg.spell_card_ids)
+    if cfg.prelude_spell_card_ids:
+        card_ids.extend(cfg.prelude_spell_card_ids)
+    if cfg.counter_spell_card_ids:
+        card_ids.extend(cfg.counter_spell_card_ids)
+
+    _unlock_collection_cards(card_ids)
+    LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
+    LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
+    db.session.delete(cfg)
+
+
 # ── GET /kingdom/conquer/config ──────────────────────────────────────────────
 
 @kingdom.route('/conquer/config', methods=['GET'])
@@ -443,6 +467,26 @@ def get_conquer_config():
         'config': _serialize_config_with_deficit(cfg),
         'land': land.serialize(),
     })
+
+
+# ── POST /kingdom/conquer/reset_config ───────────────────────────────────────
+
+@kingdom.route('/conquer/reset_config', methods=['POST'])
+@require_token
+def conquer_reset_config():
+    """Wipe the user's conquer config for a land, unlocking all cards."""
+    land_id = (request.json or {}).get('land_id')
+    if land_id is None:
+        return jsonify({'error': 'land_id is required'}), 400
+
+    cfg = LandConfig.query.filter_by(
+        user_id=g.user_id, config_type='conquer', land_id=land_id
+    ).first()
+    if cfg:
+        _wipe_config(cfg)
+        db.session.commit()
+
+    return jsonify({'success': True})
 
 
 # ── Helper: resolve collection cards by suit+rank ────────────────────────────
@@ -935,6 +979,30 @@ def get_defence_config():
         'config': _serialize_config_with_deficit(cfg),
         'land': land.serialize(),
     })
+
+
+# ── POST /kingdom/defence/reset_config ───────────────────────────────────────
+
+@kingdom.route('/defence/reset_config', methods=['POST'])
+@require_token
+def defence_reset_config():
+    """Wipe the user's defence config for a land, unlocking all cards."""
+    land_id = (request.json or {}).get('land_id')
+    if land_id is None:
+        return jsonify({'error': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    cfg = LandConfig.query.filter_by(
+        user_id=g.user_id, config_type='defence', land_id=land_id
+    ).first()
+    if cfg:
+        _wipe_config(cfg)
+        db.session.commit()
+
+    return jsonify({'success': True})
 
 
 # ── POST /kingdom/defence/build_figure ───────────────────────────────────────

@@ -1404,6 +1404,18 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
     # ── Start battle ────────────────────────────────────────────────
 
+    def _leave_screen(self):
+        """Reset config on the server (unlock cards) and go back to kingdom."""
+        try:
+            requests.post(
+                f'{settings.SERVER_URL}/kingdom/conquer/reset_config',
+                json={'land_id': self._land_id},
+                timeout=10,
+            )
+        except Exception as e:
+            logger.error(f'Failed to reset conquer config: {e}')
+        self.state.screen = 'kingdom'
+
     def _start_battle(self):
         """Call start_battle endpoint and transition to the game screen."""
         try:
@@ -1542,7 +1554,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
-                self.state.screen = 'kingdom'
+                self._leave_screen()
                 return
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
@@ -1550,7 +1562,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
                 # X close button
                 if self._btn_close_rect and self._btn_close_rect.collidepoint(pos):
-                    self.state.screen = 'kingdom'
+                    self._leave_screen()
                     return
 
                 if not self._config:
@@ -1639,5 +1651,5 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
             # ESC → back to kingdom
             if event.type == KEYDOWN and event.key == K_ESCAPE:
-                self.state.screen = 'kingdom'
+                self._leave_screen()
                 return

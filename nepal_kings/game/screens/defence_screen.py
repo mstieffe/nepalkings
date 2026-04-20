@@ -140,6 +140,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._counter_spell_choices = []
         self._counter_spell_choice_idx = 0
         self._pending_save_confirm = False
+        self._saved = False   # True after user confirms Save Defence
         self._collection_cards = None
         self._selecting_battle_fig = False  # True when prompting user to pick a figure
 
@@ -1662,6 +1663,19 @@ class DefenceScreen(MenuScreenMixin, Screen):
         # Refresh config from server to get authoritative state
         self._load_config()
 
+    def _leave_screen(self):
+        """Go back to kingdom, resetting unsaved config changes."""
+        if not self._saved:
+            try:
+                requests.post(
+                    f'{settings.SERVER_URL}/kingdom/defence/reset_config',
+                    json={'land_id': self._land_id},
+                    timeout=10,
+                )
+            except Exception as e:
+                logger.error(f'Failed to reset defence config: {e}')
+        self.state.screen = 'kingdom'
+
     # ── Readiness check ─────────────────────────────────────────────
 
     def _is_defence_ready(self):
@@ -1826,6 +1840,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._pending_save_confirm = False
             self.reset_action()
             if response == 'confirm':
+                self._saved = True
                 self.state.screen = 'kingdom'
             return
         if response and self._pending_prelude_spell:
@@ -1931,7 +1946,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
-                self.state.screen = 'kingdom'
+                self._leave_screen()
                 return
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
@@ -1939,7 +1954,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 # X close button
                 if self._btn_close_rect and self._btn_close_rect.collidepoint(pos):
-                    self.state.screen = 'kingdom'
+                    self._leave_screen()
                     return
 
                 if not self._config:
@@ -2072,5 +2087,5 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
             # ESC → back to kingdom
             if event.type == KEYDOWN and event.key == K_ESCAPE:
-                self.state.screen = 'kingdom'
+                self._leave_screen()
                 return

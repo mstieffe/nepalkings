@@ -4234,6 +4234,10 @@ def _wipe_land_config(cfg):
         card_ids.extend(cfg.modifier_card_ids)
     if cfg.spell_card_ids:
         card_ids.extend(cfg.spell_card_ids)
+    if cfg.prelude_spell_card_ids:
+        card_ids.extend(cfg.prelude_spell_card_ids)
+    if cfg.counter_spell_card_ids:
+        card_ids.extend(cfg.counter_spell_card_ids)
 
     # Unlock all cards
     if card_ids:
