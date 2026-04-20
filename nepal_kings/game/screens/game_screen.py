@@ -2927,8 +2927,10 @@ class GameScreen(Screen):
         to buy additional battle moves.
         """
         if self.state.game and self.state.game.mode == 'conquer':
-            # Check if the player has free hand cards (not part of figures)
+            # Check if the player has free hand cards (not part of figures
+            # or battle moves — battle-move cards are pre-built from config)
             hand_cards = self.main_hand.cards if hasattr(self, 'main_hand') else []
+            hand_cards = [c for c in hand_cards if not getattr(c, 'part_of_battle_move', False)]
             if len(hand_cards) > 0:
                 # Player has extra cards — open battle shop so they can use them
                 logger.info(f"[CONQUER] Player has {len(hand_cards)} hand cards — opening battle shop")
