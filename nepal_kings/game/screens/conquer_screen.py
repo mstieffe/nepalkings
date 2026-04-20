@@ -1516,7 +1516,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if response and self._pending_leave_confirm:
             self._pending_leave_confirm = False
             self.reset_action()
-            if response == 'confirm':   # 'Leave'
+            if response == 'leave':
                 self._leave_screen()
             return
         if response and self._pending_prelude_spell:
