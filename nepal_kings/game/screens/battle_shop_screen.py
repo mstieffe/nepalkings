@@ -878,7 +878,10 @@ class BattleShopScreen(SubScreen):
         """Player confirms their 3 battle moves — notify server."""
         if getattr(self.game, 'game_over', False):
             return
-        if len(self.bought_moves) < settings.BATTLE_SHOP_MAX_MOVES:
+        # In conquer/defence mode moves are pre-built from config and may
+        # be fewer than MAX — the server already allows this.
+        if (len(self.bought_moves) < settings.BATTLE_SHOP_MAX_MOVES
+                and self.mode not in ('conquer', 'defence')):
             return
 
         result = battle_shop_service.confirm_battle_moves(
