@@ -12,6 +12,7 @@ from models import (db, User, Land, LandAttackLog, CollectionCard,
                     Game, Player, Figure, BattleMove, CardToFigure, ActiveSpell,
                     MainCard, Suit, MainRank)
 from routes.auth import require_token
+from game_service.deck_manager import DeckManager
 import server_settings as config
 
 kingdom = Blueprint('kingdom', __name__)
@@ -2139,6 +2140,14 @@ def conquer_start_battle():
     # Set attacker as invader and turn player
     game.invader_player_id = atk_player.id
     game.turn_player_id = atk_player.id
+
+    # ── Create and deal deck ──
+    DeckManager.create_and_shuffle_deck(game)
+    DeckManager.deal_cards_to_players(
+        game, [atk_player, def_player],
+        num_main_cards=config.NUM_MAIN_CARDS_START,
+        num_side_cards=config.NUM_SIDE_CARDS_START,
+    )
 
     # ── Build attacker figures & moves ──
     atk_game_figures = _build_figures_from_config(atk_figures, atk_player, game)
