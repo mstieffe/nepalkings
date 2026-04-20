@@ -10,7 +10,7 @@ from flask import Blueprint, jsonify, request, g
 from models import (db, User, Land, LandAttackLog, CollectionCard,
                     LandConfig, LandConfigFigure, LandConfigBattleMove,
                     Game, Player, Figure, BattleMove, CardToFigure, ActiveSpell,
-                    MainCard, Suit, MainRank)
+                    MainCard, SideCard, Suit, MainRank, CardRole)
 from routes.auth import require_token
 from game_service.deck_manager import DeckManager
 import server_settings as config
@@ -1739,51 +1739,197 @@ _RANK_TO_VALUE = {
 }
 
 
-def _pick_strongest_figure(config_figures, game_figures, cfg_fig_map):
-    """Pick the strongest non-deficit figure as battle figure fallback.
+# ── Figure-power helpers for fallback selection ─────────────────────────────
+
+_FIELD_OVERRIDE_BASE_POWER = {'castle': 15}
+
+
+def _fb_base_power(figure):
+    """Base power of a game Figure (castle=15, else sum of card values)."""
+    override = _FIELD_OVERRIDE_BASE_POWER.get(figure.field)
+    if override is not None:
+        return override
+    total = 0
+    for assoc in CardToFigure.query.filter_by(figure_id=figure.id).all():
+        card = (db.session.get(MainCard, assoc.card_id) if assoc.card_type == 'main'
+                else db.session.get(SideCard, assoc.card_id))
+        if card:
+            total += card.value
+    return total
+
+
+def _fb_support_bonus(figure, all_figures, game_id, land_suit_bonus=None):
+    """Support bonus from same-player, same-suit figures."""
+    fig_field = (figure.field or '').lower()
+    if fig_field == 'castle':
+        valid_fields = {'castle'}
+    elif fig_field == 'village':
+        valid_fields = {'castle'}
+    elif fig_field == 'military':
+        valid_fields = {'castle', 'village'}
+    else:
+        return 0
+
+    total = 0
+    for f in all_figures:
+        if f.id == figure.id or f.player_id != figure.player_id:
+            continue
+        if (f.suit or '').lower() != (figure.suit or '').lower():
+            continue
+        f_field = (f.field or '').lower()
+        if f_field not in valid_fields or f_field == 'military':
+            continue
+        if _fb_has_deficit(f, f.player_id, game_id):
+            continue
+        if f_field == 'castle':
+            total += 5 if 'Maharaja' in (f.name or '') else 4
+        else:
+            for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
+                if assoc.role == CardRole.KEY:
+                    card = (db.session.get(MainCard, assoc.card_id)
+                            if assoc.card_type == 'main'
+                            else db.session.get(SideCard, assoc.card_id))
+                    if card:
+                        total += card.value
+
+    if land_suit_bonus:
+        bonus_suit, bonus_value = land_suit_bonus
+        if (figure.suit or '').lower() == bonus_suit.lower():
+            total += bonus_value
+    return total
+
+
+def _fb_healer_buff(figure, all_figures, game_id):
+    """Healer buff: +4 per same-suit Healer for village figures."""
+    if (figure.field or '').lower() != 'village':
+        return 0
+    buff = 0
+    for f in all_figures:
+        if f.player_id != figure.player_id:
+            continue
+        if 'Healer' not in (f.name or ''):
+            continue
+        if (f.suit or '').lower() != (figure.suit or '').lower():
+            continue
+        if _fb_has_deficit(f, f.player_id, game_id):
+            continue
+        buff += 4
+    return buff
+
+
+def _fb_wall_total(all_figures, player_id, game_id):
+    """Sum of Wall side-card values for the player (defender wall bonus)."""
+    total = 0
+    for f in all_figures:
+        if f.player_id != player_id:
+            continue
+        if 'Wall' not in (f.name or ''):
+            continue
+        if _fb_has_deficit(f, player_id, game_id):
+            continue
+        for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
+            if assoc.card_type == 'side':
+                card = db.session.get(SideCard, assoc.card_id)
+                if card:
+                    total += card.value
+    return total
+
+
+def _fb_enchantment_mod(figure_id, game_id, player_id):
+    """Sum of active enchantment power modifiers on a figure."""
+    spells = ActiveSpell.query.filter_by(
+        game_id=game_id, player_id=player_id, is_active=True
+    ).all()
+    total = 0
+    for s in spells:
+        if s.target_figure_id != figure_id:
+            continue
+        ed = s.effect_data or {}
+        pm = ed.get('power_modifier', 0)
+        if isinstance(pm, (int, float)) and pm != -999:
+            total += int(pm)
+    return total
+
+
+def _fb_has_deficit(figure, player_id, game_id):
+    """Check if a game Figure has a resource deficit."""
+    if not figure.requires:
+        return False
+    all_figs = Figure.query.filter_by(
+        player_id=player_id, game_id=game_id).all()
+    total_requires = {}
+    for fig in all_figs:
+        if fig.requires:
+            for res, amt in fig.requires.items():
+                total_requires[res] = total_requires.get(res, 0) + amt
+    excluded = set()
+    stable = False
+    while not stable:
+        stable = True
+        total_produces = {}
+        for i, fig in enumerate(all_figs):
+            if i in excluded:
+                continue
+            if fig.produces:
+                for res, amt in fig.produces.items():
+                    total_produces[res] = total_produces.get(res, 0) + amt
+        for i, fig in enumerate(all_figs):
+            if i in excluded or not fig.requires:
+                continue
+            for res_name in fig.requires:
+                if total_requires.get(res_name, 0) > total_produces.get(res_name, 0):
+                    excluded.add(i)
+                    stable = False
+                    break
+    for res_name in figure.requires:
+        if total_requires.get(res_name, 0) > total_produces.get(res_name, 0):
+            return True
+    return False
+
+
+def _pick_strongest_figure(game_figures, game):
+    """Pick the strongest non-deficit figure using full power computation.
+
+    Power = base + support + healer + wall + enchantment + land suit bonus.
 
     Returns the game figure ID of the strongest eligible figure, or
     the first figure's ID if none are eligible.
     """
-    from kingdom_service import check_land_config_deficit
+    if not game_figures:
+        return None
+
+    player_id = game_figures[0].player_id
+    game_id = game.id
+    all_figures = Figure.query.filter_by(game_id=game_id).all()
+
+    # Land suit bonus for conquer mode
+    land_suit_bonus = None
+    if game.mode == 'conquer' and game.land_id:
+        land = db.session.get(Land, game.land_id)
+        if land and land.suit_bonus_suit and land.suit_bonus_value:
+            land_suit_bonus = (land.suit_bonus_suit, land.suit_bonus_value)
+
+    # Wall total (defender gets wall bonus)
+    wall = _fb_wall_total(all_figures, player_id, game_id)
 
     best_id = None
     best_power = -1
 
-    for cfg_fig, game_fig in zip(config_figures, game_figures):
-        # Skip figures with resource deficit
-        if check_land_config_deficit(cfg_fig, config_figures):
+    for gf in game_figures:
+        if _fb_has_deficit(gf, player_id, game_id):
             continue
-
-        # Estimate power: castle = 15, others = sum of card values
-        if (cfg_fig.field or '').lower() == 'castle':
-            power = 15
-        else:
-            power = 0
-            for card_id in (cfg_fig.card_ids or []):
-                col_card = db.session.get(CollectionCard, card_id)
-                if col_card:
-                    power += col_card.value or 0
-
-        # Support bonus estimate: castle supporters give +4/+5 each
-        fig_suit = (cfg_fig.suit or '').lower()
-        for other_cfg in config_figures:
-            if other_cfg.id == cfg_fig.id:
-                continue
-            if (other_cfg.suit or '').lower() != fig_suit:
-                continue
-            if check_land_config_deficit(other_cfg, config_figures):
-                continue
-            other_field = (other_cfg.field or '').lower()
-            if other_field == 'castle':
-                power += 5 if 'Maharaja' in (other_cfg.name or '') else 4
+        base = _fb_base_power(gf)
+        support = _fb_support_bonus(gf, all_figures, game_id,
+                                    land_suit_bonus=land_suit_bonus)
+        healer = _fb_healer_buff(gf, all_figures, game_id)
+        enchant = _fb_enchantment_mod(gf.id, game_id, player_id)
+        power = base + support + healer + wall + enchant
 
         if power > best_power:
             best_power = power
-            best_id = game_fig.id
+            best_id = gf.id
 
-    # Fallback to first figure if all are in deficit
-    if best_id is None and game_figures:
+    if best_id is None:
         best_id = game_figures[0].id
 
     return best_id
@@ -2296,10 +2442,15 @@ def conquer_start_battle():
             if mapped_id:
                 game.defending_figure_id_2 = mapped_id
 
-        # ── Fallback: pick strongest eligible figure if none configured ──
-        if not game.defending_figure_id and def_game_figures:
+        # ── Fallback: pick strongest eligible figure when neither
+        #    battle figure nor counter spell is configured (both turns
+        #    empty → auto-advance with strongest figure) ──
+        if (not game.defending_figure_id
+                and not def_cfg.counter_spell_name
+                and not def_cfg.spell_name
+                and def_game_figures):
             game.defending_figure_id = _pick_strongest_figure(
-                def_config_figures, def_game_figures, def_cfg_fig_map)
+                def_game_figures, game)
 
         # ── Defender prelude spell ──
         if def_cfg.prelude_spell_name:
