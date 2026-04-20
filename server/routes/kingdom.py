@@ -1739,6 +1739,56 @@ _RANK_TO_VALUE = {
 }
 
 
+def _pick_strongest_figure(config_figures, game_figures, cfg_fig_map):
+    """Pick the strongest non-deficit figure as battle figure fallback.
+
+    Returns the game figure ID of the strongest eligible figure, or
+    the first figure's ID if none are eligible.
+    """
+    from kingdom_service import check_land_config_deficit
+
+    best_id = None
+    best_power = -1
+
+    for cfg_fig, game_fig in zip(config_figures, game_figures):
+        # Skip figures with resource deficit
+        if check_land_config_deficit(cfg_fig, config_figures):
+            continue
+
+        # Estimate power: castle = 15, others = sum of card values
+        if (cfg_fig.field or '').lower() == 'castle':
+            power = 15
+        else:
+            power = 0
+            for card_id in (cfg_fig.card_ids or []):
+                col_card = db.session.get(CollectionCard, card_id)
+                if col_card:
+                    power += col_card.value or 0
+
+        # Support bonus estimate: castle supporters give +4/+5 each
+        fig_suit = (cfg_fig.suit or '').lower()
+        for other_cfg in config_figures:
+            if other_cfg.id == cfg_fig.id:
+                continue
+            if (other_cfg.suit or '').lower() != fig_suit:
+                continue
+            if check_land_config_deficit(other_cfg, config_figures):
+                continue
+            other_field = (other_cfg.field or '').lower()
+            if other_field == 'castle':
+                power += 5 if 'Maharaja' in (other_cfg.name or '') else 4
+
+        if power > best_power:
+            best_power = power
+            best_id = game_fig.id
+
+    # Fallback to first figure if all are in deficit
+    if best_id is None and game_figures:
+        best_id = game_figures[0].id
+
+    return best_id
+
+
 def _build_figures_from_config(cfg_figures, player, game):
     """Create Figure + CardToFigure records from LandConfigFigure list.
 
@@ -2245,6 +2295,11 @@ def conquer_start_battle():
             mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id_2)
             if mapped_id:
                 game.defending_figure_id_2 = mapped_id
+
+        # ── Fallback: pick strongest eligible figure if none configured ──
+        if not game.defending_figure_id and def_game_figures:
+            game.defending_figure_id = _pick_strongest_figure(
+                def_config_figures, def_game_figures, def_cfg_fig_map)
 
         # ── Defender prelude spell ──
         if def_cfg.prelude_spell_name:
