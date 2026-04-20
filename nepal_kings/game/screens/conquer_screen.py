@@ -949,7 +949,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         right_x = self._right_x
 
         # Section label
-        lbl = self._small_font.render('Prelude Spell', True, (200, 185, 150))
+        lbl = self._small_font.render('Prelude Spell (optional)', True, (200, 185, 150))
         desc = self._res_font.render('Cast a spell before battle begins', True, (160, 145, 120))
         lbl_y = self._mod_section_y - desc.get_height() - 2 - lbl.get_height() - 2
         self.window.blit(lbl, (right_x, lbl_y))
@@ -1246,8 +1246,13 @@ class ConquerScreen(MenuScreenMixin, Screen):
         figures = self._config.get('figures', [])
         moves = self._config.get('battle_moves', [])
 
+        prelude = self._config.get('prelude_spell_name')
+        village_only = prelude in ('Peasant War', 'Civil War')
+
         has_valid_figure = any(
-            not f.get('has_deficit', False) and not f.get('cannot_attack', False)
+            not f.get('has_deficit', False)
+            and not f.get('cannot_attack', False)
+            and (not village_only or f.get('field') == 'village')
             for f in figures
         )
         has_moves = len(moves) == 3
@@ -1262,6 +1267,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         figures = self._config.get('figures', [])
         moves = self._config.get('battle_moves', [])
+        prelude = self._config.get('prelude_spell_name')
+        village_only = prelude in ('Peasant War', 'Civil War')
 
         if not figures:
             problems.append('No figures on the field.')
@@ -1279,6 +1286,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     problems.append('All figures that can fight have a resource deficit.')
                 else:
                     problems.append('No figure on the field is able to advance into battle.')
+            elif village_only:
+                village_advance = [
+                    f for f in can_advance if f.get('field') == 'village'
+                ]
+                if not village_advance:
+                    problems.append(
+                        f'{prelude} is selected — only village figures can advance, '
+                        'but none of your village figures are able to fight.'
+                    )
 
         if len(moves) < 3:
             missing = 3 - len(moves)

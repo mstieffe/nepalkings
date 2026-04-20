@@ -1092,7 +1092,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         right_x = self._right_x
 
         # Section label
-        lbl = self._small_font.render('Prelude Spell', True, (200, 185, 150))
+        lbl = self._small_font.render('Prelude Spell (optional)', True, (200, 185, 150))
         desc = self._res_font.render('Cast a spell before battle begins', True, (160, 145, 120))
         lbl_y = self._mod_section_y - desc.get_height() - 2 - lbl.get_height() - 2
         self.window.blit(lbl, (right_x, lbl_y))
@@ -1458,11 +1458,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _on_save_click(self):
         """Handle click on Save Defence button."""
         if not self._is_defence_ready():
+            problems = self._get_defence_problems()
+            msg = '\n'.join(f'\u2022 {p}' for p in problems)
             self.dialogue_box = DialogueBox(
                 self.window,
-                'Defence is not complete yet. Please fill all required slots.',
+                msg,
                 actions=['OK'],
-                title='Cannot Save',
+                title='Cannot Save Defence',
             )
             return
         msg, images, captions, after_msg = self._build_confirm_data()
@@ -1669,14 +1671,67 @@ class DefenceScreen(MenuScreenMixin, Screen):
         figures = self._config.get('figures', [])
         moves = self._config.get('battle_moves', [])
 
-        has_valid_figure = any(not f.get('has_deficit', False) for f in figures)
+        prelude = self._config.get('prelude_spell_name')
+        village_only = prelude in ('Peasant War', 'Civil War')
+
+        has_valid_figure = any(
+            not f.get('has_deficit', False)
+            and (not village_only or f.get('field') == 'village')
+            for f in figures
+        )
         has_moves = len(moves) == 3
-        # Defence also requires either a battle figure or a spell (or auto-gamble)
+
+        # Defence requires exactly one counter action (battle figure XOR counter spell),
+        # or auto-gamble as a fallback.
         has_battle_fig = self._config.get('battle_figure_id') is not None
         has_counter_spell = self._config.get('counter_spell_name') is not None
         has_auto_gamble = self._config.get('auto_gamble', False)
+        # Mutual exclusivity: cannot have both battle figure and counter spell
+        if has_battle_fig and has_counter_spell:
+            return False
         has_strategy = has_battle_fig or has_counter_spell or has_auto_gamble
         return has_valid_figure and has_moves and has_strategy
+
+    def _get_defence_problems(self):
+        """Return a list of human-readable problems preventing save."""
+        problems = []
+        if not self._config:
+            problems.append('Configuration not loaded.')
+            return problems
+
+        figures = self._config.get('figures', [])
+        moves = self._config.get('battle_moves', [])
+        prelude = self._config.get('prelude_spell_name')
+        village_only = prelude in ('Peasant War', 'Civil War')
+
+        if not figures:
+            problems.append('No figures on the field.')
+        else:
+            can_fight = [f for f in figures if not f.get('has_deficit', False)]
+            if not can_fight:
+                problems.append('All figures have a resource deficit.')
+            elif village_only:
+                village_fighters = [f for f in can_fight if f.get('field') == 'village']
+                if not village_fighters:
+                    problems.append(
+                        f'{prelude} is selected \u2014 only village figures can fight, '
+                        'but none of your village figures are available.'
+                    )
+
+        if len(moves) < 3:
+            missing = 3 - len(moves)
+            problems.append(f'{missing} battle move{"s" if missing > 1 else ""} still missing (need 3).')
+
+        has_battle_fig = self._config.get('battle_figure_id') is not None
+        has_counter_spell = self._config.get('counter_spell_name') is not None
+        has_auto_gamble = self._config.get('auto_gamble', False)
+
+        if has_battle_fig and has_counter_spell:
+            problems.append('Battle figure and counter spell cannot both be set. Remove one.')
+        elif not has_battle_fig and not has_counter_spell and not has_auto_gamble:
+            problems.append('Select a battle figure, a counter spell, or enable auto-gamble.')
+
+        return problems
 
     # ── Prelude spell cycling (auto-defender) ─────────────────────
 
