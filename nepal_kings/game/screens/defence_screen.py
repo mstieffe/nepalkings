@@ -140,6 +140,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._counter_spell_choices = []
         self._counter_spell_choice_idx = 0
         self._pending_save_confirm = False
+        self._pending_leave_confirm = False
         self._saved = False   # True after user confirms Save Defence
         self._collection_cards = None
         self._selecting_battle_fig = False  # True when prompting user to pick a figure
@@ -1676,6 +1677,37 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 logger.error(f'Failed to reset defence config: {e}')
         self.state.screen = 'kingdom'
 
+    def _has_config_content(self):
+        """True if the config has any figures, moves, or spells set."""
+        if not self._config:
+            return False
+        return bool(
+            self._config.get('figures')
+            or self._config.get('battle_moves')
+            or self._config.get('prelude_spell_name')
+            or self._config.get('counter_spell_name')
+            or self._config.get('battle_figure_id')
+            or self._config.get('battle_modifier')
+        )
+
+    def _try_leave_screen(self):
+        """Prompt if config has unsaved content; otherwise leave immediately."""
+        if self._saved:
+            self.state.screen = 'kingdom'
+            return
+        if self._has_config_content():
+            self._pending_leave_confirm = True
+            self.dialogue_box = DialogueBox(
+                self.window,
+                'You have unsaved changes.\n'
+                'Leaving will discard all figures, battle moves,\n'
+                'and spells you have configured.',
+                actions=['Leave', 'Stay'],
+                title='Discard Changes?',
+            )
+        else:
+            self._leave_screen()
+
     # ── Readiness check ─────────────────────────────────────────────
 
     def _is_defence_ready(self):
@@ -1843,6 +1875,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._saved = True
                 self.state.screen = 'kingdom'
             return
+        if response and self._pending_leave_confirm:
+            self._pending_leave_confirm = False
+            self.reset_action()
+            if response == 'confirm':   # 'Leave'
+                self._leave_screen()
+            return
         if response and self._pending_prelude_spell:
             self._pending_prelude_spell = None
             self.reset_action()
@@ -1869,6 +1907,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._pending_counter_spell = None
             self._pending_counter_clear = False
             self._pending_save_confirm = False
+            self._pending_leave_confirm = False
             self.reset_action()
             return
 
@@ -1946,7 +1985,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
-                self._leave_screen()
+                self._try_leave_screen()
                 return
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
@@ -1954,7 +1993,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 # X close button
                 if self._btn_close_rect and self._btn_close_rect.collidepoint(pos):
-                    self._leave_screen()
+                    self._try_leave_screen()
                     return
 
                 if not self._config:
@@ -2087,5 +2126,5 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
             # ESC → back to kingdom
             if event.type == KEYDOWN and event.key == K_ESCAPE:
-                self._leave_screen()
+                self._try_leave_screen()
                 return

@@ -132,6 +132,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._move_detail_box = None
         self._config_version = 0       # incremented on config change
         self._pending_battle_confirm = False
+        self._pending_leave_confirm = False
         self._pending_prelude_spell = None   # spell name pending confirmation
         self._pending_prelude_clear = False  # pending clear confirmation
         self._prelude_spell_choices = []     # affordable spells list
@@ -1416,6 +1417,32 @@ class ConquerScreen(MenuScreenMixin, Screen):
             logger.error(f'Failed to reset conquer config: {e}')
         self.state.screen = 'kingdom'
 
+    def _has_config_content(self):
+        """True if the config has any figures, moves, or spells set."""
+        if not self._config:
+            return False
+        return bool(
+            self._config.get('figures')
+            or self._config.get('battle_moves')
+            or self._config.get('prelude_spell_name')
+            or self._config.get('battle_modifier')
+        )
+
+    def _try_leave_screen(self):
+        """Prompt if config has content; otherwise leave immediately."""
+        if self._has_config_content():
+            self._pending_leave_confirm = True
+            self.dialogue_box = DialogueBox(
+                self.window,
+                'You have unsaved changes.\n'
+                'Leaving will discard all figures, battle moves,\n'
+                'and spells you have configured.',
+                actions=['Leave', 'Stay'],
+                title='Discard Changes?',
+            )
+        else:
+            self._leave_screen()
+
     def _start_battle(self):
         """Call start_battle endpoint and transition to the game screen."""
         try:
@@ -1486,6 +1513,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if response == 'confirm':
                 self._start_battle()
             return
+        if response and self._pending_leave_confirm:
+            self._pending_leave_confirm = False
+            self.reset_action()
+            if response == 'confirm':   # 'Leave'
+                self._leave_screen()
+            return
         if response and self._pending_prelude_spell:
             self._pending_prelude_spell = None
             self.reset_action()
@@ -1498,6 +1531,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return
         if response in ('ok', 'cancel'):
             self._pending_battle_confirm = False
+            self._pending_leave_confirm = False
             self._pending_prelude_spell = None
             self._pending_prelude_clear = False
             self.reset_action()
@@ -1554,7 +1588,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
-                self._leave_screen()
+                self._try_leave_screen()
                 return
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
@@ -1562,7 +1596,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
                 # X close button
                 if self._btn_close_rect and self._btn_close_rect.collidepoint(pos):
-                    self._leave_screen()
+                    self._try_leave_screen()
                     return
 
                 if not self._config:
@@ -1651,5 +1685,5 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
             # ESC → back to kingdom
             if event.type == KEYDOWN and event.key == K_ESCAPE:
-                self._leave_screen()
+                self._try_leave_screen()
                 return
