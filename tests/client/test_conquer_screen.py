@@ -43,7 +43,7 @@ class TestBattleReadiness:
         screen._config = {
             'figures': figures,
             'battle_moves': moves,
-            'battle_modifier': None,
+            'prelude_spell_name': None,
         }
         return screen
 
@@ -144,9 +144,9 @@ class TestConquerScreenNavigation:
         assert state.screen == 'kingdom'
 
 
-class TestModifierToggle:
+class TestPreludeSpellToggle:
 
-    def test_set_modifier_shows_dialogue(self):
+    def test_edit_prelude_spell_opens_selection(self):
         from game.screens.conquer_screen import ConquerScreen
         import pygame
         state = _make_state()
@@ -156,24 +156,25 @@ class TestModifierToggle:
         screen._config = {
             'figures': [],
             'battle_moves': [],
-            'battle_modifier': None,
+            'prelude_spell_name': None,
         }
         screen._collection_cards = [
             {'suit': 'Hearts', 'rank': 'Q', 'free': 2, 'total': 2, 'locked': 0},
         ]
         screen._build_layout()
 
-        # Click the Blitzkrieg icon → should open confirmation dialogue
-        icon_rect = screen._modifier_icon_rects.get('Blitzkrieg')
+        # Click the edit button → should open prelude spell selection
+        edit_rect = screen._btn_prelude_edit
         event = pygame.event.Event(
             pygame.MOUSEBUTTONUP,
             button=1,
-            pos=icon_rect.center,
+            pos=edit_rect.center,
         )
-        screen.handle_events([event])
-        assert screen._pending_modifier_confirm == 'Blitzkrieg'
+        with patch.object(screen, '_open_prelude_spell_selection') as mock_open:
+            screen.handle_events([event])
+            mock_open.assert_called_once()
 
-    def test_remove_modifier_via_x_button(self):
+    def test_clear_prelude_spell_via_x_button(self):
         from game.screens.conquer_screen import ConquerScreen
         import pygame
         state = _make_state()
@@ -183,21 +184,19 @@ class TestModifierToggle:
         screen._config = {
             'figures': [],
             'battle_moves': [],
-            'battle_modifier': {'type': 'Blitzkrieg'},
+            'prelude_spell_name': 'Blitzkrieg',
         }
         screen._build_layout()
         # Simulate X rect being set by draw
-        xw = screen._x_remove_surf.get_width()
-        xh = screen._x_remove_surf.get_height()
-        icon_rect = screen._modifier_icon_rects['Blitzkrieg']
-        screen._modifier_x_rects['Blitzkrieg'] = pygame.Rect(
-            icon_rect.right - xw - 2, icon_rect.y + 2, xw, xh)
+        _xbs = screen._x_btn_sz
+        spell_rect = screen._prelude_spell_rect
+        screen._prelude_x_rect = pygame.Rect(
+            spell_rect.right - _xbs - 2, spell_rect.y + 2, _xbs, _xbs)
 
-        with patch.object(screen, '_server_remove_modifier') as mock_rm:
-            event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP,
-                button=1,
-                pos=screen._modifier_x_rects['Blitzkrieg'].center,
-            )
-            screen.handle_events([event])
-            mock_rm.assert_called_once()
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            button=1,
+            pos=screen._prelude_x_rect.center,
+        )
+        screen.handle_events([event])
+        assert screen._pending_prelude_clear is True

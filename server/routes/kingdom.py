@@ -256,6 +256,36 @@ _SPELL_CARD_REQS = {
     'poison':       ('3', 2, 'black'),
 }
 
+# ── Prelude / Counter spell system ──────────────────────────────────────────
+_SPELL_CARD_COST = {
+    'Draw 2 MainCards': ('8', 1, None),
+    'Fill 10':          ('10', 1, None),
+    'Dump Cards':       ('7', 4, None),
+    'Forced Deal':      ('4', 2, None),
+    'Poison':           ('3', 2, 'black'),
+    'Health Boost':     ('3', 2, 'red'),
+    'All Seeing Eye':   ('9', 2, None),
+    'Explosion':        ('6', 4, None),
+    'Peasant War':      ('J', 2, None),
+    'Civil War':        ('5', 2, None),
+    'Blitzkrieg':       ('Q', 2, None),
+}
+
+_CONQUER_PRELUDE_SPELLS = frozenset({
+    'Draw 2 MainCards', 'Fill 10', 'Dump Cards', 'Forced Deal',
+    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
+    'Peasant War', 'Civil War', 'Blitzkrieg',
+})
+
+_DEFENCE_PRELUDE_SPELLS = frozenset({
+    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
+    'Explosion', 'Peasant War', 'Civil War',
+})
+
+_DEFENCE_COUNTER_SPELLS = frozenset({
+    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost', 'Explosion',
+})
+
 
 def _find_free_cards(user_id, rank, count, color_constraint=None):
     """Find `count` free (unlocked) collection cards of `rank` with the same suit color.
@@ -306,6 +336,8 @@ def _serialize_config_with_deficit(cfg):
         all_card_ids.update(fig.get('card_ids') or [])
     all_card_ids.update(data.get('modifier_card_ids') or [])
     all_card_ids.update(data.get('spell_card_ids') or [])
+    all_card_ids.update(data.get('prelude_spell_card_ids') or [])
+    all_card_ids.update(data.get('counter_spell_card_ids') or [])
 
     # Bulk-fetch card details once
     card_map = {}
@@ -320,6 +352,8 @@ def _serialize_config_with_deficit(cfg):
     # Attach modifier / spell card details at config level
     data['modifier_card_details'] = [card_map.get(cid, {}) for cid in (data.get('modifier_card_ids') or [])]
     data['spell_card_details'] = [card_map.get(cid, {}) for cid in (data.get('spell_card_ids') or [])]
+    data['prelude_spell_card_details'] = [card_map.get(cid, {}) for cid in (data.get('prelude_spell_card_ids') or [])]
+    data['counter_spell_card_details'] = [card_map.get(cid, {}) for cid in (data.get('counter_spell_card_ids') or [])]
 
     return data
 
@@ -752,6 +786,81 @@ def conquer_remove_modifier():
     })
 
 
+# ── POST /kingdom/conquer/set_prelude_spell ──────────────────────────────────
+
+@kingdom.route('/conquer/set_prelude_spell', methods=['POST'])
+@require_token
+def conquer_set_prelude_spell():
+    """Set a prelude spell for a conquer config.
+
+    Expects JSON: { land_id, spell_name, spell_data: {}|null }
+    """
+    data = request.json
+    land_id = data.get('land_id')
+    spell_name = data.get('spell_name')
+    spell_data = data.get('spell_data')
+
+    if not land_id or not spell_name:
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    if spell_name not in _CONQUER_PRELUDE_SPELLS:
+        return jsonify({'success': False,
+                        'message': f'Spell "{spell_name}" is not allowed as conquer prelude'}), 400
+
+    cfg = _get_or_create_conquer_config(g.user_id, land_id)
+
+    # Unlock previous prelude spell cards
+    if cfg.prelude_spell_card_ids:
+        _unlock_collection_cards(cfg.prelude_spell_card_ids)
+
+    # Find required free cards
+    req = _SPELL_CARD_COST.get(spell_name)
+    if req:
+        rank, count, color = req
+        card_ids = _find_free_cards(g.user_id, rank, count, color)
+        if card_ids is None:
+            return jsonify({'success': False,
+                            'message': f'{spell_name} requires {count}× rank {rank} free cards'}), 400
+        _lock_collection_cards(card_ids, 'conquer_prelude', cfg.id)
+        cfg.prelude_spell_card_ids = card_ids
+    else:
+        cfg.prelude_spell_card_ids = None
+
+    cfg.prelude_spell_name = spell_name
+    cfg.prelude_spell_data = spell_data
+    db.session.commit()
+
+    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+
+
+# ── POST /kingdom/conquer/clear_prelude_spell ────────────────────────────────
+
+@kingdom.route('/conquer/clear_prelude_spell', methods=['POST'])
+@require_token
+def conquer_clear_prelude_spell():
+    """Clear the prelude spell from a conquer config."""
+    data = request.json
+    land_id = data.get('land_id')
+    if not land_id:
+        return jsonify({'success': False, 'message': 'land_id is required'}), 400
+
+    cfg = LandConfig.query.filter_by(
+        user_id=g.user_id, config_type='conquer', land_id=land_id
+    ).first()
+    if not cfg:
+        return jsonify({'success': False, 'message': 'No conquer config found'}), 404
+
+    if cfg.prelude_spell_card_ids:
+        _unlock_collection_cards(cfg.prelude_spell_card_ids)
+
+    cfg.prelude_spell_name = None
+    cfg.prelude_spell_data = None
+    cfg.prelude_spell_card_ids = None
+    db.session.commit()
+
+    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Defence Configuration Endpoints
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1101,6 +1210,89 @@ def defence_remove_modifier():
     return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
 
 
+# ── POST /kingdom/defence/set_prelude_spell ──────────────────────────────────
+
+@kingdom.route('/defence/set_prelude_spell', methods=['POST'])
+@require_token
+def defence_set_prelude_spell():
+    """Set a prelude spell for a defence config.
+
+    Expects JSON: { land_id, spell_name, spell_data: {}|null }
+    """
+    data = request.json
+    land_id = data.get('land_id')
+    spell_name = data.get('spell_name')
+    spell_data = data.get('spell_data')
+
+    if not land_id or not spell_name:
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    if spell_name not in _DEFENCE_PRELUDE_SPELLS:
+        return jsonify({'success': False,
+                        'message': f'Spell "{spell_name}" is not allowed as defence prelude'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    cfg = _get_or_create_defence_config(g.user_id, land_id)
+
+    # Unlock previous prelude spell cards
+    if cfg.prelude_spell_card_ids:
+        _unlock_collection_cards(cfg.prelude_spell_card_ids)
+
+    # Find required free cards
+    req = _SPELL_CARD_COST.get(spell_name)
+    if req:
+        rank, count, color = req
+        card_ids = _find_free_cards(g.user_id, rank, count, color)
+        if card_ids is None:
+            return jsonify({'success': False,
+                            'message': f'{spell_name} requires {count}× rank {rank} free cards'}), 400
+        _lock_collection_cards(card_ids, 'defence_prelude', cfg.id)
+        cfg.prelude_spell_card_ids = card_ids
+    else:
+        cfg.prelude_spell_card_ids = None
+
+    cfg.prelude_spell_name = spell_name
+    cfg.prelude_spell_data = spell_data
+    db.session.commit()
+
+    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+
+
+# ── POST /kingdom/defence/clear_prelude_spell ────────────────────────────────
+
+@kingdom.route('/defence/clear_prelude_spell', methods=['POST'])
+@require_token
+def defence_clear_prelude_spell():
+    """Clear the prelude spell from a defence config."""
+    data = request.json
+    land_id = data.get('land_id')
+    if not land_id:
+        return jsonify({'success': False, 'message': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    cfg = LandConfig.query.filter_by(
+        user_id=g.user_id, config_type='defence', land_id=land_id
+    ).first()
+    if not cfg:
+        return jsonify({'success': False, 'message': 'No defence config found'}), 404
+
+    if cfg.prelude_spell_card_ids:
+        _unlock_collection_cards(cfg.prelude_spell_card_ids)
+
+    cfg.prelude_spell_name = None
+    cfg.prelude_spell_data = None
+    cfg.prelude_spell_card_ids = None
+    db.session.commit()
+
+    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+
+
 # ── POST /kingdom/defence/set_battle_figure ──────────────────────────────────
 
 @kingdom.route('/defence/set_battle_figure', methods=['POST'])
@@ -1315,6 +1507,102 @@ def defence_clear_spell():
     cfg.spell_name = None
     cfg.spell_card_ids = None
     cfg.spell_target_figure_id = None
+    db.session.commit()
+
+    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+
+
+# ── POST /kingdom/defence/set_counter_spell ──────────────────────────────────
+
+@kingdom.route('/defence/set_counter_spell', methods=['POST'])
+@require_token
+def defence_set_counter_spell():
+    """Set a counter spell for a defence config.
+
+    Expects JSON: { land_id, spell_name, spell_data: {}|null }
+    Counter spell is mutually exclusive with battle figure.
+    """
+    data = request.json
+    land_id = data.get('land_id')
+    spell_name = data.get('spell_name')
+    spell_data = data.get('spell_data')
+
+    if not land_id or not spell_name:
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    if spell_name not in _DEFENCE_COUNTER_SPELLS:
+        return jsonify({'success': False,
+                        'message': f'Spell "{spell_name}" is not allowed as counter action'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    cfg = LandConfig.query.filter_by(
+        user_id=g.user_id, config_type='defence', land_id=land_id
+    ).first()
+    if not cfg:
+        return jsonify({'success': False, 'message': 'No defence config found'}), 404
+
+    # Counter spell and battle figure are mutually exclusive
+    if cfg.battle_figure_id:
+        return jsonify({'success': False,
+                        'message': 'Cannot set counter spell while a battle figure is selected. '
+                                   'Clear battle figure first.'}), 400
+
+    # Unlock previous counter spell cards
+    if cfg.counter_spell_card_ids:
+        _unlock_collection_cards(cfg.counter_spell_card_ids)
+
+    # Find required free cards
+    req = _SPELL_CARD_COST.get(spell_name)
+    if req:
+        rank, count, color = req
+        card_ids = _find_free_cards(g.user_id, rank, count, color)
+        if card_ids is None:
+            return jsonify({'success': False,
+                            'message': f'{spell_name} requires {count}× rank {rank} free cards'}), 400
+        _lock_collection_cards(card_ids, 'defence_counter', cfg.id)
+        cfg.counter_spell_card_ids = card_ids
+    else:
+        cfg.counter_spell_card_ids = None
+
+    cfg.counter_spell_name = spell_name
+    cfg.counter_spell_data = spell_data
+    cfg.counter_spell_target_figure_id = None
+    db.session.commit()
+
+    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+
+
+# ── POST /kingdom/defence/clear_counter_spell ────────────────────────────────
+
+@kingdom.route('/defence/clear_counter_spell', methods=['POST'])
+@require_token
+def defence_clear_counter_spell():
+    """Clear the counter spell from a defence config."""
+    data = request.json
+    land_id = data.get('land_id')
+    if not land_id:
+        return jsonify({'success': False, 'message': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    cfg = LandConfig.query.filter_by(
+        user_id=g.user_id, config_type='defence', land_id=land_id
+    ).first()
+    if not cfg:
+        return jsonify({'success': False, 'message': 'No defence config found'}), 404
+
+    if cfg.counter_spell_card_ids:
+        _unlock_collection_cards(cfg.counter_spell_card_ids)
+
+    cfg.counter_spell_name = None
+    cfg.counter_spell_data = None
+    cfg.counter_spell_card_ids = None
+    cfg.counter_spell_target_figure_id = None
     db.session.commit()
 
     return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})

@@ -174,6 +174,23 @@ with app.app_context():
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE challenge ADD COLUMN game_id INTEGER REFERENCES game(id)"))
                 conn.commit()
+    if 'land_config' in inspector.get_table_names():
+        existing_cols = {c['name'] for c in inspector.get_columns('land_config')}
+        _lc_new_cols = {
+            'prelude_spell_name':          'VARCHAR(50)',
+            'prelude_spell_data':          'JSON',
+            'prelude_spell_card_ids':      'JSON',
+            'counter_spell_name':          'VARCHAR(50)',
+            'counter_spell_data':          'JSON',
+            'counter_spell_card_ids':      'JSON',
+            'counter_spell_target_figure_id': 'INTEGER',
+        }
+        for col_name, col_type in _lc_new_cols.items():
+            if col_name not in existing_cols:
+                logger.info("Auto-migrate: adding '%s' column to land_config table", col_name)
+                with db.engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE land_config ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()
     
     logger.info("Database initialized")
 

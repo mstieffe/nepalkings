@@ -20,12 +20,12 @@ def _make_config(**overrides):
     cfg = {
         'figures': [],
         'battle_moves': [],
-        'battle_modifier': None,
+        'prelude_spell_name': None,
         'battle_figure_id': None,
         'battle_figure_id_2': None,
-        'spell_name': None,
-        'spell_card_ids': None,
-        'spell_target_figure_id': None,
+        'counter_spell_name': None,
+        'counter_spell_card_ids': None,
+        'counter_spell_target_figure_id': None,
         'auto_gamble': False,
     }
     cfg.update(overrides)
@@ -87,11 +87,11 @@ class TestDefenceReadiness:
             figures=figs, battle_moves=moves, battle_figure_id=1)
         assert screen._is_defence_ready() is True
 
-    def test_ready_with_spell(self):
+    def test_ready_with_counter_spell(self):
         figs = [{'id': 1, 'has_deficit': False, 'field': 'castle'}]
         moves = [{'id': i, 'round_index': i} for i in range(3)]
         screen = self._screen_with_config(
-            figures=figs, battle_moves=moves, spell_name='poison')
+            figures=figs, battle_moves=moves, counter_spell_name='Poison')
         assert screen._is_defence_ready() is True
 
     def test_ready_with_auto_gamble(self):
@@ -141,9 +141,9 @@ class TestDefenceScreenNavigation:
         assert state.screen == 'kingdom'
 
 
-class TestModifierIcons:
+class TestPreludeSpellIcons:
 
-    def test_set_modifier_shows_dialogue(self):
+    def test_edit_prelude_spell_opens_selection(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
@@ -152,51 +152,33 @@ class TestModifierIcons:
         screen._land_id = 7
         screen._config = _make_config()
         screen._build_layout()
-        # Give enough free cards for Peasant War (2× Jack same-color)
         screen._collection_cards = [
             {'suit': 'Hearts', 'rank': 'J', 'free': 2},
         ]
 
-        pos = screen._modifier_icon_rects['Peasant War'].center
+        pos = screen._btn_prelude_edit.center
         event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
-        screen.handle_events([event])
-        assert screen._pending_modifier_confirm == 'Peasant War'
-
-    def test_remove_modifier_via_x_button(self):
-        from game.screens.defence_screen import DefenceScreen
-        import pygame
-        state = _make_state()
-        state.action = {}
-        screen = DefenceScreen(state)
-        screen._land_id = 7
-        screen._config = _make_config(battle_modifier={'type': 'Civil War'})
-        screen._build_layout()
-        # Manually add X rect (normally set during draw)
-        rect = screen._modifier_icon_rects['Civil War']
-        screen._modifier_x_rects['Civil War'] = pygame.Rect(rect.right - 14, rect.y + 2, 12, 12)
-
-        with patch.object(screen, '_server_remove_modifier') as mock_rm:
-            event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._modifier_x_rects['Civil War'].center)
+        with patch.object(screen, '_open_prelude_spell_selection') as mock_open:
             screen.handle_events([event])
-            mock_rm.assert_called_once()
+            mock_open.assert_called_once()
 
-    def test_no_cards_shows_notification(self):
+    def test_clear_prelude_spell_via_x_button(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
         state.action = {}
         screen = DefenceScreen(state)
         screen._land_id = 7
-        screen._config = _make_config()
+        screen._config = _make_config(prelude_spell_name='Peasant War')
         screen._build_layout()
-        screen._collection_cards = []  # No cards
+        _xbs = screen._x_btn_sz
+        rect = screen._prelude_spell_rect
+        screen._prelude_x_rect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
 
-        pos = screen._modifier_icon_rects['Peasant War'].center
-        event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1, pos=screen._prelude_x_rect.center)
         screen.handle_events([event])
-        assert screen._pending_modifier_confirm is None
-        assert screen.dialogue_box is not None
+        assert screen._pending_prelude_clear is True
 
 
 class TestAutoGambleToggle:
@@ -247,12 +229,13 @@ class TestBattleFigureToggle:
         )
         screen._build_layout()
         # Manually add X rect (normally set during draw)
-        rect = screen._final_round_icon_rects['battle_figure']
-        screen._final_round_x_rects['battle_figure'] = pygame.Rect(rect.right - 14, rect.y + 2, 12, 12)
+        rect = screen._battle_figure_rect
+        _xbs = screen._x_btn_sz
+        screen._battle_figure_x_rect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
 
         with patch.object(screen, '_server_clear_battle_figure') as mock_cl:
             event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._final_round_x_rects['battle_figure'].center)
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._battle_figure_x_rect.center)
             screen.handle_events([event])
             mock_cl.assert_called_once()
 
@@ -272,15 +255,15 @@ class TestBattleFigureToggle:
         screen._build_layout()
 
         # Clicking the empty battle_figure slot should enter selection mode
-        pos = screen._final_round_icon_rects['battle_figure'].center
+        pos = screen._battle_figure_rect.center
         event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
         screen.handle_events([event])
         assert screen._selecting_battle_fig is True
 
 
-class TestSpellIcons:
+class TestCounterSpellIcons:
 
-    def test_spell_shows_dialogue_with_cards(self):
+    def test_edit_counter_spell_opens_selection(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
@@ -289,30 +272,30 @@ class TestSpellIcons:
         screen._land_id = 7
         screen._config = _make_config()
         screen._build_layout()
-        # 2× rank 3 black for poison
         screen._collection_cards = [
             {'suit': 'Spades', 'rank': '3', 'free': 2},
         ]
 
-        pos = screen._final_round_icon_rects['poison'].center
+        pos = screen._btn_counter_edit.center
         event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
-        screen.handle_events([event])
-        assert screen._pending_spell_confirm == 'poison'
+        with patch.object(screen, '_open_counter_spell_selection') as mock_open:
+            screen.handle_events([event])
+            mock_open.assert_called_once()
 
-    def test_clear_spell_via_x(self):
+    def test_clear_counter_spell_via_x(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
         state.action = {}
         screen = DefenceScreen(state)
         screen._land_id = 7
-        screen._config = _make_config(spell_name='poison')
+        screen._config = _make_config(counter_spell_name='Poison')
         screen._build_layout()
-        rect = screen._final_round_icon_rects['poison']
-        screen._final_round_x_rects['poison'] = pygame.Rect(rect.right - 14, rect.y + 2, 12, 12)
+        _xbs = screen._x_btn_sz
+        rect = screen._counter_spell_rect
+        screen._counter_x_rect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
 
-        with patch.object(screen, '_server_clear_spell') as mock_cs:
-            event = pygame.event.Event(
-                pygame.MOUSEBUTTONUP, button=1, pos=screen._final_round_x_rects['poison'].center)
-            screen.handle_events([event])
-            mock_cs.assert_called_once()
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1, pos=screen._counter_x_rect.center)
+        screen.handle_events([event])
+        assert screen._pending_counter_clear is True

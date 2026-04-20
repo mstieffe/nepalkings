@@ -47,24 +47,31 @@ def _draw_panel(window, rect, corner_r=None):
                      settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
 
 
-_MODIFIER_CARD_REQS = {
-    'Peasant War': ('J', 2, None),
-    'Civil War':   ('5', 2, None),
+_SPELL_CARD_COST = {
+    'Draw 2 MainCards': ('8', 1, None),
+    'Fill 10':          ('10', 1, None),
+    'Dump Cards':       ('7', 4, None),
+    'Forced Deal':      ('4', 2, None),
+    'Poison':           ('3', 2, 'black'),
+    'Health Boost':     ('3', 2, 'red'),
+    'All Seeing Eye':   ('9', 2, None),
+    'Explosion':        ('6', 4, None),
+    'Peasant War':      ('J', 2, None),
+    'Civil War':        ('5', 2, None),
+    'Blitzkrieg':       ('Q', 2, None),
 }
 
-_SPELL_CARD_REQS = {
-    'poison':       ('3', 2, 'black'),
-    'health_boost': ('3', 2, 'red'),
-}
+_DEFENCE_PRELUDE_SPELLS = [
+    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
+    'Explosion', 'Peasant War', 'Civil War',
+]
+
+_DEFENCE_COUNTER_SPELLS = [
+    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost', 'Explosion',
+]
 
 _RED_SUITS = {'Hearts', 'Diamonds'}
 _BLACK_SUITS = {'Clubs', 'Spades'}
-
-# Map server spell_name → SpellManager family name
-_SPELL_FAMILY_MAP = {
-    'poison': 'Poison',
-    'health_boost': 'Health Boost',
-}
 
 
 class DefenceScreen(MenuScreenMixin, Screen):
@@ -115,14 +122,22 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._res_village_rect = None
         self._field_title_pos = None
         self._moves_title_pos = None
-        self._modifier_icon_rects = {}   # mod_name → Rect
-        self._modifier_x_rects = {}      # mod_name → Rect
-        self._final_round_icon_rects = {} # spell/fig key → Rect
-        self._final_round_x_rects = {}    # spell/fig key → Rect
+        self._prelude_spell_rect = None   # Rect for prelude spell icon slot
+        self._prelude_x_rect = None       # Rect for prelude X remove button
+        self._counter_spell_rect = None   # Rect for counter spell icon slot
+        self._counter_x_rect = None       # Rect for counter X remove button
+        self._battle_figure_rect = None   # Rect for battle figure icon slot
+        self._battle_figure_x_rect = None # Rect for battle figure X remove button
         self._layout_built = False
         self._hovered_slot = -1
-        self._pending_modifier_confirm = None
-        self._pending_spell_confirm = None
+        self._pending_prelude_spell = None
+        self._pending_prelude_clear = False
+        self._prelude_spell_choices = []
+        self._prelude_spell_choice_idx = 0
+        self._pending_counter_spell = None
+        self._pending_counter_clear = False
+        self._counter_spell_choices = []
+        self._counter_spell_choice_idx = 0
         self._pending_save_confirm = False
         self._collection_cards = None
         self._selecting_battle_fig = False  # True when prompting user to pick a figure
@@ -144,11 +159,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._slot_diamond = None
         self._init_move_slot_caches()
 
-        # ── Modifier & spell icons (framed, from SpellManager) ──────
-        self._modifier_icons = {}
-        self._spell_icons = {}
+        # ── Spell icons (framed, from SpellManager) ─────────────────
+        self._spell_icons = {}   # spell_name → icon dict (all prelude + counter spells)
         self._spell_manager = SpellManager()
-        self._init_modifier_icons()
         self._init_spell_icons()
 
         # ── Resource icons ──────────────────────────────────────────
@@ -269,32 +282,26 @@ class DefenceScreen(MenuScreenMixin, Screen):
         pygame.draw.polygon(self._slot_diamond, (60, 60, 60), pts)
         pygame.draw.polygon(self._slot_diamond, (100, 90, 70), pts, 2)
 
-    def _init_modifier_icons(self):
-        """Load modifier spell icons with frames from SpellManager."""
+    def _init_spell_icons(self):
+        """Load spell icons with frames from SpellManager for all prelude + counter spells."""
         isz = int(0.045 * _SW)
         fsz = int(isz * 1.4)
         ssz = int(isz * 0.4)
         xsz = int(isz * 0.3)
         self._mod_icon_size = isz
         self._mod_frame_size = fsz
+        self._spell_frame_size = fsz
 
-        # Hover-scaled sizes (15% larger)
-        isz_h = int(isz * 1.15)
-        fsz_h = int(fsz * 1.15)
-
-        for mod_name in ['Peasant War', 'Civil War']:
-            family = self._spell_manager.get_family_by_name(mod_name)
+        all_spell_names = set(_DEFENCE_PRELUDE_SPELLS) | set(_DEFENCE_COUNTER_SPELLS)
+        for spell_name in all_spell_names:
+            family = self._spell_manager.get_family_by_name(spell_name)
             if not family:
                 continue
-            self._modifier_icons[mod_name] = {
+            self._spell_icons[spell_name] = {
                 'icon': pygame.transform.smoothscale(family.icon_img, (isz, isz)) if family.icon_img else None,
                 'icon_gray': pygame.transform.smoothscale(family.icon_gray_img, (isz, isz)) if family.icon_gray_img else None,
                 'frame': pygame.transform.smoothscale(family.frame_img, (fsz, fsz)) if family.frame_img else None,
                 'frame_gray': pygame.transform.smoothscale(family.frame_closed_img, (fsz, fsz)) if family.frame_closed_img else None,
-                'icon_hover': pygame.transform.smoothscale(family.icon_img, (isz_h, isz_h)) if family.icon_img else None,
-                'frame_hover': pygame.transform.smoothscale(family.frame_img, (fsz_h, fsz_h)) if family.frame_img else None,
-                'icon_gray_hover': pygame.transform.smoothscale(family.icon_gray_img, (isz_h, isz_h)) if family.icon_gray_img else None,
-                'frame_gray_hover': pygame.transform.smoothscale(family.frame_closed_img, (fsz_h, fsz_h)) if family.frame_closed_img else None,
                 'glow': pygame.transform.smoothscale(family.glow_img, (fsz + 12, fsz + 12)) if family.glow_img else None,
                 'description': family.description,
                 'mini_game_description': family.mini_game_description,
@@ -313,32 +320,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         # Unified X-button size for all icon types
         self._x_btn_sz = max(int(0.016 * _SW), 16)
-
-    def _init_spell_icons(self):
-        """Load spell icons with frames from SpellManager."""
-        isz = self._mod_icon_size
-        fsz = self._mod_frame_size
-        isz_h = int(isz * 1.15)
-        fsz_h = int(fsz * 1.15)
-        self._spell_frame_size = fsz
-
-        for spell_name, family_name in _SPELL_FAMILY_MAP.items():
-            family = self._spell_manager.get_family_by_name(family_name)
-            if not family:
-                continue
-            self._spell_icons[spell_name] = {
-                'icon': pygame.transform.smoothscale(family.icon_img, (isz, isz)) if family.icon_img else None,
-                'icon_gray': pygame.transform.smoothscale(family.icon_gray_img, (isz, isz)) if family.icon_gray_img else None,
-                'frame': pygame.transform.smoothscale(family.frame_img, (fsz, fsz)) if family.frame_img else None,
-                'frame_gray': pygame.transform.smoothscale(family.frame_closed_img, (fsz, fsz)) if family.frame_closed_img else None,
-                'icon_hover': pygame.transform.smoothscale(family.icon_img, (isz_h, isz_h)) if family.icon_img else None,
-                'frame_hover': pygame.transform.smoothscale(family.frame_img, (fsz_h, fsz_h)) if family.frame_img else None,
-                'icon_gray_hover': pygame.transform.smoothscale(family.icon_gray_img, (isz_h, isz_h)) if family.icon_gray_img else None,
-                'frame_gray_hover': pygame.transform.smoothscale(family.frame_closed_img, (fsz_h, fsz_h)) if family.frame_closed_img else None,
-                'glow': pygame.transform.smoothscale(family.glow_img, (fsz + 12, fsz + 12)) if family.glow_img else None,
-                'description': family.description,
-                'mini_game_description': family.mini_game_description,
-            }
 
     def _init_resource_icons(self):
         """Load resource icons for inline display."""
@@ -415,29 +396,41 @@ class DefenceScreen(MenuScreenMixin, Screen):
         lbl_h = self._small_font.get_height()
         desc_h = self._res_font.get_height()
         section_text_h = lbl_h + 2 + desc_h + int(0.008 * _SH)
+
+        # ── Prelude Spell section (single spell icon slot + edit button) ──
         self._mod_section_y = my + section_text_h
-        mx = right_x
-        for mod_name in ['Peasant War', 'Civil War']:
-            self._modifier_icon_rects[mod_name] = pygame.Rect(mx, self._mod_section_y, fsz, fsz)
-            mx += fsz + pad
+        self._prelude_spell_rect = pygame.Rect(right_x, self._mod_section_y, fsz, fsz)
+        # Edit icon button next to "Prelude Spell" label
+        prelude_title_surf = self._small_font.render('Prelude Spell', True, (0, 0, 0))
+        prelude_title_w = prelude_title_surf.get_width()
+        self._prelude_title_pos = (right_x, my)
+        self._btn_prelude_edit = pygame.Rect(
+            right_x + prelude_title_w + int(0.008 * _SW),
+            my + (prelude_title_surf.get_height() - isz) // 2,
+            isz, isz,
+        )
         my = self._mod_section_y + fsz + int(0.012 * _SH)
 
-        # ── Final Action section (battle figure first, then separator, then spells) ──
+        # ── Counter Action section (battle figure OR counter spell + edit button) ──
         self._final_section_y = my + section_text_h + int(0.025 * _SH)
-        # Shift icons a bit to the right for better spacing
         final_x = right_x + int(0.005 * _SW)
-        # Use wider gap between battle_figure and spells for separator clearance
+        # Battle figure slot
+        self._battle_figure_rect = pygame.Rect(final_x, self._final_section_y, fsz, fsz)
+        # Counter spell slot (to the right of battle figure with separator gap)
         spell_gap = fsz + pad + int(0.03 * _SW)
-        for i, key in enumerate(['battle_figure', 'poison', 'health_boost']):
-            if i == 0:
-                ix = final_x
-            else:
-                ix = final_x + spell_gap + (i - 1) * (fsz + pad)
-            self._final_round_icon_rects[key] = pygame.Rect(ix, self._final_section_y, fsz, fsz)
+        self._counter_spell_rect = pygame.Rect(final_x + spell_gap, self._final_section_y, fsz, fsz)
+        # Edit icon next to "Counter Action" label
+        counter_title_surf = self._small_font.render('Counter Action', True, (0, 0, 0))
+        counter_title_w = counter_title_surf.get_width()
+        self._counter_title_pos = (right_x, my)
+        self._btn_counter_edit = pygame.Rect(
+            right_x + counter_title_w + int(0.008 * _SW),
+            my + (counter_title_surf.get_height() - isz) // 2,
+            isz, isz,
+        )
         my = self._final_section_y + fsz + int(0.012 * _SH)
 
         # Combined resource panel below castle+village field compartments
-        # Slightly smaller height, moved down a bit to leave gap above
         castle_r = self._field_rects['castle']
         village_r = self._field_rects['village']
         res_top = castle_r.bottom + pad + int(0.005 * _SH)
@@ -457,13 +450,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
         )
 
         # ── Divider positions (computed from layout) ────────────────
-        # Vertical divider: between left fields/resources and right battle column
         self._divider_v_x = right_x - pad // 2
         self._divider_v_top = top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
-        # Horizontal: between battle-move section and modifier section
+        # Horizontal: between battle-move section and prelude spell section
         self._divider_h1_y = self._mod_section_y - section_text_h - int(0.005 * _SH)
-        # Horizontal: between modifier section and final action section
+        # Horizontal: between prelude spell section and counter action section
         self._divider_h2_y = self._final_section_y - section_text_h - int(0.005 * _SH)
 
         # X close button (top-right of box)
@@ -537,11 +529,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         except Exception as e:
             logger.error(f'Return move error: {e}')
 
-    def _server_set_modifier(self, modifier_type):
+    def _server_set_prelude_spell(self, spell_name):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/set_modifier',
-                json={'land_id': self._land_id, 'modifier_type': modifier_type},
+                f'{settings.SERVER_URL}/kingdom/defence/set_prelude_spell',
+                json={'land_id': self._land_id, 'spell_name': spell_name},
                 timeout=10,
             )
             data = resp.json()
@@ -549,14 +541,14 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._config = data['config']
                 self._refresh_collection()
             else:
-                self.state.set_msg(data.get('message', 'Cannot set modifier'))
+                self.state.set_msg(data.get('message', 'Cannot set prelude spell'))
         except Exception as e:
-            logger.error(f'Set modifier error: {e}')
+            logger.error(f'Set prelude spell error: {e}')
 
-    def _server_remove_modifier(self):
+    def _server_clear_prelude_spell(self):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/remove_modifier',
+                f'{settings.SERVER_URL}/kingdom/defence/clear_prelude_spell',
                 json={'land_id': self._land_id},
                 timeout=10,
             )
@@ -565,7 +557,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._config = data['config']
                 self._refresh_collection()
         except Exception as e:
-            logger.error(f'Remove modifier error: {e}')
+            logger.error(f'Clear prelude spell error: {e}')
 
     def _server_set_battle_figure(self, figure_id, figure_id_2=None):
         try:
@@ -597,32 +589,26 @@ class DefenceScreen(MenuScreenMixin, Screen):
         except Exception as e:
             logger.error(f'Clear battle figure error: {e}')
 
-    def _server_set_spell(self, spell_name, spell_card_ids=None, target_fig_id=None):
+    def _server_set_counter_spell(self, spell_name):
         try:
-            payload = {
-                'land_id': self._land_id,
-                'spell_name': spell_name,
-                'spell_card_ids': spell_card_ids or [],
-            }
-            if target_fig_id:
-                payload['spell_target_figure_id'] = target_fig_id
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/set_spell',
-                json=payload, timeout=10,
+                f'{settings.SERVER_URL}/kingdom/defence/set_counter_spell',
+                json={'land_id': self._land_id, 'spell_name': spell_name},
+                timeout=10,
             )
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
                 self._refresh_collection()
             else:
-                self.state.set_msg(data.get('message', 'Cannot set spell'))
+                self.state.set_msg(data.get('message', 'Cannot set counter spell'))
         except Exception as e:
-            logger.error(f'Set spell error: {e}')
+            logger.error(f'Set counter spell error: {e}')
 
-    def _server_clear_spell(self):
+    def _server_clear_counter_spell(self):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/clear_spell',
+                f'{settings.SERVER_URL}/kingdom/defence/clear_counter_spell',
                 json={'land_id': self._land_id},
                 timeout=10,
             )
@@ -631,7 +617,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._config = data['config']
                 self._refresh_collection()
         except Exception as e:
-            logger.error(f'Clear spell error: {e}')
+            logger.error(f'Clear counter spell error: {e}')
 
     def _server_set_auto_gamble(self, enabled):
         try:
@@ -659,7 +645,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _has_cards_for(self, req_key, reqs_dict=None):
         """Check if player has enough free cards for a requirement."""
-        reqs = (reqs_dict or _MODIFIER_CARD_REQS).get(req_key)
+        reqs = (reqs_dict or _SPELL_CARD_COST).get(req_key)
         if not reqs:
             return False
         rank, count, color = reqs
@@ -677,7 +663,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _card_req_label(self, req_key, reqs_dict=None):
         """Return a human-readable label for card requirements."""
-        reqs = (reqs_dict or _MODIFIER_CARD_REQS).get(req_key)
+        reqs = (reqs_dict or _SPELL_CARD_COST).get(req_key)
         if not reqs:
             return ''
         rank, count, color = reqs
@@ -849,8 +835,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._draw_field_compartments()
         self._draw_battle_move_slots()
         self._draw_auto_gamble()
-        self._draw_modifier()
-        self._draw_final_round_section()
+        self._draw_prelude_spell()
+        self._draw_counter_action()
         self._draw_resources()
 
         # Save Defence button
@@ -1097,79 +1083,60 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 rlbl = self._small_font.render(f'R{i + 1}', True, (100, 100, 100))
                 self.window.blit(rlbl, rlbl.get_rect(centerx=cx, top=cy + int(sw * 0.55)))
 
-    def _draw_modifier(self):
-        """Draw the modifier section with framed spell icons."""
-        mod = self._config.get('battle_modifier')
-        active_type = mod.get('type') if mod else None
+    def _draw_prelude_spell(self):
+        """Draw the prelude spell section with a single spell icon slot."""
+        spell_name = self._config.get('prelude_spell_name')
         fsz = self._mod_frame_size
-        mx, my_mouse = pygame.mouse.get_pos()
-
-        # Section label (drawn above the icons)
-        lbl = self._small_font.render('Battle Modifier', True, (200, 185, 150))
-        desc = self._res_font.render('Spend cards to gain a battle advantage', True, (160, 145, 120))
+        mx_mouse, my_mouse = pygame.mouse.get_pos()
         right_x = self._right_x
+
+        # Section label
+        lbl = self._small_font.render('Prelude Spell', True, (200, 185, 150))
+        desc = self._res_font.render('Cast a spell before battle begins', True, (160, 145, 120))
         lbl_y = self._mod_section_y - desc.get_height() - 2 - lbl.get_height() - 2
         self.window.blit(lbl, (right_x, lbl_y))
         self.window.blit(desc, (right_x, lbl_y + lbl.get_height() + 2))
 
-        for mod_name, rect in self._modifier_icon_rects.items():
-            icons = self._modifier_icons.get(mod_name)
-            if not icons:
-                continue
+        # Edit icon next to title
+        if self._btn_prelude_edit:
+            isz = self._edit_icon_size
+            hovered = self._btn_prelude_edit.collidepoint(mx_mouse, my_mouse)
+            if hovered:
+                glow = pygame.Surface((isz + 4, isz + 4), pygame.SRCALPHA)
+                glow.fill((255, 255, 200, 40))
+                self.window.blit(glow, (self._btn_prelude_edit.x - 2, self._btn_prelude_edit.y - 2))
+            self.window.blit(self._edit_icon, self._btn_prelude_edit.topleft)
 
-            is_purchased = (active_type == mod_name)
-            has_cards = self._has_cards_for(mod_name)
+        rect = self._prelude_spell_rect
+        if not rect:
+            return
 
-            if is_purchased or has_cards:
-                icon_surf = icons['icon']
-                frame_surf = icons['frame']
-            else:
-                icon_surf = icons['icon_gray']
-                frame_surf = icons['frame_gray']
+        cx = rect.x + fsz // 2
+        cy = rect.y + fsz // 2
 
-            cx = rect.x + fsz // 2
-            cy = rect.y + fsz // 2
-
-            # Hover detection (all icons, not just unpurchased)
-            hovered = rect.collidepoint(mx, my_mouse)
-
-            # Active glow (yellow glow behind icon when purchased)
-            if is_purchased and icons.get('glow'):
-                glow_surf = icons['glow']
-                gr = glow_surf.get_rect(center=(cx, cy))
-                self.window.blit(glow_surf, gr.topleft)
-
-            # Select hover-scaled or normal surfaces
-            if hovered and (is_purchased or has_cards):
-                draw_icon = icons.get('icon_hover', icon_surf)
-                draw_frame = icons.get('frame_hover', frame_surf)
-            elif hovered:
-                draw_icon = icons.get('icon_gray_hover', icon_surf)
-                draw_frame = icons.get('frame_gray_hover', frame_surf)
-            else:
-                draw_icon = icon_surf
-                draw_frame = frame_surf
-
-            if draw_icon:
-                ir = draw_icon.get_rect(center=(cx, cy))
-                self.window.blit(draw_icon, ir.topleft)
-            if draw_frame:
-                fr = draw_frame.get_rect(center=(cx, cy))
-                self.window.blit(draw_frame, fr.topleft)
-
-            ntxt = self._res_font.render(mod_name, True,
-                                         (200, 180, 80) if is_purchased else (160, 150, 130))
-            self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
-
-            if is_purchased and self._success_badge:
-                bx = rect.x
-                by = rect.bottom - self._success_badge.get_height()
-                self.window.blit(self._success_badge, (bx, by))
-
+        if spell_name:
+            icons = self._spell_icons.get(spell_name)
+            if icons:
+                if icons.get('glow'):
+                    glow_surf = icons['glow']
+                    gr = glow_surf.get_rect(center=(cx, cy))
+                    self.window.blit(glow_surf, gr.topleft)
+                if icons.get('icon'):
+                    ir = icons['icon'].get_rect(center=(cx, cy))
+                    self.window.blit(icons['icon'], ir.topleft)
+                if icons.get('frame'):
+                    fr = icons['frame'].get_rect(center=(cx, cy))
+                    self.window.blit(icons['frame'], fr.topleft)
+                ntxt = self._res_font.render(spell_name, True, (200, 180, 80))
+                self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
+                if self._success_badge:
+                    bx = rect.x
+                    by = rect.bottom - self._success_badge.get_height()
+                    self.window.blit(self._success_badge, (bx, by))
                 _xbs = self._x_btn_sz
                 xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
-                self._modifier_x_rects[mod_name] = xrect
-                x_hovered = xrect.collidepoint(mx, my_mouse)
+                self._prelude_x_rect = xrect
+                x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
                 bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                 bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
                 tc = (255, 255, 255) if x_hovered else (200, 180, 180)
@@ -1178,92 +1145,83 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
                 xt = xf.render('\u00d7', True, tc)
                 self.window.blit(xt, xt.get_rect(center=xrect.center))
-            else:
-                self._modifier_x_rects.pop(mod_name, None)
+        else:
+            self._prelude_x_rect = None
+            empty_surf = pygame.Surface((fsz, fsz), pygame.SRCALPHA)
+            pygame.draw.rect(empty_surf, (50, 45, 35, 180), empty_surf.get_rect(), border_radius=6)
+            pygame.draw.rect(empty_surf, (100, 90, 70), empty_surf.get_rect(), 1, border_radius=6)
+            self.window.blit(empty_surf, rect.topleft)
+            ntxt = self._res_font.render('None', True, (120, 110, 90))
+            self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
 
-    def _draw_final_round_section(self):
-        """Draw the final action section with battle figure icon first, then spell icons."""
-        spell = self._config.get('spell_name')
+    def _draw_counter_action(self):
+        """Draw the counter action section: battle figure OR counter spell."""
+        counter_spell = self._config.get('counter_spell_name')
         bf_id = self._config.get('battle_figure_id')
         fsz = self._spell_frame_size
-        pad = int(0.02 * _SW)
-        mx, my_mouse = pygame.mouse.get_pos()
-
-        # Section label (drawn above the icons)
-        lbl = self._small_font.render('Final Action', True, (200, 185, 150))
-        desc = self._res_font.render('Choose a spell or battle figure', True, (160, 145, 120))
+        mx_mouse, my_mouse = pygame.mouse.get_pos()
         right_x = self._right_x
+
+        # Section label
+        lbl = self._small_font.render('Counter Action', True, (200, 185, 150))
+        desc = self._res_font.render('Battle figure or counter spell', True, (160, 145, 120))
         lbl_y = self._final_section_y - desc.get_height() - 2 - lbl.get_height() - 2
         self.window.blit(lbl, (right_x, lbl_y))
         self.window.blit(desc, (right_x, lbl_y + lbl.get_height() + 2))
 
-        # Draw icons: battle_figure first, then vertical separator, then spells
-        bf_rect = self._final_round_icon_rects.get('battle_figure')
+        # Edit icon next to title
+        if self._btn_counter_edit:
+            isz = self._edit_icon_size
+            hovered = self._btn_counter_edit.collidepoint(mx_mouse, my_mouse)
+            if hovered:
+                glow = pygame.Surface((isz + 4, isz + 4), pygame.SRCALPHA)
+                glow.fill((255, 255, 200, 40))
+                self.window.blit(glow, (self._btn_counter_edit.x - 2, self._btn_counter_edit.y - 2))
+            self.window.blit(self._edit_icon, self._btn_counter_edit.topleft)
 
-        # Draw spell icons (poison, health_boost) first so separator and bf draw on top
-        for spell_key, rect in self._final_round_icon_rects.items():
-            if spell_key == 'battle_figure':
-                continue
+        # ── Battle figure slot ──
+        bf_rect = self._battle_figure_rect
+        if bf_rect:
+            self._draw_battle_figure_icon(bf_rect, bf_id, mx_mouse, my_mouse)
 
-            icons = self._spell_icons.get(spell_key)
-            if not icons:
-                continue
+        # ── Vertical separator between figure and spell ──
+        cs_rect = self._counter_spell_rect
+        if bf_rect and cs_rect:
+            sep_x = (bf_rect.right + cs_rect.x) // 2
+            sep_y1 = self._final_section_y
+            sep_y2 = self._final_section_y + fsz
+            pygame.draw.line(self.window, (100, 90, 70), (sep_x, sep_y1), (sep_x, sep_y2), 1)
 
-            is_purchased = (spell == spell_key)
-            has_cards = self._has_cards_for(spell_key, _SPELL_CARD_REQS)
+        # ── Counter spell slot ──
+        if not cs_rect:
+            return
 
-            if is_purchased or has_cards:
-                icon_surf = icons['icon']
-                frame_surf = icons['frame']
-            else:
-                icon_surf = icons['icon_gray']
-                frame_surf = icons['frame_gray']
+        cx = cs_rect.x + fsz // 2
+        cy = cs_rect.y + fsz // 2
 
-            cx = rect.x + fsz // 2
-            cy = rect.y + fsz // 2
-
-            # Hover detection (all icons, not just unpurchased)
-            hovered = rect.collidepoint(mx, my_mouse)
-
-            # Active glow (yellow glow behind icon when purchased)
-            if is_purchased and icons.get('glow'):
-                glow_surf = icons['glow']
-                gr = glow_surf.get_rect(center=(cx, cy))
-                self.window.blit(glow_surf, gr.topleft)
-
-            # Select hover-scaled or normal surfaces
-            if hovered and (is_purchased or has_cards):
-                draw_icon = icons.get('icon_hover', icon_surf)
-                draw_frame = icons.get('frame_hover', frame_surf)
-            elif hovered:
-                draw_icon = icons.get('icon_gray_hover', icon_surf)
-                draw_frame = icons.get('frame_gray_hover', frame_surf)
-            else:
-                draw_icon = icon_surf
-                draw_frame = frame_surf
-
-            if draw_icon:
-                ir = draw_icon.get_rect(center=(cx, cy))
-                self.window.blit(draw_icon, ir.topleft)
-            if draw_frame:
-                fr = draw_frame.get_rect(center=(cx, cy))
-                self.window.blit(draw_frame, fr.topleft)
-
-            # Display name
-            display_name = _SPELL_FAMILY_MAP.get(spell_key, spell_key)
-            ntxt = self._res_font.render(display_name, True,
-                                         (180, 100, 220) if is_purchased else (160, 150, 130))
-            self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
-
-            if is_purchased and self._success_badge:
-                bx = rect.x
-                by = rect.bottom - self._success_badge.get_height()
-                self.window.blit(self._success_badge, (bx, by))
-
+        if counter_spell:
+            icons = self._spell_icons.get(counter_spell)
+            if icons:
+                if icons.get('glow'):
+                    glow_surf = icons['glow']
+                    gr = glow_surf.get_rect(center=(cx, cy))
+                    self.window.blit(glow_surf, gr.topleft)
+                if icons.get('icon'):
+                    ir = icons['icon'].get_rect(center=(cx, cy))
+                    self.window.blit(icons['icon'], ir.topleft)
+                if icons.get('frame'):
+                    fr = icons['frame'].get_rect(center=(cx, cy))
+                    self.window.blit(icons['frame'], fr.topleft)
+                ntxt = self._res_font.render(counter_spell, True, (180, 100, 220))
+                self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=cs_rect.bottom + 2))
+                if self._success_badge:
+                    bx = cs_rect.x
+                    by = cs_rect.bottom - self._success_badge.get_height()
+                    self.window.blit(self._success_badge, (bx, by))
                 _xbs = self._x_btn_sz
-                xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
-                self._final_round_x_rects[spell_key] = xrect
-                x_hovered = xrect.collidepoint(mx, my_mouse)
+                xrect = pygame.Rect(cs_rect.right - _xbs - 2, cs_rect.y + 2, _xbs, _xbs)
+                self._counter_x_rect = xrect
+                x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
                 bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                 bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
                 tc = (255, 255, 255) if x_hovered else (200, 180, 180)
@@ -1272,21 +1230,14 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
                 xt = xf.render('\u00d7', True, tc)
                 self.window.blit(xt, xt.get_rect(center=xrect.center))
-            else:
-                self._final_round_x_rects.pop(spell_key, None)
-
-        # Draw battle figure icon
-        if bf_rect:
-            self._draw_battle_figure_icon(bf_rect, bf_id, mx, my_mouse)
-
-        # Vertical separator between battle_figure and first spell icon
-        # (drawn AFTER battle figure so it's not covered by the glow)
-        poison_rect = self._final_round_icon_rects.get('poison')
-        if bf_rect and poison_rect:
-            sep_x = (bf_rect.right + poison_rect.x) // 2
-            sep_y1 = self._final_section_y
-            sep_y2 = self._final_section_y + fsz
-            pygame.draw.line(self.window, (100, 90, 70), (sep_x, sep_y1), (sep_x, sep_y2), 1)
+        else:
+            self._counter_x_rect = None
+            empty_surf = pygame.Surface((fsz, fsz), pygame.SRCALPHA)
+            pygame.draw.rect(empty_surf, (50, 45, 35, 180), empty_surf.get_rect(), border_radius=6)
+            pygame.draw.rect(empty_surf, (100, 90, 70), empty_surf.get_rect(), 1, border_radius=6)
+            self.window.blit(empty_surf, cs_rect.topleft)
+            ntxt = self._res_font.render('None', True, (120, 110, 90))
+            self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=cs_rect.bottom + 2))
 
     def _draw_battle_figure_icon(self, rect, bf_id, mx, my_mouse):
         """Draw the battle figure slot in the final round section."""
@@ -1336,7 +1287,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
             _xbs = self._x_btn_sz
             xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
-            self._final_round_x_rects['battle_figure'] = xrect
+            self._battle_figure_x_rect = xrect
             x_hovered = xrect.collidepoint(mx, my_mouse)
             bg = (180, 60, 60) if x_hovered else (120, 40, 40)
             bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
@@ -1347,7 +1298,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             xt = xf.render('\u00d7', True, tc)
             self.window.blit(xt, xt.get_rect(center=xrect.center))
         else:
-            self._final_round_x_rects.pop('battle_figure', None)
+            self._battle_figure_x_rect = None
 
     def _draw_auto_gamble(self):
         enabled = self._config.get('auto_gamble', False)
@@ -1461,32 +1412,31 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     captions.append(f'Round {rd}')
                     locked_count += 1
 
-        # Modifiers — consumed (use modifier_card_details from server config)
-        mod_details = self._config.get('modifier_card_details') or []
-        if mod_details:
-            mod = self._config.get('battle_modifier', {})
-            mod_name = mod.get('type', 'Modifier') if mod else 'Modifier'
-            for cd in mod_details:
+        # Prelude spell — locked (defender cards are locked, not consumed)
+        prelude_details = self._config.get('prelude_spell_card_details') or []
+        if prelude_details:
+            prelude_name = self._config.get('prelude_spell_name', 'Prelude Spell')
+            for cd in prelude_details:
                 suit = cd.get('suit', '')
                 rank = cd.get('rank', '')
                 if suit and rank:
                     ci = CardImg(self.window, suit, rank)
                     images.append(ci.front_img)
-                    captions.append(mod_name)
-                    consumed_count += 1
+                    captions.append(prelude_name)
+                    locked_count += 1
 
-        # Spells — consumed (use spell_card_details from server config)
-        spell_details = self._config.get('spell_card_details') or []
-        if spell_details:
-            spell = self._config.get('spell_name', 'Spell')
-            for cd in spell_details:
+        # Counter spell — locked (defender cards are locked, not consumed)
+        counter_details = self._config.get('counter_spell_card_details') or []
+        if counter_details:
+            counter_name = self._config.get('counter_spell_name', 'Counter Spell')
+            for cd in counter_details:
                 suit = cd.get('suit', '')
                 rank = cd.get('rank', '')
                 if suit and rank:
                     ci = CardImg(self.window, suit, rank)
                     images.append(ci.front_img)
-                    captions.append(spell)
-                    consumed_count += 1
+                    captions.append(counter_name)
+                    locked_count += 1
 
         # Build header message
         parts = []
@@ -1655,6 +1605,78 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._subscreen_obj._on_done = self._close_subscreen
         self._active_subscreen = 'battle_shop'
 
+    # ── Spell selection helpers ────────────────────────────────────
+
+    def _open_prelude_spell_selection(self):
+        """Open a dialogue to cycle through and select a prelude spell."""
+        affordable = [s for s in _DEFENCE_PRELUDE_SPELLS if self._has_cards_for(s)]
+        if not affordable:
+            self.dialogue_box = DialogueBox(
+                self.window,
+                'You do not have enough cards for any prelude spell.',
+                actions=['OK'],
+                title='No Spells Available',
+            )
+            return
+        self._prelude_spell_choices = affordable
+        self._prelude_spell_choice_idx = 0
+        self._show_prelude_spell_choice(0)
+
+    def _show_prelude_spell_choice(self, idx):
+        """Show a dialogue for the prelude spell at the given index."""
+        choices = self._prelude_spell_choices
+        spell_name = choices[idx]
+        req_label = self._card_req_label(spell_name)
+        icons = self._spell_icons.get(spell_name, {})
+        desc = icons.get('mini_game_description') or icons.get('description', '')
+        n = len(choices)
+        pos_text = f' ({idx + 1}/{n})' if n > 1 else ''
+        msg = f'{desc}\n\nCost: {req_label}'
+        actions = ['Confirm']
+        if n > 1:
+            actions.append('Next')
+        actions.append('Cancel')
+        self._pending_prelude_spell = spell_name
+        self.dialogue_box = DialogueBox(
+            self.window, msg, actions=actions,
+            title=f'Prelude Spell: {spell_name}{pos_text}',
+        )
+
+    def _open_counter_spell_selection(self):
+        """Open a dialogue to cycle through and select a counter spell."""
+        affordable = [s for s in _DEFENCE_COUNTER_SPELLS if self._has_cards_for(s)]
+        if not affordable:
+            self.dialogue_box = DialogueBox(
+                self.window,
+                'You do not have enough cards for any counter spell.',
+                actions=['OK'],
+                title='No Spells Available',
+            )
+            return
+        self._counter_spell_choices = affordable
+        self._counter_spell_choice_idx = 0
+        self._show_counter_spell_choice(0)
+
+    def _show_counter_spell_choice(self, idx):
+        """Show a dialogue for the counter spell at the given index."""
+        choices = self._counter_spell_choices
+        spell_name = choices[idx]
+        req_label = self._card_req_label(spell_name)
+        icons = self._spell_icons.get(spell_name, {})
+        desc = icons.get('mini_game_description') or icons.get('description', '')
+        n = len(choices)
+        pos_text = f' ({idx + 1}/{n})' if n > 1 else ''
+        msg = f'{desc}\n\nCost: {req_label}'
+        actions = ['Confirm']
+        if n > 1:
+            actions.append('Next')
+        actions.append('Cancel')
+        self._pending_counter_spell = spell_name
+        self.dialogue_box = DialogueBox(
+            self.window, msg, actions=actions,
+            title=f'Counter Spell: {spell_name}{pos_text}',
+        )
+
     def _close_subscreen(self):
         """Dismiss the active subscreen and sync config."""
         if self._game_proxy:
@@ -1678,64 +1700,68 @@ class DefenceScreen(MenuScreenMixin, Screen):
         has_moves = len(moves) == 3
         # Defence also requires either a battle figure or a spell (or auto-gamble)
         has_battle_fig = self._config.get('battle_figure_id') is not None
-        has_spell = self._config.get('spell_name') is not None
+        has_counter_spell = self._config.get('counter_spell_name') is not None
         has_auto_gamble = self._config.get('auto_gamble', False)
-        has_strategy = has_battle_fig or has_spell or has_auto_gamble
+        has_strategy = has_battle_fig or has_counter_spell or has_auto_gamble
         return has_valid_figure and has_moves and has_strategy
 
-    # ── Modifier cycling ───────────────────────────────────────────
+    # ── Prelude spell cycling (auto-defender) ─────────────────────
 
-    _MODIFIERS = ['Peasant War', 'Civil War']
-
-    def _cycle_modifier(self):
-        """Cycle through no modifier → Peasant War → Civil War → none."""
-        mod = self._config.get('battle_modifier')
-        if not mod:
-            self._server_set_modifier(self._MODIFIERS[0])
-        else:
-            current = mod.get('type')
-            try:
-                idx = self._MODIFIERS.index(current)
-            except ValueError:
-                idx = -1
-            next_idx = idx + 1
-            if next_idx >= len(self._MODIFIERS):
-                self._server_remove_modifier()
-            else:
-                self._server_set_modifier(self._MODIFIERS[next_idx])
-
-    # ── Spell cycling ──────────────────────────────────────────────
-
-    _SPELLS = ['poison', 'health_boost']
-
-    def _cycle_spell(self):
-        """Cycle through no spell → poison → health_boost → none."""
-        spell = self._config.get('spell_name')
-        if not spell:
-            # Try to set the first spell; server will check for free cards
-            self._server_set_spell(self._SPELLS[0])
+    def _cycle_prelude_spell(self):
+        """Cycle through prelude spells for auto-defender."""
+        current = self._config.get('prelude_spell_name')
+        spells = list(_DEFENCE_PRELUDE_SPELLS)
+        if not current:
+            for s in spells:
+                if self._has_cards_for(s):
+                    self._server_set_prelude_spell(s)
+                    return
         else:
             try:
-                idx = self._SPELLS.index(spell)
+                idx = spells.index(current)
             except ValueError:
                 idx = -1
-            next_idx = idx + 1
-            if next_idx >= len(self._SPELLS):
-                self._server_clear_spell()
-            else:
-                next_spell = self._SPELLS[next_idx]
-                # Clear current first, then set new (unlocks old cards)
-                self._server_clear_spell()
-                if next_spell == 'health_boost':
-                    # Health boost requires a target figure
-                    figs = self._config.get('figures', [])
-                    valid = [f for f in figs if not f.get('has_deficit', False)]
-                    if valid:
-                        self._server_set_spell(next_spell, target_fig_id=valid[0]['id'])
-                    else:
-                        self.state.set_msg('Health boost requires a target figure')
-                else:
-                    self._server_set_spell(next_spell)
+            # Try next spells
+            for i in range(1, len(spells) + 1):
+                next_idx = idx + i
+                if next_idx >= len(spells):
+                    self._server_clear_prelude_spell()
+                    return
+                if self._has_cards_for(spells[next_idx]):
+                    self._server_clear_prelude_spell()
+                    self._server_set_prelude_spell(spells[next_idx])
+                    return
+            self._server_clear_prelude_spell()
+
+    # ── Counter spell cycling (auto-defender) ──────────────────────
+
+    def _cycle_counter_spell(self):
+        """Cycle through counter spells for auto-defender."""
+        current = self._config.get('counter_spell_name')
+        spells = list(_DEFENCE_COUNTER_SPELLS)
+        if not current:
+            for s in spells:
+                if self._has_cards_for(s):
+                    # Clear battle figure first (mutually exclusive)
+                    if self._config.get('battle_figure_id'):
+                        self._server_clear_battle_figure()
+                    self._server_set_counter_spell(s)
+                    return
+        else:
+            try:
+                idx = spells.index(current)
+            except ValueError:
+                idx = -1
+            for i in range(1, len(spells) + 1):
+                next_idx = idx + i
+                if next_idx >= len(spells):
+                    self._server_clear_counter_spell()
+                    return
+                if self._has_cards_for(spells[next_idx]):
+                    self._server_clear_counter_spell()
+                    self._server_set_counter_spell(spells[next_idx])
+                    return
+            self._server_clear_counter_spell()
 
     # ── Update / events ─────────────────────────────────────────────
 
@@ -1766,7 +1792,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
-        # Handle save / modifier / spell confirmation dialogue responses
+        # Handle save / prelude / counter spell confirmation dialogue responses
         response = self.state.action.get('status')
         if response and self._pending_save_confirm:
             self._pending_save_confirm = False
@@ -1774,31 +1800,54 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if response == 'confirm':
                 self.state.screen = 'kingdom'
             return
-        if response and self._pending_modifier_confirm:
-            mod_name = self._pending_modifier_confirm
-            self._pending_modifier_confirm = None
+        if response and self._pending_prelude_spell:
+            spell_name = self._pending_prelude_spell
             self.reset_action()
             if response == 'confirm':
-                self._server_set_modifier(mod_name)
+                self._pending_prelude_spell = None
+                self._server_set_prelude_spell(spell_name)
+            elif response == 'next' and hasattr(self, '_prelude_spell_choices'):
+                choices = self._prelude_spell_choices
+                idx = (self._prelude_spell_choice_idx + 1) % len(choices)
+                self._prelude_spell_choice_idx = idx
+                self._show_prelude_spell_choice(idx)
+            else:
+                self._pending_prelude_spell = None
             return
-        if response and self._pending_spell_confirm:
-            spell_key = self._pending_spell_confirm
-            self._pending_spell_confirm = None
+        if response and self._pending_prelude_clear:
+            self._pending_prelude_clear = False
             self.reset_action()
             if response == 'confirm':
-                if spell_key == 'health_boost':
-                    figs = self._config.get('figures', [])
-                    valid = [f for f in figs if not f.get('has_deficit', False)]
-                    if valid:
-                        self._server_set_spell(spell_key, target_fig_id=valid[0]['id'])
-                    else:
-                        self.state.set_msg('Health boost requires a target figure')
-                else:
-                    self._server_set_spell(spell_key)
+                self._server_clear_prelude_spell()
+            return
+        if response and self._pending_counter_spell:
+            spell_name = self._pending_counter_spell
+            self.reset_action()
+            if response == 'confirm':
+                self._pending_counter_spell = None
+                # Clear battle figure first (mutually exclusive)
+                if self._config.get('battle_figure_id'):
+                    self._server_clear_battle_figure()
+                self._server_set_counter_spell(spell_name)
+            elif response == 'next' and hasattr(self, '_counter_spell_choices'):
+                choices = self._counter_spell_choices
+                idx = (self._counter_spell_choice_idx + 1) % len(choices)
+                self._counter_spell_choice_idx = idx
+                self._show_counter_spell_choice(idx)
+            else:
+                self._pending_counter_spell = None
+            return
+        if response and self._pending_counter_clear:
+            self._pending_counter_clear = False
+            self.reset_action()
+            if response == 'confirm':
+                self._server_clear_counter_spell()
             return
         if response in ('ok', 'cancel'):
-            self._pending_modifier_confirm = None
-            self._pending_spell_confirm = None
+            self._pending_prelude_spell = None
+            self._pending_prelude_clear = False
+            self._pending_counter_spell = None
+            self._pending_counter_clear = False
             self._pending_save_confirm = False
             self.reset_action()
             return
@@ -1914,106 +1963,62 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     self._open_battle_shop()
                     continue
 
-                # Modifier icon clicks
-                for mod_name, xrect in list(self._modifier_x_rects.items()):
-                    if xrect.collidepoint(pos):
-                        self._server_remove_modifier()
-                        break
-                else:
-                    for mod_name, rect in self._modifier_icon_rects.items():
-                        if rect.collidepoint(pos):
-                            mod = self._config.get('battle_modifier')
-                            if mod and mod.get('type') == mod_name:
-                                # Show info box for purchased modifier
-                                icons = self._modifier_icons.get(mod_name, {})
-                                desc = icons.get('mini_game_description') or icons.get('description', '')
-                                self.dialogue_box = DialogueBox(
-                                    self.window,
-                                    desc or f'{mod_name} is active.',
-                                    actions=['OK'],
-                                    title=mod_name,
-                                )
-                                break
-                            if self._has_cards_for(mod_name):
-                                req_label = self._card_req_label(mod_name)
-                                self._pending_modifier_confirm = mod_name
-                                self.dialogue_box = DialogueBox(
-                                    self.window,
-                                    f'Spend {req_label} to add {mod_name}?',
-                                    actions=['Confirm', 'Cancel'],
-                                    title='Set Modifier',
-                                )
-                            else:
-                                req_label = self._card_req_label(mod_name)
-                                self.dialogue_box = DialogueBox(
-                                    self.window,
-                                    f'You need {req_label} free cards for {mod_name}.',
-                                    actions=['OK'],
-                                    title='Not Enough Cards',
-                                )
-                            break
+                # Prelude spell: X remove button
+                if self._prelude_x_rect and self._prelude_x_rect.collidepoint(pos):
+                    current_spell = self._config.get('prelude_spell_name')
+                    if current_spell:
+                        self._pending_prelude_clear = True
+                        self.dialogue_box = DialogueBox(
+                            self.window,
+                            f'Remove {current_spell} prelude spell?',
+                            actions=['Confirm', 'Cancel'],
+                            title='Clear Prelude Spell',
+                        )
+                    continue
 
-                # Final round icon clicks (spells + battle figure)
-                for key, xrect in list(self._final_round_x_rects.items()):
-                    if xrect.collidepoint(pos):
-                        if key == 'battle_figure':
-                            self._server_clear_battle_figure()
+                # Prelude spell: edit button or empty slot click
+                if ((self._btn_prelude_edit and self._btn_prelude_edit.collidepoint(pos))
+                        or (self._prelude_spell_rect and self._prelude_spell_rect.collidepoint(pos))):
+                    self._open_prelude_spell_selection()
+                    continue
+
+                # Counter action: battle figure X remove
+                if self._battle_figure_x_rect and self._battle_figure_x_rect.collidepoint(pos):
+                    self._server_clear_battle_figure()
+                    continue
+
+                # Counter action: counter spell X remove
+                if self._counter_x_rect and self._counter_x_rect.collidepoint(pos):
+                    current_spell = self._config.get('counter_spell_name')
+                    if current_spell:
+                        self._pending_counter_clear = True
+                        self.dialogue_box = DialogueBox(
+                            self.window,
+                            f'Remove {current_spell} counter spell?',
+                            actions=['Confirm', 'Cancel'],
+                            title='Clear Counter Spell',
+                        )
+                    continue
+
+                # Counter action: battle figure slot click
+                if self._battle_figure_rect and self._battle_figure_rect.collidepoint(pos):
+                    if not self._config.get('battle_figure_id'):
+                        figs = self._config.get('figures', [])
+                        valid = [f for f in figs if not f.get('has_deficit', False)]
+                        if valid:
+                            # Clear counter spell first (mutually exclusive)
+                            if self._config.get('counter_spell_name'):
+                                self._server_clear_counter_spell()
+                            self._selecting_battle_fig = True
                         else:
-                            self._server_clear_spell()
-                        break
-                else:
-                    for key, rect in self._final_round_icon_rects.items():
-                        if rect.collidepoint(pos):
-                            if key == 'battle_figure':
-                                if self._config.get('battle_figure_id'):
-                                    break  # already selected — use X
-                                # Enter selection mode — user clicks a figure
-                                figs = self._config.get('figures', [])
-                                valid = [f for f in figs if not f.get('has_deficit', False)]
-                                if valid:
-                                    # Clear spell first (mutually exclusive)
-                                    if self._config.get('spell_name'):
-                                        self._server_clear_spell()
-                                    self._selecting_battle_fig = True
-                                else:
-                                    self.state.set_msg('No valid figures available')
-                            else:
-                                spell = self._config.get('spell_name')
-                                if spell == key:
-                                    # Show info box for purchased spell
-                                    icons = self._spell_icons.get(key, {})
-                                    desc = icons.get('mini_game_description') or icons.get('description', '')
-                                    display_name = _SPELL_FAMILY_MAP.get(key, key)
-                                    self.dialogue_box = DialogueBox(
-                                        self.window,
-                                        desc or f'{display_name} is active.',
-                                        actions=['OK'],
-                                        title=display_name,
-                                    )
-                                    break
-                                if self._has_cards_for(key, _SPELL_CARD_REQS):
-                                    # Clear battle figure first (mutually exclusive)
-                                    if self._config.get('battle_figure_id'):
-                                        self._server_clear_battle_figure()
-                                    req_label = self._card_req_label(key, _SPELL_CARD_REQS)
-                                    display_name = _SPELL_FAMILY_MAP.get(key, key)
-                                    self._pending_spell_confirm = key
-                                    self.dialogue_box = DialogueBox(
-                                        self.window,
-                                        f'Spend {req_label} to cast {display_name}?',
-                                        actions=['Confirm', 'Cancel'],
-                                        title='Set Spell',
-                                    )
-                                else:
-                                    req_label = self._card_req_label(key, _SPELL_CARD_REQS)
-                                    display_name = _SPELL_FAMILY_MAP.get(key, key)
-                                    self.dialogue_box = DialogueBox(
-                                        self.window,
-                                        f'You need {req_label} free cards for {display_name}.',
-                                        actions=['OK'],
-                                        title='Not Enough Cards',
-                                    )
-                            break
+                            self.state.set_msg('No valid figures available')
+                    continue
+
+                # Counter action: edit button or counter spell slot click
+                if ((self._btn_counter_edit and self._btn_counter_edit.collidepoint(pos))
+                        or (self._counter_spell_rect and self._counter_spell_rect.collidepoint(pos))):
+                    self._open_counter_spell_selection()
+                    continue
 
                 # Auto-gamble toggle
                 if self._btn_auto_gamble and self._btn_auto_gamble.collidepoint(pos):

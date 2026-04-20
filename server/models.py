@@ -731,6 +731,15 @@ class LandConfig(db.Model):
     spell_name           = db.Column(db.String(50), nullable=True)   # 'health_boost'|'poison'
     spell_target_figure_id = db.Column(db.Integer, nullable=True)    # health boost target
     spell_card_ids       = db.Column(db.JSON, nullable=True)         # [collection_card.id, ...]
+    # ── Prelude spell (conquer & defence) ───────────────────────────
+    prelude_spell_name       = db.Column(db.String(50), nullable=True)
+    prelude_spell_data       = db.Column(db.JSON, nullable=True)     # e.g. target info
+    prelude_spell_card_ids   = db.Column(db.JSON, nullable=True)     # [collection_card.id, ...]
+    # ── Counter spell (defence only — alternative to battle figure) ─
+    counter_spell_name           = db.Column(db.String(50), nullable=True)
+    counter_spell_data           = db.Column(db.JSON, nullable=True)
+    counter_spell_card_ids       = db.Column(db.JSON, nullable=True)
+    counter_spell_target_figure_id = db.Column(db.Integer, nullable=True)
     # Auto-gambling — defence only
     auto_gamble          = db.Column(db.Boolean, nullable=False, default=False)
     created_at           = db.Column(db.DateTime, default=_utcnow)
@@ -758,6 +767,13 @@ class LandConfig(db.Model):
             'spell_name': self.spell_name,
             'spell_target_figure_id': self.spell_target_figure_id,
             'spell_card_ids': self.spell_card_ids,
+            'prelude_spell_name': self.prelude_spell_name,
+            'prelude_spell_data': self.prelude_spell_data,
+            'prelude_spell_card_ids': self.prelude_spell_card_ids,
+            'counter_spell_name': self.counter_spell_name,
+            'counter_spell_data': self.counter_spell_data,
+            'counter_spell_card_ids': self.counter_spell_card_ids,
+            'counter_spell_target_figure_id': self.counter_spell_target_figure_id,
             'auto_gamble': self.auto_gamble,
             'figures': [f.serialize() for f in self.figures],
             'battle_moves': [m.serialize() for m in self.battle_moves],
