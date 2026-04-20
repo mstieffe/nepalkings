@@ -2141,13 +2141,8 @@ def conquer_start_battle():
     game.invader_player_id = atk_player.id
     game.turn_player_id = atk_player.id
 
-    # ── Create and deal deck ──
+    # ── Create deck (no dealing – figures are pre-built from collection) ──
     DeckManager.create_and_shuffle_deck(game)
-    DeckManager.deal_cards_to_players(
-        game, [atk_player, def_player],
-        num_main_cards=config.NUM_MAIN_CARDS_START,
-        num_side_cards=config.NUM_SIDE_CARDS_START,
-    )
 
     # ── Build attacker figures & moves ──
     atk_game_figures = _build_figures_from_config(atk_figures, atk_player, game)
