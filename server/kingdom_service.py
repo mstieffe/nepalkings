@@ -255,6 +255,7 @@ def check_defence_incomplete(land_id, user_id):
     # Check final round configuration (battle figure, spell, or auto-gamble)
     has_final = (cfg.battle_figure_id is not None
                  or cfg.spell_name is not None
+                 or cfg.counter_spell_name is not None
                  or cfg.auto_gamble)
     if not has_final:
         return True

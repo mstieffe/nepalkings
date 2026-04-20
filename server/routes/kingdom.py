@@ -286,6 +286,26 @@ _DEFENCE_COUNTER_SPELLS = frozenset({
     'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost', 'Explosion',
 })
 
+# Spells that must also be recorded in game.battle_modifier for existing
+# game logic (advance restrictions, turn updates, ceasefire, etc.)
+_BATTLE_MODIFIER_SPELLS = frozenset({'Peasant War', 'Civil War', 'Blitzkrieg'})
+
+# Spell type classification used when creating ActiveSpell records at game
+# creation time.  Matches the family types in spell_configs.
+_SPELL_TYPE_MAP = {
+    'Draw 2 MainCards': 'greed',
+    'Fill 10':          'greed',
+    'Dump Cards':       'greed',
+    'Forced Deal':      'greed',
+    'Poison':           'enchantment',
+    'Health Boost':     'enchantment',
+    'All Seeing Eye':   'enchantment',
+    'Explosion':        'enchantment',
+    'Peasant War':      'tactics',
+    'Civil War':        'tactics',
+    'Blitzkrieg':       'tactics',
+}
+
 
 def _find_free_cards(user_id, rank, count, color_constraint=None):
     """Find `count` free (unlocked) collection cards of `rank` with the same suit color.
@@ -1892,6 +1912,35 @@ def _get_or_create_ai_user():
     return ai_user
 
 
+def _create_prelude_spell(game, player, spell_name, spell_data, game_figures):
+    """Create an ActiveSpell for a prelude spell.
+
+    For battle-modifier spells (Peasant War / Civil War / Blitzkrieg) the
+    modifier is also appended to ``game.battle_modifier`` so that existing
+    game logic (advance restrictions, turn handling, ceasefire) continues to
+    work without changes.
+    """
+    spell = ActiveSpell(
+        game_id=game.id,
+        player_id=player.id,
+        spell_name=spell_name,
+        spell_type=_SPELL_TYPE_MAP.get(spell_name, 'enchantment'),
+        spell_family_name=spell_name,
+        suit=game_figures[0].suit if game_figures else 'Hearts',
+        target_figure_id=None,
+        cast_round=1,
+        is_active=True,
+        is_pending=False,
+        effect_data=spell_data,
+    )
+    db.session.add(spell)
+
+    if spell_name in _BATTLE_MODIFIER_SPELLS:
+        if not isinstance(game.battle_modifier, list):
+            game.battle_modifier = []
+        game.battle_modifier.append({'type': spell_name, 'caster_id': player.id})
+
+
 # ── POST /kingdom/conquer/start_battle ───────────────────────────────────────
 
 @kingdom.route('/conquer/start_battle', methods=['POST'])
@@ -2037,13 +2086,36 @@ def conquer_start_battle():
         if battle_fig_idx < len(def_game_figures):
             game.defending_figure_id = def_game_figures[battle_fig_idx].id
 
-        # Set battle modifier from template
-        if template.get('battle_modifier'):
+        # ── AI prelude spell ──
+        if template.get('prelude_spell_name'):
+            _create_prelude_spell(game, def_player,
+                                  template['prelude_spell_name'],
+                                  template.get('prelude_spell_data'),
+                                  def_game_figures)
+        elif template.get('battle_modifier'):
+            # Backward compat: old template battle_modifier
             mod = template['battle_modifier']
             game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
-        # Set spell from template
-        if template.get('spell'):
+        # ── AI counter spell ──
+        if template.get('counter_spell_name'):
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name=template['counter_spell_name'],
+                spell_type=_SPELL_TYPE_MAP.get(
+                    template['counter_spell_name'], 'enchantment'),
+                spell_family_name=template['counter_spell_name'],
+                suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
+                target_figure_id=None,
+                cast_round=1,
+                is_active=True,
+                is_pending=False,
+                effect_data=template.get('counter_spell_data'),
+            )
+            db.session.add(spell)
+        elif template.get('spell'):
+            # Backward compat: old template spell
             spell_data = template['spell']
             target_fig_id = None
             if spell_data.get('spell_target_figure_id') is not None:
@@ -2091,13 +2163,40 @@ def conquer_start_battle():
             if mapped_id:
                 game.defending_figure_id_2 = mapped_id
 
-        # Set battle modifier from defence config
-        if def_cfg.battle_modifier:
+        # ── Defender prelude spell ──
+        if def_cfg.prelude_spell_name:
+            _create_prelude_spell(game, def_player,
+                                  def_cfg.prelude_spell_name,
+                                  def_cfg.prelude_spell_data,
+                                  def_game_figures)
+        elif def_cfg.battle_modifier:
+            # Backward compat: old battle_modifier field
             mod = def_cfg.battle_modifier
             game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
-        # Set spell from defence config
-        if def_cfg.spell_name:
+        # ── Defender counter spell ──
+        if def_cfg.counter_spell_name:
+            target_fig_id = None
+            if def_cfg.counter_spell_target_figure_id:
+                target_fig_id = def_cfg_fig_map.get(
+                    def_cfg.counter_spell_target_figure_id)
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name=def_cfg.counter_spell_name,
+                spell_type=_SPELL_TYPE_MAP.get(
+                    def_cfg.counter_spell_name, 'enchantment'),
+                spell_family_name=def_cfg.counter_spell_name,
+                suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
+                target_figure_id=target_fig_id,
+                cast_round=1,
+                is_active=True,
+                is_pending=False,
+                effect_data=def_cfg.counter_spell_data,
+            )
+            db.session.add(spell)
+        elif def_cfg.spell_name:
+            # Backward compat: old spell_name field
             target_fig_id = None
             if def_cfg.spell_target_figure_id:
                 target_fig_id = def_cfg_fig_map.get(
@@ -2116,8 +2215,14 @@ def conquer_start_battle():
             )
             db.session.add(spell)
 
-    # Merge attacker modifier if no defender modifier
-    if not game.battle_modifier and atk_cfg.battle_modifier:
+    # ── Attacker prelude spell ──
+    if atk_cfg.prelude_spell_name:
+        _create_prelude_spell(game, atk_player,
+                              atk_cfg.prelude_spell_name,
+                              atk_cfg.prelude_spell_data,
+                              atk_game_figures)
+    elif not game.battle_modifier and atk_cfg.battle_modifier:
+        # Backward compat: old battle_modifier fallback
         mod = atk_cfg.battle_modifier
         game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
