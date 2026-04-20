@@ -1237,59 +1237,95 @@ class GameScreen(Screen):
             # ── Conquer mode game start ──
             if summary.get('mode') == 'conquer':
                 self.state.game._game_start_pending = False
-                images = []
 
-                # Show drawn cards from own prelude spells
                 own_spells = summary.get('own_prelude_spells', [])
                 own_drawn_cards = summary.get('own_drawn_cards', [])
                 opp_spells = summary.get('opponent_prelude_spells', [])
 
-                from game.components.cards.card import Card
-
-                for card_data in own_drawn_cards:
-                    card = Card(
-                        rank=card_data['rank'],
-                        suit=card_data['suit'],
-                        value=card_data['value'],
-                        id=card_data.get('id'),
-                        type=card_data.get('type', 'main'),
-                    )
-                    card_img = card.make_icon(self.window, self.state.game, 0, 0)
-                    images.append(card_img.front_img)
-
-                # Build message
+                # (1) Intro box — who, what land, invader/defender role
+                tier = self.state.game.land_tier
+                land_label = f"Tier {tier} land" if tier else "this land"
                 role_text = "invader" if is_invader else "defender"
-                msg = f"Conquer Battle Started!\n\nYou are the {role_text}. You are fighting {opponent_name}."
-
-                message_after = None
-                # Own prelude spell description
-                if own_spells:
-                    spell_names = ', '.join(s['spell_name'] for s in own_spells)
-                    msg += f"\n\nYour prelude spell: {spell_names}"
-
-                # Opponent prelude spell description
-                if opp_spells:
-                    opp_parts = []
-                    for s in opp_spells:
-                        opp_parts.append(s['spell_name'])
-                    message_after = f"Opponent's prelude spell: {', '.join(opp_parts)}"
-
-                # Battle modifiers
-                modifiers = summary.get('battle_modifier') or []
-                if modifiers:
-                    mod_names = ', '.join(m.get('type', '?') for m in modifiers if isinstance(m, dict))
-                    if mod_names:
-                        extra = f"\nBattle modifier: {mod_names}"
-                        message_after = (message_after + extra) if message_after else extra
-
+                intro_msg = (f"Conquer Battle Started!\n\n"
+                             f"You are the {role_text}. You are fighting "
+                             f"{opponent_name} for control of {land_label}.")
                 self.queue_or_show_notification({
-                    'message': msg,
+                    'message': intro_msg,
                     'actions': ['ok'],
-                    'images': images if images else None,
                     'icon': 'welcome',
                     'title': 'Conquer Battle',
-                    'message_after_images': message_after,
                 })
+
+                # (2) Own prelude spell success (if any)
+                if own_spells:
+                    from game.components.cards.card import Card
+                    card_images = []
+                    for card_data in own_drawn_cards:
+                        card = Card(
+                            rank=card_data['rank'],
+                            suit=card_data['suit'],
+                            value=card_data['value'],
+                            id=card_data.get('id'),
+                            type=card_data.get('type', 'main'),
+                        )
+                        card_img = card.make_icon(self.window, self.state.game, 0, 0)
+                        card_images.append(card_img.front_img)
+
+                    spell_names = ', '.join(s['spell_name'] for s in own_spells)
+                    # Determine message based on spell type
+                    modifiers = summary.get('battle_modifier') or []
+                    own_modifier_names = []
+                    for s in own_spells:
+                        sn = s['spell_name']
+                        if any(m.get('type') == sn and m.get('caster_id') != None
+                               for m in modifiers if isinstance(m, dict)):
+                            own_modifier_names.append(sn)
+
+                    if own_modifier_names:
+                        spell_msg = f"Your prelude spell {spell_names} is now active!"
+                    elif card_images:
+                        spell_msg = f"Your prelude spell {spell_names} was executed!\n\nYou drew {len(card_images)} card(s)."
+                    else:
+                        spell_msg = f"Your prelude spell {spell_names} was executed successfully!"
+
+                    spell_icon_images = self._get_spell_icon_image(own_spells[0]['spell_name'])
+                    all_images = spell_icon_images + card_images
+                    self.queue_or_show_notification({
+                        'message': spell_msg,
+                        'actions': ['ok'],
+                        'images': all_images if all_images else None,
+                        'icon': None if all_images else 'magic',
+                        'title': 'Prelude Spell',
+                    })
+
+                # (3) Opponent prelude spell turn notification (if any)
+                if opp_spells:
+                    opp_spell_names = ', '.join(s['spell_name'] for s in opp_spells)
+                    modifiers = summary.get('battle_modifier') or []
+                    opp_modifier_names = [s['spell_name'] for s in opp_spells
+                                          if any(m.get('type') == s['spell_name']
+                                                 for m in modifiers if isinstance(m, dict))]
+
+                    opp_images = []
+                    for s in opp_spells:
+                        opp_images.extend(self._get_spell_icon_image(s['spell_name']))
+
+                    if opp_modifier_names:
+                        opp_msg = f"{opponent_name}'s turn:"
+                        opp_msg_after = f"• Cast {opp_spell_names}\n  > Battle modifier is now active."
+                    else:
+                        opp_msg = f"{opponent_name}'s turn:"
+                        opp_msg_after = f"• Cast {opp_spell_names}"
+
+                    self.queue_or_show_notification({
+                        'message': opp_msg,
+                        'actions': ['ok'],
+                        'images': opp_images if opp_images else None,
+                        'icon': None if opp_images else 'info',
+                        'title': 'Opponent Prelude',
+                        'message_after_images': opp_msg_after,
+                    })
+
                 self.state.game.pending_opponent_turn_summary = None
                 return
 
@@ -1728,19 +1764,11 @@ class GameScreen(Screen):
             
             # Build message depending on game mode
             if self.state.game.mode == 'conquer':
-                opponent = self.state.game.opponent_name or "the defender"
                 tier = self.state.game.land_tier
                 land_label = "Tier {} land".format(tier) if tier else "this land"
                 
-                # Mention battle modifiers if any
-                modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
-                modifier_names = [m.get('type') for m in modifiers if m.get('type')]
-                
-                msg = "Battle for {}!\n\nYou are fighting {} for control of {}.".format(
-                    land_label, opponent, land_label)
-                if modifier_names:
-                    msg += "\n\nActive modifier: {}".format(", ".join(modifier_names))
-                msg += "\n\nGo to the field and select a figure to advance."
+                msg = "Battle for {}!\n\nGo to the field and select a figure to advance toward battle.".format(
+                    land_label)
                 title = "Battle for {}".format(land_label)
             else:
                 msg = "Last turn!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance, or build a figure with Instant Charge to build and advance in one action."
@@ -2009,13 +2037,7 @@ class GameScreen(Screen):
                             images.append(icon)
                             break
 
-            modifier_text, modifier_icons = self._get_battle_modifier_info()
-            images.extend(modifier_icons)
-
             msg = f"You advanced {figure_name} toward battle!"
-            message_after = "Waiting for the defender's response..."
-            if modifier_text:
-                message_after += f"\n\n{modifier_text}"
 
             self.queue_or_show_notification({
                 'message': msg,
@@ -2023,7 +2045,6 @@ class GameScreen(Screen):
                 'images': images if images else None,
                 'icon': None if images else "info",
                 'title': "Advancing!",
-                'message_after_images': message_after,
             })
             return
         
@@ -2323,41 +2344,79 @@ class GameScreen(Screen):
         if self.state.game.mode == 'conquer':
             self.state.game.battle_ready_shown = True
 
-            # Show defender info to the invader before auto-fighting
             is_invader = (self.state.game.advancing_player_id == self.state.game.player_id)
             if is_invader:
-                images = []
-                # Find the defending figure icon
-                field_screen = self.subscreens.get('field')
-                defending_fig_name = "the defender's figure"
-                if field_screen and self.state.game.defending_figure_id:
-                    for icon in getattr(field_screen, 'figure_icons', []):
-                        if hasattr(icon, 'figure') and icon.figure.id == self.state.game.defending_figure_id:
-                            defending_fig_name = icon.figure.name
-                            images.append(icon)
-                            break
-
-                msg = f"The defender responds with {defending_fig_name}!"
-
-                # Check for defender counter-spell
-                message_after = None
+                # Check for defender counter-spell (enchantment, NOT greed)
                 counter_spells = [
                     s for s in (self.state.game.cached_active_spells or [])
                     if s.get('player_id') != self.state.game.player_id
                     and s.get('spell_name') not in ('Draw 2 MainCards', 'Fill 10', 'Dump Cards')
                 ]
-                if counter_spells:
-                    spell_names = ', '.join(s.get('spell_name', '?') for s in counter_spells)
-                    message_after = f"Defender's active spell: {spell_names}"
 
-                self.queue_or_show_notification({
-                    'message': msg,
-                    'actions': ['ok'],
-                    'images': images if images else None,
-                    'icon': None if images else 'info',
-                    'title': 'Defender Response',
-                    'message_after_images': message_after,
-                })
+                if counter_spells:
+                    # (6) Defender cast a counter spell — show turn notification
+                    opponent_name = self.state.game.opponent_name or "Defender"
+                    spell_names = ', '.join(s.get('spell_name', '?') for s in counter_spells)
+
+                    spell_images = []
+                    for s in counter_spells:
+                        spell_images.extend(self._get_spell_icon_image(s.get('spell_name', '')))
+
+                    self.queue_or_show_notification({
+                        'message': f"{opponent_name}'s turn:",
+                        'actions': ['ok'],
+                        'images': spell_images if spell_images else None,
+                        'icon': None if spell_images else 'info',
+                        'title': 'Defender Counter Spell',
+                        'message_after_images': f"• Cast {spell_names}",
+                    })
+
+                    # (8) Defender used last turn for spell — did not counter-advance
+                    # Invader must select defender's battle figure
+                    if not self.state.game.defending_figure_id:
+                        advancing_figure_name = "your figure"
+                        advancing_icons = []
+                        field_screen = self.subscreens.get('field')
+                        if field_screen and self.state.game.advancing_figure_id:
+                            for fig in getattr(field_screen, 'figures', []):
+                                if fig.id == self.state.game.advancing_figure_id:
+                                    advancing_figure_name = fig.name
+                                    break
+                            for icon in getattr(field_screen, 'figure_icons', []):
+                                if hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id:
+                                    advancing_icons.append(icon)
+                                    break
+
+                        sel_images = advancing_icons if advancing_icons else None
+                        self.queue_or_show_notification({
+                            'message': (f"The defender did not counter-advance.\n\n"
+                                        f"Select one of the defender's figures to face "
+                                        f"{advancing_figure_name} in battle."),
+                            'actions': ['got it!'],
+                            'images': sel_images,
+                            'icon': None if sel_images else 'info',
+                            'title': "Select Opponent's Defender",
+                        })
+                else:
+                    # (7) No counter spell — defender counter-advanced
+                    # Show the defending figure
+                    images = []
+                    field_screen = self.subscreens.get('field')
+                    defending_fig_name = "the defender's figure"
+                    if field_screen and self.state.game.defending_figure_id:
+                        for icon in getattr(field_screen, 'figure_icons', []):
+                            if hasattr(icon, 'figure') and icon.figure.id == self.state.game.defending_figure_id:
+                                defending_fig_name = icon.figure.name
+                                images.append(icon)
+                                break
+
+                    self.queue_or_show_notification({
+                        'message': f"The defender responds with {defending_fig_name}!",
+                        'actions': ['ok'],
+                        'images': images if images else None,
+                        'icon': None if images else 'info',
+                        'title': 'Defender Response',
+                    })
 
             logger.info("[BATTLE_READY] Conquer mode — auto-submitting 'battle' decision")
             self.state.game.pending_battle_ready = False
