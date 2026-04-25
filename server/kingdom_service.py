@@ -265,4 +265,16 @@ def check_defence_incomplete(land_id, user_id):
     if has_battle_fig and not any(fig.id == cfg.battle_figure_id for fig in figures):
         return True
 
+    # Health Boost prelude/counter spells require an own-figure target.
+    figure_ids = {fig.id for fig in figures}
+    prelude_data = cfg.prelude_spell_data if isinstance(cfg.prelude_spell_data, dict) else {}
+    if cfg.prelude_spell_name == 'Health Boost':
+        target_id = prelude_data.get('target_figure_id')
+        if not target_id or target_id not in figure_ids:
+            return True
+    if cfg.counter_spell_name == 'Health Boost':
+        target_id = cfg.counter_spell_target_figure_id
+        if not target_id or target_id not in figure_ids:
+            return True
+
     return False

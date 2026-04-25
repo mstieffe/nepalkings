@@ -26,9 +26,40 @@ _CONQUER_PRELUDE_SPELLS = frozenset({
 
 _TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
 
+# LogEntry.type values that count as the current player having interacted
+# with the game.  Used to decide whether to show the conquer/duel intro and
+# whether prelude side-effect logs (figure_destroyed, etc.) may preempt it.
+_USER_ACTION_LOG_TYPES = (
+    'figure_built', 'figure_upgraded', 'figure_pickup',
+    'card_changed', 'spell_cast', 'spell_end', 'counter_spell',
+    'battle_move', 'battle_skip', 'battle_decision', 'battle_start',
+    'battle_win', 'battle_draw',
+    'advance', 'counter_advance',
+    'auto_loss', 'fold_win', 'deficit_loss', 'civil_war_skip',
+    'game_start',
+)
+
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _defender_already_cast_counter_this_round(game, defender_player_id):
+    """True if the defender already cast a counter spell this round.
+
+    Used to keep counter spells one-per-battle-round even when the round
+    contains multiple advances (Civil War).  We rely on the LogEntry record
+    of type ``counter_spell`` so the gate also covers no-valid-target casts
+    that did not produce an ActiveSpell row.
+    """
+    if not game or not defender_player_id:
+        return False
+    return LogEntry.query.filter_by(
+        game_id=game.id,
+        player_id=defender_player_id,
+        round_number=game.current_round,
+        type='counter_spell',
+    ).first() is not None
 
 
 def _conquer_defender_counter_advance_disabled(game):
@@ -49,7 +80,19 @@ def _conquer_defender_counter_advance_disabled(game):
         return True
 
     has_battle_fig = (cfg.battle_figure_id is not None)
-    has_counter_spell = (cfg.counter_spell_name is not None or cfg.spell_name is not None)
+    has_counter_spell = cfg.counter_spell_name is not None
+    if cfg.counter_spell_name == 'Explosion':
+        has_counter_spell = False
+    if cfg.counter_spell_name == 'Health Boost':
+        counter_target = db.session.get(LandConfigFigure, cfg.counter_spell_target_figure_id)
+        has_counter_spell = bool(counter_target and counter_target.config_id == cfg.id
+                                 and not getattr(counter_target, 'checkmate', False))
+
+    # If a counter spell already fired this round (e.g., Civil War first
+    # advance), fall back to counter-advance for any remaining advances.
+    defender_player = next((p for p in game.players if p.id != game.advancing_player_id), None)
+    if has_counter_spell and defender_player and _defender_already_cast_counter_this_round(game, defender_player.id):
+        has_counter_spell = False
 
     if has_battle_fig and not has_counter_spell:
         battle_cfg_fig = db.session.get(Figure, game.defending_figure_id)
@@ -63,6 +106,60 @@ def _conquer_defender_counter_advance_disabled(game):
 
     # Both-selected and none-selected strategies fall back to invader pick.
     return True
+
+
+def _map_defence_config_figure_to_game(cfg, cfg_figure_id, game, defender_player_id):
+    """Map a LandConfigFigure ID to the runtime Figure created for this conquer game.
+
+    Uses the persistent ``Figure.source_config_figure_id`` link rather than
+    insertion-order zip so the mapping is stable even when figures are
+    destroyed (Explosion) before the lookup runs.
+    """
+    if not cfg or not cfg_figure_id:
+        return None
+    return Figure.query.filter_by(
+        game_id=game.id,
+        player_id=defender_player_id,
+        source_config_figure_id=cfg_figure_id,
+    ).first()
+
+
+def _get_conquer_counter_spell_config(game, defender_player):
+    """Return the configured defender counter spell for a conquer game."""
+    if not game.defence_config_id:
+        return None, None, None
+    cfg = db.session.get(LandConfig, game.defence_config_id)
+    if not cfg or not cfg.counter_spell_name:
+        return None, None, None
+    return cfg, cfg.counter_spell_name, cfg.counter_spell_data
+
+
+def _resolve_conquer_counter_target(game, defender_player, cfg, spell_name):
+    """Resolve the runtime target for a configured conquer counter spell."""
+    if spell_name == 'Poison':
+        target = db.session.get(Figure, game.advancing_figure_id)
+        if target and not getattr(target, 'checkmate', False):
+            return target.id
+        return None
+    if spell_name == 'Health Boost':
+        target = _map_defence_config_figure_to_game(
+            cfg,
+            cfg.counter_spell_target_figure_id,
+            game,
+            defender_player.id,
+        )
+        if target and not getattr(target, 'checkmate', False):
+            return target.id
+        return None
+    return None
+
+
+def _consume_conquer_defender_response(game, defender_player):
+    """Consume the automated defender response and return turn to the invader."""
+    if (defender_player.turns_left or 0) > 0:
+        defender_player.turns_left = defender_player.turns_left - 1
+    if game.advancing_player_id:
+        game.turn_player_id = game.advancing_player_id
 
 @games.after_request
 def _ai_trigger_hook(response):
@@ -718,6 +815,17 @@ def _get_opponent_turn_summary(game, current_player_id):
         LogEntry.round_number == game.current_round
     ).order_by(LogEntry.id.desc()).limit(5).all()
     logger.debug(f"[OPPONENT_TURN] Last 5 logs from opponent: {[(log.type, log.message) for log in all_logs]}")
+
+    # Check if this is game start - each player should see it once.  For
+    # conquer mode, this must be returned before prelude side-effect logs
+    # such as Explosion destruction so the intro notification stays first.
+    # Use a strict whitelist of user-action log types so any system-only
+    # side-effect log (figure_destroyed, etc.) does not suppress the intro.
+    current_player_logs = LogEntry.query.filter(
+        LogEntry.game_id == game.id,
+        LogEntry.player_id == current_player_id,
+        LogEntry.type.in_(_USER_ACTION_LOG_TYPES),
+    ).first()
     
     # Check if current player had a figure destroyed (by opponent's Explosion spell)
     destroyed_figure_log = LogEntry.query.filter(
@@ -728,7 +836,7 @@ def _get_opponent_turn_summary(game, current_player_id):
     ).order_by(LogEntry.id.desc()).first()
     
     # If a figure was destroyed, prioritize showing this
-    if destroyed_figure_log:
+    if destroyed_figure_log and not (game.mode == 'conquer' and not current_player_logs):
         import re
         # Extract figure name from message: "FigureName was destroyed by Explosion spell (N cards returned to deck)"
         match = re.search(r'^(.+?) was destroyed by Explosion spell', destroyed_figure_log.message)
@@ -796,17 +904,10 @@ def _get_opponent_turn_summary(game, current_player_id):
         LogEntry.game_id == game.id,
         LogEntry.player_id == opponent.id,
         LogEntry.round_number == game.current_round,
-        LogEntry.type.in_(['figure_built', 'figure_upgraded', 'spell_cast', 'figure_pickup', 'card_changed'])
+        LogEntry.type.in_(['figure_built', 'figure_upgraded', 'spell_cast', 'counter_spell', 'figure_pickup', 'card_changed'])
     ).order_by(LogEntry.id.desc()).first()
     
     logger.debug(f"[OPPONENT_TURN] Most recent actionable log: {recent_log.type if recent_log else 'None'} - {recent_log.message if recent_log else 'None'}")
-    
-    # Check if this is game start - each player should see it once
-    # Check if current player has any logs yet (works regardless of turn/round number)
-    current_player_logs = LogEntry.query.filter(
-        LogEntry.game_id == game.id,
-        LogEntry.player_id == current_player_id
-    ).first()
     
     logger.debug(f"[GAME_START_CHECK] Player {current_player_id} has logs: {current_player_logs is not None}, is_turn: {game.turn_player_id == current_player_id}")
     
@@ -835,15 +936,28 @@ def _get_opponent_turn_summary(game, current_player_id):
                     if sp.cast_round == 1 and sp.spell_name in _CONQUER_PRELUDE_SPELLS
                 ]
 
-            active_prelude_spells = [sp for sp in prelude_spells if sp.is_active]
+            visible_prelude_spells = [
+                sp for sp in prelude_spells
+                if sp.is_active or (
+                    isinstance(sp.effect_data, dict)
+                    and sp.effect_data.get('prelude_status') == 'executed'
+                )
+            ]
 
             own_spells = []
             opponent_spells = []
-            for sp in active_prelude_spells:
+            for sp in visible_prelude_spells:
+                effect_data = sp.effect_data if isinstance(sp.effect_data, dict) else {}
+                target_name = effect_data.get('target_figure_name') or effect_data.get('destroyed_figure_name')
+                if not target_name and sp.target_figure_id:
+                    target = db.session.get(Figure, sp.target_figure_id)
+                    target_name = target.name if target else None
                 spell_info = {
                     'spell_name': sp.spell_name,
                     'spell_type': sp.spell_type,
                     'effect_data': sp.effect_data,
+                    'target_figure_id': sp.target_figure_id,
+                    'target_figure_name': target_name,
                 }
                 if sp.player_id == current_player_id:
                     own_spells.append(spell_info)
@@ -1053,7 +1167,7 @@ def _get_opponent_turn_summary(game, current_player_id):
                 'icon': 'round_arrow_active.png'
             }
     
-    elif log_type == 'spell_cast':
+    elif log_type in ('spell_cast', 'counter_spell'):
         spell_name = None
         spell_icon = None
         # Try to extract spell name and get corresponding icon
@@ -1084,10 +1198,10 @@ def _get_opponent_turn_summary(game, current_player_id):
             }
         
         action_data = {
-            'type': 'spell',
+            'type': 'counter_spell' if log_type == 'counter_spell' else 'spell',
             'spell_name': spell_name,
             'spell_icon': spell_icon,
-            'message': f'Cast {spell_name}'
+            'message': f'Cast {spell_name} as a counter spell' if log_type == 'counter_spell' else f'Cast {spell_name}'
         }
         
         logger.debug(f"[OPPONENT_TURN] Detected spell: {spell_name}")
@@ -1144,7 +1258,10 @@ def _get_opponent_turn_summary(game, current_player_id):
                 card_data = card.serialize()
                 card_data['type'] = 'main' if isinstance(card, MainCard) else 'side'
                 action_data['new_cards'].append(card_data)
-            action_data['message'] = f'Cast Dump Cards - you drew {len(action_data["new_cards"])} new cards'
+            action_data['message'] = (
+                f'Cast Dump Cards — both players discarded their hands; '
+                f'you redrew {len(action_data["new_cards"])} fresh card(s).'
+            )
             logger.debug(f"[DUMP_CARDS_SERVER] Serialized {len(action_data['new_cards'])} cards for notification")
         
         elif spell_name == 'Poison':
@@ -1837,6 +1954,145 @@ def update_points():
         db.session.rollback()
         logger.exception('Failed to update points')
         return jsonify({'success': False, 'message': 'Failed to update points'}), 400
+
+
+@games.route('/conquer_defender_counter_spell', methods=['POST'])
+@require_token
+def conquer_defender_counter_spell():
+    """Execute the player-owned land defender's configured conquer counter spell.
+
+    This endpoint is conquer-only and is used by deterministic defence
+    automation during the defender response window.  It does not alter normal
+    duel spell casting or counter-advance behavior.
+    """
+    try:
+        data = request.json or {}
+        game_id = data.get('game_id')
+        player_id = data.get('player_id')
+
+        if not game_id or not player_id:
+            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
+
+        game = db.session.get(Game, game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+        if game.mode != 'conquer':
+            return jsonify({'success': False, 'message': 'Counter spell response is conquer-only'}), 400
+        if game.state == 'finished':
+            return jsonify({'success': False, 'message': 'Game already finished'}), 400
+        if game.last_battle_result is not None:
+            return jsonify({'success': False, 'message': 'Battle already resolved'}), 400
+        if game.battle_confirmed:
+            return jsonify({'success': False, 'message': 'Battle already in progress'}), 400
+        if game.pending_spell_id is not None:
+            return jsonify({'success': False, 'message': 'Resolve pending spell first'}), 400
+        if game.turn_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Not your turn'}), 400
+        if not game.advancing_figure_id or game.advancing_player_id == player_id:
+            return jsonify({'success': False, 'message': 'No opponent advance to counter'}), 400
+        if game.defending_figure_id:
+            return jsonify({'success': False, 'message': 'Defender already selected'}), 400
+        if _defender_already_cast_counter_this_round(game, player_id):
+            return jsonify({'success': False, 'message': 'Counter spell already cast this round'}), 400
+
+        defender_player = db.session.get(Player, player_id)
+        if not defender_player:
+            return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+        cfg, spell_name, spell_data = _get_conquer_counter_spell_config(game, defender_player)
+        if not cfg or not spell_name:
+            return jsonify({'success': False, 'message': 'No counter spell configured'}), 400
+        if spell_name == 'Explosion':
+            return jsonify({'success': False, 'message': 'Explosion is not allowed as a counter spell'}), 400
+        if spell_name not in {'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost'}:
+            return jsonify({'success': False, 'message': f'Unsupported counter spell: {spell_name}'}), 400
+
+        target_figure_id = _resolve_conquer_counter_target(game, defender_player, cfg, spell_name)
+        if spell_name in {'Poison', 'Health Boost'} and not target_figure_id:
+            _consume_conquer_defender_response(game, defender_player)
+            log_entry = LogEntry(
+                game_id=game.id,
+                player_id=player_id,
+                round_number=game.current_round,
+                turn_number=defender_player.turns_left,
+                message=f"{spell_name} counter spell had no valid target.",
+                author='System',
+                type='counter_spell',
+            )
+            db.session.add(log_entry)
+            db.session.commit()
+            return jsonify({
+                'success': True,
+                'spell_name': spell_name,
+                'status': 'no_valid_target',
+                'game': game.serialize(),
+            })
+
+        effect_data = dict(spell_data or {}) if isinstance(spell_data, dict) else {}
+        effect_data['counter_origin'] = True
+
+        spell = ActiveSpell(
+            game_id=game.id,
+            player_id=defender_player.id,
+            spell_name=spell_name,
+            spell_type='greed' if spell_name in {'Dump Cards', 'Forced Deal'} else 'enchantment',
+            spell_family_name=spell_name,
+            suit='Hearts',
+            target_figure_id=target_figure_id,
+            cast_round=game.current_round,
+            is_active=True,
+            is_pending=False,
+            effect_data=effect_data,
+        )
+        db.session.add(spell)
+        db.session.flush()
+
+        from routes.spells import _execute_spell
+        result = _execute_spell(spell, game, defender_player)
+        post_data = dict(spell.effect_data or {})
+        post_data['counter_origin'] = True
+        if result.get('error'):
+            post_data['counter_status'] = 'failed'
+            post_data['counter_error'] = result.get('effect') or result.get('error')
+        else:
+            post_data['counter_status'] = 'executed'
+            if target_figure_id:
+                post_data['target_figure_id'] = target_figure_id
+            for key in ('drawn_cards', 'cards_given', 'cards_received', 'caster_dumped', 'opponent_dumped'):
+                if key in result:
+                    post_data[key] = result[key]
+        spell.effect_data = post_data
+
+        _consume_conquer_defender_response(game, defender_player)
+
+        log_entry = LogEntry(
+            game_id=game.id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=defender_player.turns_left,
+            message=f"Defender cast {spell_name} as a counter spell.",
+            author='System',
+            type='counter_spell',
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'spell_name': spell_name,
+            'status': post_data.get('counter_status'),
+            'result': result,
+            'game': game.serialize(),
+        })
+
+    except Exception:
+        db.session.rollback()
+        logger.exception('Failed to execute conquer defender counter spell')
+        return jsonify({'success': False, 'message': 'Failed to execute counter spell'}), 400
 
 
 @games.route('/advance_figure', methods=['POST'])

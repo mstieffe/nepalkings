@@ -418,6 +418,10 @@ class Figure(db.Model):
     checkmate = db.Column(db.Boolean, default=False, nullable=False)  # If destroyed, owner loses
     cannot_be_blocked = db.Column(db.Boolean, default=False, nullable=False)  # Cannot be counter-advanced when advancing
     rest_after_attack = db.Column(db.Boolean, default=False, nullable=False)  # Must rest one round after battle
+    # Conquer-mode link back to the LandConfigFigure this runtime Figure was
+    # built from.  Used to resolve configured spell targets without relying
+    # on insertion-order zips that break after Explosion etc.
+    source_config_figure_id = db.Column(db.Integer, nullable=True)
     cards = db.relationship('CardToFigure', backref='figure', lazy=True)
     date_created = db.Column(db.DateTime, default=_utcnow)
 

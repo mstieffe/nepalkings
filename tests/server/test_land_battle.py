@@ -666,6 +666,87 @@ class TestConquerPreludeTargeting:
             assert target.player_id == atk_player.id
             assert target.checkmate is False
 
+    def test_defender_health_boost_prelude_uses_configured_target(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_health_prelude')
+            defender = _make_user(db, username='def_health_prelude')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            target_cfg_fig = LandConfigFigure.query.filter_by(config_id=def_cfg.id).first()
+
+            def_cfg.prelude_spell_name = 'Health Boost'
+            def_cfg.prelude_spell_data = {'target_figure_id': target_cfg_fig.id}
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            def_player = [p for p in game.players if p.user_id == defender.id][0]
+
+            spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name='Health Boost',
+            ).first()
+            assert spell is not None
+            assert spell.is_active is True
+            assert (spell.effect_data or {}).get('prelude_status') == 'executed'
+            assert (spell.effect_data or {}).get('power_modifier') == 6
+
+            target = db.session.get(Figure, spell.target_figure_id)
+            assert target is not None
+            assert target.player_id == def_player.id
+            assert target.name == target_cfg_fig.name
+            assert target.source_config_figure_id == target_cfg_fig.id
+
+    def test_defender_prelude_uses_modifier_target_heuristic(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_heuristic')
+            defender = _make_user(db, username='def_heuristic')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            atk_cfg = _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+
+            _add_conquer_config_figure(
+                db,
+                atk_cfg,
+                attacker,
+                family_name='Militia Scout',
+                name='Militia Scout',
+                suit='Spades',
+                field='military',
+            )
+
+            atk_cfg.prelude_spell_name = 'Civil War'
+            def_cfg.prelude_spell_name = 'Poison'
+            def_cfg.prelude_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            def_player = [p for p in game.players if p.user_id == defender.id][0]
+
+            spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name='Poison',
+            ).first()
+            assert spell is not None
+            target = db.session.get(Figure, spell.target_figure_id)
+            assert target is not None
+            assert target.field == 'village'
+            assert target.family_name == 'Small Rice Farm'
+
     def test_attacker_targeted_prelude_blocks_actions_until_resolved(self, app, db):
         with app.app_context():
             attacker = _make_user(db, username='atk')
@@ -768,6 +849,302 @@ class TestConquerPreludeTargeting:
             assert summary.get('pending_prelude_target') is None
             own_no_target = summary.get('own_prelude_no_target_spells') or []
             assert any(s.get('spell_name') == 'Poison' for s in own_no_target)
+
+    def test_defender_explosion_prelude_does_not_preempt_game_start_summary(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_intro_explosion')
+            defender = _make_user(db, username='def_intro_explosion')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            def_cfg.prelude_spell_name = 'Explosion'
+            def_cfg.prelude_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+
+            start_resp = client.post('/games/start_turn', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+            }, headers=headers)
+            assert start_resp.status_code == 200
+            summary = (start_resp.get_json() or {}).get('opponent_turn_summary') or {}
+            assert summary.get('action') == 'game_start'
+            opponent_spells = summary.get('opponent_prelude_spells') or []
+            assert any(s.get('spell_name') == 'Explosion' for s in opponent_spells)
+
+    def test_attacker_explosion_prelude_clears_stale_defender_reference(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_stale_explosion')
+            defender = _make_user(db, username='def_stale_explosion')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            atk_cfg = _make_conquer_config(db, attacker, land)
+            _make_defence_config(db, defender, land)
+            atk_cfg.prelude_spell_name = 'Explosion'
+            atk_cfg.prelude_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            target_id = game.defending_figure_id
+            assert target_id is not None
+
+            pending_spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=atk_player.id,
+                spell_name='Explosion',
+            ).first()
+            assert pending_spell is not None
+
+            resolve_resp = client.post('/kingdom/conquer/resolve_prelude_target', json={
+                'game_id': game.id,
+                'spell_id': pending_spell.id,
+                'target_figure_id': target_id,
+            }, headers=headers)
+            assert resolve_resp.status_code == 200
+
+            db.session.refresh(game)
+            assert db.session.get(Figure, target_id) is None
+            assert game.defending_figure_id is None
+            assert game.defending_figure_id_2 is None
+
+
+class TestConquerCounterSpells:
+    """Conquer defender counter spell response behavior."""
+
+    def test_defence_counter_explosion_rejected(self, app, db):
+        with app.app_context():
+            defender = _make_user(db, username='def_counter_reject')
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_defence_config(db, defender, land)
+
+            client = app.test_client()
+            headers = _auth_headers(app, defender)
+            resp = client.post('/kingdom/defence/set_counter_spell', json={
+                'land_id': land.id,
+                'spell_name': 'Explosion',
+            }, headers=headers)
+            assert resp.status_code == 400
+            assert 'not allowed' in resp.get_json().get('message', '').lower()
+
+    def test_counter_poison_targets_advancing_figure_and_skips_counter_advance(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_counter_poison')
+            defender = _make_user(db, username='def_counter_poison')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            def_cfg.battle_figure_id = None
+            def_cfg.counter_spell_name = 'Poison'
+            def_cfg.counter_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            atk_headers = _auth_headers(app, attacker)
+            def_headers = _auth_headers(app, defender)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=atk_headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = [p for p in game.players if p.user_id == defender.id][0]
+            atk_fig = Figure.query.filter_by(game_id=game.id, player_id=atk_player.id).first()
+
+            assert ActiveSpell.query.filter_by(game_id=game.id, player_id=def_player.id).count() == 0
+
+            adv_resp = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': atk_fig.id,
+            }, headers=atk_headers)
+            assert adv_resp.status_code == 200
+            db.session.refresh(game)
+            assert game.turn_player_id == def_player.id
+
+            counter_resp = client.post('/games/conquer_defender_counter_spell', json={
+                'game_id': game.id,
+                'player_id': def_player.id,
+            }, headers=def_headers)
+            assert counter_resp.status_code == 200
+
+            spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name='Poison',
+            ).first()
+            assert spell is not None
+            assert spell.target_figure_id == atk_fig.id
+            assert (spell.effect_data or {}).get('counter_status') == 'executed'
+
+            db.session.refresh(game)
+            assert game.turn_player_id == atk_player.id
+            assert game.defending_figure_id is None
+
+    def test_counter_health_boost_uses_configured_target(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_counter_health')
+            defender = _make_user(db, username='def_counter_health')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            target_cfg_fig = LandConfigFigure.query.filter_by(config_id=def_cfg.id).first()
+            def_cfg.battle_figure_id = None
+            def_cfg.counter_spell_name = 'Health Boost'
+            def_cfg.counter_spell_data = {}
+            def_cfg.counter_spell_target_figure_id = target_cfg_fig.id
+            db.session.commit()
+
+            client = app.test_client()
+            atk_headers = _auth_headers(app, attacker)
+            def_headers = _auth_headers(app, defender)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=atk_headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = [p for p in game.players if p.user_id == defender.id][0]
+            atk_fig = Figure.query.filter_by(game_id=game.id, player_id=atk_player.id).first()
+
+            adv_resp = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': atk_fig.id,
+            }, headers=atk_headers)
+            assert adv_resp.status_code == 200
+
+            counter_resp = client.post('/games/conquer_defender_counter_spell', json={
+                'game_id': game.id,
+                'player_id': def_player.id,
+            }, headers=def_headers)
+            assert counter_resp.status_code == 200
+
+            spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name='Health Boost',
+            ).first()
+            assert spell is not None
+            target = db.session.get(Figure, spell.target_figure_id)
+            assert target is not None
+            assert target.player_id == def_player.id
+            assert target.name == target_cfg_fig.name
+            assert target.source_config_figure_id == target_cfg_fig.id
+            assert (spell.effect_data or {}).get('power_modifier') == 6
+
+            db.session.refresh(game)
+            assert game.turn_player_id == atk_player.id
+            assert game.defending_figure_id is None
+
+
+class TestConquerCounterSpellGating:
+    """One-counter-per-round and validation gating for conquer counter spells."""
+
+    def test_counter_spell_can_only_be_cast_once_per_round(self, app, db):
+        with app.app_context():
+            from models import LogEntry
+            attacker = _make_user(db, username='atk_counter_once')
+            defender = _make_user(db, username='def_counter_once')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            def_cfg.battle_figure_id = None
+            def_cfg.counter_spell_name = 'Poison'
+            def_cfg.counter_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            atk_headers = _auth_headers(app, attacker)
+            def_headers = _auth_headers(app, defender)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=atk_headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = [p for p in game.players if p.user_id == defender.id][0]
+            atk_fig = Figure.query.filter_by(game_id=game.id, player_id=atk_player.id).first()
+
+            client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': atk_fig.id,
+            }, headers=atk_headers)
+
+            first = client.post('/games/conquer_defender_counter_spell', json={
+                'game_id': game.id,
+                'player_id': def_player.id,
+            }, headers=def_headers)
+            assert first.status_code == 200
+
+            # Simulate the next defender response window in the same round
+            # (e.g. Civil War 2nd advance) by clearing the defender slot and
+            # handing the turn back to the defender.  The counter gate must
+            # block the second cast based on the existing counter_spell log.
+            db.session.refresh(game)
+            game.defending_figure_id = None
+            game.turn_player_id = def_player.id
+            db.session.commit()
+
+            second = client.post('/games/conquer_defender_counter_spell', json={
+                'game_id': game.id,
+                'player_id': def_player.id,
+            }, headers=def_headers)
+            assert second.status_code == 400
+            assert 'already' in (second.get_json() or {}).get('message', '').lower()
+
+            counter_logs = LogEntry.query.filter_by(
+                game_id=game.id, player_id=def_player.id, type='counter_spell',
+            ).count()
+            assert counter_logs == 1
+
+    def test_check_defence_incomplete_requires_health_boost_target(self, app, db):
+        with app.app_context():
+            from kingdom_service import check_defence_incomplete
+            from models import LandConfigBattleMove
+
+            defender = _make_user(db, username='def_hb_incomplete')
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            cfg = _make_defence_config(db, defender, land)
+
+            for i, (rank, suit, value) in enumerate([
+                ('9', 'Hearts', 9), ('Q', 'Hearts', 3), ('J', 'Hearts', 2),
+            ]):
+                cc = CollectionCard(user_id=defender.id, suit=suit, rank=rank,
+                                    value=value, locked=True,
+                                    lock_type='defence_move')
+                db.session.add(cc)
+                db.session.flush()
+                db.session.add(LandConfigBattleMove(
+                    config_id=cfg.id, family_name='Dagger',
+                    card_id=cc.id, suit=suit, rank=rank, value=value,
+                    round_index=i + 1,
+                ))
+            cfg.battle_figure_id = None
+            cfg.counter_spell_name = 'Health Boost'
+            cfg.counter_spell_target_figure_id = None
+            db.session.commit()
+
+            assert check_defence_incomplete(land.id, defender.id) is True
+
+            target_fig = LandConfigFigure.query.filter_by(config_id=cfg.id).first()
+            cfg.counter_spell_target_figure_id = target_fig.id
+            db.session.commit()
+            assert check_defence_incomplete(land.id, defender.id) is False
 
 
 class TestConquerResolution:

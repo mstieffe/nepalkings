@@ -6,7 +6,7 @@ Server-side spell routes for handling spell casting, countering, and management.
 
 import logging
 from flask import Blueprint, request, jsonify, current_app, g
-from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult
+from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult, BattleMove
 from datetime import datetime, timezone
 from game_service.deck_manager import DeckManager
 from sqlalchemy.orm import joinedload
@@ -853,6 +853,8 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Count dumped cards
                     caster_dumped = len(caster_main_cards) + len(caster_side_cards)
                     opponent_dumped = len(opponent_main_cards) + len(opponent_side_cards)
+                    caster_dumped_cards = [c.serialize() for c in caster_main_cards] + [c.serialize() for c in caster_side_cards]
+                    opponent_dumped_cards = [c.serialize() for c in opponent_main_cards] + [c.serialize() for c in opponent_side_cards]
                     
                     # Return all cards to deck
                     all_cards_to_dump = caster_main_cards + caster_side_cards + opponent_main_cards + opponent_side_cards
@@ -868,6 +870,8 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['effect'] = f'Both players dumped all cards and drew 5 main + 4 side cards'
                     spell_effect['caster_dumped'] = caster_dumped
                     spell_effect['opponent_dumped'] = opponent_dumped
+                    spell_effect['caster_dumped_cards'] = caster_dumped_cards
+                    spell_effect['opponent_dumped_cards'] = opponent_dumped_cards
                     spell_effect['cards_drawn'] = len(caster_new_main) + len(caster_new_side)
                     
                     # Add caster's new cards
@@ -880,6 +884,15 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         card_data = card.serialize()
                         card_data['type'] = 'side'
                         spell_effect['drawn_cards'].append(card_data)
+                    spell_effect['opponent_drawn_cards'] = []
+                    for card in opponent_new_main:
+                        card_data = card.serialize()
+                        card_data['type'] = 'main'
+                        spell_effect['opponent_drawn_cards'].append(card_data)
+                    for card in opponent_new_side:
+                        card_data = card.serialize()
+                        card_data['type'] = 'side'
+                        spell_effect['opponent_drawn_cards'].append(card_data)
             except Exception as e:
                 db.session.rollback()
                 logger.exception('Failed to dump cards')
@@ -1058,17 +1071,45 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         # Delete card associations
                         CardToFigure.query.filter_by(figure_id=target_figure.id).delete()
                         
-                        # Remove any other active enchantment spells on this figure
-                        ActiveSpell.query.filter_by(
-                            game_id=game.id,
-                            target_figure_id=target_figure.id
-                        ).delete()
+                        # Remove any active enchantment spells on this figure.
+                        # In conquer mode keep the Explosion record itself so
+                        # game-start/prelude notifications can report the
+                        # executed effect; duel mode keeps its existing cleanup.
+                        if getattr(game, 'mode', None) == 'conquer':
+                            ActiveSpell.query.filter(
+                                ActiveSpell.game_id == game.id,
+                                ActiveSpell.target_figure_id == target_figure.id,
+                                ActiveSpell.id != spell.id,
+                            ).delete(synchronize_session=False)
+                        else:
+                            ActiveSpell.query.filter_by(
+                                game_id=game.id,
+                                target_figure_id=target_figure.id
+                            ).delete()
                         
                         # Store figure name before deletion for logging
                         destroyed_figure_name = target_figure.name
                         destroyed_figure_field = target_figure.field
                         destroyed_figure_owner_id = target_figure.player_id
+                        destroyed_figure_id = target_figure.id
                         card_count = len(main_card_ids) + len(side_card_ids)
+
+                        if getattr(game, 'mode', None) == 'conquer':
+                            if game.advancing_figure_id == destroyed_figure_id:
+                                game.advancing_figure_id = None
+                                game.advancing_figure_id_2 = None
+                                game.advancing_player_id = None
+                            elif game.advancing_figure_id_2 == destroyed_figure_id:
+                                game.advancing_figure_id_2 = None
+                            if game.defending_figure_id == destroyed_figure_id:
+                                game.defending_figure_id = None
+                                game.defending_figure_id_2 = None
+                            elif game.defending_figure_id_2 == destroyed_figure_id:
+                                game.defending_figure_id_2 = None
+                            BattleMove.query.filter_by(
+                                game_id=game.id,
+                                call_figure_id=destroyed_figure_id,
+                            ).update({'call_figure_id': None}, synchronize_session='fetch')
                         
                         # Check checkmate before deleting the figure
                         checkmate_game_over = None

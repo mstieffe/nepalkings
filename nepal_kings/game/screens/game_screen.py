@@ -1296,20 +1296,13 @@ class GameScreen(Screen):
                         card_images.append(card_img.front_img)
 
                     spell_names = ', '.join(s['spell_name'] for s in own_spells)
-                    own_modifier_names = [
-                        s['spell_name'] for s in own_spells
-                        if self._is_battle_modifier_spell(s.get('spell_name'))
+                    effect_lines = [
+                        self._describe_conquer_prelude_effect(spell, own=True)
+                        for spell in own_spells
                     ]
-                    own_modifier_lines = self._get_modifier_explanation_lines(own_modifier_names)
-
-                    if own_modifier_names:
-                        spell_msg = f"Your prelude spell {spell_names} is now active!"
-                        if own_modifier_lines:
-                            spell_msg += "\n\n" + "\n".join(f"• {line}" for line in own_modifier_lines)
-                    elif card_images:
-                        spell_msg = f"Your prelude spell {spell_names} was executed!\n\nYou drew {len(card_images)} card(s)."
-                    else:
-                        spell_msg = f"Your prelude spell {spell_names} was executed successfully!"
+                    spell_msg = f"Your prelude spell {spell_names} was executed!"
+                    if effect_lines:
+                        spell_msg += "\n\n" + "\n".join(f"• {line}" for line in effect_lines)
 
                     spell_icon_images = self._get_spell_icon_image(own_spells[0]['spell_name'])
                     all_images = spell_icon_images + card_images
@@ -1324,11 +1317,10 @@ class GameScreen(Screen):
                 # (3) Opponent prelude spell turn notification (if any)
                 if opp_spells:
                     opp_spell_names = ', '.join(s['spell_name'] for s in opp_spells)
-                    opp_modifier_names = [
-                        s['spell_name'] for s in opp_spells
-                        if self._is_battle_modifier_spell(s.get('spell_name'))
+                    opp_effect_lines = [
+                        self._describe_conquer_prelude_effect(spell, own=False)
+                        for spell in opp_spells
                     ]
-                    opp_modifier_lines = self._get_modifier_explanation_lines(opp_modifier_names)
 
                     opp_images = []
                     for s in opp_spells:
@@ -1336,8 +1328,8 @@ class GameScreen(Screen):
 
                     opp_msg = f"{opponent_name}'s turn:"
                     opp_msg_after = f"• Cast {opp_spell_names}"
-                    if opp_modifier_lines:
-                        opp_msg_after += "\n" + "\n".join(f"  > {line}" for line in opp_modifier_lines)
+                    if opp_effect_lines:
+                        opp_msg_after += "\n" + "\n".join(f"  > {line}" for line in opp_effect_lines)
 
                     self.queue_or_show_notification({
                         'message': opp_msg,
@@ -1496,7 +1488,7 @@ class GameScreen(Screen):
             images = []
             
             # Special handling for Forced Deal with card details
-            if (action_type == 'spell' and spell_name == 'Forced Deal' and 
+            if (action_type in ('spell', 'counter_spell') and spell_name == 'Forced Deal' and 
                 'cards_given' in action and 'cards_received' in action):
                 
                 from game.components.cards.card import Card
@@ -1545,7 +1537,7 @@ class GameScreen(Screen):
                     images.append(given_card_img)
             
             # Special handling for Dump Cards with new cards
-            elif (action_type == 'spell' and spell_name == 'Dump Cards' and 
+            elif (action_type in ('spell', 'counter_spell') and spell_name == 'Dump Cards' and 
                   'new_cards' in action):
                 
                 logger.debug(f"[DUMP_CARDS_CLIENT] ENTERING Dump Cards card display block")
@@ -1569,7 +1561,7 @@ class GameScreen(Screen):
                     images.append(card_img.front_img)
             
             # Special handling for Poison with affected figure
-            elif (action_type == 'spell' and spell_name == 'Poison' and 
+            elif (action_type in ('spell', 'counter_spell') and spell_name == 'Poison' and 
                   action.get('affects_player') and action.get('target_figure_id')):
                 import os
                 spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon', 'poisson_portion.png'))
@@ -1586,7 +1578,7 @@ class GameScreen(Screen):
                             break
             
             # Load spell icon if this is a spell action (and not Forced Deal/Dump Cards/Poison with cards)
-            elif action_type == 'spell' and action.get('spell_icon'):
+            elif action_type in ('spell', 'counter_spell') and action.get('spell_icon'):
                 import os
                 spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon'))
                 if os.path.exists(spell_icon_path):
@@ -1621,7 +1613,7 @@ class GameScreen(Screen):
                 message_after = None
                 icon = "error"
             # Special handling for Poison on player's figure
-            elif (action_type == 'spell' and spell_name == 'Poison' and 
+            elif (action_type in ('spell', 'counter_spell') and spell_name == 'Poison' and 
                   action.get('affects_player') and action.get('target_figure_name')):
                 target_name = action.get('target_figure_name')
                 message = f"{opponent_name} cast Poison!\n\nYour {target_name} was poisoned (-6 power).\n\nIt's your turn now!"
@@ -2069,6 +2061,14 @@ class GameScreen(Screen):
     
     def _get_battle_modifier_description(self, modifier_type):
         """Return human-readable effect text for a battle modifier spell."""
+        if self.state.game and getattr(self.state.game, 'mode', None) == 'conquer':
+            conquer_descriptions = {
+                'Civil War': 'Conquer restriction: only village figures can fight, and each side may use up to two same-color village figures.',
+                'Peasant War': 'Conquer restriction: only village figures can be selected for this battle.',
+                'Blitzkrieg': 'Conquer restriction: the defender cannot counter-advance; the invader selects the defender after advancing. Ceasefire is active until the last turn.',
+            }
+            if modifier_type in conquer_descriptions:
+                return conquer_descriptions[modifier_type]
         descriptions = {
             'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 2 turns left. The invader starts next turn.',
             'Peasant War': 'Only villagers can be selected for the battle. Both players have 2 turns left. The invader starts next turn.',
@@ -2092,6 +2092,49 @@ class GameScreen(Screen):
             if desc:
                 lines.append(f"{modifier_name}: {desc}")
         return lines
+
+    def _describe_conquer_prelude_effect(self, spell_info, *, own=True):
+        """Return a concise human-readable conquer prelude effect line."""
+        spell_name = spell_info.get('spell_name', 'Prelude spell')
+        effect_data = spell_info.get('effect_data') or {}
+        target_name = spell_info.get('target_figure_name') or effect_data.get('target_figure_name')
+
+        modifier_desc = self._get_battle_modifier_description(spell_name)
+        if modifier_desc:
+            return f"{spell_name}: {modifier_desc}"
+        if spell_name == 'Poison':
+            if target_name:
+                return f"Poison: {target_name} receives -6 battle power."
+            return "Poison: target receives -6 battle power."
+        if spell_name == 'Health Boost':
+            if target_name:
+                return f"Health Boost: {target_name} receives +6 battle power."
+            return "Health Boost: target receives +6 battle power."
+        if spell_name == 'Explosion':
+            destroyed = effect_data.get('destroyed_figure_name') or target_name or 'a figure'
+            card_count = effect_data.get('card_count')
+            if card_count is not None:
+                return f"Explosion: destroyed {destroyed}; {card_count} card(s) returned to the deck."
+            return f"Explosion: destroyed {destroyed}."
+        if spell_name == 'Dump Cards':
+            own_dumped = effect_data.get('caster_dumped') if own else effect_data.get('opponent_dumped')
+            opp_dumped = effect_data.get('opponent_dumped') if own else effect_data.get('caster_dumped')
+            caster_label = 'You' if own else 'Opponent'
+            return (f"Dump Cards (cast by {caster_label}): you discarded {own_dumped or 0} card(s), "
+                    f"opponent discarded {opp_dumped or 0}; both redrew a fresh hand.")
+        if spell_name == 'Forced Deal':
+            given = effect_data.get('cards_given') or effect_data.get('caster_gave') or []
+            received = effect_data.get('cards_received') or effect_data.get('caster_received') or []
+            if not own:
+                given = effect_data.get('opponent_gave') or []
+                received = effect_data.get('opponent_received') or []
+            if given or received:
+                return f"Forced Deal: exchanged {len(given)} card(s) for {len(received)} card(s)."
+            return "Forced Deal: exchanged 2 random main cards."
+        drawn = effect_data.get('drawn_cards') or []
+        if drawn:
+            return f"{spell_name}: drew {len(drawn)} card(s)."
+        return f"{spell_name}: executed successfully."
 
     def _get_battle_modifier_info(self):
         """Get battle modifier summary text and icon images for notification dialogues."""
@@ -4405,12 +4448,10 @@ class GameScreen(Screen):
                   not fold_active):
                 self._draw_waiting_for_battle_decision_prompt()
         
-        # Draw counter spell selector on top of everything if active
+        # Draw counter spell selector on top of everything if active.
+        # The selector blits its own dark overlay; do not draw a second one
+        # here or the screen darkens twice (cosmetic regression).
         if self.counter_spell_selector:
-            overlay = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
-            overlay.set_alpha(180)
-            overlay.fill((0, 0, 0))
-            self.window.blit(overlay, (0, 0))
             self.counter_spell_selector.draw()
 
         # Draw battle modifier hover text on top of everything

@@ -293,12 +293,51 @@ _DEFENCE_PRELUDE_SPELLS = frozenset({
 })
 
 _DEFENCE_COUNTER_SPELLS = frozenset({
-    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost', 'Explosion',
+    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
 })
 
 # Spells that must also be recorded in game.battle_modifier for existing
 # game logic (advance restrictions, turn updates, ceasefire, etc.)
 _BATTLE_MODIFIER_SPELLS = frozenset({'Peasant War', 'Civil War', 'Blitzkrieg'})
+
+# ── Prelude effect_data keys ────────────────────────────────────────
+# Centralised so future additions don't have to grep magic strings.
+PRELUDE_KEY_ORIGIN          = 'prelude_origin'
+PRELUDE_KEY_STATUS          = 'prelude_status'
+PRELUDE_KEY_REQUIRES_TARGET = 'prelude_requires_target'
+PRELUDE_KEY_PENDING_TARGET  = 'prelude_pending_target'
+PRELUDE_KEY_VALID_TARGET_IDS = 'valid_target_ids'
+PRELUDE_KEY_TARGET_SCOPE    = 'target_scope'
+
+PRELUDE_STATUS_EXECUTED        = 'executed'
+PRELUDE_STATUS_PENDING_TARGET  = 'pending_target'
+PRELUDE_STATUS_NO_VALID_TARGET = 'no_valid_target'
+PRELUDE_STATUS_FAILED          = 'failed'
+
+# Keys cleared when transitioning out of the pending-target state.
+_PRELUDE_PENDING_KEYS = (
+    PRELUDE_KEY_PENDING_TARGET,
+    PRELUDE_KEY_VALID_TARGET_IDS,
+)
+
+
+def _update_prelude_effect_data(spell, *, status=None, clear_pending=False, **updates):
+    """Forward-compatible helper for mutating an ActiveSpell.effect_data dict.
+
+    Always clones the existing dict so unknown keys from older / newer
+    builds are preserved across writes.  Pass ``clear_pending=True`` to
+    drop the pending-target sentinel keys.
+    """
+    data = dict(spell.effect_data or {}) if isinstance(spell.effect_data, dict) else {}
+    if status is not None:
+        data[PRELUDE_KEY_STATUS] = status
+    if clear_pending:
+        for key in _PRELUDE_PENDING_KEYS:
+            data.pop(key, None)
+    for key, value in updates.items():
+        data[key] = value
+    spell.effect_data = data
+    return data
 
 # Spell type classification used when creating ActiveSpell records at game
 # creation time.  Matches the family types in spell_configs.
@@ -359,6 +398,8 @@ def _serialize_config_with_deficit(cfg):
     data = cfg.serialize()
     deficit_map = get_config_deficit_map(cfg.id)
 
+    fig_by_id = {fig.get('id'): fig for fig in data.get('figures', [])}
+
     # Collect all referenced collection-card IDs so we can resolve suit/rank
     all_card_ids = set()
     for fig in data['figures']:
@@ -385,7 +426,58 @@ def _serialize_config_with_deficit(cfg):
     data['prelude_spell_card_details'] = [card_map.get(cid, {}) for cid in (data.get('prelude_spell_card_ids') or [])]
     data['counter_spell_card_details'] = [card_map.get(cid, {}) for cid in (data.get('counter_spell_card_ids') or [])]
 
+    prelude_data = data.get('prelude_spell_data') or {}
+    if isinstance(prelude_data, dict):
+        prelude_target_id = prelude_data.get('target_figure_id')
+        prelude_target = fig_by_id.get(prelude_target_id)
+        if prelude_target:
+            data['prelude_spell_target_figure'] = {
+                'id': prelude_target.get('id'),
+                'name': prelude_target.get('name'),
+                'family_name': prelude_target.get('family_name'),
+                'field': prelude_target.get('field'),
+                'suit': prelude_target.get('suit'),
+            }
+        else:
+            data['prelude_spell_target_figure'] = None
+    else:
+        data['prelude_spell_target_figure'] = None
+
+    counter_target = fig_by_id.get(data.get('counter_spell_target_figure_id'))
+    if counter_target:
+        data['counter_spell_target_figure'] = {
+            'id': counter_target.get('id'),
+            'name': counter_target.get('name'),
+            'family_name': counter_target.get('family_name'),
+            'field': counter_target.get('field'),
+            'suit': counter_target.get('suit'),
+        }
+    else:
+        data['counter_spell_target_figure'] = None
+
     return data
+
+
+def _coerce_int(value):
+    if value is None or value == '':
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_config_own_spell_target(cfg, target_fig_id):
+    """Validate a stored defence config target for own-target spells."""
+    target_fig_id = _coerce_int(target_fig_id)
+    if not target_fig_id:
+        return None, 'Target figure is required'
+    fig = db.session.get(LandConfigFigure, target_fig_id)
+    if not fig or fig.config_id != cfg.id:
+        return None, 'Target figure not in this config'
+    if getattr(fig, 'checkmate', False):
+        return None, 'Checkmate figures are immune to spells'
+    return fig, None
 
 
 def _lock_collection_cards(card_ids, lock_type, lock_ref_id):
@@ -1133,6 +1225,14 @@ def defence_remove_figure():
         cfg.battle_figure_id = None
     if cfg.battle_figure_id_2 == figure.id:
         cfg.battle_figure_id_2 = None
+    if cfg.counter_spell_target_figure_id == figure.id:
+        cfg.counter_spell_target_figure_id = None
+    if cfg.spell_target_figure_id == figure.id:
+        cfg.spell_target_figure_id = None
+    prelude_data = dict(cfg.prelude_spell_data or {}) if isinstance(cfg.prelude_spell_data, dict) else {}
+    if prelude_data.get('target_figure_id') == figure.id:
+        prelude_data.pop('target_figure_id', None)
+        cfg.prelude_spell_data = prelude_data or None
 
     _unlock_collection_cards(figure.card_ids or [])
 
@@ -1340,12 +1440,13 @@ def defence_remove_modifier():
 def defence_set_prelude_spell():
     """Set a prelude spell for a defence config.
 
-    Expects JSON: { land_id, spell_name, spell_data: {}|null }
+    Expects JSON: { land_id, spell_name, spell_data: {}|null, target_figure_id?: int }
     """
     data = request.json
     land_id = data.get('land_id')
     spell_name = data.get('spell_name')
     spell_data = data.get('spell_data')
+    target_fig_id = data.get('target_figure_id')
 
     if not land_id or not spell_name:
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -1359,6 +1460,22 @@ def defence_set_prelude_spell():
         return err
 
     cfg = _get_or_create_defence_config(g.user_id, land_id)
+
+    normalized_spell_data = dict(spell_data or {}) if isinstance(spell_data, dict) else {}
+    if target_fig_id is None:
+        target_fig_id = normalized_spell_data.get('target_figure_id')
+
+    if spell_name == 'Health Boost':
+        target_fig_id = _coerce_int(target_fig_id)
+        if target_fig_id:
+            fig, err_msg = _validate_config_own_spell_target(cfg, target_fig_id)
+            if err_msg:
+                return jsonify({'success': False, 'message': err_msg}), 400
+            normalized_spell_data['target_figure_id'] = fig.id
+        else:
+            normalized_spell_data.pop('target_figure_id', None)
+    else:
+        normalized_spell_data.pop('target_figure_id', None)
 
     # Unlock previous prelude spell cards
     if cfg.prelude_spell_card_ids:
@@ -1378,7 +1495,7 @@ def defence_set_prelude_spell():
         cfg.prelude_spell_card_ids = None
 
     cfg.prelude_spell_name = spell_name
-    cfg.prelude_spell_data = spell_data
+    cfg.prelude_spell_data = normalized_spell_data or None
     db.session.commit()
 
     return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
@@ -1642,13 +1759,20 @@ def defence_clear_spell():
 def defence_set_counter_spell():
     """Set a counter spell for a defence config.
 
-    Expects JSON: { land_id, spell_name, spell_data: {}|null }
-    Counter spell is mutually exclusive with battle figure.
+    Expects JSON: { land_id, spell_name, spell_data: {}|null, target_figure_id?: int,
+                    clear_battle_figure?: bool }
+    Counter spell is mutually exclusive with battle figure.  When
+    ``clear_battle_figure`` is true the existing battle figure (and its
+    second slot, if any) is cleared atomically as part of this request so
+    clients don't have to perform a separate ``clear_battle_figure`` call
+    that could race with the server-side mutual-exclusion check.
     """
     data = request.json
     land_id = data.get('land_id')
     spell_name = data.get('spell_name')
     spell_data = data.get('spell_data')
+    target_fig_id = data.get('target_figure_id')
+    clear_battle_figure = bool(data.get('clear_battle_figure'))
 
     if not land_id or not spell_name:
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -1667,11 +1791,30 @@ def defence_set_counter_spell():
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
-    # Counter spell and battle figure are mutually exclusive
+    # Counter spell and battle figure are mutually exclusive.  Optionally
+    # clear the battle figure first, atomically, so the caller doesn't need
+    # to make a separate request.
     if cfg.battle_figure_id:
-        return jsonify({'success': False,
-                        'message': 'Cannot set counter spell while a battle figure is selected. '
-                                   'Clear battle figure first.'}), 400
+        if not clear_battle_figure:
+            return jsonify({'success': False,
+                            'message': 'Cannot set counter spell while a battle figure is selected. '
+                                       'Clear battle figure first.'}), 400
+        cfg.battle_figure_id = None
+        cfg.battle_figure_id_2 = None
+
+    if spell_name == 'Health Boost':
+        if target_fig_id is None and isinstance(spell_data, dict):
+            target_fig_id = spell_data.get('target_figure_id')
+        target_fig_id = _coerce_int(target_fig_id)
+        if target_fig_id:
+            fig, err_msg = _validate_config_own_spell_target(cfg, target_fig_id)
+            if err_msg:
+                return jsonify({'success': False, 'message': err_msg}), 400
+            target_fig_id = fig.id
+        else:
+            target_fig_id = None
+    else:
+        target_fig_id = None
 
     # Unlock previous counter spell cards
     if cfg.counter_spell_card_ids:
@@ -1692,7 +1835,7 @@ def defence_set_counter_spell():
 
     cfg.counter_spell_name = spell_name
     cfg.counter_spell_data = spell_data
-    cfg.counter_spell_target_figure_id = None
+    cfg.counter_spell_target_figure_id = target_fig_id
     db.session.commit()
 
     return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
@@ -2100,6 +2243,7 @@ def _build_figures_from_config(cfg_figures, player, game):
             checkmate=cfg_fig.checkmate,
             cannot_be_blocked=cfg_fig.cannot_be_blocked,
             rest_after_attack=cfg_fig.rest_after_attack,
+            source_config_figure_id=cfg_fig.id,
         )
         db.session.add(fig)
         db.session.flush()
@@ -2409,20 +2553,114 @@ def _pick_deterministic_prelude_target(figures):
     return sorted(figures, key=lambda f: (-_compute_figure_base_power(f), f.id))[0]
 
 
+def _figure_card_count(figure):
+    return CardToFigure.query.filter_by(figure_id=figure.id).count()
+
+
+def _figure_has_instant_charge(figure):
+    try:
+        from ai.figure_recipes import FAMILY_SKILLS
+        skills = FAMILY_SKILLS.get(figure.family_name) or FAMILY_SKILLS.get(figure.name) or {}
+        return bool(skills.get('instant_charge'))
+    except Exception:
+        return False
+
+
+def _pick_defence_prelude_target(figures, planned_modifiers=None):
+    """Pick a target for automated defence Poison/Explosion preludes.
+
+    Selection is fully deterministic so that defence start-of-battle
+    behaviour is reproducible and unit-testable.  Tie-breakers prefer the
+    figure with the highest base power, then the lowest figure ID.
+    """
+    if not figures:
+        return None
+
+    from routes.games import _compute_figure_base_power
+
+    def _rank_key(fig):
+        # Higher base power first; on ties the lowest ID wins.
+        return (-_compute_figure_base_power(fig), fig.id)
+
+    modifiers = planned_modifiers if isinstance(planned_modifiers, list) else []
+    modifier_types = {m.get('type') for m in modifiers if isinstance(m, dict)}
+
+    # Tier 1: Civil War / Peasant War — village figures with the most cards
+    # built into them are the highest-impact targets to disable.
+    if 'Civil War' in modifier_types or 'Peasant War' in modifier_types:
+        village_targets = [f for f in figures if (f.field or '').lower() == 'village']
+        if village_targets:
+            max_cards = max(_figure_card_count(f) for f in village_targets)
+            top = [f for f in village_targets if _figure_card_count(f) == max_cards]
+            return sorted(top, key=_rank_key)[0]
+
+    # Tier 2: figures that bypass blocking or have instant charge are the
+    # most dangerous attackers; disable them first.
+    fast_targets = [
+        f for f in figures
+        if getattr(f, 'cannot_be_blocked', False) or _figure_has_instant_charge(f)
+    ]
+    if fast_targets:
+        return sorted(fast_targets, key=_rank_key)[0]
+
+    # Tier 3: castle / village figures (production / economy targets).
+    castle_or_village = [
+        f for f in figures
+        if (f.field or '').lower() in {'castle', 'village'}
+    ]
+    if castle_or_village:
+        return sorted(castle_or_village, key=_rank_key)[0]
+
+    return sorted(figures, key=_rank_key)[0]
+
+
+def _planned_conquer_modifiers(def_cfg_or_template, atk_cfg):
+    """Return battle modifiers that are expected to exist after preludes resolve."""
+    modifiers = []
+
+    def _append_spell_modifier(spell_name, caster_label):
+        if spell_name in _BATTLE_MODIFIER_SPELLS:
+            modifiers.append({'type': spell_name, 'caster': caster_label})
+
+    if isinstance(def_cfg_or_template, dict):
+        _append_spell_modifier(def_cfg_or_template.get('prelude_spell_name'), 'defender')
+        legacy = def_cfg_or_template.get('battle_modifier')
+    else:
+        _append_spell_modifier(getattr(def_cfg_or_template, 'prelude_spell_name', None), 'defender')
+        legacy = getattr(def_cfg_or_template, 'battle_modifier', None)
+    if legacy:
+        if isinstance(legacy, list):
+            modifiers.extend([m for m in legacy if isinstance(m, dict)])
+        elif isinstance(legacy, dict):
+            modifiers.append(legacy)
+
+    _append_spell_modifier(getattr(atk_cfg, 'prelude_spell_name', None), 'attacker')
+    legacy_atk = getattr(atk_cfg, 'battle_modifier', None)
+    if legacy_atk:
+        if isinstance(legacy_atk, list):
+            modifiers.extend([m for m in legacy_atk if isinstance(m, dict)])
+        elif isinstance(legacy_atk, dict):
+            modifiers.append(legacy_atk)
+    return modifiers
+
+
 def _mark_prelude_spell_no_target(spell):
-    data = dict(spell.effect_data or {})
-    data['prelude_origin'] = True
-    data['prelude_requires_target'] = True
-    data['prelude_status'] = 'no_valid_target'
-    data.pop('prelude_pending_target', None)
-    data.pop('valid_target_ids', None)
-    spell.effect_data = data
+    _update_prelude_effect_data(
+        spell,
+        status=PRELUDE_STATUS_NO_VALID_TARGET,
+        clear_pending=True,
+        **{
+            PRELUDE_KEY_ORIGIN: True,
+            PRELUDE_KEY_REQUIRES_TARGET: True,
+        },
+    )
     spell.is_active = False
     spell.is_pending = False
 
 
 def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
-                          *, target_resolution='immediate'):
+                          *, target_resolution='immediate', configured_target_id=None,
+                          target_modifiers=None):
     """Create an ActiveSpell for a prelude spell and resolve startup behavior.
 
     For battle-modifier spells (Peasant War / Civil War / Blitzkrieg) the
@@ -2436,11 +2674,13 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
 
     ``target_resolution`` controls target-required spells:
     - ``'auto'``: deterministic automatic target selection and execution.
+    - ``'defence_auto'``: automated defence heuristic target selection.
+    - ``'configured'``: use a pre-configured runtime target ID.
     - ``'pending'``: mark the spell as pending target selection for the invader.
     - ``'immediate'``: immediate execution path (non-target spells).
     """
     effect_data = dict(spell_data) if isinstance(spell_data, dict) else {}
-    effect_data['prelude_origin'] = True
+    effect_data[PRELUDE_KEY_ORIGIN] = True
 
     spell = ActiveSpell(
         game_id=game.id,
@@ -2461,9 +2701,7 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
         if not isinstance(game.battle_modifier, list):
             game.battle_modifier = []
         game.battle_modifier.append({'type': spell_name, 'caster_id': player.id})
-        mod_data = dict(spell.effect_data or {})
-        mod_data['prelude_status'] = 'executed'
-        spell.effect_data = mod_data
+        _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED)
     else:
         # Target-required prelude spells can be auto-resolved (defender) or
         # deferred for explicit invader target selection.
@@ -2474,18 +2712,36 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
                 return
 
             if target_resolution == 'pending':
-                pending_data = dict(spell.effect_data or {})
-                pending_data['prelude_requires_target'] = True
-                pending_data['prelude_pending_target'] = True
-                pending_data['prelude_status'] = 'pending_target'
-                pending_data['target_scope'] = _get_prelude_target_scope(spell_name)
-                pending_data['valid_target_ids'] = [f.id for f in valid_targets]
-                spell.effect_data = pending_data
+                _update_prelude_effect_data(
+                    spell,
+                    status=PRELUDE_STATUS_PENDING_TARGET,
+                    **{
+                        PRELUDE_KEY_REQUIRES_TARGET: True,
+                        PRELUDE_KEY_PENDING_TARGET: True,
+                        PRELUDE_KEY_TARGET_SCOPE: _get_prelude_target_scope(spell_name),
+                        PRELUDE_KEY_VALID_TARGET_IDS: [f.id for f in valid_targets],
+                    },
+                )
                 spell.is_active = False
                 spell.is_pending = False
                 return
 
-            if target_resolution == 'auto':
+            if target_resolution == 'configured':
+                chosen_target = next(
+                    (f for f in valid_targets if f.id == configured_target_id),
+                    None,
+                )
+                if not chosen_target:
+                    _mark_prelude_spell_no_target(spell)
+                    return
+                spell.target_figure_id = chosen_target.id
+            elif target_resolution == 'defence_auto':
+                chosen_target = _pick_defence_prelude_target(
+                    valid_targets,
+                    planned_modifiers=target_modifiers,
+                )
+                spell.target_figure_id = chosen_target.id if chosen_target else None
+            elif target_resolution == 'auto':
                 chosen_target = _pick_deterministic_prelude_target(valid_targets)
                 spell.target_figure_id = chosen_target.id if chosen_target else None
 
@@ -2495,20 +2751,28 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
         result = _execute_spell(spell, game, player)
         if result.get('error'):
             logger.warning(f'Prelude spell {spell_name} execution failed: {result}')
-            failed_data = dict(spell.effect_data or {})
-            failed_data['prelude_origin'] = True
-            failed_data['prelude_status'] = 'failed'
-            spell.effect_data = failed_data
+            _update_prelude_effect_data(
+                spell,
+                status=PRELUDE_STATUS_FAILED,
+                **{PRELUDE_KEY_ORIGIN: True},
+            )
         else:
             # Persist prelude metadata and actually-drawn cards on the spell so
             # game-start notifications can report precise effects.
-            executed_data = dict(spell.effect_data or {})
-            executed_data['prelude_origin'] = True
-            executed_data['prelude_status'] = 'executed'
+            extras = {PRELUDE_KEY_ORIGIN: True}
             drawn = result.get('drawn_cards', [])
             if drawn:
-                executed_data['drawn_card_ids'] = [c['id'] for c in drawn]
-            spell.effect_data = executed_data
+                extras['drawn_card_ids'] = [c['id'] for c in drawn]
+            for key in (
+                'target_figure_id', 'power_modifier', 'spell_icon',
+                'destroyed_figure_name', 'card_count', 'caster_dumped',
+                'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
+                'drawn_cards', 'opponent_drawn_cards', 'cards_given',
+                'cards_received', 'opponent_notification',
+            ):
+                if key in result:
+                    extras[key] = result[key]
+            _update_prelude_effect_data(spell, status=PRELUDE_STATUS_EXECUTED, **extras)
 
 
 # ── POST /kingdom/conquer/start_battle ───────────────────────────────────────
@@ -2618,6 +2882,15 @@ def conquer_start_battle():
         has_counter_spell = (
             def_cfg.counter_spell_name is not None or def_cfg.spell_name is not None
         )
+        if def_cfg.counter_spell_name == 'Explosion':
+            has_counter_spell = False
+        if def_cfg.counter_spell_name == 'Health Boost':
+            counter_target = db.session.get(
+                LandConfigFigure,
+                def_cfg.counter_spell_target_figure_id,
+            )
+            has_counter_spell = bool(counter_target and counter_target.config_id == def_cfg.id
+                                     and not getattr(counter_target, 'checkmate', False))
 
         battle_cfg_fig_valid = False
         if has_battle_fig:
@@ -2696,56 +2969,23 @@ def conquer_start_battle():
         if battle_fig_idx < len(def_game_figures):
             game.defending_figure_id = def_game_figures[battle_fig_idx].id
 
+        planned_modifiers = _planned_conquer_modifiers(template, atk_cfg)
+
         # ── AI prelude spell ──
         if template.get('prelude_spell_name'):
             _create_prelude_spell(game, def_player,
                                   template['prelude_spell_name'],
                                   template.get('prelude_spell_data'),
                                   def_game_figures,
-                                  target_resolution='auto')
+                                  target_resolution='defence_auto',
+                                  target_modifiers=planned_modifiers)
         elif template.get('battle_modifier'):
             # Backward compat: old template battle_modifier
             mod = template['battle_modifier']
             game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
-        # ── AI counter spell ──
-        if template.get('counter_spell_name'):
-            spell = ActiveSpell(
-                game_id=game.id,
-                player_id=def_player.id,
-                spell_name=template['counter_spell_name'],
-                spell_type=_SPELL_TYPE_MAP.get(
-                    template['counter_spell_name'], 'enchantment'),
-                spell_family_name=template['counter_spell_name'],
-                suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
-                target_figure_id=None,
-                cast_round=1,
-                is_active=True,
-                is_pending=False,
-                effect_data=template.get('counter_spell_data'),
-            )
-            db.session.add(spell)
-        elif template.get('spell'):
-            # Backward compat: old template spell
-            spell_data = template['spell']
-            target_fig_id = None
-            if spell_data.get('spell_target_figure_id') is not None:
-                tgt_idx = spell_data['spell_target_figure_id']
-                if isinstance(tgt_idx, int) and tgt_idx < len(def_game_figures):
-                    target_fig_id = def_game_figures[tgt_idx].id
-            spell = ActiveSpell(
-                game_id=game.id,
-                player_id=def_player.id,
-                spell_name=spell_data.get('spell_name', ''),
-                spell_type='enchantment',
-                spell_family_name=spell_data.get('spell_name', ''),
-                suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
-                target_figure_id=target_fig_id,
-                cast_round=1,
-                is_active=True,
-                is_pending=False,
-            )
-            db.session.add(spell)
+        # Counter spells are executed only when the defender response window
+        # occurs. Do not create an active spell at battle start.
 
     else:
         def_config_figures = LandConfigFigure.query.filter_by(
@@ -2774,59 +3014,32 @@ def conquer_start_battle():
             if mapped_id:
                 game.defending_figure_id_2 = mapped_id
 
+        planned_modifiers = _planned_conquer_modifiers(def_cfg, atk_cfg)
+
         # ── Defender prelude spell ──
         if def_cfg.prelude_spell_name:
+            prelude_data = dict(def_cfg.prelude_spell_data or {}) if isinstance(def_cfg.prelude_spell_data, dict) else {}
+            target_resolution = 'defence_auto'
+            configured_target_id = None
+            if def_cfg.prelude_spell_name == 'Health Boost':
+                configured_cfg_id = _coerce_int(prelude_data.get('target_figure_id'))
+                configured_target_id = def_cfg_fig_map.get(configured_cfg_id)
+                target_resolution = 'configured'
             _create_prelude_spell(game, def_player,
                                   def_cfg.prelude_spell_name,
-                                  def_cfg.prelude_spell_data,
+                                  prelude_data,
                                   def_game_figures,
-                                  target_resolution='auto')
+                                  target_resolution=target_resolution,
+                                  configured_target_id=configured_target_id,
+                                  target_modifiers=planned_modifiers)
         elif def_cfg.battle_modifier:
             # Backward compat: old battle_modifier field
             mod = def_cfg.battle_modifier
             game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
         # ── Defender counter spell ──
-        if defender_strategy_mode == 'counter_spell':
-            if def_cfg.counter_spell_name:
-                target_fig_id = None
-                if def_cfg.counter_spell_target_figure_id:
-                    target_fig_id = def_cfg_fig_map.get(
-                        def_cfg.counter_spell_target_figure_id)
-                spell = ActiveSpell(
-                    game_id=game.id,
-                    player_id=def_player.id,
-                    spell_name=def_cfg.counter_spell_name,
-                    spell_type=_SPELL_TYPE_MAP.get(
-                        def_cfg.counter_spell_name, 'enchantment'),
-                    spell_family_name=def_cfg.counter_spell_name,
-                    suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
-                    target_figure_id=target_fig_id,
-                    cast_round=1,
-                    is_active=True,
-                    is_pending=False,
-                    effect_data=def_cfg.counter_spell_data,
-                )
-                db.session.add(spell)
-            elif def_cfg.spell_name:
-                # Backward compat: old spell_name field
-                target_fig_id = None
-                if def_cfg.spell_target_figure_id:
-                    target_fig_id = def_cfg_fig_map.get(
-                        def_cfg.spell_target_figure_id)
-                spell = ActiveSpell(
-                    game_id=game.id,
-                    player_id=def_player.id,
-                    spell_name=def_cfg.spell_name,
-                    spell_type='enchantment',
-                    spell_family_name=def_cfg.spell_name,
-                    suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
-                    target_figure_id=target_fig_id,
-                    cast_round=1,
-                    is_active=True,
-                    is_pending=False,
-                )
-                db.session.add(spell)
+        # Counter spells are executed only when the defender response
+        # window occurs. Do not create an active spell at battle start.
 
     # ── Attacker prelude spell ──
     if atk_cfg.prelude_spell_name:
@@ -2959,6 +3172,15 @@ def conquer_resolve_prelude_target():
     drawn = result.get('drawn_cards', [])
     if drawn:
         resolved_data['drawn_card_ids'] = [c['id'] for c in drawn]
+    for key in (
+        'target_figure_id', 'power_modifier', 'spell_icon',
+        'destroyed_figure_name', 'card_count', 'caster_dumped',
+        'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
+        'drawn_cards', 'opponent_drawn_cards', 'cards_given',
+        'cards_received', 'opponent_notification',
+    ):
+        if key in result:
+            resolved_data[key] = result[key]
     spell.effect_data = resolved_data
 
     db.session.commit()

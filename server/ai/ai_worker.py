@@ -1003,6 +1003,68 @@ def _conquer_play_battle_round(base, game, ai_player_id):
     return _conquer_try_finish_battle_if_ready(base, game.id, ai_player_id)
 
 
+def _conquer_should_cast_counter_spell(game, ai_player_id):
+    """Return True when this defender response should use its configured counter spell."""
+    if not game or game.mode != 'conquer' or not game.defence_config_id:
+        return False
+    if not game.advancing_figure_id or game.advancing_player_id == ai_player_id:
+        return False
+    if game.defending_figure_id:
+        return False
+    from models import LandConfig, LandConfigFigure, LogEntry, db
+    cfg = db.session.get(LandConfig, game.defence_config_id)
+    if not cfg or not cfg.counter_spell_name:
+        return False
+    if cfg.counter_spell_name == 'Explosion':
+        return False
+    # Civil War: only cast a counter spell on the first advance per round.
+    already_cast = LogEntry.query.filter_by(
+        game_id=game.id,
+        player_id=ai_player_id,
+        round_number=game.current_round,
+        type='counter_spell',
+    ).first()
+    if already_cast:
+        return False
+    if cfg.counter_spell_name == 'Health Boost':
+        target = db.session.get(LandConfigFigure, cfg.counter_spell_target_figure_id)
+        return bool(target and target.config_id == cfg.id and not getattr(target, 'checkmate', False))
+    return cfg.counter_spell_name in {'Dump Cards', 'Forced Deal', 'Poison'}
+
+
+def _conquer_pick_counter_advance_figure(game, ai_player_id):
+    """Pick the configured or next eligible defender figure for automated conquer defence."""
+    from models import Figure
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+    if has_civil_war and game.defending_figure_id and not game.defending_figure_id_2:
+        first = Figure.query.filter_by(
+            id=game.defending_figure_id,
+            game_id=game.id,
+            player_id=ai_player_id,
+        ).first()
+        if first:
+            second = Figure.query.filter(
+                Figure.game_id == game.id,
+                Figure.player_id == ai_player_id,
+                Figure.id != first.id,
+                Figure.field == 'village',
+                Figure.color == first.color,
+            ).order_by(Figure.id.asc()).first()
+            if second:
+                return second.id
+
+    if game.defending_figure_id:
+        return game.defending_figure_id
+
+    fig = Figure.query.filter_by(
+        game_id=game.id,
+        player_id=ai_player_id,
+    ).order_by(Figure.id.asc()).first()
+    return fig.id if fig else None
+
+
 def _conquer_ai_loop(app, game_id, ai_player_id):
     """Rule-based defender auto-play for conquer-mode games.
 
@@ -1043,20 +1105,52 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
             time.sleep(0.3)  # Small delay for realism
 
             if phase == 'normal_turn':
-                # Defender counter-advance: pick the configured battle figure
+                # Defender response: configured counter spells replace counter-advance.
                 with app.app_context():
-                    from models import Game, Figure, db
+                    from models import Game, db
                     game = db.session.get(Game, game_id)
-                    # Find AI's figures that can advance
-                    ai_figures = Figure.query.filter_by(
-                        game_id=game_id, player_id=ai_player_id
-                    ).all()
-                    # Prefer the defending_figure_id if already set
-                    fig_id = None
-                    if game.defending_figure_id:
-                        fig_id = game.defending_figure_id
-                    elif ai_figures:
-                        fig_id = ai_figures[0].id
+                    should_cast_counter = _conquer_should_cast_counter_spell(game, ai_player_id)
+                    fig_id = None if should_cast_counter else _conquer_pick_counter_advance_figure(game, ai_player_id)
+
+                if should_cast_counter:
+                    resp = _ai_post(f'{base}/games/conquer_defender_counter_spell',
+                                    ai_player_id, json={
+                                        'game_id': game_id,
+                                        'player_id': ai_player_id,
+                                    })
+                    if resp.ok:
+                        continue
+                    # Only fall back to counter-advance if the response window
+                    # is still open.  For race conditions such as 'Defender
+                    # already selected' or 'Not your turn', stop and let the
+                    # next loop iteration re-detect the phase.
+                    fallback_safe = False
+                    try:
+                        err_msg = (resp.json() or {}).get('message', '')
+                    except Exception:
+                        err_msg = ''
+                    logger.warning(
+                        f"[CONQUER-AI] counter spell failed ({resp.status_code}): {err_msg}"
+                    )
+                    with app.app_context():
+                        from models import Game, db
+                        game = db.session.get(Game, game_id)
+                        if game and game.mode == 'conquer' and game.state != 'finished':
+                            fallback_safe = (
+                                game.advancing_figure_id is not None
+                                and game.advancing_player_id != ai_player_id
+                                and game.defending_figure_id is None
+                                and game.turn_player_id == ai_player_id
+                            )
+                            fig_id = (
+                                _conquer_pick_counter_advance_figure(game, ai_player_id)
+                                if fallback_safe else None
+                            )
+                    if not fallback_safe:
+                        logger.info(
+                            f"[CONQUER-AI] response window closed; skipping counter-advance fallback"
+                        )
+                        continue
 
                 if fig_id:
                     _exec_advance_figure(base, game_id, ai_player_id,
@@ -1126,8 +1220,8 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
 
             elif phase == 'counter_spell':
                 # Always allow spells
-                _ai_post(f'{base}/spells/allow_spell', ai_player_id, json={
-                    'game_id': game_id, 'player_id': ai_player_id,
+                _exec_allow_spell(base, game_id, ai_player_id, {
+                    'pending_spell_id': game_dict.get('pending_spell_id'),
                 })
 
             else:

@@ -25,7 +25,8 @@ class PreludeSpellScreen(SubScreen):
 
     def __init__(self, window, state, x=0.0, y=0.0, title=None,
                  card_source=None, mode='conquer',
-                 allowed_spells=None, server_endpoint=None, land_id=None):
+                 allowed_spells=None, server_endpoint=None, land_id=None,
+                 extra_payload=None):
         """
         Parameters
         ----------
@@ -36,6 +37,10 @@ class PreludeSpellScreen(SubScreen):
             ``/kingdom/conquer/set_prelude_spell``.
         land_id : int
             The land this config belongs to.
+        extra_payload : dict, optional
+            Additional fields merged into the POST body.  Used e.g. by the
+            defence counter spell flow to pass ``clear_battle_figure=True``
+            so the server clears the existing battle figure atomically.
         """
         super().__init__(window, state.game, x, y, title)
 
@@ -46,6 +51,7 @@ class PreludeSpellScreen(SubScreen):
         self.allowed_spells = set(allowed_spells or [])
         self.server_endpoint = server_endpoint
         self.land_id = land_id
+        self.extra_payload = dict(extra_payload or {})
 
         # Spell manager
         self.spell_manager = SpellManager()
@@ -260,10 +266,12 @@ class PreludeSpellScreen(SubScreen):
         """Call the server endpoint to set the selected spell."""
         spell_name = spell.family.name
         url = f'{settings.SERVER_URL}{self.server_endpoint}'
+        payload = {'land_id': self.land_id, 'spell_name': spell_name}
+        payload.update(self.extra_payload)
         try:
             resp = requests.post(
                 url,
-                json={'land_id': self.land_id, 'spell_name': spell_name},
+                json=payload,
                 timeout=10,
             )
             data = resp.json()

@@ -68,7 +68,7 @@ _DEFENCE_PRELUDE_SPELLS = [
 ]
 
 _DEFENCE_COUNTER_SPELLS = [
-    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost', 'Explosion',
+    'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
 ]
 
 _RED_SUITS = {'Hearts', 'Diamonds'}
@@ -151,6 +151,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._saved = False   # True after user confirms Save Defence
         self._collection_cards = None
         self._selecting_battle_fig = False  # True when prompting user to pick a figure
+        self._selecting_spell_target = None  # 'prelude' or 'counter' while choosing Health Boost target
 
         # ── Figure display (eagerly loaded) ─────────────────────────
         self._figure_manager = FigureManager()
@@ -230,6 +231,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._figure_detail_box = None
         self._layout_built = False
         self._hovered_slot = -1
+        self._selecting_spell_target = None
 
     # ── Asset init ────────────────────────────────────────────────────
 
@@ -516,6 +518,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._loading = False
             self._rebuild_figure_objects()
             self._refresh_collection()
+            self._maybe_prompt_missing_spell_target()
             logger.debug(f'Defence config loaded for land {self._land_id}')
         except Exception as e:
             self._error = 'Connection error'
@@ -535,6 +538,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if data.get('success'):
                 self._config = data['config']
                 self._rebuild_figure_objects()
+                self._maybe_prompt_missing_spell_target()
             else:
                 logger.warning(f'Remove figure failed: {data.get("message")}')
         except Exception as e:
@@ -555,17 +559,22 @@ class DefenceScreen(MenuScreenMixin, Screen):
         except Exception as e:
             logger.error(f'Return move error: {e}')
 
-    def _server_set_prelude_spell(self, spell_name):
+    def _server_set_prelude_spell(self, spell_name, target_figure_id=None):
         try:
+            payload = {'land_id': self._land_id, 'spell_name': spell_name}
+            if target_figure_id:
+                payload['target_figure_id'] = target_figure_id
+                payload['spell_data'] = {'target_figure_id': target_figure_id}
             resp = requests.post(
                 f'{settings.SERVER_URL}/kingdom/defence/set_prelude_spell',
-                json={'land_id': self._land_id, 'spell_name': spell_name},
+                json=payload,
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
                 self._refresh_collection()
+                self._maybe_prompt_missing_spell_target()
             else:
                 self.state.set_msg(data.get('message', 'Cannot set prelude spell'))
         except Exception as e:
@@ -615,17 +624,27 @@ class DefenceScreen(MenuScreenMixin, Screen):
         except Exception as e:
             logger.error(f'Clear battle figure error: {e}')
 
-    def _server_set_counter_spell(self, spell_name):
+    def _server_set_counter_spell(self, spell_name, target_figure_id=None):
         try:
+            payload = {'land_id': self._land_id, 'spell_name': spell_name}
+            if target_figure_id:
+                payload['target_figure_id'] = target_figure_id
+                payload['spell_data'] = {'target_figure_id': target_figure_id}
+            # Atomically clear an existing battle figure on the server side
+            # so we don't issue two separate requests that could race.
+            cfg = self._config or {}
+            if cfg.get('battle_figure_id') or cfg.get('battle_figure_id_2'):
+                payload['clear_battle_figure'] = True
             resp = requests.post(
                 f'{settings.SERVER_URL}/kingdom/defence/set_counter_spell',
-                json={'land_id': self._land_id, 'spell_name': spell_name},
+                json=payload,
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
                 self._config = data['config']
                 self._refresh_collection()
+                self._maybe_prompt_missing_spell_target()
             else:
                 self.state.set_msg(data.get('message', 'Cannot set counter spell'))
         except Exception as e:
@@ -964,6 +983,28 @@ class DefenceScreen(MenuScreenMixin, Screen):
             # Re-draw field compartments on top of dim so figures are visible and clickable
             self._draw_field_compartments()
 
+        # Health Boost target selection mode overlay
+        if self._selecting_spell_target:
+            dim = pygame.Surface((_BOX_W, _BOX_H), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, 120))
+            self.window.blit(dim, (_BOX_X, _BOX_Y))
+            label = 'prelude' if self._selecting_spell_target == 'prelude' else 'counter spell'
+            prompt = self._label_font.render(
+                f'Click one of your figures for Health Boost {label}',
+                True,
+                (120, 240, 120),
+            )
+            self.window.blit(prompt, prompt.get_rect(centerx=_BOX_X + _BOX_W // 2,
+                                                     top=_BOX_Y + _BOX_PAD + 4))
+            cancel = self._small_font.render(
+                'Checkmate figures cannot be targeted. Press Esc to cancel.',
+                True,
+                (180, 170, 150),
+            )
+            self.window.blit(cancel, cancel.get_rect(centerx=_BOX_X + _BOX_W // 2,
+                                                      top=_BOX_Y + _BOX_PAD + prompt.get_height() + 8))
+            self._draw_field_compartments()
+
         self._draw_close_x_button()
 
         if self._figure_detail_box:
@@ -1204,6 +1245,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     self.window.blit(icons['frame'], fr.topleft)
                 ntxt = self._res_font.render(spell_name, True, (200, 180, 80))
                 self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
+                if spell_name == 'Health Boost':
+                    target = self._config.get('prelude_spell_target_figure') or {}
+                    target_name = target.get('name') or 'choose target'
+                    target_clr = (120, 220, 120) if target.get('id') else (230, 140, 80)
+                    tgt_txt = self._res_font.render(f'→ {target_name}', True, target_clr)
+                    self.window.blit(tgt_txt, tgt_txt.get_rect(centerx=cx, top=rect.bottom + 2 + ntxt.get_height()))
                 if self._success_badge:
                     bx = rect.x
                     by = rect.bottom - self._success_badge.get_height()
@@ -1289,6 +1336,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     self.window.blit(icons['frame'], fr.topleft)
                 ntxt = self._res_font.render(counter_spell, True, (180, 100, 220))
                 self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=cs_rect.bottom + 2))
+                if counter_spell == 'Health Boost':
+                    target = self._config.get('counter_spell_target_figure') or {}
+                    target_name = target.get('name') or 'choose target'
+                    target_clr = (120, 220, 120) if target.get('id') else (230, 140, 80)
+                    tgt_txt = self._res_font.render(f'→ {target_name}', True, target_clr)
+                    self.window.blit(tgt_txt, tgt_txt.get_rect(centerx=cx, top=cs_rect.bottom + 2 + ntxt.get_height()))
                 if self._success_badge:
                     bx = cs_rect.x
                     by = cs_rect.bottom - self._success_badge.get_height()
@@ -1591,6 +1644,37 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 return fig
         return None
 
+    def _prelude_health_target_id(self):
+        data = self._config.get('prelude_spell_data') or {}
+        if isinstance(data, dict):
+            return data.get('target_figure_id')
+        return None
+
+    def _has_health_boost_target(self, kind):
+        if not self._config:
+            return False
+        if kind == 'prelude':
+            return self._config.get('prelude_spell_name') != 'Health Boost' or bool(self._prelude_health_target_id())
+        return self._config.get('counter_spell_name') != 'Health Boost' or bool(self._config.get('counter_spell_target_figure_id'))
+
+    def _begin_spell_target_selection(self, kind):
+        if kind not in ('prelude', 'counter'):
+            return
+        if not self._config or not self._config.get('figures'):
+            self.state.set_msg('Build a figure before choosing a Health Boost target')
+            return
+        self._selecting_battle_fig = False
+        self._selecting_spell_target = kind
+
+    def _maybe_prompt_missing_spell_target(self):
+        if not self._config or self._selecting_spell_target:
+            return
+        if self._config.get('prelude_spell_name') == 'Health Boost' and not self._prelude_health_target_id():
+            self._begin_spell_target_selection('prelude')
+            return
+        if self._config.get('counter_spell_name') == 'Health Boost' and not self._config.get('counter_spell_target_figure_id'):
+            self._begin_spell_target_selection('counter')
+
     def _draw_button(self, rect, text, color):
         if not rect:
             return
@@ -1737,10 +1821,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _open_counter_spell_screen(self):
         """Open PreludeSpellScreen as a subscreen for defence counter spell."""
-        # Counter spell and battle figure are mutually exclusive.
-        # If a battle figure is set, clear it first.
-        if self._config.get('battle_figure_id'):
-            self._server_clear_battle_figure()
+        # Counter spell and battle figure are mutually exclusive.  Defer
+        # the clear to the server-side endpoint via ``clear_battle_figure``
+        # so it happens atomically with the counter-spell set.
+        had_battle_figure = bool(
+            self._config.get('battle_figure_id') or self._config.get('battle_figure_id_2')
+        )
         card_source = self._build_card_source()
         if not card_source:
             self._error = 'Failed to load collection'
@@ -1754,6 +1840,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             allowed_spells=_DEFENCE_COUNTER_SPELLS,
             server_endpoint='/kingdom/defence/set_counter_spell',
             land_id=self._land_id,
+            extra_payload={'clear_battle_figure': True} if had_battle_figure else None,
         )
         self._subscreen_obj._on_done = self._close_subscreen
         self._active_subscreen = 'counter_spell'
@@ -1836,7 +1923,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
         has_battle_fig = self._config.get('battle_figure_id') is not None
         has_counter_spell = self._config.get('counter_spell_name') is not None
         has_exactly_one_strategy = (has_battle_fig != has_counter_spell)
-        return has_valid_figure and has_moves and has_exactly_one_strategy
+        has_required_spell_targets = (
+            self._has_health_boost_target('prelude')
+            and self._has_health_boost_target('counter')
+        )
+        return has_valid_figure and has_moves and has_exactly_one_strategy and has_required_spell_targets
 
     def _get_defence_problems(self):
         """Return a list of human-readable problems preventing save."""
@@ -1875,6 +1966,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
             problems.append('Select exactly one strategy: battle figure or counter spell (not both).')
         elif not has_battle_fig and not has_counter_spell:
             problems.append('Select exactly one strategy: battle figure or counter spell.')
+
+        if prelude == 'Health Boost' and not self._prelude_health_target_id():
+            problems.append('Health Boost prelude needs one of your figures as target.')
+        if self._config.get('counter_spell_name') == 'Health Boost' and not self._config.get('counter_spell_target_figure_id'):
+            problems.append('Health Boost counter spell needs one of your figures as target.')
 
         return problems
 
@@ -2007,6 +2103,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._pending_counter_clear = False
             self._pending_save_confirm = False
             self._pending_leave_confirm = False
+            self._selecting_spell_target = None
             self.reset_action()
             return
 
@@ -2049,6 +2146,32 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     return
                 if event.type == KEYDOWN and event.key == K_ESCAPE:
                     self._figure_detail_box = None
+                    return
+            return
+
+        # Health Boost target selection mode — click an own figure target
+        if self._selecting_spell_target:
+            for event in events:
+                if event.type == MOUSEBUTTONUP and event.button == 1:
+                    for icon in self._figure_icons.values():
+                        if icon.hovered:
+                            fig = icon.figure
+                            cfg_fig = self._get_config_fig(fig.id)
+                            if cfg_fig and not cfg_fig.get('checkmate', False):
+                                if self._selecting_spell_target == 'prelude':
+                                    self._server_set_prelude_spell('Health Boost', target_figure_id=fig.id)
+                                else:
+                                    if self._config.get('battle_figure_id'):
+                                        self._server_clear_battle_figure()
+                                    self._server_set_counter_spell('Health Boost', target_figure_id=fig.id)
+                                self._selecting_spell_target = None
+                            else:
+                                self.state.set_msg('Checkmate figures are immune to spells')
+                            return
+                    self._selecting_spell_target = None
+                    return
+                if event.type == KEYDOWN and event.key == K_ESCAPE:
+                    self._selecting_spell_target = None
                     return
             return
 
@@ -2134,10 +2257,15 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         )
                     continue
 
-                # Prelude spell: edit button or empty slot click
-                if ((self._btn_prelude_edit and self._btn_prelude_edit.collidepoint(pos))
-                        or (self._prelude_spell_rect and self._prelude_spell_rect.collidepoint(pos))):
+                # Prelude spell: edit button opens spell picker; Health Boost slot picks target
+                if self._btn_prelude_edit and self._btn_prelude_edit.collidepoint(pos):
                     self._open_prelude_spell_screen()
+                    continue
+                if self._prelude_spell_rect and self._prelude_spell_rect.collidepoint(pos):
+                    if self._config.get('prelude_spell_name') == 'Health Boost':
+                        self._begin_spell_target_selection('prelude')
+                    else:
+                        self._open_prelude_spell_screen()
                     continue
 
                 # Counter action: battle figure X remove
@@ -2172,10 +2300,15 @@ class DefenceScreen(MenuScreenMixin, Screen):
                             self.state.set_msg('No valid figures available')
                     continue
 
-                # Counter action: edit button or counter spell slot click
-                if ((self._btn_counter_edit and self._btn_counter_edit.collidepoint(pos))
-                        or (self._counter_spell_rect and self._counter_spell_rect.collidepoint(pos))):
+                # Counter action: edit button opens picker; Health Boost slot picks target
+                if self._btn_counter_edit and self._btn_counter_edit.collidepoint(pos):
                     self._open_counter_spell_screen()
+                    continue
+                if self._counter_spell_rect and self._counter_spell_rect.collidepoint(pos):
+                    if self._config.get('counter_spell_name') == 'Health Boost':
+                        self._begin_spell_target_selection('counter')
+                    else:
+                        self._open_counter_spell_screen()
                     continue
 
                 # Threshold controls first so they keep working even if layout
