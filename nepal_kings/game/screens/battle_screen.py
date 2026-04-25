@@ -2224,15 +2224,62 @@ class BattleScreen(SubScreen):
             # Defender won — we are the attacker (we lost)
             title = "Attack Failed"
             icon = 'defeat'
-            cards_spent = result.get('cards_spent', 0)
+            cards_spent = int(result.get('cards_spent', 0) or 0)
+            loot_lost_cards = result.get('loot_lost_cards') or []
+            consumed_cards = result.get('consumed_cards') or []
+
+            def _card_line(card):
+                if not isinstance(card, dict):
+                    return None
+                rank = card.get('rank')
+                suit = card.get('suit')
+                if rank and suit:
+                    return f"{rank} of {suit}"
+                if rank:
+                    return str(rank)
+                if suit:
+                    return str(suit)
+                return None
+
+            def _card_lines(cards, max_lines=10):
+                lines = []
+                for card in cards:
+                    label = _card_line(card)
+                    if label:
+                        lines.append(label)
+                if len(lines) <= max_lines:
+                    return lines
+                overflow = len(lines) - max_lines
+                clipped = lines[:max_lines]
+                clipped.append(f"... and {overflow} more")
+                return clipped
+
             message = "The defender held their ground.\n\nYou did not conquer this land."
             card_suit = result.get('card_lost_suit')
             card_rank = result.get('card_lost_rank')
+            if (not card_suit or not card_rank) and loot_lost_cards:
+                first_loot = loot_lost_cards[0]
+                card_suit = first_loot.get('suit')
+                card_rank = first_loot.get('rank')
+
+            loot_lines = _card_lines(loot_lost_cards)
+            consumed_lines = _card_lines(consumed_cards)
+
             if card_suit and card_rank:
                 message += "\n\nKey card lost:"
                 card_img = CardImg(self.window, card_suit, card_rank)
                 images.append(card_img.front_img)
-            if cards_spent:
+
+            if loot_lines:
+                message += "\n\nLooted by defender:\n" + "\n".join(
+                    f"• {line}" for line in loot_lines
+                )
+
+            if consumed_lines:
+                message += "\n\nConsumed cards:\n" + "\n".join(
+                    f"• {line}" for line in consumed_lines
+                )
+            elif cards_spent:
                 message += "\n\nAll {} cards spent on this attack have been consumed.".format(cards_spent)
         else:
             # Defender won — we are the defender

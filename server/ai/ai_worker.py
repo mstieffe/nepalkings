@@ -743,6 +743,25 @@ def _conquer_opponent_move_value_for_round(game, ai_player_id, current_round, al
     return _conquer_move_effective_value(opp_move, call_fig, opp_healers)
 
 
+def _conquer_opponent_played_block_for_round(game, ai_player_id, current_round):
+    """Return True when opponent already played Block this round."""
+    from models import BattleMove
+
+    opponent = next((p for p in game.players if p.id != ai_player_id), None)
+    if not opponent:
+        return False
+
+    opp_move = BattleMove.query.filter_by(
+        game_id=game.id,
+        player_id=opponent.id,
+        played_round=current_round,
+    ).first()
+    if not opp_move:
+        return False
+
+    return opp_move.family_name == 'Block'
+
+
 def _conquer_choose_play_move(move_infos, opponent_round_value):
     """Pick strongest move; optionally prefer Block when strongest is not better."""
     if not move_infos:
@@ -770,6 +789,21 @@ def _conquer_choose_play_move(move_infos, opponent_round_value):
     if strongest is not None:
         return strongest
     return block_info
+
+
+def _conquer_choose_weakest_play_move(move_infos):
+    """Pick the weakest available move (used to answer opponent Block)."""
+    if not move_infos:
+        return None
+
+    return min(
+        move_infos,
+        key=lambda item: (
+            int(item.get('effective_value') or 0),
+            int(item['move'].value or 0),
+            int(item['move'].id),
+        ),
+    )
 
 
 def _conquer_play_battle_round(base, game, ai_player_id):
@@ -820,7 +854,13 @@ def _conquer_play_battle_round(base, game, ai_player_id):
     current_round = int(game.battle_round or 0)
     opponent_round_value = _conquer_opponent_move_value_for_round(
         game, ai_player_id, current_round, all_figures)
-    chosen = _conquer_choose_play_move(move_infos, opponent_round_value)
+    opponent_played_block = _conquer_opponent_played_block_for_round(
+        game, ai_player_id, current_round)
+
+    if auto_enabled and opponent_played_block:
+        chosen = _conquer_choose_weakest_play_move(move_infos)
+    else:
+        chosen = _conquer_choose_play_move(move_infos, opponent_round_value)
 
     if not chosen:
         logger.info(f"[CONQUER-AI] no playable decision, skipping turn game={game.id}")
@@ -834,7 +874,8 @@ def _conquer_play_battle_round(base, game, ai_player_id):
     logger.info(
         f"[CONQUER-AI] play game={game.id} move={move.id} family={move.family_name} "
         f"eff={chosen['effective_value']} opp_eff={opponent_round_value} "
-        f"call={chosen.get('call_figure_id')} auto={auto_enabled} threshold={threshold}"
+        f"call={chosen.get('call_figure_id')} auto={auto_enabled} threshold={threshold} "
+        f"opp_block={opponent_played_block}"
     )
     return _exec_play_battle_move(base, game.id, ai_player_id, params)
 

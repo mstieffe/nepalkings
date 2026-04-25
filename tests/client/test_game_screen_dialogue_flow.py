@@ -228,3 +228,191 @@ class TestGameScreenDialogueFlow:
         no_target_payloads = [n for n in captured_notifications if n.get('title') == 'No Valid Target']
         assert len(no_target_payloads) == 1
         assert 'No valid target was available' in no_target_payloads[0]['message']
+
+    def test_conquer_game_start_modifier_messages_include_effect_explanations(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.subscreens = {}
+        game_screen._get_spell_icon_image = lambda _name: []
+        game_screen._previous_battle_modifiers = []
+        game_screen._seen_conquer_opponent_spell_ids = set()
+
+        battle_modifier = [
+            {'type': 'Blitzkrieg', 'caster_id': 1},
+            {'type': 'Civil War', 'caster_id': 2},
+        ]
+
+        game_screen.state = SimpleNamespace(
+            pending_conquer_prelude_target=None,
+            game=SimpleNamespace(
+                pending_opponent_turn_summary={
+                    'action': 'game_start',
+                    'mode': 'conquer',
+                    'opponent_name': 'Rival',
+                    'is_turn': True,
+                    'is_invader': True,
+                    'own_prelude_spells': [{'spell_name': 'Blitzkrieg'}],
+                    'own_drawn_cards': [],
+                    'opponent_prelude_spells': [{'spell_name': 'Civil War'}],
+                    'own_prelude_no_target_spells': [],
+                    'opponent_prelude_no_target_spells': [],
+                    'pending_prelude_target': None,
+                    'battle_modifier': battle_modifier,
+                },
+                game_over=False,
+                pending_game_over=False,
+                _game_start_pending=True,
+                land_tier=1,
+                pending_conquer_prelude_target=False,
+                player_id=1,
+                cached_active_spells=[
+                    {'id': 44, 'player_id': 2, 'spell_name': 'Civil War'},
+                    {'id': 45, 'player_id': 1, 'spell_name': 'Blitzkrieg'},
+                ],
+            ),
+        )
+
+        captured_notifications = []
+        game_screen.queue_or_show_notification = captured_notifications.append
+
+        GameScreen.check_opponent_turn_notification(game_screen)
+
+        own_prelude = next(n for n in captured_notifications if n.get('title') == 'Prelude Spell')
+        opp_prelude = next(n for n in captured_notifications if n.get('title') == 'Opponent Prelude')
+
+        assert 'Blitzkrieg:' in own_prelude['message']
+        assert 'Ceasefire is active until the last turn.' in own_prelude['message']
+        assert 'Civil War:' in opp_prelude.get('message_after_images', '')
+        assert game_screen._previous_battle_modifiers == battle_modifier
+        assert game_screen._seen_conquer_opponent_spell_ids == {44}
+
+    def test_conquer_battle_modifier_changes_are_suppressed(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen._previous_battle_modifiers = []
+
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                mode='conquer',
+                battle_modifier=[{'type': 'Peasant War', 'caster_id': 2}],
+                suppress_next_turn_summary=False,
+                player_id=1,
+            )
+        )
+
+        captured_notifications = []
+        game_screen.queue_or_show_notification = captured_notifications.append
+
+        GameScreen.check_battle_modifier_changes(game_screen)
+
+        assert captured_notifications == []
+        assert game_screen._previous_battle_modifiers == [{'type': 'Peasant War', 'caster_id': 2}]
+
+    def test_conquer_battle_ready_shows_hidden_counter_advance_summary(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+
+        class _HiddenSurface:
+            def copy(self):
+                return self
+
+        hidden_surface = _HiddenSurface()
+        defender_figure = SimpleNamespace(
+            id=200,
+            name='Secret Defender',
+            family=SimpleNamespace(field='village'),
+            cards=[1, 2, 3],
+        )
+
+        game_screen.subscreens = {
+            'field': SimpleNamespace(
+                figures=[defender_figure],
+                figure_icons=[SimpleNamespace(figure=defender_figure, frame_hidden_img=hidden_surface)],
+            )
+        }
+        game_screen.dialogue_box = None
+        game_screen._seen_conquer_opponent_spell_ids = {77}
+        game_screen._get_spell_icon_image = lambda _name: []
+
+        captured_notifications = []
+        submitted_decisions = []
+        game_screen.queue_or_show_notification = captured_notifications.append
+        game_screen._submit_battle_decision = submitted_decisions.append
+
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                pending_battle_ready=True,
+                battle_ready_shown=False,
+                advancing_figure_id=101,
+                defending_figure_id=200,
+                advancing_player_id=1,
+                player_id=1,
+                mode='conquer',
+                battle_confirmed=False,
+                battle_decisions={},
+                battle_modifier=[],
+                cached_active_spells=[{'id': 77, 'player_id': 2, 'spell_name': 'Civil War'}],
+                opponent_name='Rival',
+            )
+        )
+
+        GameScreen.check_battle_ready(game_screen)
+
+        assert len(captured_notifications) == 1
+        payload = captured_notifications[0]
+        assert payload['title'] == 'Defender Response'
+        assert 'hidden Village figure with 3 cards' in payload['message']
+        assert 'Secret Defender' not in payload['message']
+        assert payload['images'] == [hidden_surface]
+        assert submitted_decisions == ['battle']
+        assert game_screen.state.game.pending_battle_ready is False
+
+    def test_conquer_counter_spell_notification_includes_modifier_effect_text(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.dialogue_box = None
+        game_screen._seen_conquer_opponent_spell_ids = set()
+        game_screen._get_spell_icon_image = lambda _name: []
+
+        advancing_figure = SimpleNamespace(
+            id=101,
+            name='Attacker',
+            family=SimpleNamespace(field='military'),
+            cards=[1, 2],
+        )
+        game_screen.subscreens = {
+            'field': SimpleNamespace(
+                figures=[advancing_figure],
+                figure_icons=[SimpleNamespace(figure=advancing_figure)],
+            )
+        }
+
+        captured_notifications = []
+        submitted_decisions = []
+        game_screen.queue_or_show_notification = captured_notifications.append
+        game_screen._submit_battle_decision = submitted_decisions.append
+
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                pending_battle_ready=True,
+                battle_ready_shown=False,
+                advancing_figure_id=101,
+                defending_figure_id=None,
+                advancing_player_id=1,
+                player_id=1,
+                mode='conquer',
+                battle_confirmed=False,
+                battle_decisions={},
+                battle_modifier=[],
+                cached_active_spells=[{'id': 88, 'player_id': 2, 'spell_name': 'Blitzkrieg'}],
+                opponent_name='Rival',
+            )
+        )
+
+        GameScreen.check_battle_ready(game_screen)
+
+        counter_payload = next(n for n in captured_notifications if n.get('title') == 'Defender Counter Spell')
+        msg_after = counter_payload.get('message_after_images', '')
+        assert 'Blitzkrieg:' in msg_after
+        assert 'Ceasefire is active until the last turn.' in msg_after
+        assert submitted_decisions == ['battle']

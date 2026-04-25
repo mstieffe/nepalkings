@@ -4237,6 +4237,40 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     game.winner_player_id = winner.id
     game.finished_at = _utcnow()
 
+    # Snapshot all cards committed to this attack before any consumption.
+    all_attack_cards = []
+    if game.conquer_config_id:
+        atk_cfg_cards = db.session.get(LandConfig, game.conquer_config_id)
+        if atk_cfg_cards:
+            attack_card_ids = []
+            for fig in atk_cfg_cards.figures:
+                if fig.card_ids:
+                    attack_card_ids.extend(fig.card_ids)
+            for mv in atk_cfg_cards.battle_moves:
+                if mv.card_id:
+                    attack_card_ids.append(mv.card_id)
+            if atk_cfg_cards.modifier_card_ids:
+                attack_card_ids.extend(atk_cfg_cards.modifier_card_ids)
+
+            unique_attack_card_ids = []
+            seen_attack_card_ids = set()
+            for cid in attack_card_ids:
+                if not cid or cid in seen_attack_card_ids:
+                    continue
+                seen_attack_card_ids.add(cid)
+                unique_attack_card_ids.append(cid)
+
+            if unique_attack_card_ids:
+                cards = CollectionCard.query.filter(
+                    CollectionCard.id.in_(unique_attack_card_ids)
+                ).all()
+                cards_by_id = {c.id: c for c in cards}
+                for cid in unique_attack_card_ids:
+                    cc = cards_by_id.get(cid)
+                    if not cc:
+                        continue
+                    all_attack_cards.append({'id': cc.id, 'suit': cc.suit, 'rank': cc.rank})
+
     # ── Consume attacker's conquer config battle-move cards ──
     if game.conquer_config_id:
         atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
@@ -4248,6 +4282,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     card_won_rank = None
     card_lost_suit = None
     card_lost_rank = None
+    looted_lost_cards = []
 
     if attacker_won:
         # ── Attacker wins: gets a card from the defender ──
@@ -4336,6 +4371,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                     if cc:
                         card_lost_suit = cc.suit
                         card_lost_rank = cc.rank
+                        looted_lost_cards = [{'id': cc.id, 'suit': cc.suit, 'rank': cc.rank}]
                         if is_ai_land:
                             # AI defender: just delete the card
                             db.session.delete(cc)
@@ -4347,7 +4383,19 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                             cc.lock_ref_id = None
 
                 # Consume attacker's figure cards (destroyed)
-                _consume_config_figure_cards(atk_cfg)
+                protected_ids = [c['id'] for c in looted_lost_cards if c.get('id')]
+                _consume_config_figure_cards(atk_cfg, exclude_card_ids=protected_ids)
+
+    looted_ids = {c['id'] for c in looted_lost_cards if c.get('id')}
+    consumed_cards = [
+        {'suit': c['suit'], 'rank': c['rank']}
+        for c in all_attack_cards
+        if c.get('id') not in looted_ids
+    ]
+    looted_lost_cards = [
+        {'suit': c['suit'], 'rank': c['rank']}
+        for c in looted_lost_cards
+    ]
 
     # Create attack log
     log = LandAttackLog(
@@ -4366,19 +4414,20 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     logger.info(f"[CONQUER_RESOLVE] game={game.id} land={game.land_id} "
                 f"result={result}")
 
-    # Count total cards the attacker spent (figures + battle moves + modifiers)
-    cards_spent = 0
-    if game.conquer_config_id:
-        atk_cfg_final = db.session.get(LandConfig, game.conquer_config_id)
-        if atk_cfg_final:
-            for fig in atk_cfg_final.figures:
-                if fig.card_ids:
-                    cards_spent += len(fig.card_ids)
-            for mv in atk_cfg_final.battle_moves:
-                if mv.card_id:
-                    cards_spent += 1
-            if atk_cfg_final.modifier_card_ids:
-                cards_spent += len(atk_cfg_final.modifier_card_ids)
+    # For failed attacks, all committed cards are either consumed or looted.
+    cards_spent = 0 if attacker_won else (len(consumed_cards) + len(looted_lost_cards))
+
+    merged_last_result = dict(saved) if isinstance(saved, dict) else {}
+    merged_last_result.update({
+        'conquer_consumed_cards': consumed_cards,
+        'conquer_loot_lost_cards': looted_lost_cards,
+        'cards_spent': cards_spent,
+        'card_lost_suit': card_lost_suit,
+        'card_lost_rank': card_lost_rank,
+        'card_won_suit': card_won_suit,
+        'card_won_rank': card_won_rank,
+    })
+    game.last_battle_result = merged_last_result
 
     return {
         'success': True,
@@ -4394,6 +4443,8 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_won_rank': card_won_rank,
         'card_lost_suit': card_lost_suit,
         'card_lost_rank': card_lost_rank,
+        'loot_lost_cards': looted_lost_cards,
+        'consumed_cards': consumed_cards,
         'cards_spent': cards_spent,
         'game': game.serialize(),
     }
@@ -4452,6 +4503,14 @@ def _serialize_finished_conquer_result(game):
             payload['card_lost_suit'] = latest_log.card_lost_suit
             payload['card_lost_rank'] = latest_log.card_lost_rank
 
+    last_result = game.last_battle_result if isinstance(game.last_battle_result, dict) else {}
+    if 'cards_spent' in last_result:
+        payload['cards_spent'] = last_result.get('cards_spent')
+    if 'conquer_consumed_cards' in last_result:
+        payload['consumed_cards'] = last_result.get('conquer_consumed_cards') or []
+    if 'conquer_loot_lost_cards' in last_result:
+        payload['loot_lost_cards'] = last_result.get('conquer_loot_lost_cards') or []
+
     return payload
 
 
@@ -4474,15 +4533,16 @@ def _consume_config_battle_cards(cfg):
         db.session.delete(m)
 
 
-def _consume_config_figure_cards(cfg):
+def _consume_config_figure_cards(cfg, exclude_card_ids=None):
     """Delete collection cards used for figures in a config (loser's figures consumed)."""
     from models import CollectionCard, LandConfigFigure
 
+    excluded = set(exclude_card_ids or [])
     figures = LandConfigFigure.query.filter_by(config_id=cfg.id).all()
     card_ids = []
     for fig in figures:
         if fig.card_ids:
-            card_ids.extend(fig.card_ids)
+            card_ids.extend(cid for cid in fig.card_ids if cid not in excluded)
 
     if card_ids:
         CollectionCard.query.filter(

@@ -122,6 +122,7 @@ class GameScreen(Screen):
         self._previous_battle_modifiers = []  # Track for change detection / notifications
         self._just_allowed_spell = False  # Flag to suppress duplicate notification after allowing a spell
         self._hovered_battle_modifier = None  # Index of currently hovered modifier (or None)
+        self._seen_conquer_opponent_spell_ids = set()  # Active opponent spell IDs already announced in conquer mode
         self._battle_modifier_font = settings.get_font(settings.GAME_BUTTON_FONT_SIZE)
         self._spell_box_title_font = settings.get_font(settings.BATTLE_SPELL_BOX_TITLE_FONT_SIZE, bold=True)
         self._tooltip_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
@@ -595,6 +596,7 @@ class GameScreen(Screen):
         self._previous_battle_modifiers = []
         self._hovered_battle_modifier = None
         self._just_allowed_spell = False
+        self._seen_conquer_opponent_spell_ids = set()
         self.state.pending_conquer_prelude_target = None
         
         # Clear queued notifications and stale advance/turn flags so
@@ -1010,6 +1012,12 @@ class GameScreen(Screen):
         current_modifiers = self.state.game.battle_modifier
         if not isinstance(current_modifiers, list):
             current_modifiers = []
+
+        # Conquer mode has dedicated prelude/counter notifications; suppress
+        # generic modifier popups to keep the sequence clean and non-duplicated.
+        if self.state.game.mode == 'conquer':
+            self._previous_battle_modifiers = list(current_modifiers)
+            return
         
         # Skip detection right after a battle ended — stale poll data may
         # still contain old modifiers that look "new" after the reset.
@@ -1036,12 +1044,9 @@ class GameScreen(Screen):
                     if hasattr(self, '_just_allowed_spell') and self._just_allowed_spell:
                         self._just_allowed_spell = False
                     else:
-                        descriptions = {
-                            'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 2 turns left. The invader starts next turn.',
-                            'Peasant War': 'Only villagers can be selected for the battle. Both players have 2 turns left. The invader starts next turn.',
-                            'Blitzkrieg': "The advancing figure cannot be blocked. Both players have 2 turns left. The invader starts next turn. Ceasefire is active until the last turn."
-                        }
-                        desc = descriptions.get(modifier_type, 'A battle modifier is now active.')
+                        desc = self._get_battle_modifier_description(modifier_type)
+                        if not desc:
+                            desc = 'A battle modifier is now active.'
                         
                         # Load icon for the notification
                         icon_img = self._battle_modifier_icons.get(modifier_type)
@@ -1250,6 +1255,17 @@ class GameScreen(Screen):
                 self.state.pending_conquer_prelude_target = None
                 self.state.game.pending_conquer_prelude_target = False
 
+                # Seed baseline tracking so generic modifier alerts and stale
+                # prelude spells are not re-announced later in conquer flow.
+                summary_modifiers = summary.get('battle_modifier')
+                if isinstance(summary_modifiers, list):
+                    self._previous_battle_modifiers = list(summary_modifiers)
+                active_spells = getattr(self.state.game, 'cached_active_spells', []) or []
+                self._seen_conquer_opponent_spell_ids = {
+                    s.get('id') for s in active_spells
+                    if s.get('id') is not None and s.get('player_id') != self.state.game.player_id
+                }
+
                 # (1) Intro box — who, what land, invader/defender role
                 tier = self.state.game.land_tier
                 land_label = f"Tier {tier} land" if tier else "this land"
@@ -1280,17 +1296,16 @@ class GameScreen(Screen):
                         card_images.append(card_img.front_img)
 
                     spell_names = ', '.join(s['spell_name'] for s in own_spells)
-                    # Determine message based on spell type
-                    modifiers = summary.get('battle_modifier') or []
-                    own_modifier_names = []
-                    for s in own_spells:
-                        sn = s['spell_name']
-                        if any(m.get('type') == sn and m.get('caster_id') != None
-                               for m in modifiers if isinstance(m, dict)):
-                            own_modifier_names.append(sn)
+                    own_modifier_names = [
+                        s['spell_name'] for s in own_spells
+                        if self._is_battle_modifier_spell(s.get('spell_name'))
+                    ]
+                    own_modifier_lines = self._get_modifier_explanation_lines(own_modifier_names)
 
                     if own_modifier_names:
                         spell_msg = f"Your prelude spell {spell_names} is now active!"
+                        if own_modifier_lines:
+                            spell_msg += "\n\n" + "\n".join(f"• {line}" for line in own_modifier_lines)
                     elif card_images:
                         spell_msg = f"Your prelude spell {spell_names} was executed!\n\nYou drew {len(card_images)} card(s)."
                     else:
@@ -1309,21 +1324,20 @@ class GameScreen(Screen):
                 # (3) Opponent prelude spell turn notification (if any)
                 if opp_spells:
                     opp_spell_names = ', '.join(s['spell_name'] for s in opp_spells)
-                    modifiers = summary.get('battle_modifier') or []
-                    opp_modifier_names = [s['spell_name'] for s in opp_spells
-                                          if any(m.get('type') == s['spell_name']
-                                                 for m in modifiers if isinstance(m, dict))]
+                    opp_modifier_names = [
+                        s['spell_name'] for s in opp_spells
+                        if self._is_battle_modifier_spell(s.get('spell_name'))
+                    ]
+                    opp_modifier_lines = self._get_modifier_explanation_lines(opp_modifier_names)
 
                     opp_images = []
                     for s in opp_spells:
                         opp_images.extend(self._get_spell_icon_image(s['spell_name']))
 
-                    if opp_modifier_names:
-                        opp_msg = f"{opponent_name}'s turn:"
-                        opp_msg_after = f"• Cast {opp_spell_names}\n  > Battle modifier is now active."
-                    else:
-                        opp_msg = f"{opponent_name}'s turn:"
-                        opp_msg_after = f"• Cast {opp_spell_names}"
+                    opp_msg = f"{opponent_name}'s turn:"
+                    opp_msg_after = f"• Cast {opp_spell_names}"
+                    if opp_modifier_lines:
+                        opp_msg_after += "\n" + "\n".join(f"  > {line}" for line in opp_modifier_lines)
 
                     self.queue_or_show_notification({
                         'message': opp_msg,
@@ -2053,26 +2067,48 @@ class GameScreen(Screen):
             error_msg = result.get('message', 'Unknown error')
             logger.error(f"[GAME_SCREEN] Defender auto-loss failed: {error_msg}")
     
+    def _get_battle_modifier_description(self, modifier_type):
+        """Return human-readable effect text for a battle modifier spell."""
+        descriptions = {
+            'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 2 turns left. The invader starts next turn.',
+            'Peasant War': 'Only villagers can be selected for the battle. Both players have 2 turns left. The invader starts next turn.',
+            'Blitzkrieg': 'The advancing figure cannot be blocked. Both players have 2 turns left. The invader starts next turn. Ceasefire is active until the last turn.',
+        }
+        return descriptions.get(modifier_type)
+
+    def _is_battle_modifier_spell(self, spell_name):
+        """Return True when the spell name maps to a battle modifier."""
+        return self._get_battle_modifier_description(spell_name) is not None
+
+    def _get_modifier_explanation_lines(self, modifier_names):
+        """Build de-duplicated '<Modifier>: <effect>' lines for notifications."""
+        lines = []
+        seen = set()
+        for modifier_name in modifier_names:
+            if not modifier_name or modifier_name in seen:
+                continue
+            seen.add(modifier_name)
+            desc = self._get_battle_modifier_description(modifier_name)
+            if desc:
+                lines.append(f"{modifier_name}: {desc}")
+        return lines
+
     def _get_battle_modifier_info(self):
         """Get battle modifier summary text and icon images for notification dialogues."""
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
         if not modifiers:
             return "", []
-        
-        modifier_texts = []
+
+        modifier_names = []
         modifier_images = []
         for mod in modifiers:
             mod_type = mod.get('type', 'Unknown')
             icon_img = self._battle_modifier_icons.get(mod_type)
             if icon_img:
                 modifier_images.append(icon_img)
-            if mod_type == 'Peasant War':
-                modifier_texts.append("Peasant War: Only village figures can be selected for battle.")
-            elif mod_type == 'Blitzkrieg':
-                modifier_texts.append("Blitzkrieg: The advancing figure cannot be blocked. Ceasefire is active until the last turn.")
-            elif mod_type == 'Civil War':
-                modifier_texts.append("Civil War: Each player selects two village figures of the same color for battle.")
-        
+            modifier_names.append(mod_type)
+
+        modifier_texts = self._get_modifier_explanation_lines(modifier_names)
         text = "\n".join(modifier_texts)
         return text, modifier_images
 
@@ -2423,21 +2459,86 @@ class GameScreen(Screen):
                 modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
                 has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
 
-                # Check for defender counter-spell (enchantment, NOT greed)
-                counter_spells = [
-                    s for s in (self.state.game.cached_active_spells or [])
+                defender_counter_advanced = bool(self.state.game.defending_figure_id)
+
+                # Check for defender counter-spell (enchantment, NOT greed).
+                # Filter out spells already seen during conquer startup so
+                # prelude effects are not announced again as counter spells.
+                all_counter_spells = [
+                    s for s in (getattr(self.state.game, 'cached_active_spells', []) or [])
                     if s.get('player_id') != self.state.game.player_id
                     and s.get('spell_name') not in ('Draw 2 MainCards', 'Fill up to 10', 'Dump Cards')
                 ]
 
-                if counter_spells:
+                seen_spell_ids = set(getattr(self, '_seen_conquer_opponent_spell_ids', set()) or set())
+                counter_spells = []
+                for spell_data in all_counter_spells:
+                    spell_id = spell_data.get('id')
+                    if spell_id is None or spell_id not in seen_spell_ids:
+                        counter_spells.append(spell_data)
+
+                current_opponent_spell_ids = {
+                    s.get('id') for s in all_counter_spells if s.get('id') is not None
+                }
+                if current_opponent_spell_ids:
+                    self._seen_conquer_opponent_spell_ids.update(current_opponent_spell_ids)
+
+                if defender_counter_advanced and not has_blitzkrieg:
+                    # (7) No counter spell — defender counter-advanced.
+                    # Keep defender identity hidden: show field category + card count.
+                    images = []
+                    field_screen = self.subscreens.get('field')
+                    defending_description = "a hidden figure"
+                    if field_screen and self.state.game.defending_figure_id:
+                        for fig in getattr(field_screen, 'figures', []):
+                            if fig.id == self.state.game.defending_figure_id:
+                                field_key = getattr(fig.family, 'field', 'unknown') if hasattr(fig, 'family') else 'unknown'
+                                field_map = {
+                                    'castle': 'Castle',
+                                    'village': 'Village',
+                                    'military': 'Military',
+                                }
+                                field_label = field_map.get(str(field_key).lower(), str(field_key).title())
+                                card_count = len(fig.cards) if hasattr(fig, 'cards') else '?'
+                                defending_description = f"a hidden {field_label} figure with {card_count} cards"
+                                break
+
+                        for icon in getattr(field_screen, 'figure_icons', []):
+                            if hasattr(icon, 'figure') and icon.figure.id == self.state.game.defending_figure_id:
+                                hidden_icon = getattr(icon, 'frame_hidden_img', None)
+                                if hidden_icon is not None:
+                                    images.append(hidden_icon.copy())
+                                break
+
+                    if not images:
+                        import os
+                        icon_path = os.path.join('img', 'figures', 'state_icons', 'charge_opponent.png')
+                        if os.path.exists(icon_path):
+                            images.append(pygame.image.load(icon_path).convert_alpha())
+
+                    self.queue_or_show_notification({
+                        'message': f"The defender counter-advanced with {defending_description}!",
+                        'actions': ['ok'],
+                        'images': images if images else None,
+                        'icon': None if images else 'info',
+                        'title': 'Defender Response',
+                    })
+
+                elif counter_spells:
                     # (6) Defender cast a counter spell — show turn notification
                     opponent_name = self.state.game.opponent_name or "Defender"
                     spell_names = ', '.join(s.get('spell_name', '?') for s in counter_spells)
+                    modifier_lines = self._get_modifier_explanation_lines(
+                        [s.get('spell_name') for s in counter_spells if self._is_battle_modifier_spell(s.get('spell_name'))]
+                    )
 
                     spell_images = []
                     for s in counter_spells:
                         spell_images.extend(self._get_spell_icon_image(s.get('spell_name', '')))
+
+                    msg_after = f"• Cast {spell_names}"
+                    if modifier_lines:
+                        msg_after += "\n" + "\n".join(f"  > {line}" for line in modifier_lines)
 
                     self.queue_or_show_notification({
                         'message': f"{opponent_name}'s turn:",
@@ -2445,7 +2546,7 @@ class GameScreen(Screen):
                         'images': spell_images if spell_images else None,
                         'icon': None if spell_images else 'info',
                         'title': 'Defender Counter Spell',
-                        'message_after_images': f"• Cast {spell_names}",
+                        'message_after_images': msg_after,
                     })
 
                     # (8) Defender used last turn for spell — did not counter-advance
@@ -2475,27 +2576,6 @@ class GameScreen(Screen):
                             'icon': None if sel_images else 'info',
                             'title': "Select Opponent's Defender",
                         })
-                elif not has_blitzkrieg:
-                    # (7) No counter spell — defender counter-advanced
-                    # Show the defending figure (skip if Blitzkrieg — invader
-                    # already chose the figure via check_defender_selection_needed)
-                    images = []
-                    field_screen = self.subscreens.get('field')
-                    defending_fig_name = "the defender's figure"
-                    if field_screen and self.state.game.defending_figure_id:
-                        for icon in getattr(field_screen, 'figure_icons', []):
-                            if hasattr(icon, 'figure') and icon.figure.id == self.state.game.defending_figure_id:
-                                defending_fig_name = icon.figure.name
-                                images.append(icon)
-                                break
-
-                    self.queue_or_show_notification({
-                        'message': f"The defender responds with {defending_fig_name}!",
-                        'actions': ['ok'],
-                        'images': images if images else None,
-                        'icon': None if images else 'info',
-                        'title': 'Defender Response',
-                    })
 
             logger.info("[BATTLE_READY] Conquer mode — auto-submitting 'battle' decision")
             self.state.game.pending_battle_ready = False

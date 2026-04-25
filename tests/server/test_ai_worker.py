@@ -194,6 +194,86 @@ def test_conquer_choose_play_move_prefers_strongest_when_advantage_positive():
     assert chosen['move'].id == 11
 
 
+def test_conquer_choose_weakest_play_move_picks_lowest_effective_value():
+    weakest = {
+        'move': SimpleNamespace(id=10, family_name='Dagger', value=7),
+        'effective_value': 3,
+    }
+    mid = {
+        'move': SimpleNamespace(id=11, family_name='Dagger', value=8),
+        'effective_value': 5,
+    }
+    strongest = {
+        'move': SimpleNamespace(id=12, family_name='Dagger', value=10),
+        'effective_value': 9,
+    }
+
+    chosen = ai_worker._conquer_choose_weakest_play_move([strongest, weakest, mid])
+    assert chosen['move'].id == 10
+
+
+def test_conquer_play_battle_round_auto_gamble_plays_weakest_when_opponent_block(monkeypatch):
+    game = SimpleNamespace(id=50, battle_round=1)
+
+    weakest_move = SimpleNamespace(id=101, family_name='Dagger', value=7)
+    strongest_move = SimpleNamespace(id=102, family_name='Dagger', value=10)
+    move_infos = [
+        {'move': strongest_move, 'effective_value': 10, 'call_figure_id': None},
+        {'move': weakest_move, 'effective_value': 7, 'call_figure_id': None},
+    ]
+
+    monkeypatch.setattr(ai_worker, '_get_conquer_auto_gamble_settings', lambda *_args, **_kwargs: (True, 10))
+    monkeypatch.setattr(ai_worker, '_conquer_collect_move_infos', lambda *_args, **_kwargs: (move_infos, []))
+    monkeypatch.setattr(ai_worker, '_conquer_choose_gamble_target', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ai_worker, '_conquer_choose_best_dagger_pair', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_move_value_for_round', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_played_block_for_round', lambda *_args, **_kwargs: True)
+
+    captured = {}
+
+    def _capture_play(_base, _game_id, _player_id, params):
+        captured['battle_move_id'] = params.get('battle_move_id')
+        return True
+
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _capture_play)
+
+    ai_worker._conquer_play_battle_round('http://example.invalid', game, ai_player_id=999)
+
+    assert captured['battle_move_id'] == 101
+
+
+def test_conquer_play_battle_round_no_auto_gamble_keeps_existing_selector(monkeypatch):
+    game = SimpleNamespace(id=51, battle_round=1)
+
+    strongest_move = SimpleNamespace(id=202, family_name='Dagger', value=10)
+    move_infos = [
+        {'move': strongest_move, 'effective_value': 10, 'call_figure_id': None},
+    ]
+
+    monkeypatch.setattr(ai_worker, '_get_conquer_auto_gamble_settings', lambda *_args, **_kwargs: (False, 10))
+    monkeypatch.setattr(ai_worker, '_conquer_collect_move_infos', lambda *_args, **_kwargs: (move_infos, []))
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_move_value_for_round', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_played_block_for_round', lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(ai_worker, '_conquer_choose_play_move', lambda infos, _opp: infos[0])
+
+    def _fail_if_called(_infos):
+        raise AssertionError('weakest override must only apply when auto-gamble is enabled')
+
+    monkeypatch.setattr(ai_worker, '_conquer_choose_weakest_play_move', _fail_if_called)
+
+    captured = {}
+
+    def _capture_play(_base, _game_id, _player_id, params):
+        captured['battle_move_id'] = params.get('battle_move_id')
+        return True
+
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _capture_play)
+
+    ai_worker._conquer_play_battle_round('http://example.invalid', game, ai_player_id=999)
+
+    assert captured['battle_move_id'] == 202
+
+
 def test_trigger_ai_if_needed_skips_without_api_key(app, monkeypatch):
     monkeypatch.setattr(ai_worker.settings, 'AI_ENABLED', True)
     monkeypatch.setattr(ai_worker.settings, 'AI_OPENAI_API_KEY', '')

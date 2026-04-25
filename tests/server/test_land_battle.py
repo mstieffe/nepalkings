@@ -1152,6 +1152,46 @@ class TestAITemplateCardRewards:
             db.session.refresh(land)
             assert land.owner_user_id is None
 
+    def test_player_defender_win_reports_loot_and_consumed_cards(self, app, db):
+        """Defender win payload includes looted and consumed card lists."""
+        with app.app_context():
+            from routes.games import _resolve_conquer_battle
+
+            attacker = _make_user(db, username='attacker_cards')
+            defender = _make_user(db, username='defender_cards')
+            land = _make_land(db, tier=2, owner_user_id=defender.id)
+
+            _make_conquer_config(db, attacker, land)
+            _make_defence_config(db, defender, land)
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            data = resp.get_json()
+            game = db.session.get(Game, data['game_id'])
+
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = [p for p in game.players if p.id != atk_player.id][0]
+
+            result = _resolve_conquer_battle(game, def_player, atk_player)
+            db.session.commit()
+
+            assert result['conquer_result'] == 'defender_won'
+
+            loot_cards = result.get('loot_lost_cards') or []
+            consumed_cards = result.get('consumed_cards') or []
+            assert len(loot_cards) == 1
+            assert len(consumed_cards) >= 1
+            assert result.get('cards_spent') == (len(loot_cards) + len(consumed_cards))
+
+            loot_pair = (loot_cards[0].get('suit'), loot_cards[0].get('rank'))
+            consumed_pairs = {(c.get('suit'), c.get('rank')) for c in consumed_cards}
+            assert loot_pair not in consumed_pairs
+
+            defender_cards = CollectionCard.query.filter_by(user_id=defender.id, locked=False).all()
+            assert any((c.suit, c.rank) == loot_pair for c in defender_cards)
+
     def test_attacker_wins_config_converted_to_defence(self, app, db):
         """Attacker's conquer config becomes the new defence config."""
         with app.app_context():
