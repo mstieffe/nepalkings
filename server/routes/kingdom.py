@@ -1802,6 +1802,82 @@ _RANK_TO_VALUE = {
     'J': 1, 'Q': 2, 'K': 4, 'A': 3,
 }
 
+_MAIN_RANKS = set(_RANK_TO_VALUE.keys())
+_NUMERIC_TO_MAIN_RANK = {v: k for k, v in _RANK_TO_VALUE.items()}
+_NUMERIC_TO_MAIN_RANK.update({11: 'J', 12: 'Q', 13: 'K', 14: 'A'})
+_VALID_SUITS = {s.value for s in Suit}
+
+
+def _enum_value(raw):
+    return raw.value if hasattr(raw, 'value') else raw
+
+
+def _normalize_main_rank(rank, *, fallback_rank='10', value=None, context=''):
+    """Normalize input rank into a valid main-rank string."""
+    fallback = str(_enum_value(fallback_rank) or '10').strip().upper()
+    if fallback not in _MAIN_RANKS:
+        fallback = '10'
+
+    raw_rank = _enum_value(rank)
+    candidate = str(raw_rank).strip().upper() if raw_rank is not None else ''
+    if candidate in _MAIN_RANKS:
+        return candidate
+
+    for source, source_name in ((candidate, 'rank'), (value, 'value')):
+        try:
+            numeric = int(source)
+        except (TypeError, ValueError):
+            continue
+        mapped = _NUMERIC_TO_MAIN_RANK.get(numeric)
+        if mapped:
+            if candidate and candidate != mapped:
+                logger.warning(
+                    "[CONQUER] normalized non-main rank '%s' -> '%s' via %s (context=%s)",
+                    candidate, mapped, source_name, context or 'n/a')
+            return mapped
+
+    if candidate:
+        logger.warning(
+            "[CONQUER] invalid main rank '%s', using fallback '%s' (context=%s)",
+            candidate, fallback, context or 'n/a')
+    return fallback
+
+
+def _normalize_main_value(rank, value, *, context=''):
+    """Return canonical value for a main rank, correcting mismatched inputs."""
+    expected = int(_RANK_TO_VALUE.get(rank, 0))
+    try:
+        raw = int(value)
+    except (TypeError, ValueError):
+        raw = None
+
+    if raw == expected:
+        return raw
+
+    if raw is not None:
+        logger.warning(
+            "[CONQUER] normalized card value %s -> %s for rank '%s' (context=%s)",
+            raw, expected, rank, context or 'n/a')
+    return expected
+
+
+def _normalize_suit(suit, *, fallback='Hearts', context=''):
+    """Normalize input suit into one of the canonical suit names."""
+    raw_suit = _enum_value(suit)
+    candidate = str(raw_suit).strip().title() if raw_suit is not None else ''
+    if candidate in _VALID_SUITS:
+        return candidate
+
+    fallback_suit = str(_enum_value(fallback) or 'Hearts').strip().title()
+    if fallback_suit not in _VALID_SUITS:
+        fallback_suit = 'Hearts'
+
+    if candidate:
+        logger.warning(
+            "[CONQUER] invalid suit '%s', using fallback '%s' (context=%s)",
+            candidate, fallback_suit, context or 'n/a')
+    return fallback_suit
+
 
 # ── Figure-power helpers for fallback selection ─────────────────────────────
 
@@ -2032,19 +2108,31 @@ def _build_figures_from_config(cfg_figures, player, game):
         card_roles = cfg_fig.card_roles or []
         for i, role in enumerate(card_roles):
             # Look up the collection card to get rank/suit/value
-            rank = None
-            suit = cfg_fig.suit
-            value = 0
+            raw_rank = None
+            raw_suit = cfg_fig.suit
+            raw_value = 0
             if i < len(card_ids) and card_ids[i]:
                 cc = db.session.get(CollectionCard, card_ids[i])
                 if cc:
-                    rank = cc.rank
-                    suit = cc.suit
-                    value = cc.value
-            if not rank:
+                    raw_rank = cc.rank
+                    raw_suit = cc.suit
+                    raw_value = cc.value
+
+            fallback_rank = 'K' if role == 'key' else '10'
+            if not raw_rank:
                 # Fallback: derive from figure suit and role
-                rank = 'K' if role == 'key' else '10'
-                value = _RANK_TO_VALUE.get(rank, 0)
+                raw_rank = fallback_rank
+                raw_value = _RANK_TO_VALUE.get(raw_rank, 0)
+
+            context = f'cfg_fig={cfg_fig.id} role={role} card_id={card_ids[i] if i < len(card_ids) else None}'
+            rank = _normalize_main_rank(
+                raw_rank,
+                fallback_rank=fallback_rank,
+                value=raw_value,
+                context=context,
+            )
+            suit = _normalize_suit(raw_suit, fallback=cfg_fig.suit or 'Hearts', context=context)
+            value = _normalize_main_value(rank, raw_value, context=context)
 
             mc = MainCard(
                 rank=rank,
@@ -2102,13 +2190,26 @@ def _build_figures_from_template(template_figures, player, game):
         tpl_cards = tpl_fig.get('cards', [])
         card_roles = tpl_fig.get('card_roles', [])
         for i, role in enumerate(card_roles):
+            fallback_rank = 'K' if role == 'key' else '10'
             if i < len(tpl_cards):
-                rank = tpl_cards[i].get('rank', 'K' if role == 'key' else '10')
-                suit = tpl_cards[i].get('suit', tpl_fig['suit'])
+                card_data = tpl_cards[i]
+                raw_rank = card_data.get('rank', fallback_rank)
+                raw_suit = card_data.get('suit', tpl_fig['suit'])
+                raw_value = card_data.get('value')
             else:
-                rank = 'K' if role == 'key' else '10'
-                suit = tpl_fig['suit']
-            value = _RANK_TO_VALUE.get(rank, 0)
+                raw_rank = fallback_rank
+                raw_suit = tpl_fig['suit']
+                raw_value = _RANK_TO_VALUE.get(raw_rank, 0)
+
+            context = f'tpl_fig={tpl_fig.get("family_name", "unknown")} role={role} idx={i}'
+            rank = _normalize_main_rank(
+                raw_rank,
+                fallback_rank=fallback_rank,
+                value=raw_value,
+                context=context,
+            )
+            suit = _normalize_suit(raw_suit, fallback=tpl_fig.get('suit', 'Hearts'), context=context)
+            value = _normalize_main_value(rank, raw_value, context=context)
 
             mc = MainCard(
                 rank=rank,
@@ -2146,10 +2247,20 @@ def _build_battle_moves_from_config(cfg_moves, player, game, config_figure_map=N
         if cfg_move.call_figure_id and config_figure_map:
             call_fig_id = config_figure_map.get(cfg_move.call_figure_id)
 
-        mc = MainCard(
-            rank=cfg_move.rank,
-            suit=cfg_move.suit,
+        context = f'cfg_move={cfg_move.id} family={cfg_move.family_name}'
+        rank = _normalize_main_rank(
+            cfg_move.rank,
+            fallback_rank='10',
             value=cfg_move.value,
+            context=context,
+        )
+        suit = _normalize_suit(cfg_move.suit, fallback='Hearts', context=context)
+        value = _normalize_main_value(rank, cfg_move.value, context=context)
+
+        mc = MainCard(
+            rank=rank,
+            suit=suit,
+            value=value,
             game_id=game.id,
             player_id=player.id,
             in_deck=False,
@@ -2165,9 +2276,9 @@ def _build_battle_moves_from_config(cfg_moves, player, game, config_figure_map=N
             family_name=cfg_move.family_name,
             card_id=mc.id,
             card_type='main',
-            suit=cfg_move.suit,
-            rank=cfg_move.rank,
-            value=cfg_move.value,
+            suit=suit,
+            rank=rank,
+            value=value,
             call_figure_id=call_fig_id,
         )
         db.session.add(move)
@@ -2197,10 +2308,24 @@ def _build_battle_moves_from_template(template_moves, player, game,
                         call_fig_id = gf.id
                         break
 
+        context = f"tpl_move={tpl_move.get('family_name', 'unknown')}"
+        rank = _normalize_main_rank(
+            tpl_move.get('rank'),
+            fallback_rank='10',
+            value=tpl_move.get('value'),
+            context=context,
+        )
+        suit = _normalize_suit(
+            tpl_move.get('suit'),
+            fallback='Hearts',
+            context=context,
+        )
+        value = _normalize_main_value(rank, tpl_move.get('value'), context=context)
+
         mc = MainCard(
-            rank=tpl_move['rank'],
-            suit=tpl_move['suit'],
-            value=tpl_move['value'],
+            rank=rank,
+            suit=suit,
+            value=value,
             game_id=game.id,
             player_id=player.id,
             in_deck=False,
@@ -2216,9 +2341,9 @@ def _build_battle_moves_from_template(template_moves, player, game,
             family_name=tpl_move['family_name'],
             card_id=mc.id,
             card_type=tpl_move.get('card_type', 'main'),
-            suit=tpl_move['suit'],
-            rank=tpl_move['rank'],
-            value=tpl_move['value'],
+            suit=suit,
+            rank=rank,
+            value=value,
             call_figure_id=call_fig_id,
         )
         db.session.add(move)

@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 
 from models import (db, User, Land, LandConfig, LandConfigFigure,
                     LandConfigBattleMove, CollectionCard, Game, Player,
-                    Figure, BattleMove, LandAttackLog, ActiveSpell)
+                    Figure, BattleMove, MainCard, LandAttackLog, ActiveSpell)
 from kingdom_service import seed_kingdom_map
 import server_settings as config
 
@@ -522,6 +522,51 @@ class TestConquerStartBattle:
 
             game = db.session.get(Game, resp.get_json()['game_id'])
             assert game.defending_figure_id is None
+
+    def test_start_battle_normalizes_legacy_numeric_rank_cards(self, app, db):
+        """Legacy numeric rank data in config cards is normalized instead of crashing."""
+        with app.app_context():
+            attacker = _make_user(db, username='attacker_legacy_rank')
+            defender = _make_user(db, username='defender_legacy_rank')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+
+            def_cfg_fig = LandConfigFigure.query.filter_by(config_id=def_cfg.id).first()
+            legacy_card = db.session.get(CollectionCard, def_cfg_fig.card_ids[0])
+            legacy_card.rank = '4'
+            legacy_card.value = 4
+
+            def_cfg_move = LandConfigBattleMove.query.filter_by(config_id=def_cfg.id).first()
+            def_cfg_move.rank = '4'
+            def_cfg_move.value = 4
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200
+            data = resp.get_json()
+
+            game = db.session.get(Game, data['game_id'])
+            def_player = [p for p in game.players if p.user_id == defender.id][0]
+
+            created_main_cards = MainCard.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+            ).all()
+            assert created_main_cards
+            assert all(c.rank.value in {'7', '8', '9', '10', 'J', 'Q', 'K', 'A'}
+                       for c in created_main_cards)
+
+            defender_moves = BattleMove.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+            ).all()
+            assert any(m.rank == 'K' and m.value == 4 for m in defender_moves)
 
     def test_start_battle_tier2_template(self, app, db):
         """Tier 2 template includes Call King move and auto_gamble."""
