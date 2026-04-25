@@ -661,6 +661,7 @@ class Land(db.Model):
     suit_bonus_value = db.Column(db.Integer, nullable=False)
     owner_user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
     owned_since      = db.Column(db.DateTime, nullable=True)
+    conquer_cooldown_until = db.Column(db.DateTime, nullable=True)
     defence_config_id = db.Column(db.Integer, db.ForeignKey('land_config.id',
                                   use_alter=True, name='fk_land_defence_config'),
                                   nullable=True)
@@ -697,6 +698,10 @@ class Land(db.Model):
             'suit_bonus_suit': self.suit_bonus_suit,
             'suit_bonus_value': self.suit_bonus_value,
             'owner': owner_data,
+            'conquer_cooldown_until': (
+                self.conquer_cooldown_until.isoformat()
+                if self.conquer_cooldown_until else None
+            ),
             'ai_name': ai_name,
             'defence_config_id': self.defence_config_id,
             'ai_template_index': self.ai_template_index,

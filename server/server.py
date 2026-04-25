@@ -174,6 +174,13 @@ with app.app_context():
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE challenge ADD COLUMN game_id INTEGER REFERENCES game(id)"))
                 conn.commit()
+    if 'land' in inspector.get_table_names():
+        existing_cols = {c['name'] for c in inspector.get_columns('land')}
+        if 'conquer_cooldown_until' not in existing_cols:
+            logger.info("Auto-migrate: adding 'conquer_cooldown_until' column to land table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE land ADD COLUMN conquer_cooldown_until DATETIME"))
+                conn.commit()
     if 'land_config' in inspector.get_table_names():
         existing_cols = {c['name'] for c in inspector.get_columns('land_config')}
         _lc_new_cols = {

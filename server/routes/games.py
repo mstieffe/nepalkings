@@ -5,8 +5,8 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
-from datetime import datetime, timezone
-from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, CollectionCard
+from datetime import datetime, timezone, timedelta
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard
 from game_service.deck_manager import DeckManager
 from routes.auth import require_token, verify_player_ownership
 
@@ -29,6 +29,40 @@ _TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _conquer_defender_counter_advance_disabled(game):
+    """Return True when conquer defender auto counter-advance should be skipped.
+
+    Player-owned land defence configs can be in fallback mode (no valid
+    strategy selected), in which case the invader should immediately select
+    the defender instead of giving the defender a counter-advance turn.
+    """
+    if not game or game.mode != 'conquer':
+        return False
+    if not game.defence_config_id:
+        # AI-template lands always keep scripted counter-advance behavior.
+        return False
+
+    cfg = db.session.get(LandConfig, game.defence_config_id)
+    if not cfg:
+        return True
+
+    has_battle_fig = (cfg.battle_figure_id is not None)
+    has_counter_spell = (cfg.counter_spell_name is not None or cfg.spell_name is not None)
+
+    if has_battle_fig and not has_counter_spell:
+        battle_cfg_fig = db.session.get(Figure, game.defending_figure_id)
+        if battle_cfg_fig:
+            return False
+        cfg_fig = db.session.get(LandConfigFigure, cfg.battle_figure_id)
+        return not (cfg_fig and cfg_fig.config_id == cfg.id)
+
+    if has_counter_spell and not has_battle_fig:
+        return False
+
+    # Both-selected and none-selected strategies fall back to invader pick.
+    return True
 
 @games.after_request
 def _ai_trigger_hook(response):
@@ -1988,9 +2022,21 @@ def advance_figure():
             player.turns_left = 0
             other_player.turns_left = 1
 
+        conquer_skip_counter_advance = (
+            game.mode == 'conquer' and
+            not is_counter_advance and
+            _conquer_defender_counter_advance_disabled(game)
+        )
+
         if civil_war_need_second:
             # Don't flip turn — player needs to pick a second figure
             logger.info(f"[ADVANCE] Civil War — waiting for second figure pick (color: {civil_war_color})")
+        elif conquer_skip_counter_advance:
+            logger.info(
+                f"[ADVANCE] Conquer fallback strategy — turn stays on invader "
+                f"for defender selection (game={game_id})"
+            )
+            game.turn_player_id = player_id
         elif has_blitzkrieg and not is_counter_advance:
             if game.mode == 'conquer':
                 # Conquer: defender doesn't play interactively.  Keep turn on
@@ -4339,6 +4385,11 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         if land:
             land.owner_user_id = attacker_user.id
             land.owned_since = _utcnow()
+            protect_seconds = max(int(getattr(_cfg, 'LAND_CONQUER_PROTECTION_SECONDS', 0)), 0)
+            if protect_seconds > 0:
+                land.conquer_cooldown_until = _utcnow() + timedelta(seconds=protect_seconds)
+            else:
+                land.conquer_cooldown_until = None
 
         # Convert attacker's conquer config to defence config
         if game.conquer_config_id:

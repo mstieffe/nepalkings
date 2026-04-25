@@ -2411,6 +2411,15 @@ def conquer_start_battle():
     if land.owner_user_id == user.id:
         return jsonify({'success': False, 'message': 'Cannot conquer your own land'}), 400
 
+    # Land-level conquer protection after a successful ownership transfer.
+    if land.conquer_cooldown_until:
+        remaining = int((land.conquer_cooldown_until - _utcnow()).total_seconds())
+        if remaining > 0:
+            return jsonify({
+                'success': False,
+                'message': f'Land is under conquer protection. {remaining}s remaining.'
+            }), 400
+
     # Cooldown check
     if user.last_conquer_at:
         elapsed = (_utcnow() - user.last_conquer_at).total_seconds()
@@ -2448,6 +2457,7 @@ def conquer_start_battle():
     defender_user = None
     def_cfg = None
     template = None
+    defender_strategy_mode = 'template'
 
     if is_ai_land:
         defender_user = _get_or_create_ai_user()
@@ -2473,19 +2483,31 @@ def conquer_start_battle():
                             'message': 'Defender has no defence config'}), 400
 
         has_battle_fig = (def_cfg.battle_figure_id is not None)
-        has_counter_spell = (def_cfg.counter_spell_name is not None)
-        if has_battle_fig == has_counter_spell:
-            return jsonify({
-                'success': False,
-                'message': ('Defender config must select exactly one counter strategy: '
-                            'battle figure or counter spell.')
-            }), 400
+        has_counter_spell = (
+            def_cfg.counter_spell_name is not None or def_cfg.spell_name is not None
+        )
 
+        battle_cfg_fig_valid = False
         if has_battle_fig:
             battle_cfg_fig = db.session.get(LandConfigFigure, def_cfg.battle_figure_id)
-            if not battle_cfg_fig or battle_cfg_fig.config_id != def_cfg.id:
-                return jsonify({'success': False,
-                                'message': 'Defender battle figure is invalid'}), 400
+            battle_cfg_fig_valid = bool(
+                battle_cfg_fig and battle_cfg_fig.config_id == def_cfg.id
+            )
+
+        if has_battle_fig and not has_counter_spell and battle_cfg_fig_valid:
+            defender_strategy_mode = 'battle_figure'
+        elif has_counter_spell and not has_battle_fig:
+            defender_strategy_mode = 'counter_spell'
+        else:
+            defender_strategy_mode = 'none'
+            logger.info(
+                "[CONQUER] Defender strategy fallback enabled for land=%s: "
+                "has_battle_fig=%s has_counter_spell=%s battle_fig_valid=%s",
+                land_id,
+                has_battle_fig,
+                has_counter_spell,
+                battle_cfg_fig_valid,
+            )
 
     # ── Create the Game ──
     game = Game(
@@ -2610,12 +2632,12 @@ def conquer_start_battle():
             def_config_moves, def_player, game,
             config_figure_map=def_cfg_fig_map)
 
-        # Set defender battle figure from config
-        if def_cfg.battle_figure_id:
+        # Set defender battle figure from config (only when the strategy is valid)
+        if defender_strategy_mode == 'battle_figure' and def_cfg.battle_figure_id:
             mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id)
             if mapped_id:
                 game.defending_figure_id = mapped_id
-        if def_cfg.battle_figure_id_2:
+        if defender_strategy_mode == 'battle_figure' and def_cfg.battle_figure_id_2:
             mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id_2)
             if mapped_id:
                 game.defending_figure_id_2 = mapped_id
@@ -2633,45 +2655,46 @@ def conquer_start_battle():
             game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
         # ── Defender counter spell ──
-        if def_cfg.counter_spell_name:
-            target_fig_id = None
-            if def_cfg.counter_spell_target_figure_id:
-                target_fig_id = def_cfg_fig_map.get(
-                    def_cfg.counter_spell_target_figure_id)
-            spell = ActiveSpell(
-                game_id=game.id,
-                player_id=def_player.id,
-                spell_name=def_cfg.counter_spell_name,
-                spell_type=_SPELL_TYPE_MAP.get(
-                    def_cfg.counter_spell_name, 'enchantment'),
-                spell_family_name=def_cfg.counter_spell_name,
-                suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
-                target_figure_id=target_fig_id,
-                cast_round=1,
-                is_active=True,
-                is_pending=False,
-                effect_data=def_cfg.counter_spell_data,
-            )
-            db.session.add(spell)
-        elif def_cfg.spell_name:
-            # Backward compat: old spell_name field
-            target_fig_id = None
-            if def_cfg.spell_target_figure_id:
-                target_fig_id = def_cfg_fig_map.get(
-                    def_cfg.spell_target_figure_id)
-            spell = ActiveSpell(
-                game_id=game.id,
-                player_id=def_player.id,
-                spell_name=def_cfg.spell_name,
-                spell_type='enchantment',
-                spell_family_name=def_cfg.spell_name,
-                suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
-                target_figure_id=target_fig_id,
-                cast_round=1,
-                is_active=True,
-                is_pending=False,
-            )
-            db.session.add(spell)
+        if defender_strategy_mode == 'counter_spell':
+            if def_cfg.counter_spell_name:
+                target_fig_id = None
+                if def_cfg.counter_spell_target_figure_id:
+                    target_fig_id = def_cfg_fig_map.get(
+                        def_cfg.counter_spell_target_figure_id)
+                spell = ActiveSpell(
+                    game_id=game.id,
+                    player_id=def_player.id,
+                    spell_name=def_cfg.counter_spell_name,
+                    spell_type=_SPELL_TYPE_MAP.get(
+                        def_cfg.counter_spell_name, 'enchantment'),
+                    spell_family_name=def_cfg.counter_spell_name,
+                    suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
+                    target_figure_id=target_fig_id,
+                    cast_round=1,
+                    is_active=True,
+                    is_pending=False,
+                    effect_data=def_cfg.counter_spell_data,
+                )
+                db.session.add(spell)
+            elif def_cfg.spell_name:
+                # Backward compat: old spell_name field
+                target_fig_id = None
+                if def_cfg.spell_target_figure_id:
+                    target_fig_id = def_cfg_fig_map.get(
+                        def_cfg.spell_target_figure_id)
+                spell = ActiveSpell(
+                    game_id=game.id,
+                    player_id=def_player.id,
+                    spell_name=def_cfg.spell_name,
+                    spell_type='enchantment',
+                    spell_family_name=def_cfg.spell_name,
+                    suit=def_game_figures[0].suit if def_game_figures else 'Hearts',
+                    target_figure_id=target_fig_id,
+                    cast_round=1,
+                    is_active=True,
+                    is_pending=False,
+                )
+                db.session.add(spell)
 
     # ── Attacker prelude spell ──
     if atk_cfg.prelude_spell_name:

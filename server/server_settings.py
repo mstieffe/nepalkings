@@ -159,6 +159,9 @@ LAND_SUIT_BONUS_RANGES = {                  # Suit combat bonus (min, max) per t
     3: (5, 10),
 }
 CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(6 * 3600)))
+LAND_CONQUER_PROTECTION_SECONDS = int(
+    os.getenv('LAND_CONQUER_PROTECTION_SECONDS', str(5 * 60))
+)
 GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS = 7 * 24  # Cap at 7 days of uncollected gold
 
 # ── v2.0: AI Defence Templates ──

@@ -65,6 +65,9 @@ class TestV2ServerSettings:
     def test_conquer_cooldown_positive(self):
         assert config.CONQUER_COOLDOWN_SECONDS > 0
 
+    def test_land_conquer_protection_nonnegative(self):
+        assert config.LAND_CONQUER_PROTECTION_SECONDS >= 0
+
     def test_ai_defence_templates_all_tiers(self):
         for tier in (1, 2, 3):
             assert tier in config.AI_DEFENCE_TEMPLATES

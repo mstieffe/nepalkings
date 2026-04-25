@@ -440,8 +440,8 @@ class TestConquerStartBattle:
             assert len(def_figs) >= 1
             assert any(f.family_name == 'Himalaya King' for f in def_figs)
 
-    def test_start_battle_player_owned_land_rejects_auto_gamble_only(self, app, db):
-        """Player-owned defender must configure exactly one of battle figure or counter spell."""
+    def test_start_battle_player_owned_land_allows_invalid_counter_strategy(self, app, db):
+        """Missing counter strategy starts battle and falls back to invader defender-pick flow."""
         with app.app_context():
             attacker = _make_user(db, username='attacker')
             defender = _make_user(db, username='defender')
@@ -466,8 +466,62 @@ class TestConquerStartBattle:
 
             resp = client.post('/kingdom/conquer/start_battle',
                                json={'land_id': land.id}, headers=headers)
-            assert resp.status_code == 400
-            assert 'exactly one counter strategy' in resp.get_json()['message'].lower()
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data['success'] is True
+
+            game = db.session.get(Game, data['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            assert game.defending_figure_id is None
+
+            defender_spell_count = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=[p for p in game.players if p.id != atk_player.id][0].id,
+                is_active=True,
+            ).count()
+            assert defender_spell_count == 0
+
+            atk_fig = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=atk_player.id,
+            ).first()
+            adv_resp = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': atk_fig.id,
+            }, headers=headers)
+            assert adv_resp.status_code == 200
+
+            db.session.refresh(game)
+            assert game.turn_player_id == atk_player.id
+            assert game.defending_figure_id is None
+
+    def test_start_battle_player_owned_land_allows_invalid_battle_figure_reference(self, app, db):
+        """Stale battle_figure_id falls back instead of rejecting battle start."""
+        with app.app_context():
+            attacker = _make_user(db, username='attacker_ref')
+            defender = _make_user(db, username='defender_ref')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            cfg = _make_defence_config(db, defender, land)
+
+            other_land = _make_land(db, tier=1, owner_user_id=defender.id)
+            other_cfg = _make_defence_config(db, defender, other_land)
+
+            cfg.battle_figure_id = other_cfg.battle_figure_id
+            cfg.counter_spell_name = None
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200
+
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            assert game.defending_figure_id is None
 
     def test_start_battle_tier2_template(self, app, db):
         """Tier 2 template includes Call King move and auto_gamble."""
@@ -1135,6 +1189,58 @@ class TestAITemplateCardRewards:
 
             db.session.refresh(land)
             assert land.owner_user_id == user.id
+
+    def test_attacker_wins_sets_land_conquer_protection(self, app, db):
+        """Successful conquest sets a temporary land-level conquer protection timestamp."""
+        with app.app_context():
+            with patch.object(config, 'LAND_CONQUER_PROTECTION_SECONDS', 300):
+                _, user, land, _, _ = self._start_battle_and_resolve(
+                    app, db, attacker_wins=True)
+
+            db.session.refresh(land)
+            assert land.owner_user_id == user.id
+            assert land.conquer_cooldown_until is not None
+            remaining = (land.conquer_cooldown_until - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()
+            assert remaining > 0
+            assert remaining <= 300
+
+    def test_start_battle_rejected_during_land_conquer_protection(self, app, db):
+        """Other attackers cannot start conquer while land protection is active."""
+        with app.app_context():
+            with patch.object(config, 'LAND_CONQUER_PROTECTION_SECONDS', 300):
+                _, owner, land, _, _ = self._start_battle_and_resolve(
+                    app, db, attacker_wins=True)
+
+            challenger = _make_user(db, username='challenger')
+            _make_conquer_config(db, challenger, land)
+
+            client = app.test_client()
+            headers = _auth_headers(app, challenger)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+
+            assert resp.status_code == 400
+            assert 'conquer protection' in resp.get_json()['message'].lower()
+
+    def test_start_battle_allows_when_land_conquer_protection_expired(self, app, db):
+        """Conquer can start again once land protection timestamp has passed."""
+        with app.app_context():
+            with patch.object(config, 'LAND_CONQUER_PROTECTION_SECONDS', 60):
+                _, owner, land, _, _ = self._start_battle_and_resolve(
+                    app, db, attacker_wins=True)
+
+            land.conquer_cooldown_until = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+            db.session.commit()
+
+            challenger = _make_user(db, username='challenger_expired')
+            _make_conquer_config(db, challenger, land)
+
+            client = app.test_client()
+            headers = _auth_headers(app, challenger)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+
+            assert resp.status_code == 200
 
     def test_defender_wins_attacker_loses_key_card(self, app, db):
         """When defender wins, attacker loses a key card."""
