@@ -71,6 +71,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         # ── Card data from server ───────────────────────────────────
         self._cards = {}       # {(suit,rank): quantity}
+        self._locked = {}      # {(suit,rank): locked_quantity}
         self._gold = 0
         self._boosters = 0
         self._boosters_side = 0
@@ -169,6 +170,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         """Called each time the collection screen becomes active — force re-fetch."""
         self._data_loaded = False
         self._cards = {}
+        self._locked = {}
         ud = getattr(self.state, 'user_dict', None) or {}
         self._gold = ud.get('gold', 0)
         self._boosters = ud.get('booster_packs', 0)
@@ -189,8 +191,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
     def _apply_collection_data(self, data):
         """Apply fetched collection data dicts."""
         self._cards = {}
+        self._locked = {}
         for c in data.get('cards', []):
-            self._cards[(c['suit'], c['rank'])] = c.get('total', c.get('quantity', 0))
+            key = (c['suit'], c['rank'])
+            self._cards[key] = c.get('total', c.get('quantity', 0))
+            self._locked[key] = c.get('locked', 0)
         self._gold = data.get('gold', 0)
         self._boosters = data.get('booster_packs', 0)
         self._boosters_side = data.get('booster_packs_side', 0)
@@ -337,6 +342,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             if not card:
                 continue
             qty = self._cards.get((suit, rank), 0)
+            locked = self._locked.get((suit, rank), 0)
+            free = max(0, qty - locked)
             card_rect = pygame.Rect(cx, cy, cw, ch)
             hovered = card_rect.collidepoint(mouse_pos) and not self._sell_dialogue and not self._reveal_overlay
 
@@ -348,14 +355,18 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     self.window.blit(glow_surf, (cx - 2, cy - 2))
                 else:
                     card.draw_front_bright(cx, cy)
-                self._draw_card_badge(cx, cy, cw, qty)
+                self._draw_card_badge(cx, cy, cw, qty, locked)
             else:
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
 
-    def _draw_card_badge(self, cx, cy, cw, qty):
-        """Draw ×N badge at the bottom-right of a card."""
-        badge_text = f'×{qty}'
+    def _draw_card_badge(self, cx, cy, cw, qty, locked=0):
+        """Draw ×N (free/total) badge at the bottom-right of a card."""
+        if locked > 0:
+            free = max(0, qty - locked)
+            badge_text = f'×{free}/{qty}'
+        else:
+            badge_text = f'×{qty}'
         badge_surf = self._badge_font.render(badge_text, True, settings.COLLECTION_BADGE_CLR)
         bw = badge_surf.get_width() + settings.COLLECTION_BADGE_PAD_X * 2
         bh = badge_surf.get_height() + settings.COLLECTION_BADGE_PAD_Y * 2
@@ -425,11 +436,21 @@ class CollectionScreen(MenuScreenMixin, Screen):
     def _open_sell_dialogue(self, suit, rank):
         """Open the sell dialogue for a card."""
         qty = self._cards.get((suit, rank), 0)
-        if qty <= 0:
+        locked = self._locked.get((suit, rank), 0)
+        free = max(0, qty - locked)
+        if free <= 0:
+            # All copies are locked — surface a clear reason instead of
+            # silently doing nothing.
+            self._sell_dialogue = DialogueBox(
+                self.window,
+                f'All {qty} {suit} {rank} card(s) are currently locked '
+                f'in a conquer/defence configuration.',
+                actions=['ok'], title='Cannot sell',
+            )
             return
         self._sell_card = (suit, rank)
         self._sell_qty = 1
-        self._sell_max = qty
+        self._sell_max = free
         unit_price = _sell_price(rank, 1)
         card_img = self._card_imgs.get((suit, rank))
         images = [card_img] if card_img else []
@@ -614,7 +635,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     response = self._sell_dialogue.update([event])
                     if response == 'sell':
                         self._perform_sell()
-                    elif response == 'cancel':
+                    elif response in ('cancel', 'ok'):
                         self._sell_card = None
                         self._sell_dialogue = None
                 elif event.type == KEYDOWN:

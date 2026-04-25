@@ -655,6 +655,9 @@ def conquer_build_figure():
     if not card_ids:
         return jsonify({'success': False, 'message': 'No cards provided'}), 400
 
+    if len(set(card_ids)) != len(card_ids):
+        return jsonify({'success': False, 'message': 'Duplicate card ids in request'}), 400
+
     if card_roles and len(card_ids) != len(card_roles):
         return jsonify({'success': False, 'message': 'card_ids and card_roles length mismatch'}), 400
 
@@ -1161,6 +1164,8 @@ def defence_build_figure():
 
     if not card_ids:
         return jsonify({'success': False, 'message': 'No cards provided'}), 400
+    if len(set(card_ids)) != len(card_ids):
+        return jsonify({'success': False, 'message': 'Duplicate card ids in request'}), 400
     if card_roles and len(card_ids) != len(card_roles):
         return jsonify({'success': False, 'message': 'card_ids and card_roles length mismatch'}), 400
 

@@ -202,6 +202,50 @@ with app.app_context():
     
     logger.info("Database initialized")
 
+    # ── Orphan-lock sweep ─────────────────────────────────────────────
+    # Find CollectionCard rows whose lock_ref_id no longer points to a
+    # live LandConfigFigure / LandConfigBattleMove / LandConfig row, and
+    # release the lock.  Keeps the collection consistent across server
+    # restarts that follow crashes mid-transaction.
+    try:
+        from models import (CollectionCard, LandConfig,
+                            LandConfigFigure, LandConfigBattleMove)
+        figure_ids  = {fid for (fid,) in db.session.query(LandConfigFigure.id).all()}
+        move_ids    = {mid for (mid,) in db.session.query(LandConfigBattleMove.id).all()}
+        config_ids  = {cid for (cid,) in db.session.query(LandConfig.id).all()}
+        valid_by_lock_type = {
+            'conquer_figure':   figure_ids,
+            'defence_figure':   figure_ids,
+            'conquer_move':     move_ids,
+            'defence_move':     move_ids,
+            'conquer_modifier': config_ids,
+            'defence_modifier': config_ids,
+            'conquer_spell':    config_ids,
+            'defence_spell':    config_ids,
+            'conquer_prelude':  config_ids,
+            'defence_prelude':  config_ids,
+            'conquer_counter':  config_ids,
+            'defence_counter':  config_ids,
+        }
+        locked_cards = CollectionCard.query.filter_by(locked=True).all()
+        orphan_count = 0
+        for cc in locked_cards:
+            valid_set = valid_by_lock_type.get(cc.lock_type)
+            if valid_set is None or cc.lock_ref_id not in valid_set:
+                cc.locked = False
+                cc.lock_type = None
+                cc.lock_ref_id = None
+                orphan_count += 1
+        if orphan_count:
+            db.session.commit()
+            logger.warning("Orphan-lock sweep: released %d stale card lock(s)",
+                           orphan_count)
+        else:
+            logger.info("Orphan-lock sweep: no stale locks found")
+    except Exception as _olsw_err:  # pragma: no cover — safety net
+        logger.exception("Orphan-lock sweep failed: %s", _olsw_err)
+        db.session.rollback()
+
     # Seed the kingdom hex map (idempotent — skips if already seeded)
     from kingdom_service import seed_kingdom_map
     seed_kingdom_map()

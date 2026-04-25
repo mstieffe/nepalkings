@@ -4337,6 +4337,45 @@ def finish_battle():
             # No winner — draw
             game.winner_player_id = None
 
+            # Consume single-use cards (battle moves, modifiers, spells) and
+            # unlock figure cards on BOTH sides.  A draw means neither side
+            # captured the land, but committed one-shot cards are still spent.
+            draw_consumed_cards = []
+            atk_cfg = (db.session.get(LandConfig, game.conquer_config_id)
+                       if game.conquer_config_id else None)
+            def_cfg = (db.session.get(LandConfig, game.defence_config_id)
+                       if game.defence_config_id else None)
+
+            for cfg in (atk_cfg, def_cfg):
+                if not cfg:
+                    continue
+                # Snapshot ids of single-use cards before consumption so the
+                # client can show which cards were spent in the draw.
+                spent_ids = []
+                for mv in cfg.battle_moves:
+                    if mv.card_id:
+                        spent_ids.append(mv.card_id)
+                for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
+                            cfg.prelude_spell_card_ids,
+                            cfg.counter_spell_card_ids):
+                    if arr:
+                        spent_ids.extend(arr)
+                if spent_ids:
+                    snap_cards = CollectionCard.query.filter(
+                        CollectionCard.id.in_(spent_ids)
+                    ).all()
+                    for cc in snap_cards:
+                        draw_consumed_cards.append(
+                            {'suit': cc.suit, 'rank': cc.rank})
+                _consume_config_battle_cards(cfg)
+
+            # Unlock figure cards on the attacker's conquer cfg and delete
+            # the cfg row (it was a one-shot attempt).  The defender's
+            # cfg stays in place for future defences — its figure locks
+            # are unchanged.
+            if atk_cfg:
+                _wipe_land_config(atk_cfg)
+
             log_entry = LogEntry(
                 game_id=game.id,
                 player_id=player_id,
@@ -4356,6 +4395,8 @@ def finish_battle():
                 'attacker_won': False,
                 'land_id': game.land_id,
                 'message': 'Conquer battle ended in a draw — no consequences.',
+                'consumed_cards': draw_consumed_cards,
+                'loot_lost_cards': [],
                 'game': game.serialize(),
             })
 
@@ -4647,11 +4688,16 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             else:
                 land.conquer_cooldown_until = None
 
-        # Convert attacker's conquer config to defence config
+        # Convert attacker's conquer config to defence config.
+        # Battle/modifier/spell cards have already been consumed above,
+        # so only figure cards remain locked — re-key their lock_type so
+        # subsequent defence-side cleanup recognises them.
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
                 atk_cfg.config_type = 'defence'
+                atk_cfg.land_id = game.land_id
+                _rekey_config_lock_types(atk_cfg, 'defence')
                 if land:
                     land.defence_config_id = atk_cfg.id
 
@@ -4689,9 +4735,12 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                             cc.lock_type = None
                             cc.lock_ref_id = None
 
-                # Consume attacker's figure cards (destroyed)
+                # Consume the entire attacker config: every remaining card
+                # (figures, plus any spell/modifier cards not already deleted
+                # in `_consume_config_battle_cards` if a future code-path
+                # changes ordering) is destroyed, and the cfg row removed.
                 protected_ids = [c['id'] for c in looted_lost_cards if c.get('id')]
-                _consume_config_figure_cards(atk_cfg, exclude_card_ids=protected_ids)
+                _destroy_land_config(atk_cfg, exclude_card_ids=protected_ids)
 
     looted_ids = {c['id'] for c in looted_lost_cards if c.get('id')}
     consumed_cards = [
@@ -4822,13 +4871,25 @@ def _serialize_finished_conquer_result(game):
 
 
 def _consume_config_battle_cards(cfg):
-    """Delete collection cards used for battle moves and modifiers in a config."""
+    """Delete collection cards used for battle moves, modifiers, and spells.
+
+    Spell cards (main, prelude, counter) are one-shot: they are consumed
+    together with battle move and modifier cards.  Stale references on the
+    config are cleared so the row can either be re-purposed or deleted
+    safely afterwards.
+    """
     from models import CollectionCard, LandConfigBattleMove
 
     moves = LandConfigBattleMove.query.filter_by(config_id=cfg.id).all()
     card_ids = [m.card_id for m in moves if m.card_id]
     if cfg.modifier_card_ids:
         card_ids.extend(cfg.modifier_card_ids)
+    if cfg.spell_card_ids:
+        card_ids.extend(cfg.spell_card_ids)
+    if cfg.prelude_spell_card_ids:
+        card_ids.extend(cfg.prelude_spell_card_ids)
+    if cfg.counter_spell_card_ids:
+        card_ids.extend(cfg.counter_spell_card_ids)
 
     if card_ids:
         CollectionCard.query.filter(
@@ -4838,6 +4899,19 @@ def _consume_config_battle_cards(cfg):
     # Delete the move records
     for m in moves:
         db.session.delete(m)
+
+    # Clear stale references so the cfg cannot accidentally be reused
+    cfg.modifier_card_ids = []
+    cfg.spell_card_ids = []
+    cfg.prelude_spell_card_ids = []
+    cfg.counter_spell_card_ids = []
+    cfg.spell_name = None
+    cfg.spell_target_figure_id = None
+    cfg.prelude_spell_name = None
+    cfg.prelude_spell_data = None
+    cfg.counter_spell_name = None
+    cfg.counter_spell_data = None
+    cfg.counter_spell_target_figure_id = None
 
 
 def _consume_config_figure_cards(cfg, exclude_card_ids=None):
@@ -4896,6 +4970,74 @@ def _wipe_land_config(cfg):
     LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
     LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
     db.session.delete(cfg)
+
+
+def _destroy_land_config(cfg, exclude_card_ids=None):
+    """Delete a land config and DELETE every collection card it referenced.
+
+    Used when an attacker loses: all cards committed to the attack are
+    consumed.  `exclude_card_ids` lets the caller protect cards that have
+    already been transferred elsewhere (e.g. looted by the defender).
+    """
+    from models import CollectionCard, LandConfigFigure, LandConfigBattleMove
+
+    excluded = set(exclude_card_ids or [])
+    card_ids = []
+    for fig in cfg.figures:
+        if fig.card_ids:
+            card_ids.extend(cid for cid in fig.card_ids if cid not in excluded)
+    for move in cfg.battle_moves:
+        if move.card_id and move.card_id not in excluded:
+            card_ids.append(move.card_id)
+    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
+                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
+        if arr:
+            card_ids.extend(cid for cid in arr if cid not in excluded)
+
+    if card_ids:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(card_ids)
+        ).delete(synchronize_session='fetch')
+
+    LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
+    LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
+    db.session.delete(cfg)
+
+
+def _rekey_config_lock_types(cfg, new_config_type):
+    """Re-key the lock_type of every CollectionCard locked by this config.
+
+    Used when a winning attacker's conquer config is converted into the
+    new defence config: every 'conquer_*' lock_type must become 'defence_*'
+    so subsequent unlock/wipe logic recognises them.
+    """
+    from models import CollectionCard
+
+    mapping = {
+        'conquer_figure':   f'{new_config_type}_figure',
+        'conquer_move':     f'{new_config_type}_move',
+        'conquer_modifier': f'{new_config_type}_modifier',
+        'conquer_spell':    f'{new_config_type}_spell',
+        'conquer_prelude':  f'{new_config_type}_prelude',
+        'conquer_counter':  f'{new_config_type}_counter',
+    }
+
+    # Gather every card id that is part of this cfg (figures only at this
+    # point — battle/modifier/spell cards have already been consumed).
+    card_ids = []
+    for fig in cfg.figures:
+        if fig.card_ids:
+            card_ids.extend(fig.card_ids)
+    if not card_ids:
+        return
+
+    cards = CollectionCard.query.filter(
+        CollectionCard.id.in_(card_ids)
+    ).all()
+    for cc in cards:
+        new_lt = mapping.get(cc.lock_type)
+        if new_lt:
+            cc.lock_type = new_lt
 
 
 @games.route('/finish_battle_pick_card', methods=['POST'])
