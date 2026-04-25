@@ -433,6 +433,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._detail_box = LandDetailBox(
             self.window, tile,
             cooldown=self._cooldown,
+            land_cooldown=getattr(tile, 'conquer_cooldown_remaining', 0),
             on_conquer=self._on_conquer,
             on_defence=self._on_defence,
             on_close=lambda: setattr(self, '_detail_box', None),

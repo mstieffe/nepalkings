@@ -10,6 +10,19 @@ import logging
 logger = logging.getLogger('nk.components.land_detail_box')
 
 
+def _format_cooldown_text(seconds):
+    """Return a compact cooldown label from seconds."""
+    total = max(0, int(seconds or 0))
+    hours = total // 3600
+    mins = (total % 3600) // 60
+    secs = total % 60
+    if hours > 0:
+        return f'{hours}h {mins}m'
+    if mins > 0:
+        return f'{mins}m {secs}s'
+    return f'{secs}s'
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  _LandButton — lightweight themed button (matches dialogue box style)
 # ═══════════════════════════════════════════════════════════════════
@@ -107,21 +120,24 @@ class LandDetailBox:
     Constructor:
         tile        – HexTile from the hex map
         window      – pygame display surface
-        cooldown    – seconds remaining on conquer cooldown (0 = ready)
+        cooldown    – player conquer cooldown seconds remaining (0 = ready)
+        land_cooldown – land protection cooldown seconds remaining (0 = ready)
         on_conquer  – callback when Conquer is clicked  (tile)
         on_defence  – callback when Configure Defence is clicked  (tile)
         on_close    – callback when box is dismissed
     """
 
-    def __init__(self, window, tile, cooldown=0,
+    def __init__(self, window, tile, cooldown=0, land_cooldown=0,
                  on_conquer=None, on_defence=None, on_close=None):
         self.window = window
         self.tile = tile
-        self.cooldown = cooldown
+        self._base_cooldown = max(0, int(cooldown or 0))
+        self._base_land_cooldown = max(0, int(land_cooldown or 0))
         self._on_conquer = on_conquer
         self._on_defence = on_defence
         self._on_close = on_close
         self._created_at = pygame.time.get_ticks()
+        self._last_render_cooldowns = None
 
         # Fonts
         self._title_font = settings.get_font(settings.LAND_DETAIL_TITLE_FONT, bold=True)
@@ -164,8 +180,18 @@ class LandDetailBox:
         # Build layout
         self._build_layout()
 
+    def _current_cooldowns(self):
+        """Return current (player_cooldown, land_cooldown) in seconds."""
+        elapsed = max(0, (pygame.time.get_ticks() - self._created_at) // 1000)
+        cooldown = max(0, self._base_cooldown - elapsed)
+        land_cooldown = max(0, self._base_land_cooldown - elapsed)
+        return cooldown, land_cooldown
+
     def _build_layout(self):
         tile = self.tile
+        cooldown, land_cooldown = self._current_cooldowns()
+        self._last_render_cooldowns = (cooldown, land_cooldown)
+
         pad = settings.LAND_DETAIL_PAD
         w = settings.LAND_DETAIL_W
         line_h = self._body_font.get_height()
@@ -193,6 +219,11 @@ class LandDetailBox:
         else:
             self._lines.append(('owner', 'Unclaimed (AI defended)'))
 
+        if not tile.is_mine and land_cooldown > 0:
+            self._lines.append(
+                ('land_cd',
+                 f'Land protection active: {_format_cooldown_text(land_cooldown)} remaining'))
+
         # Calculate height
         content_h = pad  # top padding
         for kind, _ in self._lines:
@@ -213,7 +244,7 @@ class LandDetailBox:
         else:
             btn_count = 1  # Conquer
         content_h += (settings.LAND_DETAIL_BTN_H + 8) * btn_count
-        if self.cooldown > 0 and not tile.is_mine:
+        if (cooldown > 0 or land_cooldown > 0) and not tile.is_mine:
             content_h += int(line_h * 0.8)  # cooldown sub-text
         content_h += pad  # bottom padding
 
@@ -233,7 +264,7 @@ class LandDetailBox:
         # Create buttons
         btn_x = self._box_rect.centerx - settings.LAND_DETAIL_BTN_W // 2
         btn_y = self._box_rect.bottom - pad - settings.LAND_DETAIL_BTN_H
-        if self.cooldown > 0 and not tile.is_mine:
+        if (cooldown > 0 or land_cooldown > 0) and not tile.is_mine:
             btn_y -= int(self._body_font.get_height() * 0.8)
 
         self._buttons = []
@@ -241,15 +272,24 @@ class LandDetailBox:
             btn = _LandButton(self.window, btn_x, btn_y, 'Configure Defence')
             self._buttons.append(('defence', btn))
         else:
-            disabled = self.cooldown > 0
+            # Player cooldown blocks all conquer starts; land cooldown does not
+            # block opening conquer setup but is shown as guidance.
+            disabled = cooldown > 0
             btn = _LandButton(self.window, btn_x, btn_y, 'Conquer', disabled=disabled)
             if disabled:
-                hours = self.cooldown // 3600
-                mins = (self.cooldown % 3600) // 60
-                btn.sub_text = f'Cooldown: {hours}h {mins}m'
+                btn.sub_text = f'Your cooldown: {_format_cooldown_text(cooldown)}'
+            elif land_cooldown > 0:
+                btn.sub_text = (
+                    f'Land protection: {_format_cooldown_text(land_cooldown)}')
             self._buttons.append(('conquer', btn))
 
     def update(self):
+        if not self.tile.is_mine:
+            current = self._current_cooldowns()
+            if current != self._last_render_cooldowns:
+                # Rebuild once per second as cooldown values change.
+                self._build_layout()
+
         for _, btn in self._buttons:
             btn.update()
 

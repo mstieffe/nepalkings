@@ -1468,7 +1468,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 self.state.screen = 'game'
                 logger.info(f'Battle started: game_id={game_id}')
             else:
-                self._error = data.get('error', 'Failed to start battle')
+                self._error = (
+                    data.get('message')
+                    or data.get('error')
+                    or 'Failed to start battle'
+                )
                 logger.warning(f'Start battle failed: {self._error}')
         except Exception as e:
             self._error = 'Connection error'

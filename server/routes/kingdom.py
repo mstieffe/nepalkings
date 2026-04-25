@@ -219,6 +219,13 @@ def get_kingdom_map():
 
         land_dict = land.serialize()
         land_dict['is_mine'] = is_mine
+        land_cooldown_remaining = 0
+        if land.conquer_cooldown_until:
+            land_cooldown_remaining = max(
+                0,
+                int((land.conquer_cooldown_until - _utcnow()).total_seconds()),
+            )
+        land_dict['conquer_cooldown_remaining'] = land_cooldown_remaining
         if is_mine:
             land_dict['defence_incomplete'] = check_defence_incomplete(
                 land.id, user.id)

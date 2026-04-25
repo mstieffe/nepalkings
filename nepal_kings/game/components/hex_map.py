@@ -45,7 +45,8 @@ class HexTile:
     __slots__ = (
         'land_id', 'col', 'row', 'tier', 'gold_rate',
         'suit_bonus_suit', 'suit_bonus_value',
-        'owner', 'is_mine', 'defence_incomplete', 'cx', 'cy',
+        'owner', 'is_mine', 'defence_incomplete',
+        'conquer_cooldown_remaining', 'cx', 'cy',
     )
 
     def __init__(self, land_dict, cx, cy):
@@ -59,6 +60,8 @@ class HexTile:
         self.owner = land_dict.get('owner')
         self.is_mine = land_dict.get('is_mine', False)
         self.defence_incomplete = land_dict.get('defence_incomplete', False)
+        self.conquer_cooldown_remaining = land_dict.get(
+            'conquer_cooldown_remaining', 0)
         self.cx = cx
         self.cy = cy
 

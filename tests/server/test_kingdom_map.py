@@ -32,8 +32,11 @@ def _utcnow_fixed(dt):
 
 class TestKingdomMap:
 
-    def test_empty_map(self, client, auth_headers_user1):
+    def test_empty_map(self, client, db, auth_headers_user1):
         """No lands → empty list, zero stats."""
+        db.session.query(Land).delete()
+        db.session.commit()
+
         rv = client.get('/kingdom/map', headers=auth_headers_user1)
         assert rv.status_code == 200
         data = rv.get_json()
@@ -122,6 +125,28 @@ class TestKingdomMap:
         rv = client.get('/kingdom/map', headers=auth_headers_user1)
         data = rv.get_json()
         assert data['conquer_cooldown_remaining'] == 0
+
+    def test_land_conquer_protection_remaining(self, client, db, two_users,
+                                               auth_headers_user1):
+        """Each land reports its own conquer protection countdown in seconds."""
+        u1, _ = two_users
+        now = datetime(2026, 4, 17, 12, 0, 0)
+
+        protected = _add_land(db, 0, 0, owner_id=u1.id)
+        protected.conquer_cooldown_until = now + timedelta(seconds=305)
+
+        expired = _add_land(db, 1, 0)
+        expired.conquer_cooldown_until = now - timedelta(seconds=1)
+        db.session.commit()
+
+        with _utcnow_fixed(now):
+            rv = client.get('/kingdom/map', headers=auth_headers_user1)
+
+        assert rv.status_code == 200
+        data = rv.get_json()
+        lands_by_id = {l['id']: l for l in data['lands']}
+        assert lands_by_id[protected.id]['conquer_cooldown_remaining'] == 305
+        assert lands_by_id[expired.id]['conquer_cooldown_remaining'] == 0
 
     def test_land_owner_data(self, client, db, two_users, auth_headers_user1):
         """Owned lands include owner username and owned_since."""
