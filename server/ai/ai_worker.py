@@ -806,15 +806,134 @@ def _conquer_choose_weakest_play_move(move_infos):
     )
 
 
-def _conquer_play_battle_round(base, game, ai_player_id):
-    """Execute conquer battle-round policy including optional auto-gamble flow."""
+def _reload_conquer_game(game_id):
+    """Reload a conquer game row with fresh DB state."""
     from models import Game, db
 
+    db.session.expire_all()
+    return db.session.get(Game, game_id)
+
+
+def _conquer_try_finish_battle_if_ready(base, game_id, ai_player_id):
+    """Resolve battle when state already transitioned to finish_battle."""
+    game = _reload_conquer_game(game_id)
+    if not game or not hasattr(game, 'serialize'):
+        return False
+
+    game_dict = game.serialize()
+    phase = detect_phase(game_dict, ai_player_id)
+    if phase != 'finish_battle':
+        return False
+
+    resp = _ai_post(f'{base}/games/finish_battle', ai_player_id, json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+    })
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"[CONQUER-AI] finish_battle fallback resolved game={game_id}")
+        return True
+
+    logger.warning(f"[CONQUER-AI] finish_battle fallback failed game={game_id}: {result.get('message')}")
+    return False
+
+
+def _conquer_skip_battle_turn_with_fallback(base, game, ai_player_id, auto_enabled):
+    """Try skipping battle turn; recover from stale-state/race failures."""
+    if _exec_skip_battle_turn(base, game.id, ai_player_id):
+        return True
+
+    refreshed = _reload_conquer_game(game.id)
+    if not refreshed or not hasattr(refreshed, 'serialize'):
+        return False
+
+    game_dict = refreshed.serialize()
+    phase = detect_phase(game_dict, ai_player_id)
+
+    if phase == 'finish_battle':
+        return _conquer_try_finish_battle_if_ready(base, game.id, ai_player_id)
+
+    if phase != 'battle_round':
+        logger.info(f"[CONQUER-AI] skip fallback: phase shifted to {phase}, game={game.id}")
+        return True
+
+    move_infos, all_figures = _conquer_collect_move_infos(refreshed, ai_player_id)
+    if not move_infos:
+        logger.warning(f"[CONQUER-AI] skip fallback: still no playable move game={game.id}")
+        return False
+
+    current_round = int(refreshed.battle_round or 0)
+    opponent_round_value = _conquer_opponent_move_value_for_round(
+        refreshed, ai_player_id, current_round, all_figures)
+    opponent_played_block = _conquer_opponent_played_block_for_round(
+        refreshed, ai_player_id, current_round)
+
+    if auto_enabled and opponent_played_block:
+        chosen = _conquer_choose_weakest_play_move(move_infos)
+    else:
+        chosen = _conquer_choose_play_move(move_infos, opponent_round_value)
+
+    if not chosen:
+        logger.warning(f"[CONQUER-AI] skip fallback: no move selected game={game.id}")
+        return False
+
+    move = chosen['move']
+    params = {'battle_move_id': move.id}
+    if chosen.get('call_figure_id'):
+        params['call_figure_id'] = chosen['call_figure_id']
+
+    logger.warning(
+        f"[CONQUER-AI] skip rejected; playing fallback move game={game.id} move={move.id}"
+    )
+    if _exec_play_battle_move(base, game.id, ai_player_id, params):
+        return True
+
+    return _conquer_try_finish_battle_if_ready(base, game.id, ai_player_id)
+
+
+def _conquer_confirm_battle_moves_with_fallback(app, base, game_id, ai_player_id):
+    """Try confirm_battle_moves with fallback buy/combine recovery."""
+    if _exec_confirm_battle_moves(base, game_id, ai_player_id):
+        return True
+
+    game = _reload_conquer_game(game_id)
+    if not game or not hasattr(game, 'serialize'):
+        return False
+
+    game_dict = enrich_figures_with_skills(game.serialize())
+    phase = detect_phase(game_dict, ai_player_id)
+
+    if phase == 'finish_battle':
+        return _conquer_try_finish_battle_if_ready(base, game_id, ai_player_id)
+
+    if phase != 'battle_shop':
+        logger.info(
+            f"[CONQUER-AI] confirm fallback: phase shifted to {phase}, game={game_id}"
+        )
+        return phase in (None, 'battle_round')
+
+    actions = enumerate_actions(game_dict, ai_player_id, 'battle_shop')
+    fallback = next((a for a in actions if a.get('type') == 'buy_battle_move'), None)
+    if not fallback:
+        fallback = next((a for a in actions if a.get('type') == 'combine_battle_moves'), None)
+
+    if not fallback:
+        logger.warning(f"[CONQUER-AI] confirm fallback: no buy/combine option game={game_id}")
+        return False
+
+    logger.info(
+        f"[CONQUER-AI] confirm fallback executing {fallback.get('type')} game={game_id}"
+    )
+    return _execute_action(app, game_id, ai_player_id, fallback)
+
+
+def _conquer_play_battle_round(base, game, ai_player_id):
+    """Execute conquer battle-round policy including optional auto-gamble flow."""
     auto_enabled, threshold = _get_conquer_auto_gamble_settings(game, ai_player_id)
     move_infos, all_figures = _conquer_collect_move_infos(game, ai_player_id)
     if not move_infos:
         logger.info(f"[CONQUER-AI] no unplayed move, skipping turn game={game.id}")
-        return _exec_skip_battle_turn(base, game.id, ai_player_id)
+        return _conquer_skip_battle_turn_with_fallback(base, game, ai_player_id, auto_enabled)
 
     if auto_enabled:
         gamble_target = _conquer_choose_gamble_target(move_infos, threshold)
@@ -826,12 +945,13 @@ def _conquer_play_battle_round(base, game, ai_player_id):
             )
             if _exec_gamble_battle_move(base, game.id, ai_player_id,
                                         {'battle_move_id': gamble_move.id}):
-                db.session.expire_all()
-                game = db.session.get(Game, game.id)
+                refreshed = _reload_conquer_game(game.id)
+                if refreshed:
+                    game = refreshed
                 move_infos, all_figures = _conquer_collect_move_infos(game, ai_player_id)
                 if not move_infos:
                     logger.info(f"[CONQUER-AI] no moves after gamble, skipping game={game.id}")
-                    return _exec_skip_battle_turn(base, game.id, ai_player_id)
+                    return _conquer_skip_battle_turn_with_fallback(base, game, ai_player_id, auto_enabled)
 
         dagger_pair = _conquer_choose_best_dagger_pair([info['move'] for info in move_infos])
         if dagger_pair:
@@ -844,12 +964,13 @@ def _conquer_play_battle_round(base, game, ai_player_id):
                 ai_player_id,
                 {'move_id_a': dagger_pair[0], 'move_id_b': dagger_pair[1]},
             ):
-                db.session.expire_all()
-                game = db.session.get(Game, game.id)
+                refreshed = _reload_conquer_game(game.id)
+                if refreshed:
+                    game = refreshed
                 move_infos, all_figures = _conquer_collect_move_infos(game, ai_player_id)
                 if not move_infos:
                     logger.info(f"[CONQUER-AI] no moves after combine, skipping game={game.id}")
-                    return _exec_skip_battle_turn(base, game.id, ai_player_id)
+                    return _conquer_skip_battle_turn_with_fallback(base, game, ai_player_id, auto_enabled)
 
     current_round = int(game.battle_round or 0)
     opponent_round_value = _conquer_opponent_move_value_for_round(
@@ -864,7 +985,7 @@ def _conquer_play_battle_round(base, game, ai_player_id):
 
     if not chosen:
         logger.info(f"[CONQUER-AI] no playable decision, skipping turn game={game.id}")
-        return _exec_skip_battle_turn(base, game.id, ai_player_id)
+        return _conquer_skip_battle_turn_with_fallback(base, game, ai_player_id, auto_enabled)
 
     move = chosen['move']
     params = {'battle_move_id': move.id}
@@ -877,7 +998,9 @@ def _conquer_play_battle_round(base, game, ai_player_id):
         f"call={chosen.get('call_figure_id')} auto={auto_enabled} threshold={threshold} "
         f"opp_block={opponent_played_block}"
     )
-    return _exec_play_battle_move(base, game.id, ai_player_id, params)
+    if _exec_play_battle_move(base, game.id, ai_player_id, params):
+        return True
+    return _conquer_try_finish_battle_if_ready(base, game.id, ai_player_id)
 
 
 def _conquer_ai_loop(app, game_id, ai_player_id):
@@ -967,7 +1090,9 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                                       {'decision': 'battle'})
 
             elif phase == 'battle_shop':
-                _exec_confirm_battle_moves(base, game_id, ai_player_id)
+                _conquer_confirm_battle_moves_with_fallback(
+                    app, base, game_id, ai_player_id
+                )
 
             elif phase == 'battle_round':
                 # Deterministic policy: optional auto-gamble/auto-combine,
@@ -976,7 +1101,8 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                     from models import Game, db
                     game = db.session.get(Game, game_id)
                     if game:
-                        _conquer_play_battle_round(base, game, ai_player_id)
+                        if not _conquer_play_battle_round(base, game, ai_player_id):
+                            _conquer_try_finish_battle_if_ready(base, game_id, ai_player_id)
 
             elif phase == 'finish_battle':
                 _ai_post(f'{base}/games/finish_battle', ai_player_id, json={
@@ -1011,8 +1137,16 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
     except Exception:
         logger.error(f"[CONQUER-AI] crash in game {game_id}", exc_info=True)
     finally:
+        retrigger = False
         with _active_games_lock:
             _active_games.discard(game_id)
+            if game_id in _pending_retrigger:
+                _pending_retrigger.discard(game_id)
+                retrigger = True
+        if retrigger:
+            logger.info(f"[CONQUER-AI] processing pending retrigger for game {game_id}")
+            with app.app_context():
+                trigger_ai_if_needed(game_id, app=app)
 
 
 def _ai_game_loop(app, game_id, ai_player_id):

@@ -274,6 +274,143 @@ def test_conquer_play_battle_round_no_auto_gamble_keeps_existing_selector(monkey
     assert captured['battle_move_id'] == 202
 
 
+def test_conquer_skip_battle_turn_with_fallback_plays_move_when_skip_rejected(monkeypatch):
+    move = SimpleNamespace(id=404, family_name='Dagger', value=9)
+    game = SimpleNamespace(id=71, battle_round=2)
+    refreshed = SimpleNamespace(
+        id=71,
+        battle_round=2,
+        serialize=lambda: {'id': 71},
+    )
+
+    monkeypatch.setattr(ai_worker, '_exec_skip_battle_turn', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(ai_worker, '_reload_conquer_game', lambda _game_id: refreshed)
+    monkeypatch.setattr(ai_worker, 'detect_phase', lambda *_args, **_kwargs: 'battle_round')
+    monkeypatch.setattr(
+        ai_worker,
+        '_conquer_collect_move_infos',
+        lambda *_args, **_kwargs: ([{'move': move, 'effective_value': 9, 'call_figure_id': None}], []),
+    )
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_move_value_for_round', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_played_block_for_round', lambda *_args, **_kwargs: False)
+
+    captured = {}
+
+    def _capture_play(_base, _game_id, _player_id, params):
+        captured['battle_move_id'] = params.get('battle_move_id')
+        return True
+
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _capture_play)
+
+    result = ai_worker._conquer_skip_battle_turn_with_fallback(
+        'http://example.invalid', game, ai_player_id=999, auto_enabled=False)
+
+    assert result is True
+    assert captured['battle_move_id'] == 404
+
+
+def test_conquer_confirm_battle_moves_with_fallback_executes_buy_action(monkeypatch):
+    refreshed = SimpleNamespace(
+        serialize=lambda: {'id': 72},
+    )
+
+    monkeypatch.setattr(ai_worker, '_exec_confirm_battle_moves', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(ai_worker, '_reload_conquer_game', lambda _game_id: refreshed)
+    monkeypatch.setattr(ai_worker, 'enrich_figures_with_skills', lambda d: d)
+    monkeypatch.setattr(ai_worker, 'detect_phase', lambda *_args, **_kwargs: 'battle_shop')
+
+    fallback_action = {
+        'id': 1,
+        'type': 'buy_battle_move',
+        'description': 'buy fallback move',
+        'params': {
+            'card_id': 1,
+            'family_name': 'Dagger',
+            'card_type': 'main',
+            'suit': 'Hearts',
+            'rank': '7',
+            'value': 7,
+        },
+    }
+    monkeypatch.setattr(ai_worker, 'enumerate_actions', lambda *_args, **_kwargs: [fallback_action])
+
+    captured = {}
+
+    def _capture_execute(_app, _game_id, _ai_player_id, action):
+        captured['type'] = action.get('type')
+        return True
+
+    monkeypatch.setattr(ai_worker, '_execute_action', _capture_execute)
+
+    result = ai_worker._conquer_confirm_battle_moves_with_fallback(
+        app=SimpleNamespace(),
+        base='http://example.invalid',
+        game_id=72,
+        ai_player_id=999,
+    )
+
+    assert result is True
+    assert captured['type'] == 'buy_battle_move'
+
+
+def test_conquer_try_finish_battle_if_ready_posts_finish_request(monkeypatch):
+    refreshed = SimpleNamespace(serialize=lambda: {'id': 73})
+
+    monkeypatch.setattr(ai_worker, '_reload_conquer_game', lambda _game_id: refreshed)
+    monkeypatch.setattr(ai_worker, 'detect_phase', lambda *_args, **_kwargs: 'finish_battle')
+
+    calls = []
+
+    def _fake_post(url, ai_player_id, **kwargs):
+        calls.append((url, ai_player_id, kwargs.get('json')))
+
+        class DummyResponse:
+            def json(self):
+                return {'success': True}
+
+        return DummyResponse()
+
+    monkeypatch.setattr(ai_worker, '_ai_post', _fake_post)
+
+    result = ai_worker._conquer_try_finish_battle_if_ready(
+        base='http://example.invalid',
+        game_id=73,
+        ai_player_id=999,
+    )
+
+    assert result is True
+    assert calls
+    assert calls[0][0].endswith('/games/finish_battle')
+    assert calls[0][2]['game_id'] == 73
+
+
+def test_conquer_ai_loop_processes_pending_retrigger_on_exit(app, db, monkeypatch):
+    game, ai_player = _create_game_with_ai(db)
+    game.mode = 'conquer'
+    db.session.commit()
+
+    monkeypatch.setattr(ai_worker.time, 'sleep', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ai_worker, 'detect_phase', lambda *_args, **_kwargs: None)
+
+    trigger_calls = []
+    monkeypatch.setattr(
+        ai_worker,
+        'trigger_ai_if_needed',
+        lambda game_id, app=None: trigger_calls.append(game_id),
+    )
+
+    with ai_worker._active_games_lock:
+        ai_worker._active_games.add(game.id)
+        ai_worker._pending_retrigger.add(game.id)
+
+    ai_worker._conquer_ai_loop(app, game.id, ai_player.id)
+
+    assert trigger_calls == [game.id]
+    with ai_worker._active_games_lock:
+        assert game.id not in ai_worker._active_games
+        assert game.id not in ai_worker._pending_retrigger
+
+
 def test_trigger_ai_if_needed_skips_without_api_key(app, monkeypatch):
     monkeypatch.setattr(ai_worker.settings, 'AI_ENABLED', True)
     monkeypatch.setattr(ai_worker.settings, 'AI_OPENAI_API_KEY', '')
