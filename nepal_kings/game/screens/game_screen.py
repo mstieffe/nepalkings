@@ -595,6 +595,7 @@ class GameScreen(Screen):
         self._previous_battle_modifiers = []
         self._hovered_battle_modifier = None
         self._just_allowed_spell = False
+        self.state.pending_conquer_prelude_target = None
         
         # Clear queued notifications and stale advance/turn flags so
         # they don't replay after the fold/battle result dialogue.
@@ -603,6 +604,7 @@ class GameScreen(Screen):
             self.state.game.pending_advance_notification = False
             self.state.game.pending_own_advance_notification = False
             self.state.game.pending_opponent_turn_summary = None
+            self.state.game.pending_conquer_prelude_target = False
         
         # ── Reset ALL subscreens ──
         # Each subscreen has a reset_state() that clears its game-specific
@@ -1241,6 +1243,12 @@ class GameScreen(Screen):
                 own_spells = summary.get('own_prelude_spells', [])
                 own_drawn_cards = summary.get('own_drawn_cards', [])
                 opp_spells = summary.get('opponent_prelude_spells', [])
+                own_no_target_spells = summary.get('own_prelude_no_target_spells', [])
+                opponent_no_target_spells = summary.get('opponent_prelude_no_target_spells', [])
+                pending_prelude_target = summary.get('pending_prelude_target')
+
+                self.state.pending_conquer_prelude_target = None
+                self.state.game.pending_conquer_prelude_target = False
 
                 # (1) Intro box — who, what land, invader/defender role
                 tier = self.state.game.land_tier
@@ -1324,6 +1332,54 @@ class GameScreen(Screen):
                         'icon': None if opp_images else 'info',
                         'title': 'Opponent Prelude',
                         'message_after_images': opp_msg_after,
+                    })
+
+                # (4) Explicit no-target notifications
+                for spell_info in own_no_target_spells:
+                    spell_name = spell_info.get('spell_name', 'Prelude spell')
+                    spell_images = self._get_spell_icon_image(spell_name)
+                    self.queue_or_show_notification({
+                        'message': (f"Your prelude spell {spell_name} could not be applied.\n\n"
+                                    f"No valid target was available (checkmate figures are excluded)."),
+                        'actions': ['ok'],
+                        'images': spell_images if spell_images else None,
+                        'icon': None if spell_images else 'info',
+                        'title': 'No Valid Target',
+                    })
+
+                for spell_info in opponent_no_target_spells:
+                    spell_name = spell_info.get('spell_name', 'Prelude spell')
+                    spell_images = self._get_spell_icon_image(spell_name)
+                    self.queue_or_show_notification({
+                        'message': (f"{opponent_name}'s prelude spell {spell_name} had no valid target.\n\n"
+                                    f"Checkmate figures are excluded from targeting."),
+                        'actions': ['ok'],
+                        'images': spell_images if spell_images else None,
+                        'icon': None if spell_images else 'info',
+                        'title': 'Opponent Prelude',
+                    })
+
+                # (5) Pending attacker prelude target selection
+                if pending_prelude_target:
+                    spell_name = pending_prelude_target.get('spell_name', 'Prelude spell')
+                    scope = pending_prelude_target.get('target_scope')
+                    if scope == 'own':
+                        target_hint = "one of your own figures"
+                    else:
+                        target_hint = "one of your opponent's figures"
+
+                    self.state.pending_conquer_prelude_target = pending_prelude_target
+                    self.state.game.pending_conquer_prelude_target = True
+
+                    spell_images = self._get_spell_icon_image(spell_name)
+                    self.queue_or_show_notification({
+                        'message': (f"Your prelude spell {spell_name} needs a target.\n\n"
+                                    f"Select {target_hint} on the field to resolve it.\n\n"
+                                    f"Checkmate figures cannot be targeted."),
+                        'actions': ['got it!'],
+                        'images': spell_images if spell_images else None,
+                        'icon': None if spell_images else 'magic',
+                        'title': 'Select Prelude Target',
                     })
 
                 self.state.game.pending_opponent_turn_summary = None
@@ -1733,6 +1789,15 @@ class GameScreen(Screen):
         if self.state.game.battle_confirmed:
             return
         
+        # Wait for the conquer game-start sequence (intro + prelude spells)
+        # to be shown before prompting the player to advance.
+        if self.state.game.mode == 'conquer' and (
+            self.state.game._game_start_pending
+            or self.state.game.pending_opponent_turn_summary
+            or getattr(self.state.game, 'pending_conquer_prelude_target', False)
+        ):
+            return
+        
         # Force advance when: invader, 1 or fewer turns left, ceasefire not
         # active, no active advance already, and dialogue not already shown.
         # Only the INVADER must advance on their last turn — not the defender.
@@ -1764,12 +1829,8 @@ class GameScreen(Screen):
             
             # Build message depending on game mode
             if self.state.game.mode == 'conquer':
-                tier = self.state.game.land_tier
-                land_label = "Tier {} land".format(tier) if tier else "this land"
-                
-                msg = "Battle for {}!\n\nGo to the field and select a figure to advance toward battle.".format(
-                    land_label)
-                title = "Battle for {}".format(land_label)
+                msg = "Select one of your figures on the field to advance toward battle."
+                title = "Advance your Battle Figure"
             else:
                 msg = "Last turn!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance, or build a figure with Instant Charge to build and advance in one action."
                 title = "Battle Time"
@@ -2037,14 +2098,26 @@ class GameScreen(Screen):
                             images.append(icon)
                             break
 
-            msg = f"You advanced {figure_name} toward battle!"
+            modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+            has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+
+            if has_blitzkrieg:
+                modifier_text, modifier_icons = self._get_battle_modifier_info()
+                images.extend(modifier_icons)
+                msg = (f"You advanced {figure_name} toward battle!\n\n"
+                       f"Blitzkrieg is active — the defender cannot counter-advance.\n"
+                       f"Select which of the defender's figures to face in battle.")
+                title = "Blitzkrieg Advance"
+            else:
+                msg = f"You advanced {figure_name} toward battle!"
+                title = "Advancing!"
 
             self.queue_or_show_notification({
                 'message': msg,
                 'actions': ['ok'],
                 'images': images if images else None,
                 'icon': None if images else "info",
-                'title': "Advancing!",
+                'title': title,
             })
             return
         
@@ -2346,11 +2419,15 @@ class GameScreen(Screen):
 
             is_invader = (self.state.game.advancing_player_id == self.state.game.player_id)
             if is_invader:
+                # Check for Blitzkrieg (invader already selected defender's figure)
+                modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+                has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+
                 # Check for defender counter-spell (enchantment, NOT greed)
                 counter_spells = [
                     s for s in (self.state.game.cached_active_spells or [])
                     if s.get('player_id') != self.state.game.player_id
-                    and s.get('spell_name') not in ('Draw 2 MainCards', 'Fill 10', 'Dump Cards')
+                    and s.get('spell_name') not in ('Draw 2 MainCards', 'Fill up to 10', 'Dump Cards')
                 ]
 
                 if counter_spells:
@@ -2372,8 +2449,9 @@ class GameScreen(Screen):
                     })
 
                     # (8) Defender used last turn for spell — did not counter-advance
-                    # Invader must select defender's battle figure
-                    if not self.state.game.defending_figure_id:
+                    # Invader must select defender's battle figure (skip if
+                    # Blitzkrieg already handled this via check_defender_selection_needed)
+                    if not self.state.game.defending_figure_id and not has_blitzkrieg:
                         advancing_figure_name = "your figure"
                         advancing_icons = []
                         field_screen = self.subscreens.get('field')
@@ -2397,9 +2475,10 @@ class GameScreen(Screen):
                             'icon': None if sel_images else 'info',
                             'title': "Select Opponent's Defender",
                         })
-                else:
+                elif not has_blitzkrieg:
                     # (7) No counter spell — defender counter-advanced
-                    # Show the defending figure
+                    # Show the defending figure (skip if Blitzkrieg — invader
+                    # already chose the figure via check_defender_selection_needed)
                     images = []
                     field_screen = self.subscreens.get('field')
                     defending_fig_name = "the defender's figure"
@@ -4188,25 +4267,37 @@ class GameScreen(Screen):
             self.state.game.forced_advance_dialogue_shown and not self.dialogue_box and
             not self.state.game.advancing_figure_id):
             self._draw_forced_advance_prompt()
+
+        # Modal guard: do not render persistent top prompts while a subscreen
+        # dialogue is open (e.g. battle result dialogue) or during game-over
+        # resolution.
+        subscreen = self.subscreens.get(self.state.subscreen) if self.state.subscreen in self.subscreens else None
+        subscreen_dialogue_open = bool(
+            subscreen and hasattr(subscreen, 'dialogue_box') and getattr(subscreen, 'dialogue_box')
+        )
+        in_result_phase = bool(getattr(self.state.game, 'game_over', False) or getattr(self.state.game, 'pending_game_over', False))
         
         # Draw own advance waiting prompt (advancing player waiting for opponent's reaction)
         if (self.state.game and self.state.game.advancing_figure_id and
             self.state.game.advancing_player_id == self.state.game.player_id and
-            not self.state.game.turn and not self.state.game.defending_figure_id):
+            not self.state.game.turn and not self.state.game.defending_figure_id and
+            not subscreen_dialogue_open and not in_result_phase):
             self._draw_own_advance_waiting_prompt()
         
         # Draw opponent advance prompt (opponent advanced, your turn to respond: counter-advance or spend turn)
         if (self.state.game and self.state.game.advancing_figure_id and 
             self.state.game.advancing_player_id != self.state.game.player_id and
             self.state.game.turn and not self.state.game.pending_forced_advance and
-            not self.state.game.defending_figure_id):
+            not self.state.game.defending_figure_id and
+            not subscreen_dialogue_open and not in_result_phase):
             self._draw_opponent_advance_prompt()
         
         # Draw waiting for defender pick prompt
         if (self.state.game and self.state.game.advancing_figure_id and
             self.state.game.advancing_player_id != self.state.game.player_id and
             not self.state.game.turn and not self.state.game.defending_figure_id and
-            self.state.game.waiting_for_defender_pick_shown):
+            self.state.game.waiting_for_defender_pick_shown and
+            not subscreen_dialogue_open and not in_result_phase):
             self._draw_waiting_for_defender_pick_prompt()
         
         # Draw defender selection prompt for advancing player
@@ -4254,6 +4345,10 @@ class GameScreen(Screen):
 
     def update(self, events):
         """Update the game screen and all relevant components."""
+        if (self.state.game and
+            getattr(self.state.game, 'pending_conquer_prelude_target', False)):
+            self.state.subscreen = 'field'
+
         # During defender selection, block subscreen changes from button clicks
         # super().update() calls button.update() which can change state.subscreen
         field_screen = self.subscreens.get('field')
@@ -4331,6 +4426,9 @@ class GameScreen(Screen):
                         field_screen.defender_selection_mode = True
                         field_screen._update_defender_selectable()
                     self.state.game.defender_selection_dialogue_shown = True
+                elif (response == 'got it!' and self.state.game and
+                      getattr(self.state.game, 'pending_conquer_prelude_target', False)):
+                    self.state.subscreen = 'field'
                 # Handle battle ready 'to battle!' response — submit battle decision
                 elif response == 'to battle!' and self._can_submit_battle_decision():
                     self.dialogue_box = None

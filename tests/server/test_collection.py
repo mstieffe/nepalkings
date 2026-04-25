@@ -4,6 +4,7 @@
 
 import pytest
 from models import db as _db, User, CollectionCard
+import server_settings as settings
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -325,9 +326,9 @@ class TestRegistrationStarterPacks:
 
         user = User.query.filter_by(username='newplayer').first()
         assert user is not None
-        assert user.booster_packs == 3   # STARTER_BOOSTER_PACKS
-        assert user.booster_packs_side == 2  # STARTER_BOOSTER_PACKS_SIDE
+        assert user.booster_packs == settings.STARTER_BOOSTER_PACKS
+        assert user.booster_packs_side == settings.STARTER_BOOSTER_PACKS_SIDE
 
         # Also returned in serialized user
-        assert data['user']['booster_packs'] == 3
-        assert data['user']['booster_packs_side'] == 2
+        assert data['user']['booster_packs'] == settings.STARTER_BOOSTER_PACKS
+        assert data['user']['booster_packs_side'] == settings.STARTER_BOOSTER_PACKS_SIDE

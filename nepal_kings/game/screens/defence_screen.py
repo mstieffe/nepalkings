@@ -50,7 +50,7 @@ def _draw_panel(window, rect, corner_r=None):
 
 _SPELL_CARD_COST = {
     'Draw 2 MainCards': ('8', 1, None),
-    'Fill 10':          ('10', 1, None),
+    'Fill up to 10':    ('10', 1, None),
     'Dump Cards':       ('7', 4, None),
     'Forced Deal':      ('4', 2, None),
     'Poison':           ('3', 2, 'black'),
@@ -73,6 +73,10 @@ _DEFENCE_COUNTER_SPELLS = [
 
 _RED_SUITS = {'Hearts', 'Diamonds'}
 _BLACK_SUITS = {'Clubs', 'Spades'}
+
+_AUTO_GAMBLE_THRESHOLD_DEFAULT = 10
+_AUTO_GAMBLE_THRESHOLD_MIN = 1
+_AUTO_GAMBLE_THRESHOLD_MAX = 20
 
 
 class DefenceScreen(MenuScreenMixin, Screen):
@@ -117,6 +121,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._btn_build = None
         self._btn_buy_move = None
         self._btn_auto_gamble = None
+        self._btn_auto_gamble_dec = None
+        self._btn_auto_gamble_inc = None
+        self._auto_gamble_threshold_rect = None
         self._btn_close_rect = None
         self._res_rect = None
         self._res_castle_rect = None
@@ -388,8 +395,24 @@ class DefenceScreen(MenuScreenMixin, Screen):
         ag_btn_h = int(0.035 * _SH)
         agw = int(0.10 * _SW)
         ag_x = right_x + slot_row_w + int(0.035 * _SW)
-        ag_y = content_top + (slot_row_h - ag_btn_h) // 2
+        ag_y = content_top + (slot_row_h - ag_btn_h) // 2 - int(0.010 * _SH)
+        ag_y = max(content_top, ag_y)
         self._btn_auto_gamble = pygame.Rect(ag_x, ag_y, agw, ag_btn_h)
+
+        # Threshold controls ("Gamble below")
+        ag_ctrl_w = int(0.024 * _SW)
+        ag_ctrl_gap = int(0.004 * _SW)
+        ag_label_gap = self._res_font.get_height() + int(0.008 * _SH)
+        ag_ctrl_y = ag_y + ag_btn_h + ag_label_gap
+        self._btn_auto_gamble_dec = pygame.Rect(ag_x, ag_ctrl_y, ag_ctrl_w, ag_btn_h)
+        self._btn_auto_gamble_inc = pygame.Rect(ag_x + agw - ag_ctrl_w, ag_ctrl_y,
+                                                ag_ctrl_w, ag_btn_h)
+        self._auto_gamble_threshold_rect = pygame.Rect(
+            self._btn_auto_gamble_dec.right + ag_ctrl_gap,
+            ag_ctrl_y,
+            max(1, agw - (2 * ag_ctrl_w) - (2 * ag_ctrl_gap)),
+            ag_btn_h,
+        )
 
         my = content_top + slot_row_h + pad
 
@@ -634,6 +657,55 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._config = data['config']
         except Exception as e:
             logger.error(f'Set auto gamble error: {e}')
+
+    def _get_auto_gamble_threshold(self):
+        raw = (_AUTO_GAMBLE_THRESHOLD_DEFAULT if not self._config
+               else self._config.get('auto_gamble_threshold', _AUTO_GAMBLE_THRESHOLD_DEFAULT))
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = _AUTO_GAMBLE_THRESHOLD_DEFAULT
+
+        if value < _AUTO_GAMBLE_THRESHOLD_MIN:
+            return _AUTO_GAMBLE_THRESHOLD_MIN
+        if value > _AUTO_GAMBLE_THRESHOLD_MAX:
+            return _AUTO_GAMBLE_THRESHOLD_MAX
+        return value
+
+    def _server_set_auto_gamble_threshold(self, threshold):
+        threshold = max(_AUTO_GAMBLE_THRESHOLD_MIN,
+                        min(_AUTO_GAMBLE_THRESHOLD_MAX, int(threshold)))
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/defence/set_auto_gamble_threshold',
+                json={'land_id': self._land_id, 'auto_gamble_threshold': threshold},
+                timeout=10,
+            )
+            data = None
+            try:
+                data = resp.json()
+            except Exception:
+                data = None
+
+            if not isinstance(data, dict):
+                body = (getattr(resp, 'text', '') or '').strip().replace('\n', ' ')
+                logger.error(
+                    'Set auto gamble threshold failed: unexpected response '
+                    f'status={getattr(resp, "status_code", "?")} body={body[:200]}'
+                )
+                self.state.set_msg('Could not update auto-gamble threshold')
+                return False
+
+            if data.get('success'):
+                self._config = data['config']
+                return True
+
+            self.state.set_msg(data.get('message', 'Could not update auto-gamble threshold'))
+            return False
+        except Exception as e:
+            logger.error(f'Set auto gamble threshold error: {e}')
+            self.state.set_msg('Could not update auto-gamble threshold')
+            return False
 
     # ── Collection helpers ─────────────────────────────────────────
 
@@ -1305,6 +1377,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _draw_auto_gamble(self):
         enabled = self._config.get('auto_gamble', False)
+        threshold = self._get_auto_gamble_threshold()
         label = 'Auto-Gamble: ON' if enabled else 'Auto-Gamble: OFF'
         clr = (100, 220, 100) if enabled else (130, 130, 130)
 
@@ -1315,6 +1388,37 @@ class DefenceScreen(MenuScreenMixin, Screen):
         pygame.draw.rect(self.window, (70, 120, 70), rect, 1, border_radius=2)
         txt = self._small_font.render(label, True, clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
+
+        if (not self._btn_auto_gamble_dec or not self._btn_auto_gamble_inc
+                or not self._auto_gamble_threshold_rect):
+            return
+
+        mx, my_mouse = pygame.mouse.get_pos()
+        dec_rect = self._btn_auto_gamble_dec
+        inc_rect = self._btn_auto_gamble_inc
+        val_rect = self._auto_gamble_threshold_rect
+
+        label_clr = (180, 180, 120) if enabled else (120, 120, 120)
+        threshold_label = self._res_font.render(
+            f'Gamble below: {threshold}', True, label_clr)
+        self.window.blit(threshold_label, (
+            rect.x + (rect.w - threshold_label.get_width()) // 2,
+            rect.bottom + int(0.003 * _SH),
+        ))
+
+        for btn_rect, symbol in ((dec_rect, '-'), (inc_rect, '+')):
+            hovered = btn_rect.collidepoint(mx, my_mouse)
+            bg = (65, 65, 72) if hovered else (45, 45, 52)
+            border = (120, 120, 130) if hovered else (90, 90, 100)
+            pygame.draw.rect(self.window, bg, btn_rect, border_radius=3)
+            pygame.draw.rect(self.window, border, btn_rect, 1, border_radius=3)
+            sym = self._value_font.render(symbol, True, (200, 200, 210))
+            self.window.blit(sym, sym.get_rect(center=btn_rect.center))
+
+        pygame.draw.rect(self.window, (35, 35, 40), val_rect, border_radius=3)
+        pygame.draw.rect(self.window, (90, 90, 100), val_rect, 1, border_radius=3)
+        val_txt = self._value_font.render(str(threshold), True, (210, 210, 210))
+        self.window.blit(val_txt, val_txt.get_rect(center=val_rect.center))
 
     def _draw_resources(self):
         """Draw a combined resource panel below the field compartments."""
@@ -1727,16 +1831,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
         )
         has_moves = len(moves) == 3
 
-        # Defence requires exactly one counter action (battle figure XOR counter spell),
-        # or auto-gamble as a fallback.
+        # Defence requires exactly one counter strategy:
+        # battle figure XOR counter spell.
         has_battle_fig = self._config.get('battle_figure_id') is not None
         has_counter_spell = self._config.get('counter_spell_name') is not None
-        has_auto_gamble = self._config.get('auto_gamble', False)
-        # Mutual exclusivity: cannot have both battle figure and counter spell
-        if has_battle_fig and has_counter_spell:
-            return False
-        has_strategy = has_battle_fig or has_counter_spell or has_auto_gamble
-        return has_valid_figure and has_moves and has_strategy
+        has_exactly_one_strategy = (has_battle_fig != has_counter_spell)
+        return has_valid_figure and has_moves and has_exactly_one_strategy
 
     def _get_defence_problems(self):
         """Return a list of human-readable problems preventing save."""
@@ -1770,12 +1870,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         has_battle_fig = self._config.get('battle_figure_id') is not None
         has_counter_spell = self._config.get('counter_spell_name') is not None
-        has_auto_gamble = self._config.get('auto_gamble', False)
 
         if has_battle_fig and has_counter_spell:
-            problems.append('Battle figure and counter spell cannot both be set. Remove one.')
-        elif not has_battle_fig and not has_counter_spell and not has_auto_gamble:
-            problems.append('Select a battle figure, a counter spell, or enable auto-gamble.')
+            problems.append('Select exactly one strategy: battle figure or counter spell (not both).')
+        elif not has_battle_fig and not has_counter_spell:
+            problems.append('Select exactly one strategy: battle figure or counter spell.')
 
         return problems
 
@@ -2077,6 +2176,26 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 if ((self._btn_counter_edit and self._btn_counter_edit.collidepoint(pos))
                         or (self._counter_spell_rect and self._counter_spell_rect.collidepoint(pos))):
                     self._open_counter_spell_screen()
+                    continue
+
+                # Threshold controls first so they keep working even if layout
+                # changes make them overlap with the auto-gamble toggle rect.
+                if self._btn_auto_gamble_dec and self._btn_auto_gamble_dec.collidepoint(pos):
+                    current = self._get_auto_gamble_threshold()
+                    target = max(_AUTO_GAMBLE_THRESHOLD_MIN, current - 1)
+                    if target != current:
+                        self._config['auto_gamble_threshold'] = target
+                    if not self._server_set_auto_gamble_threshold(target):
+                        self._config['auto_gamble_threshold'] = current
+                    continue
+
+                if self._btn_auto_gamble_inc and self._btn_auto_gamble_inc.collidepoint(pos):
+                    current = self._get_auto_gamble_threshold()
+                    target = min(_AUTO_GAMBLE_THRESHOLD_MAX, current + 1)
+                    if target != current:
+                        self._config['auto_gamble_threshold'] = target
+                    if not self._server_set_auto_gamble_threshold(target):
+                        self._config['auto_gamble_threshold'] = current
                     continue
 
                 # Auto-gamble toggle

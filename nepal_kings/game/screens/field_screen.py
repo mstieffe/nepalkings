@@ -658,6 +658,15 @@ class FieldScreen(SubScreen):
                                         )
                                     self.state.set_msg(f"Selected {selected_name} as opponent's defender.")
                                     self.game.pending_defender_selection = False
+                                    # Defender was selected manually. Re-arm battle-ready
+                                    # transition in case a stale guard flag was left set.
+                                    if (self.game.advancing_figure_id and
+                                            self.game.defending_figure_id and
+                                            not self.game.battle_confirmed and
+                                            not self.game.fold_outcome):
+                                        self.game.waiting_for_battle_decision = False
+                                        self.game.battle_ready_shown = False
+                                        self.game.pending_battle_ready = True
                                     logger.debug(f"[SELECT_DEFENDER] Success: defender={target_figure.name} (id={target_figure.id}), "
                                           f"pending_battle_ready={self.game.pending_battle_ready}, "
                                           f"battle_ready_shown={self.game.battle_ready_shown}")
@@ -822,7 +831,9 @@ class FieldScreen(SubScreen):
                 return
         
         # If in target selection mode, only allow figure selection
-        if hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast:
+        pending_spell_cast = hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast
+        pending_prelude_target = getattr(self.state, 'pending_conquer_prelude_target', None)
+        if pending_spell_cast or pending_prelude_target:
             self._handle_target_selection(events)
             return
         
@@ -1134,7 +1145,12 @@ class FieldScreen(SubScreen):
         # Add additional functionality for interacting with the figure
     
     def _handle_target_selection(self, events):
-        """Handle events when in target selection mode for spell casting."""
+        """Handle events when in target selection mode."""
+        pending_spell_cast = getattr(self.state, 'pending_spell_cast', None)
+        pending_prelude_target = getattr(self.state, 'pending_conquer_prelude_target', None)
+        if not pending_spell_cast and not pending_prelude_target:
+            return
+
         for event in events:
             if event.type == MOUSEBUTTONDOWN:
                 # Check which figure was clicked
@@ -1146,8 +1162,6 @@ class FieldScreen(SubScreen):
                 
                 if clicked_icon:
                     # Check if target figure has checkmate (immune to all spells)
-                    pending = self.state.pending_spell_cast
-                    selected_spell = pending['spell']
                     target_figure = clicked_icon.figure
                     
                     if hasattr(target_figure, 'checkmate') and target_figure.checkmate:
@@ -1159,21 +1173,66 @@ class FieldScreen(SubScreen):
                             auto_close_delay=2000
                         )
                         return
+
+                    if pending_spell_cast:
+                        # Apply cast-screen spell to the selected figure
+                        self._apply_spell_to_target(target_figure)
+                        return
+
+                    # Conquer startup prelude targeting
+                    target_scope = pending_prelude_target.get('target_scope')
+                    if target_scope == 'own' and target_figure.player_id != self.game.player_id:
+                        self.make_dialogue_box(
+                            message="Select one of your own figures for this prelude spell.",
+                            actions=[],
+                            icon="error",
+                            title="Invalid Target",
+                            auto_close_delay=2000
+                        )
+                        return
+                    if target_scope == 'opponent' and target_figure.player_id == self.game.player_id:
+                        self.make_dialogue_box(
+                            message="Select one of your opponent's figures for this prelude spell.",
+                            actions=[],
+                            icon="error",
+                            title="Invalid Target",
+                            auto_close_delay=2000
+                        )
+                        return
+
+                    valid_target_ids = set(pending_prelude_target.get('valid_target_ids', []))
+                    if valid_target_ids and target_figure.id not in valid_target_ids:
+                        self.make_dialogue_box(
+                            message="That figure is not a valid target for this prelude spell.",
+                            actions=[],
+                            icon="error",
+                            title="Invalid Target",
+                            auto_close_delay=2000
+                        )
+                        return
                     
-                    # Apply spell to the selected figure
-                    self._apply_spell_to_target(target_figure)
+                    self._apply_conquer_prelude_to_target(target_figure)
                     return
             
             elif event.type == KEYDOWN:
                 # Allow ESC to cancel target selection
                 if event.key == K_ESCAPE:
-                    self.state.pending_spell_cast = None
-                    self.make_dialogue_box(
-                        message="Spell casting cancelled.",
-                        actions=['ok'],
-                        icon="error",
-                        title="Cancelled"
-                    )
+                    if pending_spell_cast:
+                        self.state.pending_spell_cast = None
+                        self.make_dialogue_box(
+                            message="Spell casting cancelled.",
+                            actions=['ok'],
+                            icon="error",
+                            title="Cancelled"
+                        )
+                    else:
+                        self.make_dialogue_box(
+                            message="Prelude target selection is required before you can continue.",
+                            actions=[],
+                            icon="info",
+                            title="Target Required",
+                            auto_close_delay=2000
+                        )
                     return
     
     def _handle_defender_selection(self, events):
@@ -1499,6 +1558,116 @@ class FieldScreen(SubScreen):
         
         # Clear pending spell cast
         self.state.pending_spell_cast = None
+
+    def _apply_conquer_prelude_to_target(self, target_figure):
+        """Resolve pending conquer prelude target selection."""
+        if getattr(self.game, 'game_over', False):
+            return
+        if self.game.action_in_progress:
+            return
+
+        pending = getattr(self.state, 'pending_conquer_prelude_target', None)
+        if not pending:
+            return
+
+        from utils.game_service import resolve_conquer_prelude_target
+
+        spell_name = pending.get('spell_name', 'Prelude spell')
+        spell_id = pending.get('spell_id')
+        if spell_id is None:
+            self.make_dialogue_box(
+                message="Missing prelude spell context. Please wait for sync and try again.",
+                actions=['ok'],
+                icon="error",
+                title="Prelude Failed"
+            )
+            return
+
+        is_opponent_figure = target_figure.player_id != self.game.player_id
+        player_has_all_seeing_eye = self.game.has_active_all_seeing_eye()
+        is_maharaja = target_figure.name in ['Himalaya Maharaja', 'Djungle Maharaja']
+        if 'Explosion' in spell_name:
+            show_figure_visible = True
+        elif is_opponent_figure:
+            show_figure_visible = is_maharaja or player_has_all_seeing_eye
+        else:
+            show_figure_visible = True
+        if 'Explosion' in spell_name or show_figure_visible:
+            figure_name_display = target_figure.name
+        else:
+            figure_name_display = "an opponent figure"
+
+        self.game.lock_actions()
+        try:
+            result = resolve_conquer_prelude_target(
+                game_id=self.game.game_id,
+                spell_id=spell_id,
+                target_figure_id=target_figure.id,
+            )
+        except Exception:
+            self.game.unlock_actions()
+            raise
+
+        if result.get('success'):
+            if result.get('game'):
+                self.game.update_from_dict(result['game'])
+
+            try:
+                self.game.cached_figures_data[self.game.player_id] = fetch_figures(self.game.player_id)
+                if self.game.opponent_player:
+                    opponent_id = self.game.opponent_player['id']
+                    self.game.cached_figures_data[opponent_id] = fetch_figures(opponent_id)
+                self.game._figures_data_version += 1
+            except Exception:
+                pass
+
+            self.load_figures()
+            self.state.pending_conquer_prelude_target = None
+            self.game.pending_conquer_prelude_target = False
+
+            spell_effect = result.get('spell_effect') or {}
+            effect_text = spell_effect.get('effect')
+            success_msg = effect_text or f"{spell_name} was applied to {figure_name_display}."
+            title = "Prelude Spell"
+            if 'Explosion' in spell_name and 'destroyed' in success_msg.lower():
+                title = "Figure Destroyed"
+
+            self.make_dialogue_box(
+                message=success_msg,
+                actions=['ok'],
+                icon="magic",
+                title=title
+            )
+
+            game_over_info = spell_effect.get('game_over')
+            if game_over_info:
+                self.game.pending_game_over = game_over_info
+            return
+
+        if result.get('game'):
+            self.game.update_from_dict(result['game'])
+        else:
+            self.game.unlock_actions()
+
+        reason = result.get('reason')
+        if reason == 'no_valid_target':
+            self.state.pending_conquer_prelude_target = None
+            self.game.pending_conquer_prelude_target = False
+            self.make_dialogue_box(
+                message=result.get('message', f"No valid target is available for {spell_name}."),
+                actions=['ok'],
+                icon="info",
+                title="No Valid Target"
+            )
+            return
+
+        error_msg = result.get('message', 'Unknown error')
+        self.make_dialogue_box(
+            message=f"Failed to resolve prelude spell: {error_msg}",
+            actions=['ok'],
+            icon="error",
+            title="Prelude Failed"
+        )
     
     def _apply_enchantment_to_figure(self, figure, spell):
         """
@@ -1666,16 +1835,24 @@ class FieldScreen(SubScreen):
 
     def _draw_target_selection_prompt(self):
         """Draw a prominent prompt asking the player to select a target figure."""
-        pending = self.state.pending_spell_cast
-        spell_name = pending['spell'].name if 'spell' in pending else 'Spell'
+        pending_spell_cast = getattr(self.state, 'pending_spell_cast', None)
+        pending_prelude_target = getattr(self.state, 'pending_conquer_prelude_target', None)
+
+        if pending_spell_cast:
+            spell_name = pending_spell_cast['spell'].name if 'spell' in pending_spell_cast else 'Spell'
+            prompt_text = f"SELECT A TARGET FOR {spell_name.upper()}"
+            cancel_text = "Press ESC to cancel"
+        elif pending_prelude_target:
+            spell_name = pending_prelude_target.get('spell_name', 'Prelude Spell')
+            prompt_text = f"SELECT A PRELUDE TARGET FOR {spell_name.upper()}"
+            cancel_text = "Checkmate figures cannot be targeted"
+        else:
+            return
         
-        # Create prompt text
-        prompt_text = f"SELECT A TARGET FOR {spell_name.upper()}"
         prompt_surface = self.target_prompt_font.render(prompt_text, True, (255, 50, 50))  # Bright red
         
         # Create cancel instruction text
         cancel_font = settings.get_font(int(settings.FIELD_TITLE_FONT_SIZE * 0.9))
-        cancel_text = "Press ESC to cancel"
         cancel_surface = cancel_font.render(cancel_text, True, (255, 255, 150))  # Light yellow
         
         # Create background box for better visibility
@@ -2063,7 +2240,8 @@ class FieldScreen(SubScreen):
         # Note: Figure detail box is drawn in game_screen.py to ensure it's on top of hand cards
         
         # Draw target selection prompt if in target selection mode
-        if hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast:
+        if ((hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast)
+            or getattr(self.state, 'pending_conquer_prelude_target', None)):
             self._draw_target_selection_prompt()
         
         # Draw defender selection prompt if in defender selection mode

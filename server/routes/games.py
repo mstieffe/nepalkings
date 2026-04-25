@@ -18,6 +18,14 @@ games = Blueprint('games', __name__)
 
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 
+_CONQUER_PRELUDE_SPELLS = frozenset({
+    'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
+    'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
+    'Peasant War', 'Civil War', 'Blitzkrieg',
+})
+
+_TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
+
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -99,6 +107,88 @@ def _guard_battle_active(game, *, player_id=None, action_label='action'):
         }), 400
 
     return None
+
+
+def _find_pending_conquer_prelude_spell(game, player_id):
+    if not game or game.mode != 'conquer' or game.invader_player_id != player_id:
+        return None
+
+    candidates = ActiveSpell.query.filter_by(
+        game_id=game.id,
+        player_id=player_id,
+        is_active=False,
+    ).all()
+
+    for spell in candidates:
+        effect_data = spell.effect_data or {}
+        if isinstance(effect_data, dict) and effect_data.get('prelude_pending_target'):
+            if spell.spell_name in _TARGETED_PRELUDE_SPELLS:
+                valid_targets = _list_valid_conquer_prelude_targets(
+                    game, player_id, spell.spell_name
+                )
+                if not valid_targets:
+                    effect_data = dict(effect_data)
+                    effect_data['prelude_status'] = 'no_valid_target'
+                    effect_data.pop('prelude_pending_target', None)
+                    effect_data.pop('valid_target_ids', None)
+                    spell.effect_data = effect_data
+                    spell.is_active = False
+                    spell.is_pending = False
+                    db.session.commit()
+                    continue
+            return spell
+    return None
+
+
+def _guard_pending_conquer_prelude_target(game, *, player_id=None, action_label='action'):
+    """Block invader actions until pending conquer prelude target is resolved."""
+    if not game or player_id is None:
+        return None
+
+    pending_spell = _find_pending_conquer_prelude_spell(game, player_id)
+    if not pending_spell:
+        return None
+
+    logger.info(
+        f"[PRELUDE_LOCK] blocked action={action_label} route={request.path} "
+        f"game={getattr(game, 'id', None)} player={player_id} "
+        f"spell_id={pending_spell.id} spell_name={pending_spell.spell_name}"
+    )
+    return jsonify({
+        'success': False,
+        'message': f"Resolve your prelude spell target for {pending_spell.spell_name} first.",
+        'reason': 'pending_prelude_target',
+        'pending_spell_id': pending_spell.id,
+        'pending_spell_name': pending_spell.spell_name,
+    }), 400
+
+
+def _get_conquer_prelude_target_scope(spell_name):
+    if spell_name in ('Poison', 'Explosion'):
+        return 'opponent'
+    if spell_name == 'Health Boost':
+        return 'own'
+    return None
+
+
+def _list_valid_conquer_prelude_targets(game, caster_player_id, spell_name):
+    scope = _get_conquer_prelude_target_scope(spell_name)
+    if not scope:
+        return []
+
+    if scope == 'opponent':
+        candidate_player_ids = [p.id for p in game.players if p.id != caster_player_id]
+    else:
+        candidate_player_ids = [caster_player_id]
+
+    if not candidate_player_ids:
+        return []
+
+    targets = Figure.query.filter(
+        Figure.game_id == game.id,
+        Figure.player_id.in_(candidate_player_ids),
+    ).all()
+    return [f for f in targets if not getattr(f, 'checkmate', False)]
 
 
 def _guard_must_advance(game, player_id, *, action_label='action'):
@@ -698,14 +788,24 @@ def _get_opponent_turn_summary(game, current_player_id):
 
         # ── Conquer mode: no Maharaja — include active prelude spells ──
         if game.mode == 'conquer':
-            # Gather prelude spells for both players
-            prelude_spells = ActiveSpell.query.filter_by(
-                game_id=game.id, is_active=True
-            ).all()
+            # Gather prelude spells for both players. Newer records include
+            # effect_data.prelude_origin; keep a fallback for older games.
+            all_spells = ActiveSpell.query.filter_by(game_id=game.id).all()
+            prelude_spells = [
+                sp for sp in all_spells
+                if isinstance(sp.effect_data, dict) and sp.effect_data.get('prelude_origin')
+            ]
+            if not prelude_spells:
+                prelude_spells = [
+                    sp for sp in all_spells
+                    if sp.cast_round == 1 and sp.spell_name in _CONQUER_PRELUDE_SPELLS
+                ]
+
+            active_prelude_spells = [sp for sp in prelude_spells if sp.is_active]
 
             own_spells = []
             opponent_spells = []
-            for sp in prelude_spells:
+            for sp in active_prelude_spells:
                 spell_info = {
                     'spell_name': sp.spell_name,
                     'spell_type': sp.spell_type,
@@ -717,17 +817,60 @@ def _get_opponent_turn_summary(game, current_player_id):
                     opponent_spells.append(spell_info)
 
             # Include drawn cards for the current player's greed spells
+            # Only include cards that were actually drawn by the spell
+            # (stored in effect_data.drawn_card_ids during prelude execution).
+            drawn_card_ids = set()
+            for sp in prelude_spells:
+                if sp.player_id == current_player_id and sp.effect_data:
+                    ids = sp.effect_data.get('drawn_card_ids', [])
+                    drawn_card_ids.update(ids)
+
             own_drawn_cards = []
-            own_main_cards = MainCard.query.filter_by(
-                game_id=game.id, player_id=current_player_id,
-                part_of_figure=False,
-            ).all()
-            for mc in own_main_cards:
-                own_drawn_cards.append({
-                    'id': mc.id, 'rank': mc.rank.value,
-                    'suit': mc.suit.value, 'value': mc.value,
-                    'type': 'main',
-                })
+            if drawn_card_ids:
+                own_main_cards = MainCard.query.filter(
+                    MainCard.id.in_(drawn_card_ids)
+                ).all()
+                for mc in own_main_cards:
+                    own_drawn_cards.append({
+                        'id': mc.id, 'rank': mc.rank.value,
+                        'suit': mc.suit.value, 'value': mc.value,
+                        'type': 'main',
+                    })
+
+            own_no_target_spells = []
+            opponent_no_target_spells = []
+            pending_prelude_target = None
+
+            for sp in prelude_spells:
+                effect_data = sp.effect_data if isinstance(sp.effect_data, dict) else {}
+                status = effect_data.get('prelude_status')
+
+                if status == 'no_valid_target':
+                    payload = {'spell_name': sp.spell_name}
+                    if sp.player_id == current_player_id:
+                        own_no_target_spells.append(payload)
+                    else:
+                        opponent_no_target_spells.append(payload)
+
+                if (
+                    sp.player_id == current_player_id
+                    and sp.spell_name in _TARGETED_PRELUDE_SPELLS
+                    and effect_data.get('prelude_pending_target')
+                ):
+                    valid_targets = _list_valid_conquer_prelude_targets(
+                        game, current_player_id, sp.spell_name
+                    )
+                    if not valid_targets:
+                        own_no_target_spells.append({'spell_name': sp.spell_name})
+                        continue
+                    pending_prelude_target = {
+                        'spell_id': sp.id,
+                        'spell_name': sp.spell_name,
+                        'spell_type': sp.spell_type,
+                        'target_scope': _get_conquer_prelude_target_scope(sp.spell_name),
+                        'valid_target_ids': [f.id for f in valid_targets],
+                    }
+                    break
 
             result = {
                 'action': 'game_start',
@@ -738,6 +881,9 @@ def _get_opponent_turn_summary(game, current_player_id):
                 'own_prelude_spells': own_spells,
                 'opponent_prelude_spells': opponent_spells,
                 'own_drawn_cards': own_drawn_cards,
+                'pending_prelude_target': pending_prelude_target,
+                'own_prelude_no_target_spells': own_no_target_spells,
+                'opponent_prelude_no_target_spells': opponent_no_target_spells,
                 'battle_modifier': game.battle_modifier,
             }
             logger.debug(f"[GAME_START_CHECK] Returning conquer game_start for player {current_player_id}")
@@ -1513,6 +1659,12 @@ def change_cards():
             if battle_err:
                 return battle_err
 
+            prelude_err = _guard_pending_conquer_prelude_target(
+                game, player_id=player_id, action_label='change_cards'
+            )
+            if prelude_err:
+                return prelude_err
+
             must_adv = _guard_must_advance(game, player_id, action_label='change_cards')
             if must_adv:
                 return must_adv
@@ -1688,6 +1840,12 @@ def advance_figure():
         if battle_err:
             return battle_err
 
+        prelude_err = _guard_pending_conquer_prelude_target(
+            game, player_id=player_id, action_label='advance_figure'
+        )
+        if prelude_err:
+            return prelude_err
+
         # Clear stale fold state from a previous battle phase (fold_outcome
         # lingers for client polling; safe to clear on a new advance)
         if game.fold_outcome:
@@ -1834,12 +1992,19 @@ def advance_figure():
             # Don't flip turn — player needs to pick a second figure
             logger.info(f"[ADVANCE] Civil War — waiting for second figure pick (color: {civil_war_color})")
         elif has_blitzkrieg and not is_counter_advance:
-            # Blitzkrieg: give defender their last turn (build, etc.) before
-            # the invader selects which defender figure to fight.
-            # Counter-advance is blocked separately, so the defender can only
-            # do non-advance actions on this turn.
-            logger.info(f"[ADVANCE] Blitzkrieg active — defender gets last turn before defender selection")
-            game.turn_player_id = other_player.id
+            if game.mode == 'conquer':
+                # Conquer: defender doesn't play interactively.  Keep turn on
+                # the invader so they can immediately select the defender's
+                # battle figure via select_defender().
+                logger.info(f"[ADVANCE] Blitzkrieg + conquer — turn stays on invader for defender selection")
+                game.turn_player_id = player_id
+            else:
+                # Duel: give defender their last turn (build, etc.) before
+                # the invader selects which defender figure to fight.
+                # Counter-advance is blocked separately, so the defender can only
+                # do non-advance actions on this turn.
+                logger.info(f"[ADVANCE] Blitzkrieg active — defender gets last turn before defender selection")
+                game.turn_player_id = other_player.id
         else:
             # Normal: flip turn to opponent
             game.turn_player_id = other_player.id
@@ -3717,6 +3882,10 @@ def finish_battle():
     if not player:
         return jsonify({'success': False, 'message': 'Player not found'}), 404
 
+    finished_conquer = _serialize_finished_conquer_result(game)
+    if finished_conquer:
+        return jsonify(finished_conquer)
+
     other_player = [p for p in game.players if p.id != player_id][0]
 
     # Idempotency: if battle was already resolved by the other client
@@ -4230,6 +4399,62 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     }
 
 
+def _serialize_finished_conquer_result(game):
+    """Return a stable conquer_result payload for an already-finished conquer game."""
+    if not game or game.mode != 'conquer' or game.state != 'finished':
+        return None
+
+    land = db.session.get(Land, game.land_id) if game.land_id else None
+    invader_id = game.invader_player_id
+
+    if game.winner_player_id is None:
+        conquer_result = 'draw'
+        attacker_won = False
+    else:
+        attacker_won = (game.winner_player_id == invader_id)
+        conquer_result = 'attacker_won' if attacker_won else 'defender_won'
+
+    payload = {
+        'success': True,
+        'message': f'Conquer battle already resolved: {conquer_result}',
+        'already_resolved': True,
+        'conquer_result': conquer_result,
+        'attacker_won': attacker_won,
+        'land_id': game.land_id,
+        'land_gold_rate': land.gold_rate if land else 0,
+        'land_tier': land.tier if land else None,
+        'game': game.serialize(),
+    }
+
+    if conquer_result == 'draw':
+        payload['outcome'] = 'draw'
+        return payload
+
+    payload['outcome'] = 'win'
+    payload['winner_player_id'] = game.winner_player_id
+
+    defender_player_id = None
+    for p in game.players:
+        if p.id != invader_id:
+            defender_player_id = p.id
+            break
+
+    payload['loser_player_id'] = defender_player_id if attacker_won else invader_id
+
+    # Pull card transfer details from the latest attack log when available.
+    if game.land_id:
+        latest_log = LandAttackLog.query.filter_by(
+            land_id=game.land_id
+        ).order_by(LandAttackLog.id.desc()).first()
+        if latest_log:
+            payload['card_won_suit'] = latest_log.card_won_suit
+            payload['card_won_rank'] = latest_log.card_won_rank
+            payload['card_lost_suit'] = latest_log.card_lost_suit
+            payload['card_lost_rank'] = latest_log.card_lost_rank
+
+    return payload
+
+
 def _consume_config_battle_cards(cfg):
     """Delete collection cards used for battle moves and modifiers in a config."""
     from models import CollectionCard, LandConfigBattleMove
@@ -4342,6 +4567,9 @@ def finish_battle_pick_card():
 
     # Idempotency: if battle state was already cleaned up, just return success
     if not game.advancing_figure_id and not game.defending_figure_id and not game.battle_confirmed:
+        finished_conquer = _serialize_finished_conquer_result(game)
+        if finished_conquer:
+            return jsonify(finished_conquer)
         logger.debug(f"[FINISH_BATTLE_PICK] Already cleaned up for game {game_id}, returning success")
         return jsonify({
             'success': True,

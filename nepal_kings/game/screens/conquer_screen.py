@@ -53,7 +53,7 @@ def _draw_panel(window, rect, corner_r=None):
 # Card requirements per modifier/spell: rank, count, color_constraint
 _SPELL_CARD_COST = {
     'Draw 2 MainCards': ('8', 1, None),
-    'Fill 10':          ('10', 1, None),
+    'Fill up to 10':    ('10', 1, None),
     'Dump Cards':       ('7', 4, None),
     'Forced Deal':      ('4', 2, None),
     'Poison':           ('3', 2, 'black'),
@@ -66,7 +66,7 @@ _SPELL_CARD_COST = {
 }
 
 _CONQUER_PRELUDE_SPELLS = [
-    'Draw 2 MainCards', 'Fill 10', 'Dump Cards', 'Forced Deal',
+    'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
 ]

@@ -742,6 +742,7 @@ class LandConfig(db.Model):
     counter_spell_target_figure_id = db.Column(db.Integer, nullable=True)
     # Auto-gambling — defence only
     auto_gamble          = db.Column(db.Boolean, nullable=False, default=False)
+    auto_gamble_threshold = db.Column(db.Integer, nullable=False, default=10)
     created_at           = db.Column(db.DateTime, default=_utcnow)
 
     user = db.relationship('User', backref=db.backref('land_configs', lazy='dynamic'))
@@ -775,6 +776,7 @@ class LandConfig(db.Model):
             'counter_spell_card_ids': self.counter_spell_card_ids,
             'counter_spell_target_figure_id': self.counter_spell_target_figure_id,
             'auto_gamble': self.auto_gamble,
+            'auto_gamble_threshold': self.auto_gamble_threshold,
             'figures': [f.serialize() for f in self.figures],
             'battle_moves': [m.serialize() for m in self.battle_moves],
         }

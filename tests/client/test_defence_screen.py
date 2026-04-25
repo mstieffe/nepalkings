@@ -27,6 +27,7 @@ def _make_config(**overrides):
         'counter_spell_card_ids': None,
         'counter_spell_target_figure_id': None,
         'auto_gamble': False,
+        'auto_gamble_threshold': 10,
     }
     cfg.update(overrides)
     return cfg
@@ -74,7 +75,7 @@ class TestDefenceReadiness:
         assert screen._is_defence_ready() is False
 
     def test_not_ready_without_strategy(self):
-        """Has figures + moves but no battle fig, spell, or auto-gamble."""
+        """Has figures + moves but no battle figure or counter spell."""
         figs = [{'id': 1, 'has_deficit': False, 'field': 'castle'}]
         moves = [{'id': i, 'round_index': i} for i in range(3)]
         screen = self._screen_with_config(figures=figs, battle_moves=moves)
@@ -94,12 +95,12 @@ class TestDefenceReadiness:
             figures=figs, battle_moves=moves, counter_spell_name='Poison')
         assert screen._is_defence_ready() is True
 
-    def test_ready_with_auto_gamble(self):
+    def test_not_ready_with_auto_gamble_only(self):
         figs = [{'id': 1, 'has_deficit': False, 'field': 'castle'}]
         moves = [{'id': i, 'round_index': i} for i in range(3)]
         screen = self._screen_with_config(
             figures=figs, battle_moves=moves, auto_gamble=True)
-        assert screen._is_defence_ready() is True
+        assert screen._is_defence_ready() is False
 
     def test_not_ready_with_only_deficit_figures(self):
         figs = [{'id': 1, 'has_deficit': True, 'field': 'castle'}]
@@ -212,6 +213,120 @@ class TestAutoGambleToggle:
                 pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_auto_gamble.center)
             screen.handle_events([event])
             mock_ag.assert_called_once_with(False)
+
+
+class TestAutoGambleThreshold:
+
+    def test_threshold_label_spacing_below_toggle(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(auto_gamble_threshold=10)
+        screen._build_layout()
+
+        assert (screen._btn_auto_gamble.bottom + screen._res_font.get_height()
+                <= screen._btn_auto_gamble_dec.y)
+
+    def test_threshold_decrement(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(auto_gamble_threshold=10)
+        screen._build_layout()
+
+        with patch.object(screen, '_server_set_auto_gamble_threshold') as mock_set:
+            event = pygame.event.Event(
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_auto_gamble_dec.center)
+            screen.handle_events([event])
+            mock_set.assert_called_once_with(9)
+
+    def test_threshold_decrement_updates_local_value_immediately(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(auto_gamble_threshold=10)
+        screen._build_layout()
+
+        with patch.object(screen, '_server_set_auto_gamble_threshold') as mock_set:
+            event = pygame.event.Event(
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_auto_gamble_dec.center)
+            screen.handle_events([event])
+            assert screen._config['auto_gamble_threshold'] == 9
+            mock_set.assert_called_once_with(9)
+
+    def test_threshold_increment(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(auto_gamble_threshold=10)
+        screen._build_layout()
+
+        with patch.object(screen, '_server_set_auto_gamble_threshold') as mock_set:
+            event = pygame.event.Event(
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_auto_gamble_inc.center)
+            screen.handle_events([event])
+            mock_set.assert_called_once_with(11)
+
+    def test_threshold_click_priority_over_toggle_when_overlapping(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(auto_gamble=False, auto_gamble_threshold=10)
+        screen._build_layout()
+
+        # Simulate overlap to lock in expected click priority.
+        screen._btn_auto_gamble_dec = screen._btn_auto_gamble.copy()
+
+        with patch.object(screen, '_server_set_auto_gamble') as mock_toggle, \
+                patch.object(screen, '_server_set_auto_gamble_threshold') as mock_set:
+            event = pygame.event.Event(
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_auto_gamble.center)
+            screen.handle_events([event])
+            mock_set.assert_called_once_with(9)
+            mock_toggle.assert_not_called()
+
+    def test_threshold_reverts_local_value_on_server_failure(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(auto_gamble_threshold=10)
+        screen._build_layout()
+
+        with patch.object(screen, '_server_set_auto_gamble_threshold', return_value=False):
+            event = pygame.event.Event(
+                pygame.MOUSEBUTTONUP, button=1, pos=screen._btn_auto_gamble_inc.center)
+            screen.handle_events([event])
+            assert screen._config['auto_gamble_threshold'] == 10
+
+    def test_threshold_handles_non_json_response(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(auto_gamble_threshold=10)
+
+        class _Resp:
+            status_code = 500
+            text = '<html>Internal Server Error</html>'
+
+            def json(self):
+                raise ValueError('Expecting value: line 1 column 1 (char 0)')
+
+        with patch('game.screens.defence_screen.requests.post', return_value=_Resp()):
+            ok = screen._server_set_auto_gamble_threshold(11)
+            assert ok is False
+            state.set_msg.assert_called_once_with('Could not update auto-gamble threshold')
 
 
 class TestBattleFigureToggle:

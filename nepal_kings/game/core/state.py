@@ -18,6 +18,9 @@ class State:
         # Track pending spell cast that requires target selection
         self.pending_spell_cast = None  # Dict: {'spell': Spell, 'real_cards': List[Card]}
 
+        # Conquer startup prelude target selection (server-side pending spell)
+        self.pending_conquer_prelude_target = None
+
         # ── Badge tracking (unread indicators) ──────────────────────
         self._known_game_ids = None        # None = not yet initialised
         self._known_challenge_ids = None   # None = not yet initialised

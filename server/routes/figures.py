@@ -6,7 +6,7 @@ from models import db, Figure, CardToFigure, CardRole, Game, Player, MainCard, S
 import logging
 import server_settings as settings
 from routes.auth import require_token, verify_player_ownership
-from routes.games import _guard_must_advance
+from routes.games import _guard_must_advance, _guard_pending_conquer_prelude_target
 
 logger = logging.getLogger('nepalkings.routes.figures')
 
@@ -89,6 +89,14 @@ def _guard_non_battle_action(game, *, action_label='action', player_id=None):
             'message': 'Action not allowed while a counterable spell is pending. Resolve allow/counter first.',
             'reason': 'pending_counter_spell'
         }), 400
+
+    prelude_err = _guard_pending_conquer_prelude_target(
+        game,
+        player_id=player_id,
+        action_label=action_label,
+    )
+    if prelude_err:
+        return prelude_err
 
     return None
 

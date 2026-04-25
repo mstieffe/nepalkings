@@ -141,3 +141,90 @@ class TestGameScreenDialogueFlow:
         assert shown_dialogues, 'Expected queued notification to be shown after acknowledgement'
         assert shown_dialogues[0]['title'] == 'Queued'
         assert game_screen._active_dialogue_type == 'queued_type'
+
+    def test_conquer_game_start_pending_prelude_target_sets_selection_state(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.subscreens = {}
+        game_screen._get_spell_icon_image = lambda _name: []
+
+        game_screen.state = SimpleNamespace(
+            pending_conquer_prelude_target=None,
+            game=SimpleNamespace(
+                pending_opponent_turn_summary={
+                    'action': 'game_start',
+                    'mode': 'conquer',
+                    'opponent_name': 'Rival',
+                    'is_turn': True,
+                    'is_invader': True,
+                    'own_prelude_spells': [],
+                    'own_drawn_cards': [],
+                    'opponent_prelude_spells': [],
+                    'own_prelude_no_target_spells': [],
+                    'opponent_prelude_no_target_spells': [],
+                    'pending_prelude_target': {
+                        'spell_id': 99,
+                        'spell_name': 'Poison',
+                        'target_scope': 'opponent',
+                        'valid_target_ids': [1, 2],
+                    },
+                    'battle_modifier': [],
+                },
+                game_over=False,
+                pending_game_over=False,
+                _game_start_pending=True,
+                land_tier=1,
+                pending_conquer_prelude_target=False,
+            ),
+        )
+
+        captured_notifications = []
+        game_screen.queue_or_show_notification = captured_notifications.append
+
+        GameScreen.check_opponent_turn_notification(game_screen)
+
+        assert game_screen.state.pending_conquer_prelude_target is not None
+        assert game_screen.state.game.pending_conquer_prelude_target is True
+        assert game_screen.state.pending_conquer_prelude_target['spell_name'] == 'Poison'
+        assert any(n.get('title') == 'Select Prelude Target' for n in captured_notifications)
+        assert game_screen.state.game.pending_opponent_turn_summary is None
+
+    def test_conquer_game_start_no_valid_target_shows_explicit_dialog(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.subscreens = {}
+        game_screen._get_spell_icon_image = lambda _name: []
+
+        game_screen.state = SimpleNamespace(
+            pending_conquer_prelude_target=None,
+            game=SimpleNamespace(
+                pending_opponent_turn_summary={
+                    'action': 'game_start',
+                    'mode': 'conquer',
+                    'opponent_name': 'Rival',
+                    'is_turn': True,
+                    'is_invader': True,
+                    'own_prelude_spells': [],
+                    'own_drawn_cards': [],
+                    'opponent_prelude_spells': [],
+                    'own_prelude_no_target_spells': [{'spell_name': 'Poison'}],
+                    'opponent_prelude_no_target_spells': [],
+                    'pending_prelude_target': None,
+                    'battle_modifier': [],
+                },
+                game_over=False,
+                pending_game_over=False,
+                _game_start_pending=True,
+                land_tier=1,
+                pending_conquer_prelude_target=False,
+            ),
+        )
+
+        captured_notifications = []
+        game_screen.queue_or_show_notification = captured_notifications.append
+
+        GameScreen.check_opponent_turn_notification(game_screen)
+
+        no_target_payloads = [n for n in captured_notifications if n.get('title') == 'No Valid Target']
+        assert len(no_target_payloads) == 1
+        assert 'No valid target was available' in no_target_payloads[0]['message']

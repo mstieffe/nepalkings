@@ -224,6 +224,8 @@ def check_defence_incomplete(land_id, user_id):
     - No defence config exists at all, OR
     - No figure exists that is not in resource deficit, OR
     - Fewer than 3 battle moves are configured.
+    - Counter strategy is not set to exactly one of:
+      battle figure XOR counter spell.
 
     Returns
     -------
@@ -252,12 +254,15 @@ def check_defence_incomplete(land_id, user_id):
     if move_count < 3:
         return True
 
-    # Check final round configuration (battle figure, spell, or auto-gamble)
-    has_final = (cfg.battle_figure_id is not None
-                 or cfg.spell_name is not None
-                 or cfg.counter_spell_name is not None
-                 or cfg.auto_gamble)
-    if not has_final:
+    has_battle_fig = (cfg.battle_figure_id is not None)
+    has_counter_spell = (cfg.counter_spell_name is not None)
+
+    # Strict strategy requirement: exactly one of battle figure or counter spell.
+    if has_battle_fig == has_counter_spell:
+        return True
+
+    # Defensive check against stale battle_figure_id references.
+    if has_battle_fig and not any(fig.id == cfg.battle_figure_id for fig in figures):
         return True
 
     return False

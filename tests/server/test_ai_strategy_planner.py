@@ -825,31 +825,37 @@ def test_maharaja_advance_with_blitzkrieg():
 # ── Same-suit build promotion ────────────────────────────────────────
 
 def test_same_suit_build_bonus():
-    """Building a figure whose suit matches existing figures gets +0.8 each.
+    """Build bonus mirrors support-bonus estimate from current board state.
 
-    Setup: AI has 2 Hearts figures.  Building another Hearts figure
-    should yield a bonus of 2 * 0.8 = 1.6.  Building a Spades figure
-    (no existing match) yields 0.0.
+    Setup: AI has one Hearts castle (King, +4 support source).
+    Building a Hearts military figure should estimate +4 support bonus.
+    Building a Diamonds military figure should estimate 0.0.
 
-    Reasoning: Same-suit figures provide support bonuses in battle, so
-    concentrating on a suit is strategically stronger.
+    Reasoning: planner uses ``compute_support_bonus`` for build valuation,
+    not a flat per-figure same-suit increment.
     """
     own_figures = [
-        {'id': 1, 'field': 'military', 'suit': 'Hearts', 'cards': [{'value': 8}]},
-        {'id': 2, 'field': 'village', 'suit': 'Hearts', 'cards': [{'value': 5}]},
-        {'id': 3, 'field': 'military', 'suit': 'Spades', 'cards': [{'value': 7}]},
+        {
+            'id': 1,
+            'field': 'castle',
+            'name': 'Himalaya King',
+            'suit': 'Hearts',
+            'cards_to_figure': [{'value': 4, 'role': 'key'}],
+            'produces': {},
+            'requires': {},
+        },
     ]
     action_hearts = {
         'type': 'build_figure',
-        'params': {'suit': 'Hearts'},
+        'params': {'suit': 'Hearts', 'field': 'military', 'name': 'Test Military'},
     }
     action_spades_new = {
         'type': 'build_figure',
-        'params': {'suit': 'Diamonds'},
+        'params': {'suit': 'Diamonds', 'field': 'military', 'name': 'Test Military'},
     }
     bonus_h = _modifier_bonus(action_hearts, [], own_figures=own_figures)
     bonus_d = _modifier_bonus(action_spades_new, [], own_figures=own_figures)
-    assert bonus_h == 1.6, f'Expected 1.6 for 2 matching Hearts, got {bonus_h}'
+    assert bonus_h == 4.0, f'Expected 4.0 support estimate for Hearts military build, got {bonus_h}'
     assert bonus_d == 0.0, f'Expected 0.0 for no matching Diamonds, got {bonus_d}'
 
 

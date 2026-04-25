@@ -198,6 +198,7 @@ class BattleScreen(SubScreen):
         self._battle_result = None               # server response from finish_battle
         self._returnable_cards = []              # cards available for winner to pick
         self._awaiting_card_pick = False         # True while showing card pick dialogue
+        self._picked_card_data = None            # card_data dict of user-picked loot card
         self._awaiting_draw_choice = False       # True while showing draw options
 
         # ── round-panel figure icons (clickable sub-icons next to slots) ──
@@ -265,6 +266,7 @@ class BattleScreen(SubScreen):
         self._game_over_pending = False
         self._returnable_cards = []
         self._awaiting_card_pick = False
+        self._picked_card_data = None
         self._awaiting_draw_choice = False
         self._card_picker_active = False
         self._card_picker_cards = []
@@ -1825,6 +1827,13 @@ class BattleScreen(SubScreen):
         # Clear the safety-net data — we're about to show the proper dialogue
         if self.game:
             self.game._last_polled_battle_result = None
+
+        # Finished conquer games are resolved server-side and should route
+        # directly to the conquer end dialogue.
+        if result.get('conquer_result'):
+            self._handle_conquer_end(result)
+            return
+
         outcome = result.get('outcome', '')
 
         # If already resolved by the other client, use the game state
@@ -1947,9 +1956,20 @@ class BattleScreen(SubScreen):
     def _show_draw_result(self, result):
         """Display draw dialogue — the defender gets to choose.
         In conquer mode, draws resolve with no consequences."""
-        # Conquer mode: draw has no consequences — show result and return to kingdom
-        if result.get('conquer_result') == 'draw':
-            self._handle_conquer_end(result)
+        is_conquer = getattr(self.game, 'mode', 'duel') == 'conquer'
+
+        # Conquer mode: draw has no consequences — show result and return to
+        # kingdom. Support fallback payloads that only include outcome='draw'.
+        if is_conquer and (
+            result.get('conquer_result') == 'draw'
+            or (result.get('outcome') == 'draw' and not result.get('conquer_result'))
+        ):
+            conquer_payload = result
+            if conquer_payload.get('conquer_result') != 'draw':
+                conquer_payload = dict(conquer_payload)
+                conquer_payload['conquer_result'] = 'draw'
+                conquer_payload.setdefault('attacker_won', False)
+            self._handle_conquer_end(conquer_payload)
             return
 
         defender_id = result.get('defender_player_id')
@@ -2012,8 +2032,10 @@ class BattleScreen(SubScreen):
         """Handle the card picker confirm for a victory pick."""
         self._awaiting_card_pick = False
         if card_data:
+            self._picked_card_data = card_data
             self._finalise_winner_pick(card_data.get('id'), card_data.get('card_type', 'main'))
         else:
+            self._picked_card_data = None
             self._finalise_winner_pick(None, None)
 
     def _collect_resting_figure_ids(self):
@@ -2054,6 +2076,30 @@ class BattleScreen(SubScreen):
         """After defeat dialogue, just reset locally.
         The winner's client handles server-side cleanup (card pick + new round).
         """
+        if getattr(self.game, 'mode', 'duel') == 'conquer' and self.game:
+            # Never pick a card on the loser path. Query battle status and
+            # consume conquer_result once the winner has finalized their pick.
+            result = game_service.finish_battle(
+                self.game.game_id,
+                self.game.player_id,
+                total_diff=0,
+            )
+
+            if result.get('success') and result.get('game'):
+                self.game.update_from_dict(result['game'])
+
+            if result.get('conquer_result'):
+                self._handle_conquer_end(result)
+                return
+
+            # Fallback: if winner pick has not completed yet, route via the
+            # conquer game-over dialogue once polling catches up.
+            if result.get('success'):
+                self.game.pending_game_over = {
+                    'winner_player_id': result.get('winner_player_id')
+                }
+                self.game.game_over = True
+
         self._reset_after_battle()
 
     # ─── draw callbacks ───
@@ -2155,11 +2201,14 @@ class BattleScreen(SubScreen):
             message = "You have conquered {}!".format(land_label)
             if gold_rate:
                 message += "\n\nGold production increased by {:.1f} gold/hour.".format(gold_rate)
-            card_suit = result.get('card_won_suit')
-            card_rank = result.get('card_won_rank')
+            # Use the card the player actually picked in the card picker
+            picked = getattr(self, '_picked_card_data', None)
+            card_suit = picked.get('suit') if picked else result.get('card_won_suit')
+            card_rank = picked.get('rank') if picked else result.get('card_won_rank')
             if card_suit and card_rank:
                 message += "\n\nCard won:"
-                images.append(CardImg(self.window, card_suit, card_rank))
+                card_img = CardImg(self.window, card_suit, card_rank)
+                images.append(card_img.front_img)
         elif attacker_won and not is_attacker:
             # Attacker won — we are the defender
             title = "Land Lost!"
@@ -2169,7 +2218,8 @@ class BattleScreen(SubScreen):
             card_rank = result.get('card_lost_rank')
             if card_suit and card_rank:
                 message += "\n\nCard lost:"
-                images.append(CardImg(self.window, card_suit, card_rank))
+                card_img = CardImg(self.window, card_suit, card_rank)
+                images.append(card_img.front_img)
         elif not attacker_won and is_attacker:
             # Defender won — we are the attacker (we lost)
             title = "Attack Failed"
@@ -2180,7 +2230,8 @@ class BattleScreen(SubScreen):
             card_rank = result.get('card_lost_rank')
             if card_suit and card_rank:
                 message += "\n\nKey card lost:"
-                images.append(CardImg(self.window, card_suit, card_rank))
+                card_img = CardImg(self.window, card_suit, card_rank)
+                images.append(card_img.front_img)
             if cards_spent:
                 message += "\n\nAll {} cards spent on this attack have been consumed.".format(cards_spent)
         else:
@@ -2192,7 +2243,8 @@ class BattleScreen(SubScreen):
             card_rank = result.get('card_won_rank')
             if card_suit and card_rank:
                 message += "\n\nCard won:"
-                images.append(CardImg(self.window, card_suit, card_rank))
+                card_img = CardImg(self.window, card_suit, card_rank)
+                images.append(card_img.front_img)
 
         # Mark game as over so the game_screen routes back to kingdom
         if self.game:

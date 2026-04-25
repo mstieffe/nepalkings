@@ -3,6 +3,7 @@
 """Worker-level tests for AI orchestration and execution helpers."""
 
 import pytest
+from types import SimpleNamespace
 
 from ai import ai_worker
 
@@ -14,6 +15,8 @@ def reset_ai_worker_state():
         ai_worker._pending_retrigger.clear()
     with ai_worker._ai_player_user_ids_lock:
         ai_worker._ai_player_user_ids.clear()
+    with ai_worker._internal_service_tokens_lock:
+        ai_worker._internal_service_tokens.clear()
     with ai_worker._ai_watchdog_lock:
         ai_worker._ai_watchdog_retries.clear()
     with ai_worker._game_strategies_lock:
@@ -31,6 +34,8 @@ def reset_ai_worker_state():
         ai_worker._pending_retrigger.clear()
     with ai_worker._ai_player_user_ids_lock:
         ai_worker._ai_player_user_ids.clear()
+    with ai_worker._internal_service_tokens_lock:
+        ai_worker._internal_service_tokens.clear()
     with ai_worker._ai_watchdog_lock:
         ai_worker._ai_watchdog_retries.clear()
     with ai_worker._game_strategies_lock:
@@ -107,6 +112,86 @@ def test_ai_post_injects_auth_and_internal_header(monkeypatch):
     assert captured['headers']['Authorization'] == 'Bearer token-123'
     assert captured['headers']['X-NepalKings-AI-Internal'] == '1'
     assert captured['kwargs']['timeout'] == 15
+
+
+def test_ai_headers_falls_back_to_internal_service_token(monkeypatch):
+    with ai_worker._ai_player_user_ids_lock:
+        ai_worker._ai_player_user_ids[77] = 555
+
+    monkeypatch.setattr(
+        ai_worker,
+        'get_ai_auth_headers',
+        lambda _uid: {},
+    )
+
+    monkeypatch.setattr(ai_worker, '_generate_internal_service_token', lambda user_id: f'internal-{user_id}')
+
+    headers = ai_worker._ai_headers(77)
+
+    assert headers['Authorization'] == 'Bearer internal-555'
+
+
+def test_normalize_conquer_auto_gamble_threshold_clamps_and_defaults():
+    assert ai_worker._normalize_conquer_auto_gamble_threshold(None) == 10
+    assert ai_worker._normalize_conquer_auto_gamble_threshold('bad') == 10
+    assert ai_worker._normalize_conquer_auto_gamble_threshold(-3) == 1
+    assert ai_worker._normalize_conquer_auto_gamble_threshold(99) == 20
+    assert ai_worker._normalize_conquer_auto_gamble_threshold(13) == 13
+
+
+def test_conquer_choose_gamble_target_prefers_lowest_below_threshold():
+    low = {'move': SimpleNamespace(id=1, family_name='Dagger', value=7), 'effective_value': 7}
+    mid = {'move': SimpleNamespace(id=2, family_name='Dagger', value=9), 'effective_value': 9}
+    block = {'move': SimpleNamespace(id=3, family_name='Block', value=0), 'effective_value': 0}
+
+    chosen = ai_worker._conquer_choose_gamble_target([mid, block, low], threshold=10)
+    assert chosen['move'].id == 1
+
+
+def test_conquer_choose_best_dagger_pair_uses_highest_combined_value():
+    moves = [
+        SimpleNamespace(id=1, family_name='Dagger', suit='Hearts', value=7),
+        SimpleNamespace(id=2, family_name='Dagger', suit='Diamonds', value=9),
+        SimpleNamespace(id=3, family_name='Dagger', suit='Spades', value=8),
+        SimpleNamespace(id=4, family_name='Dagger', suit='Clubs', value=10),
+    ]
+
+    pair = ai_worker._conquer_choose_best_dagger_pair(moves)
+    assert pair == (3, 4)
+
+
+def test_conquer_choose_play_move_prefers_block_when_strongest_not_improving():
+    block_info = {
+        'move': SimpleNamespace(id=10, family_name='Block', value=2),
+        'effective_value': 0,
+    }
+    strongest_info = {
+        'move': SimpleNamespace(id=11, family_name='Dagger', value=8),
+        'effective_value': 8,
+    }
+
+    chosen = ai_worker._conquer_choose_play_move(
+        [strongest_info, block_info],
+        opponent_round_value=9,
+    )
+    assert chosen['move'].id == 10
+
+
+def test_conquer_choose_play_move_prefers_strongest_when_advantage_positive():
+    block_info = {
+        'move': SimpleNamespace(id=10, family_name='Block', value=2),
+        'effective_value': 0,
+    }
+    strongest_info = {
+        'move': SimpleNamespace(id=11, family_name='Dagger', value=10),
+        'effective_value': 10,
+    }
+
+    chosen = ai_worker._conquer_choose_play_move(
+        [strongest_info, block_info],
+        opponent_round_value=6,
+    )
+    assert chosen['move'].id == 11
 
 
 def test_trigger_ai_if_needed_skips_without_api_key(app, monkeypatch):

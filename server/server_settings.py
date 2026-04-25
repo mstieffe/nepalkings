@@ -193,6 +193,7 @@ AI_DEFENCE_TEMPLATES = {
             'counter_spell_name': None,
             'counter_spell_data': None,
             'auto_gamble': False,
+            'auto_gamble_threshold': 10,
         },
     ],
     2: [  # Tier 2 — medium: king + farm, auto-gamble, one Call King move
@@ -227,6 +228,7 @@ AI_DEFENCE_TEMPLATES = {
             'counter_spell_name': None,
             'counter_spell_data': None,
             'auto_gamble': True,
+            'auto_gamble_threshold': 10,
         },
     ],
     3: [  # Tier 3 — strong: king + warriors + farm, Call Military move
@@ -267,6 +269,7 @@ AI_DEFENCE_TEMPLATES = {
             'counter_spell_name': None,
             'counter_spell_data': None,
             'auto_gamble': True,
+            'auto_gamble_threshold': 10,
         },
     ],
 }

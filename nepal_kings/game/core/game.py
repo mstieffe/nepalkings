@@ -93,6 +93,9 @@ class Game:
         # Opponent turn summary notification (cleared after showing dialogue)
         self.pending_opponent_turn_summary = None
         self._last_shown_summary_log_id = None  # dedup stale notifications
+
+        # Conquer startup lock: invader must resolve pending prelude target.
+        self.pending_conquer_prelude_target = False
         
         # Ceasefire ended notification (cleared after showing dialogue)
         self.pending_ceasefire_ended = False
@@ -830,6 +833,11 @@ class Game:
         previous_fold_outcome = self.fold_outcome
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
+
+        # Fix: If battle is confirmed, forcibly set guards to prevent double notification
+        if self.battle_confirmed:
+            self.pending_battle_ready = False
+            self.battle_ready_shown = True
 
         # Detect both chose battle (transition) — mirrors _apply_game_dict
         if (self.battle_confirmed and not previous_battle_confirmed and

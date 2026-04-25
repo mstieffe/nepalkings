@@ -184,6 +184,7 @@ with app.app_context():
             'counter_spell_data':          'JSON',
             'counter_spell_card_ids':      'JSON',
             'counter_spell_target_figure_id': 'INTEGER',
+            'auto_gamble_threshold':       'INTEGER DEFAULT 10',
         }
         for col_name, col_type in _lc_new_cols.items():
             if col_name not in existing_cols:

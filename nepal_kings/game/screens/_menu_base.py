@@ -342,6 +342,7 @@ class MenuScreenMixin:
             self.state.user_dict = None
             self.state.game = None
             self.state.pending_spell_cast = None
+            self.state.pending_conquer_prelude_target = None
             self.state._notified_accepted_challenges = set()
             self.state._pending_accepted_challenge = None
             self.state.set_msg('Logged out')

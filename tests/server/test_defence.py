@@ -762,6 +762,7 @@ class TestDefenceAutoGamble:
                          json={'land_id': land.id, 'auto_gamble': True})
         assert rv.status_code == 200
         assert rv.get_json()['config']['auto_gamble'] is True
+        assert rv.get_json()['config']['auto_gamble_threshold'] == 10
 
     def test_set_auto_gamble_off(self, client, db, two_users, auth_headers_user1):
         u1, _ = two_users
@@ -778,6 +779,7 @@ class TestDefenceAutoGamble:
                          json={'land_id': land.id, 'auto_gamble': False})
         assert rv.status_code == 200
         assert rv.get_json()['config']['auto_gamble'] is False
+        assert rv.get_json()['config']['auto_gamble_threshold'] == 10
 
     def test_rejects_non_owned_land(self, client, db, two_users, auth_headers_user1):
         _, u2 = two_users
@@ -786,4 +788,52 @@ class TestDefenceAutoGamble:
         rv = client.post('/kingdom/defence/set_auto_gamble',
                          headers=auth_headers_user1,
                          json={'land_id': land.id, 'auto_gamble': True})
+        assert rv.status_code == 403
+
+
+class TestDefenceAutoGambleThreshold:
+
+    def test_set_threshold_updates_config(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        client.get(f'/kingdom/defence/config?land_id={land.id}',
+                   headers=auth_headers_user1)
+
+        rv = client.post('/kingdom/defence/set_auto_gamble_threshold',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id, 'auto_gamble_threshold': 13})
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['config']['auto_gamble_threshold'] == 13
+
+        cfg = LandConfig.query.filter_by(
+            user_id=u1.id, config_type='defence', land_id=land.id
+        ).first()
+        assert cfg.auto_gamble_threshold == 13
+
+    def test_set_threshold_clamps_to_bounds(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        client.get(f'/kingdom/defence/config?land_id={land.id}',
+                   headers=auth_headers_user1)
+
+        rv_high = client.post('/kingdom/defence/set_auto_gamble_threshold',
+                              headers=auth_headers_user1,
+                              json={'land_id': land.id, 'auto_gamble_threshold': 999})
+        assert rv_high.status_code == 200
+        assert rv_high.get_json()['config']['auto_gamble_threshold'] == 20
+
+        rv_low = client.post('/kingdom/defence/set_auto_gamble_threshold',
+                             headers=auth_headers_user1,
+                             json={'land_id': land.id, 'auto_gamble_threshold': -5})
+        assert rv_low.status_code == 200
+        assert rv_low.get_json()['config']['auto_gamble_threshold'] == 1
+
+    def test_set_threshold_rejects_non_owned_land(self, client, db, two_users, auth_headers_user1):
+        _, u2 = two_users
+        land = _add_land(db, owner_id=u2.id)
+
+        rv = client.post('/kingdom/defence/set_auto_gamble_threshold',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id, 'auto_gamble_threshold': 12})
         assert rv.status_code == 403

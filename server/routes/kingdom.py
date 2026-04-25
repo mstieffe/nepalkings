@@ -260,7 +260,7 @@ _SPELL_CARD_REQS = {
 # ── Prelude / Counter spell system ──────────────────────────────────────────
 _SPELL_CARD_COST = {
     'Draw 2 MainCards': ('8', 1, None),
-    'Fill 10':          ('10', 1, None),
+    'Fill up to 10':    ('10', 1, None),
     'Dump Cards':       ('7', 4, None),
     'Forced Deal':      ('4', 2, None),
     'Poison':           ('3', 2, 'black'),
@@ -273,10 +273,12 @@ _SPELL_CARD_COST = {
 }
 
 _CONQUER_PRELUDE_SPELLS = frozenset({
-    'Draw 2 MainCards', 'Fill 10', 'Dump Cards', 'Forced Deal',
+    'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
 })
+
+_TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
 
 _DEFENCE_PRELUDE_SPELLS = frozenset({
     'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost',
@@ -295,7 +297,7 @@ _BATTLE_MODIFIER_SPELLS = frozenset({'Peasant War', 'Civil War', 'Blitzkrieg'})
 # creation time.  Matches the family types in spell_configs.
 _SPELL_TYPE_MAP = {
     'Draw 2 MainCards': 'greed',
-    'Fill 10':          'greed',
+    'Fill up to 10':    'greed',
     'Dump Cards':       'greed',
     'Forced Deal':      'greed',
     'Poison':           'enchantment',
@@ -932,6 +934,24 @@ def conquer_clear_prelude_spell():
 
 _DEFENCE_MODIFIERS = ('Peasant War', 'Civil War')
 
+_AUTO_GAMBLE_THRESHOLD_DEFAULT = 10
+_AUTO_GAMBLE_THRESHOLD_MIN = 1
+_AUTO_GAMBLE_THRESHOLD_MAX = 20
+
+
+def _normalize_auto_gamble_threshold(value):
+    """Coerce auto-gamble threshold to a safe integer range."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = _AUTO_GAMBLE_THRESHOLD_DEFAULT
+
+    if parsed < _AUTO_GAMBLE_THRESHOLD_MIN:
+        return _AUTO_GAMBLE_THRESHOLD_MIN
+    if parsed > _AUTO_GAMBLE_THRESHOLD_MAX:
+        return _AUTO_GAMBLE_THRESHOLD_MAX
+    return parsed
+
 
 def _get_or_create_defence_config(user_id, land_id):
     """Get the user's defence config for a land, or create one."""
@@ -939,9 +959,16 @@ def _get_or_create_defence_config(user_id, land_id):
         user_id=user_id, config_type='defence', land_id=land_id
     ).first()
     if not cfg:
-        cfg = LandConfig(user_id=user_id, config_type='defence', land_id=land_id)
+        cfg = LandConfig(
+            user_id=user_id,
+            config_type='defence',
+            land_id=land_id,
+            auto_gamble_threshold=_AUTO_GAMBLE_THRESHOLD_DEFAULT,
+        )
         db.session.add(cfg)
         db.session.flush()
+    elif cfg.auto_gamble_threshold is None:
+        cfg.auto_gamble_threshold = _AUTO_GAMBLE_THRESHOLD_DEFAULT
     return cfg
 
 
@@ -1729,6 +1756,36 @@ def defence_set_auto_gamble():
     return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
 
 
+@kingdom.route('/defence/set_auto_gamble_threshold', methods=['POST'])
+@require_token
+def defence_set_auto_gamble_threshold():
+    """Set the auto-gamble threshold for a defence config.
+
+    Expects JSON: { land_id, auto_gamble_threshold: int }
+    """
+    data = request.json
+    land_id = data.get('land_id')
+    threshold = data.get('auto_gamble_threshold')
+
+    if not land_id or threshold is None:
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    cfg = LandConfig.query.filter_by(
+        user_id=g.user_id, config_type='defence', land_id=land_id
+    ).first()
+    if not cfg:
+        return jsonify({'success': False, 'message': 'No defence config found'}), 404
+
+    cfg.auto_gamble_threshold = _normalize_auto_gamble_threshold(threshold)
+    db.session.commit()
+
+    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Conquer Battle — Phase 13
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2177,8 +2234,64 @@ def _get_or_create_ai_user():
     return ai_user
 
 
-def _create_prelude_spell(game, player, spell_name, spell_data, game_figures):
-    """Create an ActiveSpell for a prelude spell and execute it immediately.
+def _prelude_spell_requires_target(spell_name):
+    return spell_name in _TARGETED_PRELUDE_SPELLS
+
+
+def _get_prelude_target_scope(spell_name):
+    if spell_name in ('Poison', 'Explosion'):
+        return 'opponent'
+    if spell_name == 'Health Boost':
+        return 'own'
+    return None
+
+
+def _list_valid_prelude_targets(game, caster_player_id, spell_name):
+    """Return valid prelude targets, excluding checkmate figures."""
+    scope = _get_prelude_target_scope(spell_name)
+    if not scope:
+        return []
+
+    if scope == 'opponent':
+        candidate_player_ids = [p.id for p in game.players if p.id != caster_player_id]
+    else:
+        candidate_player_ids = [caster_player_id]
+
+    if not candidate_player_ids:
+        return []
+
+    targets = Figure.query.filter(
+        Figure.game_id == game.id,
+        Figure.player_id.in_(candidate_player_ids),
+    ).all()
+    return [f for f in targets if not getattr(f, 'checkmate', False)]
+
+
+def _pick_deterministic_prelude_target(figures):
+    """Pick one target deterministically by highest base power, then lowest ID."""
+    if not figures:
+        return None
+
+    from routes.games import _compute_figure_base_power
+
+    return sorted(figures, key=lambda f: (-_compute_figure_base_power(f), f.id))[0]
+
+
+def _mark_prelude_spell_no_target(spell):
+    data = dict(spell.effect_data or {})
+    data['prelude_origin'] = True
+    data['prelude_requires_target'] = True
+    data['prelude_status'] = 'no_valid_target'
+    data.pop('prelude_pending_target', None)
+    data.pop('valid_target_ids', None)
+    spell.effect_data = data
+    spell.is_active = False
+    spell.is_pending = False
+
+
+def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
+                          *, target_resolution='immediate'):
+    """Create an ActiveSpell for a prelude spell and resolve startup behavior.
 
     For battle-modifier spells (Peasant War / Civil War / Blitzkrieg) the
     modifier is also appended to ``game.battle_modifier`` so that existing
@@ -2188,7 +2301,15 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures):
     All other prelude spells (greed / enchantment) are executed right away so
     that their effects (draw cards, dump hands, etc.) are applied before the
     first turn.
+
+    ``target_resolution`` controls target-required spells:
+    - ``'auto'``: deterministic automatic target selection and execution.
+    - ``'pending'``: mark the spell as pending target selection for the invader.
+    - ``'immediate'``: immediate execution path (non-target spells).
     """
+    effect_data = dict(spell_data) if isinstance(spell_data, dict) else {}
+    effect_data['prelude_origin'] = True
+
     spell = ActiveSpell(
         game_id=game.id,
         player_id=player.id,
@@ -2200,7 +2321,7 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures):
         cast_round=1,
         is_active=True,
         is_pending=False,
-        effect_data=spell_data,
+        effect_data=effect_data,
     )
     db.session.add(spell)
 
@@ -2208,13 +2329,54 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures):
         if not isinstance(game.battle_modifier, list):
             game.battle_modifier = []
         game.battle_modifier.append({'type': spell_name, 'caster_id': player.id})
+        mod_data = dict(spell.effect_data or {})
+        mod_data['prelude_status'] = 'executed'
+        spell.effect_data = mod_data
     else:
+        # Target-required prelude spells can be auto-resolved (defender) or
+        # deferred for explicit invader target selection.
+        if _prelude_spell_requires_target(spell_name):
+            valid_targets = _list_valid_prelude_targets(game, player.id, spell_name)
+            if not valid_targets:
+                _mark_prelude_spell_no_target(spell)
+                return
+
+            if target_resolution == 'pending':
+                pending_data = dict(spell.effect_data or {})
+                pending_data['prelude_requires_target'] = True
+                pending_data['prelude_pending_target'] = True
+                pending_data['prelude_status'] = 'pending_target'
+                pending_data['target_scope'] = _get_prelude_target_scope(spell_name)
+                pending_data['valid_target_ids'] = [f.id for f in valid_targets]
+                spell.effect_data = pending_data
+                spell.is_active = False
+                spell.is_pending = False
+                return
+
+            if target_resolution == 'auto':
+                chosen_target = _pick_deterministic_prelude_target(valid_targets)
+                spell.target_figure_id = chosen_target.id if chosen_target else None
+
         # Greed / enchantment prelude spells: execute immediately
         db.session.flush()
         from routes.spells import _execute_spell
         result = _execute_spell(spell, game, player)
         if result.get('error'):
             logger.warning(f'Prelude spell {spell_name} execution failed: {result}')
+            failed_data = dict(spell.effect_data or {})
+            failed_data['prelude_origin'] = True
+            failed_data['prelude_status'] = 'failed'
+            spell.effect_data = failed_data
+        else:
+            # Persist prelude metadata and actually-drawn cards on the spell so
+            # game-start notifications can report precise effects.
+            executed_data = dict(spell.effect_data or {})
+            executed_data['prelude_origin'] = True
+            executed_data['prelude_status'] = 'executed'
+            drawn = result.get('drawn_cards', [])
+            if drawn:
+                executed_data['drawn_card_ids'] = [c['id'] for c in drawn]
+            spell.effect_data = executed_data
 
 
 # ── POST /kingdom/conquer/start_battle ───────────────────────────────────────
@@ -2310,6 +2472,21 @@ def conquer_start_battle():
             return jsonify({'success': False,
                             'message': 'Defender has no defence config'}), 400
 
+        has_battle_fig = (def_cfg.battle_figure_id is not None)
+        has_counter_spell = (def_cfg.counter_spell_name is not None)
+        if has_battle_fig == has_counter_spell:
+            return jsonify({
+                'success': False,
+                'message': ('Defender config must select exactly one counter strategy: '
+                            'battle figure or counter spell.')
+            }), 400
+
+        if has_battle_fig:
+            battle_cfg_fig = db.session.get(LandConfigFigure, def_cfg.battle_figure_id)
+            if not battle_cfg_fig or battle_cfg_fig.config_id != def_cfg.id:
+                return jsonify({'success': False,
+                                'message': 'Defender battle figure is invalid'}), 400
+
     # ── Create the Game ──
     game = Game(
         mode='conquer',
@@ -2370,7 +2547,8 @@ def conquer_start_battle():
             _create_prelude_spell(game, def_player,
                                   template['prelude_spell_name'],
                                   template.get('prelude_spell_data'),
-                                  def_game_figures)
+                                  def_game_figures,
+                                  target_resolution='auto')
         elif template.get('battle_modifier'):
             # Backward compat: old template battle_modifier
             mod = template['battle_modifier']
@@ -2442,22 +2620,13 @@ def conquer_start_battle():
             if mapped_id:
                 game.defending_figure_id_2 = mapped_id
 
-        # ── Fallback: pick strongest eligible figure when neither
-        #    battle figure nor counter spell is configured (both turns
-        #    empty → auto-advance with strongest figure) ──
-        if (not game.defending_figure_id
-                and not def_cfg.counter_spell_name
-                and not def_cfg.spell_name
-                and def_game_figures):
-            game.defending_figure_id = _pick_strongest_figure(
-                def_game_figures, game)
-
         # ── Defender prelude spell ──
         if def_cfg.prelude_spell_name:
             _create_prelude_spell(game, def_player,
                                   def_cfg.prelude_spell_name,
                                   def_cfg.prelude_spell_data,
-                                  def_game_figures)
+                                  def_game_figures,
+                                  target_resolution='auto')
         elif def_cfg.battle_modifier:
             # Backward compat: old battle_modifier field
             mod = def_cfg.battle_modifier
@@ -2509,11 +2678,21 @@ def conquer_start_battle():
         _create_prelude_spell(game, atk_player,
                               atk_cfg.prelude_spell_name,
                               atk_cfg.prelude_spell_data,
-                              atk_game_figures)
+                              atk_game_figures,
+                              target_resolution='pending')
     elif not game.battle_modifier and atk_cfg.battle_modifier:
         # Backward compat: old battle_modifier fallback
         mod = atk_cfg.battle_modifier
         game.battle_modifier = [mod] if isinstance(mod, dict) else mod
+
+    # ── Blitzkrieg: ignore the defender's pre-configured battle figure.
+    #    The invader will select the opponent's figure via select_defender()
+    #    after advancing (Blitzkrieg's core mechanic). ──
+    if game.battle_modifier and any(
+        m.get('type') == 'Blitzkrieg' for m in game.battle_modifier
+    ):
+        game.defending_figure_id = None
+        game.defending_figure_id_2 = None
 
     # Set cooldown
     user.last_conquer_at = _utcnow()
@@ -2527,6 +2706,111 @@ def conquer_start_battle():
     return jsonify({
         'success': True,
         'game_id': game.id,
+        'game': game.serialize(),
+    })
+
+
+@kingdom.route('/conquer/resolve_prelude_target', methods=['POST'])
+@require_token
+def conquer_resolve_prelude_target():
+    """Resolve invader prelude target selection in conquer game_start flow."""
+    data = request.json or {}
+    game_id = data.get('game_id')
+    spell_id = data.get('spell_id')
+    target_figure_id = data.get('target_figure_id')
+
+    if game_id is None or spell_id is None or target_figure_id is None:
+        return jsonify({
+            'success': False,
+            'message': 'game_id, spell_id, and target_figure_id are required'
+        }), 400
+
+    game = db.session.get(Game, game_id)
+    if not game or game.mode != 'conquer':
+        return jsonify({'success': False, 'message': 'Conquer game not found'}), 404
+
+    player = Player.query.filter_by(game_id=game.id, user_id=g.user_id).first()
+    if not player:
+        return jsonify({'success': False, 'message': 'Player not found in game'}), 403
+
+    if player.id != game.invader_player_id:
+        return jsonify({
+            'success': False,
+            'message': 'Only the invader can resolve prelude targets'
+        }), 403
+
+    if game.turn_player_id != player.id:
+        return jsonify({'success': False, 'message': 'Not your turn'}), 400
+
+    spell = db.session.get(ActiveSpell, spell_id)
+    if not spell or spell.game_id != game.id or spell.player_id != player.id:
+        return jsonify({'success': False, 'message': 'Prelude spell not found'}), 404
+
+    effect_data = dict(spell.effect_data or {})
+    if not effect_data.get('prelude_pending_target'):
+        return jsonify({
+            'success': False,
+            'message': 'Spell is not waiting for target selection'
+        }), 400
+
+    valid_targets = _list_valid_prelude_targets(game, player.id, spell.spell_name)
+    if not valid_targets:
+        _mark_prelude_spell_no_target(spell)
+        db.session.commit()
+        return jsonify({
+            'success': False,
+            'message': f'No valid target is available for {spell.spell_name}.',
+            'reason': 'no_valid_target',
+            'game': game.serialize(),
+        }), 400
+
+    valid_target_ids = {f.id for f in valid_targets}
+    if target_figure_id not in valid_target_ids:
+        return jsonify({
+            'success': False,
+            'message': 'Selected figure is not a valid target.',
+            'reason': 'invalid_target',
+            'valid_target_ids': sorted(valid_target_ids),
+        }), 400
+
+    spell.target_figure_id = target_figure_id
+    spell.is_active = True
+    effect_data.pop('prelude_pending_target', None)
+    effect_data.pop('valid_target_ids', None)
+    effect_data['prelude_origin'] = True
+    effect_data['prelude_status'] = 'executing'
+    spell.effect_data = effect_data
+
+    from routes.spells import _execute_spell
+    result = _execute_spell(spell, game, player)
+    if result.get('error'):
+        spell.is_active = False
+        failed_data = dict(spell.effect_data or {})
+        failed_data['prelude_origin'] = True
+        failed_data['prelude_status'] = 'failed'
+        spell.effect_data = failed_data
+        db.session.commit()
+        return jsonify({
+            'success': False,
+            'message': result.get('effect', 'Failed to execute prelude spell.'),
+            'reason': 'spell_execution_failed',
+            'spell_effect': result,
+            'game': game.serialize(),
+        }), 400
+
+    resolved_data = dict(spell.effect_data or {})
+    resolved_data['prelude_origin'] = True
+    resolved_data['prelude_status'] = 'executed'
+    drawn = result.get('drawn_cards', [])
+    if drawn:
+        resolved_data['drawn_card_ids'] = [c['id'] for c in drawn]
+    spell.effect_data = resolved_data
+
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'message': f'{spell.spell_name} was applied successfully.',
+        'spell_effect': result,
         'game': game.serialize(),
     })
 

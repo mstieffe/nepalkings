@@ -100,6 +100,23 @@ def select_defender(game_id, player_id, figure_id):
         return {'success': False, 'message': f"Failed to select defender: {str(e)}"}
 
 
+def resolve_conquer_prelude_target(game_id, spell_id, target_figure_id):
+    """Resolve pending conquer prelude target selection for the invader."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/kingdom/conquer/resolve_prelude_target',
+            json={
+                'game_id': game_id,
+                'spell_id': spell_id,
+                'target_figure_id': target_figure_id,
+            },
+            timeout=10
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to resolve prelude target: {str(e)}"}
+
+
 def skip_civil_war_second(game_id, player_id, context='advance'):
     """Skip selecting a second Civil War figure."""
     try:

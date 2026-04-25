@@ -45,6 +45,8 @@ _llm_client = None
 # from worker threads without touching the Flask-bound DB session.
 _ai_player_user_ids = {}
 _ai_player_user_ids_lock = threading.Lock()
+_internal_service_tokens = {}
+_internal_service_tokens_lock = threading.Lock()
 # Watchdog retry budget per game when AI loop exits unsuccessfully
 _ai_watchdog_retries = {}
 _ai_watchdog_lock = threading.Lock()
@@ -115,6 +117,19 @@ _AI_EXPLAIN_DEPTH_ALIASES = {
     'verbose': 'extensive',
     'full': 'extensive',
 }
+
+_CONQUER_CALL_FIELD_MAP = {
+    'Call Villager': 'village',
+    'Call Military': 'military',
+    'Call King': 'castle',
+}
+
+_CONQUER_RED_SUITS = {'Hearts', 'Diamonds'}
+_CONQUER_BLACK_SUITS = {'Clubs', 'Spades'}
+
+_CONQUER_AUTO_GAMBLE_THRESHOLD_DEFAULT = 10
+_CONQUER_AUTO_GAMBLE_THRESHOLD_MIN = 1
+_CONQUER_AUTO_GAMBLE_THRESHOLD_MAX = 20
 
 
 def _get_llm_client():
@@ -267,7 +282,34 @@ def _ai_headers(ai_player_id):
     if ai_user_id is None:
         logger.warning(f"Missing AI user mapping for player_id={ai_player_id}")
         return {}
-    return get_ai_auth_headers(ai_user_id)
+
+    headers = get_ai_auth_headers(ai_user_id)
+    if headers:
+        return headers
+
+    # Conquer-mode defender automation can run on non-AI accounts
+    # (player-owned lands defended while owner is offline). Mint an
+    # internal long-lived token on demand for those service requests.
+    with _internal_service_tokens_lock:
+        token = _internal_service_tokens.get(ai_user_id)
+        if not token:
+            try:
+                token = _generate_internal_service_token(ai_user_id)
+                _internal_service_tokens[ai_user_id] = token
+            except Exception:
+                logger.exception(
+                    "Failed to generate internal service token for user_id=%s",
+                    ai_user_id,
+                )
+                return {}
+
+    return {'Authorization': f'Bearer {token}'}
+
+
+def _generate_internal_service_token(user_id):
+    """Generate a service token usable by server-internal automation calls."""
+    from routes.auth import generate_ai_token
+    return generate_ai_token(user_id)
 
 
 def _clear_watchdog_retry(game_id):
@@ -347,7 +389,7 @@ def trigger_ai_if_needed(game_id, app=None):
     # Import here to avoid circular imports
     from models import Game, User, db
 
-    # Quick check: does this game have an AI player who needs to act?
+    # Quick check: does this game have an automated player who needs to act?
     game = db.session.get(Game, game_id)
     if not game or game.state == 'finished':
         return
@@ -359,19 +401,34 @@ def trigger_ai_if_needed(game_id, app=None):
         return
         return
     
-    ai_player = None
-    for player in game.players:
-        user = db.session.get(User, player.user_id)
-        if user and user.is_ai:
-            ai_player = player
-            break
-    
-    if not ai_player:
-        return
+    automated_player = None
+    if game.mode == 'conquer':
+        # Conquer uses a scripted defender flow regardless of defender account
+        # type (AI or human-owned land config).
+        if game.invader_player_id is not None:
+            automated_player = next(
+                (p for p in game.players if p.id != game.invader_player_id),
+                None,
+            )
+        if automated_player is None:
+            logger.warning(
+                "AI trigger skipped for conquer game %s: defender player not found",
+                game_id,
+            )
+            return
+    else:
+        for player in game.players:
+            user = db.session.get(User, player.user_id)
+            if user and user.is_ai:
+                automated_player = player
+                break
+
+        if automated_player is None:
+            return
 
     # Cache player->user mapping for auth headers used by background thread.
     with _ai_player_user_ids_lock:
-        _ai_player_user_ids[ai_player.id] = ai_player.user_id
+        _ai_player_user_ids[automated_player.id] = automated_player.user_id
     
     # Check if the AI actually needs to act right now
     game_dict = enrich_figures_with_skills(game.serialize())
@@ -379,13 +436,13 @@ def trigger_ai_if_needed(game_id, app=None):
         logger.warning(f"AI trigger: game.serialize() returned None/empty for game {game_id}")
         return
     try:
-        phase = detect_phase(game_dict, ai_player.id)
+        phase = detect_phase(game_dict, automated_player.id)
     except Exception as e:
         logger.error(f"AI trigger: detect_phase crashed for game {game_id}: {e}", exc_info=True)
         return
     if not phase:
         logger.info(f"AI trigger for game {game_id}: no action needed "
-                     f"(turn={game_dict.get('turn_player_id')}, ai={ai_player.id})")
+                     f"(turn={game_dict.get('turn_player_id')}, actor={automated_player.id})")
         return
     
     # Avoid spawning duplicate threads for the same game
@@ -413,13 +470,373 @@ def trigger_ai_if_needed(game_id, app=None):
     # Spawn background thread
     thread = threading.Thread(
         target=loop_fn,
-        args=(app, game_id, ai_player.id),
+        args=(app, game_id, automated_player.id),
         daemon=True,
         name=f"ai-game-{game_id}",
     )
     thread.start()
-    logger.info(f"AI thread spawned for game {game_id}, phase={phase}, "
-                f"mode={game.mode}")
+    logger.info(
+        f"AI thread spawned for game {game_id}, phase={phase}, "
+        f"mode={game.mode}, actor={automated_player.id}"
+    )
+
+
+def _normalize_conquer_auto_gamble_threshold(value):
+    """Clamp conquer auto-gamble threshold to a stable integer range."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = _CONQUER_AUTO_GAMBLE_THRESHOLD_DEFAULT
+
+    if parsed < _CONQUER_AUTO_GAMBLE_THRESHOLD_MIN:
+        return _CONQUER_AUTO_GAMBLE_THRESHOLD_MIN
+    if parsed > _CONQUER_AUTO_GAMBLE_THRESHOLD_MAX:
+        return _CONQUER_AUTO_GAMBLE_THRESHOLD_MAX
+    return parsed
+
+
+def _as_plain_suit(value):
+    """Return a plain suit string from raw model/enum values."""
+    if value is None:
+        return ''
+    if hasattr(value, 'value'):
+        return str(value.value)
+    return str(value)
+
+
+def _conquer_same_colour(suit_a, suit_b):
+    """Return True when both suits are red or both are black."""
+    a = _as_plain_suit(suit_a)
+    b = _as_plain_suit(suit_b)
+    if a in _CONQUER_RED_SUITS and b in _CONQUER_RED_SUITS:
+        return True
+    if a in _CONQUER_BLACK_SUITS and b in _CONQUER_BLACK_SUITS:
+        return True
+    return False
+
+
+def _conquer_battle_ids(game):
+    """IDs of figures already engaged in the current battle."""
+    return {
+        fid for fid in (
+            game.advancing_figure_id,
+            game.advancing_figure_id_2,
+            game.defending_figure_id,
+            game.defending_figure_id_2,
+        ) if fid is not None
+    }
+
+
+def _get_conquer_auto_gamble_settings(game, ai_player_id):
+    """Resolve (enabled, threshold) for conquer auto-gamble runtime."""
+    from models import Land, LandConfig, db
+
+    cfg_id = game.conquer_config_id if ai_player_id == game.invader_player_id else game.defence_config_id
+    if cfg_id:
+        cfg = db.session.get(LandConfig, cfg_id)
+        if cfg:
+            return (
+                bool(cfg.auto_gamble),
+                _normalize_conquer_auto_gamble_threshold(cfg.auto_gamble_threshold),
+            )
+
+    land = game.land if getattr(game, 'land', None) else None
+    if not land and game.land_id:
+        land = db.session.get(Land, game.land_id)
+    if land and land.owner_user_id is None:
+        templates = settings.AI_DEFENCE_TEMPLATES.get(land.tier, [])
+        if templates:
+            tpl_idx = land.ai_template_index or 0
+            if tpl_idx < 0 or tpl_idx >= len(templates):
+                tpl_idx = 0
+            template = templates[tpl_idx]
+            return (
+                bool(template.get('auto_gamble', False)),
+                _normalize_conquer_auto_gamble_threshold(
+                    template.get('auto_gamble_threshold', _CONQUER_AUTO_GAMBLE_THRESHOLD_DEFAULT)
+                ),
+            )
+
+    return False, _CONQUER_AUTO_GAMBLE_THRESHOLD_DEFAULT
+
+
+def _conquer_call_candidates(move, all_figures, game_id, player_id, battle_ids, called_ids):
+    """Return eligible candidate figures for this Call move."""
+    from routes.games import _check_figure_resource_deficit
+
+    target_field = _CONQUER_CALL_FIELD_MAP.get(move.family_name)
+    if not target_field:
+        return []
+
+    bm_suit = _as_plain_suit(move.suit)
+    candidates = []
+    for fig in all_figures:
+        if fig.player_id != player_id:
+            continue
+        if (fig.field or '').lower() != target_field:
+            continue
+        if fig.id in battle_ids:
+            continue
+        if fig.id in called_ids:
+            continue
+        if _check_figure_resource_deficit(fig, player_id, game_id):
+            continue
+
+        fig_suit = _as_plain_suit(fig.suit)
+        if bm_suit in _CONQUER_RED_SUITS and fig_suit not in _CONQUER_RED_SUITS:
+            continue
+        if bm_suit in _CONQUER_BLACK_SUITS and fig_suit not in _CONQUER_BLACK_SUITS:
+            continue
+        candidates.append(fig)
+
+    return candidates
+
+
+def _conquer_move_effective_value(move, call_figure, own_healers):
+    """Estimate move strength, matching server-side battle-move valuation."""
+    from routes.games import _compute_figure_base_power, _compute_healer_buff
+
+    if not move or move.family_name == 'Block':
+        return 0
+
+    base_value = move.value or 0
+    if not call_figure:
+        return base_value
+
+    fig_power = _compute_figure_base_power(call_figure)
+    healer_bonus = _compute_healer_buff(call_figure, own_healers)
+    bm_suit = _as_plain_suit(move.suit).lower()
+    fig_suit = _as_plain_suit(call_figure.suit).lower()
+    if bm_suit == fig_suit:
+        return fig_power + healer_bonus + base_value
+    return fig_power + healer_bonus
+
+
+def _conquer_collect_move_infos(game, ai_player_id):
+    """Collect unplayed moves with best call target and effective value."""
+    from models import BattleMove, Figure, db
+    from routes.games import _find_healer_figures
+
+    all_figures = Figure.query.filter_by(game_id=game.id).all()
+    battle_ids = _conquer_battle_ids(game)
+
+    called_ids = {
+        cfid for (cfid,) in db.session.query(BattleMove.call_figure_id)
+        .filter_by(game_id=game.id, player_id=ai_player_id)
+        .filter(BattleMove.played_round.isnot(None))
+        .filter(BattleMove.call_figure_id.isnot(None))
+        .all()
+    }
+
+    own_healers = _find_healer_figures(ai_player_id, all_figures, battle_ids, game.id)
+    moves = BattleMove.query.filter_by(
+        game_id=game.id, player_id=ai_player_id
+    ).filter(BattleMove.played_round.is_(None)).order_by(BattleMove.id).all()
+
+    infos = []
+    for move in moves:
+        call_figure_id = None
+        eff_value = _conquer_move_effective_value(move, None, own_healers)
+
+        if move.family_name in _CONQUER_CALL_FIELD_MAP:
+            candidates = _conquer_call_candidates(
+                move, all_figures, game.id, ai_player_id, battle_ids, called_ids)
+
+            if not candidates and move.call_figure_id:
+                fallback_fig = next(
+                    (f for f in all_figures
+                     if f.id == move.call_figure_id and f.player_id == ai_player_id),
+                    None,
+                )
+                if fallback_fig:
+                    candidates = [fallback_fig]
+
+            best_candidate = None
+            best_value = None
+            for fig in candidates:
+                val = _conquer_move_effective_value(move, fig, own_healers)
+                if best_value is None or val > best_value:
+                    best_value = val
+                    best_candidate = fig
+
+            if best_candidate is not None:
+                call_figure_id = best_candidate.id
+                eff_value = best_value
+
+        infos.append({
+            'move': move,
+            'effective_value': int(eff_value or 0),
+            'call_figure_id': call_figure_id,
+        })
+
+    return infos, all_figures
+
+
+def _conquer_choose_gamble_target(move_infos, threshold):
+    """Pick the weakest non-block move below threshold for gambling."""
+    target_pool = []
+    for info in move_infos:
+        move = info['move']
+        if move.family_name in ('Block', 'Double Dagger'):
+            continue
+        if info['effective_value'] < threshold:
+            target_pool.append(info)
+
+    if not target_pool:
+        return None
+
+    return min(
+        target_pool,
+        key=lambda item: (
+            int(item.get('effective_value') or 0),
+            int(item['move'].value or 0),
+            int(item['move'].id),
+        ),
+    )
+
+
+def _conquer_choose_best_dagger_pair(moves):
+    """Choose the strongest same-colour dagger pair to combine."""
+    daggers = [m for m in moves if m.family_name == 'Dagger']
+    if len(daggers) < 2:
+        return None
+
+    best_pair = None
+    best_value = None
+    for i, move_a in enumerate(daggers):
+        for move_b in daggers[i + 1:]:
+            if not _conquer_same_colour(move_a.suit, move_b.suit):
+                continue
+            combined = int(move_a.value or 0) + int(move_b.value or 0)
+            if best_value is None or combined > best_value:
+                best_value = combined
+                best_pair = (move_a.id, move_b.id)
+
+    return best_pair
+
+
+def _conquer_opponent_move_value_for_round(game, ai_player_id, current_round, all_figures):
+    """Return opponent move effective value in the current round, if known."""
+    from models import BattleMove, Figure, db
+    from routes.games import _find_healer_figures
+
+    opponent = next((p for p in game.players if p.id != ai_player_id), None)
+    if not opponent:
+        return None
+
+    opp_move = BattleMove.query.filter_by(
+        game_id=game.id,
+        player_id=opponent.id,
+        played_round=current_round,
+    ).first()
+    if not opp_move:
+        return None
+
+    battle_ids = _conquer_battle_ids(game)
+    opp_healers = _find_healer_figures(opponent.id, all_figures, battle_ids, game.id)
+    call_fig = None
+    if opp_move.call_figure_id:
+        call_fig = next((f for f in all_figures if f.id == opp_move.call_figure_id), None)
+        if not call_fig:
+            call_fig = db.session.get(Figure, opp_move.call_figure_id)
+
+    return _conquer_move_effective_value(opp_move, call_fig, opp_healers)
+
+
+def _conquer_choose_play_move(move_infos, opponent_round_value):
+    """Pick strongest move; optionally prefer Block when strongest is not better."""
+    if not move_infos:
+        return None
+
+    block_info = next((m for m in move_infos if m['move'].family_name == 'Block'), None)
+    non_block = [m for m in move_infos if m['move'].family_name != 'Block']
+
+    strongest = None
+    if non_block:
+        strongest = max(
+            non_block,
+            key=lambda item: (
+                int(item.get('effective_value') or 0),
+                int(item['move'].value or 0),
+                -int(item['move'].id),
+            ),
+        )
+
+    if block_info and strongest is not None and opponent_round_value is not None:
+        strongest_advantage = int(strongest['effective_value'] or 0) - int(opponent_round_value or 0)
+        if strongest_advantage <= 0:
+            return block_info
+
+    if strongest is not None:
+        return strongest
+    return block_info
+
+
+def _conquer_play_battle_round(base, game, ai_player_id):
+    """Execute conquer battle-round policy including optional auto-gamble flow."""
+    from models import Game, db
+
+    auto_enabled, threshold = _get_conquer_auto_gamble_settings(game, ai_player_id)
+    move_infos, all_figures = _conquer_collect_move_infos(game, ai_player_id)
+    if not move_infos:
+        logger.info(f"[CONQUER-AI] no unplayed move, skipping turn game={game.id}")
+        return _exec_skip_battle_turn(base, game.id, ai_player_id)
+
+    if auto_enabled:
+        gamble_target = _conquer_choose_gamble_target(move_infos, threshold)
+        if gamble_target:
+            gamble_move = gamble_target['move']
+            logger.info(
+                f"[CONQUER-AI] auto-gamble game={game.id} move={gamble_move.id} "
+                f"eff={gamble_target['effective_value']} threshold={threshold}"
+            )
+            if _exec_gamble_battle_move(base, game.id, ai_player_id,
+                                        {'battle_move_id': gamble_move.id}):
+                db.session.expire_all()
+                game = db.session.get(Game, game.id)
+                move_infos, all_figures = _conquer_collect_move_infos(game, ai_player_id)
+                if not move_infos:
+                    logger.info(f"[CONQUER-AI] no moves after gamble, skipping game={game.id}")
+                    return _exec_skip_battle_turn(base, game.id, ai_player_id)
+
+        dagger_pair = _conquer_choose_best_dagger_pair([info['move'] for info in move_infos])
+        if dagger_pair:
+            logger.info(
+                f"[CONQUER-AI] auto-combine daggers game={game.id} pair={dagger_pair[0]},{dagger_pair[1]}"
+            )
+            if _exec_combine_battle_moves(
+                base,
+                game.id,
+                ai_player_id,
+                {'move_id_a': dagger_pair[0], 'move_id_b': dagger_pair[1]},
+            ):
+                db.session.expire_all()
+                game = db.session.get(Game, game.id)
+                move_infos, all_figures = _conquer_collect_move_infos(game, ai_player_id)
+                if not move_infos:
+                    logger.info(f"[CONQUER-AI] no moves after combine, skipping game={game.id}")
+                    return _exec_skip_battle_turn(base, game.id, ai_player_id)
+
+    current_round = int(game.battle_round or 0)
+    opponent_round_value = _conquer_opponent_move_value_for_round(
+        game, ai_player_id, current_round, all_figures)
+    chosen = _conquer_choose_play_move(move_infos, opponent_round_value)
+
+    if not chosen:
+        logger.info(f"[CONQUER-AI] no playable decision, skipping turn game={game.id}")
+        return _exec_skip_battle_turn(base, game.id, ai_player_id)
+
+    move = chosen['move']
+    params = {'battle_move_id': move.id}
+    if chosen.get('call_figure_id'):
+        params['call_figure_id'] = chosen['call_figure_id']
+
+    logger.info(
+        f"[CONQUER-AI] play game={game.id} move={move.id} family={move.family_name} "
+        f"eff={chosen['effective_value']} opp_eff={opponent_round_value} "
+        f"call={chosen.get('call_figure_id')} auto={auto_enabled} threshold={threshold}"
+    )
+    return _exec_play_battle_move(base, game.id, ai_player_id, params)
 
 
 def _conquer_ai_loop(app, game_id, ai_player_id):
@@ -428,7 +845,7 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
     Unlike the LLM-backed ``_ai_game_loop``, this loop makes deterministic
     decisions: always counter-advance with the pre-configured battle figure,
     always fight (never fold), auto-confirm pre-populated battle moves, and
-    play them in round order.
+    play battle rounds via strongest-move policy (optionally using auto-gamble).
     """
     try:
         time.sleep(max(settings.AI_THINK_DELAY * 0.5, 0.3))
@@ -512,31 +929,13 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                 _exec_confirm_battle_moves(base, game_id, ai_player_id)
 
             elif phase == 'battle_round':
-                # Play the next unplayed move for the current round
+                # Deterministic policy: optional auto-gamble/auto-combine,
+                # then strongest move with Block tie-break logic.
                 with app.app_context():
-                    from models import Game, BattleMove, db
+                    from models import Game, db
                     game = db.session.get(Game, game_id)
-                    current_round = game.battle_round or 0
-                    moves = BattleMove.query.filter_by(
-                        game_id=game_id, player_id=ai_player_id
-                    ).filter(BattleMove.played_round.is_(None)).order_by(
-                        BattleMove.id
-                    ).all()
-                    move = moves[0] if moves else None
-                    move_id = move.id if move else None
-                    call_fig = move.call_figure_id if move else None
-
-                if move_id:
-                    params = {'battle_move_id': move_id}
-                    if call_fig:
-                        params['call_figure_id'] = call_fig
-                    _exec_play_battle_move(base, game_id, ai_player_id, params)
-                else:
-                    # No moves left — skip turn (can happen with incomplete
-                    # defence configs that had fewer than 3 battle moves)
-                    logger.info(f"[CONQUER-AI] no unplayed move, skipping turn game={game_id}")
-                    _ai_post(f'{base}/games/skip_battle_turn', ai_player_id,
-                             json={'game_id': game_id, 'player_id': ai_player_id})
+                    if game:
+                        _conquer_play_battle_round(base, game, ai_player_id)
 
             elif phase == 'finish_battle':
                 _ai_post(f'{base}/games/finish_battle', ai_player_id, json={
