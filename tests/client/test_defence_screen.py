@@ -336,6 +336,18 @@ class TestAutoGambleThreshold:
 
 class TestDefenceScreenLayout:
 
+    def test_config_subscreen_rect_is_centered_below_top_chrome(self):
+        from config import settings
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+
+        rect = screen._config_subscreen_rect()
+
+        assert rect.y > settings.SUB_SCREEN_Y
+        assert abs(rect.centerx - settings.SCREEN_WIDTH // 2) <= 1
+        assert abs(rect.centery - settings.SCREEN_HEIGHT // 2) <= 1
+
     def test_right_panels_stack_without_overlap(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()

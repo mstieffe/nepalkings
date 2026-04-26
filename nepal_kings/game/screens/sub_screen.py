@@ -18,6 +18,8 @@ class SubScreen:
 
         self.x = x
         self.y = y
+        self._layout_offset_x = self.x - settings.SUB_SCREEN_X
+        self._layout_offset_y = self.y - settings.SUB_SCREEN_Y
 
         self.title = title
 
@@ -50,6 +52,18 @@ class SubScreen:
             self.y + _margin,
             _cbsz, _cbsz)
 
+    def _sx(self, x):
+        """Translate a base screen x-coordinate by this subscreen origin."""
+        return int(x + self._layout_offset_x)
+
+    def _sy(self, y):
+        """Translate a base screen y-coordinate by this subscreen origin."""
+        return int(y + self._layout_offset_y)
+
+    def _spos(self, x, y):
+        """Translate a base screen coordinate pair by this subscreen origin."""
+        return self._sx(x), self._sy(y)
+
     def make_button(self, text, x, y, width: int = None, height: int = None, button_img_active=None, button_img_inactive=None):
         """Helper to create a button."""
         return SubScreenButton(self.window, x, y, text, width=width, height=height, 
@@ -66,7 +80,7 @@ class SubScreen:
             title_surf = self.title_font.render(self.title, True,
                                                settings.SUB_SCREEN_TITLE_COLOR)
             title_rect = title_surf.get_rect(
-                center=(settings.SUB_SCREEN_TITLE_X, settings.SUB_SCREEN_TITLE_Y))
+                center=self._spos(settings.SUB_SCREEN_TITLE_X, settings.SUB_SCREEN_TITLE_Y))
 
             # Background badge rect with padding
             bg_rect = pygame.Rect(
@@ -87,8 +101,8 @@ class SubScreen:
             shadow_surf = self.title_font.render(self.title, True,
                                                 settings.SUB_SCREEN_TITLE_SHADOW_COLOR)
             shadow_rect = shadow_surf.get_rect(
-                center=(settings.SUB_SCREEN_TITLE_X + _off,
-                        settings.SUB_SCREEN_TITLE_Y + _off))
+                center=self._spos(settings.SUB_SCREEN_TITLE_X + _off,
+                                  settings.SUB_SCREEN_TITLE_Y + _off))
             self.window.blit(shadow_surf, shadow_rect)
 
             # Gold title text
@@ -182,13 +196,13 @@ class SubScreen:
                          (0, 0, width, height), bw, border_radius=r)
 
         self.sub_box_background = panel
-        self.sub_box_x = x
-        self.sub_box_y = y
+        self.sub_box_x = self._sx(x)
+        self.sub_box_y = self._sy(y)
 
     def init_scroll_background(self, x, y, width, height):
         """Build a warm brown programmatic scroll panel (replaces scroll.png)."""
-        self.scroll_x = x
-        self.scroll_y = y
+        self.scroll_x = self._sx(x)
+        self.scroll_y = self._sy(y)
         self.scroll_w = width
         self.scroll_h = height
         self.scroll_text_list = []
@@ -242,7 +256,7 @@ class SubScreen:
         if hasattr(self, 'scroll_x'):
             scroll_rect = pygame.Rect(self.scroll_x, self.scroll_y, self.scroll_w, self.scroll_h)
         self.scroll_text_list_shifter = ScrollTextListShifter(
-            self.window, text_list, x, y,
+            self.window, text_list, self._sx(x), self._sy(y),
             scroll_height=scroll_height, scroll_rect=scroll_rect
         )
 

@@ -54,8 +54,8 @@ class BuildFigureScreen(SubScreen):
 
         self.confirm_button = ConfirmButton(
             self.window,
-            settings.BUILD_FIGURE_CONFIRM_BUTTON_X,
-            settings.BUILD_FIGURE_CONFIRM_BUTTON_Y,
+            self._sx(settings.BUILD_FIGURE_CONFIRM_BUTTON_X),
+            self._sy(settings.BUILD_FIGURE_CONFIRM_BUTTON_Y),
             "create!"
         )
 
@@ -326,8 +326,8 @@ class BuildFigureScreen(SubScreen):
                     family.make_icon(
                         self.window,
                         self.game,
-                        family.build_position[0],
-                        family.build_position[1]
+                        self._sx(family.build_position[0]),
+                        self._sy(family.build_position[1])
                     )
                 )
             
@@ -341,7 +341,7 @@ class BuildFigureScreen(SubScreen):
         self.color_buttons = []
         for i, color in enumerate(colors):
             x = start_x + i * (settings.COLOR_TOGGLE_W + gap)
-            btn = ColorTogglePill(self.window, x, settings.BUILD_FIGURE_COLOR_BUTTON_Y, color)
+            btn = ColorTogglePill(self.window, self._sx(x), self._sy(settings.BUILD_FIGURE_COLOR_BUTTON_Y), color)
             self.color_buttons.append(btn)
         self.color_buttons[0].active = True
         self.buttons += self.color_buttons
@@ -727,7 +727,7 @@ class BuildFigureScreen(SubScreen):
         """Draw the screen, including buttons and background."""
         super().draw()
 
-        self.window.blit(self.build_hierarchy, (settings.BUILD_HIERARCHY_X, settings.BUILD_HIERARCHY_Y))
+        self.window.blit(self.build_hierarchy, self._spos(settings.BUILD_HIERARCHY_X, settings.BUILD_HIERARCHY_Y))
 
         internal_color = self.color_mapping.get(self.color, self.color)
         # Z-order layering: regular → selected → hovered (so info boxes appear on top)

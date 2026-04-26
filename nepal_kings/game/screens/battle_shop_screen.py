@@ -70,8 +70,8 @@ class BattleShopScreen(SubScreen):
         # Confirm button
         self.confirm_button = ConfirmButton(
             self.window,
-            settings.BATTLE_SHOP_CONFIRM_BUTTON_X,
-            settings.BATTLE_SHOP_CONFIRM_BUTTON_Y,
+            self._sx(settings.BATTLE_SHOP_CONFIRM_BUTTON_X),
+            self._sy(settings.BATTLE_SHOP_CONFIRM_BUTTON_Y),
             "buy!"
         )
 
@@ -98,8 +98,8 @@ class BattleShopScreen(SubScreen):
 
         self.ready_button = ConfirmButton(
             self.window,
-            settings.BATTLE_SHOP_READY_BUTTON_X,
-            settings.BATTLE_SHOP_READY_BUTTON_Y,
+            self._sx(settings.BATTLE_SHOP_READY_BUTTON_X),
+            self._sy(settings.BATTLE_SHOP_READY_BUTTON_Y),
             "ready!"
         )
         self.phase_banner_font = settings.get_font(settings.BATTLE_SHOP_PHASE_BANNER_FONT_SIZE, bold=True)
@@ -247,8 +247,8 @@ class BattleShopScreen(SubScreen):
         for i, family in enumerate(self.battle_move_manager.families):
             icon = family.make_icon(
                 self.window, self.game,
-                start_x + i * dx,
-                start_y,
+                self._sx(start_x + i * dx),
+                self._sy(start_y),
             )
             self.move_family_buttons.append(icon)
 
@@ -662,10 +662,10 @@ class BattleShopScreen(SubScreen):
         max_moves = settings.BATTLE_SHOP_MAX_MOVES
 
         # Use same centred positions as _draw_bought_slots
-        box_cx = settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2
+        box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         total_span = (max_moves - 1) * delta_x + sw
         slot_start_x = box_cx - total_span // 2
-        sy = settings.BATTLE_SHOP_SLOT_Y
+        sy = self._sy(settings.BATTLE_SHOP_SLOT_Y)
 
         for i in range(max_moves):
             sx = slot_start_x + i * delta_x
@@ -944,7 +944,7 @@ class BattleShopScreen(SubScreen):
 
     def _draw_phase_banner(self):
         """Draw a banner indicating the mandatory battle-move selection phase."""
-        box_cx = settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2
+        box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         count = len(self.bought_moves)
         max_m = settings.BATTLE_SHOP_MAX_MOVES
 
@@ -964,7 +964,7 @@ class BattleShopScreen(SubScreen):
         banner = self.phase_banner_font.render(text, True, color)
         banner_rect = banner.get_rect(
             centerx=box_cx,
-            bottom=settings.BATTLE_SHOP_INFO_BOX_Y + settings.BATTLE_SHOP_INFO_BOX_HEIGHT - int(0.02 * settings.SCREEN_HEIGHT),
+            bottom=self._sy(settings.BATTLE_SHOP_INFO_BOX_Y + settings.BATTLE_SHOP_INFO_BOX_HEIGHT - int(0.02 * settings.SCREEN_HEIGHT)),
         )
         self.window.blit(banner, banner_rect)
 
@@ -981,10 +981,10 @@ class BattleShopScreen(SubScreen):
         delta_x = settings.BATTLE_SHOP_SLOT_DELTA_X
 
         # Centre the slots horizontally within the info box
-        box_cx = settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2
+        box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         total_span = (max_moves - 1) * delta_x + sw
         slot_start_x = box_cx - total_span // 2
-        sy = settings.BATTLE_SHOP_SLOT_Y
+        sy = self._sy(settings.BATTLE_SHOP_SLOT_Y)
 
         # Label with count — centred above the slots
         count = len(self.bought_moves)

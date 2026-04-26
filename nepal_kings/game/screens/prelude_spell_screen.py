@@ -65,8 +65,8 @@ class PreludeSpellScreen(SubScreen):
 
         self.confirm_button = ConfirmButton(
             self.window,
-            settings.CAST_SPELL_CONFIRM_BUTTON_X,
-            settings.CAST_SPELL_CONFIRM_BUTTON_Y,
+            self._sx(settings.CAST_SPELL_CONFIRM_BUTTON_X),
+            self._sy(settings.CAST_SPELL_CONFIRM_BUTTON_Y),
             "select!"
         )
 
@@ -120,13 +120,13 @@ class PreludeSpellScreen(SubScreen):
 
             row_y = settings.CAST_SPELL_ICON_START_Y + row_index * settings.SPELL_ICON_DELTA_Y
             label_rect = label_surface.get_rect()
-            label_rect.midleft = (settings.SPELL_TYPE_LABEL_X, row_y)
+            label_rect.midleft = self._spos(settings.SPELL_TYPE_LABEL_X, row_y)
             self.type_label_positions[effect_type] = label_rect.topleft
 
             for col_index, family in enumerate(families_in_row):
                 btn_x = settings.CAST_SPELL_ICON_START_X + col_index * settings.SPELL_ICON_DELTA_X
                 btn_y = settings.CAST_SPELL_ICON_START_Y + row_index * settings.SPELL_ICON_DELTA_Y
-                button = family.make_icon(self.window, self.game, btn_x, btn_y)
+                button = family.make_icon(self.window, self.game, self._sx(btn_x), self._sy(btn_y))
                 self.spell_family_buttons.append(button)
 
     # ── Card helpers ────────────────────────────────────────────────

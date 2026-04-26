@@ -1929,6 +1929,18 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         return CollectionCardSource(cards, self._config.get('figures', []), locked_ids)
 
+    def _config_subscreen_origin(self):
+        """Return a centered modal origin for config-edit subscreens."""
+        x = (settings.SCREEN_WIDTH - settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH) // 2
+        y = (settings.SCREEN_HEIGHT - settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT) // 2
+        return max(0, x), max(0, y)
+
+    def _config_subscreen_rect(self):
+        x, y = self._config_subscreen_origin()
+        return pygame.Rect(x, y,
+                           settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH,
+                           settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT)
+
     def _open_build_figure(self):
         """Open BuildFigureScreen as a subscreen."""
         card_source = self._build_card_source()
@@ -1937,9 +1949,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
         self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='defence')
         self.state.game = self._game_proxy
+        sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = BuildFigureScreen(
             self.window, self.state,
-            x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
+            x=sx, y=sy,
             title='Figure Builder', card_source=card_source, mode='defence',
         )
         self._subscreen_obj._on_done = self._close_subscreen
@@ -1953,9 +1966,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
         self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='defence')
         self.state.game = self._game_proxy
+        sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = BattleShopScreen(
             self.window, self.state,
-            x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
+            x=sx, y=sy,
             title='Battle Shop', card_source=card_source, mode='defence',
         )
         self._subscreen_obj._on_done = self._close_subscreen
@@ -1971,9 +1985,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
         self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='defence')
         self.state.game = self._game_proxy
+        sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = PreludeSpellScreen(
             self.window, self.state,
-            x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
+            x=sx, y=sy,
             title='Prelude Spell', card_source=card_source, mode='defence',
             allowed_spells=_DEFENCE_PRELUDE_SPELLS,
             server_endpoint='/kingdom/defence/set_prelude_spell',
@@ -1996,9 +2011,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
         self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='defence')
         self.state.game = self._game_proxy
+        sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = PreludeSpellScreen(
             self.window, self.state,
-            x=settings.SUB_SCREEN_X, y=settings.SUB_SCREEN_Y,
+            x=sx, y=sy,
             title='Counter Spell', card_source=card_source, mode='defence',
             allowed_spells=_DEFENCE_COUNTER_SPELLS,
             server_endpoint='/kingdom/defence/set_counter_spell',
@@ -2273,10 +2289,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         # If subscreen is active, delegate events
         if self._active_subscreen and self._subscreen_obj:
             self._subscreen_obj.handle_events(events)
-            _ss_rect = pygame.Rect(
-                settings.SUB_SCREEN_X, settings.SUB_SCREEN_Y,
-                settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH,
-                settings.SUB_SCREEN_BACKGROUND_IMG_HEIGHT)
+            _ss_rect = self._config_subscreen_rect()
             for event in events:
                 if event.type == KEYDOWN and event.key == K_ESCAPE:
                     self._close_subscreen()
