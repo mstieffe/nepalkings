@@ -112,6 +112,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         # ── Layout rects (initialised lazily after first data load) ─
         self._field_rects = {}       # 'castle'/'village'/'military' → Rect
         self._move_slots_rect = None  # Rect enclosing all 3 move slots
+        self._battle_plan_rect = None
+        self._prelude_panel_rect = None
         self._btn_build = None       # "Build Figure" button rect
         self._btn_buy_move = None    # "Buy Move" button rect
         self._btn_battle = None      # "To Battle!" button rect
@@ -121,6 +123,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._res_village_rect = None # Resource sub-panel below village
         self._field_title_pos = None  # section title position
         self._moves_title_pos = None  # section title position
+        self._prelude_title_pos = None
         self._layout_built = False
 
         # ── Figure icons (FieldFigureIcon) ──────────────────────────
@@ -179,6 +182,14 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 self._header_suit_icons[suit_name] = pygame.transform.smoothscale(raw, (_hdr_suit_sz, _hdr_suit_sz))
             except Exception:
                 pass
+
+    @staticmethod
+    def _to_int(value, default=0):
+        """Safely coerce a numeric config value to an integer for display."""
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return default
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -312,14 +323,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
     def _build_layout(self):
         """Compute rects based on screen dimensions."""
         pad = int(0.02 * _SW)
-        top = _BOX_Y + _BOX_PAD + int(0.06 * _SH)   # below title
+        top = _BOX_Y + _BOX_PAD + int(0.045 * _SH)   # below compact title
 
         # Section title row height — extra gap below subtitle (gold rate / suit bonus)
         section_h = int(0.03 * _SH) + int(0.01 * _SH)
-        content_top = top + section_h + pad
+        content_top = top + section_h + int(0.65 * pad)
 
-        # Left half: 3 field compartments stacked horizontally (taller)
-        field_w = int(0.14 * _SW)
+        # Left half: 3 field compartments, trimmed slightly so the action
+        # column gets the same breathing room as the defence screen.
+        field_w = int(0.132 * _SW)
         field_h = int(0.48 * _SH)
         fx = _BOX_X + pad
         for field in ('castle', 'village', 'military'):
@@ -337,59 +349,14 @@ class ConquerScreen(MenuScreenMixin, Screen):
             isz, isz,
         )
 
-        # Right column: battle moves + modifier (starts after field compartments)
+        # Right column: battle plan + prelude spell panels.
         right_x = _BOX_X + pad + 3 * (field_w + pad)
         self._right_x = right_x
-        btn_h = int(0.045 * _SH)
-
-        # Edit icon button next to "Battle Moves" section title
-        moves_title_surf = self._label_font.render('Battle Moves', True, (0, 0, 0))
-        moves_w = moves_title_surf.get_width()
-        self._moves_title_pos = (right_x, top)
-        self._btn_buy_move = pygame.Rect(
-            right_x + moves_w + int(0.008 * _SW),
-            top + (moves_title_surf.get_height() - isz) // 2,
-            isz, isz,
-        )
-
-        # Battle move slots — 3 diamond icons in a row
-        slot_spacing = int(self._move_slot_size * 2.0)
-        slots_w = slot_spacing * 2 + self._move_slot_size
-        self._move_slots_rect = pygame.Rect(right_x, content_top, slots_w + pad, int(self._move_slot_size * 2.0))
-
-        my = content_top + self._move_slots_rect.h + pad
-
-        # Prelude spell section — single spell icon slot
-        fsz = self._mod_frame_size
-        # Section label + description height, so icon starts below the text
-        lbl_h = self._small_font.get_height()
-        desc_h = self._res_font.get_height()
-        section_text_h = lbl_h + 2 + desc_h + int(0.008 * _SH)
-        self._mod_section_y = my + section_text_h
-        # Single spell icon slot
-        self._prelude_spell_rect = pygame.Rect(right_x, self._mod_section_y, fsz, fsz)
-        # Edit icon button next to "Prelude Spell" section title
-        isz = self._edit_icon_size
-        prelude_title_surf = self._small_font.render('Prelude Spell', True, (0, 0, 0))
-        prelude_title_w = prelude_title_surf.get_width()
-        self._prelude_title_pos = (right_x, my)
-        self._btn_prelude_edit = pygame.Rect(
-            right_x + prelude_title_w + int(0.008 * _SW),
-            my + (prelude_title_surf.get_height() - isz) // 2,
-            isz, isz,
-        )
-        my = self._mod_section_y + fsz + int(0.025 * _SH) + pad
-
-        # Combined resource panel below castle+village field compartments
-        # Slightly smaller height, moved down a bit
-        castle_r = self._field_rects['castle']
-        village_r = self._field_rects['village']
-        res_top = castle_r.bottom + pad + int(0.005 * _SH)
-        res_w = village_r.right - castle_r.x
-        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
-        self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
-        self._res_castle_rect = None
-        self._res_village_rect = None
+        right_right = _BOX_X + _BOX_W - _BOX_PAD
+        right_w = right_right - right_x
+        panel_gap = int(0.014 * _SH)
+        panel_pad = int(0.010 * _SW)
+        panel_pad_y = int(0.010 * _SH)
 
         # To Battle — lower right of box
         battle_w = int(0.20 * _SW)
@@ -400,14 +367,84 @@ class ConquerScreen(MenuScreenMixin, Screen):
             battle_w, battle_h,
         )
 
+        sw = self._move_slot_size
+        slot_spacing = int(sw * 2.0)
+        slots_w = slot_spacing * 2 + sw * 2
+        slot_row_h = int(sw * 2.0)
+        fsz = self._mod_frame_size
+        header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
+        right_content_bottom = self._btn_battle.y - panel_gap
+        right_content_h = max(1, right_content_bottom - content_top)
+        available_panel_h = max(1, right_content_h - panel_gap)
+        battle_plan_min_h = header_h + slot_row_h + panel_pad_y
+        prelude_min_h = header_h + fsz + panel_pad_y
+        battle_plan_h = min(
+            max(battle_plan_min_h, int(available_panel_h * 0.58)),
+            max(battle_plan_min_h, available_panel_h - prelude_min_h),
+        )
+        prelude_h = max(prelude_min_h, available_panel_h - battle_plan_h)
+
+        self._battle_plan_rect = pygame.Rect(right_x, content_top, right_w, battle_plan_h)
+        self._prelude_panel_rect = pygame.Rect(
+            right_x, self._battle_plan_rect.bottom + panel_gap, right_w, prelude_h)
+
+        # Edit icon button next to "Battle Plan" section title
+        moves_title_surf = self._label_font.render('Battle Plan', True, (0, 0, 0))
+        moves_w = moves_title_surf.get_width()
+        self._moves_title_pos = (
+            self._battle_plan_rect.x + panel_pad,
+            self._battle_plan_rect.y + int(0.010 * _SH),
+        )
+        self._btn_buy_move = pygame.Rect(
+            self._moves_title_pos[0] + moves_w + int(0.008 * _SW),
+            self._moves_title_pos[1] + (moves_title_surf.get_height() - isz) // 2,
+            isz, isz,
+        )
+
+        # Battle move slots — 3 diamond icons in a row
+        self._move_slots_rect = pygame.Rect(
+            self._battle_plan_rect.centerx - slots_w // 2,
+            self._battle_plan_rect.y + header_h,
+            slots_w,
+            slot_row_h,
+        )
+
+        # Prelude spell section — single spell icon slot
+        prelude_header_y = self._prelude_panel_rect.y + int(0.010 * _SH)
+        self._mod_section_y = self._prelude_panel_rect.y + header_h
+        # Single spell icon slot
+        self._prelude_spell_rect = pygame.Rect(
+            self._prelude_panel_rect.x + panel_pad,
+            self._mod_section_y,
+            fsz,
+            fsz,
+        )
+        # Edit icon button next to "Prelude Spell" section title
+        prelude_title_surf = self._small_font.render('Prelude Spell', True, (0, 0, 0))
+        prelude_title_w = prelude_title_surf.get_width()
+        self._prelude_title_pos = (self._prelude_panel_rect.x + panel_pad, prelude_header_y)
+        self._btn_prelude_edit = pygame.Rect(
+            self._prelude_title_pos[0] + prelude_title_w + int(0.008 * _SW),
+            self._prelude_title_pos[1] + (prelude_title_surf.get_height() - isz) // 2,
+            isz, isz,
+        )
+
+        # Combined resource panel below castle+village field compartments
+        castle_r = self._field_rects['castle']
+        village_r = self._field_rects['village']
+        res_top = castle_r.bottom + pad + int(0.005 * _SH)
+        res_w = village_r.right - castle_r.x
+        res_h = max(1, _BOX_BOTTOM - _BOX_PAD - res_top)
+        self._res_rect = pygame.Rect(castle_r.x, res_top, res_w, res_h)
+        self._res_castle_rect = None
+        self._res_village_rect = None
+
         # ── Divider positions ──────────────────────────────────────
         # Vertical: between left fields/resources and right battle column
         self._divider_v_x = right_x - pad // 2
         self._divider_v_top = top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
-        # Horizontal: between battle-move section and modifier section
-        # Position above the section text (label + desc), not just above icons
-        self._divider_h1_y = self._mod_section_y - section_text_h - int(0.008 * _SH)
+        self._divider_h1_y = None
 
         # X close button (top-right of box)
         _xsz = int(0.028 * _SH)
@@ -658,6 +695,82 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 requires[res] = requires.get(res, 0) + amt
         return {'produces': produces, 'requires': requires}
 
+    def _draw_section_panel(self, rect, title, *, description=None,
+                            icon_rect=None, title_pos=None):
+        """Draw a quiet section card with one title row and optional edit icon."""
+        if not rect:
+            return
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (28, 24, 20, 120), surf.get_rect(), border_radius=5)
+        self.window.blit(surf, rect.topleft)
+        pygame.draw.rect(self.window, (110, 95, 72), rect, 1, border_radius=5)
+
+        x = title_pos[0] if title_pos else rect.x + int(0.010 * _SW)
+        y = title_pos[1] if title_pos else rect.y + int(0.010 * _SH)
+        font = self._label_font if title == 'Battle Plan' else self._small_font
+        title_surf = font.render(title, True, (200, 185, 150))
+        self.window.blit(title_surf, (x, y))
+        if description:
+            desc_surf = self._res_font.render(description, True, (160, 145, 120))
+            self.window.blit(desc_surf, (x, y + title_surf.get_height() + 2))
+
+        if icon_rect:
+            isz = self._edit_icon_size
+            mx, my = pygame.mouse.get_pos()
+            hovered = icon_rect.collidepoint(mx, my)
+            if hovered:
+                glow = pygame.Surface((isz + 4, isz + 4), pygame.SRCALPHA)
+                glow.fill((255, 255, 200, 40))
+                self.window.blit(glow, (icon_rect.x - 2, icon_rect.y - 2))
+            self.window.blit(self._edit_icon, icon_rect.topleft)
+
+    def _fit_text(self, text, font, max_width):
+        """Trim text with an ellipsis so captions stay inside their panel."""
+        text = str(text)
+        if max_width <= 0:
+            return ''
+        if font.size(text)[0] <= max_width:
+            return text
+        ellipsis = '…'
+        if font.size(ellipsis)[0] > max_width:
+            return ''
+        lo = 0
+        hi = len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if font.size(text[:mid] + ellipsis)[0] <= max_width:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo] + ellipsis
+
+    def _draw_caption_lines(self, lines, x, y, max_width, *, line_gap=2):
+        """Draw fitted caption lines and return the bottom y position."""
+        cy = y
+        for text, font, color in lines:
+            fitted = self._fit_text(text, font, max_width)
+            surf = font.render(fitted, True, color)
+            self.window.blit(surf, (x, cy))
+            cy += surf.get_height() + line_gap
+        return cy - line_gap
+
+    def _draw_right_panels(self):
+        """Draw structured panels behind the right-column controls."""
+        self._draw_section_panel(
+            self._battle_plan_rect,
+            'Battle Plan',
+            description='Assign cards for battle rounds',
+            icon_rect=self._btn_buy_move,
+            title_pos=self._moves_title_pos,
+        )
+        self._draw_section_panel(
+            self._prelude_panel_rect,
+            'Prelude Spell',
+            description='Optional spell before battle',
+            icon_rect=self._btn_prelude_edit,
+            title_pos=self._prelude_title_pos,
+        )
+
     # ── Rendering ───────────────────────────────────────────────────
 
     def render(self):
@@ -707,9 +820,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
                                                   top=_BOX_Y + _BOX_PAD))
 
         # Land specifications
-        gold_rate = land.get('gold_rate', 0)
+        gold_rate = self._to_int(land.get('gold_rate', 0), 0)
         suit = land.get('suit_bonus_suit', '?')
-        bonus = land.get('suit_bonus_value', 0)
+        bonus = self._to_int(land.get('suit_bonus_value', 0), 0)
         specs_text = f'Gold: {gold_rate}/hr  |  Suit Bonus: +{bonus} '
         specs_surf = self._res_font.render(specs_text, True, (180, 170, 140))
         suit_icon = self._header_suit_icons.get(suit.lower())
@@ -720,6 +833,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if suit_icon:
             self.window.blit(suit_icon, (specs_x + specs_surf.get_width() + 2,
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
+
+        self._draw_right_panels()
 
         # ── Field compartments with figure icons ────────────────────
         self._draw_field_compartments()
@@ -739,16 +854,10 @@ class ConquerScreen(MenuScreenMixin, Screen):
         pygame.draw.line(self.window, div_clr,
                          (self._divider_v_x, self._divider_v_top),
                          (self._divider_v_x, self._divider_v_bottom), 1)
-        # Horizontal divider between battle moves and modifier section
-        pygame.draw.line(self.window, div_clr,
-                         (self._right_x, self._divider_h1_y),
-                         (_BOX_X + _BOX_W - _BOX_PAD, self._divider_h1_y), 1)
 
         # ── Section titles with edit icon buttons ───────────────────
         self._draw_section_title('Conquer Field', self._field_title_pos, self._btn_build,
                                 description='Place figures to grow your economy')
-        self._draw_section_title('Battle Moves', self._moves_title_pos, self._btn_buy_move,
-                                description='Assign cards for each battle round')
 
         # To Battle — enabled only when ready
         ready = self._is_battle_ready()
@@ -860,6 +969,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         _xbs = self._x_btn_sz
         frame_w = int(settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_WIDTH)
         frame_h_btn = int(settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT)
+        mouse_pos = pygame.mouse.get_pos()
         for fig in self._figure_objects:
             pos = icon_positions.get(fig.id)
             if not pos:
@@ -867,26 +977,31 @@ class ConquerScreen(MenuScreenMixin, Screen):
             ix, iy = pos
             fr_left = ix - frame_w // 2
             fr_top = iy - frame_h_btn // 2
+            frame_rect = pygame.Rect(int(fr_left), int(fr_top), frame_w, frame_h_btn)
 
             cfg_fig = self._get_config_fig(fig.id)
             if cfg_fig:
                 xbtn = pygame.Rect(int(fr_left + frame_w - _xbs - 2), int(fr_top + 2), _xbs, _xbs)
-                x_hovered = xbtn.collidepoint(pygame.mouse.get_pos())
-                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
-                pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
-                xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
-                xt = xf.render('\u00d7', True, tc)
-                self.window.blit(xt, xt.get_rect(center=xbtn.center))
-                cfg_fig['_remove_rect'] = xbtn
+                x_hovered = xbtn.collidepoint(mouse_pos)
+                if frame_rect.collidepoint(mouse_pos) or x_hovered:
+                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                    pygame.draw.rect(self.window, bg, xbtn, border_radius=3)
+                    pygame.draw.rect(self.window, bdr, xbtn, 1, border_radius=3)
+                    xf = settings.get_font(max(int(xbtn.h * 1.3), 8), bold=True)
+                    xt = xf.render('\u00d7', True, tc)
+                    self.window.blit(xt, xt.get_rect(center=xbtn.center))
+                    cfg_fig['_remove_rect'] = xbtn
+                else:
+                    cfg_fig['_remove_rect'] = None
 
     def _draw_battle_move_slots(self):
         """Draw 3 battle move slots as diamond icons."""
         moves = self._config.get('battle_moves', [])
         move_by_round = {m['round_index']: m for m in moves}
         self._hovered_slot = -1
+        self._move_remove_rects = {}
 
         sw = self._move_slot_size
         slot_spacing = int(sw * 2.0)
@@ -917,19 +1032,19 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     hovered=hovered,
                 )
 
-                # X button (upper-right of diamond)
                 xsz = self._x_btn_sz
                 xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
                 x_hovered = xrect.collidepoint(mouse_pos)
-                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                pygame.draw.rect(self.window, bg, xrect, border_radius=3)
-                pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
-                xf = settings.get_font(max(int(xsz * 1.3), 8), bold=True)
-                xt = xf.render('\u00d7', True, tc)
-                self.window.blit(xt, xt.get_rect(center=xrect.center))
-                self._move_remove_rects[i] = xrect
+                if is_hovered or x_hovered:
+                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                    pygame.draw.rect(self.window, bg, xrect, border_radius=3)
+                    pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
+                    xf = settings.get_font(max(int(xsz * 1.3), 8), bold=True)
+                    xt = xf.render('\u00d7', True, tc)
+                    self.window.blit(xt, xt.get_rect(center=xrect.center))
+                    self._move_remove_rects[i] = xrect
 
                 # Round label below
                 rlbl = self._small_font.render(f'R{i + 1}', True, (160, 140, 120))
@@ -945,26 +1060,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         """Draw the prelude spell section with a single spell icon slot."""
         spell_name = self._config.get('prelude_spell_name')
         fsz = self._mod_frame_size
-        isz = self._mod_icon_size
         mx_mouse, my_mouse = pygame.mouse.get_pos()
-        right_x = self._right_x
-
-        # Section label
-        lbl = self._small_font.render('Prelude Spell (optional)', True, (200, 185, 150))
-        desc = self._res_font.render('Cast a spell before battle begins', True, (160, 145, 120))
-        lbl_y = self._mod_section_y - desc.get_height() - 2 - lbl.get_height() - 2
-        self.window.blit(lbl, (right_x, lbl_y))
-        self.window.blit(desc, (right_x, lbl_y + lbl.get_height() + 2))
-
-        # Edit icon next to title
-        if self._btn_prelude_edit:
-            isz = self._edit_icon_size
-            hovered = self._btn_prelude_edit.collidepoint(mx_mouse, my_mouse)
-            if hovered:
-                glow = pygame.Surface((isz + 4, isz + 4), pygame.SRCALPHA)
-                glow.fill((255, 255, 200, 40))
-                self.window.blit(glow, (self._btn_prelude_edit.x - 2, self._btn_prelude_edit.y - 2))
-            self.window.blit(self._edit_icon, self._btn_prelude_edit.topleft)
 
         rect = self._prelude_spell_rect
         if not rect:
@@ -972,54 +1068,58 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         cx = rect.x + fsz // 2
         cy = rect.y + fsz // 2
+        caption_x = rect.right + int(0.012 * _SW)
+        caption_right = (self._prelude_panel_rect.right - int(0.010 * _SW)
+                         if self._prelude_panel_rect else rect.right)
+        caption_w = max(0, caption_right - caption_x)
 
         if spell_name:
             icons = self._spell_icons.get(spell_name)
             if icons:
-                # Glow
                 if icons.get('glow'):
                     glow_surf = icons['glow']
                     gr = glow_surf.get_rect(center=(cx, cy))
                     self.window.blit(glow_surf, gr.topleft)
-                # Icon
                 if icons.get('icon'):
                     ir = icons['icon'].get_rect(center=(cx, cy))
                     self.window.blit(icons['icon'], ir.topleft)
-                # Frame
                 if icons.get('frame'):
                     fr = icons['frame'].get_rect(center=(cx, cy))
                     self.window.blit(icons['frame'], fr.topleft)
-                # Name below
-                ntxt = self._res_font.render(spell_name, True, (200, 180, 80))
-                self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
-                # Success badge
+                lines = [(spell_name, self._res_font, (200, 180, 80))]
+                text_h = sum(font.get_height() for _, font, _ in lines)
+                self._draw_caption_lines(lines, caption_x, cy - text_h // 2, caption_w)
                 if self._success_badge:
                     bx = rect.x
                     by = rect.bottom - self._success_badge.get_height()
                     self.window.blit(self._success_badge, (bx, by))
-                # X-remove button
                 _xbs = self._x_btn_sz
                 xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
-                self._prelude_x_rect = xrect
                 x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
-                bg = (180, 60, 60) if x_hovered else (120, 40, 40)
-                bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
-                tc = (255, 255, 255) if x_hovered else (200, 180, 180)
-                pygame.draw.rect(self.window, bg, xrect, border_radius=3)
-                pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
-                xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
-                xt = xf.render('\u00d7', True, tc)
-                self.window.blit(xt, xt.get_rect(center=xrect.center))
+                if rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
+                    self._prelude_x_rect = xrect
+                    bg = (180, 60, 60) if x_hovered else (120, 40, 40)
+                    bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
+                    tc = (255, 255, 255) if x_hovered else (200, 180, 180)
+                    pygame.draw.rect(self.window, bg, xrect, border_radius=3)
+                    pygame.draw.rect(self.window, bdr, xrect, 1, border_radius=3)
+                    xf = settings.get_font(max(int(_xbs * 1.3), 8), bold=True)
+                    xt = xf.render('\u00d7', True, tc)
+                    self.window.blit(xt, xt.get_rect(center=xrect.center))
+                else:
+                    self._prelude_x_rect = None
         else:
             self._prelude_x_rect = None
-            # Draw empty slot placeholder
             empty_surf = pygame.Surface((fsz, fsz), pygame.SRCALPHA)
             pygame.draw.rect(empty_surf, (50, 45, 35, 180), empty_surf.get_rect(), border_radius=6)
             pygame.draw.rect(empty_surf, (100, 90, 70), empty_surf.get_rect(), 1, border_radius=6)
             self.window.blit(empty_surf, rect.topleft)
-            # "None" text below
-            ntxt = self._res_font.render('None', True, (120, 110, 90))
-            self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
+            lines = [
+                ('No prelude spell', self._res_font, (140, 130, 110)),
+                ('Optional', self._res_font, (110, 105, 95)),
+            ]
+            text_h = sum(font.get_height() for _, font, _ in lines) + 2
+            self._draw_caption_lines(lines, caption_x, cy - text_h // 2, caption_w)
 
     def _draw_resources(self):
         """Draw a combined resource panel below the field compartments."""
@@ -1606,6 +1706,42 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 if not self._config:
                     continue
 
+                # Remove buttons must win over icon/detail clicks.
+                if self._prelude_x_rect and self._prelude_x_rect.collidepoint(pos):
+                    current_spell = self._config.get('prelude_spell_name')
+                    if current_spell:
+                        self._pending_prelude_clear = True
+                        self.dialogue_box = DialogueBox(
+                            self.window,
+                            f'Remove {current_spell} prelude spell?',
+                            actions=['Confirm', 'Cancel'],
+                            title='Clear Prelude Spell',
+                        )
+                    continue
+
+                figure_removed = False
+                for fig in self._config.get('figures', []):
+                    xrect = fig.get('_remove_rect')
+                    if xrect and xrect.collidepoint(pos):
+                        self._server_remove_figure(fig['id'])
+                        figure_removed = True
+                        break
+                if figure_removed:
+                    continue
+
+                move_removed = False
+                for ri, xrect in self._move_remove_rects.items():
+                    if xrect.collidepoint(pos):
+                        moves = self._config.get('battle_moves', [])
+                        for m in moves:
+                            if m['round_index'] == ri:
+                                self._server_return_move(m['id'])
+                                break
+                        move_removed = True
+                        break
+                if move_removed:
+                    continue
+
                 # Figure icon clicks → open detail box
                 for icon in self._figure_icons.values():
                     if icon.hovered:
@@ -1629,19 +1765,6 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     self._open_battle_shop()
                     continue
 
-                # Prelude spell: X remove button
-                if self._prelude_x_rect and self._prelude_x_rect.collidepoint(pos):
-                    current_spell = self._config.get('prelude_spell_name')
-                    if current_spell:
-                        self._pending_prelude_clear = True
-                        self.dialogue_box = DialogueBox(
-                            self.window,
-                            f'Remove {current_spell} prelude spell?',
-                            actions=['Confirm', 'Cancel'],
-                            title='Clear Prelude Spell',
-                        )
-                    continue
-
                 # Prelude spell: edit button or empty slot click
                 if ((self._btn_prelude_edit and self._btn_prelude_edit.collidepoint(pos))
                         or (self._prelude_spell_rect and self._prelude_spell_rect.collidepoint(pos))):
@@ -1651,27 +1774,6 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 # To Battle
                 if self._btn_battle and self._btn_battle.collidepoint(pos):
                     self._on_battle_click()
-                    continue
-
-                # Remove figure [X] buttons
-                for fig in self._config.get('figures', []):
-                    xrect = fig.get('_remove_rect')
-                    if xrect and xrect.collidepoint(pos):
-                        self._server_remove_figure(fig['id'])
-                        break
-
-                # Remove battle move via X button
-                move_removed = False
-                for ri, xrect in self._move_remove_rects.items():
-                    if xrect.collidepoint(pos):
-                        moves = self._config.get('battle_moves', [])
-                        for m in moves:
-                            if m['round_index'] == ri:
-                                self._server_return_move(m['id'])
-                                break
-                        move_removed = True
-                        break
-                if move_removed:
                     continue
 
                 # Click on filled battle move slot → open detail box

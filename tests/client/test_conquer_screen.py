@@ -200,3 +200,99 @@ class TestPreludeSpellToggle:
         )
         screen.handle_events([event])
         assert screen._pending_prelude_clear is True
+
+
+class TestConquerScreenLayout:
+
+    def test_right_panels_stack_without_overlap(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        state.action = {}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+
+        assert screen._battle_plan_rect.bottom < screen._prelude_panel_rect.top
+        assert screen._prelude_panel_rect.bottom <= screen._btn_battle.top
+
+    def test_right_panel_controls_stay_inside_panels(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        state.action = {}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+
+        assert screen._battle_plan_rect.contains(screen._move_slots_rect)
+        assert screen._prelude_panel_rect.contains(screen._prelude_spell_rect)
+
+
+class TestConquerRemoveClickPriority:
+
+    def test_figure_remove_click_does_not_open_detail_box(self):
+        from game.screens.conquer_screen import ConquerScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+        field_rect = screen._field_rects['castle']
+        remove_rect = pygame.Rect(field_rect.right - 24, field_rect.top + 4, 20, 20)
+        screen._config = {
+            'figures': [{'id': 10, 'has_deficit': False, 'field': 'castle', '_remove_rect': remove_rect}],
+            'battle_moves': [],
+            'prelude_spell_name': None,
+        }
+        screen._figure_icons = {
+            10: SimpleNamespace(hovered=True, figure=SimpleNamespace(id=10)),
+        }
+
+        with patch.object(screen, '_server_remove_figure') as mock_remove, \
+                patch('game.screens.conquer_screen.FigureDetailBox') as mock_detail:
+            event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=remove_rect.center)
+            screen.handle_events([event])
+
+            mock_remove.assert_called_once_with(10)
+            mock_detail.assert_not_called()
+
+    def test_battle_move_remove_click_does_not_open_detail_box(self):
+        from game.screens.conquer_screen import ConquerScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [{'id': 20, 'round_index': 1, 'family_name': 'Attack', 'suit': 'Hearts', 'value': 8}],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+        remove_rect = pygame.Rect(
+            screen._move_slots_rect.centerx, screen._move_slots_rect.centery, 20, 20)
+        screen._move_remove_rects = {1: remove_rect}
+        screen._hovered_slot = 1
+
+        with patch.object(screen, '_server_return_move') as mock_return, \
+                patch('game.screens.conquer_screen.BattleMoveDetailBox') as mock_detail:
+            event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=remove_rect.center)
+            screen.handle_events([event])
+
+            mock_return.assert_called_once_with(20)
+            mock_detail.assert_not_called()

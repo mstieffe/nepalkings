@@ -231,6 +231,7 @@ class TestAutoGambleThreshold:
         assert screen._auto_gamble_threshold_rect.right < screen._btn_auto_gamble_inc.left
         assert screen._btn_auto_gamble_inc.right <= screen._battle_plan_rect.right
         assert screen._btn_auto_gamble.top - screen._move_slots_rect.bottom >= 10
+        assert screen._battle_plan_rect.bottom - screen._btn_auto_gamble.bottom >= 6
 
     def test_threshold_decrement(self):
         from game.screens.defence_screen import DefenceScreen
@@ -372,6 +373,27 @@ class TestDefenceScreenLayout:
         fitted = screen._fit_text('Very Long Caption Text', screen._res_font, 30)
 
         assert screen._res_font.size(fitted)[0] <= 30
+
+    def test_selection_prompt_sits_below_header(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+
+        header_bottom = (
+            screen._field_title_pos[1]
+            + screen._label_font.get_height()
+            + screen._res_font.get_height()
+        )
+        prompt_rect = screen._draw_selection_prompt(
+            'Click a figure',
+            'Cancel',
+            (255, 220, 80),
+        )
+
+        assert prompt_rect.top >= header_bottom
 
 
 class TestRemoveClickPriority:

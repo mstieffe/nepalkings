@@ -358,11 +358,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _build_layout(self):
         pad = int(0.02 * _SW)
-        top = _BOX_Y + _BOX_PAD + int(0.06 * _SH)   # below title
+        top = _BOX_Y + _BOX_PAD + int(0.045 * _SH)   # below compact title
 
         # Section title row height — add extra gap below subtitle (gold rate / suit bonus)
         section_h = int(0.03 * _SH) + int(0.01 * _SH)
-        content_top = top + section_h + pad
+        content_top = top + section_h + int(0.65 * pad)
 
         # Left: 3 field compartments.  Keep the structure, but trim width a bit
         # so the action column can breathe.
@@ -393,6 +393,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         right_w = right_right - right_x
         panel_gap = int(0.014 * _SH)
         panel_pad = int(0.010 * _SW)
+        panel_pad_y = int(0.010 * _SH)
         sw = self._move_slot_size
         slot_row_w = int(sw * 2.0) * 2 + int(sw * 1.3)
         slot_row_h = int(sw * 1.45)
@@ -413,9 +414,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         right_content_bottom = self._btn_save.y - panel_gap
         right_content_h = max(1, right_content_bottom - content_top)
         available_panel_h = max(1, right_content_h - 2 * panel_gap)
-        battle_plan_min_h = header_h + slot_row_h + battle_controls_gap + ag_btn_h + panel_pad
-        prelude_min_h = header_h + fsz + panel_pad
-        counter_min_h = header_h + fsz + panel_pad
+        battle_plan_min_h = header_h + slot_row_h + battle_controls_gap + ag_btn_h + panel_pad_y
+        prelude_min_h = header_h + fsz + panel_pad_y
+        counter_min_h = header_h + fsz + panel_pad_y
 
         max_battle_plan_h = max(ag_btn_h, available_panel_h - prelude_min_h - counter_min_h)
         battle_plan_h = min(
@@ -459,7 +460,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         agw = int(0.12 * _SW)
         ag_y = min(
             self._move_slots_rect.bottom + battle_controls_gap,
-            self._battle_plan_rect.bottom - ag_btn_h,
+            self._battle_plan_rect.bottom - panel_pad_y - ag_btn_h,
         )
         ag_x = self._battle_plan_rect.x + panel_pad
         self._btn_auto_gamble = pygame.Rect(ag_x, ag_y, agw, ag_btn_h)
@@ -1056,6 +1057,33 @@ class DefenceScreen(MenuScreenMixin, Screen):
             title_pos=self._counter_title_pos,
         )
 
+    def _draw_selection_prompt(self, prompt_text, helper_text, color):
+        """Draw a selection prompt below the screen header, never over the title."""
+        prompt = self._label_font.render(prompt_text, True, color)
+        helper = self._small_font.render(helper_text, True, (180, 170, 150))
+        prompt_pad_x = int(0.012 * _SW)
+        prompt_pad_y = int(0.008 * _SH)
+        prompt_w = max(prompt.get_width(), helper.get_width()) + 2 * prompt_pad_x
+        prompt_h = prompt.get_height() + helper.get_height() + int(0.006 * _SH) + 2 * prompt_pad_y
+        header_bottom = _BOX_Y + _BOX_PAD + self._title_font.get_height() + self._res_font.get_height() + int(0.022 * _SH)
+        section_bottom = self._field_title_pos[1] + self._label_font.get_height() + self._res_font.get_height() + int(0.010 * _SH)
+        prompt_y = max(header_bottom, section_bottom)
+        prompt_rect = pygame.Rect(
+            _BOX_X + (_BOX_W - prompt_w) // 2,
+            prompt_y,
+            prompt_w,
+            prompt_h,
+        )
+        surf = pygame.Surface((prompt_rect.w, prompt_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (22, 18, 14, 225), surf.get_rect(), border_radius=6)
+        self.window.blit(surf, prompt_rect.topleft)
+        pygame.draw.rect(self.window, (130, 115, 80), prompt_rect, 1, border_radius=6)
+        self.window.blit(prompt, prompt.get_rect(centerx=prompt_rect.centerx,
+                                                 top=prompt_rect.y + prompt_pad_y))
+        self.window.blit(helper, helper.get_rect(centerx=prompt_rect.centerx,
+                                                 top=prompt_rect.y + prompt_pad_y + prompt.get_height() + int(0.006 * _SH)))
+        return prompt_rect
+
     def render(self):
         self._draw_menu_chrome()
 
@@ -1129,15 +1157,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
             dim = pygame.Surface((_BOX_W, _BOX_H), pygame.SRCALPHA)
             dim.fill((0, 0, 0, 120))
             self.window.blit(dim, (_BOX_X, _BOX_Y))
-            # Prompt text
-            prompt = self._label_font.render('Click a figure to select as Battle Figure', True, (255, 220, 80))
-            self.window.blit(prompt, prompt.get_rect(centerx=_BOX_X + _BOX_W // 2,
-                                                     top=_BOX_Y + _BOX_PAD + 4))
-            cancel = self._small_font.render('Click elsewhere to cancel', True, (180, 170, 150))
-            self.window.blit(cancel, cancel.get_rect(centerx=_BOX_X + _BOX_W // 2,
-                                                      top=_BOX_Y + _BOX_PAD + prompt.get_height() + 8))
             # Re-draw field compartments on top of dim so figures are visible and clickable
             self._draw_field_compartments()
+            self._draw_selection_prompt(
+                'Click a figure to select as Battle Figure',
+                'Click elsewhere to cancel',
+                (255, 220, 80),
+            )
 
         # Health Boost target selection mode overlay
         if self._selecting_spell_target:
@@ -1145,21 +1171,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             dim.fill((0, 0, 0, 120))
             self.window.blit(dim, (_BOX_X, _BOX_Y))
             label = 'prelude' if self._selecting_spell_target == 'prelude' else 'counter spell'
-            prompt = self._label_font.render(
-                f'Click one of your figures for Health Boost {label}',
-                True,
-                (120, 240, 120),
-            )
-            self.window.blit(prompt, prompt.get_rect(centerx=_BOX_X + _BOX_W // 2,
-                                                     top=_BOX_Y + _BOX_PAD + 4))
-            cancel = self._small_font.render(
-                'Checkmate figures cannot be targeted. Press Esc to cancel.',
-                True,
-                (180, 170, 150),
-            )
-            self.window.blit(cancel, cancel.get_rect(centerx=_BOX_X + _BOX_W // 2,
-                                                      top=_BOX_Y + _BOX_PAD + prompt.get_height() + 8))
+            prompt_text = f'Click one of your figures for Health Boost {label}'
+            helper_text = 'Checkmate figures cannot be targeted. Press Esc to cancel.'
             self._draw_field_compartments()
+            self._draw_selection_prompt(prompt_text, helper_text, (120, 240, 120))
 
         self._draw_close_x_button()
 
