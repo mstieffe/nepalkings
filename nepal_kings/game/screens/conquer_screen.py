@@ -1594,16 +1594,16 @@ class ConquerScreen(MenuScreenMixin, Screen):
             for cd in fig.get('card_details', []):
                 add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Battle moves — locked
+        # Battle moves — spent on this conquer attempt.
         for mv in self._config.get('battle_moves', []):
             if mv.get('card_id'):
-                add_card(locked_cards, mv.get('suit', ''), mv.get('rank', ''))
+                add_card(consumed_cards, mv.get('suit', ''), mv.get('rank', ''))
 
-        # Modifiers — consumed (use modifier_card_details from server config)
-        mod_details = self._config.get('modifier_card_details') or []
-        if mod_details:
-            for cd in mod_details:
-                add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
+        # Modifiers / spell cards — spent on this conquer attempt.
+        for cd in self._config.get('modifier_card_details') or []:
+            add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
+        for cd in self._config.get('spell_card_details') or []:
+            add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
 
         # Prelude spell — consumed
         prelude_details = self._config.get('prelude_spell_card_details') or []
@@ -1611,12 +1611,16 @@ class ConquerScreen(MenuScreenMixin, Screen):
             for cd in prelude_details:
                 add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
 
+        # Counter spell — included for consistency if conquer configs ever carry one.
+        for cd in self._config.get('counter_spell_card_details') or []:
+            add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
+
         image_groups = []
         if consumed_cards:
             image_groups.append({
                 'key': 'consumed',
                 'title': 'Consumed when battle starts',
-                'description': 'These cards are removed when you confirm and the conquer battle begins.',
+                'description': 'These battle and spell cards are spent for this conquer attempt.',
                 'icon': 'remove',
                 'badge_icon': 'remove',
                 'items': consumed_cards,
@@ -1624,8 +1628,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if locked_cards:
             image_groups.append({
                 'key': 'locked',
-                'title': 'Locked for this battle',
-                'description': 'These cards stay in your deck, but cannot be used elsewhere during this battle.',
+                'title': 'Locked figure cards',
+                'description': 'These figure cards stay committed to the attack and are at risk if you lose.',
                 'icon': 'lock',
                 'badge_icon': 'lock',
                 'items': locked_cards,

@@ -4442,43 +4442,16 @@ def finish_battle():
             # No winner — draw
             game.winner_player_id = None
 
-            # Consume single-use cards (battle moves, modifiers, spells) and
-            # unlock figure cards on BOTH sides.  A draw means neither side
-            # captured the land, but committed one-shot cards are still spent.
+            # Consume the attacker's single-use cards (battle moves,
+            # modifiers, spells) and return their figure cards.  The defender's
+            # active defence remains in place because the land did not fall.
             draw_consumed_cards = []
             atk_cfg = (db.session.get(LandConfig, game.conquer_config_id)
                        if game.conquer_config_id else None)
-            def_cfg = (db.session.get(LandConfig, game.defence_config_id)
-                       if game.defence_config_id else None)
 
-            for cfg in (atk_cfg, def_cfg):
-                if not cfg:
-                    continue
-                # Snapshot ids of single-use cards before consumption so the
-                # client can show which cards were spent in the draw.
-                spent_ids = []
-                for mv in cfg.battle_moves:
-                    if mv.card_id:
-                        spent_ids.append(mv.card_id)
-                for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
-                            cfg.prelude_spell_card_ids,
-                            cfg.counter_spell_card_ids):
-                    if arr:
-                        spent_ids.extend(arr)
-                if spent_ids:
-                    snap_cards = CollectionCard.query.filter(
-                        CollectionCard.id.in_(spent_ids)
-                    ).all()
-                    for cc in snap_cards:
-                        draw_consumed_cards.append(
-                            {'suit': cc.suit, 'rank': cc.rank})
-                _consume_config_battle_cards(cfg)
-
-            # Unlock figure cards on the attacker's conquer cfg and delete
-            # the cfg row (it was a one-shot attempt).  The defender's
-            # cfg stays in place for future defences — its figure locks
-            # are unchanged.
             if atk_cfg:
+                draw_consumed_cards = _snapshot_config_battle_cards(atk_cfg)
+                _consume_config_battle_cards(atk_cfg)
                 _wipe_land_config(atk_cfg)
 
             log_entry = LogEntry(
@@ -4694,30 +4667,8 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             for fig in atk_cfg_cards.figures:
                 if fig.card_ids:
                     attack_card_ids.extend(fig.card_ids)
-            for mv in atk_cfg_cards.battle_moves:
-                if mv.card_id:
-                    attack_card_ids.append(mv.card_id)
-            if atk_cfg_cards.modifier_card_ids:
-                attack_card_ids.extend(atk_cfg_cards.modifier_card_ids)
-
-            unique_attack_card_ids = []
-            seen_attack_card_ids = set()
-            for cid in attack_card_ids:
-                if not cid or cid in seen_attack_card_ids:
-                    continue
-                seen_attack_card_ids.add(cid)
-                unique_attack_card_ids.append(cid)
-
-            if unique_attack_card_ids:
-                cards = CollectionCard.query.filter(
-                    CollectionCard.id.in_(unique_attack_card_ids)
-                ).all()
-                cards_by_id = {c.id: c for c in cards}
-                for cid in unique_attack_card_ids:
-                    cc = cards_by_id.get(cid)
-                    if not cc:
-                        continue
-                    all_attack_cards.append({'id': cc.id, 'suit': cc.suit, 'rank': cc.rank})
+            attack_card_ids.extend(_config_battle_card_ids(atk_cfg_cards))
+            all_attack_cards = _snapshot_collection_cards(attack_card_ids, include_id=True)
 
     # ── Consume attacker's conquer config battle-move cards ──
     if game.conquer_config_id:
@@ -4731,6 +4682,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     card_lost_suit = None
     card_lost_rank = None
     looted_lost_cards = []
+    defence_consumed_cards = []
 
     if attacker_won:
         # ── Attacker wins: gets a card from the defender ──
@@ -4806,11 +4758,17 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 if land:
                     land.defence_config_id = atk_cfg.id
 
-        # Wipe defender's defence config
+        # The old defender's battle moves and spells are one-shot, but only
+        # finally consumed when the land falls.  Figure cards are handled by
+        # loot/unlock rules inside `_wipe_land_config`.
         if game.defence_config_id:
             def_cfg = db.session.get(LandConfig, game.defence_config_id)
             if def_cfg:
+                defence_consumed_cards = _snapshot_config_battle_cards(def_cfg)
+                _consume_config_battle_cards(def_cfg)
                 _wipe_land_config(def_cfg)
+        if defender_user and not is_ai_land:
+            _wipe_defence_drafts_for_lost_land(defender_user.id, game.land_id)
 
     else:
         # ── Defender wins: attacker loses a key card ──
@@ -4881,6 +4839,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     merged_last_result = dict(saved) if isinstance(saved, dict) else {}
     merged_last_result.update({
         'conquer_consumed_cards': consumed_cards,
+        'defence_consumed_cards': defence_consumed_cards,
         'conquer_loot_lost_cards': looted_lost_cards,
         'cards_spent': cards_spent,
         'card_lost_suit': card_lost_suit,
@@ -4906,6 +4865,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_lost_rank': card_lost_rank,
         'loot_lost_cards': looted_lost_cards,
         'consumed_cards': consumed_cards,
+        'defence_consumed_cards': defence_consumed_cards,
         'cards_spent': cards_spent,
         'game': game.serialize(),
     }
@@ -4969,10 +4929,61 @@ def _serialize_finished_conquer_result(game):
         payload['cards_spent'] = last_result.get('cards_spent')
     if 'conquer_consumed_cards' in last_result:
         payload['consumed_cards'] = last_result.get('conquer_consumed_cards') or []
+    if 'defence_consumed_cards' in last_result:
+        payload['defence_consumed_cards'] = last_result.get('defence_consumed_cards') or []
     if 'conquer_loot_lost_cards' in last_result:
         payload['loot_lost_cards'] = last_result.get('conquer_loot_lost_cards') or []
 
     return payload
+
+
+def _config_battle_card_ids(cfg):
+    """Return battle-move/modifier/spell card IDs referenced by a land config."""
+    if not cfg:
+        return []
+    card_ids = []
+    for move in cfg.battle_moves:
+        if move.card_id:
+            card_ids.append(move.card_id)
+    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
+                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
+        if arr:
+            card_ids.extend(arr)
+    return card_ids
+
+
+def _snapshot_collection_cards(card_ids, include_id=False):
+    """Snapshot suit/rank for collection cards, preserving input order."""
+    unique_ids = []
+    seen_ids = set()
+    for cid in card_ids or []:
+        if not cid or cid in seen_ids:
+            continue
+        seen_ids.add(cid)
+        unique_ids.append(cid)
+    if not unique_ids:
+        return []
+
+    cards = CollectionCard.query.filter(CollectionCard.id.in_(unique_ids)).all()
+    cards_by_id = {card.id: card for card in cards}
+    snapshot = []
+    for cid in unique_ids:
+        card = cards_by_id.get(cid)
+        if not card:
+            continue
+        data = {'suit': card.suit, 'rank': card.rank}
+        if include_id:
+            data['id'] = card.id
+        snapshot.append(data)
+    return snapshot
+
+
+def _snapshot_config_battle_cards(cfg, include_id=False):
+    """Snapshot cards that are spent when a config's battle/spell package is consumed."""
+    return _snapshot_collection_cards(
+        _config_battle_card_ids(cfg),
+        include_id=include_id,
+    )
 
 
 def _consume_config_battle_cards(cfg):
@@ -4986,15 +4997,7 @@ def _consume_config_battle_cards(cfg):
     from models import CollectionCard, LandConfigBattleMove
 
     moves = LandConfigBattleMove.query.filter_by(config_id=cfg.id).all()
-    card_ids = [m.card_id for m in moves if m.card_id]
-    if cfg.modifier_card_ids:
-        card_ids.extend(cfg.modifier_card_ids)
-    if cfg.spell_card_ids:
-        card_ids.extend(cfg.spell_card_ids)
-    if cfg.prelude_spell_card_ids:
-        card_ids.extend(cfg.prelude_spell_card_ids)
-    if cfg.counter_spell_card_ids:
-        card_ids.extend(cfg.counter_spell_card_ids)
+    card_ids = _config_battle_card_ids(cfg)
 
     if card_ids:
         CollectionCard.query.filter(
@@ -5075,6 +5078,20 @@ def _wipe_land_config(cfg):
     LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
     LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
     db.session.delete(cfg)
+
+
+def _wipe_defence_drafts_for_lost_land(user_id, land_id):
+    """Delete editable defence drafts for a land that changed owner."""
+    if not user_id or not land_id:
+        return
+    drafts = LandConfig.query.filter_by(
+        user_id=user_id,
+        land_id=land_id,
+        config_type='defence',
+        status='draft',
+    ).all()
+    for draft in drafts:
+        _wipe_land_config(draft)
 
 
 def _destroy_land_config(cfg, exclude_card_ids=None):

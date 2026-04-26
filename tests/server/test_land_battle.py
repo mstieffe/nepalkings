@@ -1689,7 +1689,22 @@ class TestAITemplateCardRewards:
             defender = _make_user(db, username='defender_cards')
             land = _make_land(db, tier=2, owner_user_id=defender.id)
 
-            _make_conquer_config(db, attacker, land)
+            atk_cfg = _make_conquer_config(db, attacker, land)
+            prelude_card = CollectionCard(
+                user_id=attacker.id,
+                suit='Diamonds',
+                rank='Q',
+                value=2,
+                locked=True,
+                lock_type='conquer_prelude',
+                lock_ref_id=atk_cfg.id,
+            )
+            db.session.add(prelude_card)
+            db.session.flush()
+            prelude_card_id = prelude_card.id
+            atk_cfg.prelude_spell_name = 'Poison'
+            atk_cfg.prelude_spell_card_ids = [prelude_card_id]
+            db.session.commit()
             _make_defence_config(db, defender, land)
 
             client = app.test_client()
@@ -1716,9 +1731,58 @@ class TestAITemplateCardRewards:
             loot_pair = (loot_cards[0].get('suit'), loot_cards[0].get('rank'))
             consumed_pairs = {(c.get('suit'), c.get('rank')) for c in consumed_cards}
             assert loot_pair not in consumed_pairs
+            assert ('Diamonds', 'Q') in consumed_pairs
+            assert db.session.get(CollectionCard, prelude_card_id) is None
 
             defender_cards = CollectionCard.query.filter_by(user_id=defender.id, locked=False).all()
             assert any((c.suit, c.rank) == loot_pair for c in defender_cards)
+
+    def test_attacker_win_consumes_old_defence_battle_and_spell_cards(self, app, db):
+        """Defence battle/spell cards are consumed only when the land falls."""
+        with app.app_context():
+            from routes.games import _resolve_conquer_battle
+
+            attacker = _make_user(db, username='attacker_takes_land')
+            defender = _make_user(db, username='defender_loses_land')
+            land = _make_land(db, tier=2, owner_user_id=defender.id)
+
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            move_card_id = def_cfg.battle_moves[0].card_id
+            counter_card = CollectionCard(
+                user_id=defender.id,
+                suit='Hearts',
+                rank='3',
+                value=3,
+                locked=True,
+                lock_type='defence_counter',
+                lock_ref_id=def_cfg.id,
+            )
+            db.session.add(counter_card)
+            db.session.flush()
+            counter_card_id = counter_card.id
+            def_cfg.counter_spell_name = 'Poison'
+            def_cfg.counter_spell_card_ids = [counter_card_id]
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            data = resp.get_json()
+            game = db.session.get(Game, data['game_id'])
+
+            atk_player = db.session.get(Player, game.invader_player_id)
+            result = _resolve_conquer_battle(game, atk_player, atk_player)
+            db.session.commit()
+
+            assert result['conquer_result'] == 'attacker_won'
+            assert db.session.get(CollectionCard, move_card_id) is None
+            assert db.session.get(CollectionCard, counter_card_id) is None
+            defence_consumed = result.get('defence_consumed_cards') or []
+            consumed_pairs = {(c.get('suit'), c.get('rank')) for c in defence_consumed}
+            assert ('Spades', '8') in consumed_pairs
+            assert ('Hearts', '3') in consumed_pairs
 
     def test_attacker_wins_config_converted_to_defence(self, app, db):
         """Attacker's conquer config becomes the new defence config."""

@@ -1967,7 +1967,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         from game.components.cards.card_img import CardImg
 
         locked_cards = []
-        consumed_cards = []
+        consumed_if_lost_cards = []
 
         def add_card(target, suit, rank):
             if suit and rank:
@@ -1979,38 +1979,44 @@ class DefenceScreen(MenuScreenMixin, Screen):
             for cd in fig.get('card_details', []):
                 add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Battle moves — locked
+        # Battle moves — consumed only if the active defence loses.
         for mv in self._config.get('battle_moves', []):
             if mv.get('card_id'):
-                add_card(locked_cards, mv.get('suit', ''), mv.get('rank', ''))
+                add_card(consumed_if_lost_cards, mv.get('suit', ''), mv.get('rank', ''))
 
-        # Prelude spell — locked (defender cards are locked, not consumed)
+        # Modifiers / legacy spell cards — consumed only if the defence loses
+        for cd in self._config.get('modifier_card_details') or []:
+            add_card(consumed_if_lost_cards, cd.get('suit', ''), cd.get('rank', ''))
+        for cd in self._config.get('spell_card_details') or []:
+            add_card(consumed_if_lost_cards, cd.get('suit', ''), cd.get('rank', ''))
+
+        # Prelude spell — consumed only if the active defence loses.
         prelude_details = self._config.get('prelude_spell_card_details') or []
         if prelude_details:
             for cd in prelude_details:
-                add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
+                add_card(consumed_if_lost_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Counter spell — locked (defender cards are locked, not consumed)
+        # Counter spell — consumed only if the active defence loses.
         counter_details = self._config.get('counter_spell_card_details') or []
         if counter_details:
             for cd in counter_details:
-                add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
+                add_card(consumed_if_lost_cards, cd.get('suit', ''), cd.get('rank', ''))
 
         image_groups = []
-        if consumed_cards:
+        if consumed_if_lost_cards:
             image_groups.append({
-                'key': 'consumed',
-                'title': 'Consumed now',
-                'description': 'These cards are removed when you confirm.',
+                'key': 'consumed_if_lost',
+                'title': 'Consumed if land falls',
+                'description': 'These battle and spell cards are reserved now, but only removed if this defence loses.',
                 'icon': 'remove',
                 'badge_icon': 'remove',
-                'items': consumed_cards,
+                'items': consumed_if_lost_cards,
             })
         if locked_cards:
             image_groups.append({
                 'key': 'locked',
-                'title': 'Locked while configured',
-                'description': 'These cards stay in your deck, but cannot be used elsewhere.',
+                'title': 'Locked figure cards',
+                'description': 'These figure cards stay in your deck, but cannot be used elsewhere while this defence is active.',
                 'icon': 'lock',
                 'badge_icon': 'lock',
                 'items': locked_cards,
@@ -2021,8 +2027,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             msg = 'No cards are used in this configuration.'
 
         after_msg = None
-        if locked_cards:
-            after_msg = 'Locked cards may be taken as loot if this defence loses.'
+        if consumed_if_lost_cards or locked_cards:
+            after_msg = 'Cards removed from the defence before saving are returned to your collection.'
 
         return msg, image_groups, after_msg
 

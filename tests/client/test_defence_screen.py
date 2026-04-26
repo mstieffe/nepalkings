@@ -267,7 +267,7 @@ class TestDefenceDraftFlow:
 
 class TestDefenceConfirmData:
 
-    def test_save_confirmation_groups_all_defence_cards_as_locked(self):
+    def test_save_confirmation_separates_locked_figures_from_deferred_consumed_cards(self):
         from game.screens.defence_screen import DefenceScreen
         import pygame
         state = _make_state()
@@ -299,12 +299,15 @@ class TestDefenceConfirmData:
             msg, image_groups, after_msg = screen._build_confirm_data()
 
         assert 'saving this defence' in msg
-        assert [group['key'] for group in image_groups] == ['locked']
-        locked = image_groups[0]
+        assert [group['key'] for group in image_groups] == ['consumed_if_lost', 'locked']
+        consumed_if_lost, locked = image_groups
+        assert consumed_if_lost['icon'] == 'remove'
+        assert consumed_if_lost['badge_icon'] == 'remove'
+        assert len(consumed_if_lost['items']) == 3
         assert locked['icon'] == 'lock'
         assert locked['badge_icon'] == 'lock'
-        assert len(locked['items']) == 4
-        assert 'loot' in after_msg
+        assert len(locked['items']) == 1
+        assert 'returned to your collection' in after_msg
 
 
 class TestPreludeSpellIcons:

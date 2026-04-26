@@ -261,10 +261,10 @@ class TestConquerConfirmData:
         consumed, locked = image_groups
         assert consumed['icon'] == 'remove'
         assert consumed['badge_icon'] == 'remove'
-        assert len(consumed['items']) == 2
+        assert len(consumed['items']) == 3
         assert locked['icon'] == 'lock'
         assert locked['badge_icon'] == 'lock'
-        assert len(locked['items']) == 2
+        assert len(locked['items']) == 1
         assert 'loot' in after_msg
 
 
