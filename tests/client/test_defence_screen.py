@@ -217,7 +217,7 @@ class TestAutoGambleToggle:
 
 class TestAutoGambleThreshold:
 
-    def test_threshold_label_spacing_below_toggle(self):
+    def test_threshold_controls_share_toggle_row_without_overlap(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
         screen = DefenceScreen(state)
@@ -225,8 +225,11 @@ class TestAutoGambleThreshold:
         screen._config = _make_config(auto_gamble_threshold=10)
         screen._build_layout()
 
-        assert (screen._btn_auto_gamble.bottom + screen._res_font.get_height()
-                <= screen._btn_auto_gamble_dec.y)
+        assert screen._btn_auto_gamble.centery == screen._btn_auto_gamble_dec.centery
+        assert screen._btn_auto_gamble.right < screen._btn_auto_gamble_dec.left
+        assert screen._btn_auto_gamble_dec.right < screen._auto_gamble_threshold_rect.left
+        assert screen._auto_gamble_threshold_rect.right < screen._btn_auto_gamble_inc.left
+        assert screen._btn_auto_gamble_inc.right <= screen._battle_plan_rect.right
 
     def test_threshold_decrement(self):
         from game.screens.defence_screen import DefenceScreen
@@ -327,6 +330,47 @@ class TestAutoGambleThreshold:
             ok = screen._server_set_auto_gamble_threshold(11)
             assert ok is False
             state.set_msg.assert_called_once_with('Could not update auto-gamble threshold')
+
+
+class TestDefenceScreenLayout:
+
+    def test_right_panels_stack_without_overlap(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+
+        assert screen._battle_plan_rect.bottom < screen._prelude_panel_rect.top
+        assert screen._prelude_panel_rect.bottom < screen._counter_panel_rect.top
+        assert screen._counter_panel_rect.bottom <= screen._btn_save.top
+
+    def test_right_panel_controls_stay_inside_panels(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+
+        assert screen._battle_plan_rect.contains(screen._move_slots_rect)
+        assert screen._battle_plan_rect.contains(screen._btn_auto_gamble)
+        assert screen._battle_plan_rect.contains(screen._btn_auto_gamble_dec)
+        assert screen._battle_plan_rect.contains(screen._auto_gamble_threshold_rect)
+        assert screen._battle_plan_rect.contains(screen._btn_auto_gamble_inc)
+        assert screen._prelude_panel_rect.contains(screen._prelude_spell_rect)
+        assert screen._counter_panel_rect.contains(screen._battle_figure_rect)
+        assert screen._counter_panel_rect.contains(screen._counter_spell_rect)
+
+    def test_caption_text_fits_available_width(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+
+        fitted = screen._fit_text('Very Long Caption Text', screen._res_font, 30)
+
+        assert screen._res_font.size(fitted)[0] <= 30
 
 
 class TestBattleFigureToggle:
