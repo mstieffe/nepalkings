@@ -180,7 +180,10 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             timeout=10)
         if response.status_code != 200:
             return []
-        game_dicts = response.json().get('games', [])
+        game_dicts = [
+            gd for gd in response.json().get('games', [])
+            if gd.get('mode', 'duel') == 'duel'
+        ]
         games = [Game(gd, self.state.user_dict) for gd in game_dicts]
         games.sort(key=lambda g: (g.state == 'finished',))
         return games
@@ -189,7 +192,10 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         """Transform an HTTP response into a list of Game objects (used by async poller)."""
         if response.status_code != 200:
             return []
-        game_dicts = response.json().get('games', [])
+        game_dicts = [
+            gd for gd in response.json().get('games', [])
+            if gd.get('mode', 'duel') == 'duel'
+        ]
         games = [Game(gd, self.state.user_dict, lightweight=True) for gd in game_dicts]
         games.sort(key=lambda g: (g.state == 'finished',))
         return games

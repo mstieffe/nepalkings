@@ -2549,6 +2549,48 @@ def skip_civil_war_second():
         return jsonify({'success': False, 'message': 'Failed to skip'}), 400
 
 
+def _resolve_conquer_auto_loss(game, winner_player, loser_player,
+                               requesting_player, log_message, log_type,
+                               auto_loss_reason, auto_loss_detail):
+    """Resolve an auto-loss / fold while in conquer mode.
+
+    Conquer games are single-battle: an auto-loss must end the game and
+    transfer land/cards via :func:`_resolve_conquer_battle`. It must NOT
+    fall through to duel-mode behaviour (10-point award, side-card draw,
+    new round, winner-becomes-invader).
+    """
+    log_entry = LogEntry(
+        game_id=game.id,
+        player_id=loser_player.id,
+        round_number=game.current_round,
+        turn_number=loser_player.turns_left,
+        message=log_message,
+        author="System",
+        type=log_type,
+    )
+    db.session.add(log_entry)
+
+    # Same pre-resolve cleanup as the regular conquer finish_battle path.
+    _return_unplayed_battle_move_cards(game.id)
+    _delete_all_battle_moves(game.id)
+    _deactivate_all_spells(game)
+    _clear_battle_state(game)
+
+    result = _resolve_conquer_battle(game, winner_player, requesting_player)
+
+    # Surface the auto-loss reason so the client can show a tailored
+    # message even though the game is already 'finished'.
+    result['auto_loss_reason'] = auto_loss_reason
+    result['auto_loss_detail'] = auto_loss_detail
+
+    db.session.commit()
+    logger.info(
+        f"[CONQUER_AUTO_LOSS] game={game.id} reason={auto_loss_reason} "
+        f"winner={winner_player.id} loser={loser_player.id}"
+    )
+    return result
+
+
 @games.route('/cannot_advance_loss', methods=['POST'])
 @require_token
 def cannot_advance_loss():
@@ -2586,6 +2628,22 @@ def cannot_advance_loss():
         opponent = next((p for p in game.players if p.id != player_id), None)
         opponent_user = db.session.get(User, opponent.user_id) if opponent else None
         opponent_name = opponent_user.username if opponent_user else "Opponent"
+
+        # ── Conquer mode: single-battle game, no new round / side cards. ──
+        if game.mode == 'conquer':
+            return jsonify(_resolve_conquer_auto_loss(
+                game,
+                winner_player=opponent,
+                loser_player=player,
+                requesting_player=player,
+                log_message=(
+                    f"{username} could not advance any figure and loses the "
+                    f"battle. {opponent_name} conquers!"
+                ),
+                log_type='auto_loss',
+                auto_loss_reason='no_figures_to_advance',
+                auto_loss_detail=username,
+            ))
 
         # Award points to winner (same as fold)
         opponent.points += 10
@@ -2700,6 +2758,22 @@ def defender_no_figures_loss():
         opponent = next((p for p in game.players if p.id != player_id), None)
         opponent_user = db.session.get(User, opponent.user_id) if opponent else None
         opponent_name = opponent_user.username if opponent_user else "Opponent"
+
+        # ── Conquer mode: single-battle game, no new round / side cards. ──
+        if game.mode == 'conquer':
+            return jsonify(_resolve_conquer_auto_loss(
+                game,
+                winner_player=player,
+                loser_player=opponent,
+                requesting_player=player,
+                log_message=(
+                    f"{opponent_name} has no valid battle figures and loses "
+                    f"the battle. {username} conquers!"
+                ),
+                log_type='auto_loss',
+                auto_loss_reason='no_defender_figures',
+                auto_loss_detail=opponent_name,
+            ))
 
         # Award points to winner (same as fold)
         player.points += 10
@@ -2972,6 +3046,22 @@ def _check_figure_resource_deficit(figure, player_id, game_id):
 
 def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_name, figure_name):
     """Resolve an auto-loss due to a figure having resource deficit in battle."""
+    # ── Conquer mode: single-battle, end the game cleanly. ──
+    if game.mode == 'conquer':
+        return jsonify(_resolve_conquer_auto_loss(
+            game,
+            winner_player=winner_player,
+            loser_player=loser_player,
+            requesting_player=winner_player,
+            log_message=(
+                f"{loser_name}'s {figure_name} has a resource deficit and "
+                f"cannot fight. {winner_name} conquers!"
+            ),
+            log_type='deficit_loss',
+            auto_loss_reason='resource_deficit',
+            auto_loss_detail=figure_name,
+        ))
+
     winner_player.points += 10
 
     game.battle_decisions = None
@@ -3039,6 +3129,21 @@ def _resolve_deficit_loss(game, winner_player, loser_player, winner_name, loser_
 
 def _resolve_fold(game, winner_player, loser_player, winner_name, loser_name):
     """Helper to resolve a fold: award points, reset round, start ceasefire."""
+    # ── Conquer mode: single-battle, end the game cleanly. ──
+    if game.mode == 'conquer':
+        return jsonify(_resolve_conquer_auto_loss(
+            game,
+            winner_player=winner_player,
+            loser_player=loser_player,
+            requesting_player=winner_player,
+            log_message=(
+                f"{loser_name} folded. {winner_name} conquers!"
+            ),
+            log_type='fold_win',
+            auto_loss_reason='fold',
+            auto_loss_detail=loser_name,
+        ))
+
     # Award points to winner
     winner_player.points += 10
 
