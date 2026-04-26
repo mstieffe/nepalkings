@@ -3,6 +3,7 @@
 """Defence screen — configure figures, battle moves, spells & gamble for defending a land."""
 
 import pygame
+from copy import copy
 from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
@@ -46,6 +47,22 @@ def _draw_panel(window, rect, corner_r=None):
     window.blit(surf, rect.topleft)
     pygame.draw.rect(window, settings.SUB_SCREEN_PANEL_BORDER_CLR, rect,
                      settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
+
+
+def _strip_duel_only_skill_description(text):
+    """Remove duel-only skill wording from kingdom config descriptions."""
+    return (text or '').replace(' Triggers checkmate when defeated.', '').replace(
+        'Triggers checkmate when defeated.', '').strip()
+
+
+def _display_family_without_duel_only_skills(family):
+    description = getattr(family, 'description', '')
+    clean_description = _strip_duel_only_skill_description(description)
+    if clean_description == description:
+        return family
+    display_family = copy(family)
+    display_family.description = clean_description
+    return display_family
 
 
 _SPELL_CARD_COST = {
@@ -882,18 +899,20 @@ class DefenceScreen(MenuScreenMixin, Screen):
         number_card = matched.number_card if matched else None
         upgrade_card = matched.upgrade_card if matched else None
 
+        display_family = _display_family_without_duel_only_skills(family)
+
         return Figure(
             name=name,
             sub_name=matched.sub_name if matched else '',
             suit=suit,
-            family=family,
+            family=display_family,
             key_cards=key_cards,
             number_card=number_card,
             upgrade_card=upgrade_card,
             upgrade_family_name=cfg_fig.get('upgrade_family_name'),
             produces=cfg_fig.get('produces', {}),
             requires=cfg_fig.get('requires', {}),
-            description=cfg_fig.get('description', ''),
+            description=_strip_duel_only_skill_description(cfg_fig.get('description', '')),
             id=cfg_fig['id'],
             cannot_attack=getattr(matched, 'cannot_attack', False) if matched else False,
             must_be_attacked=getattr(matched, 'must_be_attacked', False) if matched else False,
@@ -906,7 +925,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
             instant_charge=getattr(matched, 'instant_charge', False) if matched else False,
             cannot_be_blocked=cfg_fig.get('cannot_be_blocked', False),
             cannot_be_targeted=getattr(matched, 'cannot_be_targeted', False) if matched else False,
-            checkmate=cfg_fig.get('checkmate', False),
             override_base_power=getattr(matched, 'override_base_power', None) if matched else None,
         )
 
@@ -1172,7 +1190,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.window.blit(dim, (_BOX_X, _BOX_Y))
             label = 'prelude' if self._selecting_spell_target == 'prelude' else 'counter spell'
             prompt_text = f'Click one of your figures for Health Boost {label}'
-            helper_text = 'Checkmate figures cannot be targeted. Press Esc to cancel.'
+            helper_text = 'Press Esc to cancel.'
             self._draw_field_compartments()
             self._draw_selection_prompt(prompt_text, helper_text, (120, 240, 120))
 
@@ -2333,7 +2351,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         if icon.hovered:
                             fig = icon.figure
                             cfg_fig = self._get_config_fig(fig.id)
-                            if cfg_fig and not cfg_fig.get('checkmate', False):
+                            if cfg_fig:
                                 if self._selecting_spell_target == 'prelude':
                                     self._server_set_prelude_spell('Health Boost', target_figure_id=fig.id)
                                 else:
@@ -2342,7 +2360,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                                     self._server_set_counter_spell('Health Boost', target_figure_id=fig.id)
                                 self._selecting_spell_target = None
                             else:
-                                self.state.set_msg('Checkmate figures are immune to spells')
+                                self.state.set_msg('Could not select that figure')
                             return
                     self._selecting_spell_target = None
                     return

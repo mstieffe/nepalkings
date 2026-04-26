@@ -33,6 +33,27 @@ def _make_config(**overrides):
     return cfg
 
 
+def _make_checkmate_family():
+    description = (
+        'Supports three village slots and two military slots. '
+        'Triggers checkmate when defeated.'
+    )
+    matched = SimpleNamespace(
+        suit='Spades',
+        name='Himalaya Maharaja',
+        sub_name='Spades',
+        key_cards=[],
+        number_card=None,
+        upgrade_card=None,
+    )
+    family = SimpleNamespace(
+        name='Himalaya Maharaja',
+        description=description,
+        figures=[matched],
+    )
+    return family, description
+
+
 class TestDefenceScreenInit:
 
     def test_initial_state(self):
@@ -348,6 +369,25 @@ class TestDefenceScreenLayout:
         assert abs(rect.centerx - settings.SCREEN_WIDTH // 2) <= 1
         assert abs(rect.centery - settings.SCREEN_HEIGHT // 2) <= 1
 
+    def test_config_figures_hide_duel_only_checkmate_text(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        family, description = _make_checkmate_family()
+
+        fig = screen._config_fig_to_figure({
+            'id': 10,
+            'family_name': 'Himalaya Maharaja',
+            'name': 'Himalaya Maharaja',
+            'suit': 'Spades',
+            'description': description,
+            'checkmate': True,
+        }, {'Himalaya Maharaja': family})
+
+        assert fig.checkmate is False
+        assert 'checkmate' not in fig.description.lower()
+        assert 'checkmate' not in fig.family.description.lower()
+
     def test_right_panels_stack_without_overlap(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
@@ -504,6 +544,26 @@ class TestBattleFigureToggle:
         event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
         screen.handle_events([event])
         assert screen._selecting_battle_fig is True
+
+    def test_health_boost_target_selection_ignores_duel_only_checkmate(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = DefenceScreen(state)
+        screen._config = _make_config(figures=[{'id': 10, 'checkmate': True}])
+        screen._selecting_spell_target = 'prelude'
+        screen._figure_icons = {
+            10: SimpleNamespace(hovered=True, figure=SimpleNamespace(id=10)),
+        }
+
+        event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))
+        with patch.object(screen, '_server_set_prelude_spell') as mock_set:
+            screen.handle_events([event])
+
+        mock_set.assert_called_once_with('Health Boost', target_figure_id=10)
+        state.set_msg.assert_not_called()
+        assert screen._selecting_spell_target is None
 
 
 class TestCounterSpellIcons:

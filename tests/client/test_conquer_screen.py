@@ -15,6 +15,27 @@ def _make_state():
     return state
 
 
+def _make_checkmate_family():
+    description = (
+        'Supports three village slots and two military slots. '
+        'Triggers checkmate when defeated.'
+    )
+    matched = SimpleNamespace(
+        suit='Hearts',
+        name='Djungle Maharaja',
+        sub_name='Hearts',
+        key_cards=[],
+        number_card=None,
+        upgrade_card=None,
+    )
+    family = SimpleNamespace(
+        name='Djungle Maharaja',
+        description=description,
+        figures=[matched],
+    )
+    return family, description
+
+
 class TestConquerScreenInit:
 
     def test_initial_state(self):
@@ -215,6 +236,25 @@ class TestConquerScreenLayout:
         assert rect.y > settings.SUB_SCREEN_Y
         assert abs(rect.centerx - settings.SCREEN_WIDTH // 2) <= 1
         assert abs(rect.centery - settings.SCREEN_HEIGHT // 2) <= 1
+
+    def test_config_figures_hide_duel_only_checkmate_text(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        family, description = _make_checkmate_family()
+
+        fig = screen._config_fig_to_figure({
+            'id': 10,
+            'family_name': 'Djungle Maharaja',
+            'name': 'Djungle Maharaja',
+            'suit': 'Hearts',
+            'description': description,
+            'checkmate': True,
+        }, {'Djungle Maharaja': family})
+
+        assert fig.checkmate is False
+        assert 'checkmate' not in fig.description.lower()
+        assert 'checkmate' not in fig.family.description.lower()
 
     def test_right_panels_stack_without_overlap(self):
         from game.screens.conquer_screen import ConquerScreen
