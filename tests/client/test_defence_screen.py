@@ -549,6 +549,41 @@ class TestDefenceScreenLayout:
 
         assert prompt_rect.top >= header_bottom
 
+    def test_right_panel_info_buttons_exist_inside_sections(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+
+        assert set(screen._info_button_rects) == {
+            'battle_plan', 'prelude_spell', 'defender_response'
+        }
+        assert screen._battle_plan_rect.contains(screen._info_button_rects['battle_plan'])
+        assert screen._prelude_panel_rect.contains(screen._info_button_rects['prelude_spell'])
+        assert screen._counter_panel_rect.contains(screen._info_button_rects['defender_response'])
+
+    def test_info_button_click_opens_section_info(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            button=1,
+            pos=screen._info_button_rects['battle_plan'].center,
+        )
+        with patch.object(screen, '_open_battle_shop') as mock_open:
+            screen.handle_events([event])
+
+        assert screen._active_info_key == 'battle_plan'
+        mock_open.assert_not_called()
+
 
 class TestRemoveClickPriority:
 

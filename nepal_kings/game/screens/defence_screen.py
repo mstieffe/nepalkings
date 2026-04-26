@@ -95,6 +95,30 @@ _AUTO_GAMBLE_THRESHOLD_DEFAULT = 10
 _AUTO_GAMBLE_THRESHOLD_MIN = 1
 _AUTO_GAMBLE_THRESHOLD_MAX = 20
 
+_RIGHT_SECTION_INFO = {
+    'battle_plan': {
+        'title': 'Battle Plan',
+        'message': (
+            'Choose the three battle move cards your defenders will use, one per battle round. '
+            'A saved defence needs all three rounds assigned, and these cards stay locked while the defence is active.'
+        ),
+    },
+    'prelude_spell': {
+        'title': 'Prelude Spell',
+        'message': (
+            'Prelude spells are optional effects that trigger before a conquer battle begins. '
+            'They can restrict the battle or help your defenders before the first round, and any required cards stay locked in the saved defence.'
+        ),
+    },
+    'defender_response': {
+        'title': 'Defender Response',
+        'message': (
+            'Choose the final response your defence will use during battle: either a battle figure or a counter spell. '
+            'Exactly one response is required so the defender has a clear last-round plan.'
+        ),
+    },
+}
+
 
 class DefenceScreen(MenuScreenMixin, Screen):
     """Defence configuration screen.
@@ -156,6 +180,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._counter_x_rect = None       # Rect for counter X remove button
         self._battle_figure_rect = None   # Rect for battle figure icon slot
         self._battle_figure_x_rect = None # Rect for battle figure X remove button
+        self._info_button_rects = {}
+        self._active_info_key = None
+        self._active_info_popup_rect = None
         self._layout_built = False
         self._hovered_slot = -1
         self._pending_prelude_spell = None
@@ -261,6 +288,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._layout_built = False
         self._hovered_slot = -1
         self._selecting_spell_target = None
+        self._active_info_key = None
+        self._active_info_popup_rect = None
         self._pending_save_confirm = False
         self._pending_leave_confirm = False
         self._pending_nav = None
@@ -457,6 +486,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
             right_x, self._battle_plan_rect.bottom + panel_gap, right_w, prelude_h)
         self._counter_panel_rect = pygame.Rect(
             right_x, self._prelude_panel_rect.bottom + panel_gap, right_w, counter_h)
+        self._info_button_rects = {
+            'battle_plan': self._info_button_rect(self._battle_plan_rect),
+            'prelude_spell': self._info_button_rect(self._prelude_panel_rect),
+            'defender_response': self._info_button_rect(self._counter_panel_rect),
+        }
 
         # Edit icon button next to "Battle Plan" section title
         moves_title_surf = self._label_font.render('Battle Plan', True, (0, 0, 0))
@@ -1056,6 +1090,118 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.window.blit(suit_icon, (specs_x + specs_surf.get_width() + 2,
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
 
+    def _info_button_rect(self, panel_rect):
+        size = max(int(0.022 * _SH), 18)
+        margin_x = int(0.008 * _SW)
+        margin_y = int(0.010 * _SH)
+        return pygame.Rect(
+            panel_rect.right - margin_x - size,
+            panel_rect.y + margin_y,
+            size,
+            size,
+        )
+
+    def _draw_info_button(self, rect, active=False):
+        if not rect:
+            return
+        mx, my = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mx, my)
+        center = rect.center
+        radius = rect.w // 2
+        fill = (80, 70, 45, 235) if active else ((70, 62, 42, 225) if hovered else (45, 40, 32, 210))
+        border = (230, 210, 140) if active or hovered else (150, 135, 95)
+        text_clr = (255, 240, 185) if active or hovered else (195, 180, 130)
+        pygame.draw.circle(self.window, fill, center, radius)
+        pygame.draw.circle(self.window, border, center, radius, 1)
+        font = settings.get_font(max(int(rect.h * 0.72), 9), bold=True)
+        txt = font.render('i', True, text_clr)
+        self.window.blit(txt, txt.get_rect(center=center))
+
+    def _wrap_info_text(self, text, font, max_width):
+        lines = []
+        for paragraph in str(text).split('\n'):
+            words = paragraph.split()
+            current = ''
+            for word in words:
+                candidate = f'{current} {word}'.strip()
+                if current and font.size(candidate)[0] > max_width:
+                    lines.append(current)
+                    current = word
+                else:
+                    current = candidate
+            if current:
+                lines.append(current)
+        return lines
+
+    def _draw_info_popup(self):
+        info = _RIGHT_SECTION_INFO.get(self._active_info_key)
+        anchor = self._info_button_rects.get(self._active_info_key) if self._active_info_key else None
+        if not info or not anchor:
+            self._active_info_popup_rect = None
+            return
+
+        pad = int(0.010 * _SW)
+        gap = int(0.006 * _SH)
+        popup_w = min(int(0.30 * _SW), max(int(0.20 * _SW), self._battle_plan_rect.w - 2 * pad))
+        text_w = popup_w - 2 * pad
+        title_font = self._small_font
+        body_font = self._res_font
+        title = info['title']
+        lines = self._wrap_info_text(info['message'], body_font, text_w)
+        line_gap = 3
+        popup_h = (
+            pad
+            + title_font.get_height()
+            + int(0.006 * _SH)
+            + len(lines) * body_font.get_height()
+            + max(0, len(lines) - 1) * line_gap
+            + pad
+        )
+        x = min(anchor.right - popup_w, _BOX_X + _BOX_W - _BOX_PAD - popup_w)
+        x = max(_BOX_X + _BOX_PAD, x)
+        y = anchor.bottom + gap
+        if y + popup_h > _BOX_BOTTOM - _BOX_PAD:
+            y = anchor.top - popup_h - gap
+        y = max(_BOX_Y + _BOX_PAD, y)
+        popup_rect = pygame.Rect(int(x), int(y), int(popup_w), int(popup_h))
+        self._active_info_popup_rect = popup_rect
+
+        surf = pygame.Surface((popup_rect.w, popup_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (26, 22, 16, 242), surf.get_rect(), border_radius=6)
+        self.window.blit(surf, popup_rect.topleft)
+        pygame.draw.rect(self.window, (210, 185, 115), popup_rect, 1, border_radius=6)
+
+        cx = popup_rect.x + pad
+        cy = popup_rect.y + pad
+        title_surf = title_font.render(title, True, (235, 215, 145))
+        self.window.blit(title_surf, (cx, cy))
+        cy += title_surf.get_height() + int(0.006 * _SH)
+        for line in lines:
+            line_surf = body_font.render(line, True, (195, 180, 140))
+            self.window.blit(line_surf, (cx, cy))
+            cy += body_font.get_height() + line_gap
+
+    def _draw_info_buttons(self):
+        for key, rect in self._info_button_rects.items():
+            self._draw_info_button(rect, active=(key == self._active_info_key))
+
+    def _handle_info_button_event(self, event):
+        if event.type != MOUSEBUTTONUP or event.button != 1:
+            return False
+        pos = event.pos
+        for key, rect in self._info_button_rects.items():
+            if rect and rect.collidepoint(pos):
+                self._active_info_key = None if self._active_info_key == key else key
+                return True
+        if self._active_info_key:
+            popup = self._active_info_popup_rect
+            if popup and popup.collidepoint(pos):
+                return True
+            self._active_info_key = None
+            self._active_info_popup_rect = None
+            return True
+        return False
+
     def _draw_section_panel(self, rect, title, *, description=None,
                             icon_rect=None, title_pos=None):
         """Draw a quiet section card with one title row and optional edit icon."""
@@ -1167,6 +1313,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             icon_rect=self._btn_counter_edit,
             title_pos=self._counter_title_pos,
         )
+        self._draw_info_buttons()
 
     def _draw_selection_prompt(self, prompt_text, helper_text, color):
         """Draw a selection prompt below the screen header, never over the title."""
@@ -1293,6 +1440,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._figure_detail_box.draw()
         if self._move_detail_box:
             self._move_detail_box.draw()
+
+        self._draw_info_popup()
 
         self._draw_menu_overlay()
 
@@ -2503,6 +2652,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
         for event in events:
             if self._handle_icon_events(event):
                 continue
+            if self._handle_info_button_event(event):
+                continue
+
+            if event.type == KEYDOWN and event.key == K_ESCAPE and self._active_info_key:
+                self._active_info_key = None
+                self._active_info_popup_rect = None
+                return
 
             # Click outside content box → back to kingdom
             if (event.type == MOUSEBUTTONUP and event.button == 1

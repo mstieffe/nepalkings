@@ -288,6 +288,48 @@ class TestConquerScreenLayout:
         assert screen._battle_plan_rect.contains(screen._move_slots_rect)
         assert screen._prelude_panel_rect.contains(screen._prelude_spell_rect)
 
+    def test_right_panel_info_buttons_exist_inside_sections(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        state.action = {}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+
+        assert set(screen._info_button_rects) == {'battle_plan', 'prelude_spell'}
+        assert screen._battle_plan_rect.contains(screen._info_button_rects['battle_plan'])
+        assert screen._prelude_panel_rect.contains(screen._info_button_rects['prelude_spell'])
+
+    def test_info_button_click_opens_section_info(self):
+        from game.screens.conquer_screen import ConquerScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = ConquerScreen(state)
+        screen._land_id = 42
+        screen._config = {
+            'figures': [],
+            'battle_moves': [],
+            'prelude_spell_name': None,
+        }
+        screen._build_layout()
+
+        event = pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            button=1,
+            pos=screen._info_button_rects['prelude_spell'].center,
+        )
+        with patch.object(screen, '_open_prelude_spell_screen') as mock_open:
+            screen.handle_events([event])
+
+        assert screen._active_info_key == 'prelude_spell'
+        mock_open.assert_not_called()
+
 
 class TestConquerRemoveClickPriority:
 
