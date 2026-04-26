@@ -230,6 +230,7 @@ class TestAutoGambleThreshold:
         assert screen._btn_auto_gamble_dec.right < screen._auto_gamble_threshold_rect.left
         assert screen._auto_gamble_threshold_rect.right < screen._btn_auto_gamble_inc.left
         assert screen._btn_auto_gamble_inc.right <= screen._battle_plan_rect.right
+        assert screen._btn_auto_gamble.top - screen._move_slots_rect.bottom >= 10
 
     def test_threshold_decrement(self):
         from game.screens.defence_screen import DefenceScreen
@@ -371,6 +372,57 @@ class TestDefenceScreenLayout:
         fitted = screen._fit_text('Very Long Caption Text', screen._res_font, 30)
 
         assert screen._res_font.size(fitted)[0] <= 30
+
+
+class TestRemoveClickPriority:
+
+    def test_figure_remove_click_does_not_open_detail_box(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config()
+        screen._build_layout()
+        field_rect = screen._field_rects['castle']
+        remove_rect = pygame.Rect(field_rect.right - 24, field_rect.top + 4, 20, 20)
+        screen._config = _make_config(
+            figures=[{'id': 10, 'has_deficit': False, 'field': 'castle', '_remove_rect': remove_rect}],
+        )
+        screen._figure_icons = {
+            10: SimpleNamespace(hovered=True, figure=SimpleNamespace(id=10)),
+        }
+
+        with patch.object(screen, '_server_remove_figure') as mock_remove, \
+                patch('game.screens.defence_screen.FigureDetailBox') as mock_detail:
+            event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=remove_rect.center)
+            screen.handle_events([event])
+
+            mock_remove.assert_called_once_with(10)
+            mock_detail.assert_not_called()
+
+    def test_battle_move_remove_click_does_not_open_detail_box(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(
+            battle_moves=[{'id': 20, 'round_index': 1, 'family_name': 'Attack', 'suit': 'Hearts', 'value': 8}],
+        )
+        screen._build_layout()
+        remove_rect = pygame.Rect(
+            screen._move_slots_rect.centerx, screen._move_slots_rect.centery, 20, 20)
+        screen._move_remove_rects = {1: remove_rect}
+        screen._hovered_slot = 1
+
+        with patch.object(screen, '_server_return_move') as mock_return, \
+                patch('game.screens.defence_screen.BattleMoveDetailBox') as mock_detail:
+            event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=remove_rect.center)
+            screen.handle_events([event])
+
+            mock_return.assert_called_once_with(20)
+            mock_detail.assert_not_called()
 
 
 class TestBattleFigureToggle:

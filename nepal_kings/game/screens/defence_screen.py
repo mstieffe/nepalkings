@@ -393,6 +393,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
         right_w = right_right - right_x
         panel_gap = int(0.014 * _SH)
         panel_pad = int(0.010 * _SW)
+        sw = self._move_slot_size
+        slot_row_w = int(sw * 2.0) * 2 + int(sw * 1.3)
+        slot_row_h = int(sw * 1.45)
+        header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
+        ag_btn_h = int(0.035 * _SH)
+        battle_controls_gap = int(0.018 * _SH)
+        fsz = self._mod_frame_size
 
         # Save Defence button (bottom-right of box)
         save_w = int(0.20 * _SW)
@@ -405,9 +412,22 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         right_content_bottom = self._btn_save.y - panel_gap
         right_content_h = max(1, right_content_bottom - content_top)
-        battle_plan_h = min(int(0.19 * _SH), int(right_content_h * 0.34))
-        prelude_h = min(int(0.19 * _SH), int(right_content_h * 0.31))
-        counter_h = max(int(0.18 * _SH), right_content_h - battle_plan_h - prelude_h - 2 * panel_gap)
+        available_panel_h = max(1, right_content_h - 2 * panel_gap)
+        battle_plan_min_h = header_h + slot_row_h + battle_controls_gap + ag_btn_h + panel_pad
+        prelude_min_h = header_h + fsz + panel_pad
+        counter_min_h = header_h + fsz + panel_pad
+
+        max_battle_plan_h = max(ag_btn_h, available_panel_h - prelude_min_h - counter_min_h)
+        battle_plan_h = min(
+            max(battle_plan_min_h, int(available_panel_h * 0.40)),
+            max_battle_plan_h,
+        )
+        remaining_h = max(1, available_panel_h - battle_plan_h)
+        prelude_h = min(
+            max(prelude_min_h, int(available_panel_h * 0.27)),
+            max(prelude_min_h, remaining_h - counter_min_h),
+        )
+        counter_h = max(counter_min_h, remaining_h - prelude_h)
 
         self._battle_plan_rect = pygame.Rect(right_x, content_top, right_w, battle_plan_h)
         self._prelude_panel_rect = pygame.Rect(
@@ -428,10 +448,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
             isz, isz,
         )
 
-        sw = self._move_slot_size
-        slot_row_w = int(sw * 2.0) * 2 + int(sw * 1.3)
-        slot_row_h = int(sw * 1.45)
-        header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
         self._move_slots_rect = pygame.Rect(
             self._battle_plan_rect.centerx - slot_row_w // 2,
             self._battle_plan_rect.y + header_h,
@@ -440,11 +456,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
         )
 
         # Auto-gamble controls — footer row below battle moves.
-        ag_btn_h = int(0.035 * _SH)
         agw = int(0.12 * _SW)
         ag_y = min(
-            self._move_slots_rect.bottom + int(0.004 * _SH),
-            self._battle_plan_rect.bottom - panel_pad - ag_btn_h,
+            self._move_slots_rect.bottom + battle_controls_gap,
+            self._battle_plan_rect.bottom - ag_btn_h,
         )
         ag_x = self._battle_plan_rect.x + panel_pad
         self._btn_auto_gamble = pygame.Rect(ag_x, ag_y, agw, ag_btn_h)
@@ -464,8 +479,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
             max(1, self._btn_auto_gamble_inc.x - self._btn_auto_gamble_dec.right - (2 * ag_ctrl_gap)),
             ag_btn_h,
         )
-
-        fsz = self._mod_frame_size
 
         # ── Prelude Spell panel (single spell icon slot + edit button) ──
         prelude_header_y = self._prelude_panel_rect.y + int(0.010 * _SH)
@@ -990,6 +1003,35 @@ class DefenceScreen(MenuScreenMixin, Screen):
             cy += surf.get_height() + line_gap
         return cy - line_gap
 
+    def _blit_scaled_centered(self, source, rect, scale=1.0, alpha=None):
+        """Scale a surface to fit within rect and blit it centered."""
+        if not source or not rect:
+            return
+        max_w = max(1, int(rect.w * scale))
+        max_h = max(1, int(rect.h * scale))
+        src_w, src_h = source.get_size()
+        if src_w <= 0 or src_h <= 0:
+            return
+        factor = min(max_w / src_w, max_h / src_h)
+        size = (max(1, int(src_w * factor)), max(1, int(src_h * factor)))
+        surf = pygame.transform.smoothscale(source, size)
+        if alpha is not None:
+            surf.set_alpha(alpha)
+        self.window.blit(surf, surf.get_rect(center=rect.center).topleft)
+
+    def _draw_compact_figure_icon(self, rect, figure_id, hovered=False):
+        """Draw a figure icon in a panel without field labels or selection badges."""
+        figure = next((f for f in self._figure_objects if f.id == figure_id), None)
+        if not figure:
+            return False
+        family = figure.family
+        glow = getattr(family, 'glow_img', None)
+        if glow:
+            self._blit_scaled_centered(glow, rect, scale=1.28, alpha=170 if hovered else 115)
+        self._blit_scaled_centered(getattr(family, 'icon_img_small', None), rect, scale=0.62)
+        self._blit_scaled_centered(getattr(family, 'frame_img', None), rect, scale=1.0)
+        return True
+
     def _draw_right_panels(self):
         """Draw structured panels behind the right-column controls."""
         self._draw_section_panel(
@@ -1354,7 +1396,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     target = self._config.get('prelude_spell_target_figure') or {}
                     target_name = target.get('name') or 'choose target'
                     target_clr = (120, 220, 120) if target.get('id') else (230, 140, 80)
-                    lines.append((f'→ {target_name}', self._res_font, target_clr))
+                    lines.append((f'Target: {target_name}', self._res_font, target_clr))
                 text_h = sum(font.get_height() for _, font, _ in lines) + max(0, len(lines) - 1) * 2
                 self._draw_caption_lines(lines, caption_x, cy - text_h // 2, caption_w)
                 if self._success_badge:
@@ -1444,7 +1486,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     target = self._config.get('counter_spell_target_figure') or {}
                     target_name = target.get('name') or 'choose target'
                     target_clr = (120, 220, 120) if target.get('id') else (230, 140, 80)
-                    lines.append((f'→ {target_name}', self._res_font, target_clr))
+                    lines.append((f'Target: {target_name}', self._res_font, target_clr))
                 text_h = sum(font.get_height() for _, font, _ in lines) + max(0, len(lines) - 1) * 2
                 self._draw_caption_lines(lines, caption_x, cy - text_h // 2, caption_w)
                 if self._success_badge:
@@ -1488,12 +1530,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
         is_selected = bf_id is not None
 
         if is_selected:
-            # Draw the figure icon if available, centred in the slot
-            fig_icon = self._figure_icons.get(bf_id)
-            if fig_icon:
-                fig_icon.draw(cx, cy)
-            else:
-                # Fallback: draw a placeholder with name
+            hovered = rect.collidepoint(mx, my_mouse)
+            if not self._draw_compact_figure_icon(rect, bf_id, hovered=hovered):
                 fig_name = self._figure_name(bf_id)
                 pygame.draw.rect(self.window, (40, 50, 60, 200), rect, border_radius=4)
                 pygame.draw.rect(self.window, (80, 100, 130), rect, 1, border_radius=4)
@@ -1514,12 +1552,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             ntxt = self._res_font.render('Battle Fig', True, (130, 130, 130))
             self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
 
-        if is_selected and self._success_badge:
-            bx = rect.x
-            by = rect.bottom - self._success_badge.get_height()
-            self.window.blit(self._success_badge, (bx, by))
-
-            # Draw advance (charge) icon at top-right of figure
+        if is_selected:
             if self._advance_icon:
                 ax = rect.right - self._advance_icon.get_width()
                 ay = rect.y
@@ -2336,6 +2369,58 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 if not self._config:
                     continue
 
+                # Remove buttons must win over icon/detail clicks.
+                if self._prelude_x_rect and self._prelude_x_rect.collidepoint(pos):
+                    current_spell = self._config.get('prelude_spell_name')
+                    if current_spell:
+                        self._pending_prelude_clear = True
+                        self.dialogue_box = DialogueBox(
+                            self.window,
+                            f'Remove {current_spell} prelude spell?',
+                            actions=['Confirm', 'Cancel'],
+                            title='Clear Prelude Spell',
+                        )
+                    continue
+
+                if self._battle_figure_x_rect and self._battle_figure_x_rect.collidepoint(pos):
+                    self._server_clear_battle_figure()
+                    continue
+
+                if self._counter_x_rect and self._counter_x_rect.collidepoint(pos):
+                    current_spell = self._config.get('counter_spell_name')
+                    if current_spell:
+                        self._pending_counter_clear = True
+                        self.dialogue_box = DialogueBox(
+                            self.window,
+                            f'Remove {current_spell} counter spell?',
+                            actions=['Confirm', 'Cancel'],
+                            title='Clear Counter Spell',
+                        )
+                    continue
+
+                figure_removed = False
+                for fig in self._config.get('figures', []):
+                    xrect = fig.get('_remove_rect')
+                    if xrect and xrect.collidepoint(pos):
+                        self._server_remove_figure(fig['id'])
+                        figure_removed = True
+                        break
+                if figure_removed:
+                    continue
+
+                move_removed = False
+                for ri, xrect in self._move_remove_rects.items():
+                    if xrect.collidepoint(pos):
+                        moves = self._config.get('battle_moves', [])
+                        for m in moves:
+                            if m['round_index'] == ri:
+                                self._server_return_move(m['id'])
+                                break
+                        move_removed = True
+                        break
+                if move_removed:
+                    continue
+
                 # Figure icon clicks → open detail box
                 for icon in self._figure_icons.values():
                     if icon.hovered:
@@ -2359,19 +2444,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     self._open_battle_shop()
                     continue
 
-                # Prelude spell: X remove button
-                if self._prelude_x_rect and self._prelude_x_rect.collidepoint(pos):
-                    current_spell = self._config.get('prelude_spell_name')
-                    if current_spell:
-                        self._pending_prelude_clear = True
-                        self.dialogue_box = DialogueBox(
-                            self.window,
-                            f'Remove {current_spell} prelude spell?',
-                            actions=['Confirm', 'Cancel'],
-                            title='Clear Prelude Spell',
-                        )
-                    continue
-
                 # Prelude spell: edit button opens spell picker; Health Boost slot picks target
                 if self._btn_prelude_edit and self._btn_prelude_edit.collidepoint(pos):
                     self._open_prelude_spell_screen()
@@ -2381,24 +2453,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         self._begin_spell_target_selection('prelude')
                     else:
                         self._open_prelude_spell_screen()
-                    continue
-
-                # Counter action: battle figure X remove
-                if self._battle_figure_x_rect and self._battle_figure_x_rect.collidepoint(pos):
-                    self._server_clear_battle_figure()
-                    continue
-
-                # Counter action: counter spell X remove
-                if self._counter_x_rect and self._counter_x_rect.collidepoint(pos):
-                    current_spell = self._config.get('counter_spell_name')
-                    if current_spell:
-                        self._pending_counter_clear = True
-                        self.dialogue_box = DialogueBox(
-                            self.window,
-                            f'Remove {current_spell} counter spell?',
-                            actions=['Confirm', 'Cancel'],
-                            title='Clear Counter Spell',
-                        )
                     continue
 
                 # Counter action: battle figure slot click
@@ -2455,27 +2509,6 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 # Save Defence button
                 if self._btn_save and self._btn_save.collidepoint(pos):
                     self._on_save_click()
-                    continue
-
-                # Remove figure [X] buttons
-                for fig in self._config.get('figures', []):
-                    xrect = fig.get('_remove_rect')
-                    if xrect and xrect.collidepoint(pos):
-                        self._server_remove_figure(fig['id'])
-                        break
-
-                # Remove battle move via X button
-                move_removed = False
-                for ri, xrect in self._move_remove_rects.items():
-                    if xrect.collidepoint(pos):
-                        moves = self._config.get('battle_moves', [])
-                        for m in moves:
-                            if m['round_index'] == ri:
-                                self._server_return_move(m['id'])
-                                break
-                        move_removed = True
-                        break
-                if move_removed:
                     continue
 
                 # Click on filled battle move slot → open detail box
