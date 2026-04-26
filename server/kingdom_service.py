@@ -232,8 +232,11 @@ def check_defence_incomplete(land_id, user_id):
     bool
         ``True`` if the defence is incomplete or missing.
     """
-    cfg = LandConfig.query.filter_by(
-        user_id=user_id, config_type='defence', land_id=land_id
+    cfg = LandConfig.query.filter(
+        LandConfig.user_id == user_id,
+        LandConfig.config_type == 'defence',
+        LandConfig.land_id == land_id,
+        db.or_(LandConfig.status == 'active', LandConfig.status.is_(None)),
     ).first()
     if not cfg:
         return True

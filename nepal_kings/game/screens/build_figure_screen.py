@@ -18,6 +18,14 @@ import logging
 logger = logging.getLogger('nk.screens.build_figure')
 
 
+def _is_kingdom_config_mode(mode):
+    return mode in ('conquer', 'defence', 'defence_draft')
+
+
+def _kingdom_mode_path(mode):
+    return 'defence/draft' if mode == 'defence_draft' else mode
+
+
 
 class BuildFigureScreen(SubScreen):
     """Screen for building a figure by selecting figures and suits."""
@@ -71,7 +79,7 @@ class BuildFigureScreen(SubScreen):
 
     def create_figure_in_db(self, selected_figure, instant_charge_advance=False):
         """Insert the selected figure into the database. Returns the server response dict."""
-        if self.mode in ('conquer', 'defence'):
+        if _is_kingdom_config_mode(self.mode):
             return self._create_figure_kingdom(selected_figure)
 
         if getattr(self.game, 'game_over', False):
@@ -157,7 +165,7 @@ class BuildFigureScreen(SubScreen):
         land_id = getattr(self.game, 'land_id', None)
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/{self.mode}/build_figure',
+                f'{settings.SERVER_URL}/kingdom/{_kingdom_mode_path(self.mode)}/build_figure',
                 json={
                     'land_id': land_id,
                     'family_name': selected_figure.family.name,
@@ -375,7 +383,7 @@ class BuildFigureScreen(SubScreen):
         if hasattr(self.card_source, 'game'):
             self.card_source.game = game
 
-        if self.mode in ('conquer', 'defence') or self.game.turn:
+        if _is_kingdom_config_mode(self.mode) or self.game.turn:
             self.confirm_button.disabled = False
         else:
             self.confirm_button.disabled = True
@@ -546,7 +554,7 @@ class BuildFigureScreen(SubScreen):
 
                 elif response == 'to field':
                     self.dialogue_box = None
-                    if self.mode in ('conquer', 'defence'):
+                    if _is_kingdom_config_mode(self.mode):
                         # Signal parent to dismiss the build subscreen
                         if hasattr(self, '_on_done') and self._on_done:
                             self._on_done()

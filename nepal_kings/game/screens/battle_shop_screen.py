@@ -20,6 +20,14 @@ import logging
 logger = logging.getLogger('nk.screens.battle_shop')
 
 
+def _is_kingdom_config_mode(mode):
+    return mode in ('conquer', 'defence', 'defence_draft')
+
+
+def _kingdom_mode_path(mode):
+    return 'defence/draft' if mode == 'defence_draft' else mode
+
+
 
 class BattleShopScreen(SubScreen):
     """Screen for purchasing and returning battle moves.
@@ -255,7 +263,7 @@ class BattleShopScreen(SubScreen):
     # ----------------------------------------------------------- data helpers
     def _load_bought_moves(self):
         """Fetch bought battle moves from server."""
-        if self.mode in ('conquer', 'defence'):
+        if _is_kingdom_config_mode(self.mode):
             # In kingdom mode, moves come from the config
             if self.game:
                 self.bought_moves = self.game._config.get('battle_moves', [])
@@ -566,7 +574,7 @@ class BattleShopScreen(SubScreen):
 
         card_type = 'side' if move.card.type == 'side_card' else 'main'
 
-        if self.mode in ('conquer', 'defence'):
+        if _is_kingdom_config_mode(self.mode):
             result = self._buy_move_kingdom(move, card_type)
         else:
             result = battle_shop_service.buy_battle_move(
@@ -586,7 +594,7 @@ class BattleShopScreen(SubScreen):
             self._load_bought_moves()
 
             # Rebuild card source for kingdom mode (re-fetch free counts)
-            if self.mode in ('conquer', 'defence'):
+            if _is_kingdom_config_mode(self.mode):
                 self._rebuild_card_source_kingdom()
             else:
                 self._sync_card_source_locked()
@@ -632,7 +640,7 @@ class BattleShopScreen(SubScreen):
 
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/{self.mode}/buy_battle_move',
+                f'{settings.SERVER_URL}/kingdom/{_kingdom_mode_path(self.mode)}/buy_battle_move',
                 json={
                     'land_id': land_id,
                     'family_name': move.family.name,
@@ -818,11 +826,11 @@ class BattleShopScreen(SubScreen):
 
         bm = self.bought_moves[idx]
 
-        if self.mode in ('conquer', 'defence'):
+        if _is_kingdom_config_mode(self.mode):
             from utils import http_compat as requests
             try:
                 resp = requests.post(
-                    f'{settings.SERVER_URL}/kingdom/{self.mode}/return_battle_move',
+                    f'{settings.SERVER_URL}/kingdom/{_kingdom_mode_path(self.mode)}/return_battle_move',
                     json={'move_id': bm['id']},
                     timeout=10,
                 )
@@ -845,7 +853,7 @@ class BattleShopScreen(SubScreen):
             self._load_bought_moves()
 
             # Rebuild card source for kingdom mode (re-fetch free counts)
-            if self.mode in ('conquer', 'defence'):
+            if _is_kingdom_config_mode(self.mode):
                 self._rebuild_card_source_kingdom()
             else:
                 self._sync_card_source_locked()
@@ -881,7 +889,7 @@ class BattleShopScreen(SubScreen):
         # In conquer/defence mode moves are pre-built from config and may
         # be fewer than MAX — the server already allows this.
         if (len(self.bought_moves) < settings.BATTLE_SHOP_MAX_MOVES
-                and self.mode not in ('conquer', 'defence')):
+                and not _is_kingdom_config_mode(self.mode)):
             return
 
         result = battle_shop_service.confirm_battle_moves(

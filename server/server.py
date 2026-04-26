@@ -192,6 +192,10 @@ with app.app_context():
             'counter_spell_card_ids':      'JSON',
             'counter_spell_target_figure_id': 'INTEGER',
             'auto_gamble_threshold':       'INTEGER DEFAULT 10',
+            'status':                      "VARCHAR(12) DEFAULT 'active' NOT NULL",
+            'base_config_id':              'INTEGER',
+            'version':                     'INTEGER DEFAULT 1 NOT NULL',
+            'updated_at':                  'DATETIME',
         }
         for col_name, col_type in _lc_new_cols.items():
             if col_name not in existing_cols:
@@ -216,16 +220,22 @@ with app.app_context():
         valid_by_lock_type = {
             'conquer_figure':   figure_ids,
             'defence_figure':   figure_ids,
+            'defence_draft_figure': figure_ids,
             'conquer_move':     move_ids,
             'defence_move':     move_ids,
+            'defence_draft_move': move_ids,
             'conquer_modifier': config_ids,
             'defence_modifier': config_ids,
+            'defence_draft_modifier': config_ids,
             'conquer_spell':    config_ids,
             'defence_spell':    config_ids,
+            'defence_draft_spell': config_ids,
             'conquer_prelude':  config_ids,
             'defence_prelude':  config_ids,
+            'defence_draft_prelude': config_ids,
             'conquer_counter':  config_ids,
             'defence_counter':  config_ids,
+            'defence_draft_counter': config_ids,
         }
         locked_cards = CollectionCard.query.filter_by(locked=True).all()
         orphan_count = 0

@@ -33,6 +33,7 @@ def app():
     flask_app.config['RATELIMIT_ENABLED'] = False
 
     with flask_app.app_context():
+        _db.drop_all()
         _db.create_all()
         yield flask_app
         _db.session.remove()

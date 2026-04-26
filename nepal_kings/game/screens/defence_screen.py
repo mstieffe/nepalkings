@@ -168,7 +168,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._counter_spell_choice_idx = 0
         self._pending_save_confirm = False
         self._pending_leave_confirm = False
-        self._saved = False   # True after user confirms Save Defence
+        self._pending_nav = None
+        self._draft_dirty = False
         self._collection_cards = None
         self._selecting_battle_fig = False  # True when prompting user to pick a figure
         self._selecting_spell_target = None  # 'prelude' or 'counter' while choosing Health Boost target
@@ -260,6 +261,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._layout_built = False
         self._hovered_slot = -1
         self._selecting_spell_target = None
+        self._pending_save_confirm = False
+        self._pending_leave_confirm = False
+        self._pending_nav = None
+        self._draft_dirty = False
 
     # ── Asset init ────────────────────────────────────────────────────
 
@@ -566,13 +571,17 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     # ── Data loading ────────────────────────────────────────────────
 
+    def _apply_config(self, config):
+        self._config = config
+        self._draft_dirty = bool((config or {}).get('draft_dirty', True))
+
     def _load_config(self):
         self._loading = True
         self._error = None
         try:
-            resp = requests.get(
-                f'{settings.SERVER_URL}/kingdom/defence/config',
-                params={'land_id': self._land_id},
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/defence/draft/open',
+                json={'land_id': self._land_id},
                 timeout=15,
             )
             if resp.status_code != 200:
@@ -581,7 +590,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 self._loading = False
                 return
             data = resp.json()
-            self._config = data.get('config')
+            self._apply_config(data.get('config'))
             self._land = data.get('land')
             self._loading = False
             self._rebuild_figure_objects()
@@ -595,16 +604,100 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     # ── Server actions ──────────────────────────────────────────────
 
+    def _server_validate_draft(self):
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/defence/draft/validate',
+                json={'land_id': self._land_id},
+                timeout=10,
+            )
+            data = resp.json()
+            return data
+        except Exception as e:
+            logger.error(f'Validate defence draft error: {e}')
+            return {'success': False, 'problems': ['Connection error']}
+
+    def _server_save_draft(self):
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/defence/draft/save',
+                json={'land_id': self._land_id},
+                timeout=15,
+            )
+            data = resp.json()
+            if data.get('success'):
+                self._apply_config(data.get('config'))
+                self._land = data.get('land', self._land)
+                self._rebuild_figure_objects()
+                self._refresh_collection()
+                self.state.set_msg('Defence saved')
+                return True
+            problems = data.get('problems') or [data.get('message', 'Could not save defence')]
+            self._show_problem_dialogue('Cannot Save Defence', problems)
+            return False
+        except Exception as e:
+            logger.error(f'Save defence draft error: {e}')
+            self.state.set_msg('Could not save defence')
+            return False
+
+    def _server_discard_draft(self):
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/defence/draft/discard',
+                json={'land_id': self._land_id},
+                timeout=10,
+            )
+            data = resp.json()
+            if data.get('success'):
+                self._apply_config(data.get('config'))
+                self._land = data.get('land', self._land)
+                if self._config:
+                    self._rebuild_figure_objects()
+                else:
+                    self._figure_objects = []
+                    self._figure_icons = {}
+                self._refresh_collection()
+                return True
+            self.state.set_msg(data.get('message', 'Could not discard changes'))
+            return False
+        except Exception as e:
+            logger.error(f'Discard defence draft error: {e}')
+            self.state.set_msg('Could not discard changes')
+            return False
+
+    def _show_problem_dialogue(self, title, problems):
+        msg = '\n'.join(f'• {p}' for p in (problems or ['Unknown problem']))
+        self.dialogue_box = DialogueBox(
+            self.window,
+            msg,
+            actions=['OK'],
+            title=title,
+        )
+
+    def _complete_pending_navigation(self):
+        target = self._pending_nav or 'kingdom'
+        self._pending_nav = None
+        if target == 'logout':
+            self._logout_dialogue = DialogueBox(
+                self.window,
+                'Are you sure you want to log out?',
+                actions=['yes', 'no'],
+                icon='question',
+                title='Logout'
+            )
+            return
+        self.state.screen = target
+
     def _server_remove_figure(self, figure_id):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/remove_figure',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/remove_figure',
                 json={'figure_id': figure_id},
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
                 self._rebuild_figure_objects()
                 self._maybe_prompt_missing_spell_target()
             else:
@@ -615,13 +708,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _server_return_move(self, move_id):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/return_battle_move',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/return_battle_move',
                 json={'move_id': move_id},
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
             else:
                 logger.warning(f'Return move failed: {data.get("message")}')
         except Exception as e:
@@ -634,13 +727,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 payload['target_figure_id'] = target_figure_id
                 payload['spell_data'] = {'target_figure_id': target_figure_id}
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/set_prelude_spell',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/set_prelude_spell',
                 json=payload,
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
                 self._refresh_collection()
                 self._maybe_prompt_missing_spell_target()
             else:
@@ -651,13 +744,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _server_clear_prelude_spell(self):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/clear_prelude_spell',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/clear_prelude_spell',
                 json={'land_id': self._land_id},
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
                 self._refresh_collection()
         except Exception as e:
             logger.error(f'Clear prelude spell error: {e}')
@@ -668,12 +761,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if figure_id_2:
                 payload['figure_id_2'] = figure_id_2
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/set_battle_figure',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/set_battle_figure',
                 json=payload, timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
             else:
                 logger.warning(f'Set battle figure failed: {data.get("message")}')
         except Exception as e:
@@ -682,13 +775,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _server_clear_battle_figure(self):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/clear_battle_figure',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/clear_battle_figure',
                 json={'land_id': self._land_id},
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
         except Exception as e:
             logger.error(f'Clear battle figure error: {e}')
 
@@ -704,13 +797,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if cfg.get('battle_figure_id') or cfg.get('battle_figure_id_2'):
                 payload['clear_battle_figure'] = True
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/set_counter_spell',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/set_counter_spell',
                 json=payload,
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
                 self._refresh_collection()
                 self._maybe_prompt_missing_spell_target()
             else:
@@ -721,13 +814,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _server_clear_counter_spell(self):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/clear_counter_spell',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/clear_counter_spell',
                 json={'land_id': self._land_id},
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
                 self._refresh_collection()
         except Exception as e:
             logger.error(f'Clear counter spell error: {e}')
@@ -735,13 +828,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _server_set_auto_gamble(self, enabled):
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/set_auto_gamble',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/set_auto_gamble',
                 json={'land_id': self._land_id, 'auto_gamble': enabled},
                 timeout=10,
             )
             data = resp.json()
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
         except Exception as e:
             logger.error(f'Set auto gamble error: {e}')
 
@@ -764,7 +857,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         min(_AUTO_GAMBLE_THRESHOLD_MAX, int(threshold)))
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/defence/set_auto_gamble_threshold',
+                f'{settings.SERVER_URL}/kingdom/defence/draft/set_auto_gamble_threshold',
                 json={'land_id': self._land_id, 'auto_gamble_threshold': threshold},
                 timeout=10,
             )
@@ -784,7 +877,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 return False
 
             if data.get('success'):
-                self._config = data['config']
+                self._apply_config(data['config'])
                 return True
 
             self.state.set_msg(data.get('message', 'Could not update auto-gamble threshold'))
@@ -1799,12 +1892,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
         """Handle click on Save Defence button."""
         if not self._is_defence_ready():
             problems = self._get_defence_problems()
-            msg = '\n'.join(f'\u2022 {p}' for p in problems)
-            self.dialogue_box = DialogueBox(
-                self.window,
-                msg,
-                actions=['OK'],
-                title='Cannot Save Defence',
+            self._show_problem_dialogue('Cannot Save Defence', problems)
+            return
+        validation = self._server_validate_draft()
+        if not validation.get('success'):
+            self._show_problem_dialogue(
+                'Cannot Save Defence',
+                validation.get('problems') or [validation.get('message', 'Configuration is incomplete')],
             )
             return
         msg, images, captions, after_msg = self._build_confirm_data()
@@ -1971,7 +2065,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._subscreen_obj = BuildFigureScreen(
             self.window, self.state,
             x=sx, y=sy,
-            title='Figure Builder', card_source=card_source, mode='defence',
+            title='Figure Builder', card_source=card_source, mode='defence_draft',
         )
         self._subscreen_obj._on_done = self._close_subscreen
         self._active_subscreen = 'build_figure'
@@ -1988,7 +2082,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._subscreen_obj = BattleShopScreen(
             self.window, self.state,
             x=sx, y=sy,
-            title='Battle Shop', card_source=card_source, mode='defence',
+            title='Battle Shop', card_source=card_source, mode='defence_draft',
         )
         self._subscreen_obj._on_done = self._close_subscreen
         self._active_subscreen = 'battle_shop'
@@ -2009,7 +2103,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             x=sx, y=sy,
             title='Prelude Spell', card_source=card_source, mode='defence',
             allowed_spells=_DEFENCE_PRELUDE_SPELLS,
-            server_endpoint='/kingdom/defence/set_prelude_spell',
+            server_endpoint='/kingdom/defence/draft/set_prelude_spell',
             land_id=self._land_id,
         )
         self._subscreen_obj._on_done = self._close_subscreen
@@ -2035,7 +2129,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             x=sx, y=sy,
             title='Counter Spell', card_source=card_source, mode='defence',
             allowed_spells=_DEFENCE_COUNTER_SPELLS,
-            server_endpoint='/kingdom/defence/set_counter_spell',
+            server_endpoint='/kingdom/defence/draft/set_counter_spell',
             land_id=self._land_id,
             extra_payload={'clear_battle_figure': True} if had_battle_figure else None,
         )
@@ -2045,7 +2139,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _close_subscreen(self):
         """Dismiss the active subscreen and sync config."""
         if self._game_proxy:
-            self._config = self._game_proxy._config
+            self._apply_config(self._game_proxy._config)
         self._active_subscreen = None
         self._subscreen_obj = None
         self._game_proxy = None
@@ -2053,48 +2147,31 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._load_config()
 
     def _leave_screen(self):
-        """Go back to kingdom, resetting unsaved config changes."""
-        if not self._saved:
-            try:
-                requests.post(
-                    f'{settings.SERVER_URL}/kingdom/defence/reset_config',
-                    json={'land_id': self._land_id},
-                    timeout=10,
-                )
-            except Exception as e:
-                logger.error(f'Failed to reset defence config: {e}')
-        self.state.screen = 'kingdom'
+        """Go back to kingdom without deleting the saved active defence."""
+        self._pending_nav = 'kingdom'
+        self._complete_pending_navigation()
 
-    def _has_config_content(self):
-        """True if the config has any figures, moves, or spells set."""
+    def _has_unsaved_changes(self):
+        """True if the open defence draft differs from the saved active config."""
         if not self._config:
             return False
-        return bool(
-            self._config.get('figures')
-            or self._config.get('battle_moves')
-            or self._config.get('prelude_spell_name')
-            or self._config.get('counter_spell_name')
-            or self._config.get('battle_figure_id')
-            or self._config.get('battle_modifier')
-        )
+        return bool(self._draft_dirty or self._config.get('draft_dirty'))
 
     def _try_leave_screen(self):
-        """Prompt if config has unsaved content; otherwise leave immediately."""
-        if self._saved:
-            self.state.screen = 'kingdom'
+        """Prompt if the draft is dirty; otherwise leave immediately."""
+        if not self._pending_nav:
+            self._pending_nav = 'kingdom'
+        if not self._has_unsaved_changes():
+            self._complete_pending_navigation()
             return
-        if self._has_config_content():
-            self._pending_leave_confirm = True
-            self.dialogue_box = DialogueBox(
-                self.window,
-                'You have unsaved changes.\n'
-                'Leaving will discard all figures, battle moves,\n'
-                'and spells you have configured.',
-                actions=['Leave', 'Stay'],
-                title='Discard Changes?',
-            )
-        else:
-            self._leave_screen()
+        self._pending_leave_confirm = True
+        self.dialogue_box = DialogueBox(
+            self.window,
+            'You have unsaved defence changes.\n'
+            'Save them, discard only this draft, or stay here.',
+            actions=['Save & Leave', 'Discard Changes', 'Stay'],
+            title='Unsaved Defence Changes',
+        )
 
     # ── Readiness check ─────────────────────────────────────────────
 
@@ -2231,6 +2308,25 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     # ── Update / events ─────────────────────────────────────────────
 
+    def _handle_icon_events(self, event):
+        """Guard shared menu icons so they cannot bypass draft handling."""
+        if hasattr(self, '_logout_dialogue') and self._logout_dialogue:
+            return MenuScreenMixin._handle_icon_events(self, event)
+        if event.type == pygame.MOUSEBUTTONUP:
+            if self._icon_settings.collide():
+                self._pending_nav = 'settings'
+                self._try_leave_screen()
+                return True
+            if self._icon_home.collide():
+                self._pending_nav = 'game_menu'
+                self._try_leave_screen()
+                return True
+            if self._icon_logout.collide():
+                self._pending_nav = 'logout'
+                self._try_leave_screen()
+                return True
+        return False
+
     def update(self, events):
         super().update()
         self._update_icon_buttons()
@@ -2264,14 +2360,21 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._pending_save_confirm = False
             self.reset_action()
             if response == 'confirm':
-                self._saved = True
-                self.state.screen = 'kingdom'
+                self._pending_nav = self._pending_nav or 'kingdom'
+                if self._server_save_draft():
+                    self._complete_pending_navigation()
             return
         if response and self._pending_leave_confirm:
             self._pending_leave_confirm = False
             self.reset_action()
-            if response == 'leave':
-                self._leave_screen()
+            if response == 'save & leave':
+                if self._server_save_draft():
+                    self._complete_pending_navigation()
+            elif response == 'discard changes':
+                if self._server_discard_draft():
+                    self._complete_pending_navigation()
+            else:
+                self._pending_nav = None
             return
         if response and self._pending_prelude_spell:
             self._pending_prelude_spell = None
@@ -2300,8 +2403,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._pending_counter_clear = False
             self._pending_save_confirm = False
             self._pending_leave_confirm = False
+            self._pending_nav = None
             self._selecting_spell_target = None
             self.reset_action()
+            return
+
+        if self.dialogue_box:
             return
 
         # If subscreen is active, delegate events

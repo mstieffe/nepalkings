@@ -837,3 +837,211 @@ class TestDefenceAutoGambleThreshold:
                          headers=auth_headers_user1,
                          json={'land_id': land.id, 'auto_gamble_threshold': 12})
         assert rv.status_code == 403
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Defence draft lifecycle
+# ═══════════════════════════════════════════════════════════════════
+
+def _create_complete_active_defence(client, db, user_id, headers, land):
+    fig_card = _add_collection_card(db, user_id, 'Clubs', 'K', 4)
+    rv = _build_figure(client, headers, land.id, [fig_card.id], produces={'villager_black': 1})
+    assert rv.status_code == 200
+    fig_id = rv.get_json()['config']['figures'][0]['id']
+
+    for idx, rank in enumerate(('7', '8', '9')):
+        card = _add_collection_card(db, user_id, 'Hearts', rank, int(rank))
+        rv = client.post('/kingdom/defence/buy_battle_move',
+                         headers=headers,
+                         json={
+                             'land_id': land.id,
+                             'family_name': 'Strike',
+                             'card_id': card.id,
+                             'suit': 'Hearts',
+                             'rank': rank,
+                             'value': int(rank),
+                             'round_index': idx,
+                         })
+        assert rv.status_code == 200
+
+    rv = client.post('/kingdom/defence/set_battle_figure',
+                     headers=headers,
+                     json={'land_id': land.id, 'figure_id': fig_id})
+    assert rv.status_code == 200
+
+    active = LandConfig.query.filter_by(
+        user_id=user_id, config_type='defence', land_id=land.id, status='active'
+    ).first()
+    assert active is not None
+    return active
+
+
+class TestDefenceDraftLifecycle:
+
+    def test_draft_edit_does_not_change_active_and_discard_unlocks_draft_cards(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        active = _create_complete_active_defence(client, db, u1.id, auth_headers_user1, land)
+        active_fig_card_id = active.figures[0].card_ids[0]
+
+        rv = client.post('/kingdom/defence/draft/open',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+        draft = LandConfig.query.filter_by(
+            user_id=u1.id, config_type='defence', land_id=land.id, status='draft'
+        ).first()
+        assert draft is not None
+        assert len(rv.get_json()['config']['figures']) == 1
+
+        draft_card = _add_collection_card(db, u1.id, 'Spades', 'Q', 12)
+        rv = client.post('/kingdom/defence/draft/build_figure',
+                         headers=auth_headers_user1,
+                         json={
+                             'land_id': land.id,
+                             'family_name': 'Himalaya King',
+                             'name': 'Himalaya King',
+                             'suit': 'Spades',
+                             'color': 'defensive',
+                             'field': 'castle',
+                             'card_ids': [draft_card.id],
+                             'card_roles': ['key'],
+                             'produces': {},
+                             'requires': {},
+                         })
+        assert rv.status_code == 200
+        assert rv.get_json()['config']['draft_dirty'] is True
+
+        active_cfg = client.get(f'/kingdom/defence/config?land_id={land.id}',
+                                headers=auth_headers_user1).get_json()['config']
+        assert len(active_cfg['figures']) == 1
+
+        rv = client.post('/kingdom/defence/draft/discard',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+        assert rv.get_json()['config']['draft_dirty'] is False
+        assert LandConfig.query.filter_by(
+            user_id=u1.id, config_type='defence', land_id=land.id, status='draft'
+        ).first() is None
+
+        db.session.refresh(draft_card)
+        assert draft_card.locked is False
+        active_fig_card = db.session.get(CollectionCard, active_fig_card_id)
+        assert active_fig_card.locked is True
+        assert active_fig_card.lock_type == 'defence_figure'
+
+    def test_draft_save_promotes_to_active(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        old_active = _create_complete_active_defence(client, db, u1.id, auth_headers_user1, land)
+
+        client.post('/kingdom/defence/draft/open',
+                    headers=auth_headers_user1,
+                    json={'land_id': land.id})
+        rv = client.post('/kingdom/defence/draft/set_auto_gamble',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id, 'auto_gamble': True})
+        assert rv.status_code == 200
+        assert rv.get_json()['config']['draft_dirty'] is True
+
+        active_cfg = client.get(f'/kingdom/defence/config?land_id={land.id}',
+                                headers=auth_headers_user1).get_json()['config']
+        assert active_cfg['auto_gamble'] is False
+
+        rv = client.post('/kingdom/defence/draft/save',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+        saved = rv.get_json()['config']
+        assert saved['auto_gamble'] is True
+        assert saved['status'] == 'active'
+        assert saved['draft_dirty'] is False
+
+        db.session.refresh(old_active)
+        assert old_active.status == 'archived'
+        land_refreshed = db.session.get(Land, land.id)
+        assert land_refreshed.defence_config_id == saved['id']
+
+    def test_prelude_health_boost_target_survives_reopen_and_save(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        active = _create_complete_active_defence(client, db, u1.id, auth_headers_user1, land)
+        active_fig_id = active.figures[0].id
+        _add_collection_card(db, u1.id, 'Hearts', '3', 3)
+        _add_collection_card(db, u1.id, 'Hearts', '3', 3)
+
+        rv = client.post('/kingdom/defence/set_prelude_spell',
+                         headers=auth_headers_user1,
+                         json={
+                             'land_id': land.id,
+                             'spell_name': 'Health Boost',
+                             'target_figure_id': active_fig_id,
+                         })
+        assert rv.status_code == 200
+
+        rv = client.post('/kingdom/defence/draft/open',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+        opened = rv.get_json()['config']
+        target_id = opened['prelude_spell_data']['target_figure_id']
+        assert target_id != active_fig_id
+        assert opened['prelude_spell_target_figure']['id'] == target_id
+        assert target_id in {fig['id'] for fig in opened['figures']}
+
+        rv = client.post('/kingdom/defence/draft/validate',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+        assert rv.get_json()['success'] is True
+
+        rv = client.post('/kingdom/defence/draft/save',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+
+        rv = client.post('/kingdom/defence/draft/open',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        reopened = rv.get_json()['config']
+        assert reopened['prelude_spell_target_figure'] is not None
+        assert reopened['prelude_spell_data']['target_figure_id'] in {
+            fig['id'] for fig in reopened['figures']
+        }
+
+    def test_counter_health_boost_target_survives_reopen(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        active = _create_complete_active_defence(client, db, u1.id, auth_headers_user1, land)
+        active_fig_id = active.figures[0].id
+        _add_collection_card(db, u1.id, 'Diamonds', '3', 3)
+        _add_collection_card(db, u1.id, 'Diamonds', '3', 3)
+
+        rv = client.post('/kingdom/defence/set_counter_spell',
+                         headers=auth_headers_user1,
+                         json={
+                             'land_id': land.id,
+                             'spell_name': 'Health Boost',
+                             'target_figure_id': active_fig_id,
+                             'clear_battle_figure': True,
+                         })
+        assert rv.status_code == 200
+
+        rv = client.post('/kingdom/defence/draft/open',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+        opened = rv.get_json()['config']
+        assert opened['counter_spell_target_figure'] is not None
+        assert opened['counter_spell_target_figure_id'] != active_fig_id
+        assert opened['counter_spell_target_figure_id'] in {fig['id'] for fig in opened['figures']}
+
+        rv = client.post('/kingdom/defence/draft/validate',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id})
+        assert rv.status_code == 200
+        assert rv.get_json()['success'] is True

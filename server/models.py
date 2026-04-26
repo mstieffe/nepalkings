@@ -718,7 +718,10 @@ class LandConfig(db.Model):
 
     id            = db.Column(db.Integer, primary_key=True)
     user_id       = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
-    config_type   = db.Column(db.String(10), nullable=False)  # 'conquer' | 'defence'
+    config_type   = db.Column(db.String(20), nullable=False)  # 'conquer' | 'defence'
+    status        = db.Column(db.String(12), nullable=False, default='active', index=True)  # active|draft|archived
+    base_config_id = db.Column(db.Integer, db.ForeignKey('land_config.id'), nullable=True)
+    version       = db.Column(db.Integer, nullable=False, default=1)
     land_id       = db.Column(db.Integer, db.ForeignKey('land.id',
                               use_alter=True, name='fk_land_config_land'),
                               nullable=True)  # defence → which land; conquer → NULL
@@ -753,6 +756,7 @@ class LandConfig(db.Model):
     auto_gamble          = db.Column(db.Boolean, nullable=False, default=False)
     auto_gamble_threshold = db.Column(db.Integer, nullable=False, default=10)
     created_at           = db.Column(db.DateTime, default=_utcnow)
+    updated_at           = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
 
     user = db.relationship('User', backref=db.backref('land_configs', lazy='dynamic'))
     figures = db.relationship('LandConfigFigure',
@@ -769,6 +773,9 @@ class LandConfig(db.Model):
             'id': self.id,
             'user_id': self.user_id,
             'config_type': self.config_type,
+            'status': self.status,
+            'base_config_id': self.base_config_id,
+            'version': self.version,
             'land_id': self.land_id,
             'battle_modifier': self.battle_modifier,
             'modifier_card_ids': self.modifier_card_ids,

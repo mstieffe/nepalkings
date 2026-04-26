@@ -28,6 +28,7 @@ def _make_config(**overrides):
         'counter_spell_target_figure_id': None,
         'auto_gamble': False,
         'auto_gamble_threshold': 10,
+        'draft_dirty': False,
     }
     cfg.update(overrides)
     return cfg
@@ -161,6 +162,107 @@ class TestDefenceScreenNavigation:
         event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE)
         screen.handle_events([event])
         assert state.screen == 'kingdom'
+
+
+class TestDefenceDraftFlow:
+
+    def test_load_opens_draft_config(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+
+        class _Resp:
+            status_code = 200
+            headers = {'content-type': 'application/json'}
+
+            def json(self):
+                return {
+                    'success': True,
+                    'config': _make_config(draft_dirty=True),
+                    'land': {'id': 7},
+                }
+
+        with patch('game.screens.defence_screen.requests.post', return_value=_Resp()) as mock_post, \
+                patch.object(screen, '_refresh_collection'):
+            screen._load_config()
+
+        assert '/kingdom/defence/draft/open' in mock_post.call_args.args[0]
+        assert mock_post.call_args.kwargs['json'] == {'land_id': 7}
+        assert screen._draft_dirty is True
+
+    def test_leave_clean_draft_does_not_reset_active(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(draft_dirty=False)
+
+        with patch('game.screens.defence_screen.requests.post') as mock_post:
+            screen._try_leave_screen()
+
+        assert state.screen == 'kingdom'
+        mock_post.assert_not_called()
+
+    def test_leave_dirty_draft_offers_save_discard_stay(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(draft_dirty=True)
+        screen._draft_dirty = True
+
+        screen._try_leave_screen()
+
+        assert screen._pending_leave_confirm is True
+        assert screen.dialogue_box.actions == ['Save & Leave', 'Discard Changes', 'Stay']
+        assert state.screen == 'defence'
+
+    def test_discard_changes_discards_draft_only_and_navigates(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        state.action = {'status': 'discard changes'}
+        screen._pending_leave_confirm = True
+        screen._pending_nav = 'game_menu'
+
+        with patch.object(screen, '_server_discard_draft', return_value=True) as mock_discard:
+            screen.handle_events([])
+
+        mock_discard.assert_called_once()
+        assert state.screen == 'game_menu'
+
+    def test_save_confirm_saves_draft_and_navigates(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        state.action = {'status': 'confirm'}
+        screen._pending_save_confirm = True
+
+        with patch.object(screen, '_server_save_draft', return_value=True) as mock_save:
+            screen.handle_events([])
+
+        mock_save.assert_called_once()
+        assert state.screen == 'kingdom'
+
+    def test_home_icon_cannot_bypass_dirty_draft_prompt(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._config = _make_config(draft_dirty=True)
+        screen._draft_dirty = True
+        screen._icon_home.collide = MagicMock(return_value=True)
+        screen._icon_settings.collide = MagicMock(return_value=False)
+        screen._icon_logout.collide = MagicMock(return_value=False)
+
+        event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))
+        handled = screen._handle_icon_events(event)
+
+        assert handled is True
+        assert state.screen == 'defence'
+        assert screen._pending_nav == 'game_menu'
+        assert screen._pending_leave_confirm is True
 
 
 class TestPreludeSpellIcons:

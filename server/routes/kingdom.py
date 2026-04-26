@@ -504,6 +504,357 @@ def _unlock_collection_cards(card_ids):
     }, synchronize_session='fetch')
 
 
+def _unlock_collection_cards_for_ref(card_ids, lock_type, lock_ref_id):
+    """Unlock only cards still owned by a specific config-row lock."""
+    if not card_ids:
+        return
+    CollectionCard.query.filter(
+        CollectionCard.id.in_(card_ids),
+        CollectionCard.lock_type == lock_type,
+        CollectionCard.lock_ref_id == lock_ref_id,
+    ).update({
+        CollectionCard.locked: False,
+        CollectionCard.lock_type: None,
+        CollectionCard.lock_ref_id: None,
+    }, synchronize_session='fetch')
+
+
+_CONFIG_STATUS_ACTIVE = 'active'
+_CONFIG_STATUS_DRAFT = 'draft'
+_CONFIG_STATUS_ARCHIVED = 'archived'
+
+
+def _is_defence_draft_request():
+    return '/defence/draft/' in request.path
+
+
+def _defence_status_filter(status):
+    if status == _CONFIG_STATUS_ACTIVE:
+        # Treat legacy rows created before the status column existed as active.
+        return db.or_(LandConfig.status == _CONFIG_STATUS_ACTIVE,
+                      LandConfig.status.is_(None))
+    return LandConfig.status == status
+
+
+def _defence_config_query(user_id, land_id, status=_CONFIG_STATUS_ACTIVE):
+    return LandConfig.query.filter(
+        LandConfig.user_id == user_id,
+        LandConfig.config_type == 'defence',
+        LandConfig.land_id == land_id,
+        _defence_status_filter(status),
+    )
+
+
+def _get_active_defence_config(user_id, land_id):
+    return _defence_config_query(user_id, land_id, _CONFIG_STATUS_ACTIVE).first()
+
+
+def _get_draft_defence_config(user_id, land_id):
+    return _defence_config_query(user_id, land_id, _CONFIG_STATUS_DRAFT).first()
+
+
+def _defence_lock_type(base_lock_type, status=None):
+    if status is None:
+        status = _CONFIG_STATUS_DRAFT if _is_defence_draft_request() else _CONFIG_STATUS_ACTIVE
+    if status == _CONFIG_STATUS_DRAFT and base_lock_type.startswith('defence_'):
+        return base_lock_type.replace('defence_', 'defence_draft_', 1)
+    return base_lock_type
+
+
+def _touch_config(cfg):
+    cfg.version = int(cfg.version or 1) + 1
+    cfg.updated_at = _utcnow()
+
+
+def _is_defence_draft_dirty(cfg):
+    return bool(cfg and cfg.status == _CONFIG_STATUS_DRAFT and int(cfg.version or 1) > 1)
+
+
+def _copy_json(value, fallback=None):
+    if value is None:
+        return fallback
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, list):
+        return list(value)
+    return value
+
+
+def _clone_defence_config_to_draft(active_cfg, user_id, land_id):
+    """Create a draft config as an editable copy of the active defence."""
+    draft = LandConfig(
+        user_id=user_id,
+        config_type='defence',
+        status=_CONFIG_STATUS_DRAFT,
+        base_config_id=active_cfg.id if active_cfg else None,
+        land_id=land_id,
+        battle_modifier=_copy_json(active_cfg.battle_modifier) if active_cfg else None,
+        modifier_card_ids=_copy_json(active_cfg.modifier_card_ids) if active_cfg else None,
+        spell_name=active_cfg.spell_name if active_cfg else None,
+        spell_target_figure_id=None,
+        spell_card_ids=_copy_json(active_cfg.spell_card_ids) if active_cfg else None,
+        prelude_spell_name=active_cfg.prelude_spell_name if active_cfg else None,
+        prelude_spell_data=_copy_json(active_cfg.prelude_spell_data) if active_cfg else None,
+        prelude_spell_card_ids=_copy_json(active_cfg.prelude_spell_card_ids) if active_cfg else None,
+        counter_spell_name=active_cfg.counter_spell_name if active_cfg else None,
+        counter_spell_data=_copy_json(active_cfg.counter_spell_data) if active_cfg else None,
+        counter_spell_card_ids=_copy_json(active_cfg.counter_spell_card_ids) if active_cfg else None,
+        counter_spell_target_figure_id=None,
+        auto_gamble=bool(active_cfg.auto_gamble) if active_cfg else False,
+        auto_gamble_threshold=(active_cfg.auto_gamble_threshold
+                               if active_cfg and active_cfg.auto_gamble_threshold is not None
+                               else _AUTO_GAMBLE_THRESHOLD_DEFAULT),
+        version=1,
+    )
+    db.session.add(draft)
+    db.session.flush()
+
+    fig_id_map = {}
+    if active_cfg:
+        for fig in active_cfg.figures:
+            clone = LandConfigFigure(
+                config_id=draft.id,
+                family_name=fig.family_name,
+                name=fig.name,
+                suit=fig.suit,
+                color=fig.color,
+                field=fig.field,
+                card_ids=_copy_json(fig.card_ids, []),
+                card_roles=_copy_json(fig.card_roles, []),
+                produces=_copy_json(fig.produces, {}),
+                requires=_copy_json(fig.requires, {}),
+                description=fig.description,
+                upgrade_family_name=fig.upgrade_family_name,
+                checkmate=fig.checkmate,
+                cannot_be_blocked=fig.cannot_be_blocked,
+                rest_after_attack=fig.rest_after_attack,
+            )
+            db.session.add(clone)
+            db.session.flush()
+            fig_id_map[fig.id] = clone.id
+
+        for move in active_cfg.battle_moves:
+            clone = LandConfigBattleMove(
+                config_id=draft.id,
+                family_name=move.family_name,
+                card_id=move.card_id,
+                suit=move.suit,
+                rank=move.rank,
+                value=move.value,
+                round_index=move.round_index,
+                call_figure_id=fig_id_map.get(move.call_figure_id),
+            )
+            db.session.add(clone)
+
+        draft.battle_figure_id = fig_id_map.get(active_cfg.battle_figure_id)
+        draft.battle_figure_id_2 = fig_id_map.get(active_cfg.battle_figure_id_2)
+        draft.spell_target_figure_id = fig_id_map.get(active_cfg.spell_target_figure_id)
+        draft.counter_spell_target_figure_id = fig_id_map.get(active_cfg.counter_spell_target_figure_id)
+
+        if isinstance(draft.prelude_spell_data, dict):
+            # Assign a fresh dict after remapping. SQLAlchemy's plain JSON
+            # column does not reliably track in-place nested mutations.
+            prelude_data = dict(draft.prelude_spell_data)
+            old_target = prelude_data.get('target_figure_id')
+            if old_target:
+                mapped = fig_id_map.get(old_target)
+                if mapped:
+                    prelude_data['target_figure_id'] = mapped
+                else:
+                    prelude_data.pop('target_figure_id', None)
+                draft.prelude_spell_data = prelude_data or None
+
+    return draft
+
+
+def _matching_draft_figure_id(active_cfg, draft, active_figure_id):
+    """Find the draft clone of an active figure by stable figure attributes."""
+    active_figure_id = _coerce_int(active_figure_id)
+    if not active_cfg or not active_figure_id:
+        return None
+    active_fig = next((fig for fig in active_cfg.figures if fig.id == active_figure_id), None)
+    if not active_fig:
+        return None
+
+    active_card_ids = tuple(active_fig.card_ids or [])
+    for draft_fig in draft.figures:
+        if (
+            draft_fig.family_name == active_fig.family_name
+            and draft_fig.name == active_fig.name
+            and draft_fig.suit == active_fig.suit
+            and draft_fig.field == active_fig.field
+            and tuple(draft_fig.card_ids or []) == active_card_ids
+        ):
+            return draft_fig.id
+    return None
+
+
+def _repair_defence_draft_target_refs(draft):
+    """Repair stale spell targets that still point at the base active config."""
+    if not draft or draft.status != _CONFIG_STATUS_DRAFT:
+        return
+    active = (db.session.get(LandConfig, draft.base_config_id)
+              if draft.base_config_id else _get_active_defence_config(draft.user_id, draft.land_id))
+    if not active:
+        return
+
+    draft_figure_ids = {fig.id for fig in draft.figures}
+
+    if isinstance(draft.prelude_spell_data, dict):
+        prelude_data = dict(draft.prelude_spell_data)
+        target_id = _coerce_int(prelude_data.get('target_figure_id'))
+        if target_id and target_id not in draft_figure_ids:
+            mapped = _matching_draft_figure_id(active, draft, target_id)
+            if mapped:
+                prelude_data['target_figure_id'] = mapped
+            else:
+                prelude_data.pop('target_figure_id', None)
+            draft.prelude_spell_data = prelude_data or None
+
+    counter_target_id = _coerce_int(draft.counter_spell_target_figure_id)
+    if counter_target_id and counter_target_id not in draft_figure_ids:
+        draft.counter_spell_target_figure_id = _matching_draft_figure_id(
+            active, draft, counter_target_id)
+
+
+def _get_or_create_defence_draft(user_id, land_id):
+    draft = _get_draft_defence_config(user_id, land_id)
+    if draft:
+        _repair_defence_draft_target_refs(draft)
+        return draft
+    active = _get_active_defence_config(user_id, land_id)
+    draft = _clone_defence_config_to_draft(active, user_id, land_id)
+    _repair_defence_draft_target_refs(draft)
+    return draft
+
+
+def _get_defence_edit_config(user_id, land_id):
+    if _is_defence_draft_request():
+        return _get_or_create_defence_draft(user_id, land_id)
+    return _get_or_create_defence_config(user_id, land_id)
+
+
+def _serialize_defence_edit_config(cfg):
+    data = _serialize_config_with_deficit(cfg)
+    data['draft_dirty'] = _is_defence_draft_dirty(cfg)
+    return data
+
+
+def _collect_config_card_ids(cfg):
+    card_ids = set()
+    if not cfg:
+        return card_ids
+    for fig in cfg.figures:
+        card_ids.update(fig.card_ids or [])
+    for move in cfg.battle_moves:
+        if move.card_id:
+            card_ids.add(move.card_id)
+    card_ids.update(cfg.modifier_card_ids or [])
+    card_ids.update(cfg.spell_card_ids or [])
+    card_ids.update(cfg.prelude_spell_card_ids or [])
+    card_ids.update(cfg.counter_spell_card_ids or [])
+    return card_ids
+
+
+def _iter_config_card_locks(cfg, status=_CONFIG_STATUS_ACTIVE):
+    if not cfg:
+        return
+    for fig in cfg.figures:
+        yield fig.card_ids or [], _defence_lock_type('defence_figure', status), fig.id
+    for move in cfg.battle_moves:
+        if move.card_id:
+            yield [move.card_id], _defence_lock_type('defence_move', status), move.id
+    if cfg.modifier_card_ids:
+        yield cfg.modifier_card_ids, _defence_lock_type('defence_modifier', status), cfg.id
+    if cfg.spell_card_ids:
+        yield cfg.spell_card_ids, _defence_lock_type('defence_spell', status), cfg.id
+    if cfg.prelude_spell_card_ids:
+        yield cfg.prelude_spell_card_ids, _defence_lock_type('defence_prelude', status), cfg.id
+    if cfg.counter_spell_card_ids:
+        yield cfg.counter_spell_card_ids, _defence_lock_type('defence_counter', status), cfg.id
+
+
+def _get_defence_config_problems(cfg):
+    """Return detailed validation errors for a defence config."""
+    problems = []
+    if not cfg:
+        return ['Configuration not loaded.']
+
+    from kingdom_service import get_config_deficit_map
+    figures = list(cfg.figures)
+    moves = list(cfg.battle_moves)
+    prelude = cfg.prelude_spell_name
+    village_only = prelude in ('Peasant War', 'Civil War')
+
+    if not figures:
+        problems.append('No figures on the field.')
+    else:
+        deficit_map = get_config_deficit_map(cfg.id)
+        can_fight = [fig for fig in figures if not deficit_map.get(fig.id, False)]
+        if not can_fight:
+            problems.append('All figures have a resource deficit.')
+        elif village_only and not any(fig.field == 'village' for fig in can_fight):
+            problems.append(
+                f'{prelude} is selected — only village figures can fight, '
+                'but none of your village figures are available.'
+            )
+
+    if len(moves) < 3:
+        missing = 3 - len(moves)
+        problems.append(f'{missing} battle move{"s" if missing > 1 else ""} still missing (need 3).')
+
+    has_battle_fig = cfg.battle_figure_id is not None
+    has_counter_spell = cfg.counter_spell_name is not None
+    if has_battle_fig and has_counter_spell:
+        problems.append('Select exactly one strategy: battle figure or counter spell (not both).')
+    elif not has_battle_fig and not has_counter_spell:
+        problems.append('Select exactly one strategy: battle figure or counter spell.')
+
+    figure_ids = {fig.id for fig in figures}
+    if has_battle_fig and cfg.battle_figure_id not in figure_ids:
+        problems.append('Selected battle figure is no longer in this configuration.')
+    prelude_data = cfg.prelude_spell_data if isinstance(cfg.prelude_spell_data, dict) else {}
+    if prelude == 'Health Boost':
+        target_id = prelude_data.get('target_figure_id')
+        if not target_id or target_id not in figure_ids:
+            problems.append('Health Boost prelude needs one of your figures as target.')
+    if cfg.counter_spell_name == 'Health Boost':
+        target_id = cfg.counter_spell_target_figure_id
+        if not target_id or target_id not in figure_ids:
+            problems.append('Health Boost counter spell needs one of your figures as target.')
+
+    return problems
+
+
+def _promote_defence_draft(draft):
+    """Promote a valid draft to the active defence config."""
+    active = _get_active_defence_config(draft.user_id, draft.land_id)
+    active_card_ids = _collect_config_card_ids(active)
+    draft_card_ids = _collect_config_card_ids(draft)
+
+    if active and active.id != draft.id:
+        active.status = _CONFIG_STATUS_ARCHIVED
+        active.version = int(active.version or 1) + 1
+        active.updated_at = _utcnow()
+
+    removed_ids = list(active_card_ids - draft_card_ids)
+    _unlock_collection_cards(removed_ids)
+
+    draft.status = _CONFIG_STATUS_ACTIVE
+    draft.base_config_id = None
+    draft.version = int(draft.version or 1) + 1
+    draft.updated_at = _utcnow()
+
+    for card_ids, lock_type, lock_ref_id in _iter_config_card_locks(draft, _CONFIG_STATUS_ACTIVE):
+        _lock_collection_cards(card_ids, lock_type, lock_ref_id)
+
+    land = db.session.get(Land, draft.land_id)
+    if land:
+        land.defence_config_id = draft.id
+
+    return draft
+
+
 def _get_or_create_conquer_config(user_id, land_id):
     """Get the user's active conquer config for a land, or create one."""
     cfg = LandConfig.query.filter_by(
@@ -1056,20 +1407,21 @@ def _normalize_auto_gamble_threshold(value):
 
 
 def _get_or_create_defence_config(user_id, land_id):
-    """Get the user's defence config for a land, or create one."""
-    cfg = LandConfig.query.filter_by(
-        user_id=user_id, config_type='defence', land_id=land_id
-    ).first()
+    """Get the user's active defence config for a land, or create one."""
+    cfg = _get_active_defence_config(user_id, land_id)
     if not cfg:
         cfg = LandConfig(
             user_id=user_id,
             config_type='defence',
+            status=_CONFIG_STATUS_ACTIVE,
             land_id=land_id,
             auto_gamble_threshold=_AUTO_GAMBLE_THRESHOLD_DEFAULT,
         )
         db.session.add(cfg)
         db.session.flush()
-    elif cfg.auto_gamble_threshold is None:
+    elif not cfg.status:
+        cfg.status = _CONFIG_STATUS_ACTIVE
+    if cfg.auto_gamble_threshold is None:
         cfg.auto_gamble_threshold = _AUTO_GAMBLE_THRESHOLD_DEFAULT
     return cfg
 
@@ -1111,6 +1463,170 @@ def get_defence_config():
     })
 
 
+# ── Defence draft lifecycle ────────────────────────────────────────────────
+
+@kingdom.route('/defence/draft/open', methods=['POST'])
+@require_token
+def defence_draft_open():
+    """Open an editable defence draft, cloning active defence if needed."""
+    land_id = (request.json or {}).get('land_id')
+    if land_id is None:
+        return jsonify({'error': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    draft = _get_or_create_defence_draft(g.user_id, land_id)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'config': _serialize_defence_edit_config(draft),
+        'land': land.serialize(),
+        'dirty': _is_defence_draft_dirty(draft),
+    })
+
+
+@kingdom.route('/defence/draft/config', methods=['GET'])
+@require_token
+def get_defence_draft_config():
+    """Return the current editable defence draft for an owned land."""
+    land_id = request.args.get('land_id', type=int)
+    if land_id is None:
+        return jsonify({'error': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    draft = _get_or_create_defence_draft(g.user_id, land_id)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'config': _serialize_defence_edit_config(draft),
+        'land': land.serialize(),
+        'dirty': _is_defence_draft_dirty(draft),
+    })
+
+
+@kingdom.route('/defence/draft/validate', methods=['POST'])
+@require_token
+def defence_draft_validate():
+    """Validate the editable defence draft and return detailed problems."""
+    land_id = (request.json or {}).get('land_id')
+    if land_id is None:
+        return jsonify({'error': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    draft = _get_or_create_defence_draft(g.user_id, land_id)
+    problems = _get_defence_config_problems(draft)
+    db.session.commit()
+    return jsonify({
+        'success': not problems,
+        'valid': not problems,
+        'problems': problems,
+        'config': _serialize_defence_edit_config(draft),
+        'land': land.serialize(),
+        'dirty': _is_defence_draft_dirty(draft),
+    })
+
+
+@kingdom.route('/defence/draft/save', methods=['POST'])
+@require_token
+def defence_draft_save():
+    """Promote a valid draft to the active defence config."""
+    land_id = (request.json or {}).get('land_id')
+    if land_id is None:
+        return jsonify({'error': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    draft = _get_draft_defence_config(g.user_id, land_id)
+    if not draft:
+        return jsonify({'success': False, 'message': 'No defence draft found'}), 404
+
+    problems = _get_defence_config_problems(draft)
+    if problems:
+        return jsonify({'success': False, 'valid': False, 'problems': problems,
+                        'message': 'Defence draft is incomplete'}), 400
+
+    active = _promote_defence_draft(draft)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'valid': True,
+        'config': _serialize_defence_edit_config(active),
+        'land': land.serialize(),
+    })
+
+
+@kingdom.route('/defence/draft/discard', methods=['POST'])
+@require_token
+def defence_draft_discard():
+    """Delete only the editable draft and unlock draft-only cards."""
+    land_id = (request.json or {}).get('land_id')
+    if land_id is None:
+        return jsonify({'error': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    draft = _get_draft_defence_config(g.user_id, land_id)
+    if draft:
+        for card_ids, lock_type, lock_ref_id in _iter_config_card_locks(draft, _CONFIG_STATUS_DRAFT):
+            _unlock_collection_cards_for_ref(card_ids, lock_type, lock_ref_id)
+        LandConfigBattleMove.query.filter_by(config_id=draft.id).delete()
+        LandConfigFigure.query.filter_by(config_id=draft.id).delete()
+        db.session.delete(draft)
+        db.session.flush()
+
+    active = _get_active_defence_config(g.user_id, land_id)
+    db.session.commit()
+    payload = {
+        'success': True,
+        'land': land.serialize(),
+        'dirty': False,
+    }
+    if active:
+        payload['config'] = _serialize_defence_edit_config(active)
+    return jsonify(payload)
+
+
+@kingdom.route('/defence/clear_active', methods=['POST'])
+@require_token
+def defence_clear_active():
+    """Explicitly clear the saved active defence config for a land."""
+    land_id = (request.json or {}).get('land_id')
+    if land_id is None:
+        return jsonify({'error': 'land_id is required'}), 400
+
+    land, err = _validate_land_ownership(land_id, g.user_id)
+    if err:
+        return err
+
+    draft = _get_draft_defence_config(g.user_id, land_id)
+    if draft:
+        for card_ids, lock_type, lock_ref_id in _iter_config_card_locks(draft, _CONFIG_STATUS_DRAFT):
+            _unlock_collection_cards_for_ref(card_ids, lock_type, lock_ref_id)
+        LandConfigBattleMove.query.filter_by(config_id=draft.id).delete()
+        LandConfigFigure.query.filter_by(config_id=draft.id).delete()
+        db.session.delete(draft)
+
+    active = _get_active_defence_config(g.user_id, land_id)
+    if active:
+        _wipe_config(active)
+        if land.defence_config_id == active.id:
+            land.defence_config_id = None
+    db.session.commit()
+    return jsonify({'success': True, 'land': land.serialize()})
+
+
 # ── POST /kingdom/defence/reset_config ───────────────────────────────────────
 
 @kingdom.route('/defence/reset_config', methods=['POST'])
@@ -1125,11 +1641,11 @@ def defence_reset_config():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = _get_active_defence_config(g.user_id, land_id)
     if cfg:
         _wipe_config(cfg)
+        if land.defence_config_id == cfg.id:
+            land.defence_config_id = None
         db.session.commit()
 
     return jsonify({'success': True})
@@ -1138,6 +1654,7 @@ def defence_reset_config():
 # ── POST /kingdom/defence/build_figure ───────────────────────────────────────
 
 @kingdom.route('/defence/build_figure', methods=['POST'])
+@kingdom.route('/defence/draft/build_figure', methods=['POST'])
 @require_token
 def defence_build_figure():
     """Build a figure for a defence config using collection cards."""
@@ -1182,7 +1699,7 @@ def defence_build_figure():
     if any(c.locked for c in cards):
         return jsonify({'success': False, 'message': 'Some cards are already locked'}), 400
 
-    cfg = _get_or_create_defence_config(g.user_id, land_id)
+    cfg = _get_defence_edit_config(g.user_id, land_id)
 
     figure = LandConfigFigure(
         config_id=cfg.id,
@@ -1198,15 +1715,18 @@ def defence_build_figure():
     )
     db.session.add(figure)
     db.session.flush()
-    _lock_collection_cards(card_ids, 'defence_figure', figure.id)
+    _lock_collection_cards(card_ids, _defence_lock_type('defence_figure'), figure.id)
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/remove_figure ──────────────────────────────────────
 
 @kingdom.route('/defence/remove_figure', methods=['POST'])
+@kingdom.route('/defence/draft/remove_figure', methods=['POST'])
 @require_token
 def defence_remove_figure():
     """Remove a figure from a defence config and unlock its cards."""
@@ -1224,6 +1744,10 @@ def defence_remove_figure():
         return jsonify({'success': False, 'message': 'Not your config'}), 403
     if cfg.config_type != 'defence':
         return jsonify({'success': False, 'message': 'Not a defence config'}), 400
+    if _is_defence_draft_request() and cfg.status != _CONFIG_STATUS_DRAFT:
+        return jsonify({'success': False, 'message': 'Not a defence draft'}), 400
+    if not _is_defence_draft_request() and cfg.status == _CONFIG_STATUS_DRAFT:
+        return jsonify({'success': False, 'message': 'Draft figure requires draft endpoint'}), 400
 
     # Clear battle figure references
     if cfg.battle_figure_id == figure.id:
@@ -1239,21 +1763,28 @@ def defence_remove_figure():
         prelude_data.pop('target_figure_id', None)
         cfg.prelude_spell_data = prelude_data or None
 
-    _unlock_collection_cards(figure.card_ids or [])
+    if _is_defence_draft_request():
+        _unlock_collection_cards_for_ref(
+            figure.card_ids or [], _defence_lock_type('defence_figure'), figure.id)
+    else:
+        _unlock_collection_cards(figure.card_ids or [])
 
     for move in list(cfg.battle_moves):
         if move.call_figure_id == figure.id:
             move.call_figure_id = None
 
     db.session.delete(figure)
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/buy_battle_move ────────────────────────────────────
 
 @kingdom.route('/defence/buy_battle_move', methods=['POST'])
+@kingdom.route('/defence/draft/buy_battle_move', methods=['POST'])
 @require_token
 def defence_buy_battle_move():
     """Buy a battle move for a defence config."""
@@ -1289,7 +1820,7 @@ def defence_buy_battle_move():
 
     card_id = card.id
 
-    cfg = _get_or_create_defence_config(g.user_id, land_id)
+    cfg = _get_defence_edit_config(g.user_id, land_id)
 
     existing = LandConfigBattleMove.query.filter_by(
         config_id=cfg.id, round_index=round_index
@@ -1307,15 +1838,18 @@ def defence_buy_battle_move():
     )
     db.session.add(move)
     db.session.flush()
-    _lock_collection_cards([card_id], 'defence_move', move.id)
+    _lock_collection_cards([card_id], _defence_lock_type('defence_move'), move.id)
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/return_battle_move ─────────────────────────────────
 
 @kingdom.route('/defence/return_battle_move', methods=['POST'])
+@kingdom.route('/defence/draft/return_battle_move', methods=['POST'])
 @require_token
 def defence_return_battle_move():
     """Return a battle move from a defence config and unlock the card."""
@@ -1333,17 +1867,28 @@ def defence_return_battle_move():
         return jsonify({'success': False, 'message': 'Not your config'}), 403
     if cfg.config_type != 'defence':
         return jsonify({'success': False, 'message': 'Not a defence config'}), 400
+    if _is_defence_draft_request() and cfg.status != _CONFIG_STATUS_DRAFT:
+        return jsonify({'success': False, 'message': 'Not a defence draft'}), 400
+    if not _is_defence_draft_request() and cfg.status == _CONFIG_STATUS_DRAFT:
+        return jsonify({'success': False, 'message': 'Draft move requires draft endpoint'}), 400
 
-    _unlock_collection_cards([move.card_id])
+    if _is_defence_draft_request():
+        _unlock_collection_cards_for_ref(
+            [move.card_id], _defence_lock_type('defence_move'), move.id)
+    else:
+        _unlock_collection_cards([move.card_id])
     db.session.delete(move)
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/set_modifier ───────────────────────────────────────
 
 @kingdom.route('/defence/set_modifier', methods=['POST'])
+@kingdom.route('/defence/draft/set_modifier', methods=['POST'])
 @require_token
 def defence_set_modifier():
     """Set the battle modifier for a defence config.
@@ -1367,10 +1912,17 @@ def defence_set_modifier():
     if err:
         return err
 
-    cfg = _get_or_create_defence_config(g.user_id, land_id)
+    cfg = _get_defence_edit_config(g.user_id, land_id)
 
     if cfg.modifier_card_ids:
-        _unlock_collection_cards(cfg.modifier_card_ids)
+        if _is_defence_draft_request():
+            _unlock_collection_cards_for_ref(
+                cfg.modifier_card_ids,
+                _defence_lock_type('defence_modifier'),
+                cfg.id,
+            )
+        else:
+            _unlock_collection_cards(cfg.modifier_card_ids)
 
     # Find required free cards for this modifier
     req = _MODIFIER_CARD_REQS.get(modifier_type)
@@ -1380,7 +1932,7 @@ def defence_set_modifier():
         if card_ids is None:
             return jsonify({'success': False,
                             'message': f'{modifier_type} requires {count}× rank {rank} same-color free cards'}), 400
-        _lock_collection_cards(card_ids, 'defence_modifier', cfg.id)
+        _lock_collection_cards(card_ids, _defence_lock_type('defence_modifier'), cfg.id)
         cfg.modifier_card_ids = card_ids
     else:
         cfg.modifier_card_ids = None
@@ -1402,13 +1954,16 @@ def defence_set_modifier():
         # Non-civil-war: clear second battle figure
         cfg.battle_figure_id_2 = None
 
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/remove_modifier ────────────────────────────────────
 
 @kingdom.route('/defence/remove_modifier', methods=['POST'])
+@kingdom.route('/defence/draft/remove_modifier', methods=['POST'])
 @require_token
 def defence_remove_modifier():
     """Clear the battle modifier from a defence config."""
@@ -1421,26 +1976,36 @@ def defence_remove_modifier():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = (_get_draft_defence_config(g.user_id, land_id)
+           if _is_defence_draft_request()
+           else _get_active_defence_config(g.user_id, land_id))
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
     if cfg.modifier_card_ids:
-        _unlock_collection_cards(cfg.modifier_card_ids)
+        if _is_defence_draft_request():
+            _unlock_collection_cards_for_ref(
+                cfg.modifier_card_ids,
+                _defence_lock_type('defence_modifier'),
+                cfg.id,
+            )
+        else:
+            _unlock_collection_cards(cfg.modifier_card_ids)
 
     cfg.battle_modifier = None
     cfg.modifier_card_ids = None
     cfg.battle_figure_id_2 = None  # second fig only relevant for civil war
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/set_prelude_spell ──────────────────────────────────
 
 @kingdom.route('/defence/set_prelude_spell', methods=['POST'])
+@kingdom.route('/defence/draft/set_prelude_spell', methods=['POST'])
 @require_token
 def defence_set_prelude_spell():
     """Set a prelude spell for a defence config.
@@ -1464,7 +2029,7 @@ def defence_set_prelude_spell():
     if err:
         return err
 
-    cfg = _get_or_create_defence_config(g.user_id, land_id)
+    cfg = _get_defence_edit_config(g.user_id, land_id)
 
     normalized_spell_data = dict(spell_data or {}) if isinstance(spell_data, dict) else {}
     if target_fig_id is None:
@@ -1484,7 +2049,14 @@ def defence_set_prelude_spell():
 
     # Unlock previous prelude spell cards
     if cfg.prelude_spell_card_ids:
-        _unlock_collection_cards(cfg.prelude_spell_card_ids)
+        if _is_defence_draft_request():
+            _unlock_collection_cards_for_ref(
+                cfg.prelude_spell_card_ids,
+                _defence_lock_type('defence_prelude'),
+                cfg.id,
+            )
+        else:
+            _unlock_collection_cards(cfg.prelude_spell_card_ids)
 
     # Find required free cards
     req = _SPELL_CARD_COST.get(spell_name)
@@ -1494,21 +2066,24 @@ def defence_set_prelude_spell():
         if card_ids is None:
             return jsonify({'success': False,
                             'message': f'{spell_name} requires {count}× rank {rank} free cards'}), 400
-        _lock_collection_cards(card_ids, 'defence_prelude', cfg.id)
+        _lock_collection_cards(card_ids, _defence_lock_type('defence_prelude'), cfg.id)
         cfg.prelude_spell_card_ids = card_ids
     else:
         cfg.prelude_spell_card_ids = None
 
     cfg.prelude_spell_name = spell_name
     cfg.prelude_spell_data = normalized_spell_data or None
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/clear_prelude_spell ────────────────────────────────
 
 @kingdom.route('/defence/clear_prelude_spell', methods=['POST'])
+@kingdom.route('/defence/draft/clear_prelude_spell', methods=['POST'])
 @require_token
 def defence_clear_prelude_spell():
     """Clear the prelude spell from a defence config."""
@@ -1521,26 +2096,36 @@ def defence_clear_prelude_spell():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = (_get_draft_defence_config(g.user_id, land_id)
+           if _is_defence_draft_request()
+           else _get_active_defence_config(g.user_id, land_id))
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
     if cfg.prelude_spell_card_ids:
-        _unlock_collection_cards(cfg.prelude_spell_card_ids)
+        if _is_defence_draft_request():
+            _unlock_collection_cards_for_ref(
+                cfg.prelude_spell_card_ids,
+                _defence_lock_type('defence_prelude'),
+                cfg.id,
+            )
+        else:
+            _unlock_collection_cards(cfg.prelude_spell_card_ids)
 
     cfg.prelude_spell_name = None
     cfg.prelude_spell_data = None
     cfg.prelude_spell_card_ids = None
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/set_battle_figure ──────────────────────────────────
 
 @kingdom.route('/defence/set_battle_figure', methods=['POST'])
+@kingdom.route('/defence/draft/set_battle_figure', methods=['POST'])
 @require_token
 def defence_set_battle_figure():
     """Set the battle figure(s) for a defence config.
@@ -1562,9 +2147,9 @@ def defence_set_battle_figure():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = (_get_draft_defence_config(g.user_id, land_id)
+           if _is_defence_draft_request()
+           else _get_active_defence_config(g.user_id, land_id))
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
@@ -1605,14 +2190,17 @@ def defence_set_battle_figure():
 
     cfg.battle_figure_id = figure_id
     cfg.battle_figure_id_2 = figure_id_2
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/clear_battle_figure ────────────────────────────────
 
 @kingdom.route('/defence/clear_battle_figure', methods=['POST'])
+@kingdom.route('/defence/draft/clear_battle_figure', methods=['POST'])
 @require_token
 def defence_clear_battle_figure():
     """Clear the battle figure selection from a defence config."""
@@ -1625,17 +2213,19 @@ def defence_clear_battle_figure():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = (_get_draft_defence_config(g.user_id, land_id)
+           if _is_defence_draft_request()
+           else _get_active_defence_config(g.user_id, land_id))
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
     cfg.battle_figure_id = None
     cfg.battle_figure_id_2 = None
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/set_spell ──────────────────────────────────────────
@@ -1669,9 +2259,7 @@ def defence_set_spell():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = _get_active_defence_config(g.user_id, land_id)
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
@@ -1740,9 +2328,7 @@ def defence_clear_spell():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = _get_active_defence_config(g.user_id, land_id)
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
@@ -1760,6 +2346,7 @@ def defence_clear_spell():
 # ── POST /kingdom/defence/set_counter_spell ──────────────────────────────────
 
 @kingdom.route('/defence/set_counter_spell', methods=['POST'])
+@kingdom.route('/defence/draft/set_counter_spell', methods=['POST'])
 @require_token
 def defence_set_counter_spell():
     """Set a counter spell for a defence config.
@@ -1790,9 +2377,9 @@ def defence_set_counter_spell():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = (_get_draft_defence_config(g.user_id, land_id)
+           if _is_defence_draft_request()
+           else _get_active_defence_config(g.user_id, land_id))
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
@@ -1823,7 +2410,14 @@ def defence_set_counter_spell():
 
     # Unlock previous counter spell cards
     if cfg.counter_spell_card_ids:
-        _unlock_collection_cards(cfg.counter_spell_card_ids)
+        if _is_defence_draft_request():
+            _unlock_collection_cards_for_ref(
+                cfg.counter_spell_card_ids,
+                _defence_lock_type('defence_counter'),
+                cfg.id,
+            )
+        else:
+            _unlock_collection_cards(cfg.counter_spell_card_ids)
 
     # Find required free cards
     req = _SPELL_CARD_COST.get(spell_name)
@@ -1833,7 +2427,7 @@ def defence_set_counter_spell():
         if card_ids is None:
             return jsonify({'success': False,
                             'message': f'{spell_name} requires {count}× rank {rank} free cards'}), 400
-        _lock_collection_cards(card_ids, 'defence_counter', cfg.id)
+        _lock_collection_cards(card_ids, _defence_lock_type('defence_counter'), cfg.id)
         cfg.counter_spell_card_ids = card_ids
     else:
         cfg.counter_spell_card_ids = None
@@ -1841,14 +2435,17 @@ def defence_set_counter_spell():
     cfg.counter_spell_name = spell_name
     cfg.counter_spell_data = spell_data
     cfg.counter_spell_target_figure_id = target_fig_id
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/clear_counter_spell ────────────────────────────────
 
 @kingdom.route('/defence/clear_counter_spell', methods=['POST'])
+@kingdom.route('/defence/draft/clear_counter_spell', methods=['POST'])
 @require_token
 def defence_clear_counter_spell():
     """Clear the counter spell from a defence config."""
@@ -1861,27 +2458,37 @@ def defence_clear_counter_spell():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = (_get_draft_defence_config(g.user_id, land_id)
+           if _is_defence_draft_request()
+           else _get_active_defence_config(g.user_id, land_id))
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
     if cfg.counter_spell_card_ids:
-        _unlock_collection_cards(cfg.counter_spell_card_ids)
+        if _is_defence_draft_request():
+            _unlock_collection_cards_for_ref(
+                cfg.counter_spell_card_ids,
+                _defence_lock_type('defence_counter'),
+                cfg.id,
+            )
+        else:
+            _unlock_collection_cards(cfg.counter_spell_card_ids)
 
     cfg.counter_spell_name = None
     cfg.counter_spell_data = None
     cfg.counter_spell_card_ids = None
     cfg.counter_spell_target_figure_id = None
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ── POST /kingdom/defence/set_auto_gamble ────────────────────────────────────
 
 @kingdom.route('/defence/set_auto_gamble', methods=['POST'])
+@kingdom.route('/defence/draft/set_auto_gamble', methods=['POST'])
 @require_token
 def defence_set_auto_gamble():
     """Toggle auto-gamble for a defence config.
@@ -1899,19 +2506,22 @@ def defence_set_auto_gamble():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = (_get_draft_defence_config(g.user_id, land_id)
+           if _is_defence_draft_request()
+           else _get_active_defence_config(g.user_id, land_id))
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
     cfg.auto_gamble = bool(auto_gamble)
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 @kingdom.route('/defence/set_auto_gamble_threshold', methods=['POST'])
+@kingdom.route('/defence/draft/set_auto_gamble_threshold', methods=['POST'])
 @require_token
 def defence_set_auto_gamble_threshold():
     """Set the auto-gamble threshold for a defence config.
@@ -1929,16 +2539,18 @@ def defence_set_auto_gamble_threshold():
     if err:
         return err
 
-    cfg = LandConfig.query.filter_by(
-        user_id=g.user_id, config_type='defence', land_id=land_id
-    ).first()
+    cfg = (_get_draft_defence_config(g.user_id, land_id)
+           if _is_defence_draft_request()
+           else _get_active_defence_config(g.user_id, land_id))
     if not cfg:
         return jsonify({'success': False, 'message': 'No defence config found'}), 404
 
     cfg.auto_gamble_threshold = _normalize_auto_gamble_threshold(threshold)
+    if _is_defence_draft_request():
+        _touch_config(cfg)
     db.session.commit()
 
-    return jsonify({'success': True, 'config': _serialize_config_with_deficit(cfg)})
+    return jsonify({'success': True, 'config': _serialize_defence_edit_config(cfg)})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2876,9 +3488,7 @@ def conquer_start_battle():
         defender_user = db.session.get(User, land.owner_user_id)
         if not defender_user:
             return jsonify({'success': False, 'message': 'Defender not found'}), 400
-        def_cfg = LandConfig.query.filter_by(
-            user_id=defender_user.id, config_type='defence', land_id=land_id
-        ).first()
+        def_cfg = _get_active_defence_config(defender_user.id, land_id)
         if not def_cfg:
             return jsonify({'success': False,
                             'message': 'Defender has no defence config'}), 400
