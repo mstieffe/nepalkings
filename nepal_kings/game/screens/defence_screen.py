@@ -1963,79 +1963,68 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 y += icon_s + 6
 
     def _build_confirm_data(self):
-        """Build confirmation data: message text, card images, captions, and after-message."""
+        """Build confirmation data: message text, grouped cards, and after-message."""
         from game.components.cards.card_img import CardImg
 
-        images = []
-        captions = []
-        locked_count = 0
-        consumed_count = 0
+        locked_cards = []
+        consumed_cards = []
+
+        def add_card(target, suit, rank):
+            if suit and rank:
+                ci = CardImg(self.window, suit, rank)
+                target.append(ci.front_img)
 
         # Figures — locked (use card_details from server config)
         for fig in self._config.get('figures', []):
-            name = fig.get('name', '?')
             for cd in fig.get('card_details', []):
-                suit = cd.get('suit', '')
-                rank = cd.get('rank', '')
-                if suit and rank:
-                    ci = CardImg(self.window, suit, rank)
-                    images.append(ci.front_img)
-                    captions.append(name)
-                    locked_count += 1
+                add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
 
         # Battle moves — locked
         for mv in self._config.get('battle_moves', []):
             if mv.get('card_id'):
-                rank = mv.get('rank', '')
-                suit = mv.get('suit', '')
-                rd = mv.get('round_index', 0) + 1
-                if rank and suit:
-                    ci = CardImg(self.window, suit, rank)
-                    images.append(ci.front_img)
-                    captions.append(f'Round {rd}')
-                    locked_count += 1
+                add_card(locked_cards, mv.get('suit', ''), mv.get('rank', ''))
 
         # Prelude spell — locked (defender cards are locked, not consumed)
         prelude_details = self._config.get('prelude_spell_card_details') or []
         if prelude_details:
-            prelude_name = self._config.get('prelude_spell_name', 'Prelude Spell')
             for cd in prelude_details:
-                suit = cd.get('suit', '')
-                rank = cd.get('rank', '')
-                if suit and rank:
-                    ci = CardImg(self.window, suit, rank)
-                    images.append(ci.front_img)
-                    captions.append(prelude_name)
-                    locked_count += 1
+                add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
 
         # Counter spell — locked (defender cards are locked, not consumed)
         counter_details = self._config.get('counter_spell_card_details') or []
         if counter_details:
-            counter_name = self._config.get('counter_spell_name', 'Counter Spell')
             for cd in counter_details:
-                suit = cd.get('suit', '')
-                rank = cd.get('rank', '')
-                if suit and rank:
-                    ci = CardImg(self.window, suit, rank)
-                    images.append(ci.front_img)
-                    captions.append(counter_name)
-                    locked_count += 1
+                add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Build header message
-        parts = []
-        if locked_count:
-            parts.append(f'Locked cards: {locked_count}')
-        if consumed_count:
-            parts.append(f'Consumed cards: {consumed_count}')
-        if not locked_count and not consumed_count:
-            parts.append('No cards are used in this configuration.')
-        msg = '  |  '.join(parts) if parts else ''
+        image_groups = []
+        if consumed_cards:
+            image_groups.append({
+                'key': 'consumed',
+                'title': 'Consumed now',
+                'description': 'These cards are removed when you confirm.',
+                'icon': 'remove',
+                'badge_icon': 'remove',
+                'items': consumed_cards,
+            })
+        if locked_cards:
+            image_groups.append({
+                'key': 'locked',
+                'title': 'Locked while configured',
+                'description': 'These cards stay in your deck, but cannot be used elsewhere.',
+                'icon': 'lock',
+                'badge_icon': 'lock',
+                'items': locked_cards,
+            })
+
+        msg = 'Review the card costs before saving this defence.'
+        if not image_groups:
+            msg = 'No cards are used in this configuration.'
 
         after_msg = None
-        if locked_count:
-            after_msg = 'If you lose, locked cards may be taken as loot by the opponent.'
+        if locked_cards:
+            after_msg = 'Locked cards may be taken as loot if this defence loses.'
 
-        return msg, images, captions, after_msg
+        return msg, image_groups, after_msg
 
     def _on_save_click(self):
         """Handle click on Save Defence button."""
@@ -2050,15 +2039,14 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 validation.get('problems') or [validation.get('message', 'Configuration is incomplete')],
             )
             return
-        msg, images, captions, after_msg = self._build_confirm_data()
+        msg, image_groups, after_msg = self._build_confirm_data()
         self._pending_save_confirm = True
         self.dialogue_box = DialogueBox(
             self.window,
             msg,
             actions=['Confirm', 'Cancel'],
             title='Save Defence',
-            images=images,
-            image_captions=captions,
+            image_groups=image_groups,
             message_after_images=after_msg,
         )
 

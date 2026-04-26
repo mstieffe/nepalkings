@@ -223,6 +223,51 @@ class TestPreludeSpellToggle:
         assert screen._pending_prelude_clear is True
 
 
+class TestConquerConfirmData:
+
+    def test_battle_confirmation_separates_consumed_and_locked_cards(self):
+        from game.screens.conquer_screen import ConquerScreen
+        import pygame
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._config = {
+            'figures': [{
+                'id': 1,
+                'name': 'Attacker',
+                'card_details': [{'suit': 'Hearts', 'rank': '7'}],
+            }],
+            'battle_moves': [{
+                'id': 2,
+                'card_id': 20,
+                'round_index': 0,
+                'suit': 'Spades',
+                'rank': 'Q',
+            }],
+            'battle_modifier': {'type': 'Stronghold'},
+            'modifier_card_details': [{'suit': 'Clubs', 'rank': '3'}],
+            'prelude_spell_name': 'Poison',
+            'prelude_spell_card_details': [{'suit': 'Diamonds', 'rank': '8'}],
+        }
+
+        class _FakeCardImg:
+            def __init__(self, window, suit, rank):
+                self.front_img = pygame.Surface((70, 100), pygame.SRCALPHA)
+
+        with patch('game.components.cards.card_img.CardImg', _FakeCardImg):
+            msg, image_groups, after_msg = screen._build_confirm_data()
+
+        assert 'starting this conquer battle' in msg
+        assert [group['key'] for group in image_groups] == ['consumed', 'locked']
+        consumed, locked = image_groups
+        assert consumed['icon'] == 'remove'
+        assert consumed['badge_icon'] == 'remove'
+        assert len(consumed['items']) == 2
+        assert locked['icon'] == 'lock'
+        assert locked['badge_icon'] == 'lock'
+        assert len(locked['items']) == 2
+        assert 'loot' in after_msg
+
+
 class TestConquerScreenLayout:
 
     def test_config_subscreen_rect_is_centered_below_top_chrome(self):

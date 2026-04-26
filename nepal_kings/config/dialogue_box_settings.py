@@ -30,6 +30,24 @@ DIALOGUE_BOX_ICON_HEIGHT = int(0.055 * SCREEN_HEIGHT)
 DIALOGUE_BOX_ICON_MARGIN_X = int(0.05 * SCREEN_WIDTH)
 DIALOGUE_BOX_ICON_MARGIN_Y = int(0.05 * SCREEN_HEIGHT)
 
+# Compact grouped-card rows for confirmation dialogues.
+DIALOGUE_BOX_GROUP_IMG_HEIGHT = int(0.105 * SCREEN_HEIGHT)
+DIALOGUE_BOX_GROUP_ICON_SIZE = int(0.026 * SCREEN_HEIGHT)
+DIALOGUE_BOX_GROUP_BADGE_SIZE = int(0.028 * SCREEN_HEIGHT)
+DIALOGUE_BOX_GROUP_CARD_GAP_X = int(0.004 * SCREEN_WIDTH)
+DIALOGUE_BOX_GROUP_ROW_GAP = int(0.008 * SCREEN_HEIGHT)
+DIALOGUE_BOX_GROUP_PADDING_X = int(0.014 * SCREEN_WIDTH)
+DIALOGUE_BOX_GROUP_PADDING_Y = int(0.010 * SCREEN_HEIGHT)
+DIALOGUE_BOX_GROUP_GAP_Y = int(0.012 * SCREEN_HEIGHT)
+DIALOGUE_BOX_GROUP_HEADER_GAP = int(0.006 * SCREEN_HEIGHT)
+DIALOGUE_BOX_GROUP_PANEL_BG_CLR = (14, 15, 18, 125)
+DIALOGUE_BOX_GROUP_PANEL_BORDER_CLR = (115, 110, 96)
+DIALOGUE_BOX_GROUP_LOCK_CLR = (160, 205, 255)
+DIALOGUE_BOX_GROUP_CONSUME_CLR = (255, 172, 130)
+DIALOGUE_BOX_GROUP_NOTE_CLR = (185, 180, 166)
+DIALOGUE_BOX_GROUP_MORE_CLR = (45, 45, 52, 230)
+DIALOGUE_BOX_GROUP_MAX_ITEMS = 16
+
 # Button styling for dialogue box
 DIALOGUE_BOX_BTN_IMG_PATH = 'img/menu_button/menu_button2.png'
 DIALOGUE_BOX_BTN_W = int(0.14 * SCREEN_WIDTH)
@@ -51,6 +69,8 @@ DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT = {
     'defeat': pygame.image.load('img/dialogue_box/icons/defeat_small.png'),
     'draw': pygame.image.load('img/dialogue_box/icons/draw.png'),
     'loot': pygame.image.load('img/dialogue_box/icons/loot.png'),
+    'lock': pygame.image.load('img/dialogue_box/icons/lock.png'),
+    'remove': pygame.image.load('img/dialogue_box/icons/remove.png'),
     'figure': pygame.image.load('img/dialogue_box/icons/figure.png'),
     'magic': pygame.image.load('img/dialogue_box/icons/magic.png'),
     'ceasefire_passive': pygame.image.load('img/status_icons/ceasefire_passive.png'),

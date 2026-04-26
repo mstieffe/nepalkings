@@ -99,22 +99,27 @@ class _DlgButton:
 class DialogueBox:
     def __init__(self, window, message, actions=None, images=None, icon=None,
                  title="", auto_close_delay=None, message_after_images=None,
-                 image_captions=None):
+                 image_captions=None, image_groups=None):
         if actions is None:
             actions = ['ok']
         if images is None:
             images = []
+        if image_groups is None:
+            image_groups = []
 
         self.window = window
         self.message = message
         self.message_after_images = message_after_images
         self.images = images
         self.image_captions = image_captions or []
+        self.image_groups = []
         self.icon = None
         self.title = title
         self.font = settings.get_font(settings.FONT_SIZE_DIALOGUE_BOX)
         self.title_font = settings.get_font(settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
         self.caption_font = settings.get_font(settings.FS_TINY)
+        self.group_title_font = settings.get_font(settings.FS_SMALL, bold=True)
+        self.group_note_font = settings.get_font(max(10, int(settings.FS_TINY * 0.82)))
         self.actions = actions
         self.auto_close_delay = auto_close_delay
         self.auto_close_timer = pygame.time.get_ticks() if auto_close_delay else None
@@ -143,7 +148,9 @@ class DialogueBox:
                                      settings.DIALOGUE_BOX_MSG_TEXT_CLR) for l in self.after_lines]
 
         # Process images
-        self.ordered_items = self.process_images()
+        self._group_max_w = settings.DIALOGUE_BOX_WIDTH - int(0.060 * _SW)
+        self.image_groups = self.process_image_groups(image_groups)
+        self.ordered_items = [] if self.image_groups else self.process_images()
         has_surfaces = any(t == 'surface' for t, _ in self.ordered_items)
         has_drawables = any(t == 'drawable' for t, _ in self.ordered_items)
 
@@ -158,10 +165,16 @@ class DialogueBox:
         self.after_text_height = len(self.after_lines) * _line_h if self.after_lines else 0
         self.img_height = settings.DIALOGUE_BOX_IMG_HEIGHT if has_surfaces else 0
         self.drawable_object_height = settings.DIALOGUE_BOX_DRAWABLE_OBJECT_HEIGHT if has_drawables else 0
-        self.content_height = max(self.img_height, self.drawable_object_height) if self.ordered_items else 0
-        self.img_spacing = int(0.020 * _SH) if self.ordered_items else 0
-        self.drawable_bottom_spacing = int(0.022 * _SH) if self.ordered_items else 0
-        self.caption_height = (self.caption_font.get_height() + int(0.006 * _SH)) if self.image_captions else 0
+        self.group_content_height = self._calc_group_content_height()
+        self.content_height = self.group_content_height if self.image_groups else (
+            max(self.img_height, self.drawable_object_height) if self.ordered_items else 0
+        )
+        has_visual_content = bool(self.image_groups or self.ordered_items)
+        self.img_spacing = int(0.020 * _SH) if has_visual_content else 0
+        self.drawable_bottom_spacing = int(0.018 * _SH) if has_visual_content else 0
+        self.caption_height = 0 if self.image_groups else (
+            (self.caption_font.get_height() + int(0.006 * _SH)) if self.image_captions else 0
+        )
 
         btn_h = settings.DIALOGUE_BOX_BTN_H if self.actions else 0
         self.button_height = btn_h + _pad_bottom if self.actions else 0
@@ -178,6 +191,7 @@ class DialogueBox:
         self.x = (_SW - box_w) // 2
         height_diff = self.box_height - settings.DIALOGUE_BOX_HEIGHT
         self.y = int(_SH * 0.5 - settings.DIALOGUE_BOX_HEIGHT * 0.75 - height_diff / 2)
+        self.y = max(int(0.020 * _SH), min(self.y, _SH - self.box_height - int(0.020 * _SH)))
         self.rect = pygame.Rect(self.x, self.y, box_w, self.box_height)
 
         # Pre-render panel surface (semi-transparent with rounded corners)
@@ -228,6 +242,145 @@ class DialogueBox:
             elif hasattr(img, "draw_icon"):
                 ordered.append(('drawable', img))
         return ordered
+
+    def process_image_groups(self, image_groups):
+        """Normalize compact grouped-card sections for confirmation dialogues."""
+        groups = []
+        for raw_group in image_groups:
+            raw_items = raw_group.get('items') or raw_group.get('images') or []
+            items = []
+            max_items = getattr(settings, 'DIALOGUE_BOX_GROUP_MAX_ITEMS', 16)
+            for raw_item in raw_items[:max_items]:
+                item = raw_item.get('image') if isinstance(raw_item, dict) else raw_item
+                normalized = self._normalize_group_item(item)
+                if normalized:
+                    items.append(normalized)
+
+            count = raw_group.get('count') or len(raw_items)
+            more_count = max(0, count - len(items))
+            if more_count:
+                items.append({
+                    'kind': 'more',
+                    'width': int(settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT * 0.72),
+                    'height': settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT,
+                    'text': f'+{more_count}',
+                })
+
+            if not items and not raw_group.get('show_when_empty'):
+                continue
+
+            icon_name = raw_group.get('icon')
+            badge_name = raw_group.get('badge_icon') or icon_name
+            title = raw_group.get('title', 'Cards')
+            color = raw_group.get('color') or self._default_group_color(icon_name)
+            group = {
+                'key': raw_group.get('key'),
+                'title': self._format_group_title(title, count),
+                'description': raw_group.get('description') or raw_group.get('note') or '',
+                'items': items,
+                'count': count,
+                'icon_name': icon_name,
+                'icon': self._scaled_named_icon(icon_name, settings.DIALOGUE_BOX_GROUP_ICON_SIZE),
+                'badge_icon': self._scaled_named_icon(badge_name, settings.DIALOGUE_BOX_GROUP_BADGE_SIZE),
+                'color': color,
+            }
+            group['note_lines'] = self._wrap_text(
+                group['description'],
+                self.group_note_font,
+                self._group_max_w - int(0.040 * settings.SCREEN_WIDTH),
+            ) if group['description'] else []
+            group['rows'] = self._layout_group_rows(group['items'], self._group_max_w)
+            group['height'] = self._calc_single_group_height(group)
+            groups.append(group)
+        return groups
+
+    def _normalize_group_item(self, item):
+        if isinstance(item, pygame.Surface):
+            iw, ih = item.get_size()
+            if ih <= 0:
+                return None
+            ratio = settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT / ih
+            nw = max(1, int(iw * ratio))
+            scaled = pygame.transform.smoothscale(
+                item, (nw, settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT))
+            return {
+                'kind': 'surface',
+                'surface': scaled,
+                'width': scaled.get_width(),
+                'height': scaled.get_height(),
+            }
+        if hasattr(item, 'draw_icon'):
+            size = settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT
+            return {
+                'kind': 'drawable',
+                'drawable': item,
+                'width': size,
+                'height': size,
+            }
+        return None
+
+    def _layout_group_rows(self, items, max_width):
+        rows = []
+        current = []
+        current_w = 0
+        gap = settings.DIALOGUE_BOX_GROUP_CARD_GAP_X
+        for item in items:
+            item_w = item['width']
+            next_w = item_w if not current else current_w + gap + item_w
+            if current and next_w > max_width:
+                rows.append(current)
+                current = [item]
+                current_w = item_w
+            else:
+                current.append(item)
+                current_w = next_w
+        if current:
+            rows.append(current)
+        return rows
+
+    def _calc_group_content_height(self):
+        if not self.image_groups:
+            return 0
+        gap = settings.DIALOGUE_BOX_GROUP_GAP_Y
+        return sum(group['height'] for group in self.image_groups) + gap * (len(self.image_groups) - 1)
+
+    def _calc_single_group_height(self, group):
+        pad_y = settings.DIALOGUE_BOX_GROUP_PADDING_Y
+        header_h = max(
+            self.group_title_font.get_height(),
+            settings.DIALOGUE_BOX_GROUP_ICON_SIZE if group.get('icon') else 0,
+        )
+        note_h = len(group['note_lines']) * (self.group_note_font.get_height() + 1)
+        if note_h:
+            note_h += int(0.003 * settings.SCREEN_HEIGHT)
+        rows = group.get('rows') or []
+        cards_h = 0
+        if rows:
+            cards_h = (
+                len(rows) * settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT
+                + (len(rows) - 1) * settings.DIALOGUE_BOX_GROUP_ROW_GAP
+                + settings.DIALOGUE_BOX_GROUP_HEADER_GAP
+            )
+        return pad_y * 2 + header_h + note_h + cards_h
+
+    def _format_group_title(self, title, count):
+        suffix = 'card' if count == 1 else 'cards'
+        return f'{title}: {count} {suffix}'
+
+    def _default_group_color(self, icon_name):
+        if icon_name == 'remove':
+            return settings.DIALOGUE_BOX_GROUP_CONSUME_CLR
+        if icon_name == 'lock':
+            return settings.DIALOGUE_BOX_GROUP_LOCK_CLR
+        return settings.DIALOGUE_BOX_MSG_TEXT_CLR
+
+    def _scaled_named_icon(self, icon_name, size):
+        if not icon_name:
+            return None
+        icon = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT.get(icon_name)
+        if not icon:
+            return None
+        return pygame.transform.smoothscale(icon, (size, size))
 
     def scale_icon(self, icon):
         iw, ih = icon.get_size()
@@ -306,7 +459,9 @@ class DialogueBox:
         image_y = (current_y + len(self.lines_surfaces) * self._line_h +
                    self.img_spacing)
 
-        if self.ordered_items:
+        if self.image_groups:
+            self._draw_image_groups(image_y)
+        elif self.ordered_items:
             max_w = settings.DIALOGUE_BOX_WIDTH - int(0.04 * _SW)
             num = len(self.ordered_items)
             widths = []
@@ -376,6 +531,110 @@ class DialogueBox:
         # Buttons
         for button in self.buttons:
             button.draw()
+
+    def _draw_image_groups(self, start_y):
+        group_x = self.rect.centerx - self._group_max_w // 2
+        group_w = self._group_max_w
+        current_y = start_y
+        for group in self.image_groups:
+            group_rect = pygame.Rect(group_x, current_y, group_w, group['height'])
+            pygame.draw.rect(
+                self.window,
+                settings.DIALOGUE_BOX_GROUP_PANEL_BG_CLR,
+                group_rect,
+                border_radius=8,
+            )
+            pygame.draw.rect(
+                self.window,
+                group.get('color') or settings.DIALOGUE_BOX_GROUP_PANEL_BORDER_CLR,
+                group_rect,
+                1,
+                border_radius=8,
+            )
+
+            pad_x = settings.DIALOGUE_BOX_GROUP_PADDING_X
+            pad_y = settings.DIALOGUE_BOX_GROUP_PADDING_Y
+            x = group_rect.x + pad_x
+            y = group_rect.y + pad_y
+            icon = group.get('icon')
+            header_h = max(
+                self.group_title_font.get_height(),
+                settings.DIALOGUE_BOX_GROUP_ICON_SIZE if icon else 0,
+            )
+            if icon:
+                icon_y = y + (header_h - icon.get_height()) // 2
+                self.window.blit(icon, (x, icon_y))
+                x += icon.get_width() + int(0.006 * settings.SCREEN_WIDTH)
+
+            title_surf = self.group_title_font.render(
+                group['title'], True, group.get('color') or settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+            self.window.blit(title_surf, (x, y + (header_h - title_surf.get_height()) // 2))
+
+            y += header_h
+            if group['note_lines']:
+                y += int(0.003 * settings.SCREEN_HEIGHT)
+                for line in group['note_lines']:
+                    note_surf = self.group_note_font.render(
+                        line, True, settings.DIALOGUE_BOX_GROUP_NOTE_CLR)
+                    self.window.blit(note_surf, (group_rect.x + pad_x, y))
+                    y += self.group_note_font.get_height() + 1
+
+            if group['rows']:
+                y += settings.DIALOGUE_BOX_GROUP_HEADER_GAP
+                for row in group['rows']:
+                    row_w = self._row_width(row)
+                    row_x = group_rect.centerx - row_w // 2
+                    for item in row:
+                        self._draw_group_item(item, row_x, y, group.get('badge_icon'))
+                        row_x += item['width'] + settings.DIALOGUE_BOX_GROUP_CARD_GAP_X
+                    y += settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT + settings.DIALOGUE_BOX_GROUP_ROW_GAP
+
+            current_y += group['height'] + settings.DIALOGUE_BOX_GROUP_GAP_Y
+
+    def _row_width(self, row):
+        if not row:
+            return 0
+        return (sum(item['width'] for item in row)
+                + (len(row) - 1) * settings.DIALOGUE_BOX_GROUP_CARD_GAP_X)
+
+    def _draw_group_item(self, item, x, y, badge_icon):
+        if item['kind'] == 'surface':
+            self.window.blit(item['surface'], (x, y))
+            self._draw_group_badge(x, y, badge_icon)
+            return
+        if item['kind'] == 'drawable':
+            item['drawable'].draw_icon(
+                x, y,
+                settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT,
+                settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT,
+            )
+            self._draw_group_badge(x, y, badge_icon)
+            return
+        if item['kind'] == 'more':
+            rect = pygame.Rect(x, y, item['width'], item['height'])
+            pygame.draw.rect(
+                self.window,
+                settings.DIALOGUE_BOX_GROUP_MORE_CLR,
+                rect,
+                border_radius=6,
+            )
+            pygame.draw.rect(
+                self.window,
+                settings.DIALOGUE_BOX_GROUP_PANEL_BORDER_CLR,
+                rect,
+                1,
+                border_radius=6,
+            )
+            text_surf = self.group_title_font.render(
+                item['text'], True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+            self.window.blit(text_surf, text_surf.get_rect(center=rect.center))
+
+    def _draw_group_badge(self, x, y, badge_icon):
+        if not badge_icon:
+            return
+        badge_bg = badge_icon.get_rect(topleft=(x + 2, y + 2)).inflate(4, 4)
+        pygame.draw.rect(self.window, (245, 240, 220, 220), badge_bg, border_radius=4)
+        self.window.blit(badge_icon, (x + 4, y + 4))
 
     # ── update ──────────────────────────────────────────────────────
 

@@ -265,6 +265,48 @@ class TestDefenceDraftFlow:
         assert screen._pending_leave_confirm is True
 
 
+class TestDefenceConfirmData:
+
+    def test_save_confirmation_groups_all_defence_cards_as_locked(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._config = _make_config(
+            figures=[{
+                'id': 1,
+                'name': 'Guard',
+                'card_details': [{'suit': 'Hearts', 'rank': '7'}],
+            }],
+            battle_moves=[{
+                'id': 2,
+                'card_id': 20,
+                'round_index': 0,
+                'suit': 'Spades',
+                'rank': 'Q',
+            }],
+            prelude_spell_name='Health Boost',
+            prelude_spell_card_details=[{'suit': 'Clubs', 'rank': '3'}],
+            counter_spell_name='Poison',
+            counter_spell_card_details=[{'suit': 'Diamonds', 'rank': '8'}],
+        )
+
+        class _FakeCardImg:
+            def __init__(self, window, suit, rank):
+                self.front_img = pygame.Surface((70, 100), pygame.SRCALPHA)
+
+        with patch('game.components.cards.card_img.CardImg', _FakeCardImg):
+            msg, image_groups, after_msg = screen._build_confirm_data()
+
+        assert 'saving this defence' in msg
+        assert [group['key'] for group in image_groups] == ['locked']
+        locked = image_groups[0]
+        assert locked['icon'] == 'lock'
+        assert locked['badge_icon'] == 'lock'
+        assert len(locked['items']) == 4
+        assert 'loot' in after_msg
+
+
 class TestPreludeSpellIcons:
 
     def test_edit_prelude_spell_opens_selection(self):
