@@ -1620,7 +1620,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             image_groups.append({
                 'key': 'consumed',
                 'title': 'Consumed when battle starts',
-                'description': 'These battle and spell cards are spent for this conquer attempt.',
+                'description': 'These battle and spell cards are consumed when the conquer battle begins, win or lose.',
                 'icon': 'remove',
                 'badge_icon': 'remove',
                 'items': consumed_cards,
@@ -1629,7 +1629,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             image_groups.append({
                 'key': 'locked',
                 'title': 'Locked figure cards',
-                'description': 'These figure cards stay committed to the attack and are at risk if you lose.',
+                'description': 'These figure cards are committed to the attack and cannot be used elsewhere. The defender may loot one if you lose.',
                 'icon': 'lock',
                 'badge_icon': 'lock',
                 'items': locked_cards,
@@ -1641,7 +1641,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         after_msg = None
         if locked_cards:
-            after_msg = 'Locked cards may be taken as loot if you lose.'
+            after_msg = 'Locked figure cards may be taken as loot if you lose.'
 
         return msg, image_groups, after_msg
 

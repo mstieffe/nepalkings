@@ -2217,9 +2217,39 @@ class BattleScreen(SubScreen):
             card_suit = result.get('card_lost_suit')
             card_rank = result.get('card_lost_rank')
             if card_suit and card_rank:
-                message += "\n\nCard lost:"
+                message += "\n\nCard lost as loot:"
                 card_img = CardImg(self.window, card_suit, card_rank)
                 images.append(card_img.front_img)
+
+            defence_consumed = result.get('defence_consumed_cards') or []
+
+            def _card_line_def(card):
+                if not isinstance(card, dict):
+                    return None
+                rank = card.get('rank')
+                suit = card.get('suit')
+                if rank and suit:
+                    return f"{rank} of {suit}"
+                if rank:
+                    return str(rank)
+                if suit:
+                    return str(suit)
+                return None
+
+            consumed_lines = []
+            for card in defence_consumed:
+                label = _card_line_def(card)
+                if label:
+                    consumed_lines.append(label)
+            if len(consumed_lines) > 10:
+                overflow = len(consumed_lines) - 10
+                consumed_lines = consumed_lines[:10]
+                consumed_lines.append(f"... and {overflow} more")
+
+            if consumed_lines:
+                message += "\n\nDefence cards consumed:\n" + "\n".join(
+                    f"• {line}" for line in consumed_lines
+                )
         elif not attacker_won and is_attacker:
             # Defender won — we are the attacker (we lost)
             title = "Attack Failed"

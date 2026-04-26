@@ -307,6 +307,7 @@ class TestDefenceConfirmData:
         assert locked['icon'] == 'lock'
         assert locked['badge_icon'] == 'lock'
         assert len(locked['items']) == 1
+        assert 'loot' in after_msg
         assert 'returned to your collection' in after_msg
 
 

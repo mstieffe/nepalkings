@@ -4767,7 +4767,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 defence_consumed_cards = _snapshot_config_battle_cards(def_cfg)
                 _consume_config_battle_cards(def_cfg)
                 _wipe_land_config(def_cfg)
-        if defender_user and not is_ai_land:
+        if defender_user:
             _wipe_defence_drafts_for_lost_land(defender_user.id, game.land_id)
 
     else:
@@ -5081,7 +5081,11 @@ def _wipe_land_config(cfg):
 
 
 def _wipe_defence_drafts_for_lost_land(user_id, land_id):
-    """Delete editable defence drafts for a land that changed owner."""
+    """Delete editable defence drafts for a land that changed owner.
+
+    AI lands carry no drafts, so this is a no-op for them.  Logged at INFO
+    so we have an audit trail when a player's in-progress edits are dropped.
+    """
     if not user_id or not land_id:
         return
     drafts = LandConfig.query.filter_by(
@@ -5090,6 +5094,12 @@ def _wipe_defence_drafts_for_lost_land(user_id, land_id):
         config_type='defence',
         status='draft',
     ).all()
+    if not drafts:
+        return
+    logger.info(
+        "Wiping %d defence draft(s) for user_id=%s land_id=%s after land changed owner",
+        len(drafts), user_id, land_id,
+    )
     for draft in drafts:
         _wipe_land_config(draft)
 

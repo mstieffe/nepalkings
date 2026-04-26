@@ -2007,7 +2007,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             image_groups.append({
                 'key': 'consumed_if_lost',
                 'title': 'Consumed if land falls',
-                'description': 'These battle and spell cards are reserved now, but only removed if this defence loses.',
+                'description': 'These battle and spell cards are reserved while this defence is active, and consumed only if the land is conquered.',
                 'icon': 'remove',
                 'badge_icon': 'remove',
                 'items': consumed_if_lost_cards,
@@ -2016,7 +2016,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             image_groups.append({
                 'key': 'locked',
                 'title': 'Locked figure cards',
-                'description': 'These figure cards stay in your deck, but cannot be used elsewhere while this defence is active.',
+                'description': 'These figure cards are committed to the defence and cannot be used elsewhere. They may be looted if the land is conquered.',
                 'icon': 'lock',
                 'badge_icon': 'lock',
                 'items': locked_cards,
@@ -2026,9 +2026,16 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if not image_groups:
             msg = 'No cards are used in this configuration.'
 
-        after_msg = None
+        after_msg_parts = []
+        if locked_cards:
+            after_msg_parts.append(
+                'Locked figure cards may be taken as loot if this defence loses.'
+            )
         if consumed_if_lost_cards or locked_cards:
-            after_msg = 'Cards removed from the defence before saving are returned to your collection.'
+            after_msg_parts.append(
+                'Cards removed from the defence before saving are returned to your collection.'
+            )
+        after_msg = ' '.join(after_msg_parts) if after_msg_parts else None
 
         return msg, image_groups, after_msg
 

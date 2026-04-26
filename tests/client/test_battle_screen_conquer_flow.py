@@ -152,3 +152,38 @@ class TestBattleScreenConquerFlow:
         assert 'Consumed cards:' in msg
         assert '7 of Clubs' in msg
         assert '10 of Spades' in msg
+
+    def test_conquer_defender_loss_dialogue_lists_consumed_defence_cards(self, monkeypatch):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+
+        class _DummyCardImg:
+            def __init__(self, *_args, **_kwargs):
+                self.front_img = None
+
+        monkeypatch.setattr('game.components.cards.card_img.CardImg', _DummyCardImg)
+
+        captured = {}
+        screen.window = object()
+        screen.game = SimpleNamespace(invader=False, game_over=False, mode='conquer')
+        screen.make_dialogue_box = lambda message, **kwargs: captured.update({
+            'message': message,
+            'kwargs': kwargs,
+        })
+
+        BattleScreen._handle_conquer_end(screen, {
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'card_lost_suit': 'Hearts',
+            'card_lost_rank': 'K',
+            'defence_consumed_cards': [
+                {'suit': 'Spades', 'rank': '8'},
+                {'suit': 'Hearts', 'rank': '3'},
+            ],
+        })
+
+        msg = captured.get('message', '')
+        assert 'Card lost as loot:' in msg
+        assert 'Defence cards consumed:' in msg
+        assert '8 of Spades' in msg
+        assert '3 of Hearts' in msg
