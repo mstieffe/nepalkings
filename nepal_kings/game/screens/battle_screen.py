@@ -186,7 +186,6 @@ class BattleScreen(SubScreen):
         self._pending_combine_data = None    # (move_a, move_b) awaiting combine confirmation
         self._pending_dismantle_move = None   # move dict awaiting dismantle confirmation
         self._dialogue_callback = None       # callback for dialogue response
-        self._kingdom_intro_shown_key = None  # one-time conquer kingdom skill notice
 
         # ── skip state (no moves left) ──
         self._player_skipped_rounds = []     # list of round indices the player skipped
@@ -258,7 +257,6 @@ class BattleScreen(SubScreen):
         self._pending_combine_data = None
         self._pending_dismantle_move = None
         self._dialogue_callback = None
-        self._kingdom_intro_shown_key = None
         self._player_skipped_rounds = []
         self._opponent_skipped_rounds = []
         self._auto_skip_pending = False
@@ -1037,24 +1035,6 @@ class BattleScreen(SubScreen):
 
     # ────────────────── power calculations ─────────────────────
 
-    def _show_conquer_kingdom_intro_if_needed(self):
-        if not self.game or getattr(self.game, 'mode', 'duel') != 'conquer':
-            return False
-        if not self.player_is_invader or self.dialogue_box:
-            return False
-        effects = list(getattr(self.game, 'defender_kingdom_effects', []) or [])
-        if not effects:
-            return False
-        key = (getattr(self.game, 'game_id', None), tuple(effects))
-        if self._kingdom_intro_shown_key == key:
-            return False
-        self._kingdom_intro_shown_key = key
-        kingdom_name = getattr(self.game, 'defender_kingdom_name', None) or 'the defender kingdom'
-        lines = '\n'.join(f'• {line}' for line in effects[:5])
-        msg = f'You are attacking {kingdom_name}.\n\nActive kingdom skills:\n{lines}'
-        self.make_dialogue_box(msg, actions=['ok'], icon='info', title='Kingdom Defences')
-        return True
-
     def _get_figure_total_power(self, figure, figure_icon):
         """Get total power of a figure including base value, bonus, and enchantments.
         If the figure's bonus is blocked (blocks_bonus skill), the bonus is excluded.
@@ -1310,7 +1290,6 @@ class BattleScreen(SubScreen):
             needs_reload = True
         if needs_reload:
             self._load_battle_data()
-            self._show_conquer_kingdom_intro_if_needed()
             # (Re)create the background poller for this game
             self._battle_poller = BackgroundPoller(
                 lambda gid, pid: game_service.get_battle_state(gid, pid),

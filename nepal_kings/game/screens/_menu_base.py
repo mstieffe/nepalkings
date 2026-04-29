@@ -11,6 +11,7 @@ Provides:
 
 import pygame
 from config import settings
+from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.core.input_state import get_pressed as _get_pressed
 
 
@@ -200,6 +201,9 @@ class MenuScreenMixin:
         self._booster_icon = cache['booster']
         self._booster_side_icon = cache['booster_side']
         self._gold_font = settings.get_font(settings.GAME_MENU_GOLD_FONT_SIZE)
+        self._gold_floaters = FloatingTextLayer()
+        self._gold_floaters_last_tick = pygame.time.get_ticks()
+        self._last_seen_gold = self._current_gold_amount()
 
         # Icon buttons (top-right): home at top, settings at bottom, logout just above settings
         stone_sz = settings.GAME_MENU_ICON_STONE_SZ
@@ -236,6 +240,7 @@ class MenuScreenMixin:
             self.dialogue_box.draw()
         for ib in self._icon_buttons:
             ib.draw()
+        self._draw_gold_floaters()
         self._draw_logout_dialogue()
 
     def _draw_gold(self):
@@ -284,6 +289,7 @@ class MenuScreenMixin:
 
         # Draw each icon + text pair
         cx = mx + pad_x
+        gold_floater_pos = None
         for i, (icon, _) in enumerate(items):
             ts = text_surfs[i]
             iy = my + pad_y + (row_h - icon_sz) // 2
@@ -291,7 +297,55 @@ class MenuScreenMixin:
             tx = cx + icon_sz + gap
             ty = my + pad_y + (row_h - ts.get_height()) // 2
             self.window.blit(ts, (tx, ty))
+            if i == 0:
+                gold_floater_pos = (tx + ts.get_width() // 2, my + bh + int(0.012 * _SH))
             cx = tx + ts.get_width() + sep
+
+        self._maybe_spawn_gold_gain_floater(gold, gold_floater_pos)
+
+    def _current_gold_amount(self):
+        state = getattr(self, 'state', None)
+        ud = getattr(state, 'user_dict', None) or {}
+        try:
+            return int(ud.get('gold', 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _maybe_spawn_gold_gain_floater(self, current_gold, start_pos):
+        try:
+            current_gold = int(current_gold or 0)
+        except (TypeError, ValueError):
+            current_gold = 0
+        previous_gold = getattr(self, '_last_seen_gold', None)
+        self._last_seen_gold = current_gold
+        if previous_gold is None or current_gold <= previous_gold or not start_pos:
+            return
+        self._spawn_gold_gain_floater(current_gold - previous_gold, start_pos)
+
+    def _spawn_gold_gain_floater(self, amount, start_pos):
+        layer = getattr(self, '_gold_floaters', None)
+        if layer is None:
+            return
+        font = settings.get_font(getattr(settings, 'COLLECT_FLOAT_FONT_SIZE', settings.GAME_MENU_GOLD_FONT_SIZE))
+        layer.add(FloatingText(
+            f'+{int(amount)}g',
+            start_pos,
+            color=getattr(settings, 'COLLECT_FLOAT_GOLD_CLR', settings.GAME_MENU_GOLD_TEXT_CLR),
+            duration_ms=getattr(settings, 'COLLECT_FLOAT_DURATION_MS', 900),
+            rise_px=getattr(settings, 'COLLECT_FLOAT_RISE_PX', int(0.07 * _SH)),
+            font=font,
+            jitter_px=5,
+        ))
+
+    def _draw_gold_floaters(self):
+        layer = getattr(self, '_gold_floaters', None)
+        if layer is None:
+            return
+        now = pygame.time.get_ticks()
+        last_tick = getattr(self, '_gold_floaters_last_tick', now)
+        self._gold_floaters_last_tick = now
+        layer.update(max(0, now - last_tick))
+        layer.draw(self.window)
 
     def _draw_booster_packs(self):
         """No-op — boosters are now drawn inside _draw_gold."""

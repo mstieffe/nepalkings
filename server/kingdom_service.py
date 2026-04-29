@@ -760,18 +760,31 @@ def kingdom_vault_cap(kingdom):
     return int(config.vault_cap_for_skill_level(level))
 
 
-def kingdom_vault_state(kingdom):
-    """Return a snapshot dict for the kingdom's gold vault (no side effects).
+def _pending_gold_snapshot(kingdom, now=None):
+    """Return accrued pending gold for ``kingdom`` without mutating it."""
+    if not kingdom:
+        return 0.0, int(config.KINGDOM_VAULT_DEFAULT_CAP), 0.0
+    now = now or _utcnow()
+    cap = int(kingdom_vault_cap(kingdom))
+    pending = float(kingdom.pending_gold or 0.0)
+    last = kingdom.last_gold_collection_at or kingdom.created_at or now
+    elapsed_seconds = max(0.0, (now - last).total_seconds())
+    rate = kingdom_gold_rate_per_hour(kingdom)
+    earned = rate * (elapsed_seconds / 3600.0)
+    return min(float(cap), pending + earned), cap, rate
+
+
+def kingdom_vault_state(kingdom, *, now=None):
+    """Return a fresh snapshot dict for the kingdom's gold vault (no side effects).
 
     ``{pending, cap, full, rate_per_hour}``.  Rate is the kingdom's gold
-    production per hour at its current land/skill levels.
+    production per hour at its current land/skill levels. Pending gold is
+    accrued up to ``now`` in the returned snapshot but is not written back.
     """
     if not kingdom:
         return {'pending': 0.0, 'cap': int(config.KINGDOM_VAULT_DEFAULT_CAP),
                 'full': False, 'rate_per_hour': 0.0}
-    cap = kingdom_vault_cap(kingdom)
-    pending = float(kingdom.pending_gold or 0.0)
-    rate = kingdom_gold_rate_per_hour(kingdom)
+    pending, cap, rate = _pending_gold_snapshot(kingdom, now=now)
     return {
         'pending': pending,
         'cap': cap,
@@ -1156,9 +1169,8 @@ def serialize_kingdom_config(kingdom):
         shield_remaining = max(0, int((kingdom.shield_until - now).total_seconds()))
     bonuses = kingdom_skill_bonuses(kingdom)
 
-    # Vault snapshot accrued up to "now" without committing.
-    _accrue_pending_gold(kingdom, now=now)
-    vault_state = kingdom_vault_state(kingdom)
+    # Vault snapshot accrued up to "now" without mutating the DB row.
+    vault_state = kingdom_vault_state(kingdom, now=now)
 
     # Level / XP progression.
     level = int(kingdom.level or 1)

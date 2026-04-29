@@ -24,10 +24,6 @@ class Game:
         self.land_gold_rate = game_dict.get('land_gold_rate')  # conquer mode only
         self.land_suit_bonus_suit = game_dict.get('land_suit_bonus_suit')  # conquer mode only
         self.land_suit_bonus_value = game_dict.get('land_suit_bonus_value')  # conquer mode only
-        self.defender_kingdom_id = game_dict.get('defender_kingdom_id')
-        self.defender_kingdom_name = game_dict.get('defender_kingdom_name')
-        self.defender_kingdom_bonuses = game_dict.get('defender_kingdom_bonuses') or {}
-        self.defender_kingdom_effects = game_dict.get('defender_kingdom_effects') or []
         self.date = game_dict['date']
         self.stake = game_dict.get('stake', 45)
         self.turn_time_limit = game_dict.get('turn_time_limit')  # Seconds per turn (None = no limit)
@@ -364,14 +360,6 @@ class Game:
             'land_suit_bonus_suit', self.land_suit_bonus_suit)
         self.land_suit_bonus_value = game_dict.get(
             'land_suit_bonus_value', self.land_suit_bonus_value)
-        self.defender_kingdom_id = game_dict.get(
-            'defender_kingdom_id', getattr(self, 'defender_kingdom_id', None))
-        self.defender_kingdom_name = game_dict.get(
-            'defender_kingdom_name', getattr(self, 'defender_kingdom_name', None))
-        self.defender_kingdom_bonuses = game_dict.get(
-            'defender_kingdom_bonuses', getattr(self, 'defender_kingdom_bonuses', {})) or {}
-        self.defender_kingdom_effects = game_dict.get(
-            'defender_kingdom_effects', getattr(self, 'defender_kingdom_effects', [])) or []
         self.date = game_dict['date']
         self.stake = game_dict.get('stake', 45)
         self.winner_player_id = game_dict.get('winner_player_id')
@@ -822,14 +810,6 @@ class Game:
             'land_suit_bonus_suit', self.land_suit_bonus_suit)
         self.land_suit_bonus_value = game_dict.get(
             'land_suit_bonus_value', self.land_suit_bonus_value)
-        self.defender_kingdom_id = game_dict.get(
-            'defender_kingdom_id', getattr(self, 'defender_kingdom_id', None))
-        self.defender_kingdom_name = game_dict.get(
-            'defender_kingdom_name', getattr(self, 'defender_kingdom_name', None))
-        self.defender_kingdom_bonuses = game_dict.get(
-            'defender_kingdom_bonuses', getattr(self, 'defender_kingdom_bonuses', {})) or {}
-        self.defender_kingdom_effects = game_dict.get(
-            'defender_kingdom_effects', getattr(self, 'defender_kingdom_effects', [])) or []
         self.date = game_dict['date']
         self.players = game_dict.get('players', [])
         self.main_cards = game_dict.get('main_cards', [])

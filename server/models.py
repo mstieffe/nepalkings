@@ -190,27 +190,7 @@ class Game(db.Model):
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
     battle_moves = db.relationship('BattleMove', backref='game', lazy=True, foreign_keys='BattleMove.game_id')
-
-
     def serialize(self):
-        defender_kingdom_id = None
-        defender_kingdom_name = None
-        defender_kingdom_bonuses = {}
-        defender_kingdom_effects = []
-        if self.mode == 'conquer' and self.land and self.land.kingdom_id:
-            try:
-                from kingdom_service import describe_kingdom_bonuses, kingdom_skill_bonuses
-                kingdom = db.session.get(Kingdom, self.land.kingdom_id)
-                if kingdom:
-                    defender_kingdom_id = kingdom.id
-                    defender_kingdom_name = kingdom.name or f'Kingdom #{kingdom.id}'
-                    defender_kingdom_bonuses = kingdom_skill_bonuses(kingdom)
-                    defender_kingdom_effects = describe_kingdom_bonuses(defender_kingdom_bonuses)
-            except Exception:
-                defender_kingdom_id = None
-                defender_kingdom_name = None
-                defender_kingdom_bonuses = {}
-                defender_kingdom_effects = []
         return {
             'id': self.id,
             'state': self.state,
@@ -220,10 +200,6 @@ class Game(db.Model):
             'land_gold_rate': self.land.gold_rate if self.land else None,
             'land_suit_bonus_suit': self.land.suit_bonus_suit if self.land else None,
             'land_suit_bonus_value': self.land.suit_bonus_value if self.land else None,
-            'defender_kingdom_id': defender_kingdom_id,
-            'defender_kingdom_name': defender_kingdom_name,
-            'defender_kingdom_bonuses': defender_kingdom_bonuses,
-            'defender_kingdom_effects': defender_kingdom_effects,
             'date': self.date.isoformat() if self.date else None,
             'stake': self.stake,
             'turn_time_limit': self.turn_time_limit,

@@ -2,13 +2,14 @@
 # See LICENSE file in the project root for full license information.
 """Tests for persistent per-kingdom configuration."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from models import (Game, Land, Kingdom, KingdomCosmeticUnlock, KingdomNotification,
                     KingdomSkillAllocation)
 import server_settings as config
-from kingdom_service import effective_gold_rate_for_lands, reconcile_user_kingdoms
+from kingdom_service import (effective_gold_rate_for_lands, reconcile_user_kingdoms,
+                             serialize_kingdom_config)
 
 
 def _add_land(db, col, row, owner_id=None, gold_rate=10.0):
@@ -258,8 +259,29 @@ class TestKingdomConfigRoutes:
         # Level 1 gold_production effect = 0.03 → 100 * 1.03 = 103.0
         assert effective_gold_rate_for_lands(lands) == 103.0
 
-    def test_conquer_game_serializes_defender_kingdom_skill_effects(self, db, two_users):
-        """Game.serialize exposes the defender's kingdom (no longer combat-tied)."""
+    def test_serialize_kingdom_config_does_not_mutate_vault_accrual(self, db, two_users):
+        u1, _ = two_users
+        _add_land(db, 0, 0, owner_id=u1.id, gold_rate=20.0)
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+        from kingdom_service import kingdom_skill_allocations
+        kingdom_skill_allocations(kingdom.id)
+        kingdom.pending_gold = 2.5
+        kingdom.last_gold_collection_at = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        )
+        db.session.commit()
+
+        pending_before = kingdom.pending_gold
+        last_before = kingdom.last_gold_collection_at
+
+        payload = serialize_kingdom_config(kingdom)
+
+        assert payload['vault_pending'] > pending_before
+        assert kingdom.pending_gold == pending_before
+        assert kingdom.last_gold_collection_at == last_before
+
+    def test_conquer_game_does_not_serialize_defender_kingdom_skills(self, db, two_users):
+        """Conquer battles should not expose passive kingdom skills as battle info."""
         u1, _ = two_users
         land = _add_land(db, 0, 0, owner_id=u1.id)
         kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
@@ -271,10 +293,11 @@ class TestKingdomConfigRoutes:
         db.session.commit()
 
         payload = game.serialize()
-        assert payload['defender_kingdom_id'] == kingdom.id
-        assert payload['defender_kingdom_name'] == f'Kingdom #{kingdom.id}'
-        assert payload['defender_kingdom_bonuses'].get('gold_production') == 0.03
-        assert '+3% gold production' in payload['defender_kingdom_effects']
+        assert kingdom.id is not None
+        assert 'defender_kingdom_id' not in payload
+        assert 'defender_kingdom_name' not in payload
+        assert 'defender_kingdom_bonuses' not in payload
+        assert 'defender_kingdom_effects' not in payload
 
     def test_merge_keeps_larger_style_and_unions_unlocks_and_shield(self, db, two_users):
         u1, _ = two_users

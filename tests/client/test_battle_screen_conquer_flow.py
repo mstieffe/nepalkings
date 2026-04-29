@@ -19,12 +19,6 @@ class TestBattleScreenConquerFlow:
         screen.game = SimpleNamespace(
             mode='conquer',
             land_suit_bonus_suit='Hearts',
-            defender_kingdom_bonuses={
-                'gold_production': 0.03,
-                'gold_vault': 100,
-                'shield_cost_reduction': 0.05,
-                'core_protection': 1,
-            },
         )
         screen.player_figure = None
         screen.player_figure_2 = None
@@ -95,26 +89,6 @@ class TestBattleScreenConquerFlow:
             screen, move, is_player=True, round_idx=0)
 
         assert power == 12  # 7 base +5 matching call move only
-
-    def test_conquer_intro_informs_attacker_about_defender_kingdom_skills(self):
-        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
-        screen._kingdom_intro_shown_key = None
-        captured = {}
-        screen.make_dialogue_box = lambda message, **kwargs: captured.update({
-            'message': message,
-            'kwargs': kwargs,
-        })
-        screen.dialogue_box = None
-        screen.game.defender_kingdom_name = 'North Pass'
-        screen.game.defender_kingdom_effects = ['+3% gold production']
-        screen.game.game_id = 44
-
-        assert BattleScreen._show_conquer_kingdom_intro_if_needed(screen) is True
-
-        assert 'North Pass' in captured['message']
-        assert '+3% gold production' in captured['message']
-        assert captured['kwargs']['title'] == 'Kingdom Defences'
-        assert BattleScreen._show_conquer_kingdom_intro_if_needed(screen) is False
 
     def test_conquer_defeat_ack_queries_finish_battle_and_sets_fallback_game_over(self, monkeypatch):
         BattleScreen = _battle_screen_class()
