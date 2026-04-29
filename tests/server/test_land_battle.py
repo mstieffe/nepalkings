@@ -279,6 +279,19 @@ class TestConquerStartBattle:
         with app.app_context():
             user = _make_user(db)
             land = _make_land(db, tier=1)
+            from ai.defence.generator import get_ai_defence_template_for_land
+            expected_prelude = None
+            for seed in range(500):
+                land.ai_template_index = seed
+                template = get_ai_defence_template_for_land(land)
+                if (
+                    template.get('prelude_spell_name')
+                    and template.get('counter_spell_name')
+                ):
+                    expected_prelude = template['prelude_spell_name']
+                    break
+            assert expected_prelude is not None
+            db.session.commit()
             _make_conquer_config(db, user, land)
 
             client = app.test_client()
@@ -294,7 +307,7 @@ class TestConquerStartBattle:
             assert ActiveSpell.query.filter_by(
                 game_id=game.id,
                 player_id=ai_player.id,
-                spell_name='Health Boost',
+                spell_name=expected_prelude,
             ).first() is not None
 
     def test_start_battle_cooldown(self, app, db):
@@ -623,11 +636,32 @@ class TestConquerStartBattle:
             land.suit_bonus_suit = 'Spades'
             from ai.defence.generator import get_ai_defence_template_for_land
             fortress_families = {'Wooden Fortress', 'Stone Fortress'}
-            for seed in range(100):
+            # Skip Explosion preludes: they destroy the lone attacker figure
+            # and break the rest of this test's flow.  Skip battle-modifier
+            # preludes too because they constrain advance/select rules in ways
+            # this test's minimal config can't satisfy.
+            _BATTLE_MOD_PRELUDES = {'Peasant War', 'Civil War', 'Blitzkrieg'}
+            template = None
+            for seed in range(500):
                 land.ai_template_index = seed
-                template = get_ai_defence_template_for_land(land)
-                if any(f['family_name'] in fortress_families for f in template['figures']):
+                candidate = get_ai_defence_template_for_land(land)
+                has_fortress = any(
+                    f['family_name'] in fortress_families
+                    for f in candidate['figures']
+                )
+                prelude = candidate.get('prelude_spell_name')
+                if (
+                    has_fortress
+                    and prelude
+                    and prelude != 'Explosion'
+                    and prelude not in _BATTLE_MOD_PRELUDES
+                    and candidate.get('counter_spell_name')
+                ):
+                    template = candidate
                     break
+            assert template is not None
+            expected_prelude = template['prelude_spell_name']
+            expected_counter = template['counter_spell_name']
             db.session.commit()
             _make_conquer_config(db, user, land)
 
@@ -646,7 +680,7 @@ class TestConquerStartBattle:
             prelude = ActiveSpell.query.filter_by(
                 game_id=game.id,
                 player_id=def_player.id,
-                spell_name='Health Boost',
+                spell_name=expected_prelude,
             ).first()
             assert prelude is not None
             assert (prelude.effect_data or {}).get('prelude_status') == 'executed'
@@ -671,7 +705,7 @@ class TestConquerStartBattle:
                 'player_id': def_player.id,
             }, headers=def_headers)
             assert counter_resp.status_code == 200
-            assert counter_resp.get_json()['spell_name'] == 'Forced Deal'
+            assert counter_resp.get_json()['spell_name'] == expected_counter
 
             db.session.refresh(game)
             assert game.turn_player_id == atk_player.id

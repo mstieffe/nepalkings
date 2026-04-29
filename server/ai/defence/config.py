@@ -7,7 +7,7 @@ This module intentionally keeps AI land defence balancing out of
 ``ai/defence/generator.py`` turns them into concrete battle templates.
 """
 
-AI_DEFENCE_GENERATOR_VERSION = 4
+AI_DEFENCE_GENERATOR_VERSION = 5
 
 AI_DEFENCE_SUITS = ('Hearts', 'Diamonds', 'Clubs', 'Spades')
 AI_DEFENCE_RED_SUITS = ('Hearts', 'Diamonds')
@@ -425,10 +425,23 @@ AI_DEFENCE_FIGURE_CATALOG = {
 #   Effective-value floor used by the conquer AI: moves below threshold are
 #   candidates for gambling. Runtime clamps to [1, 20].
 
-# ``prelude_spell_name`` / ``counter_spell_name``
-#   Optional scripted AI spells. Prelude spells resolve during battle startup;
-#   counter spells resolve during the defender response window and then return
-#   defender selection to the invader.
+# ``prelude_spell_weights`` / ``counter_spell_weights``
+#   Weighted pools of scripted AI spells.  The seeded RNG picks one entry per
+#   template, so each AI land draws an independent prelude / counter spell.
+#   Use the literal value ``None`` (or ``'None'``) in a pool to give the
+#   template a chance to roll "no spell" — this mirrors player defence
+#   configs, where:
+#     * Prelude is fully optional.
+#     * Counter is optional too because AI templates always set
+#       ``battle_figure_index`` (the counter-advance figure).
+#   Available preludes: ``Dump Cards``, ``Forced Deal``, ``Poison``,
+#   ``Health Boost``, ``Explosion``, ``Peasant War``, ``Civil War``.
+#   Available counters: ``Dump Cards``, ``Forced Deal``, ``Poison``,
+#   ``Health Boost``.
+#   Targeted spells (``Poison``, ``Explosion``, ``Health Boost``) auto-resolve
+#   their target at battle start (defender heuristic) so no extra data is
+#   required in the template.  Battle-modifier preludes (``Peasant War``,
+#   ``Civil War``) append to ``game.battle_modifier`` like player-cast spells.
 
 # ``core_cross_color_chance`` / ``optional_suit_weights``
 #   Controls suit-color variety. Core roles keep the first figure as a land-suit
@@ -464,9 +477,25 @@ AI_DEFENCE_GENERATION_RULES = {
         'core_cross_color_chance': 0.30,
         'optional_suit_weights': {'primary': 6, 'same_color': 1, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.35,
-        'prelude_spell_name': 'Health Boost',
+        # T1: utility-leaning, with a real chance of "no spell".
+        'prelude_spell_weights': [
+            (None, 6),
+            ('Dump Cards', 4),
+            ('Forced Deal', 3),
+            ('Poison', 2),
+            ('Health Boost', 2),
+            ('Peasant War', 2),
+            ('Civil War', 1),
+            ('Explosion', 1),
+        ],
         'prelude_spell_data': {},
-        'counter_spell_name': 'Dump Cards',
+        'counter_spell_weights': [
+            (None, 5),
+            ('Dump Cards', 5),
+            ('Forced Deal', 4),
+            ('Poison', 3),
+            ('Health Boost', 3),
+        ],
         'counter_spell_data': {},
         'auto_gamble': True,
         'auto_gamble_threshold': 9,
@@ -488,9 +517,25 @@ AI_DEFENCE_GENERATION_RULES = {
         'core_cross_color_chance': 0.30,
         'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.25,
-        'prelude_spell_name': 'Poison',
+        # T2: full pool, lower "no spell" chance.
+        'prelude_spell_weights': [
+            (None, 2),
+            ('Dump Cards', 3),
+            ('Forced Deal', 3),
+            ('Poison', 4),
+            ('Health Boost', 4),
+            ('Peasant War', 3),
+            ('Civil War', 3),
+            ('Explosion', 2),
+        ],
         'prelude_spell_data': {},
-        'counter_spell_name': 'Poison',
+        'counter_spell_weights': [
+            (None, 2),
+            ('Dump Cards', 3),
+            ('Forced Deal', 4),
+            ('Poison', 5),
+            ('Health Boost', 5),
+        ],
         'counter_spell_data': {},
         'auto_gamble': True,
         'auto_gamble_threshold': 8,
@@ -512,9 +557,25 @@ AI_DEFENCE_GENERATION_RULES = {
         'core_cross_color_chance': 0.28,
         'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.15,
-        'prelude_spell_name': 'Health Boost',
+        # T3: heavy pressure, small "no spell" chance for variety.
+        'prelude_spell_weights': [
+            (None, 1),
+            ('Dump Cards', 2),
+            ('Forced Deal', 2),
+            ('Poison', 4),
+            ('Health Boost', 4),
+            ('Peasant War', 4),
+            ('Civil War', 4),
+            ('Explosion', 4),
+        ],
         'prelude_spell_data': {},
-        'counter_spell_name': 'Forced Deal',
+        'counter_spell_weights': [
+            (None, 1),
+            ('Dump Cards', 2),
+            ('Forced Deal', 4),
+            ('Poison', 6),
+            ('Health Boost', 6),
+        ],
         'counter_spell_data': {},
         'auto_gamble': True,
         'auto_gamble_threshold': 7,
@@ -550,9 +611,23 @@ AI_DEFENCE_GENERATION_RULES = {
         'core_cross_color_chance': 0.25,
         'optional_suit_weights': {'primary': 6, 'same_color': 2, 'opposite_color': 2},
         'black_land_fortress_free_chance': 0.08,
-        'prelude_spell_name': 'Health Boost',
+        # T4: always casts; weighted toward devastating choices.
+        'prelude_spell_weights': [
+            ('Dump Cards', 2),
+            ('Forced Deal', 2),
+            ('Poison', 4),
+            ('Health Boost', 4),
+            ('Peasant War', 4),
+            ('Civil War', 4),
+            ('Explosion', 5),
+        ],
         'prelude_spell_data': {},
-        'counter_spell_name': 'Health Boost',
+        'counter_spell_weights': [
+            ('Dump Cards', 1),
+            ('Forced Deal', 3),
+            ('Poison', 6),
+            ('Health Boost', 6),
+        ],
         'counter_spell_data': {},
         'auto_gamble': True,
         'auto_gamble_threshold': 6,

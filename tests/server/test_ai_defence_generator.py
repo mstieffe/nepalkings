@@ -77,12 +77,43 @@ class TestAiDefenceGenerator:
             assert has_side_card
 
     def test_generated_templates_include_scripted_spells(self):
+        # Spells are now drawn from weighted pools, including a None entry at
+        # low tiers. T4 is configured without a None weight, so prelude and
+        # counter must always be set there.
         for tier in (1, 2, 3, 4):
             template = get_ai_defence_template_for_land(_land(tier=tier, suit='Spades'))
+            if template['prelude_spell_name']:
+                assert isinstance(template['prelude_spell_data'], dict)
+            if template['counter_spell_name']:
+                assert isinstance(template['counter_spell_data'], dict)
+        for suit in AI_DEFENCE_SUITS:
+            template = get_ai_defence_template_for_land(_land(tier=4, suit=suit, seed=7))
             assert template['prelude_spell_name']
-            assert isinstance(template['prelude_spell_data'], dict)
             assert template['counter_spell_name']
-            assert isinstance(template['counter_spell_data'], dict)
+
+    def test_spell_pools_produce_variety_across_seeds(self):
+        # Every configured spell (and the None sentinel where present) should
+        # appear at least once across a handful of seeds for each tier.
+        from ai.defence.config import AI_DEFENCE_GENERATION_RULES
+        for tier in (1, 2, 3, 4):
+            rules = AI_DEFENCE_GENERATION_RULES[tier]
+            for key in ('prelude', 'counter'):
+                expected = set()
+                for entry in rules.get(f'{key}_spell_weights') or []:
+                    name = entry[0]
+                    if isinstance(name, str) and name.strip().lower() == 'none':
+                        name = None
+                    expected.add(name)
+                seen = set()
+                for seed in range(500):
+                    template = get_ai_defence_template_for_land(
+                        _land(tier=tier, suit='Hearts', seed=seed, land_id=3000 + seed)
+                    )
+                    seen.add(template[f'{key}_spell_name'])
+                missing = expected - seen
+                assert not missing, (
+                    f'tier={tier} key={key} never produced spells: {missing}'
+                )
 
     def test_generated_templates_have_no_resource_deficits(self):
         for tier in (1, 2, 3, 4):

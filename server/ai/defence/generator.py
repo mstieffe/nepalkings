@@ -426,6 +426,31 @@ def _battle_figure_index(figures: list[dict[str, Any]], tier: int,
     return 0
 
 
+def _pick_scripted_spell(rules: dict[str, Any], key: str,
+                         rng: random.Random) -> str | None:
+    """Pick a prelude/counter spell from a weighted pool.
+
+    ``key`` is ``'prelude'`` or ``'counter'``.  Pool entries are
+    ``(spell_name_or_None, weight)`` tuples; the literal string ``'None'`` is
+    also treated as the no-spell sentinel for convenience.  Falls back to the
+    legacy ``f'{key}_spell_name'`` single value when no pool is configured.
+    """
+    pool = rules.get(f'{key}_spell_weights')
+    if pool:
+        normalized = []
+        for entry in pool:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                continue
+            name, weight = entry
+            if isinstance(name, str) and name.strip().lower() == 'none':
+                name = None
+            normalized.append((name, weight))
+        if normalized:
+            return _weighted_choice(normalized, rng)
+    legacy = rules.get(f'{key}_spell_name')
+    return legacy if legacy else None
+
+
 def _template_seed(land: Any) -> int:
     parts = (
         str(AI_DEFENCE_GENERATOR_VERSION),
@@ -493,6 +518,8 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
         rng,
         str(rules.get('battle_plan') or 'border'),
     )
+    prelude_spell = _pick_scripted_spell(rules, 'prelude', rng)
+    counter_spell = _pick_scripted_spell(rules, 'counter', rng)
     template = {
         'ai_name': f'{primary_suit} {AI_DEFENCE_TIER_NAMES.get(tier, "Defenders")}',
         'figures': figures,
@@ -500,10 +527,10 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
         'battle_figure_index': _battle_figure_index(figures, tier, primary_suit),
         'battle_modifier': None,
         'spell': None,
-        'prelude_spell_name': rules.get('prelude_spell_name'),
-        'prelude_spell_data': copy.deepcopy(rules.get('prelude_spell_data')),
-        'counter_spell_name': rules.get('counter_spell_name'),
-        'counter_spell_data': copy.deepcopy(rules.get('counter_spell_data')),
+        'prelude_spell_name': prelude_spell,
+        'prelude_spell_data': copy.deepcopy(rules.get('prelude_spell_data')) if prelude_spell else None,
+        'counter_spell_name': counter_spell,
+        'counter_spell_data': copy.deepcopy(rules.get('counter_spell_data')) if counter_spell else None,
         'auto_gamble': bool(rules.get('auto_gamble', False)),
         'auto_gamble_threshold': int(rules.get('auto_gamble_threshold', 10)),
     }
