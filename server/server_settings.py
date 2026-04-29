@@ -222,6 +222,15 @@ CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(10)))#s
 LAND_CONQUER_PROTECTION_SECONDS = int(
     os.getenv('LAND_CONQUER_PROTECTION_SECONDS', str(5 * 60))
 )
+# Stuck-conquer-game sweeper: any conquer game still 'active' with no
+# activity for this many seconds is auto-resolved with the defender as
+# winner.
+STUCK_CONQUER_TIMEOUT_SECONDS = int(
+    os.getenv('STUCK_CONQUER_TIMEOUT_SECONDS', str(15 * 60))
+)
+STUCK_CONQUER_SWEEP_INTERVAL_SECONDS = int(
+    os.getenv('STUCK_CONQUER_SWEEP_INTERVAL_SECONDS', str(60))
+)
 GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS = 7 * 24  # Cap at 7 days of uncollected gold
 
 # ── Kingdom cosmetics ──────────────────────────────────────────────

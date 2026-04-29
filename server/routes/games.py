@@ -6,7 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
 from datetime import datetime, timezone, timedelta
-from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom, KingdomNotification
 from game_service.deck_manager import DeckManager
 from routes.auth import require_token, verify_player_ownership
 from ai.defence.config import AI_DEFENCE_RANK_VALUES
@@ -811,7 +811,17 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
     # Gather per-player stats
     game_stats = _compute_game_stats(game.id, [winner_player.id, loser_player.id])
 
-    return {
+    # Conquer mode: also resolve land/card consequences (consume attacker
+    # cfg, transfer loot card, write LandAttackLog).  Resolver is idempotent
+    # so calling it again from finish_battle_pick_card is a no-op.
+    conquer_payload = None
+    if game.mode == 'conquer':
+        try:
+            conquer_payload = _resolve_conquer_battle(game, winner_player, winner_player)
+        except Exception:
+            logger.exception("[GAME_OVER] conquer resolve failed for game %s", game.id)
+
+    info = {
         'game_over': True,
         'reason': reason,
         'checkmate_figure_name': checkmate_figure_name,
@@ -828,6 +838,17 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         'winner_boosters': winner_boosters,
         'loser_boosters': loser_boosters,
     }
+    if isinstance(conquer_payload, dict):
+        info['conquer_result'] = conquer_payload.get('conquer_result')
+        info['attacker_won'] = conquer_payload.get('attacker_won')
+        info['land_id'] = conquer_payload.get('land_id')
+        for _k in ('card_won_suit', 'card_won_rank',
+                   'card_lost_suit', 'card_lost_rank',
+                   'loot_lost_cards', 'consumed_cards',
+                   'cards_spent'):
+            if _k in conquer_payload:
+                info[_k] = conquer_payload[_k]
+    return info
 
 
 def _build_game_over_info_from_finished(game):
@@ -4539,7 +4560,7 @@ def finish_battle():
 
         saved = game.last_battle_result or {}
 
-        return jsonify({
+        already_response = {
             'success': True,
             'outcome': outcome,
             'already_resolved': True,
@@ -4551,7 +4572,26 @@ def finish_battle():
             'destroyed_figure_family': saved.get('destroyed_figure_family', ''),
             'returnable_cards': returnable_cards,
             'game': game.serialize(),
-        })
+        }
+        # Conquer mode: surface loot/consumption details (resolver is idempotent;
+        # if it has already run, this just rebuilds the cached payload).
+        if game.mode == 'conquer':
+            try:
+                _winner_player = db.session.get(Player, winner_id) if winner_id else None
+                if _winner_player is not None:
+                    conquer_payload = _resolve_conquer_battle(game, _winner_player, player)
+                    db.session.commit()
+                    for _k in ('conquer_result', 'attacker_won', 'land_id',
+                               'land_gold_rate', 'land_tier',
+                               'card_won_suit', 'card_won_rank',
+                               'card_lost_suit', 'card_lost_rank',
+                               'loot_lost_cards', 'consumed_cards',
+                               'defence_consumed_cards', 'cards_spent'):
+                        if _k in conquer_payload:
+                            already_response[_k] = conquer_payload[_k]
+            except Exception:
+                logger.exception("[FINISH_BATTLE] conquer resolve failed in already_resolved path")
+        return jsonify(already_response)
 
     if not adv_figure or not def_figure:
         # Battle already fully resolved by the other client (figures destroyed,
@@ -4669,7 +4709,8 @@ def finish_battle():
                 player_id=player_id,
                 round_number=game.current_round,
                 turn_number=player.turns_left,
-                message="Conquer battle ended in a draw — no consequences.",
+                message=("Conquer battle ended in a draw. Battle moves and one-shot "
+                         "spell cards were spent; figure cards return to your collection."),
                 author="System",
                 type='battle_draw'
             )
@@ -4682,7 +4723,8 @@ def finish_battle():
                 'conquer_result': 'draw',
                 'attacker_won': False,
                 'land_id': game.land_id,
-                'message': 'Conquer battle ended in a draw — no consequences.',
+                'message': ('Conquer battle ended in a draw. Battle moves and one-shot '
+                            'spell cards were spent; figure cards return to your collection.'),
                 'consumed_cards': draw_consumed_cards,
                 'loot_lost_cards': [],
                 'game': game.serialize(),
@@ -4822,6 +4864,15 @@ def finish_battle():
             game.last_battle_result['game_stats'] = _compute_game_stats(
                 game.id, [winner_player.id, loser_player.id])
 
+        # Conquer mode: resolve card consumption / loot transfer / attack log
+        # immediately, so the loser's HTTP response already carries the loot
+        # data and stuck-game scenarios (no follow-up pick_card) still finalize.
+        # The resolver is idempotent — a later finish_battle_pick_card call
+        # returns the cached payload.
+        conquer_payload = None
+        if game.mode == 'conquer':
+            conquer_payload = _resolve_conquer_battle(game, winner_player, player)
+
         db.session.commit()
 
         response = {
@@ -4840,6 +4891,15 @@ def finish_battle():
         }
         if game_over_info:
             response['game_over_pending'] = True
+        if conquer_payload:
+            for _k in ('conquer_result', 'attacker_won', 'land_id',
+                       'land_gold_rate', 'land_tier',
+                       'card_won_suit', 'card_won_rank',
+                       'card_lost_suit', 'card_lost_rank',
+                       'loot_lost_cards', 'consumed_cards',
+                       'defence_consumed_cards', 'cards_spent'):
+                if _k in conquer_payload:
+                    response[_k] = conquer_payload[_k]
         return jsonify(response)
 
 
@@ -4848,8 +4908,20 @@ def _resolve_conquer_battle(game, winner, requesting_player):
 
     Handles land ownership transfer, card consumption, card rewards,
     and attack log.  Returns a JSON-serialisable dict for the response.
+
+    Idempotent: a marker ``conquer_resolved`` is written to
+    ``game.last_battle_result``; subsequent calls short-circuit and return
+    the cached payload via :func:`_serialize_finished_conquer_result`.
     """
     import random as _random
+
+    # Idempotency: if a previous call already ran the consumption / loot /
+    # log side-effects, just rebuild the response from persisted state.
+    saved_check = game.last_battle_result if isinstance(game.last_battle_result, dict) else {}
+    if saved_check.get('conquer_resolved'):
+        cached = _serialize_finished_conquer_result(game)
+        if cached is not None:
+            return cached
 
     atk_player = _conquer_attacker_player(game)
     if not atk_player:
@@ -5060,6 +5132,29 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                             cc.lock_type = None
                             cc.lock_ref_id = None
 
+                        # Notify the (human) attacker that one of their cards
+                        # was looted by the defender.  Surfaces in the kingdom
+                        # notification feed alongside attack_notifications.
+                        if attacker_user and not getattr(attacker_user, 'is_ai', False):
+                            try:
+                                defender_name = (defender_user.username
+                                                 if defender_user else None)
+                                db.session.add(KingdomNotification(
+                                    user_id=attacker_user.id,
+                                    kind='card_looted',
+                                    kingdom_id=lost_kingdom_id,
+                                    payload={
+                                        'suit': cc.suit,
+                                        'rank': cc.rank,
+                                        'land_id': game.land_id,
+                                        'defender_name': defender_name,
+                                        'is_ai_defender': bool(is_ai_land),
+                                    },
+                                ))
+                            except Exception:
+                                logger.exception(
+                                    "Failed to record card_looted notification")
+
                 # Consume the entire attacker config: every remaining card
                 # (figures, plus any spell/modifier cards not already deleted
                 # in `_consume_config_battle_cards` if a future code-path
@@ -5104,6 +5199,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
 
     merged_last_result = dict(saved) if isinstance(saved, dict) else {}
     merged_last_result.update({
+        'conquer_resolved': True,
         'conquer_attacker_player_id': atk_player.id,
         'conquer_attacker_user_id': attacker_user.id if attacker_user else None,
         'conquer_defender_player_id': def_player.id,

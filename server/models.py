@@ -131,6 +131,7 @@ class Game(db.Model):
     turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
     winner_player_id = db.Column(db.Integer, nullable=True)  # Player who won the game
     finished_at = db.Column(db.DateTime, nullable=True)  # When the game ended
+    last_activity_at = db.Column(db.DateTime, nullable=True, default=_utcnow)  # Last meaningful activity (for stuck-game sweeper)
     main_cards = db.relationship('MainCard', backref='game', lazy=True)
     side_cards = db.relationship('SideCard', backref='game', lazy=True)
 

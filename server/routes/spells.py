@@ -1233,6 +1233,27 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                                 author="System", type='game_over'
                             )
                             db.session.add(checkmate_log)
+
+                            # Conquer mode: also resolve land/card consequences
+                            # so the loser's loot/consumption record is created
+                            # and the attacker's LandConfig is cleaned up.
+                            if game.mode == 'conquer':
+                                try:
+                                    from routes.games import _resolve_conquer_battle
+                                    conquer_payload = _resolve_conquer_battle(
+                                        game, winner_player, winner_player)
+                                    if isinstance(conquer_payload, dict):
+                                        checkmate_game_over['conquer_result'] = conquer_payload.get('conquer_result')
+                                        checkmate_game_over['attacker_won'] = conquer_payload.get('attacker_won')
+                                        checkmate_game_over['land_id'] = conquer_payload.get('land_id')
+                                        for _k in ('card_won_suit', 'card_won_rank',
+                                                   'card_lost_suit', 'card_lost_rank',
+                                                   'loot_lost_cards', 'consumed_cards',
+                                                   'cards_spent'):
+                                            if _k in conquer_payload:
+                                                checkmate_game_over[_k] = conquer_payload[_k]
+                                except Exception:
+                                    logger.exception("[EXPLOSION_CHECKMATE] conquer resolve failed")
                         
                         # Delete the figure
                         db.session.delete(target_figure)

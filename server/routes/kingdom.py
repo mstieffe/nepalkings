@@ -1347,10 +1347,48 @@ def _promote_defence_draft(draft):
 
 
 def _get_or_create_conquer_config(user_id, land_id):
-    """Get the user's active conquer config for a land, or create one."""
+    """Get the user's active conquer config for a land, or create one.
+
+    Safety net: if the existing cfg is still attached to a finished conquer
+    Game whose card consumption / loot transfer never ran (e.g. attacker
+    disconnected before finish_battle_pick_card), resolve that game lazily
+    here.  After resolution the cfg row has been destroyed by
+    ``_resolve_conquer_battle``, so we re-query and create a fresh one.
+    """
     cfg = LandConfig.query.filter_by(
         user_id=user_id, config_type='conquer', land_id=land_id
     ).first()
+    if cfg is not None:
+        stale_game = Game.query.filter_by(
+            conquer_config_id=cfg.id, state='finished'
+        ).order_by(Game.id.desc()).first()
+        if stale_game is not None:
+            try:
+                from routes.games import _resolve_conquer_battle
+                winner_player = None
+                if stale_game.winner_player_id:
+                    winner_player = db.session.get(Player, stale_game.winner_player_id)
+                if winner_player is None:
+                    # Default to the defender (attacker abandoned / no winner)
+                    other_players = [p for p in stale_game.players
+                                     if p.user_id != user_id]
+                    winner_player = other_players[0] if other_players else None
+                if winner_player is not None:
+                    _resolve_conquer_battle(stale_game, winner_player, winner_player)
+                    db.session.commit()
+                    logger.info(
+                        "[CONQUER_REENTRY] resolved stale game %s for user %s land %s",
+                        stale_game.id, user_id, land_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "[CONQUER_REENTRY] failed to resolve stale game for user %s land %s",
+                    user_id, land_id,
+                )
+            # Cfg may have been destroyed; re-query.
+            cfg = LandConfig.query.filter_by(
+                user_id=user_id, config_type='conquer', land_id=land_id
+            ).first()
     if not cfg:
         cfg = LandConfig(user_id=user_id, config_type='conquer', land_id=land_id)
         db.session.add(cfg)

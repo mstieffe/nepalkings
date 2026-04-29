@@ -122,12 +122,23 @@ def verify_player_ownership(player_id):
 
     Returns a JSON error response tuple on failure, or None on success.
     Must be called inside a route protected by @require_token.
+
+    Side-effect: bumps Game.last_activity_at for the player's game so the
+    stuck-game sweeper doesn't kill games with active client activity.
     """
     player = db.session.get(Player, player_id)
     if not player:
         return jsonify({'success': False, 'message': 'Player not found'}), 404
     if player.user_id != g.user_id:
         return jsonify({'success': False, 'message': 'Forbidden: player does not belong to authenticated user'}), 403
+    # Touch game activity timestamp (best-effort, don't fail auth on error).
+    try:
+        if player.game_id:
+            game = db.session.get(Game, player.game_id)
+            if game and game.state != 'finished':
+                game.last_activity_at = datetime.now(timezone.utc)
+    except Exception:
+        pass
     return None
 
 

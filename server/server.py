@@ -208,6 +208,21 @@ with app.app_context():
         from ai import init_ai_users
         init_ai_users()
 
+    # Start the stuck-conquer-game sweeper (daemon thread).  Skipped when
+    # running tests (pytest sets PYTEST_CURRENT_TEST or sys.modules has
+    # pytest) — tests call sweep_stuck_conquer_games directly when they
+    # need to exercise the sweeper.
+    import sys as _sys
+    _is_pytest = ('pytest' in _sys.modules or
+                  os.environ.get('PYTEST_CURRENT_TEST') is not None or
+                  os.environ.get('DISABLE_BACKGROUND_SWEEPERS') == '1')
+    if not _is_pytest:
+        try:
+            from sweepers import start_stuck_conquer_sweeper
+            start_stuck_conquer_sweeper(app)
+        except Exception:
+            logger.exception("Failed to start stuck-conquer sweeper")
+
 # ── Session cleanup on every request teardown ──
 @app.teardown_appcontext
 def shutdown_session(exception=None):
