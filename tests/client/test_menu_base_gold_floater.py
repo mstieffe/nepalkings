@@ -42,6 +42,28 @@ def test_missing_gold_position_suppresses_floater_but_keeps_baseline():
     assert screen._last_seen_gold == 125
 
 
+def test_suppress_next_gold_floater_skips_once_then_resumes():
+    screen, calls = _screen_with_gold(100)
+
+    screen._suppress_next_gold_floater()
+    screen._maybe_spawn_gold_gain_floater(140, (42, 24))
+    screen._maybe_spawn_gold_gain_floater(160, (42, 24))
+
+    assert calls == [(20, (42, 24))]
+    assert screen._last_seen_gold == 160
+
+
+def test_override_next_gold_floater_position_uses_custom_anchor_once():
+    screen, calls = _screen_with_gold(100)
+
+    screen._set_next_gold_floater_pos((9, 11))
+    screen._maybe_spawn_gold_gain_floater(130, (42, 24))
+    screen._maybe_spawn_gold_gain_floater(150, (42, 24))
+
+    assert calls == [(30, (9, 11)), (20, (42, 24))]
+    assert screen._last_seen_gold == 150
+
+
 def test_current_gold_amount_handles_missing_or_invalid_values():
     screen, _ = _screen_with_gold(100)
 

@@ -8,6 +8,15 @@ from unittest.mock import MagicMock
 import pygame
 
 
+class _Response:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        return self._payload
+
+
 class TestKingdomLayout:
     def test_layout_regions_do_not_overlap(self):
         from game.screens.kingdom_screen import _compute_kingdom_layout
@@ -308,3 +317,113 @@ class TestKingdomLargestComponentFocus:
 
         assert tile is None
         assert screen._hex_map.focused_groups == []
+
+
+class TestKingdomCollectAllFloater:
+    def _screen(self):
+        from game.screens.kingdom_screen import KingdomScreen
+        from game.components.floating_text import FloatingTextLayer
+        from config import settings
+
+        screen = KingdomScreen.__new__(KingdomScreen)
+        screen._collect_all_rect = pygame.Rect(200, 120, 140, 34)
+        screen._floating_text = FloatingTextLayer()
+        screen._collect_float_font = settings.get_font(
+            getattr(settings, 'COLLECT_FLOAT_FONT_SIZE', settings.FS_HEADING),
+            bold=True,
+        )
+        screen._suppress_next_gold_floater = MagicMock()
+        screen._load_map = MagicMock()
+        screen.state = SimpleNamespace(user_dict={'gold': 100})
+        return KingdomScreen, screen
+
+    def test_collect_all_spawns_floater_from_collect_button_center(self, monkeypatch):
+        import game.screens.kingdom_screen as module
+        KingdomScreen, screen = self._screen()
+
+        monkeypatch.setattr(
+            module.requests,
+            'post',
+            lambda url, timeout=0: _Response({'gold': 125, 'collected': 25}),
+        )
+
+        KingdomScreen._collect_all_gold(screen)
+
+        assert screen.state.user_dict['gold'] == 125
+        assert len(screen._floating_text._items) == 1
+        item = screen._floating_text._items[0]
+        assert (item._x0, item._y0) == screen._collect_all_rect.center
+        screen._suppress_next_gold_floater.assert_called_once_with()
+        screen._load_map.assert_called_once_with()
+
+    def test_collect_all_breakdown_staggers_button_center_burst(self, monkeypatch):
+        import game.screens.kingdom_screen as module
+        from config import settings
+        KingdomScreen, screen = self._screen()
+
+        monkeypatch.setattr(
+            module.requests,
+            'post',
+            lambda url, timeout=0: _Response({
+                'gold': 170,
+                'collected': 70,
+                'kingdoms': [
+                    {'collected': 20},
+                    {'collected': 0},
+                    {'collected': 50},
+                ],
+            }),
+        )
+
+        KingdomScreen._collect_all_gold(screen)
+
+        assert screen.state.user_dict['gold'] == 170
+        assert len(screen._floating_text._items) == 2
+        expected_stagger = int(getattr(settings, 'COLLECT_FLOAT_STAGGER_MS', 80))
+        first, second = screen._floating_text._items
+        assert (first._x0, first._y0) == screen._collect_all_rect.center
+        assert (second._x0, second._y0) == screen._collect_all_rect.center
+        assert first._delay_ms == 0
+        assert second._delay_ms == expected_stagger
+
+
+class TestKingdomInfoBarHeader:
+    def test_info_bar_uses_requested_header_format_and_green_bonus(self):
+        from game.screens.kingdom_screen import KingdomScreen
+        from config import settings
+
+        screen = KingdomScreen.__new__(KingdomScreen)
+        screen.window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        screen._header_rect = pygame.Rect(40, 40, 900, 120)
+        screen._btn_close_rect = pygame.Rect(screen._header_rect.right - 30, 42, 28, 28)
+        title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
+        screen._title_surf = title_font.render('Kingdom', True, settings.SUB_SCREEN_TITLE_CLR)
+        screen._cooldown = 0
+        screen._collect_all_rect = None
+        screen._collect_all_enabled = False
+        screen._map_data = {
+            'my_total_gold_rate': 20.0,
+            'my_effective_gold_rate': 23.0,
+            'my_lands_count': 9,
+            'my_kingdoms': [
+                {'pending_gold': 5.0, 'vault_cap': 50.0},
+                {'pending_gold': 0.0, 'vault_cap': 60.0},
+            ],
+        }
+
+        captured = []
+        original_info_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE)
+
+        class _RecordingInfoFont:
+            def render(self, text, antialias, color):
+                captured.append((text, tuple(color)))
+                return original_info_font.render(text, antialias, color)
+
+        screen._info_font = _RecordingInfoFont()
+        screen._nav_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE, bold=True)
+
+        KingdomScreen._draw_info_bar(screen)
+
+        assert ('kingdoms: 2  lands: 9  gold: 20.0/hr', tuple(settings.KINGDOM_INFO_CLR)) in captured
+        assert (' +3.0', tuple(settings.KINGDOM_CONFIG_GOOD_CLR)) in captured
+        assert screen._collect_all_enabled is True

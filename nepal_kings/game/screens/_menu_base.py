@@ -204,6 +204,11 @@ class MenuScreenMixin:
         self._gold_floaters = FloatingTextLayer()
         self._gold_floaters_last_tick = pygame.time.get_ticks()
         self._last_seen_gold = self._current_gold_amount()
+        # Optional one-shot controls for the next automatic top-bar gold
+        # floater. Screens that show their own collect animation can suppress
+        # or re-anchor the shared HUD floater to avoid duplicates.
+        self._suppress_next_gold_gain_floater = False
+        self._next_gold_gain_floater_pos = None
 
         # Icon buttons (top-right): home at top, settings at bottom, logout just above settings
         stone_sz = settings.GAME_MENU_ICON_STONE_SZ
@@ -311,6 +316,17 @@ class MenuScreenMixin:
         except (TypeError, ValueError):
             return 0
 
+    def _suppress_next_gold_floater(self):
+        """Skip the next automatic top-bar gold gain floater exactly once."""
+        self._suppress_next_gold_gain_floater = True
+
+    def _set_next_gold_floater_pos(self, pos):
+        """Override the next automatic top-bar gold floater start position."""
+        if pos is None:
+            self._next_gold_gain_floater_pos = None
+            return
+        self._next_gold_gain_floater_pos = (int(pos[0]), int(pos[1]))
+
     def _maybe_spawn_gold_gain_floater(self, current_gold, start_pos):
         try:
             current_gold = int(current_gold or 0)
@@ -318,9 +334,17 @@ class MenuScreenMixin:
             current_gold = 0
         previous_gold = getattr(self, '_last_seen_gold', None)
         self._last_seen_gold = current_gold
-        if previous_gold is None or current_gold <= previous_gold or not start_pos:
+        if previous_gold is None or current_gold <= previous_gold:
             return
-        self._spawn_gold_gain_floater(current_gold - previous_gold, start_pos)
+        if getattr(self, '_suppress_next_gold_gain_floater', False):
+            self._suppress_next_gold_gain_floater = False
+            self._next_gold_gain_floater_pos = None
+            return
+        floater_pos = getattr(self, '_next_gold_gain_floater_pos', None) or start_pos
+        self._next_gold_gain_floater_pos = None
+        if not floater_pos:
+            return
+        self._spawn_gold_gain_floater(current_gold - previous_gold, floater_pos)
 
     def _spawn_gold_gain_floater(self, amount, start_pos):
         layer = getattr(self, '_gold_floaters', None)

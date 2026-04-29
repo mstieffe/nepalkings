@@ -456,6 +456,153 @@ class TestGameRouteCoverage:
         assert data.get('success') is True, data
         assert data.get('game', {}).get('defending_figure_id') == defender_figure.id
 
+    def test_select_defender_requires_must_be_attacked_without_blitzkrieg(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Figure, Game, Player
+
+        u1, u2 = two_users
+        game = db.session.get(Game, created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        attacker_figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).first()
+        fortress = Figure(
+            game_id=game.id,
+            player_id=p2.id,
+            family_name='Wooden Fortress',
+            field='military',
+            color='defensive',
+            name='Wooden Fortress',
+            suit='Spades',
+        )
+        normal_defender = Figure(
+            game_id=game.id,
+            player_id=p2.id,
+            family_name='Rice Farmer',
+            field='village',
+            color='offensive',
+            name='Rice Farmer',
+            suit='Hearts',
+        )
+        db.session.add_all([fortress, normal_defender])
+        db.session.flush()
+        game.mode = 'conquer'
+        game.advancing_figure_id = attacker_figure.id
+        game.advancing_player_id = p1.id
+        game.turn_player_id = p1.id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/select_defender',
+            json={'game_id': game.id, 'player_id': p1.id, 'figure_id': normal_defender.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 400
+        assert data.get('reason') == 'must_be_attacked'
+
+    def test_select_defender_blitzkrieg_can_ignore_must_be_attacked_fortress(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Figure, Game, Player
+
+        u1, u2 = two_users
+        game = db.session.get(Game, created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        attacker_figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).first()
+        fortress = Figure(
+            game_id=game.id,
+            player_id=p2.id,
+            family_name='Wooden Fortress',
+            field='military',
+            color='defensive',
+            name='Wooden Fortress',
+            suit='Spades',
+        )
+        normal_defender = Figure(
+            game_id=game.id,
+            player_id=p2.id,
+            family_name='Rice Farmer',
+            field='village',
+            color='offensive',
+            name='Rice Farmer',
+            suit='Hearts',
+        )
+        db.session.add_all([fortress, normal_defender])
+        db.session.flush()
+        game.mode = 'conquer'
+        game.advancing_figure_id = attacker_figure.id
+        game.advancing_player_id = p1.id
+        game.turn_player_id = p1.id
+        game.battle_modifier = [{'type': 'Blitzkrieg', 'caster_id': p1.id}]
+        db.session.commit()
+
+        resp = client.post(
+            '/games/select_defender',
+            json={'game_id': game.id, 'player_id': p1.id, 'figure_id': normal_defender.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+        assert data.get('game', {}).get('defending_figure_id') == normal_defender.id
+
+    def test_select_defender_blitzkrieg_still_rejects_cannot_be_targeted(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        from models import Figure, Game, Player
+
+        u1, u2 = two_users
+        game = db.session.get(Game, created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        attacker_figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).first()
+        wall = Figure(
+            game_id=game.id,
+            player_id=p2.id,
+            family_name='Wall',
+            field='military',
+            color='defensive',
+            name='Wall',
+            suit='Clubs',
+        )
+        db.session.add(wall)
+        db.session.flush()
+        game.mode = 'conquer'
+        game.advancing_figure_id = attacker_figure.id
+        game.advancing_player_id = p1.id
+        game.turn_player_id = p1.id
+        game.battle_modifier = [{'type': 'Blitzkrieg', 'caster_id': p1.id}]
+        db.session.commit()
+
+        resp = client.post(
+            '/games/select_defender',
+            json={'game_id': game.id, 'player_id': p1.id, 'figure_id': wall.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 400
+        assert 'cannot be selected' in data.get('message', '')
+
     def test_skip_civil_war_second_flips_turn_for_advance_context(
         self,
         client,

@@ -113,6 +113,17 @@ def _must_be_attacked_defenders(game, defender_player_id):
     ]
 
 
+def _defender_selection_ignores_must_be_attacked(game):
+    """Return True when special advance rules bypass Fortress-style taunts."""
+    if not game:
+        return False
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    if any(m.get('type') == 'Blitzkrieg' for m in modifiers if isinstance(m, dict)):
+        return True
+    advancing_figure = db.session.get(Figure, game.advancing_figure_id) if game.advancing_figure_id else None
+    return bool(advancing_figure and _figure_has_family_skill(advancing_figure, 'cannot_be_blocked'))
+
+
 def _conquer_defender_player(game):
     if not game or not game.players:
         return None
@@ -2546,7 +2557,9 @@ def select_defender():
         if not _figure_can_be_selected_as_defender(figure):
             return jsonify({'success': False, 'message': f'{figure.name} cannot be selected as a defender'}), 400
 
-        mandatory_defenders = _must_be_attacked_defenders(game, figure.player_id)
+        mandatory_defenders = []
+        if not _defender_selection_ignores_must_be_attacked(game):
+            mandatory_defenders = _must_be_attacked_defenders(game, figure.player_id)
         if (not game.defending_figure_id and mandatory_defenders and
                 figure.id not in {f.id for f in mandatory_defenders}):
             forced_names = ', '.join(sorted(f.name for f in mandatory_defenders))

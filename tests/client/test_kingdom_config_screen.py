@@ -60,6 +60,9 @@ def _screen_base():
     screen._rename_cancel_rect = None
     screen._icons = {}
     screen._shield_icon = None
+    screen._edit_icon = None
+    screen._edit_icon_size = 18
+    screen._rename_icon_rect = None
     from game.components.floating_text import FloatingTextLayer
     screen._floating_text = FloatingTextLayer()
     screen._last_render_ms = 0
@@ -233,6 +236,7 @@ class TestKingdomConfigInteractions:
         screen._gold = 100
         screen.state.user_dict['gold'] = 100
         screen._collect_btn_rect = pygame.Rect(10, 10, 80, 30)
+        screen._suppress_next_gold_floater = MagicMock()
         quote_calls = []
 
         monkeypatch.setattr(
@@ -254,6 +258,7 @@ class TestKingdomConfigInteractions:
         assert screen._gold == 112
         assert screen.state.user_dict['gold'] == 112
         assert screen._kingdom['pending_gold'] == 0.5
+        screen._suppress_next_gold_floater.assert_called_once_with()
         assert quote_calls == [True]
 
     def test_cosmetic_section_scrolls_all_catalog_items(self):
@@ -447,3 +452,70 @@ class TestKingdomConfigInteractions:
         actions = {action for action, _value, _rect in screen._buttons}
         assert actions <= module.HANDLED_KINGDOM_CONFIG_ACTIONS
         assert {'kingdom_prev', 'kingdom_next'} <= actions
+
+    def test_render_header_uses_kingdom_name_not_generic_label(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._data = {'shield_options_hours': [6, 12, 24]}
+        screen._catalog = {}
+        screen._gold = 500
+        screen._quote = {'price_gold': 108}
+
+        rendered_titles = []
+        original_font = screen._title_font
+
+        class _RecordingFont:
+            def render(self, text, antialias, color):
+                rendered_titles.append(text)
+                return original_font.render(text, antialias, color)
+
+            def size(self, text):
+                return original_font.size(text)
+
+        screen._title_font = _RecordingFont()
+
+        KingdomConfigScreen.render(screen)
+
+        assert 'North Pass' in rendered_titles
+        assert 'Kingdom Config' not in rendered_titles
+        actions = [action for action, _value, _rect in screen._buttons]
+        assert actions.count('rename_start') == 1
+        assert screen._rename_icon_rect is not None
+
+    def test_render_vault_panel_reads_pending_gold_and_rate(self):
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        kingdom = _kingdom_payload()
+        kingdom['pending_gold'] = 17.5
+        kingdom['vault_cap'] = 80
+        kingdom['gold_rate_per_hour'] = 24.5
+        screen._kingdom = kingdom
+        screen._data = {'vault_default_cap': 50, 'shield_options_hours': [6, 12, 24]}
+        screen._catalog = {}
+        screen._gold = 100
+        screen._quote = {'price_gold': 0}
+
+        rendered_tiny = []
+        original_tiny = screen._tiny_font
+
+        class _RecordingTinyFont:
+            def render(self, text, antialias, color):
+                rendered_tiny.append((text, tuple(color)))
+                return original_tiny.render(text, antialias, color)
+
+            def size(self, text):
+                return original_tiny.size(text)
+
+            def get_height(self):
+                return original_tiny.get_height()
+
+        screen._tiny_font = _RecordingTinyFont()
+
+        KingdomConfigScreen.render(screen)
+
+        # Collect button is present and enabled when pending > 0.
+        actions = {action for action, _value, _rect in screen._buttons}
+        assert 'collect_kingdom_gold' in actions
+        assert screen._collect_btn_rect is not None
+        assert ('Production: 20.0 gold/hr', tuple(settings.KINGDOM_CONFIG_HIGHLIGHT)) in rendered_tiny
+        assert (' +4.5', tuple(settings.KINGDOM_CONFIG_GOOD_CLR)) in rendered_tiny

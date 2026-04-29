@@ -159,6 +159,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._collect_all_rect = None
         self._collect_all_enabled = False
         self._floating_text = FloatingTextLayer()
+        self._floating_text_last_tick = pygame.time.get_ticks()
         self._collect_float_font = settings.get_font(
             getattr(settings, 'COLLECT_FLOAT_FONT_SIZE', settings.FS_HEADING), bold=True)
 
@@ -171,6 +172,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         """Called each time the kingdom screen becomes active."""
         self._hex_map = None
         self._last_load_tick = 0
+        self._floating_text_last_tick = pygame.time.get_ticks()
 
     # ── Data loading ────────────────────────────────────────────────
 
@@ -332,7 +334,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         # Floating text (gold collect / level up) above modals' chrome
         now_ms = pygame.time.get_ticks()
-        self._floating_text.update(now_ms)
+        dt_ms = max(0, now_ms - getattr(self, '_floating_text_last_tick', now_ms))
+        self._floating_text_last_tick = now_ms
+        self._floating_text.update(dt_ms)
         self._floating_text.draw(self.window)
 
         self._draw_menu_overlay()
@@ -658,11 +662,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
         rate = self._map_data.get('my_total_gold_rate', 0)
         effective_rate = self._map_data.get('my_effective_gold_rate', rate)
         count = self._map_data.get('my_lands_count', 0)
-        kingdom = self._map_data.get('my_kingdom') or {}
-        connected = int(kingdom.get('largest_component_size', 0) or 0)
 
         # Aggregate vault stats across all owned kingdoms
         my_kingdoms = self._map_data.get('my_kingdoms') or []
+        num_kingdoms = len(my_kingdoms)
         pending_total = 0.0
         any_full = False
         any_near_full = False
@@ -678,30 +681,46 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 elif ratio >= near_ratio:
                     any_near_full = True
 
-        if abs(float(effective_rate or 0) - float(rate or 0)) >= 0.05:
-            gold_text = f'Gold rate: {effective_rate:.1f}/hr (base {rate:.1f})'
-        else:
-            gold_text = f'Gold rate: {rate:.1f}/hr'
-        text = f'Your lands: {count}    {gold_text}    Connected kingdom: {connected} lands'
+        base_rate = float(rate or 0)
+        bonus_rate = max(0.0, float(effective_rate or 0) - base_rate)
+        header_base = (
+            f'kingdoms: {num_kingdoms}  '
+            f'lands: {int(count or 0)}  '
+            f'gold: {base_rate:.1f}/hr'
+        )
         if self._cooldown > 0:
             hours = self._cooldown // 3600
             mins = (self._cooldown % 3600) // 60
-            text += f'    Conquer cooldown: {hours}h {mins}m'
+            cooldown_text = f'  conquer cooldown: {hours}h {mins}m'
+        else:
+            cooldown_text = ''
 
         # Color gold-rate-bearing text red when any vault is full (production stalled)
         info_clr = (220, 90, 90) if any_full else settings.KINGDOM_INFO_CLR
-        txt_surf = self._info_font.render(text, True, info_clr)
+        bonus_clr = getattr(settings, 'KINGDOM_CONFIG_GOOD_CLR', (132, 220, 142))
+        segments = [
+            self._info_font.render(header_base, True, info_clr),
+            self._info_font.render(f' +{bonus_rate:.1f}', True, bonus_clr),
+        ]
+        if cooldown_text:
+            segments.append(self._info_font.render(cooldown_text, True, info_clr))
         px = settings.KINGDOM_INFO_PAD_X
         py = settings.KINGDOM_INFO_PAD_Y
-        bw = txt_surf.get_width() + px * 2
-        bh = txt_surf.get_height() + py * 2
+        text_w = sum(s.get_width() for s in segments)
+        text_h = max((s.get_height() for s in segments), default=0)
+        bw = text_w + px * 2
+        bh = text_h + py * 2
 
         box = pygame.Surface((bw, bh), pygame.SRCALPHA)
         box.fill(settings.KINGDOM_INFO_BG_CLR)
         bar_x = self._header_rect.x + (self._header_rect.w - bw) // 2
         bar_y = self._header_rect.y + self._title_surf.get_height() + int(0.006 * _SH)
         self.window.blit(box, (bar_x, bar_y))
-        self.window.blit(txt_surf, (bar_x + px, bar_y + py))
+        tx = bar_x + px
+        ty = bar_y + py
+        for surf in segments:
+            self.window.blit(surf, (tx, ty + (text_h - surf.get_height()) // 2))
+            tx += surf.get_width()
 
         # Collect All button (right of info bar)
         if my_kingdoms:
@@ -889,6 +908,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
             return
 
         gold_after = data.get('gold', data.get('total_gold'))
+        total_collected = int(round(float(data.get('collected') or 0)))
+        if total_collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
+            # Keep collect feedback anchored to the clicked Collect-All button
+            # instead of duplicating it at the top-left HUD gold widget.
+            self._suppress_next_gold_floater()
         if gold_after is not None and getattr(self.state, 'user_dict', None) is not None:
             self.state.user_dict['gold'] = int(gold_after)
 
@@ -900,7 +924,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         duration = int(getattr(settings, 'COLLECT_FLOAT_DURATION_MS', 900))
         gold_clr = getattr(settings, 'COLLECT_FLOAT_GOLD_CLR', (255, 220, 90))
         if breakdown:
-            for i, entry in enumerate(breakdown):
+            burst_idx = 0
+            for entry in breakdown:
                 amt = int(round(float(entry.get('collected') or 0)))
                 if amt <= 0:
                     continue
@@ -911,10 +936,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     duration_ms=duration,
                     rise_px=rise_px,
                     font=self._collect_float_font,
-                    delay_ms=i * stagger,
+                    delay_ms=burst_idx * stagger,
                 ))
+                burst_idx += 1
         else:
-            total = int(round(float(data.get('collected') or 0)))
+            total = total_collected
             if total > 0:
                 self._floating_text.add(FloatingText(
                     f'+{total}g',

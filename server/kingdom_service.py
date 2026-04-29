@@ -1211,6 +1211,12 @@ def serialize_kingdom_config(kingdom):
         'vault_cap': vault_state['cap'],
         'vault_full': vault_state['full'],
         'vault_rate_per_hour': vault_state['rate_per_hour'],
+        # Aliases consumed by the persistent kingdom-config UI: ``pending_gold``
+        # is the live snapshot accrued up to "now" (lazy: only computed when
+        # the row is serialized; no background ticker), and ``gold_rate_per_hour``
+        # is the kingdom's effective production rate.
+        'pending_gold': vault_state['pending'],
+        'gold_rate_per_hour': vault_state['rate_per_hour'],
         # Core protection
         'core_protection_active': kingdom_core_protection_active(kingdom),
     }

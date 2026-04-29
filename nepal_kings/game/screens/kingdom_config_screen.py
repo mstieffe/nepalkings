@@ -81,6 +81,19 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._shield_icon = self._load_icon(settings.KINGDOM_SHIELD_ICON_PATH)
         for key, path in settings.KINGDOM_SKILL_ICON_PATHS.items():
             self._icons[key] = self._load_icon(path)
+        # Edit (pencil) icon used as the rename trigger next to the kingdom
+        # name title — same affordance as the defence/conquer config screens.
+        self._edit_icon_size = max(18, int(0.030 * _SH))
+        edit_raw = self._load_icon('img/dialogue_box/icons/edit.png')
+        if edit_raw is not None:
+            try:
+                self._edit_icon = pygame.transform.smoothscale(
+                    edit_raw, (self._edit_icon_size, self._edit_icon_size))
+            except Exception:
+                self._edit_icon = edit_raw
+        else:
+            self._edit_icon = None
+        self._rename_icon_rect = None
         # Visual layer for `+amount` floaters spawned by Collect.
         self._floating_text = FloatingTextLayer()
         self._last_render_ms = pygame.time.get_ticks()
@@ -221,6 +234,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._set_msg(data.get('message', 'Collect failed'))
             return
         collected = int(data.get('collected', 0) or 0)
+        if collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
+            self._suppress_next_gold_floater()
         if 'gold' in data:
             self._sync_gold(data['gold'])
         elif 'total_gold' in data:
@@ -460,6 +475,36 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         surf = self._small_font.render(label, True, color or settings.KINGDOM_CONFIG_TEXT_CLR)
         self.window.blit(surf, surf.get_rect(center=rect.center))
 
+    def _draw_rename_icon(self, rect, *, enabled, price):
+        """Draw the pencil rename trigger and register the click hitbox.
+
+        Mirrors the edit-icon affordance used on the defence/conquer config
+        screens: a small icon (with a hover glow) instead of a large text
+        button.  Tooltip-style price hint is appended to the kingdom name in
+        the rename modal already, so we keep the icon itself unobtrusive.
+        """
+        if not rect:
+            return
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = enabled and rect.collidepoint(mouse_pos)
+        if self._edit_icon is not None:
+            if hovered:
+                glow = pygame.Surface((rect.w + 4, rect.h + 4), pygame.SRCALPHA)
+                glow.fill((255, 240, 180, 55))
+                self.window.blit(glow, (rect.x - 2, rect.y - 2))
+            icon = self._edit_icon
+            if not enabled:
+                icon = icon.copy()
+                icon.fill((0, 0, 0, 110), special_flags=pygame.BLEND_RGBA_MULT)
+            self.window.blit(icon, rect.topleft)
+        else:
+            # Fallback if the asset failed to load: draw a simple outlined box.
+            clr = (220, 200, 150) if enabled else settings.KINGDOM_CONFIG_DIM_CLR
+            pygame.draw.rect(self.window, clr, rect, 1, border_radius=4)
+        if enabled:
+            self._buttons.append(('rename_start', None, rect))
+            self._rename_icon_rect = rect
+
     def _draw_close_x_button(self):
         r = self._btn_close_rect
         if not r:
@@ -479,29 +524,177 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._buttons.append(('back', None, r))
 
     def _draw_kingdom_selector(self, rect):
+        """Backwards-compatible thin wrapper used by older tests.
+
+        The header is rendered through ``_draw_header_pill`` now, but this
+        method still draws a bare metadata row when called directly so unit
+        tests that hit it in isolation keep working.
+        """
         kingdoms = self._kingdoms()
         if not self._kingdom:
             return
         idx = self._selected_kingdom_index()
         count = len(kingdoms)
-        name = self._kingdom.get('name') or f"Kingdom #{self._kingdom.get('id', '?')}"
         lands_count = int(self._kingdom.get('lands_count', 0) or len(self._kingdom.get('land_ids') or []))
-        label = f'{name}  •  {lands_count} land{"s" if lands_count != 1 else ""}'
+        label = f'{lands_count} land{"s" if lands_count != 1 else ""}'
         if count > 1:
-            label += f'  •  {idx + 1}/{count}'
+            label += f'  \u2022  {idx + 1}/{count}'
         pygame.draw.rect(self.window, (35, 29, 34, 190), rect, border_radius=8)
         pygame.draw.rect(self.window, (132, 112, 78), rect, 1, border_radius=8)
-        if count > 1:
-            btn_w = min(40, max(30, rect.h - 4))
-            prev_rect = pygame.Rect(rect.x + 4, rect.y + 4, btn_w, rect.h - 8)
-            next_rect = pygame.Rect(rect.right - btn_w - 4, rect.y + 4, btn_w, rect.h - 8)
-            self._draw_button(prev_rect, '<', 'kingdom_prev')
-            self._draw_button(next_rect, '>', 'kingdom_next')
-            label_rect = pygame.Rect(prev_rect.right + 6, rect.y, next_rect.x - prev_rect.right - 12, rect.h)
-        else:
-            label_rect = rect
         surf = self._small_font.render(label, True, settings.KINGDOM_CONFIG_TEXT_CLR)
-        self.window.blit(surf, surf.get_rect(center=label_rect.center))
+        self.window.blit(surf, surf.get_rect(center=rect.center))
+
+    def _draw_pager_arrow(self, rect, action, *, enabled, glyph):
+        """Small chevron button used by the unified header pill."""
+        if not rect:
+            return
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = enabled and rect.collidepoint(mouse_pos)
+        bg = (60, 50, 38, 220) if hovered else (35, 29, 34, 200)
+        border = (190, 168, 116) if hovered else (120, 100, 70)
+        clr = settings.KINGDOM_CONFIG_TEXT_CLR if enabled else settings.KINGDOM_CONFIG_DIM_CLR
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg, surf.get_rect(), border_radius=6)
+        pygame.draw.rect(surf, border, surf.get_rect(), 1, border_radius=6)
+        self.window.blit(surf, rect.topleft)
+        font = settings.get_font(int(settings.FONT_SIZE * 0.95), bold=True)
+        txt = font.render(glyph, True, clr)
+        self.window.blit(txt, txt.get_rect(center=rect.center))
+        if enabled:
+            self._buttons.append((action, None, rect))
+
+    def _draw_header_pill(self, rect):
+        """Unified header: pager + name + edit + level/XP, all in one pill.
+
+        Left zone (60%): prev arrow, kingdom name + edit pencil, next arrow,
+        with a small ``N lands \u00b7 i/k`` subtitle line under the name.
+        Right zone (40%): kingdom level header + XP progress bar.
+        """
+        if not rect:
+            return
+        # Pill background.
+        bg = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(bg, (35, 29, 34, 200), bg.get_rect(), border_radius=10)
+        self.window.blit(bg, rect.topleft)
+        pygame.draw.rect(self.window, (132, 112, 78), rect, 1, border_radius=10)
+
+        if not self._kingdom:
+            return
+
+        kingdoms = self._kingdoms()
+        count = len(kingdoms)
+        idx = self._selected_kingdom_index()
+        name = self._kingdom.get('name') or f"Kingdom #{self._kingdom.get('id', '?')}"
+        lands_count = int(self._kingdom.get('lands_count', 0) or len(self._kingdom.get('land_ids') or []))
+        meta = f'{lands_count} land{"s" if lands_count != 1 else ""}'
+        if count > 1:
+            meta += f'  \u00b7  {idx + 1}/{count}'
+
+        # Vertical divider between left (name + pager) and right (level/XP).
+        split_x = rect.x + int(rect.w * 0.58)
+        pygame.draw.line(self.window, (90, 78, 60),
+                         (split_x, rect.y + 8), (split_x, rect.bottom - 8), 1)
+
+        # ── Left zone: pager + name + edit + subtitle ───────────────
+        left_rect = pygame.Rect(rect.x, rect.y, split_x - rect.x, rect.h)
+        arrow_w = max(28, int(rect.h * 0.55))
+        arrow_h = max(26, int(rect.h * 0.50))
+        arrow_y = rect.y + (rect.h - arrow_h) // 2
+        prev_rect = pygame.Rect(left_rect.x + 8, arrow_y, arrow_w, arrow_h)
+        next_rect = pygame.Rect(left_rect.right - arrow_w - 8, arrow_y, arrow_w, arrow_h)
+        # Always reserve the arrow area so the name region stays steady when
+        # the user only owns one kingdom; just don't make it interactive.
+        self._draw_pager_arrow(prev_rect, 'kingdom_prev', enabled=count > 1, glyph='\u2039')
+        self._draw_pager_arrow(next_rect, 'kingdom_next', enabled=count > 1, glyph='\u203a')
+
+        name_zone = pygame.Rect(prev_rect.right + 10, rect.y,
+                                next_rect.x - prev_rect.right - 20, rect.h)
+        # Title row: name (left-aligned in zone) + edit pencil immediately right.
+        edit_sz = self._edit_icon_size
+        edit_pad = 8
+        # Reserve room for the edit icon when measuring/clipping the name.
+        max_name_w = max(40, name_zone.w - edit_sz - edit_pad)
+        title_text = self._fit_text(name, self._title_font, max_name_w)
+        title_surf = self._title_font.render(title_text, True,
+                                             settings.LAND_DETAIL_TITLE_CLR)
+        title_y = rect.y + 6
+        self.window.blit(title_surf, (name_zone.x, title_y))
+
+        # Edit pencil (rename trigger), vertically aligned with the name.
+        rename_price = int((self._data or {}).get('rename_price_gold', 0) or 0)
+        can_rename = self._gold >= rename_price
+        edit_x = name_zone.x + title_surf.get_width() + edit_pad
+        edit_y = title_y + (title_surf.get_height() - edit_sz) // 2
+        edit_rect = pygame.Rect(edit_x, edit_y, edit_sz, edit_sz)
+        self._draw_rename_icon(edit_rect, enabled=can_rename, price=rename_price)
+
+        # Subtitle metadata.
+        meta_surf = self._tiny_font.render(meta, True,
+                                           settings.KINGDOM_CONFIG_DIM_CLR)
+        meta_y = title_y + title_surf.get_height() + 2
+        # Keep subtitle within the pill.
+        meta_y = min(meta_y, rect.bottom - meta_surf.get_height() - 6)
+        self.window.blit(meta_surf, (name_zone.x, meta_y))
+
+        # ── Right zone: level + XP bar ──────────────────────────────
+        right_rect = pygame.Rect(split_x + 1, rect.y, rect.right - split_x - 1, rect.h)
+        right_pad_x = 14
+        right_pad_y = 8
+        level = int(self._kingdom.get('level', 1) or 1)
+        max_level = int(self._kingdom.get('level_max', 50) or 50)
+        xp_into = int(self._kingdom.get('xp_into_level', 0) or 0)
+        xp_for_next = int(self._kingdom.get('xp_for_next_level', 0) or 0)
+        total_xp = int(self._kingdom.get('experience', 0) or 0)
+
+        # Spawn a level-up floater the first time we see ``level`` advance,
+        # mirroring the prior skills-panel behavior so users keep that feedback.
+        if self._last_seen_level is None:
+            self._last_seen_level = level
+        elif level > self._last_seen_level:
+            font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+            self._floating_text.add(FloatingText(
+                'Level Up!', (right_rect.x + 80, right_rect.y + 24),
+                color=settings.COLLECT_FLOAT_LEVEL_CLR,
+                duration_ms=settings.COLLECT_FLOAT_DURATION_MS * 2,
+                rise_px=settings.COLLECT_FLOAT_RISE_PX,
+                font=font,
+            ))
+            self._last_seen_level = level
+
+        header_label = (f'Kingdom Level {level}/{max_level}'
+                        if level < max_level else f'Kingdom Level {level} (MAX)')
+        level_font = settings.get_font(settings.KINGDOM_LEVEL_HEADER_FONT_SIZE, bold=True)
+        level_surf = level_font.render(header_label, True,
+                                       settings.KINGDOM_LEVEL_HEADER_CLR)
+        self.window.blit(level_surf, (right_rect.x + right_pad_x,
+                                      right_rect.y + right_pad_y))
+        # XP bar.
+        bar_y = right_rect.y + right_pad_y + level_surf.get_height() + 4
+        bar_rect = pygame.Rect(right_rect.x + right_pad_x, bar_y,
+                               right_rect.w - right_pad_x * 2,
+                               settings.KINGDOM_XP_BAR_H)
+        pygame.draw.rect(self.window, settings.KINGDOM_XP_BAR_TRACK_CLR,
+                         bar_rect, border_radius=4)
+        if level < max_level and xp_for_next > 0:
+            ratio = max(0.0, min(1.0, xp_into / float(xp_for_next)))
+            fill_w = int(bar_rect.w * ratio)
+            if fill_w > 0:
+                pygame.draw.rect(self.window, settings.KINGDOM_XP_BAR_FILL_CLR,
+                                 pygame.Rect(bar_rect.x, bar_rect.y, fill_w, bar_rect.h),
+                                 border_radius=4)
+            xp_label = f'{xp_into} / {xp_for_next} XP  (total {total_xp})'
+        else:
+            pygame.draw.rect(self.window, settings.KINGDOM_XP_BAR_FILL_CLR,
+                             bar_rect, border_radius=4)
+            xp_label = f'MAX  (total {total_xp} XP)'
+        pygame.draw.rect(self.window, settings.KINGDOM_XP_BAR_BORDER_CLR,
+                         bar_rect, 1, border_radius=4)
+        xp_surf = self._tiny_font.render(xp_label, True,
+                                         settings.KINGDOM_XP_BAR_TEXT_CLR)
+        # Keep xp label inside the pill bottom.
+        xp_y = min(bar_rect.bottom + 2,
+                   right_rect.bottom - xp_surf.get_height() - 4)
+        self.window.blit(xp_surf, (bar_rect.x, xp_y))
 
     def _catalog_items(self, cosmetic_type):
         items = []
@@ -740,65 +933,14 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
 
     def _draw_skills_panel(self, rect):
         self._draw_panel(rect, 'Kingdom Skills')
-        self._collect_btn_rect = None
         if not self._kingdom:
             return
 
-        # ── Level header + XP bar ────────────────────────────────────
-        level = int(self._kingdom.get('level', 1) or 1)
-        max_level = int(self._kingdom.get('level_max', 50) or 50)
-        xp_into = int(self._kingdom.get('xp_into_level', 0) or 0)
-        xp_for_next = int(self._kingdom.get('xp_for_next_level', 0) or 0)
-        total_xp = int(self._kingdom.get('experience', 0) or 0)
-
-        # Spawn a level-up floater the first time we see ``level`` advance.
-        if self._last_seen_level is None:
-            self._last_seen_level = level
-        elif level > self._last_seen_level:
-            font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
-            self._floating_text.add(FloatingText(
-                'Level Up!', (rect.x + 80, rect.y + 36),
-                color=settings.COLLECT_FLOAT_LEVEL_CLR,
-                duration_ms=settings.COLLECT_FLOAT_DURATION_MS * 2,
-                rise_px=settings.COLLECT_FLOAT_RISE_PX,
-                font=font,
-            ))
-            self._last_seen_level = level
-
-        header_y = rect.y + 36
-        header_label = (f'Kingdom Level {level}/{max_level}'
-                        if level < max_level else f'Kingdom Level {level} (MAX)')
-        header_surf = settings.get_font(
-            settings.KINGDOM_LEVEL_HEADER_FONT_SIZE, bold=True
-        ).render(header_label, True, settings.KINGDOM_LEVEL_HEADER_CLR)
-        self.window.blit(header_surf, (rect.x + 14, header_y))
-
-        # XP progress bar.
-        bar_y = header_y + header_surf.get_height() + 4
-        bar_rect = pygame.Rect(rect.x + 14, bar_y, rect.w - 28,
-                               settings.KINGDOM_XP_BAR_H)
-        pygame.draw.rect(self.window, settings.KINGDOM_XP_BAR_TRACK_CLR, bar_rect,
-                         border_radius=4)
-        if level < max_level and xp_for_next > 0:
-            ratio = max(0.0, min(1.0, xp_into / float(xp_for_next)))
-            fill_w = int(bar_rect.w * ratio)
-            if fill_w > 0:
-                fill_rect = pygame.Rect(bar_rect.x, bar_rect.y, fill_w, bar_rect.h)
-                pygame.draw.rect(self.window, settings.KINGDOM_XP_BAR_FILL_CLR,
-                                 fill_rect, border_radius=4)
-            xp_label = f'{xp_into} / {xp_for_next} XP  (total {total_xp})'
-        else:
-            pygame.draw.rect(self.window, settings.KINGDOM_XP_BAR_FILL_CLR,
-                             bar_rect, border_radius=4)
-            xp_label = f'MAX  (total {total_xp} XP)'
-        pygame.draw.rect(self.window, settings.KINGDOM_XP_BAR_BORDER_CLR, bar_rect,
-                         1, border_radius=4)
-        xp_surf = self._tiny_font.render(xp_label, True,
-                                         settings.KINGDOM_XP_BAR_TEXT_CLR)
-        self.window.blit(xp_surf, (bar_rect.x, bar_rect.bottom + 2))
+        # Level / XP have moved to the unified header pill; this card now
+        # focuses purely on the skill-point summary plus the skill rows.
 
         # ── Skill points summary ─────────────────────────────────────
-        sp_y = bar_rect.bottom + 2 + xp_surf.get_height() + 6
+        sp_y = rect.y + 40
         total = int(self._kingdom.get('skill_points_total', 0) or 0)
         spent = int(self._kingdom.get('skill_points_spent', 0) or 0)
         available = int(self._kingdom.get('skill_points_available', 0) or 0)
@@ -807,64 +949,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                                                 settings.KINGDOM_CONFIG_TEXT_CLR),
                          (rect.x + 14, sp_y))
 
-        # ── Vault widget ─────────────────────────────────────────────
-        pending = float(self._kingdom.get('pending_gold', 0) or 0)
-        default_cap = int((self._data or {}).get('vault_default_cap', 50) or 50)
-        vault_cap = int(self._kingdom.get('vault_cap') or 0)
-        if vault_cap <= 0:
-            vault_cap = default_cap
-        rate_per_hour = float(self._kingdom.get('gold_rate_per_hour', 0) or 0)
-        vault_y = sp_y + self._body_font.get_height() + 8
-        vault_bar_rect = pygame.Rect(rect.x + 14, vault_y, rect.w - 28 - 110,
-                                     settings.KINGDOM_VAULT_BAR_H)
-        pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_TRACK_CLR,
-                         vault_bar_rect, border_radius=4)
-        ratio = max(0.0, min(1.0, pending / float(vault_cap)))
-        if ratio >= 1.0:
-            fill_clr = settings.KINGDOM_VAULT_BAR_FULL_CLR
-        elif ratio >= settings.KINGDOM_VAULT_NEAR_FULL_RATIO:
-            fill_clr = settings.KINGDOM_VAULT_BAR_NEAR_CLR
-        else:
-            fill_clr = settings.KINGDOM_VAULT_BAR_FILL_CLR
-        if ratio > 0:
-            fill_w = max(2, int(vault_bar_rect.w * ratio))
-            pygame.draw.rect(self.window, fill_clr,
-                             pygame.Rect(vault_bar_rect.x, vault_bar_rect.y,
-                                         fill_w, vault_bar_rect.h),
-                             border_radius=4)
-        pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_BORDER_CLR,
-                         vault_bar_rect, 1, border_radius=4)
-        vault_label = (f'Vault: {int(pending)} / {vault_cap}   '
-                       f'({rate_per_hour:.1f}/hr)')
-        vault_surf = self._tiny_font.render(vault_label, True,
-                                            settings.KINGDOM_CONFIG_TEXT_CLR)
-        self.window.blit(vault_surf, (vault_bar_rect.x,
-                                      vault_bar_rect.bottom + 2))
-        collect_rect = pygame.Rect(vault_bar_rect.right + 10,
-                                   vault_bar_rect.y - 4, 96, 30)
-        self._collect_btn_rect = collect_rect
-        self._draw_button(collect_rect, 'Collect', 'collect_kingdom_gold', None,
-                          disabled=int(pending) <= 0)
-
-        # Sanctuary badge for active core_protection.
-        if self._kingdom.get('core_protection_active'):
-            badge = self._tiny_font.render('Sanctuary active',
-                                           True, settings.KINGDOM_CONFIG_GOOD_CLR)
-            self.window.blit(badge, (vault_bar_rect.x,
-                                     vault_bar_rect.bottom + 2 + vault_surf.get_height() + 2))
-
-        # ── Effective gold rate line ─────────────────────────────────
-        raw_rate = float(self._kingdom.get('raw_gold_rate', 0) or 0)
-        effective_rate = float(self._kingdom.get('effective_gold_rate', raw_rate) or raw_rate)
-        gain = effective_rate - raw_rate
-        gold_line = f'Gold: {effective_rate:.1f}/hr (base {raw_rate:.1f}, +{gain:.1f})'
-        gold_surf = self._tiny_font.render(gold_line, True,
-                                           settings.KINGDOM_CONFIG_HIGHLIGHT)
-        gold_y = vault_bar_rect.bottom + 2 + vault_surf.get_height() + 22
-        self.window.blit(gold_surf, (rect.x + 14, gold_y))
-
         # ── Skill rows (data-driven) ─────────────────────────────────
-        y = gold_y + gold_surf.get_height() + 8
+        y = sp_y + self._body_font.get_height() + 10
         skills = self._kingdom.get('skills') or {}
         row_step = settings.KINGDOM_CONFIG_SKILL_ROW_H
         if skills:
@@ -901,6 +987,104 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._draw_button(btn, label, 'upgrade_skill', key, disabled=disabled)
             y += row_step
 
+    def _draw_vault_panel(self, rect):
+        """Standalone Gold Vault card.
+
+        Pending gold and the per-hour rate displayed here are computed lazily
+        on every ``/kingdom/config`` fetch (see ``serialize_kingdom_config``):
+        the server applies elapsed-time accrual against the vault cap when it
+        serializes the kingdom, so the values are always fresh as of the
+        most recent fetch \u2014 no background ticker is required.
+        """
+        self._draw_panel(rect, 'Gold Vault')
+        self._collect_btn_rect = None
+        if not self._kingdom:
+            return
+
+        pending = float(self._kingdom.get('pending_gold', 0) or 0)
+        default_cap = int((self._data or {}).get('vault_default_cap', 50) or 50)
+        vault_cap = int(self._kingdom.get('vault_cap') or 0)
+        if vault_cap <= 0:
+            vault_cap = default_cap
+        rate_per_hour = float(self._kingdom.get('gold_rate_per_hour', 0) or 0)
+
+        # Coin/vault icon on the left of the card.
+        icon = self._icons.get('gold_vault')
+        icon_sz = min(48, rect.h - 60)
+        icon_pad_x = rect.x + 14
+        body_x = icon_pad_x
+        if icon and icon_sz > 0:
+            self.window.blit(
+                pygame.transform.smoothscale(icon, (icon_sz, icon_sz)),
+                (icon_pad_x, rect.y + 44))
+            body_x = icon_pad_x + icon_sz + 12
+
+        # Vault progress bar (pending / cap), with collect button on the right.
+        collect_w = 96
+        bar_y = rect.y + 50
+        bar_rect = pygame.Rect(body_x, bar_y,
+                               rect.right - body_x - collect_w - 22,
+                               settings.KINGDOM_VAULT_BAR_H)
+        pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_TRACK_CLR,
+                         bar_rect, border_radius=4)
+        ratio = max(0.0, min(1.0, pending / float(vault_cap))) if vault_cap > 0 else 0.0
+        if ratio >= 1.0:
+            fill_clr = settings.KINGDOM_VAULT_BAR_FULL_CLR
+        elif ratio >= settings.KINGDOM_VAULT_NEAR_FULL_RATIO:
+            fill_clr = settings.KINGDOM_VAULT_BAR_NEAR_CLR
+        else:
+            fill_clr = settings.KINGDOM_VAULT_BAR_FILL_CLR
+        if ratio > 0:
+            fill_w = max(2, int(bar_rect.w * ratio))
+            pygame.draw.rect(self.window, fill_clr,
+                             pygame.Rect(bar_rect.x, bar_rect.y,
+                                         fill_w, bar_rect.h),
+                             border_radius=4)
+        pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_BORDER_CLR,
+                         bar_rect, 1, border_radius=4)
+        vault_label = f'{int(pending)} / {vault_cap} gold'
+        vault_surf = self._small_font.render(vault_label, True,
+                                             settings.KINGDOM_CONFIG_TEXT_CLR)
+        self.window.blit(vault_surf, (bar_rect.x, bar_rect.bottom + 4))
+
+        # Production rate (effective and base).
+        raw_rate = float(self._kingdom.get('raw_gold_rate', 0) or 0)
+        effective_rate = float(self._kingdom.get('effective_gold_rate', raw_rate) or raw_rate)
+        # Prefer the dedicated gold_rate_per_hour (skill-multiplied) when set,
+        # falling back to the kingdom-wide effective rate.
+        live_rate = rate_per_hour if rate_per_hour > 0 else effective_rate
+        gain = max(0.0, live_rate - raw_rate)
+        rate_y = bar_rect.bottom + 4 + vault_surf.get_height() + 2
+        rate_base = self._tiny_font.render(
+            f'Production: {raw_rate:.1f} gold/hr',
+            True,
+            settings.KINGDOM_CONFIG_HIGHLIGHT,
+        )
+        rate_bonus = self._tiny_font.render(
+            f' +{gain:.1f}',
+            True,
+            settings.KINGDOM_CONFIG_GOOD_CLR,
+        )
+        self.window.blit(rate_base, (bar_rect.x, rate_y))
+        self.window.blit(rate_bonus, (bar_rect.x + rate_base.get_width(), rate_y))
+        rate_line_h = max(rate_base.get_height(), rate_bonus.get_height())
+
+        # Collect button (right-aligned).
+        collect_rect = pygame.Rect(bar_rect.right + 12, bar_rect.y - 4,
+                                   collect_w, 30)
+        self._collect_btn_rect = collect_rect
+        self._draw_button(collect_rect, 'Collect', 'collect_kingdom_gold', None,
+                          disabled=int(pending) <= 0)
+
+        # Sanctuary badge for active core_protection.
+        if self._kingdom.get('core_protection_active'):
+            badge_y = (bar_rect.bottom + 4
+                       + vault_surf.get_height() + 2
+                       + rate_line_h + 2)
+            badge = self._tiny_font.render('Sanctuary active',
+                                           True, settings.KINGDOM_CONFIG_GOOD_CLR)
+            self.window.blit(badge, (bar_rect.x, badge_y))
+
     def _layout_rects(self):
         self._box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
         xsz = int(0.028 * _SH)
@@ -913,8 +1097,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         )
         content_x = _BOX_X + _BOX_PAD
         header_y = _BOX_Y + _BOX_PAD
-        selector_h = int(0.046 * _SH)
-        content_top = header_y + int(0.078 * _SH)
+        # Unified header pill is a two-row widget: name + edit + pager on the
+        # left, kingdom level + XP bar on the right.  Tall enough for both.
+        header_h = max(int(0.090 * _SH), int(0.105 * _SH))
+        content_top = header_y + header_h + max(6, int(0.010 * _SH))
         content_bottom = _BOX_BOTTOM - _BOX_PAD
         gap = max(8, int(0.014 * _SH))
         left_w = min(settings.KINGDOM_CONFIG_LEFT_W, int(_BOX_W * 0.43))
@@ -923,13 +1109,14 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         content_h = max(1, content_bottom - content_top)
         shield_h = min(settings.KINGDOM_CONFIG_SHIELD_H, max(92, int(content_h * 0.24)))
         card_h = max(82, (content_h - shield_h - gap * 3) // 3)
-        title_w = int(0.22 * _SW)
-        rename_w = int(0.12 * _SW)
-        selector_x = content_x + title_w + gap
-        rename_x = _BOX_X + _BOX_W - _BOX_PAD - xsz - gap - rename_w
-        selector_w = max(220, rename_x - gap - selector_x)
-        selector_rect = pygame.Rect(selector_x, header_y, selector_w, selector_h)
-        rename_rect = pygame.Rect(rename_x, header_y, rename_w, selector_h)
+        # Right column splits into a dedicated Gold Vault card on top and the
+        # Skills/Level panel below.
+        vault_h = max(120, int(content_h * 0.22))
+        # Header pill spans the content row, leaving clearance for the X.
+        header_right = _BOX_X + _BOX_W - _BOX_PAD - xsz - xmargin
+        header_rect = pygame.Rect(content_x, header_y,
+                                  max(320, header_right - content_x),
+                                  header_h)
         return {
             'header_y': header_y,
             'content_x': content_x,
@@ -941,8 +1128,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             'right_w': right_w,
             'shield_h': shield_h,
             'card_h': card_h,
-            'selector': selector_rect,
-            'rename': rename_rect,
+            'vault_h': vault_h,
+            'header': header_rect,
         }
 
     def _draw_rename_modal(self):
@@ -1007,16 +1194,11 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._buttons = []
         self._cosmetic_scroll_areas = {}
         self._collect_btn_rect = None
+        self._rename_icon_rect = None
         layout = self._layout_rects()
         _draw_config_frame(self.window, self._box_rect)
-        title = self._title_font.render('Kingdom Config', True, settings.LAND_DETAIL_TITLE_CLR)
-        self.window.blit(title, title.get_rect(midleft=(layout['content_x'],
-                                   layout['selector'].centery)))
-        self._draw_kingdom_selector(layout['selector'])
-        rename_price = int((self._data or {}).get('rename_price_gold', 0) or 0)
-        rename_label = 'Rename' if rename_price <= 0 else f'Rename {rename_price}g'
-        self._draw_button(layout['rename'], rename_label, 'rename_start', None,
-                  disabled=not self._kingdom or self._gold < rename_price)
+        # Unified header pill: pager + name + edit + level/XP in one widget.
+        self._draw_header_pill(layout['header'])
         self._draw_close_x_button()
 
         if self._loading:
@@ -1052,8 +1234,15 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
 
         right_x = layout['right_x']
         right_w = layout['right_w']
-        right_h = layout['content_bottom'] - top
-        self._draw_skills_panel(pygame.Rect(right_x, top, right_w, right_h))
+        right_top = top
+        right_bottom = layout['content_bottom']
+        vault_h = layout['vault_h']
+        gap_v = layout['gap']
+        vault_rect = pygame.Rect(right_x, right_top, right_w, vault_h)
+        self._draw_vault_panel(vault_rect)
+        skills_y = vault_rect.bottom + gap_v
+        skills_h = max(120, right_bottom - skills_y)
+        self._draw_skills_panel(pygame.Rect(right_x, skills_y, right_w, skills_h))
 
         if self._message and not getattr(self.state, 'message_lines', None):
             surf = self._small_font.render(self._message, True, settings.KINGDOM_CONFIG_GOOD_CLR)

@@ -280,6 +280,22 @@ class TestKingdomConfigRoutes:
         assert kingdom.pending_gold == pending_before
         assert kingdom.last_gold_collection_at == last_before
 
+    def test_serialize_kingdom_config_emits_pending_and_rate_aliases(self, db, two_users):
+        """Client UI consumes ``pending_gold`` and ``gold_rate_per_hour`` keys."""
+        u1, _ = two_users
+        _add_land(db, 0, 0, owner_id=u1.id, gold_rate=20.0)
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+        kingdom.pending_gold = 4.0
+        kingdom.last_gold_collection_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.session.commit()
+
+        payload = serialize_kingdom_config(kingdom)
+
+        assert 'pending_gold' in payload
+        assert 'gold_rate_per_hour' in payload
+        assert payload['pending_gold'] == payload['vault_pending']
+        assert payload['gold_rate_per_hour'] == payload['vault_rate_per_hour']
+
     def test_conquer_game_does_not_serialize_defender_kingdom_skills(self, db, two_users):
         """Conquer battles should not expose passive kingdom skills as battle info."""
         u1, _ = two_users
