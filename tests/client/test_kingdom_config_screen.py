@@ -132,6 +132,7 @@ class TestKingdomConfigLoading:
 
         assert screen._kingdom['id'] == 4
         assert screen._gold == 321
+        assert screen.state.user_dict['gold'] == 321
         assert screen._quote['price_gold'] == 108
         assert calls[0][1].endswith('/kingdom/config?land_id=12')
         assert calls[1][1].endswith('/kingdom/config/4/shield/quote')
@@ -159,6 +160,7 @@ class TestKingdomConfigLoading:
         assert data['success'] is True
         assert screen._kingdom['skill_points_available'] == 1
         assert screen._gold == 77
+        assert screen.state.user_dict['gold'] == 77
 
 
 class TestKingdomConfigInteractions:
@@ -305,6 +307,7 @@ class TestKingdomConfigInteractions:
         assert calls[0][0].endswith('/kingdom/config/4/rename')
         assert calls[0][1] == {'name': 'High Garden'}
         assert screen._gold == 350
+        assert screen.state.user_dict['gold'] == 350
         assert screen._rename_dialog is None
 
     def test_rename_modal_accepts_textinput_after_keydown(self):
@@ -359,6 +362,19 @@ class TestKingdomConfigInteractions:
 
         assert '-5% shield cost' in text
         assert '-10% shield cost' in text
+
+    def test_skill_effect_text_gold_vault_uses_default_cap_at_level_zero(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._data = {'vault_default_cap': 50}
+
+        text = KingdomConfigScreen._skill_effect_text(screen, 'gold_vault', {
+            'level': 0,
+            'max_level': 5,
+            'effect_values': [100, 250, 500, 1000, 2000],
+        })
+
+        assert 'Current: cap 50' in text
+        assert 'Next: cap 100' in text
 
     def test_render_registers_skill_and_shield_actions(self):
         KingdomConfigScreen, screen = _screen_base()

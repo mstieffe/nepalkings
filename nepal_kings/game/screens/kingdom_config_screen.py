@@ -103,6 +103,15 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         if hasattr(self.state, 'set_msg'):
             self.state.set_msg(self._message)
 
+    def _sync_gold(self, gold_value):
+        try:
+            gold_int = int(gold_value or 0)
+        except (TypeError, ValueError):
+            gold_int = 0
+        self._gold = gold_int
+        if getattr(self.state, 'user_dict', None) is not None:
+            self.state.user_dict['gold'] = gold_int
+
     def _fetch_config(self):
         self._loading = True
         land_id = getattr(self.state, 'kingdom_config_land_id', None)
@@ -117,7 +126,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 return
             self._data = data
             self._catalog = data.get('catalog') or {}
-            self._gold = data.get('gold', 0)
+            self._sync_gold(data.get('gold', 0))
             selected_id = getattr(self.state, 'kingdom_config_id', None) or data.get('selected_kingdom_id')
             kingdoms = data.get('kingdoms') or []
             self._kingdom = None
@@ -170,7 +179,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 if data.get('kingdom'):
                     self._kingdom = data['kingdom']
                 if 'gold' in data:
-                    self._gold = data['gold']
+                    self._sync_gold(data['gold'])
                 return data
             self._set_msg(data.get('message', 'Action failed'))
         except Exception as exc:
@@ -213,11 +222,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return
         collected = int(data.get('collected', 0) or 0)
         if 'gold' in data:
-            self._gold = int(data['gold'])
+            self._sync_gold(data['gold'])
         elif 'total_gold' in data:
-            self._gold = int(data['total_gold'])
-        if getattr(self.state, 'user_dict', None) is not None:
-            self.state.user_dict['gold'] = self._gold
+            self._sync_gold(data['total_gold'])
         if self._kingdom is not None:
             if 'pending_gold' in data:
                 self._kingdom['pending_gold'] = float(data.get('pending_gold') or 0.0)
@@ -543,8 +550,11 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             current_text = f'-{int(round(float(current) * 100))}% shield cost'
             next_text = f'-{int(round(float(next_value) * 100))}% shield cost'
         elif key == 'gold_vault':
-            current_text = f'cap {int(current)}'
-            next_text = f'cap {int(next_value)}'
+            default_cap = int((self._data or {}).get('vault_default_cap', 50) or 50)
+            current_cap = int(current) if level > 0 else default_cap
+            next_cap = int(next_value) if level < max_level else current_cap
+            current_text = f'cap {current_cap}'
+            next_text = f'cap {next_cap}'
         elif key == 'core_protection':
             current_text = f'protect {int(current)} land' + ('s' if int(current) != 1 else '')
             next_text = f'protect {int(next_value)} land' + ('s' if int(next_value) != 1 else '')
@@ -799,10 +809,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
 
         # ── Vault widget ─────────────────────────────────────────────
         pending = float(self._kingdom.get('pending_gold', 0) or 0)
-        vault_cap = int(self._kingdom.get('vault_cap',
-                                          settings.KINGDOM_VAULT_NEAR_FULL_RATIO and 0) or 0)
+        default_cap = int((self._data or {}).get('vault_default_cap', 50) or 50)
+        vault_cap = int(self._kingdom.get('vault_cap') or 0)
         if vault_cap <= 0:
-            vault_cap = 50
+            vault_cap = default_cap
         rate_per_hour = float(self._kingdom.get('gold_rate_per_hour', 0) or 0)
         vault_y = sp_y + self._body_font.get_height() + 8
         vault_bar_rect = pygame.Rect(rect.x + 14, vault_y, rect.w - 28 - 110,
