@@ -1093,6 +1093,7 @@ class KingdomNotification(db.Model):
     def serialize(self):
         return {
             'id': self.id,
+            'source': 'kingdom_notification',
             'kind': self.kind,
             'kingdom_id': self.kingdom_id,
             'payload': self.payload or {},

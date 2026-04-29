@@ -241,7 +241,12 @@ class LandDetailBox:
                 ('land_cd',
                  f'Land protection active: {_format_cooldown_text(land_cooldown)} remaining'))
         shield_remaining = getattr(tile, 'kingdom_shield_remaining', 0) or 0
-        if shield_remaining > 0:
+        shield_reason = getattr(tile, 'kingdom_shield_reason', None)
+        core_protected = shield_reason == 'core_protection' or shield_remaining < 0
+        if core_protected:
+            self._lines.append(
+                ('shield', 'Core Protection active: cannot be conquered'))
+        elif shield_remaining > 0:
             self._lines.append(
                 ('shield',
                  f'Kingdom shield active: {_format_cooldown_text(shield_remaining)} remaining'))
@@ -271,7 +276,9 @@ class LandDetailBox:
         btn_count = len(button_actions)
         button_gap = 8
         shield_remaining = getattr(tile, 'kingdom_shield_remaining', 0) or 0
-        if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0) and not tile.is_mine:
+        shield_reason = getattr(tile, 'kingdom_shield_reason', None)
+        core_protected = shield_reason == 'core_protection' or shield_remaining < 0
+        if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0 or core_protected) and not tile.is_mine:
             content_h += int(line_h * 0.8)  # cooldown sub-text
         content_h += settings.LAND_DETAIL_BTN_H * btn_count
         content_h += button_gap * max(0, btn_count - 1)
@@ -294,7 +301,9 @@ class LandDetailBox:
         btn_x = self._box_rect.centerx - settings.LAND_DETAIL_BTN_W // 2
         extra_after_conquer = 0
         shield_remaining = getattr(tile, 'kingdom_shield_remaining', 0) or 0
-        if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0) and not tile.is_mine:
+        shield_reason = getattr(tile, 'kingdom_shield_reason', None)
+        core_protected = shield_reason == 'core_protection' or shield_remaining < 0
+        if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0 or core_protected) and not tile.is_mine:
             extra_after_conquer = int(self._body_font.get_height() * 0.8)
         button_stack_h = settings.LAND_DETAIL_BTN_H * btn_count + button_gap * max(0, btn_count - 1)
         btn_y = self._box_rect.bottom - pad - button_stack_h - extra_after_conquer
@@ -309,10 +318,12 @@ class LandDetailBox:
         else:
             # Player cooldown blocks all conquer starts; land cooldown does not
             # block opening conquer setup but is shown as guidance.
-            disabled = cooldown > 0 or shield_remaining > 0
+            disabled = cooldown > 0 or shield_remaining > 0 or core_protected
             btn = _LandButton(self.window, btn_x, btn_y, 'Conquer', disabled=disabled)
             if disabled:
-                if shield_remaining > 0:
+                if core_protected:
+                    btn.sub_text = 'Core Protection active'
+                elif shield_remaining > 0:
                     btn.sub_text = f'Shield: {_format_cooldown_text(shield_remaining)}'
                 else:
                     btn.sub_text = f'Your cooldown: {_format_cooldown_text(cooldown)}'

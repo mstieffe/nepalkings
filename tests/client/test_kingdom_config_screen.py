@@ -222,6 +222,38 @@ class TestKingdomConfigInteractions:
         assert screen.state.kingdom_config_id == 9
         assert quote_calls == [True]
 
+    def test_collect_kingdom_gold_updates_local_and_shared_gold(self, monkeypatch):
+        import game.screens.kingdom_config_screen as module
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._kingdom['pending_gold'] = 12.0
+        screen._kingdom['vault_cap'] = 50
+        screen._gold = 100
+        screen.state.user_dict['gold'] = 100
+        screen._collect_btn_rect = pygame.Rect(10, 10, 80, 30)
+        quote_calls = []
+
+        monkeypatch.setattr(
+            module.requests,
+            'post',
+            lambda url, json=None, timeout=0: _Response({
+                'success': True,
+                'collected': 12,
+                'pending_gold': 0.5,
+                'vault_cap': 50,
+                'gold': 112,
+            }),
+        )
+        monkeypatch.setattr(KingdomConfigScreen, '_fetch_quote',
+                            lambda self, silent=False: quote_calls.append(silent))
+
+        KingdomConfigScreen._collect_kingdom_gold(screen)
+
+        assert screen._gold == 112
+        assert screen.state.user_dict['gold'] == 112
+        assert screen._kingdom['pending_gold'] == 0.5
+        assert quote_calls == [True]
+
     def test_cosmetic_section_scrolls_all_catalog_items(self):
         from config import settings
         KingdomConfigScreen, screen = _screen_base()

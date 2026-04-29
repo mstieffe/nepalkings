@@ -3,6 +3,8 @@
 ## Dropping Tables on Startup
 
 By default, the server **does NOT drop tables** on startup to preserve your data.
+Schema changes are handled by an intentional reset/recreate flow; the app does
+not maintain in-place migration helpers for old local databases.
 
 ### When to Reset the Database
 
@@ -62,12 +64,15 @@ SQLite database locking errors typically happen because:
    - `pool_pre_ping`: Verifies connections before use
    - `pool_recycle`: Refreshes connections every 300 seconds
 
-3. **Optional Drop**: Only drop tables when explicitly requested via `DROP_TABLES_ON_STARTUP`
+3. **Explicit Reset**: Schema updates require a deliberate reset via
+   `DROP_TABLES_ON_STARTUP=True` or by deleting the DB file. No in-place
+   migration/backfill code is run at startup.
 
 ### Best Practices
 
 - **Development**: Use `DROP_TABLES_ON_STARTUP=True` when testing schema changes
-- **Production**: Always set to `False` to preserve data
+- **Production/Test deployment reset**: run the reset once intentionally, then set
+   `DROP_TABLES_ON_STARTUP=False` before normal use.
 - **Kill Old Processes**: Before resetting database:
   ```bash
   killall python3

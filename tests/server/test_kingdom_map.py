@@ -5,7 +5,8 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
-from models import db as _db, User, Land, Kingdom as KingdomModel
+from models import (db as _db, User, Land, Kingdom as KingdomModel,
+                    KingdomSkillAllocation)
 import server_settings as config
 
 
@@ -213,6 +214,38 @@ class TestKingdomMap:
         assert row['owner_style']['flag_key'] == 'flag_plain'
         assert row['owner_style']['border_key'] == 'border_simple_gold'
         assert row['owner_style']['surface_key'] == 'surface_plain'
+
+    def test_core_protected_opponent_land_is_marked_shielded(self, client, db,
+                                                             two_users,
+                                                             auth_headers_user1):
+        """Map payload must let the client disable Conquer before setup."""
+        _u1, u2 = two_users
+        kingdom = KingdomModel(
+            owner_user_id=u2.id,
+            name='Sanctuary',
+            flag_key='flag_plain',
+            border_key='border_simple_gold',
+            surface_key='surface_plain',
+        )
+        db.session.add(kingdom)
+        db.session.commit()
+        land = _add_land(db, 0, 0, owner_id=u2.id)
+        land.kingdom_id = kingdom.id
+        db.session.add(KingdomSkillAllocation(
+            kingdom_id=kingdom.id,
+            skill_key='core_protection',
+            level=1,
+        ))
+        db.session.commit()
+
+        rv = client.get('/kingdom/map', headers=auth_headers_user1)
+        assert rv.status_code == 200
+        row = rv.get_json()['lands'][0]
+
+        assert row['id'] == land.id
+        assert row['kingdom_is_shielded'] is True
+        assert row['kingdom_shield_reason'] == 'core_protection'
+        assert row['kingdom_shield_remaining'] == -1
 
     def test_requires_auth(self, client):
         """Endpoint requires authentication."""

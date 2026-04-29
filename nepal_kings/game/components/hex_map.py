@@ -116,7 +116,8 @@ class HexTile:
         'owner', 'owner_style', 'is_mine', 'defence_incomplete',
         'kingdom_component_id', 'kingdom_component_size', 'kingdom_level',
         'kingdom_tier_name', 'kingdom_bonuses', 'kingdom_name',
-        'kingdom_id', 'kingdom_shield_remaining', 'kingdom_is_shielded',
+        'kingdom_id', 'kingdom_shield_remaining', 'kingdom_shield_reason',
+        'kingdom_is_shielded',
         'conquer_cooldown_remaining', 'cx', 'cy',
     )
 
@@ -140,6 +141,7 @@ class HexTile:
         self.kingdom_name = land_dict.get('kingdom_name')
         self.kingdom_id = land_dict.get('kingdom_id')
         self.kingdom_shield_remaining = land_dict.get('kingdom_shield_remaining', 0) or 0
+        self.kingdom_shield_reason = land_dict.get('kingdom_shield_reason')
         self.kingdom_is_shielded = bool(land_dict.get('kingdom_is_shielded', False))
         self.conquer_cooldown_remaining = land_dict.get(
             'conquer_cooldown_remaining', 0)
@@ -625,7 +627,7 @@ class HexMap:
             by = int(scy - sz * 0.65)
             self.window.blit(b_icon, (bx, by))
 
-        if tile.kingdom_is_shielded and tile.kingdom_shield_remaining > 0 and sz > 24:
+        if tile.kingdom_is_shielded and sz > 24:
             self._draw_shield_badge(tile, scx, scy, sz)
 
     def _kingdom_badges(self):
@@ -728,6 +730,8 @@ class HexMap:
             self.window.blit(badge, br)
 
     def _format_countdown(self, seconds):
+        if int(seconds or 0) < 0:
+            return 'Core'
         seconds = max(0, int(seconds or 0))
         if seconds >= 3600:
             return f'{seconds // 3600}h'

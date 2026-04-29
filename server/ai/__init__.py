@@ -32,7 +32,7 @@ def init_ai_users():
     for ai_name in settings.AI_USERNAMES:
         existing = User.query.filter_by(username=ai_name).first()
         if existing:
-            # Ensure the is_ai flag is set (for migration from older versions)
+            # Keep existing service accounts consistent across restarts.
             if not existing.is_ai:
                 existing.is_ai = True
                 db.session.commit()

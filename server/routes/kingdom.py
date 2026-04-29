@@ -131,10 +131,12 @@ def collect_kingdom_gold_route(kingdom_id):
     db.session.commit()
 
     return jsonify({
+        'success': True,
         'kingdom_id': kingdom_row.id,
         'collected': int(collected),
         'pending_gold': float(kingdom_row.pending_gold or 0.0),
         'vault_cap': int(cap),
+        'gold': int(gold_after),
         'total_gold': int(gold_after),
         'kingdom': summarize_user_kingdom(user.id, None),
     })
@@ -175,8 +177,10 @@ def collect_gold_all_route():
     db.session.commit()
 
     return jsonify({
+        'success': True,
         'collected_total': total,
         'vault_cap_total': cap_total,
+        'gold': int(user.gold or 0),
         'total_gold': int(user.gold or 0),
         'kingdoms': breakdown,
         'kingdom': summarize_user_kingdom(user.id, None),
@@ -631,7 +635,7 @@ def get_kingdom_map():
     """
     from kingdom_service import (check_defence_incomplete, compute_owned_land_components,
                                  describe_kingdom_bonuses, effective_gold_rate_for_lands,
-                                 kingdom_skill_bonuses,
+                                 kingdom_shield_block_reason, kingdom_skill_bonuses,
                                  reconcile_all_kingdoms, serialize_kingdom_config,
                                  summarize_user_kingdom)
 
@@ -677,11 +681,10 @@ def get_kingdom_map():
         }))
         persistent_kingdom = kingdoms_by_id.get(land.kingdom_id)
         shield_remaining = 0
-        if persistent_kingdom and persistent_kingdom.shield_until:
-            shield_remaining = max(
-                0,
-                int((persistent_kingdom.shield_until - _utcnow()).total_seconds()),
-            )
+        shield_reason = None
+        if persistent_kingdom:
+            shield_remaining, _shield_kingdom, shield_reason = kingdom_shield_block_reason(
+                land, now=_utcnow())
         legacy_bonuses = dict(land_dict.get('kingdom_bonuses') or {})
         legacy_bonuses.update(kingdom_skill_bonuses(persistent_kingdom))
         land_dict['kingdom_id'] = land.kingdom_id
@@ -696,7 +699,8 @@ def get_kingdom_map():
             if persistent_kingdom and persistent_kingdom.shield_until else None
         )
         land_dict['kingdom_shield_remaining'] = shield_remaining
-        land_dict['kingdom_is_shielded'] = shield_remaining > 0
+        land_dict['kingdom_shield_reason'] = shield_reason
+        land_dict['kingdom_is_shielded'] = bool(shield_reason)
         if land.owner_user_id:
             land_dict['owner_style'] = (
                 persistent_kingdom.serialize_style()
@@ -4442,6 +4446,7 @@ def _serialize_attack_activity(log, role=None):
     attacker = db.session.get(User, log.attacker_user_id)
     defender = db.session.get(User, log.defender_user_id) if log.defender_user_id else None
     entry = log.serialize()
+    entry['source'] = 'attack_log'
     entry['land_col'] = land.col if land else None
     entry['land_row'] = land.row if land else None
     entry['attacker_username'] = attacker.username if attacker else None
@@ -4526,28 +4531,42 @@ def kingdom_notifications():
 def kingdom_notifications_mark_seen():
     """Mark kingdom notifications as seen.
 
-    Accepts both ``LandAttackLog`` IDs and ``KingdomNotification`` IDs. Each
-    ID is silently no-op'd if not owned by the caller.
+    Prefer typed ID lists so unrelated ``LandAttackLog`` and
+    ``KingdomNotification`` rows with the same numeric ID cannot accidentally
+    mark each other.  The legacy ``notification_ids`` list is still accepted
+    for older clients.
     """
     from models import KingdomNotification
 
     data = request.json or {}
-    notification_ids = data.get('notification_ids', [])
-
-    if not notification_ids or not isinstance(notification_ids, list):
-        return jsonify({'success': False,
-                        'message': 'notification_ids is required'}), 400
+    typed_payload = ('attack_log_ids' in data or 'kingdom_notification_ids' in data)
+    if typed_payload:
+        attack_log_ids = data.get('attack_log_ids') or []
+        kingdom_notification_ids = data.get('kingdom_notification_ids') or []
+        if not isinstance(attack_log_ids, list) or not isinstance(kingdom_notification_ids, list):
+            return jsonify({'success': False,
+                            'message': 'typed notification IDs must be lists'}), 400
+        if not attack_log_ids and not kingdom_notification_ids:
+            return jsonify({'success': False,
+                            'message': 'at least one notification ID is required'}), 400
+    else:
+        notification_ids = data.get('notification_ids', [])
+        if not notification_ids or not isinstance(notification_ids, list):
+            return jsonify({'success': False,
+                            'message': 'notification_ids is required'}), 400
+        attack_log_ids = notification_ids
+        kingdom_notification_ids = notification_ids
 
     attacker_updated = LandAttackLog.query.filter(
-        LandAttackLog.id.in_(notification_ids),
+        LandAttackLog.id.in_(attack_log_ids),
         LandAttackLog.attacker_user_id == g.user_id,
     ).update({'seen_by_attacker': True}, synchronize_session='fetch')
     defender_updated = LandAttackLog.query.filter(
-        LandAttackLog.id.in_(notification_ids),
+        LandAttackLog.id.in_(attack_log_ids),
         LandAttackLog.defender_user_id == g.user_id,
     ).update({'seen_by_defender': True}, synchronize_session='fetch')
     kingdom_updated = KingdomNotification.query.filter(
-        KingdomNotification.id.in_(notification_ids),
+        KingdomNotification.id.in_(kingdom_notification_ids),
         KingdomNotification.user_id == g.user_id,
     ).update({'seen': True}, synchronize_session='fetch')
 

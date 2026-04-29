@@ -4,7 +4,7 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 
-from models import db, User, Land, LandAttackLog
+from models import db, User, Land, LandAttackLog, KingdomNotification
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -218,6 +218,36 @@ class TestUnifiedKingdomNotifications:
             assert resp.get_json()['marked'] == 2
             assert db.session.get(LandAttackLog, incoming.id).seen_by_defender is True
             assert db.session.get(LandAttackLog, outgoing.id).seen_by_attacker is True
+
+    def test_typed_mark_seen_avoids_attack_and_kingdom_id_collision(self, app, db):
+        """Typed payloads prevent same numeric IDs in different tables colliding."""
+        with app.app_context():
+            current = _make_user(db, 'current')
+            rival = _make_user(db, 'rival')
+            land = _make_land(db, owner_user_id=current.id)
+            attack_log = _make_attack_log(db, land, rival, current, result='defender_won')
+            kingdom_notif = KingdomNotification(
+                user_id=current.id,
+                kind='level_up',
+                kingdom_id=None,
+                payload={'new_level': 2},
+            )
+            db.session.add(kingdom_notif)
+            db.session.commit()
+
+            assert attack_log.id == kingdom_notif.id
+            client = app.test_client()
+            resp = client.post(
+                '/kingdom/notifications/mark_seen',
+                json={'attack_log_ids': [attack_log.id],
+                      'kingdom_notification_ids': []},
+                headers=_auth_headers(app, current),
+            )
+
+            assert resp.status_code == 200
+            assert resp.get_json()['marked'] == 1
+            assert db.session.get(LandAttackLog, attack_log.id).seen_by_defender is True
+            assert db.session.get(KingdomNotification, kingdom_notif.id).seen is False
 
 
 # ═════════════════════════════════════════════════════════════════════════════

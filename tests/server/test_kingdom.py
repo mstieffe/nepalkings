@@ -51,7 +51,9 @@ class TestCollectKingdomGold:
                              headers=auth_headers_user1)
         assert rv.status_code == 200
         data = rv.get_json()
+        assert data['success'] is True
         assert data['collected'] == 6
+        assert data['gold'] == 106
         assert data['total_gold'] == 106
         assert data['pending_gold'] == 0
 
@@ -97,7 +99,9 @@ class TestCollectGoldAll:
                              headers=auth_headers_user1)
         assert rv.status_code == 200
         data = rv.get_json()
+        assert data['success'] is True
         assert data['collected_total'] == 6
+        assert data['gold'] == 6
         assert data['total_gold'] == 6
         assert len(data['kingdoms']) == 2
         assert sorted(k['collected'] for k in data['kingdoms']) == [2, 4]

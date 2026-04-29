@@ -8,7 +8,6 @@ from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from game.components.hex_map import HexMap
 from game.components.land_detail_box import LandDetailBox
-from game.components.dialogue_box import DialogueBox
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from config import settings
 from utils import http_compat as requests
@@ -113,7 +112,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._activity_row_rects = []
         self._mark_read_rect = None
         self._mark_read_kind = None
-        self._notif_dialogue = None   # DialogueBox showing notifications
         self._message_compose = None
         self._message_input_rect = None
         self._message_send_rect = None
@@ -157,11 +155,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # ── X close button (top-right of header) ───────────────────
         self._btn_close_rect = self._layout['close']
 
-        self._badge_font = settings.get_font(int(0.016 * _SH), bold=True)
-        self._notif_btn_font = settings.get_font(int(0.018 * _SH), bold=True)
-
         # ── Collect All gold button (drawn in info bar) ────────────
         self._collect_all_rect = None
+        self._collect_all_enabled = False
         self._floating_text = FloatingTextLayer()
         self._collect_float_font = settings.get_font(
             getattr(settings, 'COLLECT_FLOAT_FONT_SIZE', settings.FS_HEADING), bold=True)
@@ -329,8 +325,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._draw_close_x_button()
 
         # Modal layer
-        if self._notif_dialogue:
-            self._notif_dialogue.draw()
         if self._detail_box:
             self._detail_box.render()
         if self._message_compose:
@@ -657,6 +651,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         """Draw production rate / lands count bar at top of box, below title."""
         # Reset clickable rect each frame
         self._collect_all_rect = None
+        self._collect_all_enabled = False
         if not self._map_data:
             return
 
@@ -710,6 +705,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         # Collect All button (right of info bar)
         if my_kingdoms:
+            collectable = int(pending_total) > 0
             label = f'Collect All: {int(pending_total)}g'
             if any_full:
                 label += '  (FULL!)'
@@ -728,8 +724,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
             rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
 
             mx, my = pygame.mouse.get_pos()
-            hovered = rect.collidepoint(mx, my)
-            if any_full:
+            hovered = rect.collidepoint(mx, my) and collectable
+            if not collectable:
+                bg = (42, 40, 42, 205)
+                border = (120, 110, 100)
+            elif any_full:
                 bg = (140, 50, 50, 230) if hovered else (110, 40, 40, 210)
                 border = (220, 120, 120)
             elif any_near_full:
@@ -744,6 +743,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self.window.blit(bsurf, rect.topleft)
             self.window.blit(btn_surf, btn_surf.get_rect(center=rect.center))
             self._collect_all_rect = rect
+            self._collect_all_enabled = collectable
 
     def _draw_nav_buttons(self):
         """Draw zoom +/- buttons in the bottom-left corner."""
@@ -761,33 +761,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
             lbl = self._nav_font.render(label, True, clr)
             self.window.blit(lbl, lbl.get_rect(center=rect.center))
 
-    def _draw_notif_button(self):
-        """Draw the notifications button with unseen-count badge."""
-        r = self._btn_notif
-        mx, my = pygame.mouse.get_pos()
-        hovered = r.collidepoint(mx, my)
-
-        bg = (60, 60, 80, 200) if not hovered else (80, 80, 110, 220)
-        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, bg, surf.get_rect(), border_radius=6)
-        pygame.draw.rect(surf, (160, 160, 180), surf.get_rect(), 1, border_radius=6)
-        self.window.blit(surf, r.topleft)
-
-        lbl = self._notif_btn_font.render('Alerts', True, (220, 220, 220))
-        self.window.blit(lbl, lbl.get_rect(center=r.center))
-
-        count = len(self._notifications)
-        if count > 0:
-            badge_txt = self._badge_font.render(str(count), True, (255, 255, 255))
-            bw = max(badge_txt.get_width() + 8, badge_txt.get_height() + 4)
-            bh = badge_txt.get_height() + 4
-            bx = r.right - bw // 2
-            by = r.top - bh // 2
-            pygame.draw.ellipse(self.window, (200, 50, 50),
-                                (bx, by, bw, bh))
-            self.window.blit(badge_txt,
-                             badge_txt.get_rect(center=(bx + bw // 2, by + bh // 2)))
-
     # ── Update / events ─────────────────────────────────────────────
 
     def update(self, events):
@@ -802,11 +775,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         if self._detail_box:
             self._detail_box.update()
-        if self._notif_dialogue:
-            action = self._notif_dialogue.update(events)
-            if action == 'ok':
-                self._mark_notifications_seen()
-                self._notif_dialogue = None
 
     def handle_events(self, events):
         super().handle_events(events)
@@ -825,7 +793,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not self._detail_box
-                    and not self._notif_dialogue
                     and self._btn_close_rect.collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
                 return
@@ -834,15 +801,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not self._detail_box
-                    and not self._notif_dialogue
                     and not (self._hex_map and self._hex_map.is_drag_release(event))
                     and not self._box_rect.collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
                 return
-
-            # Notification dialogue — handled via update(), skip other events
-            if self._notif_dialogue:
-                continue
 
             # If detail box is open, route events there
             if self._detail_box:
@@ -867,6 +829,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
                 # Collect All gold button (info bar)
                 if (self._collect_all_rect
+                    and getattr(self, '_collect_all_enabled', False)
                         and self._collect_all_rect.collidepoint(event.pos)):
                     self._collect_all_gold()
                     continue
@@ -924,6 +887,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
         except Exception as exc:
             logger.error(f'collect_gold_all error: {exc}')
             return
+
+        gold_after = data.get('gold', data.get('total_gold'))
+        if gold_after is not None and getattr(self.state, 'user_dict', None) is not None:
+            self.state.user_dict['gold'] = int(gold_after)
 
         breakdown = data.get('kingdoms') or []
         center = self._collect_all_rect.center
@@ -1155,37 +1122,28 @@ class KingdomScreen(MenuScreenMixin, Screen):
         txt = self._activity_font.render(label, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
-    # ── Notifications ───────────────────────────────────────────────
-
-    def _show_notifications(self):
-        """Open a dialogue showing unseen attack notifications."""
-        if not self._notifications:
-            msg = 'No new alerts.'
-        else:
-            lines = []
-            for n in self._notifications[:10]:
-                attacker = n.get('attacker_name', 'Unknown')
-                result = n.get('result', '?')
-                land = n.get('land_name', n.get('land_id', '?'))
-                lines.append(f'{attacker} attacked {land} — {result}')
-            msg = '\n'.join(lines)
-
-        self._notif_dialogue = DialogueBox(
-            self.window, msg,
-            actions=['OK'],
-            title='Attack Alerts',
-        )
-
     def _mark_notifications_seen(self):
         """Tell the server to mark current notifications as seen."""
-        ids = [n.get('id') for n in self._notifications if n.get('id')]
-        if not ids:
+        attack_log_ids = []
+        kingdom_notification_ids = []
+        for n in self._notifications:
+            nid = n.get('id')
+            if not nid:
+                continue
+            if self._is_kingdom_event_item(n) or n.get('source') == 'kingdom_notification':
+                kingdom_notification_ids.append(nid)
+            else:
+                attack_log_ids.append(nid)
+        if not attack_log_ids and not kingdom_notification_ids:
             self._notifications = []
             return
         try:
             requests.post(
                 f'{settings.SERVER_URL}/kingdom/notifications/mark_seen',
-                json={'notification_ids': ids}, timeout=10)
+                json={
+                    'attack_log_ids': attack_log_ids,
+                    'kingdom_notification_ids': kingdom_notification_ids,
+                }, timeout=10)
         except Exception as e:
             logger.warning(f'Failed to mark notifications seen: {e}')
         self._notifications = []

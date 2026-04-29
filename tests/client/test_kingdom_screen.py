@@ -242,7 +242,6 @@ class TestKingdomDragRelease:
         screen.control_buttons = []
         screen.dialogue_box = None
         screen._detail_box = None
-        screen._notif_dialogue = None
         screen._message_compose = None
         screen._btn_close_rect = pygame.Rect(0, 0, 20, 20)
         screen._box_rect = pygame.Rect(100, 100, 400, 300)

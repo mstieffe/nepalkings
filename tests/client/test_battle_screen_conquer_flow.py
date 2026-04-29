@@ -20,10 +20,10 @@ class TestBattleScreenConquerFlow:
             mode='conquer',
             land_suit_bonus_suit='Hearts',
             defender_kingdom_bonuses={
-                'villager_power_bonus': 3,
-                'military_power_bonus': 5,
-                'archer_damage_bonus': 2,
-                'land_suit_bonus_boost': 4,
+                'gold_production': 0.03,
+                'gold_vault': 100,
+                'shield_cost_reduction': 0.05,
+                'core_protection': 1,
             },
         )
         screen.player_figure = None
@@ -47,7 +47,7 @@ class TestBattleScreenConquerFlow:
             get_total_enchantment_modifier=lambda: 0,
         )
 
-    def test_defender_kingdom_bonuses_affect_client_figure_power_preview(self):
+    def test_kingdom_skills_do_not_modify_client_figure_power_preview(self):
         BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
         figure = self._figure(base=10, suit='Hearts', field='village')
         icon = SimpleNamespace(
@@ -58,15 +58,11 @@ class TestBattleScreenConquerFlow:
             battle_bonus_blocked=False,
         )
 
-        defender_power = BattleScreen._get_figure_total_power(
-            screen, figure, icon, is_player=False)
-        attacker_power = BattleScreen._get_figure_total_power(
-            screen, figure, icon, is_player=True)
+        defender_power = BattleScreen._get_figure_total_power(screen, figure, icon)
 
-        assert defender_power == 19  # 10 base +3 villager +2 support +4 suit boost
-        assert attacker_power == 12
+        assert defender_power == 12  # 10 base +2 normal support only
 
-    def test_blocks_bonus_still_zeroes_kingdom_land_suit_support_boost(self):
+    def test_blocks_bonus_still_zeroes_normal_support_bonus(self):
         BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
         figure = self._figure(base=10, suit='Hearts', field='village')
         icon = SimpleNamespace(
@@ -77,11 +73,11 @@ class TestBattleScreenConquerFlow:
             battle_bonus_blocked=True,
         )
 
-        power = BattleScreen._get_figure_total_power(screen, figure, icon, is_player=False)
+        power = BattleScreen._get_figure_total_power(screen, figure, icon)
 
-        assert power == 13  # base + villager boost; support and suit boost are blocked
+        assert power == 10  # base only; normal support bonus is blocked
 
-    def test_defender_kingdom_bonuses_affect_client_call_figure_preview(self):
+    def test_kingdom_skills_do_not_modify_client_call_figure_preview(self):
         BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=False)
         screen.player_buffs_allies_figures = []
         screen.opponent_buffs_allies_figures = []
@@ -98,13 +94,7 @@ class TestBattleScreenConquerFlow:
         power = BattleScreen._get_move_effective_power(
             screen, move, is_player=True, round_idx=0)
 
-        assert power == 15  # 7 base +3 villager +5 matching call move
-
-    def test_defender_archer_damage_bonus_is_side_specific(self):
-        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=False)
-
-        assert BattleScreen._kingdom_archer_damage_bonus(screen, is_player=True) == 2
-        assert BattleScreen._kingdom_archer_damage_bonus(screen, is_player=False) == 0
+        assert power == 12  # 7 base +5 matching call move only
 
     def test_conquer_intro_informs_attacker_about_defender_kingdom_skills(self):
         BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
@@ -116,13 +106,13 @@ class TestBattleScreenConquerFlow:
         })
         screen.dialogue_box = None
         screen.game.defender_kingdom_name = 'North Pass'
-        screen.game.defender_kingdom_effects = ['+3 village defender power']
+        screen.game.defender_kingdom_effects = ['+3% gold production']
         screen.game.game_id = 44
 
         assert BattleScreen._show_conquer_kingdom_intro_if_needed(screen) is True
 
         assert 'North Pass' in captured['message']
-        assert '+3 village defender power' in captured['message']
+        assert '+3% gold production' in captured['message']
         assert captured['kwargs']['title'] == 'Kingdom Defences'
         assert BattleScreen._show_conquer_kingdom_intro_if_needed(screen) is False
 

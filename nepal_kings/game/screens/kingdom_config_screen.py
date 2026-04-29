@@ -214,7 +214,16 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         collected = int(data.get('collected', 0) or 0)
         if 'gold' in data:
             self._gold = int(data['gold'])
-        # Refresh kingdom snapshot so XP / vault state reflect the post-collect server state.
+        elif 'total_gold' in data:
+            self._gold = int(data['total_gold'])
+        if getattr(self.state, 'user_dict', None) is not None:
+            self.state.user_dict['gold'] = self._gold
+        if self._kingdom is not None:
+            if 'pending_gold' in data:
+                self._kingdom['pending_gold'] = float(data.get('pending_gold') or 0.0)
+            if 'vault_cap' in data:
+                self._kingdom['vault_cap'] = int(data.get('vault_cap') or 0)
+        # Refresh shield quote so price reflects current gold / kingdom state.
         self._fetch_quote(silent=True)
         if collected > 0 and self._collect_btn_rect is not None:
             self._spawn_collect_floater(collected, self._collect_btn_rect.center)
