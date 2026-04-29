@@ -50,7 +50,7 @@ def check_png_profiles(directory):
     return problematic_files, total_checked
 
 def main():
-    img_dir = os.path.join(os.path.dirname(__file__), 'nepal_kings', 'img')
+    img_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'nepal_kings', 'img')
     
     print("=" * 80)
     print("PNG ICC Profile Checker")

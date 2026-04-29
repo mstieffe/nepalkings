@@ -31,6 +31,7 @@ fi
 echo "Fixing ICC profiles in PNG files..."
 echo "This may take a few minutes..."
 
+cd "$(dirname "$0")/../.." || exit 1
 cd nepal_kings/img || exit 1
 
 fixed=0

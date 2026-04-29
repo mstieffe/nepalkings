@@ -11,8 +11,10 @@ except ImportError:
     from PIL import Image, ImageDraw
     import numpy as np
 
-src = 'nepal_kings/img/dialogue_box/icons/gold.png'
-dst = 'nepal_kings/img/dialogue_box/icons/gold_lost.png'
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[2]
+src = str(_ROOT / 'nepal_kings/img/dialogue_box/icons/gold.png')
+dst = str(_ROOT / 'nepal_kings/img/dialogue_box/icons/gold_lost.png')
 
 img = Image.open(src).convert('RGBA')
 arr = np.array(img)

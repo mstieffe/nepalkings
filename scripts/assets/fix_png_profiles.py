@@ -45,7 +45,7 @@ def fix_png_icc_profile(image_path):
 
 def main():
     # Start from the nepal_kings/img directory
-    img_dir = Path(__file__).parent / 'nepal_kings' / 'img'
+    img_dir = Path(__file__).resolve().parents[2] / 'nepal_kings' / 'img'
     
     if not img_dir.exists():
         print(f"Error: {img_dir} not found")

@@ -25,6 +25,25 @@ battle_shop.settings = settings
 app = Flask(__name__)
 app.config['SECRET_KEY'] = settings.SECRET_KEY
 
+# ── Production safety guard ───────────────────────────────────────
+# In any non-development environment, refuse to boot if SECRET_KEY is
+# not set explicitly via env. A random per-process default is fine for
+# local dev but means a deploy restart silently invalidates every
+# issued token and signed cookie.
+import os as _os
+_FLASK_ENV = (_os.getenv('FLASK_ENV') or _os.getenv('ENV') or '').lower()
+_IS_DEV = _FLASK_ENV in ('development', 'dev', 'local', 'test', '')
+if not getattr(settings, 'SECRET_KEY_FROM_ENV', False) and not _IS_DEV:
+    raise RuntimeError(
+        "SECRET_KEY env var must be set in non-development environments. "
+        "Refusing to boot with an ephemeral random key."
+    )
+if getattr(settings, 'DROP_TABLES_ON_STARTUP', False) and not _IS_DEV:
+    raise RuntimeError(
+        "DROP_TABLES_ON_STARTUP is True in a non-development environment. "
+        "This would wipe production data. Refusing to boot."
+    )
+
 # ── Proxy fix (PythonAnywhere / reverse-proxy environments) ──
 # Without this, request.remote_addr returns the proxy IP and ALL clients
 # share a single rate-limit bucket — exhausting it almost immediately.
@@ -181,6 +200,28 @@ with app.app_context():
             with db.engine.connect() as conn:
                 conn.execute(text("ALTER TABLE land ADD COLUMN conquer_cooldown_until DATETIME"))
                 conn.commit()
+        if 'kingdom_id' not in existing_cols:
+            logger.info("Auto-migrate: adding 'kingdom_id' column to land table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE land ADD COLUMN kingdom_id INTEGER REFERENCES kingdom(id)"))
+                conn.commit()
+    if 'land_attack_log' in inspector.get_table_names():
+        existing_cols = {c['name'] for c in inspector.get_columns('land_attack_log')}
+        if 'seen_by_attacker' not in existing_cols:
+            logger.info("Auto-migrate: adding 'seen_by_attacker' column to land_attack_log table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE land_attack_log ADD COLUMN seen_by_attacker BOOLEAN DEFAULT 0 NOT NULL"))
+                conn.commit()
+        if 'kingdom_deleted_id' not in existing_cols:
+            logger.info("Auto-migrate: adding 'kingdom_deleted_id' column to land_attack_log table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE land_attack_log ADD COLUMN kingdom_deleted_id INTEGER"))
+                conn.commit()
+        if 'kingdom_deleted_name' not in existing_cols:
+            logger.info("Auto-migrate: adding 'kingdom_deleted_name' column to land_attack_log table")
+            with db.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE land_attack_log ADD COLUMN kingdom_deleted_name VARCHAR(80)"))
+                conn.commit()
     if 'land_config' in inspector.get_table_names():
         existing_cols = {c['name'] for c in inspector.get_columns('land_config')}
         _lc_new_cols = {
@@ -205,6 +246,42 @@ with app.app_context():
                     conn.commit()
     
     logger.info("Database initialized")
+
+    # ── One-time legacy cosmetic migration ─────────────────────────
+    # Older builds stored cosmetic unlocks at the user level.  Copy any
+    # remaining rows into the per-kingdom unlock table, then drop the
+    # legacy tables so models.py can be slimmed down.
+    try:
+        from sqlalchemy import inspect as _sa_inspect2, text as _sa_text2
+        _insp = _sa_inspect2(db.engine)
+        _legacy_tables = set(_insp.get_table_names())
+        if 'user_cosmetic_unlock' in _legacy_tables:
+            from models import Kingdom as _Kingdom, KingdomCosmeticUnlock as _KCU
+            with db.engine.connect() as conn:
+                rows = conn.execute(_sa_text2(
+                    "SELECT user_id, cosmetic_key FROM user_cosmetic_unlock"
+                )).fetchall()
+            for user_id, cosmetic_key in rows:
+                kingdoms = _Kingdom.query.filter_by(owner_user_id=user_id).all()
+                for k in kingdoms:
+                    exists = _KCU.query.filter_by(
+                        kingdom_id=k.id, cosmetic_key=cosmetic_key
+                    ).first()
+                    if not exists:
+                        db.session.add(_KCU(kingdom_id=k.id, cosmetic_key=cosmetic_key))
+            db.session.commit()
+            with db.engine.connect() as conn:
+                conn.execute(_sa_text2("DROP TABLE user_cosmetic_unlock"))
+                conn.commit()
+            logger.info("Dropped legacy user_cosmetic_unlock table after backfill")
+        if 'user_kingdom_style' in _legacy_tables:
+            with db.engine.connect() as conn:
+                conn.execute(_sa_text2("DROP TABLE user_kingdom_style"))
+                conn.commit()
+            logger.info("Dropped legacy user_kingdom_style table")
+    except Exception as _legacy_mig_err:  # pragma: no cover — safety net
+        logger.exception("Legacy cosmetic migration failed: %s", _legacy_mig_err)
+        db.session.rollback()
 
     # ── Orphan-lock sweep ─────────────────────────────────────────────
     # Find CollectionCard rows whose lock_ref_id no longer points to a
@@ -260,6 +337,13 @@ with app.app_context():
     from kingdom_service import seed_kingdom_map
     seed_kingdom_map()
     logger.info("Kingdom map seeding checked")
+    try:
+        from kingdom_service import reconcile_all_kingdoms
+        reconcile_all_kingdoms(commit=True)
+        logger.info("Persistent kingdom reconciliation checked")
+    except Exception as _kingdom_reconcile_err:  # pragma: no cover — safety net
+        logger.exception("Persistent kingdom reconciliation failed: %s", _kingdom_reconcile_err)
+        db.session.rollback()
 
     # Create AI users if enabled
     if settings.AI_ENABLED:
@@ -292,6 +376,19 @@ app.register_blueprint(kingdom, url_prefix='/kingdom')
 # ── Stricter rate limits for auth-sensitive endpoints ──
 limiter.limit(settings.RATE_LIMIT_LOGIN)(app.view_functions['auth.login'])
 limiter.limit(settings.RATE_LIMIT_REGISTER)(app.view_functions['auth.register'])
+
+# ── Per-user rate limits for kingdom mutation endpoints ──
+_kingdom_mutate_views = (
+    'kingdom.kingdom_config_cosmetic_purchase',
+    'kingdom.kingdom_config_cosmetic_equip',
+    'kingdom.kingdom_config_skill_upgrade',
+    'kingdom.kingdom_config_skill_reset',
+    'kingdom.kingdom_config_shield_purchase',
+)
+for _view_name in _kingdom_mutate_views:
+    _view_fn = app.view_functions.get(_view_name)
+    if _view_fn is not None:
+        limiter.limit(settings.KINGDOM_MUTATE_RATE_LIMIT)(_view_fn)
 
 if __name__ == '__main__':
     def _graceful_shutdown(signum, frame):

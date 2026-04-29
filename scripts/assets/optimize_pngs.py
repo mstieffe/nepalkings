@@ -39,7 +39,7 @@ import sys
 Image.MAX_IMAGE_PIXELS = 200_000_000
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nepal_kings', 'img')
+IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'nepal_kings', 'img')
 SKIP_DIRS = {'_legacy', 'figures_old', 'old_cards', 'app_icon'}
 
 # ── Max pixel dimension per path substring ──────────────────────

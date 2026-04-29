@@ -274,8 +274,8 @@ class TestConquerStartBattle:
             # 3 attacker + 3 defender (from AI template tier 1)
             assert len(moves) == 6
 
-    def test_start_battle_sets_defender_battle_figure(self, app, db):
-        """AI template's battle_figure_index sets the defending_figure_id."""
+    def test_start_battle_defers_ai_defender_for_counter_spell(self, app, db):
+        """AI templates use counter spells before the invader selects a defender."""
         with app.app_context():
             user = _make_user(db)
             land = _make_land(db, tier=1)
@@ -289,8 +289,13 @@ class TestConquerStartBattle:
             data = resp.get_json()
 
             game = db.session.get(Game, data['game_id'])
-            # AI tier 1 template has battle_figure_index = 0
-            assert game.defending_figure_id is not None
+            assert game.defending_figure_id is None
+            ai_player = [p for p in game.players if p.id != game.invader_player_id][0]
+            assert ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=ai_player.id,
+                spell_name='Health Boost',
+            ).first() is not None
 
     def test_start_battle_cooldown(self, app, db):
         """Cannot start another battle during cooldown."""
@@ -610,6 +615,148 @@ class TestConquerStartBattle:
             call_mil = [m for m in moves if m.family_name == 'Call Military']
             assert len(call_mil) == 1
 
+    def test_ai_template_uses_spells_and_forces_fortress_selection(self, app, db):
+        """AI fortress defence should cast a counter, then force invader selection."""
+        with app.app_context():
+            user = _make_user(db, username='atk_ai_fortress')
+            land = _make_land(db, tier=3)
+            land.suit_bonus_suit = 'Spades'
+            from ai.defence.generator import get_ai_defence_template_for_land
+            fortress_families = {'Wooden Fortress', 'Stone Fortress'}
+            for seed in range(100):
+                land.ai_template_index = seed
+                template = get_ai_defence_template_for_land(land)
+                if any(f['family_name'] in fortress_families for f in template['figures']):
+                    break
+            db.session.commit()
+            _make_conquer_config(db, user, land)
+
+            client = app.test_client()
+            atk_headers = _auth_headers(app, user)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=atk_headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = [p for p in game.players if p.id != atk_player.id][0]
+            ai_user = db.session.get(User, def_player.user_id)
+
+            # Template counter spells defer defender selection until after the response.
+            assert game.defending_figure_id is None
+            prelude = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name='Health Boost',
+            ).first()
+            assert prelude is not None
+            assert (prelude.effect_data or {}).get('prelude_status') == 'executed'
+
+            atk_fig = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=atk_player.id,
+            ).first()
+            adv_resp = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': atk_fig.id,
+            }, headers=atk_headers)
+            assert adv_resp.status_code == 200
+
+            db.session.refresh(game)
+            assert game.turn_player_id == def_player.id
+
+            def_headers = _auth_headers(app, ai_user)
+            counter_resp = client.post('/games/conquer_defender_counter_spell', json={
+                'game_id': game.id,
+                'player_id': def_player.id,
+            }, headers=def_headers)
+            assert counter_resp.status_code == 200
+            assert counter_resp.get_json()['spell_name'] == 'Forced Deal'
+
+            db.session.refresh(game)
+            assert game.turn_player_id == atk_player.id
+            fortress = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                family_name='Stone Fortress',
+            ).first()
+            assert fortress is not None
+            non_fortress = Figure.query.filter(
+                Figure.game_id == game.id,
+                Figure.player_id == def_player.id,
+                Figure.id != fortress.id,
+                Figure.checkmate.is_(False),
+            ).first()
+            assert non_fortress is not None
+
+            blocked = client.post('/games/select_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': non_fortress.id,
+            }, headers=atk_headers)
+            assert blocked.status_code == 400
+            assert blocked.get_json().get('reason') == 'must_be_attacked'
+
+            selected = client.post('/games/select_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': fortress.id,
+            }, headers=atk_headers)
+            assert selected.status_code == 200
+            db.session.refresh(game)
+            assert game.defending_figure_id == fortress.id
+
+    def test_cannot_attack_figure_cannot_counter_advance(self, app, db):
+        """Server rejects counter-advance attempts by cannot_attack families."""
+        with app.app_context():
+            attacker = _make_user(db, username='atk_no_temple_counter')
+            defender = _make_user(db, username='def_no_temple_counter')
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            temple_cfg = LandConfigFigure.query.filter_by(config_id=def_cfg.id).first()
+            temple_cfg.family_name = 'Himalaya Temple'
+            temple_cfg.name = 'Himalaya Temple'
+            temple_cfg.field = 'village'
+            db.session.commit()
+
+            client = app.test_client()
+            atk_headers = _auth_headers(app, attacker)
+            def_headers = _auth_headers(app, defender)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=atk_headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = [p for p in game.players if p.user_id == defender.id][0]
+            atk_fig = Figure.query.filter_by(game_id=game.id, player_id=atk_player.id).first()
+            temple = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                family_name='Himalaya Temple',
+            ).first()
+            assert temple is not None
+
+            game.defending_figure_id = None
+            db.session.commit()
+            adv_resp = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': atk_fig.id,
+            }, headers=atk_headers)
+            assert adv_resp.status_code == 200
+
+            db.session.refresh(game)
+            game.turn_player_id = def_player.id
+            db.session.commit()
+            counter_resp = client.post('/games/advance_figure', json={
+                'game_id': game.id,
+                'player_id': def_player.id,
+                'figure_id': temple.id,
+            }, headers=def_headers)
+            assert counter_resp.status_code == 400
+            assert 'cannot advance' in counter_resp.get_json().get('message', '').lower()
+
 
 class TestConquerPreludeTargeting:
     """Conquer startup prelude targeting behavior."""
@@ -803,6 +950,7 @@ class TestConquerPreludeTargeting:
             db.session.refresh(pending_spell)
             assert pending_spell.target_figure_id == def_target.id
             assert (pending_spell.effect_data or {}).get('prelude_status') == 'executed'
+
 
     def test_attacker_targeted_prelude_no_target_is_reported_in_game_start(self, app, db):
         with app.app_context():

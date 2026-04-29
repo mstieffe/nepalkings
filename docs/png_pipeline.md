@@ -50,8 +50,8 @@ brew install imagemagick  # macOS
 apt-get install imagemagick  # Linux
 
 # Make executable and run
-chmod +x fix_png_profiles.sh
-./fix_png_profiles.sh
+chmod +x scripts/assets/fix_png_profiles.sh
+./scripts/assets/fix_png_profiles.sh
 ```
 
 Both scripts will:

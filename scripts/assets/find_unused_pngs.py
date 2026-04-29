@@ -10,7 +10,7 @@ import re
 import shutil
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parents[2]
 IMG_DIR = ROOT / 'nepal_kings' / 'img'
 LEGACY_DIR = IMG_DIR / '_legacy'
 SRC_DIRS = [ROOT / 'nepal_kings']

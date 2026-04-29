@@ -36,12 +36,26 @@ path = '/home/USERNAME/nepalkings/server'
 if path not in sys.path:
     sys.path.insert(0, path)
 
+os.environ['FLASK_ENV'] = 'production'
+# REQUIRED in production. Generate one with:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+os.environ['SECRET_KEY'] = 'PASTE_A_LONG_RANDOM_SECRET_HERE'
 os.environ['DROP_TABLES_ON_STARTUP'] = 'False'
 os.environ['DB_URL'] = f'sqlite:///{path}/instance/nepalkings.db'
+os.environ['SERVER_URL'] = 'https://USERNAME.pythonanywhere.com'
+
+# If your web client is hosted on GitHub Pages, allow that origin here.
+# Replace USERNAME with your GitHub username.
+os.environ['CORS_ORIGINS'] = 'https://USERNAME.github.io'
 
 from wsgi import application
 ```
 Replace `USERNAME` with your PythonAnywhere username.
+
+If your GitHub Pages site is a project page like
+`https://USERNAME.github.io/nepalkings`, the allowed CORS origin is still
+just `https://USERNAME.github.io` because CORS works at the origin level,
+not the path level.
 
 ### 6. Create the database directory
 ```bash
@@ -60,6 +74,22 @@ This creates the tables. They persist across reloads.
 ### 8. Reload and test
 - Click **Reload** on the Web tab
 - Visit `https://USERNAME.pythonanywhere.com/auth/login` — should return a JSON response
+
+### 9. GitHub Pages web client
+If you host the web client on GitHub Pages and the API on PythonAnywhere,
+you must allow the GitHub Pages origin in `CORS_ORIGINS` as shown above.
+Otherwise browser requests from the web client will fail with a CORS error
+even though direct API requests still work.
+
+Examples:
+
+```python
+os.environ['CORS_ORIGINS'] = 'https://USERNAME.github.io'
+```
+
+```python
+os.environ['CORS_ORIGINS'] = 'https://USERNAME.github.io,https://www.example.com'
+```
 
 ---
 

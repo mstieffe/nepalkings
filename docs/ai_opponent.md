@@ -757,4 +757,4 @@ Check in order:
 
 ---
 
-For historical rollout context and implementation sequencing notes, see `AI_STRATEGY_IMPLEMENTATION_PLAN.md`.
+For historical rollout context and implementation sequencing notes, see `docs/plans/AI_STRATEGY_IMPLEMENTATION_PLAN.md`.

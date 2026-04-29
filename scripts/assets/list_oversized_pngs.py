@@ -6,7 +6,7 @@ from PIL import Image
 import os
 from pathlib import Path
 
-IMG_DIR = Path(__file__).parent / "nepal_kings" / "img"
+IMG_DIR = Path(__file__).resolve().parents[2] / "nepal_kings" / "img"
 SKIP = {"_legacy", "figures_old", "old_cards", "app_icon"}
 results = []
 

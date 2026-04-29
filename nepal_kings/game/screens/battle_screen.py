@@ -186,6 +186,7 @@ class BattleScreen(SubScreen):
         self._pending_combine_data = None    # (move_a, move_b) awaiting combine confirmation
         self._pending_dismantle_move = None   # move dict awaiting dismantle confirmation
         self._dialogue_callback = None       # callback for dialogue response
+        self._kingdom_intro_shown_key = None  # one-time conquer kingdom skill notice
 
         # ── skip state (no moves left) ──
         self._player_skipped_rounds = []     # list of round indices the player skipped
@@ -257,6 +258,7 @@ class BattleScreen(SubScreen):
         self._pending_combine_data = None
         self._pending_dismantle_move = None
         self._dialogue_callback = None
+        self._kingdom_intro_shown_key = None
         self._player_skipped_rounds = []
         self._opponent_skipped_rounds = []
         self._auto_skip_pending = False
@@ -708,6 +710,7 @@ class BattleScreen(SubScreen):
             if not adv_suit:
                 continue
             penalty_value = fig.number_card.value if fig.number_card else 0
+            penalty_value += self._kingdom_archer_damage_bonus(is_player=True)
             hit_battle = False
             for opp_suit, opp_icon in opp_targets:
                 if adv_suit == opp_suit:
@@ -744,6 +747,7 @@ class BattleScreen(SubScreen):
             if not adv_suit:
                 continue
             penalty_value = fig.number_card.value if fig.number_card else 0
+            penalty_value += self._kingdom_archer_damage_bonus(is_player=False)
             hit_battle = False
             for player_suit, player_icon in player_targets:
                 if adv_suit == player_suit:
@@ -1003,7 +1007,7 @@ class BattleScreen(SubScreen):
 
         max_power = 0
         for fig in eligible:
-            base = fig.get_value()
+            base = fig.get_value() + self._kingdom_base_power_bonus(fig, is_player=True)
             buffs = self._get_buffs_allies_bonus(fig, is_player=True)
             # Wall defence does NOT apply to call figures
             bonus = bm_value if fig.suit == bm_suit else 0
@@ -1023,7 +1027,7 @@ class BattleScreen(SubScreen):
         best_idx = 0
         best_power = -1
         for i, fig in enumerate(eligible):
-            base = fig.get_value()
+            base = fig.get_value() + self._kingdom_base_power_bonus(fig, is_player=True)
             buffs = self._get_buffs_allies_bonus(fig, is_player=True)
             # Wall defence does NOT apply to call figures
             bonus = bm_value if fig.suit == bm_suit else 0
@@ -1035,7 +1039,97 @@ class BattleScreen(SubScreen):
 
     # ────────────────── power calculations ─────────────────────
 
-    def _get_figure_total_power(self, figure, figure_icon):
+    def _is_defender_side(self, is_player):
+        """Return whether the requested side is defending the conquer land."""
+        if is_player is None or not self.game:
+            return False
+        if getattr(self.game, 'mode', 'duel') != 'conquer':
+            return False
+        return bool(is_player) != bool(self.player_is_invader)
+
+    def _defender_kingdom_bonuses(self, is_player):
+        if not self._is_defender_side(is_player):
+            return {}
+        return getattr(self.game, 'defender_kingdom_bonuses', {}) or {}
+
+    def _kingdom_bonus_lines(self, bonuses):
+        if not bonuses:
+            return []
+        lines = []
+        villager = int(bonuses.get('villager_power_bonus', 0) or 0)
+        if villager:
+            lines.append(f'+{villager} village defender power')
+        military = int(bonuses.get('military_power_bonus', 0) or 0)
+        if military:
+            lines.append(f'+{military} military defender power')
+        archer = int(bonuses.get('archer_damage_bonus', 0) or 0)
+        if archer:
+            lines.append(f'+{archer} archer damage')
+        suit = int(bonuses.get('land_suit_bonus_boost', 0) or 0)
+        if suit:
+            lines.append(f'+{suit} land suit bonus')
+        return lines
+
+    def _show_conquer_kingdom_intro_if_needed(self):
+        if not self.game or getattr(self.game, 'mode', 'duel') != 'conquer':
+            return False
+        if not self.player_is_invader or self.dialogue_box:
+            return False
+        effects = list(getattr(self.game, 'defender_kingdom_effects', []) or [])
+        if not effects:
+            effects = self._kingdom_bonus_lines(getattr(self.game, 'defender_kingdom_bonuses', {}) or {})
+        if not effects:
+            return False
+        key = (getattr(self.game, 'game_id', None), tuple(effects))
+        if self._kingdom_intro_shown_key == key:
+            return False
+        self._kingdom_intro_shown_key = key
+        kingdom_name = getattr(self.game, 'defender_kingdom_name', None) or 'the defender kingdom'
+        lines = '\n'.join(f'• {line}' for line in effects[:5])
+        msg = f'You are attacking {kingdom_name}.\n\nActive kingdom skills:\n{lines}'
+        self.make_dialogue_box(msg, actions=['ok'], icon='info', title='Kingdom Defences')
+        return True
+
+    def _infer_is_player_side(self, figure, figure_icon):
+        if figure_icon in (self.player_figure_icon, self.player_figure_icon_2):
+            return True
+        if figure_icon in (self.opponent_figure_icon, self.opponent_figure_icon_2):
+            return False
+        if figure and figure in (self.player_figure, self.player_figure_2):
+            return True
+        if figure and figure in (self.opponent_figure, self.opponent_figure_2):
+            return False
+        return None
+
+    def _figure_field(self, figure):
+        family = getattr(figure, 'family', None)
+        return (getattr(family, 'field', None) or getattr(figure, 'field', '') or '').lower()
+
+    def _kingdom_base_power_bonus(self, figure, is_player=None):
+        bonuses = self._defender_kingdom_bonuses(is_player)
+        if not bonuses:
+            return 0
+        field = self._figure_field(figure)
+        if field == 'village':
+            return int(bonuses.get('villager_power_bonus', 0) or 0)
+        if field == 'military':
+            return int(bonuses.get('military_power_bonus', 0) or 0)
+        return 0
+
+    def _kingdom_land_suit_bonus_boost(self, figure, is_player=None):
+        bonuses = self._defender_kingdom_bonuses(is_player)
+        if not bonuses or not figure or not self.game:
+            return 0
+        land_suit = getattr(self.game, 'land_suit_bonus_suit', None)
+        if not land_suit or (figure.suit or '').lower() != land_suit.lower():
+            return 0
+        return int(bonuses.get('land_suit_bonus_boost', 0) or 0)
+
+    def _kingdom_archer_damage_bonus(self, is_player=None):
+        bonuses = self._defender_kingdom_bonuses(is_player)
+        return int(bonuses.get('archer_damage_bonus', 0) or 0) if bonuses else 0
+
+    def _get_figure_total_power(self, figure, figure_icon, is_player=None):
         """Get total power of a figure including base value, bonus, and enchantments.
         If the figure's bonus is blocked (blocks_bonus skill), the bonus is excluded.
         Distance-attack penalty (if any) is subtracted from the total.
@@ -1044,10 +1138,13 @@ class BattleScreen(SubScreen):
         """
         if not figure:
             return 0
-        base = figure.get_value()
+        if is_player is None:
+            is_player = self._infer_is_player_side(figure, figure_icon)
+        base = figure.get_value() + self._kingdom_base_power_bonus(figure, is_player)
         # buffs_allies bonus (treated as base power, not affected by blocks_bonus)
         buffs_bonus = getattr(figure_icon, 'buffs_allies_bonus', 0) if figure_icon else 0
         bonus = figure_icon.battle_bonus_received if figure_icon else 0
+        bonus += self._kingdom_land_suit_bonus_boost(figure, is_player)
         # blocks_bonus negates the support bonus (NOT wall defence)
         if figure_icon and getattr(figure_icon, 'battle_bonus_blocked', False):
             bonus = 0
@@ -1134,7 +1231,7 @@ class BattleScreen(SubScreen):
             bm_value = 0
         call_fig = move.get('_call_figure')
         if call_fig:
-            fig_power = call_fig.get_value()
+            fig_power = call_fig.get_value() + self._kingdom_base_power_bonus(call_fig, is_player)
             fig_suit = (call_fig.suit or '').lower()
             bm_suit = (move.get('suit', '') or '').lower()
 
@@ -1290,6 +1387,7 @@ class BattleScreen(SubScreen):
             needs_reload = True
         if needs_reload:
             self._load_battle_data()
+            self._show_conquer_kingdom_intro_if_needed()
             # (Re)create the background poller for this game
             self._battle_poller = BackgroundPoller(
                 lambda gid, pid: game_service.get_battle_state(gid, pid),
@@ -1353,6 +1451,8 @@ class BattleScreen(SubScreen):
                 and not getattr(game, 'battle_confirmed', True)
                 and not getattr(game, 'fold_winner_id', None)
                 and self._loaded_game_key):
+            if self._try_resolve_server_finished_battle():
+                return
             logger.warning("[BattleScreen] Safety net: battle resolved on server but "
                   "no local result — exiting battle screen")
             self._reset_after_battle()
@@ -1443,6 +1543,64 @@ class BattleScreen(SubScreen):
         for r in self._opponent_skipped_rounds:
             if 0 <= r <= 2 and self.opponent_played[r] is None:
                 self.opponent_played[r] = {'family_name': 'Skip', 'value': 0, 'suit': '', '_skipped': True}
+
+    def _derive_conquer_result_from_server_state(self):
+        """Build a conquer-result payload from current synced game state."""
+        if not self.game or getattr(self.game, 'mode', 'duel') != 'conquer':
+            return None
+
+        last = getattr(self.game, '_last_polled_battle_result', None) or {}
+        explicit = last.get('conquer_result')
+        if explicit in ('draw', 'attacker_won', 'defender_won'):
+            payload = dict(last)
+            payload.setdefault('success', True)
+            payload.setdefault('attacker_won', explicit == 'attacker_won')
+            payload.setdefault('land_tier', getattr(self.game, 'land_tier', None))
+            payload.setdefault('land_gold_rate', getattr(self.game, 'land_gold_rate', 0))
+            return payload
+
+        if getattr(self.game, 'state', None) != 'finished':
+            return None
+
+        winner_id = getattr(self.game, 'winner_player_id', None)
+        if winner_id is None:
+            return {
+                'success': True,
+                'conquer_result': 'draw',
+                'attacker_won': False,
+                'land_tier': getattr(self.game, 'land_tier', None),
+                'land_gold_rate': getattr(self.game, 'land_gold_rate', 0),
+            }
+
+        attacker_id = last.get('conquer_attacker_player_id')
+        if attacker_id is None:
+            attacker_id = getattr(self.game, 'invader_player_id', None)
+        if attacker_id is None:
+            return None
+
+        attacker_won = (winner_id == attacker_id)
+        payload = dict(last)
+        payload.update({
+            'success': True,
+            'conquer_result': 'attacker_won' if attacker_won else 'defender_won',
+            'attacker_won': attacker_won,
+            'winner_player_id': winner_id,
+            'land_tier': getattr(self.game, 'land_tier', None),
+            'land_gold_rate': getattr(self.game, 'land_gold_rate', 0),
+        })
+        return payload
+
+    def _try_resolve_server_finished_battle(self):
+        """Resolve already-finished conquer battles without hard-reset fallback."""
+        result = self._derive_conquer_result_from_server_state()
+        if not result:
+            return False
+
+        logger.warning("[BattleScreen] Safety net: derived conquer result from "
+              "server state — showing conquer end dialogue")
+        self._battle_result = result
+        self._handle_conquer_end(result)
+        return True
 
     def _find_figure_by_id(self, figure_id, opponent=False):
         """Find a Figure object by ID from cached figures.

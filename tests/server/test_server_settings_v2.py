@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 """Tests for v2.0 server settings validity."""
+from ai.defence import config as ai_defence_config
 import server_settings as config
 
 
@@ -68,20 +69,13 @@ class TestV2ServerSettings:
     def test_land_conquer_protection_nonnegative(self):
         assert config.LAND_CONQUER_PROTECTION_SECONDS >= 0
 
-    def test_ai_defence_templates_all_tiers(self):
-        for tier in (1, 2, 3):
-            assert tier in config.AI_DEFENCE_TEMPLATES
-            assert len(config.AI_DEFENCE_TEMPLATES[tier]) > 0
+    def test_ai_defence_generation_rules_all_tiers(self):
+        for tier in (1, 2, 3, 4):
+            assert tier in ai_defence_config.AI_DEFENCE_GENERATION_RULES
 
-    def test_ai_defence_template_structure(self):
-        for tier, templates in config.AI_DEFENCE_TEMPLATES.items():
-            for tmpl in templates:
-                assert 'figures' in tmpl
-                assert 'battle_moves' in tmpl
-                assert len(tmpl['battle_moves']) == 3
-                for fig in tmpl['figures']:
-                    assert 'family_name' in fig
-                    assert 'cards' in fig
-                for move in tmpl['battle_moves']:
-                    assert 'family_name' in move
-                    assert 'round_index' in move
+    def test_ai_defence_generation_rule_structure(self):
+        for rules in ai_defence_config.AI_DEFENCE_GENERATION_RULES.values():
+            assert rules['core_roles']
+            assert len(rules['optional_count_range']) == 2
+            assert rules['number_ranks']
+            assert rules['battle_plan']

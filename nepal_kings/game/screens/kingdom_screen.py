@@ -9,6 +9,7 @@ from game.screens._menu_base import MenuScreenMixin
 from game.components.hex_map import HexMap
 from game.components.land_detail_box import LandDetailBox
 from game.components.dialogue_box import DialogueBox
+from game.components.floating_text import FloatingText, FloatingTextLayer
 from config import settings
 from utils import http_compat as requests
 import logging
@@ -35,6 +36,57 @@ def _draw_panel(window, rect, corner_r=None):
                      settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
 
 
+def _compute_kingdom_layout():
+    """Return non-overlapping layout rects for the kingdom dashboard."""
+    box = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
+    pad = _BOX_PAD
+    gap = settings.KINGDOM_PANEL_GAP
+    header = pygame.Rect(
+        box.x + pad,
+        box.y + pad,
+        box.w - 2 * pad,
+        settings.KINGDOM_HEADER_H,
+    )
+
+    content_top = header.bottom + int(0.008 * _SH)
+    content_bottom = box.bottom - pad
+    content_h = max(1, content_bottom - content_top)
+    activity_w = settings.KINGDOM_ACTIVITY_W
+    activity = pygame.Rect(
+        box.right - pad - activity_w,
+        content_top,
+        activity_w,
+        content_h,
+    )
+    map_frame = pygame.Rect(
+        box.x + pad,
+        content_top,
+        activity.x - gap - (box.x + pad),
+        content_h,
+    )
+    map_viewport = pygame.Rect(
+        map_frame.x + settings.KINGDOM_MAP_FRAME_PAD,
+        map_frame.y + settings.KINGDOM_MAP_FRAME_PAD,
+        map_frame.w - 2 * settings.KINGDOM_MAP_FRAME_PAD,
+        map_frame.h - 2 * settings.KINGDOM_MAP_FRAME_PAD,
+    )
+    _xsz = int(0.028 * _SH)
+    close = pygame.Rect(
+        header.right - _xsz,
+        header.y,
+        _xsz,
+        _xsz,
+    )
+    return {
+        'box': box,
+        'header': header,
+        'map_frame': map_frame,
+        'map_viewport': map_viewport,
+        'activity': activity,
+        'close': close,
+    }
+
+
 class KingdomScreen(MenuScreenMixin, Screen):
     """Kingdom screen with hex-map, minimap, land detail box, and nav controls."""
 
@@ -53,49 +105,66 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         # ── Attack notifications ────────────────────────────────────
         self._notifications = []      # unseen attack notifications
+        self._attack_history = []     # recent attack history for this user
+        self._messages = []           # kingdom user messages
+        self._message_unread_count = 0
+        self._activity_tab = 'alerts'
+        self._activity_tab_rects = {}
+        self._activity_row_rects = []
+        self._mark_read_rect = None
+        self._mark_read_kind = None
         self._notif_dialogue = None   # DialogueBox showing notifications
+        self._message_compose = None
+        self._message_input_rect = None
+        self._message_send_rect = None
+        self._message_cancel_rect = None
+
+        # ── Layout ──────────────────────────────────────────────────
+        self._layout = _compute_kingdom_layout()
+        self._box_rect = self._layout['box']
+        self._header_rect = self._layout['header']
+        self._map_frame_rect = self._layout['map_frame']
+        self._map_viewport_rect = self._layout['map_viewport']
+        self._activity_rect = self._layout['activity']
 
         # ── Title ───────────────────────────────────────────────────
         self._title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
         self._title_surf = self._title_font.render('Kingdom', True, settings.SUB_SCREEN_TITLE_CLR)
-        self._title_y = _BOX_Y + _BOX_PAD
+        self._title_y = self._header_rect.y
 
         # ── Fonts ───────────────────────────────────────────────────
         self._info_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE)
         self._nav_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE, bold=True)
+        self._activity_title_font = settings.get_font(settings.FS_SMALL, bold=True)
+        self._activity_font = settings.get_font(settings.FS_TINY)
+        self._activity_small_font = settings.get_font(int(settings.FS_TINY * 0.86))
 
-        # ── Navigation zoom buttons (inside box, bottom-left) ──────
+        # ── Navigation zoom buttons (inside map frame, bottom-left) ─
         btn_sz = settings.NAV_BTN_SIZE
         margin = settings.NAV_BTN_MARGIN
-        nav_by = _BOX_BOTTOM - _BOX_PAD - btn_sz
+        nav_by = self._map_frame_rect.bottom - settings.KINGDOM_MAP_FRAME_PAD - btn_sz
+        nav_x = self._map_frame_rect.x + settings.KINGDOM_MAP_FRAME_PAD
 
         self._nav_rects = {
-            'zoom_in':  pygame.Rect(_BOX_X + _BOX_PAD, nav_by - btn_sz - margin, btn_sz, btn_sz),
-            'zoom_out': pygame.Rect(_BOX_X + _BOX_PAD, nav_by, btn_sz, btn_sz),
+            'zoom_in':  pygame.Rect(nav_x, nav_by - btn_sz - margin, btn_sz, btn_sz),
+            'zoom_out': pygame.Rect(nav_x, nav_by, btn_sz, btn_sz),
         }
         self._nav_labels = {
             'zoom_in': '+',
             'zoom_out': '\u2212',  # minus sign
         }
 
-        # ── X close button (top-right of box) ──────────────────────
-        _xsz = int(0.028 * _SH)
-        _xmargin = int(0.012 * _SW)
-        self._btn_close_rect = pygame.Rect(
-            _BOX_X + _BOX_W - _xsz - _xmargin,
-            _BOX_Y + _xmargin,
-            _xsz, _xsz)
+        # ── X close button (top-right of header) ───────────────────
+        self._btn_close_rect = self._layout['close']
 
-        # ── Notifications button (inside box, top-right, left of X) ─
-        notif_w = int(0.12 * _SW)
-        notif_h = int(0.04 * _SH)
-        self._btn_notif = pygame.Rect(
-            self._btn_close_rect.x - notif_w - _xmargin,
-            _BOX_Y + _BOX_PAD,
-            notif_w, notif_h,
-        )
         self._badge_font = settings.get_font(int(0.016 * _SH), bold=True)
         self._notif_btn_font = settings.get_font(int(0.018 * _SH), bold=True)
+
+        # ── Collect All gold button (drawn in info bar) ────────────
+        self._collect_all_rect = None
+        self._floating_text = FloatingTextLayer()
+        self._collect_float_font = settings.get_font(
+            getattr(settings, 'COLLECT_FLOAT_FONT_SIZE', settings.FS_HEADING), bold=True)
 
         # ── Track last load time ────────────────────────────────────
         self._last_load_tick = 0
@@ -126,31 +195,70 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
             lands = data.get('lands', [])
             if self._hex_map is None:
-                self._hex_map = HexMap(lands, self.window)
+                self._hex_map = HexMap(lands, self.window, viewport_rect=self._map_viewport_rect)
             else:
+                self._hex_map.set_viewport(self._map_viewport_rect)
                 self._hex_map.update_data(lands)
 
-            # Position minimap inside the subscreen box (bottom-right)
+            # Position minimap inside the framed map viewport (bottom-right)
             mm_w = settings.MINIMAP_W
             mm_h = settings.MINIMAP_H
             self._hex_map.minimap_origin = (
-                _BOX_X + _BOX_W - mm_w - _BOX_PAD,
-                _BOX_BOTTOM - mm_h - _BOX_PAD,
+                self._map_viewport_rect.right - mm_w - settings.MINIMAP_MARGIN,
+                self._map_viewport_rect.bottom - mm_h - settings.MINIMAP_MARGIN,
             )
+
+            # On enter/reload, focus on the center of the player's largest
+            # connected kingdom so the map opens where most owned lands are.
+            self._focus_largest_kingdom_component()
 
             self._loading = False
             logger.debug(f'Kingdom map loaded: {len(lands)} lands')
-            self._load_notifications()
+            self._load_activity()
         except Exception as e:
             self._error = 'Connection error'
             logger.error(f'Kingdom map load error: {e}')
             self._loading = False
 
+    def _focus_largest_kingdom_component(self):
+        """Center map camera on the largest connected component of owned lands."""
+        if not self._hex_map or not isinstance(self._map_data, dict):
+            return None
+
+        my_kingdom = self._map_data.get('my_kingdom') or {}
+        components = my_kingdom.get('components') or []
+        if not components:
+            return None
+
+        best_land_ids = None
+        best_key = None
+        for component in components:
+            land_ids = [
+                land_id for land_id in (component.get('land_ids') or [])
+                if isinstance(land_id, int)
+            ]
+            if not land_ids:
+                continue
+            size = int(component.get('size') or len(land_ids))
+            key = (size, -min(land_ids))
+            if best_key is None or key > best_key:
+                best_key = key
+                best_land_ids = land_ids
+
+        if not best_land_ids:
+            return None
+
+        if hasattr(self._hex_map, 'focus_lands'):
+            return self._hex_map.focus_lands(best_land_ids)
+
+        # Backward-compatible fallback for older HexMap instances.
+        return self._hex_map.focus_land(best_land_ids[0])
+
     def _load_notifications(self):
-        """Fetch unseen attack notifications."""
+        """Fetch unseen kingdom notifications for attack and defence outcomes."""
         try:
             resp = requests.get(
-                f'{settings.SERVER_URL}/kingdom/attack_notifications', timeout=10)
+                f'{settings.SERVER_URL}/kingdom/notifications', timeout=10)
             if resp.status_code == 200:
                 self._notifications = resp.json().get('notifications', [])
             else:
@@ -159,31 +267,64 @@ class KingdomScreen(MenuScreenMixin, Screen):
             logger.warning(f'Failed to load notifications: {e}')
             self._notifications = []
 
+    def _load_messages(self):
+        """Fetch recent kingdom messages for the activity panel."""
+        try:
+            resp = requests.get(
+                f'{settings.SERVER_URL}/kingdom/messages?limit=20', timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                self._messages = data.get('messages', [])
+                self._message_unread_count = data.get('unread_count', 0)
+            else:
+                self._messages = []
+                self._message_unread_count = 0
+        except Exception as e:
+            logger.warning(f'Failed to load kingdom messages: {e}')
+            self._messages = []
+            self._message_unread_count = 0
+
+    def _load_activity(self):
+        """Fetch unseen alerts and recent attack history for the activity panel."""
+        self._load_notifications()
+        try:
+            resp = requests.get(
+                f'{settings.SERVER_URL}/kingdom/attack_history?per_page=20', timeout=10)
+            if resp.status_code == 200:
+                self._attack_history = resp.json().get('history', [])
+            else:
+                self._attack_history = []
+        except Exception as e:
+            logger.warning(f'Failed to load attack history: {e}')
+            self._attack_history = []
+        self._load_messages()
+
     # ── Rendering ───────────────────────────────────────────────────
 
     def render(self):
         self._draw_menu_chrome()
 
         # Outer box
-        box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
-        _draw_panel(self.window, box_rect)
+        _draw_panel(self.window, self._box_rect)
 
         # Title (centred inside box)
-        tx = _BOX_X + (_BOX_W - self._title_surf.get_width()) // 2
+        tx = self._header_rect.x + (self._header_rect.w - self._title_surf.get_width()) // 2
         self.window.blit(self._title_surf, (tx, self._title_y))
+        self._draw_info_bar()
+        self._draw_map_frame()
+        self._draw_activity_panel()
 
         if self._loading:
             txt = self._info_font.render('Loading kingdom map...', True,
                                          settings.KINGDOM_INFO_CLR)
-            self.window.blit(txt, txt.get_rect(center=(_SW // 2, _SH // 2)))
+            self.window.blit(txt, txt.get_rect(center=self._map_frame_rect.center))
         elif self._error:
             txt = self._info_font.render(self._error, True, (200, 80, 80))
-            self.window.blit(txt, txt.get_rect(center=(_SW // 2, _SH // 2)))
+            self.window.blit(txt, txt.get_rect(center=self._map_frame_rect.center))
         elif self._hex_map:
+            self._hex_map.set_viewport(self._map_viewport_rect)
             self._hex_map.render()
-            self._draw_info_bar()
             self._draw_nav_buttons()
-            self._draw_notif_button()
 
         self._draw_close_x_button()
 
@@ -192,6 +333,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._notif_dialogue.draw()
         if self._detail_box:
             self._detail_box.render()
+        if self._message_compose:
+            self._draw_message_compose()
+
+        # Floating text (gold collect / level up) above modals' chrome
+        now_ms = pygame.time.get_ticks()
+        self._floating_text.update(now_ms)
+        self._floating_text.draw(self.window)
 
         self._draw_menu_overlay()
 
@@ -210,20 +358,344 @@ class KingdomScreen(MenuScreenMixin, Screen):
         txt = _xfont.render('\u00d7', True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=r.center))
 
+    def _draw_map_frame(self):
+        """Draw the dedicated map frame that owns map rendering and input."""
+        r = self._map_frame_rect
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, settings.KINGDOM_MAP_FRAME_BG, surf.get_rect(), border_radius=8)
+        self.window.blit(surf, r.topleft)
+        pygame.draw.rect(self.window, settings.KINGDOM_MAP_FRAME_BORDER, r,
+                         settings.KINGDOM_MAP_FRAME_BORDER_W, border_radius=8)
+
+    def _draw_activity_panel(self):
+        """Draw the right-side activity panel with alert/history tabs."""
+        r = self._activity_rect
+        self._activity_tab_rects = {}
+        self._activity_row_rects = []
+        self._mark_read_rect = None
+        self._mark_read_kind = None
+
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, settings.KINGDOM_ACTIVITY_BG, surf.get_rect(), border_radius=8)
+        self.window.blit(surf, r.topleft)
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER, r, 1, border_radius=8)
+
+        old_clip = self.window.get_clip()
+        self.window.set_clip(r)
+        try:
+            title = self._activity_title_font.render('Kingdom Activity', True, settings.KINGDOM_INFO_CLR)
+            self.window.blit(title, (r.x + 10, r.y + 8))
+
+            msg_label = 'Messages'
+            if self._message_unread_count:
+                msg_label = f'Messages ({self._message_unread_count})'
+            tabs = [('alerts', f'Alerts ({len(self._notifications)})'),
+                    ('history', 'History'),
+                    ('messages', msg_label)]
+            tab_y = r.y + 34
+            tab_h = int(0.036 * _SH)
+            tab_gap = 4
+            tab_w = (r.w - 20 - tab_gap * (len(tabs) - 1)) // len(tabs)
+            for i, (key, label) in enumerate(tabs):
+                tr = pygame.Rect(r.x + 10 + i * (tab_w + tab_gap), tab_y, tab_w, tab_h)
+                self._activity_tab_rects[key] = tr
+                bg = (settings.KINGDOM_ACTIVITY_TAB_ACTIVE_BG
+                      if self._activity_tab == key else settings.KINGDOM_ACTIVITY_TAB_BG)
+                pygame.draw.rect(self.window, bg, tr, border_radius=5)
+                pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER, tr, 1, border_radius=5)
+                label = self._fit_text(label, self._activity_small_font, tr.w - 8)
+                lbl = self._activity_small_font.render(label, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+                self.window.blit(lbl, lbl.get_rect(center=tr.center))
+
+            content_top = tab_y + tab_h + 10
+            if self._activity_tab == 'alerts':
+                rows = self._notifications
+                empty = 'No new kingdom alerts.'
+                if rows:
+                    self._mark_read_rect = pygame.Rect(r.right - 102, r.y + 8, 88, 20)
+                    self._mark_read_kind = 'alerts'
+                    pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_TAB_BG,
+                                     self._mark_read_rect, border_radius=5)
+                    pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
+                                     self._mark_read_rect, 1, border_radius=5)
+                    mark = self._activity_small_font.render('Mark read', True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+                    self.window.blit(mark, mark.get_rect(center=self._mark_read_rect.center))
+            elif self._activity_tab == 'history':
+                rows = self._attack_history
+                empty = 'No attacks yet.'
+            elif self._activity_tab == 'messages':
+                rows = self._messages
+                empty = 'No kingdom messages yet. Click another player land and choose Message.'
+                if self._message_unread_count:
+                    self._mark_read_rect = pygame.Rect(r.right - 102, r.y + 8, 88, 20)
+                    self._mark_read_kind = 'messages'
+                    pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_TAB_BG,
+                                     self._mark_read_rect, border_radius=5)
+                    pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
+                                     self._mark_read_rect, 1, border_radius=5)
+                    mark = self._activity_small_font.render('Mark read', True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+                    self.window.blit(mark, mark.get_rect(center=self._mark_read_rect.center))
+            else:
+                rows = []
+                empty = 'Select a kingdom activity tab.'
+
+            if not rows:
+                empty_rect = pygame.Rect(r.x + 12, content_top + 8,
+                                         r.w - 24, r.bottom - content_top - 18)
+                self._draw_wrapped_text(empty, self._activity_font,
+                                        settings.KINGDOM_ACTIVITY_DIM_CLR, empty_rect)
+                return
+
+            row_h = settings.KINGDOM_ACTIVITY_ROW_H
+            y = content_top
+            max_bottom = r.bottom - 10
+            for item in rows[:7]:
+                if y + row_h > max_bottom:
+                    break
+                rr = pygame.Rect(r.x + 10, y, r.w - 20, row_h - 4)
+                self._activity_row_rects.append((rr, item))
+                self._draw_activity_row(rr, item)
+                y += row_h
+        finally:
+            self.window.set_clip(old_clip)
+
+    def _draw_activity_row(self, rect, item):
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_ROW_BG, rect, border_radius=6)
+        pygame.draw.rect(self.window, (90, 85, 105), rect, 1, border_radius=6)
+        title, detail, good = self._format_activity_item(item)
+        max_w = rect.w - 16
+        title = self._fit_text(title, self._activity_font, max_w)
+        detail = self._fit_text(detail, self._activity_small_font, max_w)
+        if self._is_message_item(item):
+            unread = (item.get('recipient_user_id') == self._current_user_id()
+                      and not item.get('seen_by_recipient'))
+            title_clr = settings.KINGDOM_INFO_CLR if unread else settings.KINGDOM_ACTIVITY_TEXT_CLR
+        else:
+            title_clr = (settings.KINGDOM_ACTIVITY_GOOD_CLR if good else settings.KINGDOM_ACTIVITY_BAD_CLR)
+        title_surf = self._activity_font.render(title, True, title_clr)
+        detail_surf = self._activity_small_font.render(detail, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+        self.window.blit(title_surf, (rect.x + 8, rect.y + 6))
+        self.window.blit(detail_surf, (rect.x + 8, rect.y + 26))
+
+        land = self._activity_small_font.render(self._activity_land_label(item), True,
+                                                settings.KINGDOM_ACTIVITY_DIM_CLR)
+        self.window.blit(land, (rect.x + 8, rect.bottom - land.get_height() - 5))
+
+    def _draw_wrapped_text(self, text, font, color, rect, line_gap=2):
+        """Draw text wrapped inside rect and clipped to rect bounds."""
+        old_clip = self.window.get_clip()
+        self.window.set_clip(rect.clip(old_clip))
+        try:
+            line_h = font.get_height() + line_gap
+            max_lines = max(1, rect.h // line_h)
+            for i, line in enumerate(self._wrap_text(text, font, rect.w, max_lines=max_lines)):
+                surf = font.render(line, True, color)
+                self.window.blit(surf, (rect.x, rect.y + i * line_h))
+        finally:
+            self.window.set_clip(old_clip)
+
+    def _wrap_text(self, text, font, max_width, max_lines=None):
+        """Return text lines that fit max_width, adding ellipsis if truncated."""
+        words = str(text).split()
+        if not words:
+            return ['']
+        lines = []
+        current = ''
+        for word in words:
+            candidate = word if not current else f'{current} {word}'
+            if font.size(candidate)[0] <= max_width:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+                current = word
+                if font.size(current)[0] > max_width:
+                    lines.append(self._fit_text(current, font, max_width))
+                    current = ''
+            else:
+                lines.append(self._fit_text(word, font, max_width))
+                current = ''
+            if max_lines and len(lines) >= max_lines:
+                break
+        if current and (not max_lines or len(lines) < max_lines):
+            lines.append(current)
+        if max_lines and len(lines) >= max_lines and words:
+            lines[-1] = self._fit_text(lines[-1], font, max_width)
+        return lines or ['']
+
+    def _fit_text(self, text, font, max_width):
+        if font.size(text)[0] <= max_width:
+            return text
+        ellipsis = '...'
+        clipped = text
+        while clipped and font.size(clipped + ellipsis)[0] > max_width:
+            clipped = clipped[:-1]
+        return (clipped + ellipsis) if clipped else ellipsis
+
+    def _format_activity_item(self, item):
+        if self._is_message_item(item):
+            return self._format_message_item(item)
+        if self._is_kingdom_event_item(item):
+            return self._format_kingdom_event_item(item)
+        attacker = item.get('attacker_username') or item.get('attacker_name') or 'Unknown'
+        defender = item.get('defender_username') or 'AI'
+        result = item.get('result')
+        is_defender_alert = item in self._notifications
+        current_user_id = self._current_user_id()
+        is_attacker = current_user_id is not None and item.get('attacker_user_id') == current_user_id
+        is_defender = current_user_id is not None and item.get('defender_user_id') == current_user_id
+        if result == 'attacker_won':
+            if is_defender_alert or is_defender:
+                title = f'{attacker} conquered your land'
+                deleted = item.get('kingdom_deleted_name')
+                detail = (f'{deleted} had no lands left and was dissolved.' if deleted
+                          else self._card_detail(item, lost=True) or 'Land ownership changed.')
+                return title, detail, False
+            if is_attacker:
+                title = f'You conquered {defender}'
+                detail = self._card_detail(item, won=True) or 'Attack succeeded.'
+                return title, detail, True
+            title = f'{attacker} conquered {defender}'
+            detail = self._card_detail(item, won=True) or 'Attack succeeded.'
+            return title, detail, True
+        if is_defender_alert or is_defender:
+            title = f'{attacker} failed to conquer you'
+            detail = self._card_detail(item, won=True) or 'Your defence held.'
+            return title, detail, True
+        if is_attacker:
+            title = f'Your attack on {defender} failed'
+            detail = self._card_detail(item, lost=True) or 'Attack failed.'
+            return title, detail, False
+        title = f'{attacker} failed against {defender}'
+        detail = self._card_detail(item, lost=True) or 'Attack failed.'
+        return title, detail, False
+
+    def _is_message_item(self, item):
+        return 'sender_user_id' in item and 'recipient_user_id' in item and 'message' in item
+
+    def _format_message_item(self, item):
+        current_user_id = self._current_user_id()
+        is_sent = item.get('sender_user_id') == current_user_id
+        other = item.get('recipient_username') if is_sent else item.get('sender_username')
+        other = other or 'Unknown'
+        title = f'To {other}' if is_sent else f'From {other}'
+        detail = item.get('message') or ''
+        return title, detail, True
+
+    def _is_kingdom_event_item(self, item):
+        """True for KingdomNotification rows (have ``kind`` + ``payload``)."""
+        return ('kind' in item and 'payload' in item
+                and 'attacker_user_id' not in item
+                and 'sender_user_id' not in item)
+
+    def _format_kingdom_event_item(self, item):
+        kind = item.get('kind') or ''
+        payload = item.get('payload') or {}
+        if kind == 'xp_gained':
+            amount = int(payload.get('amount') or 0)
+            reason = payload.get('reason') or 'conquer'
+            level = int(payload.get('level') or 0)
+            title = f'+{amount} XP gained'
+            detail = f'Kingdom level {level} ({reason}).' if level else f'Earned from {reason}.'
+            return title, detail, True
+        if kind == 'level_up':
+            new_level = int(payload.get('new_level') or 0)
+            sp = int(payload.get('sp_gained') or 0)
+            title = f'Kingdom reached level {new_level}!'
+            detail = f'+{sp} skill point{"s" if sp != 1 else ""}.' if sp else 'Level up!'
+            return title, detail, True
+        if kind == 'kingdoms_merged':
+            absorbed = payload.get('absorbed_kingdom_name') or 'A kingdom'
+            lands = int(payload.get('absorbed_lands') or 0)
+            xp = int(payload.get('xp_awarded') or 0)
+            title = 'Kingdoms merged'
+            detail = f'{absorbed} absorbed ({lands} lands, +{xp} XP).'
+            return title, detail, True
+        if kind == 'kingdom_dissolved':
+            name = payload.get('kingdom_name') or 'Your kingdom'
+            title = 'Kingdom dissolved'
+            detail = f'{name} had no lands left.'
+            return title, detail, False
+        if kind == 'skill_downgraded':
+            skill = payload.get('skill') or 'A skill'
+            title = 'Skill downgraded'
+            detail = f'{skill} level decreased.'
+            return title, detail, False
+        # Generic fallback
+        title = (kind or 'Kingdom event').replace('_', ' ').capitalize()
+        detail = ''
+        return title, detail, True
+
+    def _current_user_id(self):
+        data = getattr(self.state, 'user_dict', None) or {}
+        return data.get('id') or data.get('user_id')
+
+    def _card_detail(self, item, won=False, lost=False):
+        if won:
+            suit = item.get('card_won_suit')
+            rank = item.get('card_won_rank')
+            if suit and rank:
+                return f'Card won: {rank} of {suit}'
+        if lost:
+            suit = item.get('card_lost_suit')
+            rank = item.get('card_lost_rank')
+            if suit and rank:
+                return f'Card lost: {rank} of {suit}'
+        return ''
+
+    def _activity_land_label(self, item):
+        col = item.get('land_col')
+        row = item.get('land_row')
+        land_id = item.get('land_id')
+        if col is not None and row is not None:
+            return f'Land ({col}, {row})'
+        if land_id is not None:
+            return f'Land #{land_id}'
+        return 'Kingdom land'
+
     def _draw_info_bar(self):
         """Draw production rate / lands count bar at top of box, below title."""
+        # Reset clickable rect each frame
+        self._collect_all_rect = None
         if not self._map_data:
             return
 
         rate = self._map_data.get('my_total_gold_rate', 0)
+        effective_rate = self._map_data.get('my_effective_gold_rate', rate)
         count = self._map_data.get('my_lands_count', 0)
-        text = f'Your lands: {count}    Gold rate: {rate:.1f}/hr'
+        kingdom = self._map_data.get('my_kingdom') or {}
+        connected = int(kingdom.get('largest_component_size', 0) or 0)
+
+        # Aggregate vault stats across all owned kingdoms
+        my_kingdoms = self._map_data.get('my_kingdoms') or []
+        pending_total = 0.0
+        any_full = False
+        any_near_full = False
+        near_ratio = float(getattr(settings, 'KINGDOM_VAULT_NEAR_FULL_RATIO', 0.80))
+        for k in my_kingdoms:
+            pending = float(k.get('pending_gold') or 0.0)
+            cap = float(k.get('vault_cap') or 0.0)
+            pending_total += pending
+            if cap > 0:
+                ratio = pending / cap if cap else 0
+                if ratio >= 0.999:
+                    any_full = True
+                elif ratio >= near_ratio:
+                    any_near_full = True
+
+        if abs(float(effective_rate or 0) - float(rate or 0)) >= 0.05:
+            gold_text = f'Gold rate: {effective_rate:.1f}/hr (base {rate:.1f})'
+        else:
+            gold_text = f'Gold rate: {rate:.1f}/hr'
+        text = f'Your lands: {count}    {gold_text}    Connected kingdom: {connected} lands'
         if self._cooldown > 0:
             hours = self._cooldown // 3600
             mins = (self._cooldown % 3600) // 60
             text += f'    Conquer cooldown: {hours}h {mins}m'
 
-        txt_surf = self._info_font.render(text, True, settings.KINGDOM_INFO_CLR)
+        # Color gold-rate-bearing text red when any vault is full (production stalled)
+        info_clr = (220, 90, 90) if any_full else settings.KINGDOM_INFO_CLR
+        txt_surf = self._info_font.render(text, True, info_clr)
         px = settings.KINGDOM_INFO_PAD_X
         py = settings.KINGDOM_INFO_PAD_Y
         bw = txt_surf.get_width() + px * 2
@@ -231,10 +703,47 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         box = pygame.Surface((bw, bh), pygame.SRCALPHA)
         box.fill(settings.KINGDOM_INFO_BG_CLR)
-        bar_x = _BOX_X + (_BOX_W - bw) // 2
-        bar_y = _BOX_Y + _BOX_PAD + self._title_surf.get_height() + int(0.005 * _SH)
+        bar_x = self._header_rect.x + (self._header_rect.w - bw) // 2
+        bar_y = self._header_rect.y + self._title_surf.get_height() + int(0.006 * _SH)
         self.window.blit(box, (bar_x, bar_y))
         self.window.blit(txt_surf, (bar_x + px, bar_y + py))
+
+        # Collect All button (right of info bar)
+        if my_kingdoms:
+            label = f'Collect All: {int(pending_total)}g'
+            if any_full:
+                label += '  (FULL!)'
+            btn_font = self._nav_font
+            btn_surf = btn_font.render(label, True, (240, 230, 180))
+            bpx = int(0.012 * _SW)
+            bpy = int(0.006 * _SH)
+            btn_w = btn_surf.get_width() + bpx * 2
+            btn_h = max(bh, btn_surf.get_height() + bpy * 2)
+            btn_x = bar_x + bw + int(0.010 * _SW)
+            # Keep button inside header area; if overflow, place to right of title within header
+            max_right = self._header_rect.right - self._btn_close_rect.w - int(0.012 * _SW)
+            if btn_x + btn_w > max_right:
+                btn_x = max(self._header_rect.x, max_right - btn_w)
+            btn_y = bar_y + (bh - btn_h) // 2
+            rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+
+            mx, my = pygame.mouse.get_pos()
+            hovered = rect.collidepoint(mx, my)
+            if any_full:
+                bg = (140, 50, 50, 230) if hovered else (110, 40, 40, 210)
+                border = (220, 120, 120)
+            elif any_near_full:
+                bg = (130, 110, 50, 230) if hovered else (100, 85, 40, 210)
+                border = (220, 200, 120)
+            else:
+                bg = (60, 80, 60, 230) if hovered else (45, 60, 45, 210)
+                border = (160, 200, 160)
+            bsurf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(bsurf, bg, bsurf.get_rect(), border_radius=6)
+            pygame.draw.rect(bsurf, border, bsurf.get_rect(), 1, border_radius=6)
+            self.window.blit(bsurf, rect.topleft)
+            self.window.blit(btn_surf, btn_surf.get_rect(center=rect.center))
+            self._collect_all_rect = rect
 
     def _draw_nav_buttons(self):
         """Draw zoom +/- buttons in the bottom-left corner."""
@@ -302,11 +811,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
-        _box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
-
         for event in events:
             # Icon buttons (settings, home, logout) — highest priority
             if self._handle_icon_events(event):
+                continue
+
+            # Message composer captures normal kingdom input.
+            if self._message_compose:
+                self._handle_message_compose_event(event)
                 continue
 
             # X close button
@@ -323,7 +835,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     and not self.dialogue_box
                     and not self._detail_box
                     and not self._notif_dialogue
-                    and not _box_rect.collidepoint(event.pos)):
+                    and not (self._hex_map and self._hex_map.is_drag_release(event))
+                    and not self._box_rect.collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
                 return
 
@@ -342,11 +855,22 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     land_id = self._detail_box.tile.land_id if self._detail_box else '?'
                     logger.info(f'Defence config requested for land {land_id}')
                     self._detail_box = None
+                elif action == 'message':
+                    self._detail_box = None
                 elif action == 'close':
                     self._detail_box = None
                 continue
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
+                if self._handle_activity_click(event.pos):
+                    continue
+
+                # Collect All gold button (info bar)
+                if (self._collect_all_rect
+                        and self._collect_all_rect.collidepoint(event.pos)):
+                    self._collect_all_gold()
+                    continue
+
                 # Nav buttons
                 handled_nav = False
                 for key, rect in self._nav_rects.items():
@@ -358,11 +882,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
                         handled_nav = True
                         break
                 if handled_nav:
-                    continue
-
-                # Notification button
-                if self._btn_notif.collidepoint(event.pos):
-                    self._show_notifications()
                     continue
 
                 # Minimap click
@@ -390,6 +909,251 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         if keys[K_ESCAPE] and not self._detail_box:
             self.state.screen = 'game_menu'
+
+    def _collect_all_gold(self):
+        """POST to /kingdom/collect_gold_all and spawn a floating-text burst."""
+        if not self._collect_all_rect:
+            return
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/collect_gold_all', timeout=15)
+            if resp.status_code != 200:
+                logger.error(f'collect_gold_all failed: {resp.status_code}')
+                return
+            data = resp.json() or {}
+        except Exception as exc:
+            logger.error(f'collect_gold_all error: {exc}')
+            return
+
+        breakdown = data.get('kingdoms') or []
+        center = self._collect_all_rect.center
+        stagger = int(getattr(settings, 'COLLECT_FLOAT_STAGGER_MS', 80))
+        rise_px = int(getattr(settings, 'COLLECT_FLOAT_RISE_PX',
+                              int(0.07 * _SH)))
+        duration = int(getattr(settings, 'COLLECT_FLOAT_DURATION_MS', 900))
+        gold_clr = getattr(settings, 'COLLECT_FLOAT_GOLD_CLR', (255, 220, 90))
+        if breakdown:
+            for i, entry in enumerate(breakdown):
+                amt = int(round(float(entry.get('collected') or 0)))
+                if amt <= 0:
+                    continue
+                self._floating_text.add(FloatingText(
+                    f'+{amt}g',
+                    center,
+                    color=gold_clr,
+                    duration_ms=duration,
+                    rise_px=rise_px,
+                    font=self._collect_float_font,
+                    delay_ms=i * stagger,
+                ))
+        else:
+            total = int(round(float(data.get('collected') or 0)))
+            if total > 0:
+                self._floating_text.add(FloatingText(
+                    f'+{total}g',
+                    center,
+                    color=gold_clr,
+                    duration_ms=duration,
+                    rise_px=rise_px,
+                    font=self._collect_float_font,
+                ))
+        # Refresh map data so vault bars / pending totals update
+        self._load_map()
+
+    def _handle_activity_click(self, pos):
+        """Handle clicks in the right activity panel. Returns True if handled."""
+        if not self._activity_rect.collidepoint(pos):
+            return False
+        for key, rect in self._activity_tab_rects.items():
+            if rect.collidepoint(pos):
+                self._activity_tab = key
+                return True
+        if self._mark_read_rect and self._mark_read_rect.collidepoint(pos):
+            if self._mark_read_kind == 'messages':
+                self._mark_messages_seen()
+            else:
+                self._mark_notifications_seen()
+            return True
+        for rect, item in self._activity_row_rects:
+            if rect.collidepoint(pos):
+                if self._is_message_item(item):
+                    self._open_reply_to_message(item)
+                    return True
+                land_id = item.get('land_id')
+                if land_id and self._hex_map:
+                    tile = self._hex_map.focus_land(land_id)
+                    if tile:
+                        self.state.set_msg(f'Focused {self._activity_land_label(item)}')
+                return True
+        return True
+
+    # ── Kingdom messages ─────────────────────────────────────────────────────────
+
+    def _open_message_compose(self, recipient_user_id, recipient_username, land_id=None):
+        """Open the message composer for a kingdom user."""
+        if not recipient_user_id:
+            self.state.set_msg('Cannot message AI defenders.')
+            return
+        if recipient_user_id == self._current_user_id():
+            self.state.set_msg('You cannot message yourself.')
+            return
+        self._message_compose = {
+            'recipient_user_id': recipient_user_id,
+            'recipient_username': recipient_username or 'Player',
+            'land_id': land_id,
+            'text': '',
+            'error': '',
+        }
+        self._activity_tab = 'messages'
+
+    def _open_reply_to_message(self, item):
+        """Open composer to reply to the other participant in a message row."""
+        current_user_id = self._current_user_id()
+        if item.get('sender_user_id') == current_user_id:
+            recipient_user_id = item.get('recipient_user_id')
+            recipient_username = item.get('recipient_username')
+        else:
+            recipient_user_id = item.get('sender_user_id')
+            recipient_username = item.get('sender_username')
+        self._open_message_compose(
+            recipient_user_id,
+            recipient_username,
+            land_id=item.get('land_id'),
+        )
+
+    def _handle_message_compose_event(self, event):
+        """Handle input for the message composer. Returns True when captured."""
+        if not self._message_compose:
+            return False
+        if event.type == KEYDOWN:
+            if event.key == K_ESCAPE:
+                self._message_compose = None
+            elif event.key == K_BACKSPACE:
+                self._message_compose['text'] = self._message_compose.get('text', '')[:-1]
+                self._message_compose['error'] = ''
+            elif event.key == K_RETURN:
+                self._send_kingdom_message()
+            return True
+        if event.type == pygame.TEXTINPUT:
+            text = self._message_compose.get('text', '')
+            if len(text) < 500:
+                self._message_compose['text'] = (text + event.text)[:500]
+                self._message_compose['error'] = ''
+            return True
+        if event.type == MOUSEBUTTONUP and event.button == 1:
+            if self._message_cancel_rect and self._message_cancel_rect.collidepoint(event.pos):
+                self._message_compose = None
+                return True
+            if self._message_send_rect and self._message_send_rect.collidepoint(event.pos):
+                self._send_kingdom_message()
+                return True
+        return True
+
+    def _send_kingdom_message(self):
+        """Send the current composer text through the kingdom message endpoint."""
+        if not self._message_compose:
+            return False
+        text = (self._message_compose.get('text') or '').strip()
+        if not text:
+            self._message_compose['error'] = 'Write a message first.'
+            return False
+        payload = {
+            'recipient_user_id': self._message_compose.get('recipient_user_id'),
+            'land_id': self._message_compose.get('land_id'),
+            'message': text,
+        }
+        try:
+            resp = requests.post(f'{settings.SERVER_URL}/kingdom/messages',
+                                 json=payload, timeout=10)
+            data = resp.json() if hasattr(resp, 'json') else {}
+            if resp.status_code == 200 and data.get('success'):
+                recipient = self._message_compose.get('recipient_username') or 'player'
+                self._message_compose = None
+                self._activity_tab = 'messages'
+                self._load_messages()
+                self.state.set_msg(f'Message sent to {recipient}.')
+                return True
+            self._message_compose['error'] = data.get('message', 'Message failed.')
+        except Exception as e:
+            logger.warning(f'Failed to send kingdom message: {e}')
+            self._message_compose['error'] = 'Connection error.'
+        return False
+
+    def _draw_message_compose(self):
+        """Draw a modal message composer."""
+        sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+        overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 130))
+        self.window.blit(overlay, (0, 0))
+
+        box = pygame.Rect(0, 0, int(0.42 * sw), int(0.31 * sh))
+        box.center = (sw // 2, sh // 2)
+        surf = pygame.Surface((box.w, box.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, settings.KINGDOM_ACTIVITY_BG, surf.get_rect(), border_radius=8)
+        self.window.blit(surf, box.topleft)
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER, box, 1, border_radius=8)
+
+        pad = int(0.018 * sh)
+        y = box.y + pad
+        recipient = self._message_compose.get('recipient_username') or 'Player'
+        title = self._activity_title_font.render(f'Message {recipient}', True, settings.KINGDOM_INFO_CLR)
+        self.window.blit(title, (box.x + pad, y))
+        y += title.get_height() + 8
+
+        land_id = self._message_compose.get('land_id')
+        helper = 'Enter sends. Esc cancels.'
+        if land_id:
+            helper = f'About Land #{land_id}.  {helper}'
+        helper_surf = self._activity_small_font.render(helper, True, settings.KINGDOM_ACTIVITY_DIM_CLR)
+        self.window.blit(helper_surf, (box.x + pad, y))
+        y += helper_surf.get_height() + 10
+
+        self._message_input_rect = pygame.Rect(
+            box.x + pad,
+            y,
+            box.w - 2 * pad,
+            int(0.072 * sh),
+        )
+        pygame.draw.rect(self.window, (18, 17, 24, 235), self._message_input_rect, border_radius=6)
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
+                         self._message_input_rect, 1, border_radius=6)
+        text = self._message_compose.get('text') or ''
+        placeholder = 'Write message...'
+        display = text if text else placeholder
+        color = settings.KINGDOM_ACTIVITY_TEXT_CLR if text else settings.KINGDOM_ACTIVITY_DIM_CLR
+        input_text = self._fit_text(display, self._activity_font, self._message_input_rect.w - 16)
+        input_surf = self._activity_font.render(input_text, True, color)
+        self.window.blit(input_surf, (self._message_input_rect.x + 8,
+                                      self._message_input_rect.centery - input_surf.get_height() // 2))
+
+        if text and (pygame.time.get_ticks() // 500) % 2 == 0:
+            cursor_x = self._message_input_rect.x + 10 + min(
+                self._activity_font.size(text)[0], self._message_input_rect.w - 24)
+            pygame.draw.line(self.window, settings.KINGDOM_ACTIVITY_TEXT_CLR,
+                             (cursor_x, self._message_input_rect.y + 8),
+                             (cursor_x, self._message_input_rect.bottom - 8), 1)
+
+        y = self._message_input_rect.bottom + 8
+        err = self._message_compose.get('error')
+        if err:
+            err_surf = self._activity_small_font.render(err, True, settings.KINGDOM_ACTIVITY_BAD_CLR)
+            self.window.blit(err_surf, (box.x + pad, y))
+
+        btn_w = int(0.095 * sw)
+        btn_h = int(0.042 * sh)
+        gap = int(0.012 * sw)
+        by = box.bottom - pad - btn_h
+        self._message_cancel_rect = pygame.Rect(box.right - pad - btn_w * 2 - gap, by, btn_w, btn_h)
+        self._message_send_rect = pygame.Rect(box.right - pad - btn_w, by, btn_w, btn_h)
+        self._draw_compose_button(self._message_cancel_rect, 'Cancel', active=False)
+        self._draw_compose_button(self._message_send_rect, 'Send', active=True)
+
+    def _draw_compose_button(self, rect, label, active=False):
+        bg = settings.KINGDOM_ACTIVITY_TAB_ACTIVE_BG if active else settings.KINGDOM_ACTIVITY_TAB_BG
+        pygame.draw.rect(self.window, bg, rect, border_radius=5)
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER, rect, 1, border_radius=5)
+        txt = self._activity_font.render(label, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+        self.window.blit(txt, txt.get_rect(center=rect.center))
 
     # ── Notifications ───────────────────────────────────────────────
 
@@ -420,11 +1184,30 @@ class KingdomScreen(MenuScreenMixin, Screen):
             return
         try:
             requests.post(
-                f'{settings.SERVER_URL}/kingdom/attack_notifications/mark_seen',
+                f'{settings.SERVER_URL}/kingdom/notifications/mark_seen',
                 json={'notification_ids': ids}, timeout=10)
         except Exception as e:
             logger.warning(f'Failed to mark notifications seen: {e}')
         self._notifications = []
+
+    def _mark_messages_seen(self):
+        """Tell the server to mark received kingdom messages as read."""
+        current_user_id = self._current_user_id()
+        ids = [m.get('id') for m in self._messages
+               if m.get('id') and m.get('recipient_user_id') == current_user_id]
+        if not ids:
+            self._message_unread_count = 0
+            return
+        try:
+            requests.post(
+                f'{settings.SERVER_URL}/kingdom/messages/mark_seen',
+                json={'message_ids': ids}, timeout=10)
+        except Exception as e:
+            logger.warning(f'Failed to mark kingdom messages seen: {e}')
+        for msg in self._messages:
+            if msg.get('id') in ids:
+                msg['seen_by_recipient'] = True
+        self._message_unread_count = 0
 
     # ── Detail box ──────────────────────────────────────────────────
 
@@ -436,6 +1219,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             land_cooldown=getattr(tile, 'conquer_cooldown_remaining', 0),
             on_conquer=self._on_conquer,
             on_defence=self._on_defence,
+            on_config=self._on_configure_kingdom,
+            on_message=self._on_message_owner,
             on_close=lambda: setattr(self, '_detail_box', None),
         )
 
@@ -450,3 +1235,19 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self.state.defence_land_id = tile.land_id
         self.state.screen = 'defence'
         self._detail_box = None
+
+    def _on_configure_kingdom(self, tile):
+        """Transition to the kingdom configuration screen for this land."""
+        self.state.kingdom_config_land_id = tile.land_id
+        self.state.kingdom_config_id = getattr(tile, 'kingdom_id', None)
+        self.state.screen = 'kingdom_config'
+        self._detail_box = None
+
+    def _on_message_owner(self, tile):
+        """Open the kingdom message composer for a land owner."""
+        self._detail_box = None
+        self._open_message_compose(
+            getattr(tile, 'owner_user_id', None),
+            getattr(tile, 'owner_username', None) or 'Owner',
+            land_id=getattr(tile, 'land_id', None),
+        )

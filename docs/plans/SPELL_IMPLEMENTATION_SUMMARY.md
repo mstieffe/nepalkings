@@ -3,7 +3,7 @@
 ## What Has Been Implemented
 
 ### 1. Architecture & Planning ✅
-- Created comprehensive implementation plan in `SPELL_IMPLEMENTATION_PLAN.md`
+- Created comprehensive implementation plan in `docs/plans/SPELL_IMPLEMENTATION_PLAN.md`
 - Designed confirmation flow similar to figure building
 - Designed counter spell mechanism for client-side handling
 - Defined spell type effects (greed, enchantment, tactics)
@@ -212,7 +212,7 @@ Updated `game/core/game.py`:
 
 ```
 nepal_kings/
-├── SPELL_IMPLEMENTATION_PLAN.md      # Detailed architecture
+├── docs/plans/SPELL_IMPLEMENTATION_PLAN.md  # Detailed architecture
 ├── nepal_kings/
 │   ├── game/
 │   │   ├── components/

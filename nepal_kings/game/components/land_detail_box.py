@@ -124,18 +124,23 @@ class LandDetailBox:
         land_cooldown – land protection cooldown seconds remaining (0 = ready)
         on_conquer  – callback when Conquer is clicked  (tile)
         on_defence  – callback when Configure Defence is clicked  (tile)
+        on_config   – callback when Configure Kingdom is clicked  (tile)
         on_close    – callback when box is dismissed
+        on_message  – callback when Message Owner is clicked  (tile)
     """
 
     def __init__(self, window, tile, cooldown=0, land_cooldown=0,
-                 on_conquer=None, on_defence=None, on_close=None):
+                 on_conquer=None, on_defence=None, on_close=None,
+                 on_message=None, on_config=None):
         self.window = window
         self.tile = tile
         self._base_cooldown = max(0, int(cooldown or 0))
         self._base_land_cooldown = max(0, int(land_cooldown or 0))
         self._on_conquer = on_conquer
         self._on_defence = on_defence
+        self._on_config = on_config
         self._on_close = on_close
+        self._on_message = on_message
         self._created_at = pygame.time.get_ticks()
         self._last_render_cooldowns = None
 
@@ -203,7 +208,19 @@ class LandDetailBox:
         self._lines.append(('tier', f'Tier {tile.tier}  {tier_label}'))
         self._lines.append(('spacer', ''))
         self._lines.append(('gold', f'Gold production: {tile.gold_rate:.1f} / hour'))
-        self._lines.append(('suit', f'Suit bonus: {tile.suit_bonus_suit} +{tile.suit_bonus_value}'))
+        if tile.suit_bonus_suit == 'Neutral' or not tile.suit_bonus_value:
+            self._lines.append(('suit', 'Suit bonus: none (neutral land)'))
+        else:
+            self._lines.append(('suit', f'Suit bonus: {tile.suit_bonus_suit} +{tile.suit_bonus_value}'))
+        if tile.owner and getattr(tile, 'kingdom_component_size', 0):
+            size = getattr(tile, 'kingdom_component_size', 0) or 0
+            land_word = 'land' if size == 1 else 'lands'
+            self._lines.append(('kingdom', f'Kingdom: {size} connected {land_word}'))
+            bonuses = getattr(tile, 'kingdom_bonuses', {}) or {}
+            if bonuses:
+                bonus_text = ', '.join(str(key).replace('_', ' ')
+                                       for key in sorted(bonuses.keys()))
+                self._lines.append(('kingdom_bonus', f'Bonus: {bonus_text}'))
 
         if tile.is_mine and tile.defence_incomplete:
             self._lines.append(('defence_warning', 'Defence config incomplete!'))
@@ -223,6 +240,11 @@ class LandDetailBox:
             self._lines.append(
                 ('land_cd',
                  f'Land protection active: {_format_cooldown_text(land_cooldown)} remaining'))
+        shield_remaining = getattr(tile, 'kingdom_shield_remaining', 0) or 0
+        if shield_remaining > 0:
+            self._lines.append(
+                ('shield',
+                 f'Kingdom shield active: {_format_cooldown_text(shield_remaining)} remaining'))
 
         # Calculate height
         content_h = pad  # top padding
@@ -238,14 +260,21 @@ class LandDetailBox:
 
         # Buttons
         content_h += pad
-        btn_count = 0
+        button_actions = []
         if tile.is_mine:
-            btn_count = 1  # Configure Defence
+            button_actions.append('defence')
+            button_actions.append('config')
         else:
-            btn_count = 1  # Conquer
-        content_h += (settings.LAND_DETAIL_BTN_H + 8) * btn_count
-        if (cooldown > 0 or land_cooldown > 0) and not tile.is_mine:
+            button_actions.append('conquer')
+            if tile.owner_user_id:
+                button_actions.append('message')
+        btn_count = len(button_actions)
+        button_gap = 8
+        shield_remaining = getattr(tile, 'kingdom_shield_remaining', 0) or 0
+        if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0) and not tile.is_mine:
             content_h += int(line_h * 0.8)  # cooldown sub-text
+        content_h += settings.LAND_DETAIL_BTN_H * btn_count
+        content_h += button_gap * max(0, btn_count - 1)
         content_h += pad  # bottom padding
 
         # Position box (centred on screen)
@@ -263,25 +292,38 @@ class LandDetailBox:
 
         # Create buttons
         btn_x = self._box_rect.centerx - settings.LAND_DETAIL_BTN_W // 2
-        btn_y = self._box_rect.bottom - pad - settings.LAND_DETAIL_BTN_H
-        if (cooldown > 0 or land_cooldown > 0) and not tile.is_mine:
-            btn_y -= int(self._body_font.get_height() * 0.8)
+        extra_after_conquer = 0
+        shield_remaining = getattr(tile, 'kingdom_shield_remaining', 0) or 0
+        if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0) and not tile.is_mine:
+            extra_after_conquer = int(self._body_font.get_height() * 0.8)
+        button_stack_h = settings.LAND_DETAIL_BTN_H * btn_count + button_gap * max(0, btn_count - 1)
+        btn_y = self._box_rect.bottom - pad - button_stack_h - extra_after_conquer
 
         self._buttons = []
         if tile.is_mine:
             btn = _LandButton(self.window, btn_x, btn_y, 'Configure Defence')
             self._buttons.append(('defence', btn))
+            btn_y += settings.LAND_DETAIL_BTN_H + button_gap
+            self._buttons.append(('config', _LandButton(
+                self.window, btn_x, btn_y, 'Configure Kingdom')))
         else:
             # Player cooldown blocks all conquer starts; land cooldown does not
             # block opening conquer setup but is shown as guidance.
-            disabled = cooldown > 0
+            disabled = cooldown > 0 or shield_remaining > 0
             btn = _LandButton(self.window, btn_x, btn_y, 'Conquer', disabled=disabled)
             if disabled:
-                btn.sub_text = f'Your cooldown: {_format_cooldown_text(cooldown)}'
+                if shield_remaining > 0:
+                    btn.sub_text = f'Shield: {_format_cooldown_text(shield_remaining)}'
+                else:
+                    btn.sub_text = f'Your cooldown: {_format_cooldown_text(cooldown)}'
             elif land_cooldown > 0:
                 btn.sub_text = (
                     f'Land protection: {_format_cooldown_text(land_cooldown)}')
             self._buttons.append(('conquer', btn))
+            btn_y += settings.LAND_DETAIL_BTN_H + button_gap + extra_after_conquer
+            if tile.owner_user_id:
+                self._buttons.append(('message', _LandButton(
+                    self.window, btn_x, btn_y, 'Message Owner')))
 
     def update(self):
         if not self.tile.is_mine:
@@ -296,7 +338,7 @@ class LandDetailBox:
     def handle_event(self, event):
         """Process a single event. Returns action string or None.
 
-        Actions: 'conquer', 'defence', 'close'
+        Actions: 'conquer', 'defence', 'config', 'message', 'close'
         """
         # Grace period to prevent accidental click-through
         if pygame.time.get_ticks() - self._created_at < 200:
@@ -315,6 +357,10 @@ class LandDetailBox:
                         self._on_conquer(self.tile)
                     elif action == 'defence' and self._on_defence:
                         self._on_defence(self.tile)
+                    elif action == 'config' and self._on_config:
+                        self._on_config(self.tile)
+                    elif action == 'message' and self._on_message:
+                        self._on_message(self.tile)
                     return action
 
             # Click outside box → close
@@ -396,6 +442,16 @@ class LandDetailBox:
                 y += surf.get_height() + 2
             elif kind == 'since':
                 surf = self._small_font.render(text, True, settings.LAND_DETAIL_DIM_CLR)
+                self.window.blit(surf, (x, y))
+                y += surf.get_height() + 2
+            elif kind in ('kingdom', 'kingdom_bonus'):
+                font = self._body_font if kind == 'kingdom' else self._small_font
+                clr = settings.LAND_DETAIL_TITLE_CLR if kind == 'kingdom' else settings.LAND_DETAIL_DIM_CLR
+                surf = font.render(text, True, clr)
+                self.window.blit(surf, (x, y))
+                y += surf.get_height() + 2
+            elif kind in ('land_cd', 'shield'):
+                surf = self._small_font.render(text, True, settings.LAND_DETAIL_TITLE_CLR)
                 self.window.blit(surf, (x, y))
                 y += surf.get_height() + 2
             elif kind == 'defence_warning':

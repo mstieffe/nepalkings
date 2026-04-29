@@ -991,6 +991,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self.window.blit(suit_icon, (specs_x + specs_surf.get_width() + 2,
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
 
+        effects = land.get('kingdom_skill_effects') or []
+        if effects:
+            kingdom_name = land.get('kingdom_name') or 'Defender kingdom'
+            effect_text = f'{kingdom_name} skills: ' + ', '.join(effects[:4])
+            effect_text = self._fit_text(effect_text, self._tiny_font, int(_BOX_W * 0.72))
+            effect_surf = self._tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
+            self.window.blit(effect_surf, effect_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
+                                                               top=specs_y + specs_surf.get_height() + 3))
+
         self._draw_right_panels()
 
         # ── Field compartments with figure icons ────────────────────

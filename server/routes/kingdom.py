@@ -4,15 +4,20 @@
 
 import math
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Blueprint, jsonify, request, g
 
-from models import (db, User, Land, LandAttackLog, CollectionCard,
+from models import (db, User, Land, LandAttackLog, KingdomMessage,
+                    KingdomNotification,
+                    Kingdom as KingdomModel, KingdomCosmeticUnlock,
+                    KingdomSkillAllocation,
+                    CollectionCard,
                     LandConfig, LandConfigFigure, LandConfigBattleMove,
                     Game, Player, Figure, BattleMove, CardToFigure, ActiveSpell,
                     MainCard, SideCard, Suit, MainRank, CardRole)
 from routes.auth import require_token
 from game_service.deck_manager import DeckManager
+from ai.defence.generator import get_ai_defence_template_for_land
 import server_settings as config
 
 kingdom = Blueprint('kingdom', __name__)
@@ -23,68 +28,158 @@ def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-# ── POST /kingdom/collect_gold ──────────────────────────────────────────────
+# ── Cosmetic / style helpers ────────────────────────────────────────────────
 
-@kingdom.route('/collect_gold', methods=['POST'])
-@require_token
-def collect_gold():
-    """Collect accumulated gold from all owned lands.
+_COSMETIC_STYLE_FIELDS = {
+    'flag': 'flag_key',
+    'border': 'border_key',
+    'surface': 'surface_key',
+}
 
-    Gold = floor(total_gold_rate × elapsed_hours).
-    Elapsed is capped at GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS.
+
+def _cosmetic_catalog():
+    return getattr(config, 'KINGDOM_COSMETIC_CATALOG', {}) or {}
+
+
+def _default_style_dict():
+    return dict(getattr(config, 'KINGDOM_DEFAULT_STYLE', {}) or {
+        'flag_key': 'flag_plain',
+        'border_key': 'border_simple_gold',
+        'surface_key': 'surface_plain',
+    })
+
+
+def _serialize_skill_definitions():
+    """Return the static skill definition table as a JSON-friendly list."""
+    out = []
+    for sdef in (config.KINGDOM_SKILL_DEFINITIONS or ()):
+        out.append({
+            'key': sdef.key,
+            'name': sdef.name,
+            'description': sdef.description,
+            'icon_path': sdef.icon_path,
+            'max_level': sdef.max_level,
+            'cost_multiplier': sdef.cost_multiplier,
+            'effect_values': list(sdef.effect_values),
+            'level_costs': [
+                config.skill_cost_to_buy_level(sdef.key, lvl)
+                for lvl in range(1, sdef.max_level + 1)
+            ],
+        })
+    return out
+
+
+def _lock_user_for_spend(user_id):
+    """Lock the User row before mutating gold to avoid lost-update races.
+
+    On SQLite ``with_for_update`` is a no-op; on Postgres/MySQL it issues
+    ``SELECT ... FOR UPDATE`` so concurrent gold spends serialize.
     """
-    user = db.session.get(User, g.user_id)
+    try:
+        return User.query.with_for_update().filter_by(id=user_id).first()
+    except Exception:
+        db.session.rollback()
+        return db.session.get(User, user_id)
+
+
+# In-memory rate-limit window for per-user kingdom rename attempts.
+_RENAME_ATTEMPTS = {}
+
+
+def _check_rename_rate_limit(user_id):
+    """Return True if this rename attempt is within the per-user hourly cap."""
+    cap = int(getattr(config, 'KINGDOM_RENAME_RATE_LIMIT_PER_HOUR', 10) or 10)
+    if cap <= 0:
+        return True
+    now = _utcnow()
+    window_start = now - timedelta(hours=1)
+    history = [t for t in _RENAME_ATTEMPTS.get(user_id, []) if t >= window_start]
+    if len(history) >= cap:
+        _RENAME_ATTEMPTS[user_id] = history
+        return False
+    history.append(now)
+    _RENAME_ATTEMPTS[user_id] = history
+    return True
+
+
+# ── POST /kingdom/<id>/collect_gold ─────────────────────────────────────────
+
+@kingdom.route('/<int:kingdom_id>/collect_gold', methods=['POST'])
+@require_token
+def collect_kingdom_gold_route(kingdom_id):
+    """Collect this kingdom's pending vault gold into the user's purse.
+
+    Gold accrues into ``Kingdom.pending_gold`` over time at the kingdom's
+    effective rate, capped by the gold_vault skill.  This endpoint advances
+    accrual to ``now`` and atomically transfers the full pending balance.
+    """
+    user = _lock_user_for_spend(g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
 
-    now = _utcnow()
+    from kingdom_service import (collect_kingdom_gold,
+                                 reconcile_user_kingdoms,
+                                 summarize_user_kingdom)
 
-    # Sum gold_rate from all owned lands
-    lands = Land.query.filter_by(owner_user_id=user.id).all()
-    total_rate = sum(land.gold_rate for land in lands)
+    reconcile_user_kingdoms(user.id, commit=False)
+    db.session.flush()
+    kingdom_row = db.session.get(KingdomModel, kingdom_id)
+    if not kingdom_row or kingdom_row.owner_user_id != user.id:
+        return jsonify({'error': 'Kingdom not found'}), 404
 
-    if total_rate <= 0 or not lands:
-        return jsonify({
-            'gold_earned': 0,
-            'total_gold': user.gold,
-            'total_production_rate': 0.0,
-            'lands_owned': 0,
-        })
-
-    # Elapsed time since last collection (or account creation)
-    last = user.last_gold_collection
-    if last is None:
-        # First collection ever — no accumulation yet
-        user.last_gold_collection = now
-        db.session.commit()
-        return jsonify({
-            'gold_earned': 0,
-            'total_gold': user.gold,
-            'total_production_rate': total_rate,
-            'lands_owned': len(lands),
-        })
-
-    elapsed_seconds = (now - last).total_seconds()
-    max_seconds = config.GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS * 3600
-    elapsed_seconds = min(elapsed_seconds, max_seconds)
-    elapsed_hours = elapsed_seconds / 3600.0
-
-    earned = math.floor(total_rate * elapsed_hours)
-
-    if earned > 0:
-        user.gold += earned
-        user.last_gold_collection = now
-        db.session.commit()
-    else:
-        # Update timestamp even if 0 earned to prevent drift
-        user.last_gold_collection = now
-        db.session.commit()
+    collected, cap, gold_after = collect_kingdom_gold(kingdom_row, user, now=_utcnow())
+    db.session.commit()
 
     return jsonify({
-        'gold_earned': earned,
-        'total_gold': user.gold,
-        'total_production_rate': total_rate,
-        'lands_owned': len(lands),
+        'kingdom_id': kingdom_row.id,
+        'collected': int(collected),
+        'pending_gold': float(kingdom_row.pending_gold or 0.0),
+        'vault_cap': int(cap),
+        'total_gold': int(gold_after),
+        'kingdom': summarize_user_kingdom(user.id, None),
+    })
+
+
+@kingdom.route('/collect_gold_all', methods=['POST'])
+@require_token
+def collect_gold_all_route():
+    """Collect pending gold from EVERY kingdom owned by the user.
+
+    Returns one combined ``collected`` total plus a per-kingdom breakdown so
+    the client can stage floating-text animations.
+    """
+    user = _lock_user_for_spend(g.user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    from kingdom_service import (collect_kingdom_gold,
+                                 reconcile_user_kingdoms,
+                                 summarize_user_kingdom)
+
+    reconcile_user_kingdoms(user.id, commit=False)
+    db.session.flush()
+    now = _utcnow()
+    breakdown = []
+    total = 0
+    cap_total = 0
+    for k in KingdomModel.query.filter_by(owner_user_id=user.id).all():
+        collected, cap, _ = collect_kingdom_gold(k, user, now=now)
+        cap_total += int(cap)
+        total += int(collected)
+        breakdown.append({
+            'kingdom_id': k.id,
+            'kingdom_name': k.name or f'Kingdom #{k.id}',
+            'collected': int(collected),
+            'vault_cap': int(cap),
+        })
+    db.session.commit()
+
+    return jsonify({
+        'collected_total': total,
+        'vault_cap_total': cap_total,
+        'total_gold': int(user.gold or 0),
+        'kingdoms': breakdown,
+        'kingdom': summarize_user_kingdom(user.id, None),
     })
 
 
@@ -189,6 +284,341 @@ def get_kingdom_rankings():
         return jsonify({'success': False, 'message': 'Failed to fetch kingdom rankings'}), 500
 
 
+# ── Persistent kingdom configuration ───────────────────────────────────────
+
+def _kingdom_config_or_404(kingdom_id):
+    kingdom_row = db.session.get(KingdomModel, kingdom_id)
+    if not kingdom_row or kingdom_row.owner_user_id != g.user_id:
+        return None
+    return kingdom_row
+
+
+def _serialize_land_context(land):
+    from kingdom_service import serialize_land_with_kingdom_context
+    return serialize_land_with_kingdom_context(land)
+
+
+def _kingdom_style_updates_from_payload(data):
+    catalog = _cosmetic_catalog()
+    updates = {}
+
+    cosmetic_key = data.get('cosmetic_key')
+    if cosmetic_key:
+        item = catalog.get(cosmetic_key)
+        if not item:
+            raise ValueError('Unknown cosmetic')
+        style_field = _COSMETIC_STYLE_FIELDS.get(item.get('type'))
+        if not style_field:
+            raise ValueError('Invalid cosmetic type')
+        updates[style_field] = cosmetic_key
+
+    for style_field in ('flag_key', 'border_key', 'surface_key'):
+        key = data.get(style_field)
+        if not key:
+            continue
+        item = catalog.get(key)
+        expected_type = style_field.replace('_key', '')
+        if not item:
+            raise ValueError(f'Unknown cosmetic: {key}')
+        if item.get('type') != expected_type:
+            raise ValueError(f'{key} is not a {expected_type} cosmetic')
+        updates[style_field] = key
+    return updates
+
+
+@kingdom.route('/config', methods=['GET'])
+@require_token
+def kingdom_config_list():
+    """Return all persistent kingdoms owned by the current user."""
+    from kingdom_service import reconcile_user_kingdoms, serialize_kingdom_config
+
+    user = db.session.get(User, g.user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+
+    kingdoms = reconcile_user_kingdoms(user.id, commit=False)
+    db.session.commit()
+
+    selected = None
+    land_id = request.args.get('land_id', type=int)
+    if land_id:
+        land = db.session.get(Land, land_id)
+        if land and land.owner_user_id == user.id and land.kingdom_id:
+            selected = land.kingdom_id
+    if selected is None and kingdoms:
+        selected = kingdoms[0].id
+
+    return jsonify({
+        'success': True,
+        'catalog': _cosmetic_catalog(),
+        'default_style': _default_style_dict(),
+        'skill_definitions': _serialize_skill_definitions(),
+        'skill_base_cost_curve': list(config.KINGDOM_SKILL_BASE_COST_CURVE),
+        'level_max': int(config.KINGDOM_LEVEL_MAX),
+        'skill_points_per_level': int(config.KINGDOM_SKILL_POINTS_PER_LEVEL),
+        'vault_default_cap': int(config.KINGDOM_VAULT_DEFAULT_CAP),
+        'shield_options_hours': getattr(config, 'KINGDOM_SHIELD_DURATION_OPTIONS_HOURS', []),
+        'shield_price_per_hour_per_land': getattr(config, 'KINGDOM_SHIELD_PRICE_PER_HOUR_PER_LAND', 0),
+        'rename_price_gold': getattr(config, 'KINGDOM_RENAME_PRICE_GOLD', 0),
+        'selected_kingdom_id': selected,
+        'kingdoms': [serialize_kingdom_config(row) for row in kingdoms],
+        'gold': user.gold,
+    })
+
+
+@kingdom.route('/config/<int:kingdom_id>', methods=['GET'])
+@require_token
+def kingdom_config_detail(kingdom_id):
+    from kingdom_service import reconcile_user_kingdoms, serialize_kingdom_config
+
+    reconcile_user_kingdoms(g.user_id, commit=False)
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    if not kingdom_row:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'catalog': _cosmetic_catalog(),
+        'skill_definitions': _serialize_skill_definitions(),
+        'skill_base_cost_curve': list(config.KINGDOM_SKILL_BASE_COST_CURVE),
+        'level_max': int(config.KINGDOM_LEVEL_MAX),
+        'skill_points_per_level': int(config.KINGDOM_SKILL_POINTS_PER_LEVEL),
+        'vault_default_cap': int(config.KINGDOM_VAULT_DEFAULT_CAP),
+        'shield_options_hours': getattr(config, 'KINGDOM_SHIELD_DURATION_OPTIONS_HOURS', []),
+        'rename_price_gold': getattr(config, 'KINGDOM_RENAME_PRICE_GOLD', 0),
+        'kingdom': serialize_kingdom_config(kingdom_row),
+        'gold': db.session.get(User, g.user_id).gold,
+    })
+
+
+@kingdom.route('/config/<int:kingdom_id>/rename', methods=['POST'])
+@require_token
+def kingdom_config_rename(kingdom_id):
+    from kingdom_service import serialize_kingdom_config
+
+    if not _check_rename_rate_limit(g.user_id):
+        return jsonify({
+            'success': False,
+            'message': 'Too many rename attempts. Try again later.',
+        }), 429
+
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    user = _lock_user_for_spend(g.user_id)
+    if not kingdom_row or not user:
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+
+    data = request.json or {}
+    raw_name = data.get('name')
+    if not isinstance(raw_name, str):
+        return jsonify({'success': False, 'message': 'Kingdom name is required'}), 400
+    name = raw_name.strip()
+    if any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return jsonify({'success': False,
+                        'message': 'Kingdom name contains invalid characters'}), 400
+    if len(name) < 2:
+        return jsonify({'success': False,
+                        'message': 'Kingdom name must be at least 2 characters'}), 400
+    if len(name) > 40:
+        return jsonify({'success': False, 'message': 'Kingdom name is too long'}), 400
+
+    price = max(0, int(getattr(config, 'KINGDOM_RENAME_PRICE_GOLD', 0) or 0))
+    if user.gold < price:
+        return jsonify({'success': False, 'message': 'Not enough gold'}), 400
+
+    user.gold -= price
+    kingdom_row.name = name
+    kingdom_row.updated_at = _utcnow()
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'kingdom': serialize_kingdom_config(kingdom_row),
+        'gold': user.gold,
+        'rename_price_gold': price,
+    })
+
+
+@kingdom.route('/config/<int:kingdom_id>/cosmetics/purchase', methods=['POST'])
+@require_token
+def kingdom_config_cosmetic_purchase(kingdom_id):
+    from kingdom_service import kingdom_unlocked_cosmetics, serialize_kingdom_config
+
+    data = request.json or {}
+    cosmetic_key = data.get('cosmetic_key')
+    catalog = _cosmetic_catalog()
+    item = catalog.get(cosmetic_key)
+    if not item:
+        return jsonify({'success': False, 'message': 'Unknown cosmetic'}), 404
+
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    user = _lock_user_for_spend(g.user_id)
+    if not kingdom_row or not user:
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+
+    unlocked = kingdom_unlocked_cosmetics(kingdom_row.id)
+    if cosmetic_key in unlocked:
+        return jsonify({
+            'success': True,
+            'already_unlocked': True,
+            'kingdom': serialize_kingdom_config(kingdom_row),
+            'gold': user.gold,
+        })
+
+    price = max(0, int(item.get('price_gold', 0) or 0))
+    if user.gold < price:
+        return jsonify({'success': False, 'message': 'Not enough gold'}), 400
+
+    user.gold -= price
+    db.session.add(KingdomCosmeticUnlock(
+        kingdom_id=kingdom_row.id, cosmetic_key=cosmetic_key))
+    kingdom_row.updated_at = _utcnow()
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'cosmetic_key': cosmetic_key,
+        'kingdom': serialize_kingdom_config(kingdom_row),
+        'gold': user.gold,
+    })
+
+
+@kingdom.route('/config/<int:kingdom_id>/cosmetics/equip', methods=['POST'])
+@require_token
+def kingdom_config_cosmetic_equip(kingdom_id):
+    from kingdom_service import kingdom_unlocked_cosmetics, serialize_kingdom_config
+
+    data = request.json or {}
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    if not kingdom_row:
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+    try:
+        updates = _kingdom_style_updates_from_payload(data)
+    except ValueError as err:
+        return jsonify({'success': False, 'message': str(err)}), 400
+    if not updates:
+        return jsonify({'success': False, 'message': 'No cosmetics supplied'}), 400
+
+    unlocked = kingdom_unlocked_cosmetics(kingdom_row.id)
+    for cosmetic_key in updates.values():
+        if cosmetic_key not in unlocked:
+            return jsonify({'success': False, 'message': f'{cosmetic_key} is locked'}), 403
+
+    for style_field, cosmetic_key in updates.items():
+        setattr(kingdom_row, style_field, cosmetic_key)
+    kingdom_row.updated_at = _utcnow()
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'kingdom': serialize_kingdom_config(kingdom_row),
+    })
+
+
+@kingdom.route('/config/<int:kingdom_id>/skills/upgrade', methods=['POST'])
+@require_token
+def kingdom_config_skill_upgrade(kingdom_id):
+    """Spend SP to advance a skill by one level (skills are permanent)."""
+    from kingdom_service import (kingdom_skill_allocations,
+                                 kingdom_spent_skill_points,
+                                 kingdom_total_skill_points,
+                                 serialize_kingdom_config)
+
+    data = request.json or {}
+    skill_key = data.get('skill_key')
+    sdef = config.skill_definition(skill_key)
+    if not sdef:
+        return jsonify({'success': False, 'message': 'Unknown skill'}), 404
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    if not kingdom_row:
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+
+    allocations = kingdom_skill_allocations(kingdom_row.id)
+    allocation = allocations[skill_key]
+    if allocation.level >= sdef.max_level:
+        return jsonify({'success': False, 'message': 'Skill is already maxed'}), 400
+
+    next_level = allocation.level + 1
+    cost = config.skill_cost_to_buy_level(skill_key, next_level)
+    granted = kingdom_total_skill_points(kingdom_row)
+    spent = kingdom_spent_skill_points(kingdom_row.id)
+    if spent + cost > granted:
+        return jsonify({'success': False, 'message': 'Not enough skill points'}), 400
+
+    allocation.level = next_level
+    allocation.last_upgraded_at = _utcnow()
+    kingdom_row.updated_at = _utcnow()
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'kingdom': serialize_kingdom_config(kingdom_row),
+    })
+
+
+# Skill-reset endpoint removed: skills are permanent in the kingdom-levels
+# rework.  Clients should no longer call POST /kingdom/config/<id>/skills/reset.
+
+
+@kingdom.route('/config/<int:kingdom_id>/shield/quote', methods=['POST'])
+@require_token
+def kingdom_config_shield_quote(kingdom_id):
+    from kingdom_service import shield_quote_for_kingdom
+
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    if not kingdom_row:
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+    data = request.json or {}
+    try:
+        quote = shield_quote_for_kingdom(kingdom_row, data.get('hours'))
+    except (TypeError, ValueError) as err:
+        return jsonify({'success': False, 'message': str(err) or 'Invalid shield duration'}), 400
+    return jsonify({'success': True, 'quote': quote})
+
+
+@kingdom.route('/config/<int:kingdom_id>/shield/purchase', methods=['POST'])
+@require_token
+def kingdom_config_shield_purchase(kingdom_id):
+    from kingdom_service import shield_quote_for_kingdom, serialize_kingdom_config
+
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    user = _lock_user_for_spend(g.user_id)
+    if not kingdom_row or not user:
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+
+    data = request.json or {}
+    try:
+        quote = shield_quote_for_kingdom(kingdom_row, data.get('hours'))
+    except (TypeError, ValueError) as err:
+        return jsonify({'success': False, 'message': str(err) or 'Invalid shield duration'}), 400
+
+    if user.gold < quote['price_gold']:
+        return jsonify({'success': False, 'message': 'Not enough gold'}), 400
+
+    now = _utcnow()
+    base_until = now
+    if kingdom_row.shield_until and kingdom_row.shield_until > now:
+        if not getattr(config, 'KINGDOM_SHIELD_EXTENSION_ENABLED', True):
+            return jsonify({'success': False, 'message': 'Kingdom is already shielded'}), 400
+        base_until = kingdom_row.shield_until
+    new_until = base_until + timedelta(hours=quote['hours'])
+    max_until = now + timedelta(hours=int(getattr(config, 'KINGDOM_SHIELD_MAX_HOURS', 24) or 24))
+    if new_until > max_until:
+        return jsonify({'success': False, 'message': 'Shield would exceed maximum duration'}), 400
+
+    user.gold -= quote['price_gold']
+    kingdom_row.shield_until = new_until
+    kingdom_row.updated_at = now
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'quote': quote,
+        'kingdom': serialize_kingdom_config(kingdom_row),
+        'gold': user.gold,
+    })
+
+
 # ── GET /kingdom/map ────────────────────────────────────────────────────────
 
 @kingdom.route('/map', methods=['GET'])
@@ -199,13 +629,31 @@ def get_kingdom_map():
     Response includes per-land data (tier, gold rate, suit bonus, owner)
     and aggregate stats for the requesting user.
     """
-    from kingdom_service import check_defence_incomplete
+    from kingdom_service import (check_defence_incomplete, compute_owned_land_components,
+                                 describe_kingdom_bonuses, effective_gold_rate_for_lands,
+                                 kingdom_skill_bonuses,
+                                 reconcile_all_kingdoms, serialize_kingdom_config,
+                                 summarize_user_kingdom)
 
     user = db.session.get(User, g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
 
+    reconcile_all_kingdoms(commit=True)
     lands = Land.query.order_by(Land.row, Land.col).all()
+    kingdom_ids = {land.kingdom_id for land in lands if land.kingdom_id}
+    kingdoms_by_id = {
+        row.id: row for row in KingdomModel.query.filter(KingdomModel.id.in_(kingdom_ids)).all()
+    } if kingdom_ids else {}
+    component_info_by_land, _ = compute_owned_land_components(lands)
+    my_kingdom = summarize_user_kingdom(user.id, lands)
+    my_persistent_kingdoms = [
+        serialize_kingdom_config(row)
+        for row in sorted(kingdoms_by_id.values(), key=lambda k: k.id)
+        if row.owner_user_id == user.id
+    ]
+    my_effective_gold_rate = effective_gold_rate_for_lands(
+        [land for land in lands if land.owner_user_id == user.id])
 
     my_total_gold_rate = 0.0
     my_lands_count = 0
@@ -218,6 +666,42 @@ def get_kingdom_map():
             my_lands_count += 1
 
         land_dict = land.serialize()
+        land_dict.update(component_info_by_land.get(land.id, {
+            'kingdom_component_id': None,
+            'kingdom_component_size': 0,
+            'kingdom_level': 0,
+            'kingdom_tier_name': None,
+            'kingdom_bonuses': {},
+            'kingdom_raw_gold_rate': 0,
+            'kingdom_effective_gold_rate': 0,
+        }))
+        persistent_kingdom = kingdoms_by_id.get(land.kingdom_id)
+        shield_remaining = 0
+        if persistent_kingdom and persistent_kingdom.shield_until:
+            shield_remaining = max(
+                0,
+                int((persistent_kingdom.shield_until - _utcnow()).total_seconds()),
+            )
+        legacy_bonuses = dict(land_dict.get('kingdom_bonuses') or {})
+        legacy_bonuses.update(kingdom_skill_bonuses(persistent_kingdom))
+        land_dict['kingdom_id'] = land.kingdom_id
+        land_dict['kingdom_name'] = (
+            persistent_kingdom.name or f'Kingdom #{persistent_kingdom.id}'
+            if persistent_kingdom else None
+        )
+        land_dict['kingdom_bonuses'] = legacy_bonuses
+        land_dict['kingdom_skill_effects'] = describe_kingdom_bonuses(legacy_bonuses)
+        land_dict['kingdom_shield_until'] = (
+            persistent_kingdom.shield_until.isoformat()
+            if persistent_kingdom and persistent_kingdom.shield_until else None
+        )
+        land_dict['kingdom_shield_remaining'] = shield_remaining
+        land_dict['kingdom_is_shielded'] = shield_remaining > 0
+        if land.owner_user_id:
+            land_dict['owner_style'] = (
+                persistent_kingdom.serialize_style()
+                if persistent_kingdom else _default_style_dict()
+            )
         land_dict['is_mine'] = is_mine
         land_cooldown_remaining = 0
         if land.conquer_cooldown_until:
@@ -241,7 +725,10 @@ def get_kingdom_map():
     return jsonify({
         'lands': lands_data,
         'my_total_gold_rate': round(my_total_gold_rate, 1),
+        'my_effective_gold_rate': round(my_effective_gold_rate, 3),
         'my_lands_count': my_lands_count,
+        'my_kingdom': my_kingdom,
+        'my_kingdoms': my_persistent_kingdoms,
         'conquer_cooldown_remaining': cooldown_remaining,
     })
 
@@ -918,7 +1405,7 @@ def get_conquer_config():
     return jsonify({
         'success': True,
         'config': _serialize_config_with_deficit(cfg),
-        'land': land.serialize(),
+        'land': _serialize_land_context(land),
     })
 
 
@@ -1459,7 +1946,7 @@ def get_defence_config():
     return jsonify({
         'success': True,
         'config': _serialize_config_with_deficit(cfg),
-        'land': land.serialize(),
+        'land': _serialize_land_context(land),
     })
 
 
@@ -1482,7 +1969,7 @@ def defence_draft_open():
     return jsonify({
         'success': True,
         'config': _serialize_defence_edit_config(draft),
-        'land': land.serialize(),
+        'land': _serialize_land_context(land),
         'dirty': _is_defence_draft_dirty(draft),
     })
 
@@ -1504,7 +1991,7 @@ def get_defence_draft_config():
     return jsonify({
         'success': True,
         'config': _serialize_defence_edit_config(draft),
-        'land': land.serialize(),
+        'land': _serialize_land_context(land),
         'dirty': _is_defence_draft_dirty(draft),
     })
 
@@ -1529,7 +2016,7 @@ def defence_draft_validate():
         'valid': not problems,
         'problems': problems,
         'config': _serialize_defence_edit_config(draft),
-        'land': land.serialize(),
+        'land': _serialize_land_context(land),
         'dirty': _is_defence_draft_dirty(draft),
     })
 
@@ -1561,7 +2048,7 @@ def defence_draft_save():
         'success': True,
         'valid': True,
         'config': _serialize_defence_edit_config(active),
-        'land': land.serialize(),
+        'land': _serialize_land_context(land),
     })
 
 
@@ -1590,7 +2077,7 @@ def defence_draft_discard():
     db.session.commit()
     payload = {
         'success': True,
-        'land': land.serialize(),
+        'land': _serialize_land_context(land),
         'dirty': False,
     }
     if active:
@@ -1624,7 +2111,7 @@ def defence_clear_active():
         if land.defence_config_id == active.id:
             land.defence_config_id = None
     db.session.commit()
-    return jsonify({'success': True, 'land': land.serialize()})
+    return jsonify({'success': True, 'land': _serialize_land_context(land)})
 
 
 # ── POST /kingdom/defence/reset_config ───────────────────────────────────────
@@ -2562,9 +3049,15 @@ _RANK_TO_VALUE = {
     'J': 1, 'Q': 2, 'K': 4, 'A': 3,
 }
 
+_SIDE_RANK_TO_VALUE = {
+    '2': 2, '3': 3, '4': 4, '5': 5, '6': 6,
+}
+
 _MAIN_RANKS = set(_RANK_TO_VALUE.keys())
 _NUMERIC_TO_MAIN_RANK = {v: k for k, v in _RANK_TO_VALUE.items()}
 _NUMERIC_TO_MAIN_RANK.update({11: 'J', 12: 'Q', 13: 'K', 14: 'A'})
+_SIDE_RANKS = set(_SIDE_RANK_TO_VALUE.keys())
+_NUMERIC_TO_SIDE_RANK = {v: k for k, v in _SIDE_RANK_TO_VALUE.items()}
 _VALID_SUITS = {s.value for s in Suit}
 
 
@@ -2617,6 +3110,55 @@ def _normalize_main_value(rank, value, *, context=''):
     if raw is not None:
         logger.warning(
             "[CONQUER] normalized card value %s -> %s for rank '%s' (context=%s)",
+            raw, expected, rank, context or 'n/a')
+    return expected
+
+
+def _normalize_side_rank(rank, *, fallback_rank='6', value=None, context=''):
+    """Normalize input rank into a valid side-rank string."""
+    fallback = str(_enum_value(fallback_rank) or '6').strip()
+    if fallback not in _SIDE_RANKS:
+        fallback = '6'
+
+    raw_rank = _enum_value(rank)
+    candidate = str(raw_rank).strip() if raw_rank is not None else ''
+    if candidate in _SIDE_RANKS:
+        return candidate
+
+    for source, source_name in ((candidate, 'rank'), (value, 'value')):
+        try:
+            numeric = int(source)
+        except (TypeError, ValueError):
+            continue
+        mapped = _NUMERIC_TO_SIDE_RANK.get(numeric)
+        if mapped:
+            if candidate and candidate != mapped:
+                logger.warning(
+                    "[CONQUER] normalized non-side rank '%s' -> '%s' via %s (context=%s)",
+                    candidate, mapped, source_name, context or 'n/a')
+            return mapped
+
+    if candidate:
+        logger.warning(
+            "[CONQUER] invalid side rank '%s', using fallback '%s' (context=%s)",
+            candidate, fallback, context or 'n/a')
+    return fallback
+
+
+def _normalize_side_value(rank, value, *, context=''):
+    """Return canonical value for a side rank, correcting mismatched inputs."""
+    expected = int(_SIDE_RANK_TO_VALUE.get(rank, 0))
+    try:
+        raw = int(value)
+    except (TypeError, ValueError):
+        raw = None
+
+    if raw == expected:
+        return raw
+
+    if raw is not None:
+        logger.warning(
+            "[CONQUER] normalized side-card value %s -> %s for rank '%s' (context=%s)",
             raw, expected, rank, context or 'n/a')
     return expected
 
@@ -2951,45 +3493,91 @@ def _build_figures_from_template(template_figures, player, game):
         tpl_cards = tpl_fig.get('cards', [])
         card_roles = tpl_fig.get('card_roles', [])
         for i, role in enumerate(card_roles):
-            fallback_rank = 'K' if role == 'key' else '10'
+            card_data = tpl_cards[i] if i < len(tpl_cards) else {}
+            card_type = str(card_data.get('card_type', 'main') or 'main').strip().lower()
+            if card_type not in ('main', 'side'):
+                logger.warning(
+                    "[CONQUER] invalid template card_type '%s' for figure '%s'; using 'main'",
+                    card_type,
+                    tpl_fig.get('family_name', 'unknown'),
+                )
+                card_type = 'main'
+
+            if card_type == 'side':
+                fallback_rank = '2' if role == 'key' else '6'
+            else:
+                fallback_rank = 'K' if role == 'key' else '10'
+
             if i < len(tpl_cards):
-                card_data = tpl_cards[i]
                 raw_rank = card_data.get('rank', fallback_rank)
                 raw_suit = card_data.get('suit', tpl_fig['suit'])
                 raw_value = card_data.get('value')
             else:
                 raw_rank = fallback_rank
                 raw_suit = tpl_fig['suit']
-                raw_value = _RANK_TO_VALUE.get(raw_rank, 0)
+                raw_value = (
+                    _SIDE_RANK_TO_VALUE.get(raw_rank, 0)
+                    if card_type == 'side'
+                    else _RANK_TO_VALUE.get(raw_rank, 0)
+                )
 
             context = f'tpl_fig={tpl_fig.get("family_name", "unknown")} role={role} idx={i}'
-            rank = _normalize_main_rank(
-                raw_rank,
-                fallback_rank=fallback_rank,
-                value=raw_value,
-                context=context,
-            )
             suit = _normalize_suit(raw_suit, fallback=tpl_fig.get('suit', 'Hearts'), context=context)
-            value = _normalize_main_value(rank, raw_value, context=context)
 
-            mc = MainCard(
-                rank=rank,
-                suit=suit,
-                value=value,
-                game_id=game.id,
-                player_id=player.id,
-                in_deck=False,
-                part_of_figure=True,
-            )
-            db.session.add(mc)
-            db.session.flush()
+            if card_type == 'side':
+                rank = _normalize_side_rank(
+                    raw_rank,
+                    fallback_rank=fallback_rank,
+                    value=raw_value,
+                    context=context,
+                )
+                value = _normalize_side_value(rank, raw_value, context=context)
 
-            ctf = CardToFigure(
-                figure_id=fig.id,
-                card_id=mc.id,
-                card_type='main',
-                role=role,
-            )
+                sc = SideCard(
+                    rank=rank,
+                    suit=suit,
+                    value=value,
+                    game_id=game.id,
+                    player_id=player.id,
+                    in_deck=False,
+                    part_of_figure=True,
+                )
+                db.session.add(sc)
+                db.session.flush()
+
+                ctf = CardToFigure(
+                    figure_id=fig.id,
+                    card_id=sc.id,
+                    card_type='side',
+                    role=role,
+                )
+            else:
+                rank = _normalize_main_rank(
+                    raw_rank,
+                    fallback_rank=fallback_rank,
+                    value=raw_value,
+                    context=context,
+                )
+                value = _normalize_main_value(rank, raw_value, context=context)
+
+                mc = MainCard(
+                    rank=rank,
+                    suit=suit,
+                    value=value,
+                    game_id=game.id,
+                    player_id=player.id,
+                    in_deck=False,
+                    part_of_figure=True,
+                )
+                db.session.add(mc)
+                db.session.flush()
+
+                ctf = CardToFigure(
+                    figure_id=fig.id,
+                    card_id=mc.id,
+                    card_type='main',
+                    role=role,
+                )
             db.session.add(ctf)
 
         figures.append(fig)
@@ -3181,6 +3769,23 @@ def _figure_has_instant_charge(figure):
         return bool(skills.get('instant_charge'))
     except Exception:
         return False
+
+
+def _figure_has_family_skill(figure, skill_name):
+    if not figure:
+        return False
+    if bool(getattr(figure, skill_name, False)):
+        return True
+    try:
+        from ai.figure_recipes import FAMILY_SKILLS
+        skills = FAMILY_SKILLS.get(figure.family_name) or FAMILY_SKILLS.get(figure.name) or {}
+        return bool(skills.get(skill_name))
+    except Exception:
+        return False
+
+
+def _has_must_be_attacked_figure(figures):
+    return any(_figure_has_family_skill(fig, 'must_be_attacked') for fig in figures or [])
 
 
 def _pick_defence_prelude_target(figures, planned_modifiers=None):
@@ -3405,7 +4010,9 @@ def conquer_start_battle():
     moves from the attacker's conquer config and the defender's defence
     config (or AI template for unowned lands).
     """
-    from kingdom_service import check_land_config_deficit
+    from kingdom_service import (check_land_config_deficit,
+                                 conquer_cooldown_seconds_for_target,
+                                 reconcile_user_kingdoms)
 
     data = request.json
     land_id = data.get('land_id')
@@ -3424,6 +4031,26 @@ def conquer_start_battle():
     if land.owner_user_id == user.id:
         return jsonify({'success': False, 'message': 'Cannot conquer your own land'}), 400
 
+    if land.owner_user_id:
+        reconcile_user_kingdoms(land.owner_user_id, commit=False)
+        db.session.flush()
+        from kingdom_service import kingdom_shield_block_reason
+        shield_remaining, defended_kingdom, reason = kingdom_shield_block_reason(land, now=_utcnow())
+        if reason and defended_kingdom:
+            if reason == 'core_protection':
+                return jsonify({
+                    'success': False,
+                    'message': 'Core Protection: this is one of the kingdom\'s last lands and cannot be conquered.',
+                    'core_protection': True,
+                    'kingdom_id': defended_kingdom.id,
+                }), 400
+            return jsonify({
+                'success': False,
+                'message': f'Kingdom shield blocks attacks. {shield_remaining}s remaining.',
+                'shield_remaining': shield_remaining,
+                'kingdom_id': defended_kingdom.id,
+            }), 400
+
     # Land-level conquer protection after a successful ownership transfer.
     if land.conquer_cooldown_until:
         remaining = int((land.conquer_cooldown_until - _utcnow()).total_seconds())
@@ -3434,10 +4061,11 @@ def conquer_start_battle():
             }), 400
 
     # Cooldown check
+    effective_conquer_cooldown = conquer_cooldown_seconds_for_target(user.id, land)
     if user.last_conquer_at:
         elapsed = (_utcnow() - user.last_conquer_at).total_seconds()
-        if elapsed < config.CONQUER_COOLDOWN_SECONDS:
-            remaining = int(config.CONQUER_COOLDOWN_SECONDS - elapsed)
+        if elapsed < effective_conquer_cooldown:
+            remaining = int(effective_conquer_cooldown - elapsed)
             return jsonify({'success': False,
                             'message': f'Conquer on cooldown. {remaining}s remaining.'}), 400
 
@@ -3474,16 +4102,10 @@ def conquer_start_battle():
 
     if is_ai_land:
         defender_user = _get_or_create_ai_user()
-        # Load AI template
-        templates = config.AI_DEFENCE_TEMPLATES.get(land.tier, [])
-        tpl_idx = land.ai_template_index or 0
-        if tpl_idx < len(templates):
-            template = templates[tpl_idx]
-        else:
-            template = templates[0] if templates else None
+        template = get_ai_defence_template_for_land(land)
         if not template:
             return jsonify({'success': False,
-                            'message': 'No AI template available for this land'}), 400
+                            'message': 'No AI defence available for this land'}), 400
     else:
         defender_user = db.session.get(User, land.owner_user_id)
         if not defender_user:
@@ -3581,7 +4203,11 @@ def conquer_start_battle():
 
         # Set defender battle figure from template
         battle_fig_idx = template.get('battle_figure_index', 0)
-        if battle_fig_idx < len(def_game_figures):
+        defer_template_defender = (
+            bool(template.get('counter_spell_name')) or
+            _has_must_be_attacked_figure(def_game_figures)
+        )
+        if battle_fig_idx < len(def_game_figures) and not defer_template_defender:
             game.defending_figure_id = def_game_figures[battle_fig_idx].id
 
         planned_modifiers = _planned_conquer_modifiers(template, atk_cfg)
@@ -3620,13 +4246,14 @@ def conquer_start_battle():
             config_figure_map=def_cfg_fig_map)
 
         # Set defender battle figure from config (only when the strategy is valid)
+        defer_config_defender = _has_must_be_attacked_figure(def_game_figures)
         if defender_strategy_mode == 'battle_figure' and def_cfg.battle_figure_id:
             mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id)
-            if mapped_id:
+            if mapped_id and not defer_config_defender:
                 game.defending_figure_id = mapped_id
         if defender_strategy_mode == 'battle_figure' and def_cfg.battle_figure_id_2:
             mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id_2)
-            if mapped_id:
+            if mapped_id and not defer_config_defender:
                 game.defending_figure_id_2 = mapped_id
 
         planned_modifiers = _planned_conquer_modifiers(def_cfg, atk_cfg)
@@ -3807,6 +4434,131 @@ def conquer_resolve_prelude_target():
     })
 
 
+# ── Activity serialization helpers ───────────────────────────────────────────
+
+def _serialize_attack_activity(log, role=None):
+    """Serialize a land attack log with usernames, land position, and role."""
+    land = db.session.get(Land, log.land_id)
+    attacker = db.session.get(User, log.attacker_user_id)
+    defender = db.session.get(User, log.defender_user_id) if log.defender_user_id else None
+    entry = log.serialize()
+    entry['land_col'] = land.col if land else None
+    entry['land_row'] = land.row if land else None
+    entry['attacker_username'] = attacker.username if attacker else None
+    entry['defender_username'] = defender.username if defender else 'AI'
+    if role:
+        entry['role'] = role
+        entry['seen'] = (log.seen_by_attacker if role == 'attacker'
+                         else log.seen_by_defender)
+    return entry
+
+
+# ── GET /kingdom/notifications ───────────────────────────────────────────────
+
+@kingdom.route('/notifications', methods=['GET'])
+@require_token
+def kingdom_notifications():
+    """Return unseen kingdom notifications for the current user.
+
+    Merges legacy attack-result rows from ``LandAttackLog`` with the new
+    ``KingdomNotification`` stream (skill downgrades, kingdom dissolution,
+    shield expiry).  Lazy: emits a ``shield_expired`` notification on read
+    if a previously active shield has lapsed.
+    """
+    from sqlalchemy import and_, or_
+    from kingdom_service import reconcile_user_kingdoms
+    from models import KingdomNotification
+
+    try:
+        reconcile_user_kingdoms(g.user_id, commit=False)
+    except Exception as exc:
+        logger.warning('reconcile failed in /notifications: %s', exc)
+
+    # Lazy shield-expired emission.
+    now = _utcnow()
+    owned_kingdoms = KingdomModel.query.filter_by(owner_user_id=g.user_id).all()
+    for k in owned_kingdoms:
+        if not k.shield_until or k.shield_until > now:
+            continue
+        expiry_iso = k.shield_until.isoformat()
+        existing = KingdomNotification.query.filter_by(
+            user_id=g.user_id,
+            kind='shield_expired',
+            kingdom_id=k.id,
+        ).order_by(KingdomNotification.created_at.desc()).first()
+        if existing and (existing.payload or {}).get('expiry') == expiry_iso:
+            continue
+        db.session.add(KingdomNotification(
+            user_id=g.user_id,
+            kind='shield_expired',
+            kingdom_id=k.id,
+            payload={'expiry': expiry_iso, 'kingdom_name': k.name},
+        ))
+    db.session.commit()
+
+    logs = LandAttackLog.query.filter(
+        or_(
+            and_(LandAttackLog.attacker_user_id == g.user_id,
+                 LandAttackLog.seen_by_attacker == False),
+            and_(LandAttackLog.defender_user_id == g.user_id,
+                 LandAttackLog.seen_by_defender == False),
+        )
+    ).order_by(LandAttackLog.timestamp.desc()).all()
+
+    result = []
+    for log in logs:
+        role = 'attacker' if log.attacker_user_id == g.user_id else 'defender'
+        result.append(_serialize_attack_activity(log, role=role))
+
+    kingdom_notifs = KingdomNotification.query.filter_by(
+        user_id=g.user_id, seen=False
+    ).order_by(KingdomNotification.created_at.desc()).all()
+    for n in kingdom_notifs:
+        result.append(n.serialize())
+
+    return jsonify({'success': True, 'notifications': result})
+
+
+# ── POST /kingdom/notifications/mark_seen ───────────────────────────────────
+
+@kingdom.route('/notifications/mark_seen', methods=['POST'])
+@require_token
+def kingdom_notifications_mark_seen():
+    """Mark kingdom notifications as seen.
+
+    Accepts both ``LandAttackLog`` IDs and ``KingdomNotification`` IDs. Each
+    ID is silently no-op'd if not owned by the caller.
+    """
+    from models import KingdomNotification
+
+    data = request.json or {}
+    notification_ids = data.get('notification_ids', [])
+
+    if not notification_ids or not isinstance(notification_ids, list):
+        return jsonify({'success': False,
+                        'message': 'notification_ids is required'}), 400
+
+    attacker_updated = LandAttackLog.query.filter(
+        LandAttackLog.id.in_(notification_ids),
+        LandAttackLog.attacker_user_id == g.user_id,
+    ).update({'seen_by_attacker': True}, synchronize_session='fetch')
+    defender_updated = LandAttackLog.query.filter(
+        LandAttackLog.id.in_(notification_ids),
+        LandAttackLog.defender_user_id == g.user_id,
+    ).update({'seen_by_defender': True}, synchronize_session='fetch')
+    kingdom_updated = KingdomNotification.query.filter(
+        KingdomNotification.id.in_(notification_ids),
+        KingdomNotification.user_id == g.user_id,
+    ).update({'seen': True}, synchronize_session='fetch')
+
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'marked': attacker_updated + defender_updated + kingdom_updated,
+    })
+
+
 # ── GET /kingdom/attack_notifications ────────────────────────────────────────
 
 @kingdom.route('/attack_notifications', methods=['GET'])
@@ -3820,13 +4572,7 @@ def attack_notifications():
 
     result = []
     for log in logs:
-        land = db.session.get(Land, log.land_id)
-        attacker = db.session.get(User, log.attacker_user_id)
-        entry = log.serialize()
-        entry['land_col'] = land.col if land else None
-        entry['land_row'] = land.row if land else None
-        entry['attacker_username'] = attacker.username if attacker else None
-        result.append(entry)
+        result.append(_serialize_attack_activity(log, role='defender'))
 
     return jsonify({'success': True, 'notifications': result})
 
@@ -3874,15 +4620,8 @@ def attack_history():
 
     results = []
     for log in pagination.items:
-        land = db.session.get(Land, log.land_id)
-        attacker = db.session.get(User, log.attacker_user_id)
-        defender = db.session.get(User, log.defender_user_id) if log.defender_user_id else None
-        entry = log.serialize()
-        entry['land_col'] = land.col if land else None
-        entry['land_row'] = land.row if land else None
-        entry['attacker_username'] = attacker.username if attacker else None
-        entry['defender_username'] = defender.username if defender else 'AI'
-        results.append(entry)
+        role = 'attacker' if log.attacker_user_id == g.user_id else 'defender'
+        results.append(_serialize_attack_activity(log, role=role))
 
     return jsonify({
         'success': True,
@@ -3891,3 +4630,106 @@ def attack_history():
         'pages': pagination.pages,
         'total': pagination.total,
     })
+
+
+# ── Kingdom user messages ───────────────────────────────────────────────────
+
+_MAX_KINGDOM_MESSAGE = 500
+
+
+@kingdom.route('/messages', methods=['GET'])
+@require_token
+def kingdom_messages():
+    """Return recent kingdom messages sent or received by the current user."""
+    from kingdom_service import reconcile_user_kingdoms
+    try:
+        reconcile_user_kingdoms(g.user_id, commit=False)
+    except Exception as exc:
+        logger.warning('reconcile failed in /messages: %s', exc)
+    limit = max(1, min(request.args.get('limit', 30, type=int), 50))
+    messages = KingdomMessage.query.filter(
+        db.or_(
+            KingdomMessage.sender_user_id == g.user_id,
+            KingdomMessage.recipient_user_id == g.user_id,
+        )
+    ).order_by(KingdomMessage.timestamp.desc()).limit(limit).all()
+    unread_count = KingdomMessage.query.filter_by(
+        recipient_user_id=g.user_id,
+        seen_by_recipient=False,
+    ).count()
+    return jsonify({
+        'success': True,
+        'messages': [m.serialize() for m in messages],
+        'unread_count': unread_count,
+    })
+
+
+@kingdom.route('/messages', methods=['POST'])
+@require_token
+def kingdom_messages_send():
+    """Send a kingdom-layer message to another user."""
+    data = request.json or {}
+    raw_message = data.get('message', data.get('body', ''))
+    message = str(raw_message or '').strip()
+    if not message:
+        return jsonify({'success': False, 'message': 'Message is required'}), 400
+
+    recipient = None
+    recipient_id = data.get('recipient_user_id') or data.get('recipient_id')
+    if recipient_id is not None:
+        try:
+            recipient = db.session.get(User, int(recipient_id))
+        except (TypeError, ValueError):
+            recipient = None
+    elif data.get('recipient_username'):
+        recipient = User.query.filter_by(username=data.get('recipient_username')).first()
+
+    if not recipient:
+        return jsonify({'success': False, 'message': 'Recipient not found'}), 404
+    if recipient.id == g.user_id:
+        return jsonify({'success': False, 'message': 'Cannot message yourself'}), 400
+    if recipient.is_ai:
+        return jsonify({'success': False, 'message': 'Cannot message AI defenders'}), 400
+
+    land_id = data.get('land_id')
+    if land_id in ('', None):
+        land_id = None
+    else:
+        try:
+            land_id = int(land_id)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'message': 'Invalid land_id'}), 400
+        if not db.session.get(Land, land_id):
+            return jsonify({'success': False, 'message': 'Land not found'}), 404
+
+    msg = KingdomMessage(
+        sender_user_id=g.user_id,
+        recipient_user_id=recipient.id,
+        land_id=land_id,
+        message=message[:_MAX_KINGDOM_MESSAGE],
+    )
+    db.session.add(msg)
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'message': 'Message sent',
+        'kingdom_message': msg.serialize(),
+    })
+
+
+@kingdom.route('/messages/mark_seen', methods=['POST'])
+@require_token
+def kingdom_messages_mark_seen():
+    """Mark received kingdom messages as read."""
+    data = request.json or {}
+    message_ids = data.get('message_ids', [])
+    if not message_ids or not isinstance(message_ids, list):
+        return jsonify({'success': False,
+                        'message': 'message_ids is required'}), 400
+
+    updated = KingdomMessage.query.filter(
+        KingdomMessage.id.in_(message_ids),
+        KingdomMessage.recipient_user_id == g.user_id,
+    ).update({'seen_by_recipient': True}, synchronize_session='fetch')
+    db.session.commit()
+    return jsonify({'success': True, 'marked': updated})

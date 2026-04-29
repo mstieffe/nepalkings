@@ -17,6 +17,7 @@ import requests as http_requests
 
 import server_settings as settings
 from ai import get_ai_auth_headers
+from ai.defence.generator import get_ai_defence_template_for_land
 from ai.llm_client import LLMClient, parse_action_response
 from ai.game_state import enrich_figures_with_skills, serialize_game_for_llm
 from ai.action_enum import detect_phase, enumerate_actions, format_actions_for_llm
@@ -375,6 +376,46 @@ def _ai_post(url, ai_player_id, **kwargs):
     return http_requests.post(url, headers=headers, **kwargs)
 
 
+def _conquer_original_attacker_player(game):
+    """Return the original conquest attacker, independent of current invader."""
+    players = list(getattr(game, 'players', []) or [])
+    if not game or not players:
+        return None
+    from models import LandConfig, Player, db
+
+    conquer_config_id = getattr(game, 'conquer_config_id', None)
+    if conquer_config_id:
+        cfg = db.session.get(LandConfig, conquer_config_id)
+        if cfg:
+            player = next((p for p in players if p.user_id == cfg.user_id), None)
+            if player:
+                return player
+    if isinstance(getattr(game, 'last_battle_result', None), dict):
+        user_id = game.last_battle_result.get('conquer_attacker_user_id')
+        if user_id is not None:
+            player = next((p for p in players if p.user_id == user_id), None)
+            if player:
+                return player
+    invader_player_id = getattr(game, 'invader_player_id', None)
+    if invader_player_id:
+        return db.session.get(Player, invader_player_id)
+    return players[0] if players else None
+
+
+def _conquer_automated_defender_player(game):
+    """Return the land defender controlled by the rule-based conquer worker."""
+    attacker = _conquer_original_attacker_player(game)
+    players = list(getattr(game, 'players', []) or [])
+    if attacker and game and players:
+        defender = next((p for p in players if p.id != attacker.id), None)
+        if defender:
+            return defender
+    invader_player_id = getattr(game, 'invader_player_id', None)
+    if game and invader_player_id is not None:
+        return next((p for p in players if p.id != invader_player_id), None)
+    return None
+
+
 def trigger_ai_if_needed(game_id, app=None):
     """
     Check if an AI player needs to act in this game, and if so,
@@ -405,11 +446,7 @@ def trigger_ai_if_needed(game_id, app=None):
     if game.mode == 'conquer':
         # Conquer uses a scripted defender flow regardless of defender account
         # type (AI or human-owned land config).
-        if game.invader_player_id is not None:
-            automated_player = next(
-                (p for p in game.players if p.id != game.invader_player_id),
-                None,
-            )
+        automated_player = _conquer_automated_defender_player(game)
         if automated_player is None:
             logger.warning(
                 "AI trigger skipped for conquer game %s: defender player not found",
@@ -531,7 +568,12 @@ def _get_conquer_auto_gamble_settings(game, ai_player_id):
     """Resolve (enabled, threshold) for conquer auto-gamble runtime."""
     from models import Land, LandConfig, db
 
-    cfg_id = game.conquer_config_id if ai_player_id == game.invader_player_id else game.defence_config_id
+    automated_defender = _conquer_automated_defender_player(game)
+    cfg_id = (
+        game.defence_config_id
+        if automated_defender and ai_player_id == automated_defender.id
+        else game.conquer_config_id
+    )
     if cfg_id:
         cfg = db.session.get(LandConfig, cfg_id)
         if cfg:
@@ -544,20 +586,53 @@ def _get_conquer_auto_gamble_settings(game, ai_player_id):
     if not land and game.land_id:
         land = db.session.get(Land, game.land_id)
     if land and land.owner_user_id is None:
-        templates = settings.AI_DEFENCE_TEMPLATES.get(land.tier, [])
-        if templates:
-            tpl_idx = land.ai_template_index or 0
-            if tpl_idx < 0 or tpl_idx >= len(templates):
-                tpl_idx = 0
-            template = templates[tpl_idx]
-            return (
-                bool(template.get('auto_gamble', False)),
-                _normalize_conquer_auto_gamble_threshold(
-                    template.get('auto_gamble_threshold', _CONQUER_AUTO_GAMBLE_THRESHOLD_DEFAULT)
-                ),
+        template = get_ai_defence_template_for_land(land)
+        return (
+            bool(template.get('auto_gamble', False)),
+            _normalize_conquer_auto_gamble_threshold(
+                template.get('auto_gamble_threshold', _CONQUER_AUTO_GAMBLE_THRESHOLD_DEFAULT)
             )
+        )
 
     return False, _CONQUER_AUTO_GAMBLE_THRESHOLD_DEFAULT
+
+
+def _conquer_template_counter_spell(game):
+    from models import Land, db
+
+    if not game or game.defence_config_id or not game.land_id:
+        return None
+    land = game.land if getattr(game, 'land', None) else db.session.get(Land, game.land_id)
+    if not land or land.owner_user_id is not None:
+        return None
+    template = get_ai_defence_template_for_land(land)
+    return template.get('counter_spell_name') if template else None
+
+
+def _figure_has_family_skill(figure, skill_name):
+    if not figure:
+        return False
+    if bool(getattr(figure, skill_name, False)):
+        return True
+    try:
+        from ai.figure_recipes import FAMILY_SKILLS
+        skills = FAMILY_SKILLS.get(figure.family_name) or FAMILY_SKILLS.get(figure.name) or {}
+        return bool(skills.get(skill_name))
+    except Exception:
+        return False
+
+
+def _conquer_figure_can_advance(figure, player_id, game_id, *, counter=False):
+    if not figure:
+        return False
+    if _figure_has_family_skill(figure, 'cannot_attack'):
+        return False
+    if counter and _figure_has_family_skill(figure, 'cannot_defend'):
+        return False
+    from routes.games import _check_figure_resource_deficit
+    if _check_figure_resource_deficit(figure, player_id, game_id):
+        return False
+    return True
 
 
 def _conquer_call_candidates(move, all_figures, game_id, player_id, battle_ids, called_ids):
@@ -1005,17 +1080,21 @@ def _conquer_play_battle_round(base, game, ai_player_id):
 
 def _conquer_should_cast_counter_spell(game, ai_player_id):
     """Return True when this defender response should use its configured counter spell."""
-    if not game or game.mode != 'conquer' or not game.defence_config_id:
+    if not game or game.mode != 'conquer':
+        return False
+    automated_defender = _conquer_automated_defender_player(game)
+    if automated_defender and automated_defender.id != ai_player_id:
         return False
     if not game.advancing_figure_id or game.advancing_player_id == ai_player_id:
         return False
     if game.defending_figure_id:
         return False
     from models import LandConfig, LandConfigFigure, LogEntry, db
-    cfg = db.session.get(LandConfig, game.defence_config_id)
-    if not cfg or not cfg.counter_spell_name:
+    cfg = db.session.get(LandConfig, game.defence_config_id) if game.defence_config_id else None
+    counter_spell_name = cfg.counter_spell_name if cfg else _conquer_template_counter_spell(game)
+    if not counter_spell_name:
         return False
-    if cfg.counter_spell_name == 'Explosion':
+    if counter_spell_name == 'Explosion':
         return False
     # Civil War: only cast a counter spell on the first advance per round.
     already_cast = LogEntry.query.filter_by(
@@ -1026,43 +1105,77 @@ def _conquer_should_cast_counter_spell(game, ai_player_id):
     ).first()
     if already_cast:
         return False
-    if cfg.counter_spell_name == 'Health Boost':
+    if not cfg:
+        return counter_spell_name in {'Dump Cards', 'Forced Deal', 'Poison', 'Health Boost'}
+    if counter_spell_name == 'Health Boost':
         target = db.session.get(LandConfigFigure, cfg.counter_spell_target_figure_id)
         return bool(target and target.config_id == cfg.id and not getattr(target, 'checkmate', False))
-    return cfg.counter_spell_name in {'Dump Cards', 'Forced Deal', 'Poison'}
+    return counter_spell_name in {'Dump Cards', 'Forced Deal', 'Poison'}
 
 
 def _conquer_pick_counter_advance_figure(game, ai_player_id):
-    """Pick the configured or next eligible defender figure for automated conquer defence."""
+    """Pick the next legal automated conquer figure.
+
+    Normally this selects a counter-advance defender.  After Invader Swap the
+    same original land defender may be the current invader, so normal advance
+    eligibility must not reject figures with ``cannot_defend``.
+    """
     from models import Figure
     modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
     has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    is_counter = bool(game.advancing_figure_id and game.advancing_player_id != ai_player_id)
 
-    if has_civil_war and game.defending_figure_id and not game.defending_figure_id_2:
+    def _pick_second(first_id):
         first = Figure.query.filter_by(
+            id=first_id,
+            game_id=game.id,
+            player_id=ai_player_id,
+        ).first()
+        if not first:
+            return None
+        second_candidates = Figure.query.filter(
+            Figure.game_id == game.id,
+            Figure.player_id == ai_player_id,
+            Figure.id != first.id,
+            Figure.field == 'village',
+            Figure.color == first.color,
+        ).order_by(Figure.id.asc()).all()
+        for second in second_candidates:
+            if _conquer_figure_can_advance(
+                second,
+                ai_player_id,
+                game.id,
+                counter=is_counter,
+            ):
+                return second.id
+        return None
+
+    if has_civil_war and is_counter and game.defending_figure_id and not game.defending_figure_id_2:
+        return _pick_second(game.defending_figure_id)
+
+    if has_civil_war and not is_counter and game.advancing_figure_id \
+            and game.advancing_player_id == ai_player_id \
+            and not game.advancing_figure_id_2:
+        return _pick_second(game.advancing_figure_id)
+
+    if is_counter and game.defending_figure_id:
+        fig = Figure.query.filter_by(
             id=game.defending_figure_id,
             game_id=game.id,
             player_id=ai_player_id,
         ).first()
-        if first:
-            second = Figure.query.filter(
-                Figure.game_id == game.id,
-                Figure.player_id == ai_player_id,
-                Figure.id != first.id,
-                Figure.field == 'village',
-                Figure.color == first.color,
-            ).order_by(Figure.id.asc()).first()
-            if second:
-                return second.id
+        if _conquer_figure_can_advance(fig, ai_player_id, game.id, counter=True):
+            return fig.id
+        return None
 
-    if game.defending_figure_id:
-        return game.defending_figure_id
-
-    fig = Figure.query.filter_by(
+    candidates = Figure.query.filter_by(
         game_id=game.id,
         player_id=ai_player_id,
-    ).order_by(Figure.id.asc()).first()
-    return fig.id if fig else None
+    ).order_by(Figure.id.asc()).all()
+    for fig in candidates:
+        if _conquer_figure_can_advance(fig, ai_player_id, game.id, counter=is_counter):
+            return fig.id
+    return None
 
 
 def _conquer_ai_loop(app, game_id, ai_player_id):
@@ -1111,6 +1224,7 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                     game = db.session.get(Game, game_id)
                     should_cast_counter = _conquer_should_cast_counter_spell(game, ai_player_id)
                     fig_id = None if should_cast_counter else _conquer_pick_counter_advance_figure(game, ai_player_id)
+                    is_current_invader = bool(game and game.invader_player_id == ai_player_id)
 
                 if should_cast_counter:
                     resp = _ai_post(f'{base}/games/conquer_defender_counter_spell',
@@ -1156,6 +1270,9 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                     _exec_advance_figure(base, game_id, ai_player_id,
                                          {'figure_id': fig_id})
                 else:
+                    if is_current_invader:
+                        _exec_cannot_advance_loss(base, game_id, ai_player_id)
+                        break
                     logger.warning(f"[CONQUER-AI] no figure to advance, game={game_id}")
                     break
 

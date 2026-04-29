@@ -5,7 +5,8 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
-from models import db as _db, User, Land
+from models import db as _db, User, Land, Kingdom as KingdomModel
+import server_settings as config
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -103,9 +104,8 @@ class TestKingdomMap:
             rv = client.get('/kingdom/map', headers=auth_headers_user1)
 
         data = rv.get_json()
-        # Default CONQUER_COOLDOWN_SECONDS = 6 * 3600 = 21600
-        # Elapsed = 1 hour = 3600s → remaining = 21600 - 3600 = 18000
-        assert data['conquer_cooldown_remaining'] == 18000
+        expected = max(0, int(getattr(config, 'CONQUER_COOLDOWN_SECONDS', 0)) - 3600)
+        assert data['conquer_cooldown_remaining'] == expected
 
     def test_conquer_cooldown_expired(self, client, db, two_users, auth_headers_user1):
         """When enough time has passed, cooldown_remaining = 0."""
@@ -118,7 +118,8 @@ class TestKingdomMap:
             rv = client.get('/kingdom/map', headers=auth_headers_user1)
 
         data = rv.get_json()
-        assert data['conquer_cooldown_remaining'] == 0
+        expected = max(0, int(getattr(config, 'CONQUER_COOLDOWN_SECONDS', 0)) - 7 * 3600)
+        assert data['conquer_cooldown_remaining'] == expected
 
     def test_conquer_cooldown_never_conquered(self, client, auth_headers_user1):
         """When last_conquer_at is None, cooldown_remaining = 0."""
@@ -182,6 +183,36 @@ class TestKingdomMap:
         assert land['gold_rate'] == 12.5
         assert land['suit_bonus_suit'] == 'Spades'
         assert land['suit_bonus_value'] == 8
+
+    def test_opponent_land_includes_kingdom_name_and_owner_style(self, client, db,
+                                                                  two_users,
+                                                                  auth_headers_user1):
+        """Map payload exposes opponent kingdom name/style for cross-player visibility."""
+        _u1, u2 = two_users
+
+        rival_kingdom = KingdomModel(
+            owner_user_id=u2.id,
+            name='Rival Realm',
+            flag_key='flag_plain',
+            border_key='border_simple_gold',
+            surface_key='surface_plain',
+        )
+        db.session.add(rival_kingdom)
+        db.session.commit()
+
+        land = _add_land(db, 0, 0, owner_id=u2.id)
+        land.kingdom_id = rival_kingdom.id
+        db.session.commit()
+
+        rv = client.get('/kingdom/map', headers=auth_headers_user1)
+        assert rv.status_code == 200
+        row = rv.get_json()['lands'][0]
+
+        assert row['is_mine'] is False
+        assert row['kingdom_name'] == 'Rival Realm'
+        assert row['owner_style']['flag_key'] == 'flag_plain'
+        assert row['owner_style']['border_key'] == 'border_simple_gold'
+        assert row['owner_style']['surface_key'] == 'surface_plain'
 
     def test_requires_auth(self, client):
         """Endpoint requires authentication."""

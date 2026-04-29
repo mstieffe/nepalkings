@@ -12,6 +12,120 @@ def _battle_screen_class():
 
 
 class TestBattleScreenConquerFlow:
+    def _screen_for_kingdom_bonus(self, player_is_invader=True):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+        screen.player_is_invader = player_is_invader
+        screen.game = SimpleNamespace(
+            mode='conquer',
+            land_suit_bonus_suit='Hearts',
+            defender_kingdom_bonuses={
+                'villager_power_bonus': 3,
+                'military_power_bonus': 5,
+                'archer_damage_bonus': 2,
+                'land_suit_bonus_boost': 4,
+            },
+        )
+        screen.player_figure = None
+        screen.player_figure_2 = None
+        screen.opponent_figure = None
+        screen.opponent_figure_2 = None
+        screen.player_figure_icon = None
+        screen.player_figure_icon_2 = None
+        screen.opponent_figure_icon = None
+        screen.opponent_figure_icon_2 = None
+        screen.player_played = [None, None, None]
+        screen.opponent_played = [None, None, None]
+        return BattleScreen, screen
+
+    @staticmethod
+    def _figure(base=10, suit='Hearts', field='village'):
+        return SimpleNamespace(
+            suit=suit,
+            family=SimpleNamespace(field=field),
+            get_value=lambda: base,
+            get_total_enchantment_modifier=lambda: 0,
+        )
+
+    def test_defender_kingdom_bonuses_affect_client_figure_power_preview(self):
+        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
+        figure = self._figure(base=10, suit='Hearts', field='village')
+        icon = SimpleNamespace(
+            battle_bonus_received=2,
+            buffs_allies_bonus=0,
+            buffs_allies_defence_bonus=0,
+            distance_attack_penalty=0,
+            battle_bonus_blocked=False,
+        )
+
+        defender_power = BattleScreen._get_figure_total_power(
+            screen, figure, icon, is_player=False)
+        attacker_power = BattleScreen._get_figure_total_power(
+            screen, figure, icon, is_player=True)
+
+        assert defender_power == 19  # 10 base +3 villager +2 support +4 suit boost
+        assert attacker_power == 12
+
+    def test_blocks_bonus_still_zeroes_kingdom_land_suit_support_boost(self):
+        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
+        figure = self._figure(base=10, suit='Hearts', field='village')
+        icon = SimpleNamespace(
+            battle_bonus_received=2,
+            buffs_allies_bonus=0,
+            buffs_allies_defence_bonus=0,
+            distance_attack_penalty=0,
+            battle_bonus_blocked=True,
+        )
+
+        power = BattleScreen._get_figure_total_power(screen, figure, icon, is_player=False)
+
+        assert power == 13  # base + villager boost; support and suit boost are blocked
+
+    def test_defender_kingdom_bonuses_affect_client_call_figure_preview(self):
+        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=False)
+        screen.player_buffs_allies_figures = []
+        screen.opponent_buffs_allies_figures = []
+        screen._player_da_archers = []
+        screen._opponent_da_archers = []
+        call_fig = self._figure(base=7, suit='Clubs', field='village')
+        move = {
+            'family_name': 'Call',
+            'value': 5,
+            'suit': 'Clubs',
+            '_call_figure': call_fig,
+        }
+
+        power = BattleScreen._get_move_effective_power(
+            screen, move, is_player=True, round_idx=0)
+
+        assert power == 15  # 7 base +3 villager +5 matching call move
+
+    def test_defender_archer_damage_bonus_is_side_specific(self):
+        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=False)
+
+        assert BattleScreen._kingdom_archer_damage_bonus(screen, is_player=True) == 2
+        assert BattleScreen._kingdom_archer_damage_bonus(screen, is_player=False) == 0
+
+    def test_conquer_intro_informs_attacker_about_defender_kingdom_skills(self):
+        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
+        screen._kingdom_intro_shown_key = None
+        captured = {}
+        screen.make_dialogue_box = lambda message, **kwargs: captured.update({
+            'message': message,
+            'kwargs': kwargs,
+        })
+        screen.dialogue_box = None
+        screen.game.defender_kingdom_name = 'North Pass'
+        screen.game.defender_kingdom_effects = ['+3 village defender power']
+        screen.game.game_id = 44
+
+        assert BattleScreen._show_conquer_kingdom_intro_if_needed(screen) is True
+
+        assert 'North Pass' in captured['message']
+        assert '+3 village defender power' in captured['message']
+        assert captured['kwargs']['title'] == 'Kingdom Defences'
+        assert BattleScreen._show_conquer_kingdom_intro_if_needed(screen) is False
+
     def test_conquer_defeat_ack_queries_finish_battle_and_sets_fallback_game_over(self, monkeypatch):
         BattleScreen = _battle_screen_class()
         screen = BattleScreen.__new__(BattleScreen)
@@ -187,3 +301,56 @@ class TestBattleScreenConquerFlow:
         assert 'Defence cards consumed:' in msg
         assert '8 of Spades' in msg
         assert '3 of Hearts' in msg
+
+    def test_try_resolve_server_finished_battle_handles_finished_conquer_draw(self):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+
+        handled = []
+        screen._battle_result = None
+        screen.game = SimpleNamespace(
+            mode='conquer',
+            state='finished',
+            winner_player_id=None,
+            invader_player_id=88,
+            land_tier=2,
+            land_gold_rate=12,
+            _last_polled_battle_result=None,
+        )
+        screen._handle_conquer_end = lambda result: handled.append(result)
+
+        resolved = BattleScreen._try_resolve_server_finished_battle(screen)
+
+        assert resolved is True
+        assert len(handled) == 1
+        assert handled[0]['conquer_result'] == 'draw'
+        assert handled[0]['attacker_won'] is False
+        assert screen._battle_result['conquer_result'] == 'draw'
+
+    def test_try_resolve_server_finished_battle_prefers_explicit_cached_conquer_result(self):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+
+        handled = []
+        screen._battle_result = None
+        screen.game = SimpleNamespace(
+            mode='conquer',
+            state='active',
+            winner_player_id=None,
+            invader_player_id=9,
+            land_tier=3,
+            land_gold_rate=15,
+            _last_polled_battle_result={
+                'conquer_result': 'defender_won',
+                'attacker_won': False,
+            },
+        )
+        screen._handle_conquer_end = lambda result: handled.append(result)
+
+        resolved = BattleScreen._try_resolve_server_finished_battle(screen)
+
+        assert resolved is True
+        assert len(handled) == 1
+        assert handled[0]['conquer_result'] == 'defender_won'
+        assert handled[0]['attacker_won'] is False
+        assert screen._battle_result['conquer_result'] == 'defender_won'

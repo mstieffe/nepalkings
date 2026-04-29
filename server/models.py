@@ -80,7 +80,6 @@ class User(db.Model):
     # v2.0: Collection & Kingdom
     booster_packs = db.Column(db.Integer, nullable=False, default=0)
     booster_packs_side = db.Column(db.Integer, nullable=False, default=0)
-    last_gold_collection = db.Column(db.DateTime, nullable=True)
     last_conquer_at = db.Column(db.DateTime, nullable=True)
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
                                         foreign_keys='Challenge.challenger_id')
@@ -194,6 +193,24 @@ class Game(db.Model):
 
 
     def serialize(self):
+        defender_kingdom_id = None
+        defender_kingdom_name = None
+        defender_kingdom_bonuses = {}
+        defender_kingdom_effects = []
+        if self.mode == 'conquer' and self.land and self.land.kingdom_id:
+            try:
+                from kingdom_service import describe_kingdom_bonuses, kingdom_skill_bonuses
+                kingdom = db.session.get(Kingdom, self.land.kingdom_id)
+                if kingdom:
+                    defender_kingdom_id = kingdom.id
+                    defender_kingdom_name = kingdom.name or f'Kingdom #{kingdom.id}'
+                    defender_kingdom_bonuses = kingdom_skill_bonuses(kingdom)
+                    defender_kingdom_effects = describe_kingdom_bonuses(defender_kingdom_bonuses)
+            except Exception:
+                defender_kingdom_id = None
+                defender_kingdom_name = None
+                defender_kingdom_bonuses = {}
+                defender_kingdom_effects = []
         return {
             'id': self.id,
             'state': self.state,
@@ -203,6 +220,10 @@ class Game(db.Model):
             'land_gold_rate': self.land.gold_rate if self.land else None,
             'land_suit_bonus_suit': self.land.suit_bonus_suit if self.land else None,
             'land_suit_bonus_value': self.land.suit_bonus_value if self.land else None,
+            'defender_kingdom_id': defender_kingdom_id,
+            'defender_kingdom_name': defender_kingdom_name,
+            'defender_kingdom_bonuses': defender_kingdom_bonuses,
+            'defender_kingdom_effects': defender_kingdom_effects,
             'date': self.date.isoformat() if self.date else None,
             'stake': self.stake,
             'turn_time_limit': self.turn_time_limit,
@@ -664,6 +685,7 @@ class Land(db.Model):
     suit_bonus_suit  = db.Column(db.String(10), nullable=False)
     suit_bonus_value = db.Column(db.Integer, nullable=False)
     owner_user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    kingdom_id       = db.Column(db.Integer, db.ForeignKey('kingdom.id'), nullable=True, index=True)
     owned_since      = db.Column(db.DateTime, nullable=True)
     conquer_cooldown_until = db.Column(db.DateTime, nullable=True)
     defence_config_id = db.Column(db.Integer, db.ForeignKey('land_config.id',
@@ -677,6 +699,8 @@ class Land(db.Model):
 
     owner = db.relationship('User', backref=db.backref('owned_lands', lazy='dynamic'),
                             foreign_keys=[owner_user_id])
+    kingdom = db.relationship('Kingdom', foreign_keys=[kingdom_id],
+                              back_populates='lands', lazy=True)
 
     def serialize(self):
         owner_data = None
@@ -686,13 +710,11 @@ class Land(db.Model):
                 'username': self.owner.username if self.owner else None,
                 'owned_since': self.owned_since.isoformat() if self.owned_since else None,
             }
-        # Resolve AI name from template when land is unowned
+        # Resolve AI name from the deterministic defence generator when unowned.
         ai_name = None
-        if not self.owner_user_id and self.ai_template_index is not None:
-            from server_settings import AI_DEFENCE_TEMPLATES
-            templates = AI_DEFENCE_TEMPLATES.get(self.tier, [])
-            if 0 <= self.ai_template_index < len(templates):
-                ai_name = templates[self.ai_template_index].get('ai_name')
+        if not self.owner_user_id:
+            from ai.defence.generator import get_ai_defence_template_for_land
+            ai_name = get_ai_defence_template_for_land(self).get('ai_name')
         return {
             'id': self.id,
             'col': self.col,
@@ -702,6 +724,7 @@ class Land(db.Model):
             'suit_bonus_suit': self.suit_bonus_suit,
             'suit_bonus_value': self.suit_bonus_value,
             'owner': owner_data,
+            'kingdom_id': self.kingdom_id,
             'conquer_cooldown_until': (
                 self.conquer_cooldown_until.isoformat()
                 if self.conquer_cooldown_until else None
@@ -709,6 +732,65 @@ class Land(db.Model):
             'ai_name': ai_name,
             'defence_config_id': self.defence_config_id,
             'ai_template_index': self.ai_template_index,
+        }
+
+
+class Kingdom(db.Model):
+    """Persistent configuration for one connected owned-land kingdom."""
+    __tablename__ = 'kingdom'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    owner_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    name          = db.Column(db.String(80), nullable=True)
+    flag_key      = db.Column(db.String(80), nullable=False)
+    border_key    = db.Column(db.String(80), nullable=False)
+    surface_key   = db.Column(db.String(80), nullable=False)
+    shield_until  = db.Column(db.DateTime, nullable=True)
+    # Permanent progression: experience is cumulative XP; level is derived
+    # from experience and cached for fast reads (kept in sync via
+    # kingdom_service.award_kingdom_xp).  skill_points_granted = level *
+    # KINGDOM_SKILL_POINTS_PER_LEVEL.
+    level                    = db.Column(db.Integer, nullable=False, default=1, server_default='1')
+    experience               = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    skill_points_granted     = db.Column(db.Integer, nullable=False, default=3, server_default='3')
+    # Per-kingdom gold vault: pending_gold accrues from owned lands and is
+    # capped by the gold_vault skill effect.  last_gold_collection_at marks
+    # the last time accrual was advanced or collected.
+    pending_gold             = db.Column(db.Float, nullable=False, default=0.0, server_default='0')
+    last_gold_collection_at  = db.Column(db.DateTime, nullable=True)
+    created_at    = db.Column(db.DateTime, default=_utcnow)
+    updated_at    = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
+
+    owner = db.relationship('User', foreign_keys=[owner_user_id])
+    lands = db.relationship('Land', back_populates='kingdom',
+                            foreign_keys='Land.kingdom_id', lazy='dynamic')
+
+    def serialize_style(self):
+        return {
+            'flag_key': self.flag_key,
+            'border_key': self.border_key,
+            'surface_key': self.surface_key,
+        }
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'owner_user_id': self.owner_user_id,
+            'name': self.name or f'Kingdom #{self.id}',
+            'flag_key': self.flag_key,
+            'border_key': self.border_key,
+            'surface_key': self.surface_key,
+            'shield_until': self.shield_until.isoformat() if self.shield_until else None,
+            'level': self.level,
+            'experience': self.experience,
+            'skill_points_granted': self.skill_points_granted,
+            'pending_gold': float(self.pending_gold or 0.0),
+            'last_gold_collection_at': (
+                self.last_gold_collection_at.isoformat()
+                if self.last_gold_collection_at else None
+            ),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
 
 
@@ -882,6 +964,9 @@ class LandAttackLog(db.Model):
     card_won_rank    = db.Column(db.String(5),  nullable=True)
     card_lost_suit   = db.Column(db.String(10), nullable=True)
     card_lost_rank   = db.Column(db.String(5),  nullable=True)
+    kingdom_deleted_id = db.Column(db.Integer, nullable=True)
+    kingdom_deleted_name = db.Column(db.String(80), nullable=True)
+    seen_by_attacker = db.Column(db.Boolean, nullable=False, default=False)
     seen_by_defender = db.Column(db.Boolean, nullable=False, default=False)
     timestamp        = db.Column(db.DateTime, default=_utcnow)
 
@@ -898,6 +983,119 @@ class LandAttackLog(db.Model):
             'card_won_rank': self.card_won_rank,
             'card_lost_suit': self.card_lost_suit,
             'card_lost_rank': self.card_lost_rank,
+            'kingdom_deleted_id': self.kingdom_deleted_id,
+            'kingdom_deleted_name': self.kingdom_deleted_name,
+            'seen_by_attacker': self.seen_by_attacker,
             'seen_by_defender': self.seen_by_defender,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+        }
+
+
+class KingdomMessage(db.Model):
+    """User-to-user messages attached to the kingdom layer."""
+    __tablename__ = 'kingdom_message'
+
+    id                = db.Column(db.Integer, primary_key=True)
+    sender_user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    recipient_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    land_id           = db.Column(db.Integer, db.ForeignKey('land.id'), nullable=True)
+    message           = db.Column(db.String(500), nullable=False)
+    seen_by_recipient = db.Column(db.Boolean, nullable=False, default=False)
+    timestamp         = db.Column(db.DateTime, default=_utcnow)
+
+    sender = db.relationship('User', foreign_keys=[sender_user_id])
+    recipient = db.relationship('User', foreign_keys=[recipient_user_id])
+    land = db.relationship('Land', foreign_keys=[land_id])
+
+    def serialize(self):
+        land = self.land
+        return {
+            'id': self.id,
+            'sender_user_id': self.sender_user_id,
+            'recipient_user_id': self.recipient_user_id,
+            'sender_username': self.sender.username if self.sender else None,
+            'recipient_username': self.recipient.username if self.recipient else None,
+            'land_id': self.land_id,
+            'land_col': land.col if land else None,
+            'land_row': land.row if land else None,
+            'message': self.message,
+            'seen_by_recipient': self.seen_by_recipient,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+        }
+
+
+class KingdomCosmeticUnlock(db.Model):
+    """Permanent cosmetic unlock scoped to one persistent kingdom."""
+    __tablename__ = 'kingdom_cosmetic_unlock'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    kingdom_id   = db.Column(db.Integer, db.ForeignKey('kingdom.id'), nullable=False, index=True)
+    cosmetic_key = db.Column(db.String(80), nullable=False)
+    unlocked_at  = db.Column(db.DateTime, default=_utcnow)
+
+    kingdom = db.relationship('Kingdom', foreign_keys=[kingdom_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('kingdom_id', 'cosmetic_key', name='uq_kingdom_cosmetic_unlock'),
+    )
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'kingdom_id': self.kingdom_id,
+            'cosmetic_key': self.cosmetic_key,
+            'unlocked_at': self.unlocked_at.isoformat() if self.unlocked_at else None,
+        }
+
+
+class KingdomSkillAllocation(db.Model):
+    """Allocated kingdom skill level scoped to one persistent kingdom."""
+    __tablename__ = 'kingdom_skill_allocation'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    kingdom_id       = db.Column(db.Integer, db.ForeignKey('kingdom.id'), nullable=False, index=True)
+    skill_key        = db.Column(db.String(80), nullable=False)
+    level            = db.Column(db.Integer, nullable=False, default=0)
+    last_upgraded_at = db.Column(db.DateTime, nullable=True)
+
+    kingdom = db.relationship('Kingdom', foreign_keys=[kingdom_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('kingdom_id', 'skill_key', name='uq_kingdom_skill_allocation'),
+    )
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'kingdom_id': self.kingdom_id,
+            'skill_key': self.skill_key,
+            'level': self.level,
+            'last_upgraded_at': (
+                self.last_upgraded_at.isoformat() if self.last_upgraded_at else None
+            ),
+        }
+
+
+class KingdomNotification(db.Model):
+    """User-visible kingdom event (skill downgrade, dissolution, shield expiry)."""
+    __tablename__ = 'kingdom_notification'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    kind        = db.Column(db.String(40), nullable=False, index=True)
+    kingdom_id  = db.Column(db.Integer, nullable=True)
+    payload     = db.Column(db.JSON, nullable=True)
+    created_at  = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    seen        = db.Column(db.Boolean, nullable=False, default=False, index=True)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'kind': self.kind,
+            'kingdom_id': self.kingdom_id,
+            'payload': self.payload or {},
+            'seen': self.seen,
+            'timestamp': self.created_at.isoformat() if self.created_at else None,
         }

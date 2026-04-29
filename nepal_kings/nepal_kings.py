@@ -11,6 +11,7 @@ from game.screens.load_game_screen import LoadGameScreen
 from game.screens.ranking_screen import RankingScreen
 from game.screens.settings_screen import SettingsScreen
 from game.screens.kingdom_screen import KingdomScreen
+from game.screens.kingdom_config_screen import KingdomConfigScreen
 from game.screens.conquer_screen import ConquerScreen
 from game.screens.defence_screen import DefenceScreen
 from game.screens.collection_screen import CollectionScreen
@@ -74,6 +75,7 @@ class Client:
             ('rankings',   'Loading rankings …',     RankingScreen,    1),
             ('settings',   'Loading settings …',     SettingsScreen,   1),
             ('kingdom',    'Loading kingdom …',      KingdomScreen,    1),
+            ('kingdom_config', 'Loading kingdom config …', KingdomConfigScreen, 1),
             ('conquer',    'Loading conquer …',      ConquerScreen,    1),
             ('defence',    'Loading defence …',      DefenceScreen,    1),
             ('collection', 'Loading collection …',   CollectionScreen, 1),

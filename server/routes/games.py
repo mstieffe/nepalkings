@@ -6,9 +6,11 @@ from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
 from datetime import datetime, timezone, timedelta
-from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom
 from game_service.deck_manager import DeckManager
 from routes.auth import require_token, verify_player_ownership
+from ai.defence.config import AI_DEFENCE_RANK_VALUES
+from ai.defence.generator import get_ai_defence_template_for_land
 
 import server_settings as settings
 
@@ -62,6 +64,116 @@ def _defender_already_cast_counter_this_round(game, defender_player_id):
     ).first() is not None
 
 
+def _figure_has_family_skill(figure, skill_name):
+    """Return True when a runtime figure has a stored or family-derived skill."""
+    if not figure:
+        return False
+    if bool(getattr(figure, skill_name, False)):
+        return True
+    try:
+        from ai.figure_recipes import FAMILY_SKILLS
+        skills = FAMILY_SKILLS.get(figure.family_name) or FAMILY_SKILLS.get(figure.name) or {}
+        return bool(skills.get(skill_name))
+    except Exception:
+        return False
+
+
+def _figure_can_counter_advance(figure, player_id, game_id):
+    if not figure:
+        return False
+    if _figure_has_family_skill(figure, 'cannot_attack'):
+        return False
+    if _figure_has_family_skill(figure, 'cannot_defend'):
+        return False
+    if _check_figure_resource_deficit(figure, player_id, game_id):
+        return False
+    return True
+
+
+def _figure_can_be_selected_as_defender(figure):
+    if not figure:
+        return False
+    if _figure_has_family_skill(figure, 'cannot_defend'):
+        return False
+    if _figure_has_family_skill(figure, 'cannot_be_targeted'):
+        return False
+    return True
+
+
+def _must_be_attacked_defenders(game, defender_player_id):
+    figures = Figure.query.filter_by(
+        game_id=game.id,
+        player_id=defender_player_id,
+    ).all()
+    return [
+        fig for fig in figures
+        if _figure_can_be_selected_as_defender(fig)
+        and not getattr(fig, 'checkmate', False)
+        and _figure_has_family_skill(fig, 'must_be_attacked')
+    ]
+
+
+def _conquer_defender_player(game):
+    if not game or not game.players:
+        return None
+    if game.advancing_player_id:
+        return next((p for p in game.players if p.id != game.advancing_player_id), None)
+    if game.invader_player_id:
+        return next((p for p in game.players if p.id != game.invader_player_id), None)
+    return None
+
+
+def _conquer_attacker_player(game):
+    """Return the original land conquerer, not necessarily current invader."""
+    if not game or not game.players:
+        return None
+
+    attacker_user_id = None
+    if game.conquer_config_id:
+        cfg = db.session.get(LandConfig, game.conquer_config_id)
+        if cfg:
+            attacker_user_id = cfg.user_id
+
+    if attacker_user_id is None and isinstance(game.last_battle_result, dict):
+        attacker_user_id = game.last_battle_result.get('conquer_attacker_user_id')
+
+    if attacker_user_id is None and game.state == 'finished' and game.land_id:
+        latest_log = LandAttackLog.query.filter_by(
+            land_id=game.land_id
+        ).order_by(LandAttackLog.id.desc()).first()
+        if latest_log:
+            attacker_user_id = latest_log.attacker_user_id
+
+    if attacker_user_id is not None:
+        player = next((p for p in game.players if p.user_id == attacker_user_id), None)
+        if player:
+            return player
+
+    if game.invader_player_id:
+        return db.session.get(Player, game.invader_player_id)
+    return game.players[0] if game.players else None
+
+
+def _conquer_original_defender_player(game):
+    attacker = _conquer_attacker_player(game)
+    if not attacker or not game or not game.players:
+        return None
+    return next((p for p in game.players if p.id != attacker.id), None)
+
+
+def _get_ai_template_counter_spell(game):
+    if not game or game.defence_config_id or not game.land_id:
+        return None, None
+    land = db.session.get(Land, game.land_id)
+    if not land or land.owner_user_id is not None:
+        return None, None
+    template = get_ai_defence_template_for_land(land)
+    spell_name = template.get('counter_spell_name') if template else None
+    if not spell_name:
+        return None, None
+    return spell_name, template.get('counter_spell_data')
+
+
 def _conquer_defender_counter_advance_disabled(game):
     """Return True when conquer defender auto counter-advance should be skipped.
 
@@ -71,28 +183,46 @@ def _conquer_defender_counter_advance_disabled(game):
     """
     if not game or game.mode != 'conquer':
         return False
+    cfg = db.session.get(LandConfig, game.defence_config_id) if game.defence_config_id else None
+    has_counter_spell = False
+    if cfg and cfg.counter_spell_name:
+        has_counter_spell = cfg.counter_spell_name != 'Explosion'
+        if cfg.counter_spell_name == 'Health Boost':
+            counter_target = db.session.get(LandConfigFigure, cfg.counter_spell_target_figure_id)
+            has_counter_spell = bool(counter_target and counter_target.config_id == cfg.id
+                                     and not getattr(counter_target, 'checkmate', False))
+
+    defender_player = _conquer_defender_player(game)
+    original_defender = _conquer_original_defender_player(game)
+    if defender_player and original_defender and defender_player.id != original_defender.id:
+        return False
+    if has_counter_spell and defender_player and _defender_already_cast_counter_this_round(game, defender_player.id):
+        has_counter_spell = False
+    if defender_player:
+        template_counter_name, _ = _get_ai_template_counter_spell(game)
+        if not game.defence_config_id and template_counter_name:
+            return False
+        if game.defence_config_id and has_counter_spell and cfg and not cfg.battle_figure_id:
+            return False
+        if _must_be_attacked_defenders(game, defender_player.id):
+            return True
+        counter_candidates = Figure.query.filter_by(
+            game_id=game.id,
+            player_id=defender_player.id,
+        ).all()
+        if not any(
+            _figure_can_counter_advance(fig, defender_player.id, game.id)
+            for fig in counter_candidates
+        ):
+            return True
     if not game.defence_config_id:
         # AI-template lands always keep scripted counter-advance behavior.
         return False
 
-    cfg = db.session.get(LandConfig, game.defence_config_id)
     if not cfg:
         return True
 
     has_battle_fig = (cfg.battle_figure_id is not None)
-    has_counter_spell = cfg.counter_spell_name is not None
-    if cfg.counter_spell_name == 'Explosion':
-        has_counter_spell = False
-    if cfg.counter_spell_name == 'Health Boost':
-        counter_target = db.session.get(LandConfigFigure, cfg.counter_spell_target_figure_id)
-        has_counter_spell = bool(counter_target and counter_target.config_id == cfg.id
-                                 and not getattr(counter_target, 'checkmate', False))
-
-    # If a counter spell already fired this round (e.g., Civil War first
-    # advance), fall back to counter-advance for any remaining advances.
-    defender_player = next((p for p in game.players if p.id != game.advancing_player_id), None)
-    if has_counter_spell and defender_player and _defender_already_cast_counter_this_round(game, defender_player.id):
-        has_counter_spell = False
 
     if has_battle_fig and not has_counter_spell:
         battle_cfg_fig = db.session.get(Figure, game.defending_figure_id)
@@ -126,12 +256,32 @@ def _map_defence_config_figure_to_game(cfg, cfg_figure_id, game, defender_player
 
 def _get_conquer_counter_spell_config(game, defender_player):
     """Return the configured defender counter spell for a conquer game."""
+    original_defender = _conquer_original_defender_player(game)
+    if original_defender and defender_player and defender_player.id != original_defender.id:
+        return None, None, None
     if not game.defence_config_id:
+        spell_name, spell_data = _get_ai_template_counter_spell(game)
+        if spell_name:
+            return {'source': 'ai_template'}, spell_name, spell_data
         return None, None, None
     cfg = db.session.get(LandConfig, game.defence_config_id)
     if not cfg or not cfg.counter_spell_name:
         return None, None, None
     return cfg, cfg.counter_spell_name, cfg.counter_spell_data
+
+
+def _pick_conquer_health_boost_counter_target(game, defender_player):
+    figures = Figure.query.filter_by(
+        game_id=game.id,
+        player_id=defender_player.id,
+    ).all()
+    candidates = [f for f in figures if not getattr(f, 'checkmate', False)]
+    if not candidates:
+        return None
+    forced = [f for f in candidates if _figure_has_family_skill(f, 'must_be_attacked')]
+    if forced:
+        candidates = forced
+    return sorted(candidates, key=lambda f: (-_compute_figure_base_power(f), f.id))[0]
 
 
 def _resolve_conquer_counter_target(game, defender_player, cfg, spell_name):
@@ -142,6 +292,9 @@ def _resolve_conquer_counter_target(game, defender_player, cfg, spell_name):
             return target.id
         return None
     if spell_name == 'Health Boost':
+        if isinstance(cfg, dict) and cfg.get('source') == 'ai_template':
+            target = _pick_conquer_health_boost_counter_target(game, defender_player)
+            return target.id if target else None
         target = _map_defence_config_figure_to_game(
             cfg,
             cfg.counter_spell_target_figure_id,
@@ -2177,6 +2330,11 @@ def advance_figure():
             if advancing_fig and advancing_fig.cannot_be_blocked:
                 return jsonify({'success': False, 'message': 'Cannot counter-advance: opponent\'s figure cannot be blocked'}), 400
 
+        if _figure_has_family_skill(figure, 'cannot_attack'):
+            return jsonify({'success': False, 'message': 'This figure cannot advance toward battle.'}), 400
+        if is_counter_advance and _figure_has_family_skill(figure, 'cannot_defend'):
+            return jsonify({'success': False, 'message': 'This figure cannot counter-advance.'}), 400
+
         # Blitzkrieg: defender cannot counter-advance
         if has_blitzkrieg and is_counter_advance:
             return jsonify({'success': False, 'message': 'Blitzkrieg: defender cannot counter-advance'}), 400
@@ -2384,6 +2542,19 @@ def select_defender():
             return jsonify({'success': False, 'message': 'Figure not found'}), 400
         if figure.player_id == player_id:
             return jsonify({'success': False, 'message': 'You must select an opponent\'s figure, not your own'}), 400
+
+        if not _figure_can_be_selected_as_defender(figure):
+            return jsonify({'success': False, 'message': f'{figure.name} cannot be selected as a defender'}), 400
+
+        mandatory_defenders = _must_be_attacked_defenders(game, figure.player_id)
+        if (not game.defending_figure_id and mandatory_defenders and
+                figure.id not in {f.id for f in mandatory_defenders}):
+            forced_names = ', '.join(sorted(f.name for f in mandatory_defenders))
+            return jsonify({
+                'success': False,
+                'message': f'Must attack {forced_names} before selecting another defender',
+                'reason': 'must_be_attacked',
+            }), 400
         
         # Check checkmate constraint (checkmate figures cannot be selected
         # as defenders UNLESS the opponent has no other valid figures).
@@ -3590,24 +3761,28 @@ def _compute_server_total_diff(game, return_breakdown=False):
     def_walls = _find_wall_figures(def_pid, all_figures, battle_ids, game.id)
     def_wall_total = _compute_wall_defence_total(def_walls)
 
+    def_kingdom_bonuses = {}
+
     # ── Conquer mode: land suit bonus (applied via support bonus) ──
-    land_suit_bonus = None
+    land_suit_bonus_attacker = None
+    land_suit_bonus_defender = None
     if game.mode == 'conquer' and game.land_id:
         land = db.session.get(Land, game.land_id)
         if land and land.suit_bonus_suit and land.suit_bonus_value:
-            land_suit_bonus = (land.suit_bonus_suit, land.suit_bonus_value)
+            land_suit_bonus_attacker = (land.suit_bonus_suit, land.suit_bonus_value)
+            land_suit_bonus_defender = (land.suit_bonus_suit, land.suit_bonus_value)
 
     # ── figure power WITHOUT distance-attack (handled below) ──
     adv_power = _compute_figure_full_power(
         adv_fig, all_figures, enchant_spells,
         def_pid, battle_ids, game.id,
         adv_healers, 0,
-        land_suit_bonus=land_suit_bonus)  # attacker: wall = 0
+        land_suit_bonus=land_suit_bonus_attacker)  # attacker: wall = 0
     def_power = _compute_figure_full_power(
         def_fig, all_figures, enchant_spells,
         adv_pid, battle_ids, game.id,
         def_healers, def_wall_total,
-        land_suit_bonus=land_suit_bonus)
+        land_suit_bonus=land_suit_bonus_defender)
 
     if game.advancing_figure_id_2:
         f2 = db.session.get(Figure, game.advancing_figure_id_2)
@@ -3616,7 +3791,7 @@ def _compute_server_total_diff(game, return_breakdown=False):
                 f2, all_figures, enchant_spells,
                 def_pid, battle_ids, game.id,
                 adv_healers, 0,
-                land_suit_bonus=land_suit_bonus)
+                land_suit_bonus=land_suit_bonus_attacker)
     if game.defending_figure_id_2:
         f2 = db.session.get(Figure, game.defending_figure_id_2)
         if f2:
@@ -3624,7 +3799,9 @@ def _compute_server_total_diff(game, return_breakdown=False):
                 f2, all_figures, enchant_spells,
                 adv_pid, battle_ids, game.id,
                 def_healers, def_wall_total,
-                land_suit_bonus=land_suit_bonus)
+                land_suit_bonus=land_suit_bonus_defender)
+
+    kingdom_defence_bonus_total = 0  # kept for breakdown payload compatibility
 
     # ── Distance-attack: each eligible archer fires once per battle ──
     # Build list of defender targets
@@ -3668,7 +3845,8 @@ def _compute_server_total_diff(game, return_breakdown=False):
 
     fig_diff = adv_power - def_power
     logger.debug(f"[TOTAL_DIFF] adv_power={adv_power} def_power={def_power} fig_diff={fig_diff} "
-          f"adv_da={adv_da_applied} def_da={def_da_applied}")
+            f"adv_da={adv_da_applied} def_da={def_da_applied} "
+            f"kingdom_defence_bonus={kingdom_defence_bonus_total}")
 
     # ── round diffs from BattleMove records ──
     round_diff = 0
@@ -3736,7 +3914,7 @@ def _compute_server_total_diff(game, return_breakdown=False):
 
     logger.debug(f"[SERVER_TOTAL_DIFF] game={game.id} "
           f"fig_diff={fig_diff} (adv={adv_power} def={def_power}) "
-          f"round_diff={round_diff} land_suit_bonus={land_suit_bonus} total={total}")
+          f"round_diff={round_diff} land_suit_bonus={land_suit_bonus_defender} total={total}")
 
     if return_breakdown:
         breakdown = {
@@ -3749,9 +3927,10 @@ def _compute_server_total_diff(game, return_breakdown=False):
             'adv_da_applied': adv_da_applied,
             'def_da_applied': def_da_applied,
             'def_wall_total': def_wall_total,
+            'kingdom_defence_bonus': kingdom_defence_bonus_total,
             'fig_diff': fig_diff,
             'round_diff': round_diff,
-            'land_suit_bonus': land_suit_bonus,
+            'land_suit_bonus': land_suit_bonus_defender,
             'total': total,
         }
         return total, breakdown
@@ -4640,9 +4819,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     and attack log.  Returns a JSON-serialisable dict for the response.
     """
     import random as _random
-    import server_settings as _cfg
 
-    atk_player = db.session.get(Player, game.invader_player_id)
+    atk_player = _conquer_attacker_player(game)
+    if not atk_player:
+        atk_player = db.session.get(Player, game.invader_player_id)
     def_player = [p for p in game.players if p.id != atk_player.id][0]
 
     attacker_won = (winner.id == atk_player.id)
@@ -4650,6 +4830,15 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     defender_user = db.session.get(User, def_player.user_id)
     land = db.session.get(Land, game.land_id)
     is_ai_land = defender_user and defender_user.is_ai
+    old_land_owner_id = land.owner_user_id if land else None
+    lost_kingdom_id = land.kingdom_id if land else None
+    lost_kingdom_name = None
+    if lost_kingdom_id:
+        old_kingdom = db.session.get(Kingdom, lost_kingdom_id)
+        if old_kingdom:
+            lost_kingdom_name = old_kingdom.name or f'Kingdom #{old_kingdom.id}'
+    deleted_kingdom_id = None
+    deleted_kingdom_name = None
 
     saved = game.last_battle_result or {}
 
@@ -4687,11 +4876,8 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     if attacker_won:
         # ── Attacker wins: gets a card from the defender ──
         if is_ai_land and land:
-            # AI land: create a new CollectionCard from the template
-            templates = _cfg.AI_DEFENCE_TEMPLATES.get(land.tier, [])
-            tpl_idx = land.ai_template_index or 0
-            tpl = templates[tpl_idx] if tpl_idx < len(templates) else (
-                templates[0] if templates else None)
+            # AI land: create a new CollectionCard from the generated template.
+            tpl = get_ai_defence_template_for_land(land)
             if tpl:
                 # Collect all template cards
                 all_cards = []
@@ -4699,14 +4885,11 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                     all_cards.extend(fig.get('cards', []))
                 if all_cards:
                     picked = _random.choice(all_cards)
-                    rank_values = {'A': 3, 'K': 4, 'Q': 2, 'J': 1,
-                                   '10': 10, '9': 9, '8': 8, '7': 7,
-                                   '6': 6, '5': 5, '4': 4, '3': 3, '2': 2}
                     new_cc = CollectionCard(
                         user_id=attacker_user.id,
                         suit=picked['suit'],
                         rank=picked['rank'],
-                        value=rank_values.get(picked['rank'], 0),
+                        value=AI_DEFENCE_RANK_VALUES.get(picked['rank'], 0),
                         locked=False,
                     )
                     db.session.add(new_cc)
@@ -4738,8 +4921,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         # Transfer land ownership
         if land:
             land.owner_user_id = attacker_user.id
+            land.kingdom_id = None
             land.owned_since = _utcnow()
-            protect_seconds = max(int(getattr(_cfg, 'LAND_CONQUER_PROTECTION_SECONDS', 0)), 0)
+            protect_seconds = max(
+                int(getattr(settings, 'LAND_CONQUER_PROTECTION_SECONDS', 0)), 0)
             if protect_seconds > 0:
                 land.conquer_cooldown_until = _utcnow() + timedelta(seconds=protect_seconds)
             else:
@@ -4769,6 +4954,52 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 _wipe_land_config(def_cfg)
         if defender_user:
             _wipe_defence_drafts_for_lost_land(defender_user.id, game.land_id)
+        try:
+            from kingdom_service import (reconcile_after_land_transfer,
+                                         award_kingdom_xp)
+            from kingdom_progression import xp_for_land_tier
+            reconcile_after_land_transfer(
+                old_owner_id=old_land_owner_id,
+                new_owner_id=attacker_user.id,
+                commit=False,
+            )
+            # Award XP for connecting a new land to an existing kingdom: the
+            # land must now belong to a kingdom that already held >= 1 other
+            # land (i.e. the conquered tile is adjacent to attacker's
+            # existing kingdom).  Brand-new isolated kingdoms (one-land)
+            # award no XP.
+            if land and land.kingdom_id:
+                joined_kingdom = db.session.get(Kingdom, land.kingdom_id)
+                if joined_kingdom and joined_kingdom.owner_user_id == attacker_user.id:
+                    siblings = Land.query.filter(
+                        Land.kingdom_id == joined_kingdom.id,
+                        Land.id != land.id,
+                    ).count()
+                    if siblings >= 1:
+                        award_kingdom_xp(
+                            joined_kingdom,
+                            xp_for_land_tier(int(land.tier or 0)),
+                            reason='conquer',
+                        )
+            if lost_kingdom_id and db.session.get(Kingdom, lost_kingdom_id) is None:
+                deleted_kingdom_id = lost_kingdom_id
+                deleted_kingdom_name = lost_kingdom_name or f'Kingdom #{lost_kingdom_id}'
+                if old_land_owner_id:
+                    try:
+                        from models import KingdomNotification
+                        db.session.add(KingdomNotification(
+                            user_id=old_land_owner_id,
+                            kind='kingdom_dissolved',
+                            kingdom_id=deleted_kingdom_id,
+                            payload={'kingdom_name': deleted_kingdom_name},
+                        ))
+                    except Exception as _kn_err:
+                        logger.warning('Failed to record kingdom_dissolved notification: %s',
+                                       _kn_err)
+        except Exception as _kingdom_reconcile_err:
+            logger.exception('Persistent kingdom reconciliation failed after conquer: %s',
+                             _kingdom_reconcile_err)
+            raise
 
     else:
         # ── Defender wins: attacker loses a key card ──
@@ -4826,6 +5057,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         card_won_rank=card_won_rank,
         card_lost_suit=card_lost_suit,
         card_lost_rank=card_lost_rank,
+        kingdom_deleted_id=deleted_kingdom_id,
+        kingdom_deleted_name=deleted_kingdom_name,
+        seen_by_attacker=False,
+        seen_by_defender=False,
     )
     db.session.add(log)
 
@@ -4838,6 +5073,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
 
     merged_last_result = dict(saved) if isinstance(saved, dict) else {}
     merged_last_result.update({
+        'conquer_attacker_player_id': atk_player.id,
+        'conquer_attacker_user_id': attacker_user.id if attacker_user else None,
+        'conquer_defender_player_id': def_player.id,
+        'conquer_defender_user_id': defender_user.id if defender_user else None,
         'conquer_consumed_cards': consumed_cards,
         'defence_consumed_cards': defence_consumed_cards,
         'conquer_loot_lost_cards': looted_lost_cards,
@@ -4877,13 +5116,14 @@ def _serialize_finished_conquer_result(game):
         return None
 
     land = db.session.get(Land, game.land_id) if game.land_id else None
-    invader_id = game.invader_player_id
+    attacker_player = _conquer_attacker_player(game)
+    attacker_id = attacker_player.id if attacker_player else game.invader_player_id
 
     if game.winner_player_id is None:
         conquer_result = 'draw'
         attacker_won = False
     else:
-        attacker_won = (game.winner_player_id == invader_id)
+        attacker_won = (game.winner_player_id == attacker_id)
         conquer_result = 'attacker_won' if attacker_won else 'defender_won'
 
     payload = {
@@ -4905,13 +5145,10 @@ def _serialize_finished_conquer_result(game):
     payload['outcome'] = 'win'
     payload['winner_player_id'] = game.winner_player_id
 
-    defender_player_id = None
-    for p in game.players:
-        if p.id != invader_id:
-            defender_player_id = p.id
-            break
+    defender_player = _conquer_original_defender_player(game)
+    defender_player_id = defender_player.id if defender_player else None
 
-    payload['loser_player_id'] = defender_player_id if attacker_won else invader_id
+    payload['loser_player_id'] = defender_player_id if attacker_won else attacker_id
 
     # Pull card transfer details from the latest attack log when available.
     if game.land_id:

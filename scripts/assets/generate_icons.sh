@@ -10,7 +10,8 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ICON_DIR="$SCRIPT_DIR/nepal_kings/img/app_icon"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ICON_DIR="$REPO_ROOT/nepal_kings/img/app_icon"
 SRC="$ICON_DIR/app_icon.png"
 
 if [ ! -f "$SRC" ]; then

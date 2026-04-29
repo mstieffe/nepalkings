@@ -29,6 +29,7 @@ def _make_land(db_session, col=0, row=0, owner_user_id=None):
 
 def _make_attack_log(db_session, land, attacker, defender=None,
                      result='attacker_won', seen=False,
+                     seen_by_attacker=False,
                      card_won_suit=None, card_won_rank=None,
                      card_lost_suit=None, card_lost_rank=None,
                      timestamp=None):
@@ -39,6 +40,7 @@ def _make_attack_log(db_session, land, attacker, defender=None,
         result=result,
         card_won_suit=card_won_suit, card_won_rank=card_won_rank,
         card_lost_suit=card_lost_suit, card_lost_rank=card_lost_rank,
+        seen_by_attacker=seen_by_attacker,
         seen_by_defender=seen,
     )
     if timestamp:
@@ -146,6 +148,163 @@ class TestAttackNotifications:
             assert notifs[0]['result'] == 'defender_won'
             assert notifs[1]['result'] == 'attacker_won'
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  GET/POST /kingdom/notifications
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestUnifiedKingdomNotifications:
+
+    def test_returns_unseen_attacker_and_defender_notifications(self, app, db):
+        """Unified notifications include own attacks and incoming attacks."""
+        with app.app_context():
+            current = _make_user(db, 'current')
+            rival = _make_user(db, 'rival')
+            land1 = _make_land(db, col=1, row=1, owner_user_id=current.id)
+            land2 = _make_land(db, col=2, row=2, owner_user_id=rival.id)
+            _make_attack_log(db, land1, rival, current, result='defender_won')
+            _make_attack_log(db, land2, current, rival, result='attacker_won',
+                             card_won_suit='Spades', card_won_rank='A')
+
+            client = app.test_client()
+            resp = client.get('/kingdom/notifications',
+                              headers=_auth_headers(app, current))
+            data = resp.get_json()
+
+            assert resp.status_code == 200
+            assert data['success'] is True
+            assert len(data['notifications']) == 2
+            roles = {n['role'] for n in data['notifications']}
+            assert roles == {'attacker', 'defender'}
+            own_attack = next(n for n in data['notifications'] if n['role'] == 'attacker')
+            assert own_attack['result'] == 'attacker_won'
+            assert own_attack['card_won_suit'] == 'Spades'
+
+    def test_seen_flags_are_role_specific(self, app, db):
+        """Seen attacker logs are hidden without hiding defender logs."""
+        with app.app_context():
+            current = _make_user(db, 'current')
+            rival = _make_user(db, 'rival')
+            land1 = _make_land(db, col=1, row=1, owner_user_id=current.id)
+            land2 = _make_land(db, col=2, row=2, owner_user_id=rival.id)
+            _make_attack_log(db, land1, rival, current, result='defender_won')
+            _make_attack_log(db, land2, current, rival, result='attacker_won',
+                             seen_by_attacker=True)
+
+            client = app.test_client()
+            resp = client.get('/kingdom/notifications',
+                              headers=_auth_headers(app, current))
+            notifs = resp.get_json()['notifications']
+
+            assert len(notifs) == 1
+            assert notifs[0]['role'] == 'defender'
+
+    def test_mark_seen_updates_attacker_and_defender_flags(self, app, db):
+        """Current user can mark both role-specific notification types seen."""
+        with app.app_context():
+            current = _make_user(db, 'current')
+            rival = _make_user(db, 'rival')
+            land1 = _make_land(db, owner_user_id=current.id)
+            land2 = _make_land(db, col=2, row=0, owner_user_id=rival.id)
+            incoming = _make_attack_log(db, land1, rival, current, result='defender_won')
+            outgoing = _make_attack_log(db, land2, current, rival, result='defender_won')
+
+            client = app.test_client()
+            resp = client.post('/kingdom/notifications/mark_seen',
+                               json={'notification_ids': [incoming.id, outgoing.id]},
+                               headers=_auth_headers(app, current))
+
+            assert resp.status_code == 200
+            assert resp.get_json()['marked'] == 2
+            assert db.session.get(LandAttackLog, incoming.id).seen_by_defender is True
+            assert db.session.get(LandAttackLog, outgoing.id).seen_by_attacker is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Kingdom user messages
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestKingdomMessages:
+
+    def test_send_and_fetch_message_with_land_context(self, app, db):
+        """Players can send kingdom messages to another user."""
+        with app.app_context():
+            sender = _make_user(db, 'sender')
+            recipient = _make_user(db, 'recipient')
+            land = _make_land(db, col=4, row=5, owner_user_id=recipient.id)
+
+            client = app.test_client()
+            resp = client.post('/kingdom/messages',
+                               json={
+                                   'recipient_user_id': recipient.id,
+                                   'land_id': land.id,
+                                   'message': 'Nice land.',
+                               },
+                               headers=_auth_headers(app, sender))
+            assert resp.status_code == 200
+            payload = resp.get_json()['kingdom_message']
+            assert payload['sender_username'] == 'sender'
+            assert payload['recipient_username'] == 'recipient'
+            assert payload['land_col'] == 4
+            assert payload['message'] == 'Nice land.'
+
+            recv = client.get('/kingdom/messages',
+                              headers=_auth_headers(app, recipient)).get_json()
+            assert recv['unread_count'] == 1
+            assert recv['messages'][0]['message'] == 'Nice land.'
+
+    def test_mark_messages_seen_only_for_recipient(self, app, db):
+        """Only the recipient can mark a kingdom message as read."""
+        with app.app_context():
+            sender = _make_user(db, 'sender')
+            recipient = _make_user(db, 'recipient')
+            third = _make_user(db, 'third')
+            client = app.test_client()
+            sent = client.post('/kingdom/messages',
+                               json={'recipient_user_id': recipient.id,
+                                     'message': 'Read me'},
+                               headers=_auth_headers(app, sender)).get_json()
+            msg_id = sent['kingdom_message']['id']
+
+            blocked = client.post('/kingdom/messages/mark_seen',
+                                  json={'message_ids': [msg_id]},
+                                  headers=_auth_headers(app, third))
+            assert blocked.get_json()['marked'] == 0
+
+            ok = client.post('/kingdom/messages/mark_seen',
+                             json={'message_ids': [msg_id]},
+                             headers=_auth_headers(app, recipient))
+            assert ok.status_code == 200
+            assert ok.get_json()['marked'] == 1
+            recv = client.get('/kingdom/messages',
+                              headers=_auth_headers(app, recipient)).get_json()
+            assert recv['unread_count'] == 0
+
+    def test_empty_self_and_ai_messages_are_rejected(self, app, db):
+        """Invalid kingdom message targets or bodies are rejected."""
+        with app.app_context():
+            sender = _make_user(db, 'sender')
+            ai = User(username='ai', password_hash='x', is_ai=True)
+            db.session.add(ai)
+            db.session.commit()
+
+            client = app.test_client()
+            empty = client.post('/kingdom/messages',
+                                json={'recipient_user_id': ai.id, 'message': '  '},
+                                headers=_auth_headers(app, sender))
+            assert empty.status_code == 400
+
+            self_msg = client.post('/kingdom/messages',
+                                   json={'recipient_user_id': sender.id,
+                                         'message': 'hello'},
+                                   headers=_auth_headers(app, sender))
+            assert self_msg.status_code == 400
+
+            ai_msg = client.post('/kingdom/messages',
+                                 json={'recipient_user_id': ai.id,
+                                       'message': 'hello'},
+                                 headers=_auth_headers(app, sender))
+            assert ai_msg.status_code == 400
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  POST /kingdom/attack_notifications/mark_seen

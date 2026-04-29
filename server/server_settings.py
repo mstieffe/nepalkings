@@ -1,26 +1,39 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+"""Aggregated server configuration.
+
+Historically this module was the single home for every server setting.
+New configuration should be added as a topic-specific module under
+``server/`` (e.g. ``security_settings.py``, ``database_settings.py``)
+and re-exported here so existing ``import server_settings as settings``
+call sites keep working.
+
+Currently extracted modules:
+
+* :mod:`security_settings` -- ``SECRET_KEY``, ``CORS_ORIGINS``,
+  ``RATE_LIMIT_*``, ``TOKEN_EXPIRY_SECONDS``.
+* :mod:`database_settings` -- ``DB_URL``, ``DROP_TABLES_ON_STARTUP``.
+"""
 
 import os
-import secrets
 
-# Server and database configurations
+# ── Re-exports from topic-specific settings modules ───────────────
+from security_settings import (  # noqa: F401  (public re-export)
+    SECRET_KEY,
+    SECRET_KEY_FROM_ENV,
+    CORS_ORIGINS,
+    RATE_LIMIT_DEFAULT,
+    RATE_LIMIT_LOGIN,
+    RATE_LIMIT_REGISTER,
+    TOKEN_EXPIRY_SECONDS,
+)
+from database_settings import (  # noqa: F401  (public re-export)
+    DB_URL,
+    DROP_TABLES_ON_STARTUP,
+)
+
+# Server URL is not security-critical; keep here for now.
 SERVER_URL = os.getenv('SERVER_URL', 'http://localhost:5000')
-DB_URL = os.getenv('DB_URL', 'sqlite:///test.db')
-
-# Security
-SECRET_KEY = os.getenv('SECRET_KEY', secrets.token_hex(32))
-CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*')  # Comma-separated origins, or '*'
-
-# Rate limiting (Flask-Limiter format)
-RATE_LIMIT_DEFAULT = os.getenv('RATE_LIMIT_DEFAULT', '600 per minute')
-RATE_LIMIT_LOGIN = os.getenv('RATE_LIMIT_LOGIN', '10 per minute')
-RATE_LIMIT_REGISTER = os.getenv('RATE_LIMIT_REGISTER', '5 per minute')
-
-# Database management
-# Set to True to drop and recreate all tables on server startup (useful for schema changes)
-# WARNING: This will delete all data! Set to False for production.
-DROP_TABLES_ON_STARTUP = os.getenv('DROP_TABLES_ON_STARTUP', 'False').lower() == 'true'
 
 # Debug logging
 DEBUG_ENABLED = os.getenv('DEBUG_ENABLED', 'False').lower() == 'true'
@@ -46,12 +59,11 @@ INITIAL_TURNS_INVADER = 6
 DEFAULT_GAME_STAKE = 35  # Default gold stake / point threshold to win
 
 # New player starting gold
-INITIAL_GOLD = 1000
+INITIAL_GOLD = 100000
 
-# Auth token settings
-# Signed user tokens expire after TOKEN_EXPIRY_SECONDS (default 24 hours).
-# Set a fixed SECRET_KEY env var in production so tokens survive restarts.
-TOKEN_EXPIRY_SECONDS = int(os.getenv('TOKEN_EXPIRY_SECONDS', '86400'))
+# Auth token settings: TOKEN_EXPIRY_SECONDS now lives in config/security.py
+# and is re-exported above. Set a fixed SECRET_KEY env var in production
+# so tokens survive restarts.
 
 # Email verification settings
 # Set EMAIL_VERIFICATION_ENABLED=True and configure SMTP to send real emails.
@@ -145,137 +157,254 @@ KEY_CARD_RANKS = ['J', 'Q', 'K', 'A']
 CARD_SELL_KEY_MULTIPLIER = 10               # J→10, Q→20, K→40, A→30
 
 # ── v2.0: Kingdom ──
-KINGDOM_MAP_COLS = 13
-KINGDOM_MAP_ROWS = 7                        # ~91 hexes
-LAND_TIER_PROBABILITIES = {1: 0.55, 2: 0.30, 3: 0.15}
+KINGDOM_MAP_COLS = 75
+KINGDOM_MAP_ROWS = 50                        # = 3750 hexes
+
+# Land tiers 1..KINGDOM_TIER_COUNT.  Higher = rarer / more valuable.  The map
+# is generated as a "landscape" with one elevation peak per suit cluster, so
+# the highest tier appears at the cluster centre.  Future increases of the
+# tier count must extend LAND_TIER_PROBABILITIES, LAND_GOLD_RATE_RANGES,
+# LAND_SUIT_BONUS_RANGES and ai.defence.config.AI_DEFENCE_GENERATION_RULES
+# accordingly.
+KINGDOM_TIER_COUNT = 4
+
+# Voronoi-style suit clustering: each suit receives exactly this many clusters
+# (seed hexes), so all suits always have the same cluster count.
+KINGDOM_MAP_CLUSTERS_PER_SUIT = int(os.getenv('KINGDOM_MAP_CLUSTERS_PER_SUIT', '10'))
+
+# Per-cluster radius is sampled from this inclusive range.  Radius is measured
+# in anisotropic distance-space and controls how far suit terrain can spread
+# before turning neutral.
+KINGDOM_MAP_CLUSTER_RADIUS_RANGE = (4, 7)
+
+# Hard cap for tier-1 outer-border thickness.  The seeder clamps sampled
+# cluster radius so tier-1 bands never exceed this number of hex layers.
+KINGDOM_MAP_TIER1_BORDER_MAX_HEXES = int(
+    os.getenv('KINGDOM_MAP_TIER1_BORDER_MAX_HEXES', '3')
+)
+
+# Cluster anisotropy (major/minor axis ratio) sampled per cluster.
+# 1.0 is circular; higher values produce elongated mountain-range shapes.
+KINGDOM_MAP_CLUSTER_ANISOTROPY_RANGE = (1.2, 2.1)
+
+# Deterministic boundary perturbation strength.  0 disables perturbation.
+KINGDOM_MAP_BOUNDARY_NOISE_STRENGTH = float(
+    os.getenv('KINGDOM_MAP_BOUNDARY_NOISE_STRENGTH', '0.35')
+)
+
+# Each cluster's apex is a "plateau" of N hexes (the seed plus a few of its
+# neighbours), all at the top tier.  This adds shape variation so apex
+# regions are not always a single hex.  Range is (min, max) inclusive.
+KINGDOM_MAP_PEAK_PLATEAU_RANGE = (1, 10)
+
+# Sentinel suit name used for neutral lands (no suit bonus).
+LAND_NEUTRAL_SUIT = 'Neutral'
+
+LAND_TIER_PROBABILITIES = {1: 0.4, 2: 0.30, 3: 0.2, 4: 0.1}
+
+# Neutral lands never reach the apex tier; weights are the cluster weights
+# minus tier KINGDOM_TIER_COUNT, renormalised to sum to 1.
+LAND_NEUTRAL_TIER_PROBABILITIES = {1: 0.484, 2: 0.323, 3: 0.193}
+
 LAND_GOLD_RATE_RANGES = {                   # Gold per hour (min, max) per tier
     1: (1, 3),
     2: (3, 7),
     3: (7, 15),
+    4: (15, 28),
 }
 LAND_SUIT_BONUS_RANGES = {                  # Suit combat bonus (min, max) per tier
-    1: (1, 3),
-    2: (3, 6),
-    3: (5, 10),
+    1: (1, 2),
+    2: (2, 4),
+    3: (4, 6),
+    4: (6, 10),
 }
-CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(6 * 3600)))
+CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(10)))#str(6 * 3600)))
 LAND_CONQUER_PROTECTION_SECONDS = int(
     os.getenv('LAND_CONQUER_PROTECTION_SECONDS', str(5 * 60))
 )
 GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS = 7 * 24  # Cap at 7 days of uncollected gold
 
-# ── v2.0: AI Defence Templates ──
-# Each template defines a pre-built defence configuration for unowned (AI) lands.
-# Templates are lists of dicts per tier; one is randomly assigned to each land at
-# map seeding time.  Full template schema is defined in kingdom_service.py.
-AI_DEFENCE_TEMPLATES = {
-    1: [  # Tier 1 — weak: one farm figure, basic dagger moves
-        {
-            'ai_name': 'Village Guard',
-            'figures': [
-                {'family_name': 'Small Rice Farm', 'name': 'Small Rice Farm',
-                 'suit': 'Hearts', 'color': 'offensive', 'field': 'village',
-                 'produces': {'food_red': 8}, 'requires': {'villager_red': 1},
-                 'card_ids': [], 'card_roles': ['key', 'number'],
-                 'cards': [{'rank': 'J', 'suit': 'Hearts', 'role': 'key'},
-                           {'rank': '8', 'suit': 'Hearts', 'role': 'number'}]},
-            ],
-            'battle_moves': [
-                {'family_name': 'Dagger', 'rank': '7', 'suit': 'Spades',
-                 'value': 7, 'round_index': 0, 'card_type': 'main'},
-                {'family_name': 'Dagger', 'rank': '8', 'suit': 'Hearts',
-                 'value': 8, 'round_index': 1, 'card_type': 'main'},
-                {'family_name': 'Dagger', 'rank': '7', 'suit': 'Clubs',
-                 'value': 7, 'round_index': 2, 'card_type': 'main'},
-            ],
-            'battle_figure_index': 0,
-            'battle_modifier': None,
-            'spell': None,
-            'prelude_spell_name': None,
-            'prelude_spell_data': None,
-            'counter_spell_name': None,
-            'counter_spell_data': None,
-            'auto_gamble': False,
-            'auto_gamble_threshold': 10,
-        },
-    ],
-    2: [  # Tier 2 — medium: king + farm, auto-gamble, one Call King move
-        {
-            'ai_name': 'Mountain Warden',
-            'figures': [
-                {'family_name': 'Himalaya King', 'name': 'Himalaya King',
-                 'suit': 'Spades', 'color': 'defensive', 'field': 'castle',
-                 'produces': {'villager_black': 2, 'warrior_black': 1}, 'requires': {},
-                 'card_ids': [], 'card_roles': ['key'],
-                 'cards': [{'rank': 'K', 'suit': 'Spades', 'role': 'key'}]},
-                {'family_name': 'Small Yack Farm', 'name': 'Small Yack Farm',
-                 'suit': 'Clubs', 'color': 'defensive', 'field': 'village',
-                 'produces': {'food_black': 8}, 'requires': {'villager_black': 1},
-                 'card_ids': [], 'card_roles': ['key', 'number'],
-                 'cards': [{'rank': 'J', 'suit': 'Clubs', 'role': 'key'},
-                           {'rank': '8', 'suit': 'Clubs', 'role': 'number'}]},
-            ],
-            'battle_moves': [
-                {'family_name': 'Call King', 'rank': 'K', 'suit': 'Spades',
-                 'value': 4, 'round_index': 0, 'card_type': 'main'},
-                {'family_name': 'Dagger', 'rank': '10', 'suit': 'Clubs',
-                 'value': 10, 'round_index': 1, 'card_type': 'main'},
-                {'family_name': 'Dagger', 'rank': '8', 'suit': 'Spades',
-                 'value': 8, 'round_index': 2, 'card_type': 'main'},
-            ],
-            'battle_figure_index': 0,
-            'battle_modifier': None,
-            'spell': None,
-            'prelude_spell_name': None,
-            'prelude_spell_data': None,
-            'counter_spell_name': None,
-            'counter_spell_data': None,
-            'auto_gamble': True,
-            'auto_gamble_threshold': 10,
-        },
-    ],
-    3: [  # Tier 3 — strong: king + warriors + farm, Call Military move
-        {
-            'ai_name': 'Djungle Warlord',
-            'figures': [
-                {'family_name': 'Djungle King', 'name': 'Djungle King',
-                 'suit': 'Hearts', 'color': 'offensive', 'field': 'castle',
-                 'produces': {'villager_red': 2, 'warrior_red': 1}, 'requires': {},
-                 'card_ids': [], 'card_roles': ['key'],
-                 'cards': [{'rank': 'K', 'suit': 'Hearts', 'role': 'key'}]},
-                {'family_name': 'Gorkha Warriors', 'name': 'Gorkha Warriors',
-                 'suit': 'Hearts', 'color': 'offensive', 'field': 'military',
-                 'produces': {}, 'requires': {'warrior_red': 1, 'food_red': 10},
-                 'card_ids': [], 'card_roles': ['key', 'number'],
-                 'cards': [{'rank': 'A', 'suit': 'Hearts', 'role': 'key'},
-                           {'rank': '10', 'suit': 'Hearts', 'role': 'number'}]},
-                {'family_name': 'Small Rice Farm', 'name': 'Small Rice Farm',
-                 'suit': 'Diamonds', 'color': 'offensive', 'field': 'village',
-                 'produces': {'food_red': 9}, 'requires': {'villager_red': 1},
-                 'card_ids': [], 'card_roles': ['key', 'number'],
-                 'cards': [{'rank': 'J', 'suit': 'Diamonds', 'role': 'key'},
-                           {'rank': '9', 'suit': 'Diamonds', 'role': 'number'}]},
-            ],
-            'battle_moves': [
-                {'family_name': 'Call Military', 'rank': 'A', 'suit': 'Hearts',
-                 'value': 3, 'round_index': 0, 'card_type': 'main'},
-                {'family_name': 'Dagger', 'rank': '9', 'suit': 'Diamonds',
-                 'value': 9, 'round_index': 1, 'card_type': 'main'},
-                {'family_name': 'Dagger', 'rank': '10', 'suit': 'Diamonds',
-                 'value': 10, 'round_index': 2, 'card_type': 'main'},
-            ],
-            'battle_figure_index': 1,
-            'battle_modifier': None,
-            'spell': None,
-            'prelude_spell_name': None,
-            'prelude_spell_data': None,
-            'counter_spell_name': None,
-            'counter_spell_data': None,
-            'auto_gamble': True,
-            'auto_gamble_threshold': 10,
-        },
-    ],
+# ── Kingdom cosmetics ──────────────────────────────────────────────
+# Permanent, preset-only cosmetic unlocks.  Each user equips one cosmetic per
+# category; owned lands expose the equipped style in /kingdom/map so every
+# client can render each kingdom's identity.
+KINGDOM_DEFAULT_STYLE = {
+    'flag_key': 'flag_plain',
+    'border_key': 'border_simple_gold',
+    'surface_key': 'surface_plain',
 }
+
+KINGDOM_COSMETIC_CATALOG = {
+    'flag_plain': {
+        'type': 'flag',
+        'name': 'Plain Pennant',
+        'rarity': 'default',
+        'price_gold': 0,
+        'asset_key': 'flag_plain',
+    },
+    'flag_crimson': {
+        'type': 'flag',
+        'name': 'Crimson Banner',
+        'rarity': 'common',
+        'price_gold': 250,
+        'asset_key': 'flag_crimson',
+    },
+    'flag_sun': {
+        'type': 'flag',
+        'name': 'Sun Banner',
+        'rarity': 'rare',
+        'price_gold': 850,
+        'asset_key': 'flag_sun',
+    },
+    'flag_raven': {
+        'type': 'flag',
+        'name': 'Raven Banner',
+        'rarity': 'rare',
+        'price_gold': 1100,
+        'asset_key': 'flag_raven',
+    },
+    'flag_lotus': {
+        'type': 'flag',
+        'name': 'Lotus Banner',
+        'rarity': 'epic',
+        'price_gold': 1600,
+        'asset_key': 'flag_lotus',
+    },
+    'flag_mountain': {
+        'type': 'flag',
+        'name': 'Mountain Banner',
+        'rarity': 'epic',
+        'price_gold': 1900,
+        'asset_key': 'flag_mountain',
+    },
+    'border_simple_gold': {
+        'type': 'border',
+        'name': 'Simple Gold Border',
+        'rarity': 'default',
+        'price_gold': 0,
+        'asset_key': 'border_simple_gold',
+    },
+    'border_royal_blue': {
+        'type': 'border',
+        'name': 'Royal Blue Border',
+        'rarity': 'common',
+        'price_gold': 350,
+        'asset_key': 'border_royal_blue',
+    },
+    'border_emerald_carved': {
+        'type': 'border',
+        'name': 'Emerald Carved Border',
+        'rarity': 'rare',
+        'price_gold': 1000,
+        'asset_key': 'border_emerald_carved',
+    },
+    'border_obsidian': {
+        'type': 'border',
+        'name': 'Obsidian Border',
+        'rarity': 'rare',
+        'price_gold': 1250,
+        'asset_key': 'border_obsidian',
+    },
+    'border_ruby': {
+        'type': 'border',
+        'name': 'Ruby Border',
+        'rarity': 'epic',
+        'price_gold': 1750,
+        'asset_key': 'border_ruby',
+    },
+    'border_silver': {
+        'type': 'border',
+        'name': 'Silver Border',
+        'rarity': 'common',
+        'price_gold': 450,
+        'asset_key': 'border_silver',
+    },
+    'surface_plain': {
+        'type': 'surface',
+        'name': 'Plain Ground',
+        'rarity': 'default',
+        'price_gold': 0,
+        'asset_key': 'surface_plain',
+    },
+    'surface_parchment': {
+        'type': 'surface',
+        'name': 'Parchment Wash',
+        'rarity': 'common',
+        'price_gold': 300,
+        'asset_key': 'surface_parchment',
+    },
+    'surface_stone': {
+        'type': 'surface',
+        'name': 'Stone Pattern',
+        'rarity': 'rare',
+        'price_gold': 950,
+        'asset_key': 'surface_stone',
+    },
+    'surface_snow': {
+        'type': 'surface',
+        'name': 'Snow Wash',
+        'rarity': 'common',
+        'price_gold': 400,
+        'asset_key': 'surface_snow',
+    },
+    'surface_forest': {
+        'type': 'surface',
+        'name': 'Forest Canopy',
+        'rarity': 'rare',
+        'price_gold': 1150,
+        'asset_key': 'surface_forest',
+    },
+    'surface_dusk': {
+        'type': 'surface',
+        'name': 'Dusk Veil',
+        'rarity': 'epic',
+        'price_gold': 1700,
+        'asset_key': 'surface_dusk',
+    },
+}
+
+# ── Persistent kingdom configuration ───────────────────────────────
+KINGDOM_SHIELD_PRICE_PER_HOUR_PER_LAND = int(
+    os.getenv('KINGDOM_SHIELD_PRICE_PER_HOUR_PER_LAND', '6')
+)
+KINGDOM_SHIELD_DURATION_OPTIONS_HOURS = [6, 12, 24]
+KINGDOM_SHIELD_MAX_HOURS = int(os.getenv('KINGDOM_SHIELD_MAX_HOURS', '24'))
+KINGDOM_SHIELD_EXTENSION_ENABLED = os.getenv(
+    'KINGDOM_SHIELD_EXTENSION_ENABLED', 'True'
+).lower() == 'true'
+
+KINGDOM_RENAME_PRICE_GOLD = int(os.environ.get('KINGDOM_RENAME_PRICE_GOLD', '150'))
+# Per-user rate limit window for kingdom rename attempts.
+KINGDOM_RENAME_RATE_LIMIT_PER_HOUR = int(os.environ.get('KINGDOM_RENAME_RATE_LIMIT_PER_HOUR', '10'))
+# Per-user rate limit for any single kingdom mutation (skills, cosmetics, shield).
+KINGDOM_MUTATE_RATE_LIMIT = os.environ.get('KINGDOM_MUTATE_RATE_LIMIT', '30 per minute')
+
+# Kingdom progression (levels, XP, skills, gold vault) lives in
+# kingdom_progression.py and is re-exported here for ``import server_settings``
+# call sites.  Skill definitions are data-driven; add new skills there.
+from kingdom_progression import (  # noqa: F401  (public re-export)
+    KINGDOM_LEVEL_MAX,
+    KINGDOM_SKILL_POINTS_PER_LEVEL,
+    KINGDOM_LEVEL_XP_BASE,
+    KINGDOM_LEVEL_XP_GROWTH,
+    KINGDOM_TIER_XP,
+    KINGDOM_SKILL_BASE_COST_CURVE,
+    KINGDOM_VAULT_DEFAULT_CAP,
+    KingdomSkillDef,
+    KINGDOM_SKILL_DEFINITIONS,
+    skill_definition,
+    skill_keys,
+    skill_cost_to_buy_level,
+    skill_total_cost_for_level,
+    skill_effect_at_level,
+    vault_cap_for_skill_level,
+    kingdom_xp_required_for_level,
+    kingdom_total_xp_for_level,
+    kingdom_level_for_total_xp,
+    xp_for_land_tier,
+)
+
+# AI defence generation rules and safe fallbacks live in ai/defence/config.py.
 
 
 

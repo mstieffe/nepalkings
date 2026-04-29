@@ -1090,6 +1090,15 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.window.blit(suit_icon, (specs_x + specs_surf.get_width() + 2,
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
 
+        effects = land.get('kingdom_skill_effects') or []
+        if effects:
+            kingdom_name = land.get('kingdom_name') or 'Kingdom'
+            effect_text = f'{kingdom_name} skills: ' + ', '.join(effects[:4])
+            effect_text = self._fit_text(effect_text, self._tiny_font, int(_BOX_W * 0.72))
+            effect_surf = self._tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
+            self.window.blit(effect_surf, effect_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
+                                                               top=specs_y + specs_surf.get_height() + 3))
+
     def _info_button_rect(self, panel_rect):
         size = max(int(0.022 * _SH), 18)
         margin_x = int(0.008 * _SW)
@@ -2033,7 +2042,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             )
         if consumed_if_lost_cards or locked_cards:
             after_msg_parts.append(
-                'Cards removed from the defence before saving are returned to your collection.'
+                'Cards you remove from this defence return to your collection while the land is still yours.'
             )
         after_msg = ' '.join(after_msg_parts) if after_msg_parts else None
 
