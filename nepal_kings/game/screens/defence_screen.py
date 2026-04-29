@@ -152,6 +152,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._value_font = settings.get_font(settings.FS_BODY, bold=True)
         self._btn_font = settings.get_font(settings.FS_BUTTON, bold=True)
         self._small_font = settings.get_font(settings.FS_SMALL)
+        self._tiny_font = settings.get_font(settings.FS_TINY)
         self._res_font = settings.get_font(settings.FS_TINY)
         self._slot_font = settings.get_font(settings.FS_TINY, bold=True)
 
@@ -1094,8 +1095,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if effects:
             kingdom_name = land.get('kingdom_name') or 'Kingdom'
             effect_text = f'{kingdom_name} skills: ' + ', '.join(effects[:4])
-            effect_text = self._fit_text(effect_text, self._tiny_font, int(_BOX_W * 0.72))
-            effect_surf = self._tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
+            tiny_font = getattr(self, '_tiny_font', self._res_font)
+            effect_text = self._fit_text(effect_text, tiny_font, int(_BOX_W * 0.72))
+            effect_surf = tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
             self.window.blit(effect_surf, effect_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
                                                                top=specs_y + specs_surf.get_height() + 3))
 

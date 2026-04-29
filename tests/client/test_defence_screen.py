@@ -65,6 +65,28 @@ class TestDefenceScreenInit:
         assert screen._config is None
         assert screen._loading is False
 
+    def test_tiny_font_initialized(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        assert hasattr(screen, '_tiny_font')
+
+    def test_draw_land_header_handles_kingdom_effects(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        land = {
+            'tier': 2,
+            'gold_rate': 5,
+            'suit_bonus_suit': 'Hearts',
+            'suit_bonus_value': 3,
+            'kingdom_name': 'Valley Crown',
+            'kingdom_skill_effects': ['+1 Shield', '+5 Gold Rate'],
+        }
+        # Regression guard: this path used to crash with AttributeError
+        # when _tiny_font was not initialized.
+        screen._draw_land_header(land)
+
     def test_picks_up_land_id_from_state(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
