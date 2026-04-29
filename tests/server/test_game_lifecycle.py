@@ -603,6 +603,129 @@ class TestGameRouteCoverage:
         assert resp.status_code == 400
         assert 'cannot be selected' in data.get('message', '')
 
+    def test_select_defender_cannot_be_blocked_can_ignore_must_be_attacked_fortress(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        """Cavalry (cannot_be_blocked) advance bypasses must_be_attacked, like Blitzkrieg."""
+        from models import Figure, Game, Player
+
+        u1, u2 = two_users
+        game = db.session.get(Game, created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        cavalry = Figure(
+            game_id=game.id,
+            player_id=p1.id,
+            family_name='Cavalry',
+            field='military',
+            color='offensive',
+            name='Cavalry',
+            suit='Hearts',
+            cannot_be_blocked=True,
+        )
+        fortress = Figure(
+            game_id=game.id,
+            player_id=p2.id,
+            family_name='Wooden Fortress',
+            field='military',
+            color='defensive',
+            name='Wooden Fortress',
+            suit='Spades',
+        )
+        normal_defender = Figure(
+            game_id=game.id,
+            player_id=p2.id,
+            family_name='Rice Farmer',
+            field='village',
+            color='offensive',
+            name='Rice Farmer',
+            suit='Hearts',
+        )
+        db.session.add_all([cavalry, fortress, normal_defender])
+        db.session.flush()
+        game.mode = 'conquer'
+        game.advancing_figure_id = cavalry.id
+        game.advancing_player_id = p1.id
+        game.turn_player_id = p1.id
+        db.session.commit()
+
+        resp = client.post(
+            '/games/select_defender',
+            json={'game_id': game.id, 'player_id': p1.id, 'figure_id': normal_defender.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200
+        assert data.get('success') is True, data
+        assert data.get('game', {}).get('defending_figure_id') == normal_defender.id
+
+    def test_advance_figure_cannot_be_blocked_clears_preselected_defender_in_conquer(
+        self,
+        client,
+        db,
+        created_game,
+        two_users,
+        auth_headers_user1,
+    ):
+        """Cavalry advance in conquer mode clears the preselected defender and
+        keeps turn on invader so they can pick freely (mirrors Blitzkrieg)."""
+        from models import Figure, Game, Player
+
+        u1, u2 = two_users
+        game = db.session.get(Game, created_game['id'])
+        p1 = Player.query.filter_by(game_id=game.id, user_id=u1.id).first()
+        p2 = Player.query.filter_by(game_id=game.id, user_id=u2.id).first()
+        cavalry = Figure(
+            game_id=game.id,
+            player_id=p1.id,
+            family_name='Cavalry',
+            field='military',
+            color='offensive',
+            name='Cavalry',
+            suit='Hearts',
+            cannot_be_blocked=True,
+        )
+        preselected_defender = Figure(
+            game_id=game.id,
+            player_id=p2.id,
+            family_name='Rice Farmer',
+            field='village',
+            color='offensive',
+            name='Rice Farmer',
+            suit='Hearts',
+        )
+        db.session.add_all([cavalry, preselected_defender])
+        db.session.flush()
+        game.mode = 'conquer'
+        game.invader_player_id = p1.id
+        game.turn_player_id = p1.id
+        game.defending_figure_id = preselected_defender.id
+        game.ceasefire_active = False
+        p1.turns_left = 1
+        p2.turns_left = 0
+        db.session.commit()
+
+        resp = client.post(
+            '/games/advance_figure',
+            json={'game_id': game.id, 'player_id': p1.id, 'figure_id': cavalry.id},
+            headers=auth_headers_user1,
+        )
+        data = resp.get_json()
+
+        assert resp.status_code == 200, data
+        assert data.get('success') is True, data
+        db.session.refresh(game)
+        assert game.advancing_figure_id == cavalry.id
+        assert game.defending_figure_id is None
+        assert game.defending_figure_id_2 is None
+        assert game.turn_player_id == p1.id
+
     def test_skip_civil_war_second_flips_turn_for_advance_context(
         self,
         client,

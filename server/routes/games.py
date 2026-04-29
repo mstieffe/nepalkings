@@ -194,6 +194,16 @@ def _conquer_defender_counter_advance_disabled(game):
     """
     if not game or game.mode != 'conquer':
         return False
+    # cannot_be_blocked advances (e.g. Cavalry) skip the defender response
+    # entirely — mirrors Blitzkrieg behavior so the invader picks the
+    # defending figure freely instead of fighting a preselected battle
+    # figure or fortress.
+    advancing_figure = (
+        db.session.get(Figure, game.advancing_figure_id)
+        if game.advancing_figure_id else None
+    )
+    if advancing_figure and _figure_has_family_skill(advancing_figure, 'cannot_be_blocked'):
+        return True
     cfg = db.session.get(LandConfig, game.defence_config_id) if game.defence_config_id else None
     has_counter_spell = False
     if cfg and cfg.counter_spell_name:
@@ -2452,6 +2462,14 @@ def advance_figure():
             not is_counter_advance and
             _conquer_defender_counter_advance_disabled(game)
         )
+
+        # cannot_be_blocked advances in conquer mode bypass any preselected
+        # defender (battle_figure_id from defence config or AI template) — the
+        # invader picks freely via select_defender, mirroring Blitzkrieg setup.
+        if (game.mode == 'conquer' and not is_counter_advance
+                and figure.cannot_be_blocked):
+            game.defending_figure_id = None
+            game.defending_figure_id_2 = None
 
         if civil_war_need_second:
             # Don't flip turn — player needs to pick a second figure
