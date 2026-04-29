@@ -5089,7 +5089,6 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 deleted_kingdom_name = lost_kingdom_name or f'Kingdom #{lost_kingdom_id}'
                 if old_land_owner_id:
                     try:
-                        from models import KingdomNotification
                         db.session.add(KingdomNotification(
                             user_id=old_land_owner_id,
                             kind='kingdom_dissolved',

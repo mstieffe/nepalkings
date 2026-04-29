@@ -47,7 +47,12 @@ def sweep_stuck_conquer_games(timeout_seconds=None):
 
     resolved = 0
     for game in candidates:
-        last_active = game.last_activity_at or game.date
+        # Require an explicit last_activity_at signal.  Games predating the
+        # column (or never touched by an authenticated request) report
+        # NULL and are left alone — better to leak a stuck row for one
+        # player to revisit than to forfeit a possibly-active battle the
+        # first time the sweeper runs after a deploy.
+        last_active = game.last_activity_at
         if last_active is None:
             continue
         # Normalize to aware datetime for comparison

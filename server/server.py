@@ -214,8 +214,8 @@ with app.app_context():
     # need to exercise the sweeper.
     import sys as _sys
     _is_pytest = ('pytest' in _sys.modules or
-                  os.environ.get('PYTEST_CURRENT_TEST') is not None or
-                  os.environ.get('DISABLE_BACKGROUND_SWEEPERS') == '1')
+                  _os.environ.get('PYTEST_CURRENT_TEST') is not None or
+                  _os.environ.get('DISABLE_BACKGROUND_SWEEPERS') == '1')
     if not _is_pytest:
         try:
             from sweepers import start_stuck_conquer_sweeper
