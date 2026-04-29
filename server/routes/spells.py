@@ -714,6 +714,56 @@ def _validate_and_mark_spell_cards(player_id, cards_data):
         return False
 
 
+def _purge_battle_moves_referencing_card(game_id, card_id, card_type):
+    """Delete BattleMove rows referencing the given card.
+
+    Used when a spell removes or relocates a hand card that was reserved
+    for a pre-bought battle move (Forced Deal swap, Dump Cards return-to-
+    deck) so the battle shop no longer shows a dangling move whose card
+    has changed owner / been recycled.
+
+    For Double Dagger moves (two cards), the partner card is freed back
+    to its owner's hand (part_of_battle_move=False, in_deck=False) so it
+    can be re-used.
+
+    Returns the number of BattleMove rows deleted.
+    """
+    if not card_id:
+        return 0
+    primary = BattleMove.query.filter_by(
+        game_id=game_id, card_id=card_id, card_type=card_type,
+    ).all()
+    secondary = BattleMove.query.filter_by(
+        game_id=game_id, card_id_b=card_id, card_type_b=card_type,
+    ).all()
+    affected = {bm.id: bm for bm in primary}
+    affected.update({bm.id: bm for bm in secondary})
+    if not affected:
+        return 0
+    for bm in affected.values():
+        # Free the partner card (other side of a Double Dagger), if any
+        partner_card_id = None
+        partner_card_type = None
+        if bm.card_id == card_id and bm.card_type == card_type:
+            partner_card_id = bm.card_id_b
+            partner_card_type = bm.card_type_b
+        elif bm.card_id_b == card_id and bm.card_type_b == card_type:
+            partner_card_id = bm.card_id
+            partner_card_type = bm.card_type
+        if partner_card_id:
+            partner_model = SideCard if partner_card_type == 'side' else MainCard
+            partner = db.session.get(partner_model, partner_card_id)
+            if partner:
+                partner.part_of_battle_move = False
+                partner.in_deck = False
+        logger.info(
+            f"[BM_PURGE] game={game_id} bm_id={bm.id} family={bm.family_name} "
+            f"player={bm.player_id} trigger_card={card_type}#{card_id}"
+        )
+        db.session.delete(bm)
+    return len(affected)
+
+
 def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
     """
     Execute a spell's effect based on its type.
@@ -859,6 +909,18 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Return all cards to deck
                     all_cards_to_dump = caster_main_cards + caster_side_cards + opponent_main_cards + opponent_side_cards
                     if all_cards_to_dump:
+                        # Drop any pre-bought BattleMove rows whose cards are
+                        # being recycled into the deck — otherwise the battle
+                        # shop would keep showing moves whose underlying cards
+                        # are gone.
+                        for card in all_cards_to_dump:
+                            if not getattr(card, 'part_of_battle_move', False):
+                                continue
+                            ct = 'side' if isinstance(card, SideCard) else 'main'
+                            _purge_battle_moves_referencing_card(
+                                game.id, card.id, ct
+                            )
+                            card.part_of_battle_move = False
                         DeckManager.return_cards_to_deck(all_cards_to_dump)
                     
                     # Deal new cards to both players (5 main, 4 side)
@@ -957,6 +1019,17 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         
                         for card in opponent_cards_to_swap:
                             card.player_id = caster.id
+
+                        # Any pre-bought BattleMove that referenced a swapped
+                        # card is now stale (the card has changed owner) — drop
+                        # the move so the battle shop doesn't show a dangling
+                        # entry whose underlying card belongs to the opponent.
+                        for card in caster_cards_to_swap + opponent_cards_to_swap:
+                            if getattr(card, 'part_of_battle_move', False):
+                                _purge_battle_moves_referencing_card(
+                                    game.id, card.id, 'main'
+                                )
+                                card.part_of_battle_move = False
                         
                         logger.debug(f"[FORCED DEAL] Card ownership updated successfully")
                         

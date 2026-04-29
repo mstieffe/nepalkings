@@ -514,3 +514,169 @@ class TestSpellManagementRoutes:
         assert hammer.is_active is False
         assert p1.turns_left == 2
         assert game.turn_player_id == p2.id
+
+
+class TestSpellPurgesBattleMoves:
+    """Spells that take or recycle hand cards must drop any pre-bought
+    BattleMove referencing those cards so the battle shop stays consistent."""
+
+    def _make_battle_move_for_card(self, db, game, player, card, family_name='Dagger'):
+        from models import BattleMove
+        bm = BattleMove(
+            game_id=game.id,
+            player_id=player.id,
+            family_name=family_name,
+            card_id=card.id,
+            card_type='main',
+            suit=str(card.suit),
+            rank=str(card.rank),
+            value=card.value,
+        )
+        db.session.add(bm)
+        card.part_of_battle_move = True
+        db.session.commit()
+        return bm
+
+    def test_forced_deal_purges_battle_move_for_swapped_card(
+        self, app, db, spell_game, monkeypatch
+    ):
+        from models import ActiveSpell, BattleMove, MainCard
+        from routes.spells import _execute_spell
+        import random as _random
+
+        with app.app_context():
+            game, p1, p2, _, _ = spell_game
+
+            caster_cards = MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all()
+            reserved = caster_cards[0]
+            other_caster = caster_cards[1]
+            self._make_battle_move_for_card(db, game, p1, reserved)
+
+            # Force the random.sample picks: caster gives [reserved, other]
+            opp_cards = MainCard.query.filter_by(
+                player_id=p2.id, in_deck=False, part_of_figure=False
+            ).all()
+            opp_pick = opp_cards[:2]
+
+            def _fake_sample(seq, k):
+                if any(c.player_id == p1.id for c in seq):
+                    return [reserved, other_caster]
+                return opp_pick
+
+            monkeypatch.setattr(_random, 'sample', _fake_sample)
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Forced Deal',
+                spell_type='greed',
+                spell_family_name='Forced Deal',
+                suit='Hearts',
+                cast_round=1,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            _execute_spell(spell, game, p1)
+            db.session.commit()
+
+            # BattleMove should be gone
+            remaining = BattleMove.query.filter_by(game_id=game.id).all()
+            assert all(bm.card_id != reserved.id for bm in remaining)
+
+            # Card should now belong to opponent and not be reserved
+            db.session.refresh(reserved)
+            assert reserved.player_id == p2.id
+            assert reserved.part_of_battle_move is False
+
+    def test_forced_deal_keeps_unrelated_battle_moves(
+        self, app, db, spell_game, monkeypatch
+    ):
+        from models import ActiveSpell, BattleMove, MainCard
+        from routes.spells import _execute_spell
+        import random as _random
+
+        with app.app_context():
+            game, p1, p2, _, _ = spell_game
+
+            caster_cards = MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all()
+            reserved = caster_cards[0]
+            unswapped_a = caster_cards[1]
+            unswapped_b = caster_cards[2]
+            self._make_battle_move_for_card(db, game, p1, reserved)
+
+            opp_cards = MainCard.query.filter_by(
+                player_id=p2.id, in_deck=False, part_of_figure=False
+            ).all()
+
+            def _fake_sample(seq, k):
+                if any(c.player_id == p1.id for c in seq):
+                    return [unswapped_a, unswapped_b]
+                return opp_cards[:2]
+
+            monkeypatch.setattr(_random, 'sample', _fake_sample)
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Forced Deal',
+                spell_type='greed',
+                spell_family_name='Forced Deal',
+                suit='Hearts',
+                cast_round=1,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            _execute_spell(spell, game, p1)
+            db.session.commit()
+
+            # Unrelated BattleMove survives
+            remaining = BattleMove.query.filter_by(game_id=game.id).all()
+            assert any(bm.card_id == reserved.id for bm in remaining)
+            db.session.refresh(reserved)
+            assert reserved.player_id == p1.id
+            assert reserved.part_of_battle_move is True
+
+    def test_dump_cards_purges_battle_moves_for_reserved_cards(
+        self, app, db, spell_game
+    ):
+        from models import ActiveSpell, BattleMove, MainCard
+        from routes.spells import _execute_spell
+
+        with app.app_context():
+            game, p1, p2, _, _ = spell_game
+
+            caster_cards = MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all()
+            reserved = caster_cards[0]
+            self._make_battle_move_for_card(db, game, p1, reserved)
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Dump Cards',
+                spell_type='greed',
+                spell_family_name='Dump Cards',
+                suit='Hearts',
+                cast_round=1,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            _execute_spell(spell, game, p1)
+            db.session.commit()
+
+            # Reserved card's BattleMove is gone
+            remaining = BattleMove.query.filter_by(game_id=game.id).all()
+            assert all(bm.card_id != reserved.id for bm in remaining)
+
+            # The card itself was returned to deck
+            db.session.refresh(reserved)
+            assert reserved.in_deck is True
+            assert reserved.part_of_battle_move is False
