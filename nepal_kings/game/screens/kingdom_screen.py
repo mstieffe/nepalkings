@@ -667,6 +667,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         my_kingdoms = self._map_data.get('my_kingdoms') or []
         num_kingdoms = len(my_kingdoms)
         pending_total = 0.0
+        collectable_total = 0
         any_full = False
         any_near_full = False
         near_ratio = float(getattr(settings, 'KINGDOM_VAULT_NEAR_FULL_RATIO', 0.80))
@@ -674,6 +675,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             pending = float(k.get('pending_gold') or 0.0)
             cap = float(k.get('vault_cap') or 0.0)
             pending_total += pending
+            collectable_total += int(pending)
             if cap > 0:
                 ratio = pending / cap if cap else 0
                 if ratio >= 0.999:
@@ -724,8 +726,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         # Collect All button (right of info bar)
         if my_kingdoms:
-            collectable = int(pending_total) > 0
-            label = f'Collect All: {int(pending_total)}g'
+            # Server collects ``int(pending)`` per kingdom, then sums those
+            # integers. Mirror that here so the button amount reflects what
+            # would actually be collected right now.
+            collectable = collectable_total > 0
+            label = f'Collect All: {collectable_total}g'
             if any_full:
                 label += '  (FULL!)'
             btn_font = self._nav_font
@@ -908,7 +913,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
             return
 
         gold_after = data.get('gold', data.get('total_gold'))
-        total_collected = int(round(float(data.get('collected') or 0)))
+        total_collected = int(round(float(
+            data.get('collected_total', data.get('collected') or 0)
+        )))
         if total_collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
             # Keep collect feedback anchored to the clicked Collect-All button
             # instead of duplicating it at the top-left HUD gold widget.
@@ -917,41 +924,30 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self.state.user_dict['gold'] = int(gold_after)
 
         breakdown = data.get('kingdoms') or []
+        if total_collected <= 0 and breakdown:
+            total_collected = sum(
+                int(round(float(entry.get('collected') or 0)))
+                for entry in breakdown
+            )
         center = self._collect_all_rect.center
-        stagger = int(getattr(settings, 'COLLECT_FLOAT_STAGGER_MS', 80))
         rise_px = int(getattr(settings, 'COLLECT_FLOAT_RISE_PX',
                               int(0.07 * _SH)))
         duration = int(getattr(settings, 'COLLECT_FLOAT_DURATION_MS', 900))
         gold_clr = getattr(settings, 'COLLECT_FLOAT_GOLD_CLR', (255, 220, 90))
-        if breakdown:
-            burst_idx = 0
-            for entry in breakdown:
-                amt = int(round(float(entry.get('collected') or 0)))
-                if amt <= 0:
-                    continue
-                self._floating_text.add(FloatingText(
-                    f'+{amt}g',
-                    center,
-                    color=gold_clr,
-                    duration_ms=duration,
-                    rise_px=rise_px,
-                    font=self._collect_float_font,
-                    delay_ms=burst_idx * stagger,
-                ))
-                burst_idx += 1
-        else:
-            total = total_collected
-            if total > 0:
-                self._floating_text.add(FloatingText(
-                    f'+{total}g',
-                    center,
-                    color=gold_clr,
-                    duration_ms=duration,
-                    rise_px=rise_px,
-                    font=self._collect_float_font,
-                ))
-        # Refresh map data so vault bars / pending totals update
+        if total_collected > 0:
+            self._floating_text.add(FloatingText(
+                f'+{total_collected}g',
+                center,
+                color=gold_clr,
+                duration_ms=duration,
+                rise_px=rise_px,
+                font=self._collect_float_font,
+            ))
+        # Refresh map data so vault bars / pending totals update.
+        # Reset the floater tick after the blocking reload so network latency
+        # does not instantly age out the newly added burst.
         self._load_map()
+        self._floating_text_last_tick = pygame.time.get_ticks()
 
     def _handle_activity_click(self, pos):
         """Handle clicks in the right activity panel. Returns True if handled."""
