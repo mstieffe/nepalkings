@@ -649,18 +649,23 @@ class ConquerScreen(MenuScreenMixin, Screen):
             land_suit_bonus_value=land.get('suit_bonus_value'),
         )
 
+        # First pass: build the complete figure list. Support-bonus depends
+        # on every other same-suit ally being known, so we must NOT compute
+        # `battle_bonus_received` until the list is fully assembled (otherwise
+        # the displayed bonus becomes order-dependent on build order).
         for cfg_fig in self._config.get('figures', []):
             fig = self._config_fig_to_figure(cfg_fig, families)
             if fig is None:
                 continue
             self._figure_objects.append(fig)
 
+        # Second pass: create / refresh icons with the complete list.
+        for fig in self._figure_objects:
             if fig.id in old_icons:
                 icon = old_icons[fig.id]
                 icon.figure = fig
                 icon.game = game_proxy
                 icon.has_deficit = icon._check_resource_deficit(resources_data)
-                icon.battle_bonus_received = icon._calculate_battle_bonus_received(self._figure_objects)
             else:
                 icon = FieldFigureIcon(
                     window=self.window,
@@ -670,6 +675,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     all_player_figures=self._figure_objects,
                     resources_data=resources_data,
                 )
+            # Always recompute against the full figure list so bonuses are
+            # consistent regardless of which figure was just (re)built.
+            icon.battle_bonus_received = icon._calculate_battle_bonus_received(
+                self._figure_objects
+            )
             self._figure_icons[fig.id] = icon
 
     def _config_fig_to_figure(self, cfg_fig, families):
