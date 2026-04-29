@@ -475,13 +475,12 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         surf = self._small_font.render(label, True, color or settings.KINGDOM_CONFIG_TEXT_CLR)
         self.window.blit(surf, surf.get_rect(center=rect.center))
 
-    def _draw_rename_icon(self, rect, *, enabled, price):
+    def _draw_rename_icon(self, rect, *, enabled):
         """Draw the pencil rename trigger and register the click hitbox.
 
         Mirrors the edit-icon affordance used on the defence/conquer config
         screens: a small icon (with a hover glow) instead of a large text
-        button.  Tooltip-style price hint is appended to the kingdom name in
-        the rename modal already, so we keep the icon itself unobtrusive.
+        button.
         """
         if not rect:
             return
@@ -522,27 +521,6 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         txt = x_font.render('\u00d7', True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=r.center))
         self._buttons.append(('back', None, r))
-
-    def _draw_kingdom_selector(self, rect):
-        """Backwards-compatible thin wrapper used by older tests.
-
-        The header is rendered through ``_draw_header_pill`` now, but this
-        method still draws a bare metadata row when called directly so unit
-        tests that hit it in isolation keep working.
-        """
-        kingdoms = self._kingdoms()
-        if not self._kingdom:
-            return
-        idx = self._selected_kingdom_index()
-        count = len(kingdoms)
-        lands_count = int(self._kingdom.get('lands_count', 0) or len(self._kingdom.get('land_ids') or []))
-        label = f'{lands_count} land{"s" if lands_count != 1 else ""}'
-        if count > 1:
-            label += f'  \u2022  {idx + 1}/{count}'
-        pygame.draw.rect(self.window, (35, 29, 34, 190), rect, border_radius=8)
-        pygame.draw.rect(self.window, (132, 112, 78), rect, 1, border_radius=8)
-        surf = self._small_font.render(label, True, settings.KINGDOM_CONFIG_TEXT_CLR)
-        self.window.blit(surf, surf.get_rect(center=rect.center))
 
     def _draw_pager_arrow(self, rect, action, *, enabled, glyph):
         """Small chevron button used by the unified header pill."""
@@ -626,7 +604,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         edit_x = name_zone.x + title_surf.get_width() + edit_pad
         edit_y = title_y + (title_surf.get_height() - edit_sz) // 2
         edit_rect = pygame.Rect(edit_x, edit_y, edit_sz, edit_sz)
-        self._draw_rename_icon(edit_rect, enabled=can_rename, price=rename_price)
+        self._draw_rename_icon(edit_rect, enabled=can_rename)
 
         # Subtitle metadata.
         meta_surf = self._tiny_font.render(meta, True,
@@ -1099,7 +1077,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         header_y = _BOX_Y + _BOX_PAD
         # Unified header pill is a two-row widget: name + edit + pager on the
         # left, kingdom level + XP bar on the right.  Tall enough for both.
-        header_h = max(int(0.090 * _SH), int(0.105 * _SH))
+        header_h = int(0.105 * _SH)
         content_top = header_y + header_h + max(6, int(0.010 * _SH))
         content_bottom = _BOX_BOTTOM - _BOX_PAD
         gap = max(8, int(0.014 * _SH))
