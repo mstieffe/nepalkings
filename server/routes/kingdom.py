@@ -4660,15 +4660,19 @@ def _serialize_attack_activity(log, role=None):
 def _activity_card_detail(entry, won=False, lost=False):
     """Return a short card outcome detail for an activity row."""
     if won:
-        suit = entry.get('card_won_suit')
-        rank = entry.get('card_won_rank')
-        if suit and rank:
-            return f'Card won: {rank} of {suit}'
+        return _activity_card_pair_detail(
+            entry, 'card_won_suit', 'card_won_rank', 'Card won')
     if lost:
-        suit = entry.get('card_lost_suit')
-        rank = entry.get('card_lost_rank')
-        if suit and rank:
-            return f'Card lost: {rank} of {suit}'
+        return _activity_card_pair_detail(
+            entry, 'card_lost_suit', 'card_lost_rank', 'Card lost')
+    return ''
+
+
+def _activity_card_pair_detail(entry, suit_key, rank_key, label):
+    suit = entry.get(suit_key)
+    rank = entry.get(rank_key)
+    if suit and rank:
+        return f'{label}: {rank} of {suit}'
     return ''
 
 
@@ -4689,7 +4693,10 @@ def _attack_activity_presentation(entry):
         if is_defender_perspective:
             deleted = entry.get('kingdom_deleted_name')
             detail = (f'{deleted} had no lands left and was dissolved.' if deleted
-                      else _activity_card_detail(entry, lost=True)
+                      else _activity_card_pair_detail(
+                          entry, 'card_won_suit', 'card_won_rank', 'Card lost')
+                      or _activity_card_pair_detail(
+                          entry, 'card_lost_suit', 'card_lost_rank', 'Card lost')
                       or 'Land ownership changed.')
             return {
                 'activity_title': f'{attacker} conquered your land',
@@ -4712,7 +4719,11 @@ def _attack_activity_presentation(entry):
         if is_defender_perspective:
             return {
                 'activity_title': f'{attacker} failed to conquer you',
-                'activity_detail': _activity_card_detail(entry, won=True) or 'Your defence held.',
+                'activity_detail': _activity_card_pair_detail(
+                    entry, 'card_lost_suit', 'card_lost_rank', 'Card won')
+                    or _activity_card_pair_detail(
+                        entry, 'card_won_suit', 'card_won_rank', 'Card won')
+                    or 'Your defence held.',
                 'activity_tone': 'good',
             }
         if is_attacker_perspective:

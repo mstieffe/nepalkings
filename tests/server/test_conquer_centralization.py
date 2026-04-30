@@ -5,8 +5,8 @@
 Covers:
 - ``_resolve_conquer_battle`` idempotency (re-running does not double-consume
   cards, double-loot, or write a second LandAttackLog).
-- ``KingdomNotification(kind='card_looted')`` emitted to a human attacker
-  when the defender wins.
+- attacker-loss loot details surface through the attack log without a duplicate
+    ``KingdomNotification(kind='card_looted')``.
 - ``_get_or_create_conquer_config`` re-entry safety net resolves a stale
   finished conquer game and yields a fresh config.
 - ``sweep_stuck_conquer_games`` auto-forfeits a stale conquer game and
@@ -121,11 +121,91 @@ class TestResolveConquerIdempotency:
             assert CollectionCard.query.filter_by(
                 user_id=attacker.id).count() == attacker_card_count_1
 
+    def test_finished_payload_prefers_game_cached_card_details(self, app, db):
+        """A later attack on the same land must not rewrite old payload details."""
+        from routes.games import _serialize_finished_conquer_result
+        with app.app_context():
+            attacker = _make_user(db, username='att_cached_payload')
+            defender = _make_user(db, username='def_cached_payload')
+            land = _make_land(db, tier=2, owner_user_id=defender.id)
+            game = Game(mode='conquer', land_id=land.id, state='finished')
+            db.session.add(game)
+            db.session.flush()
+            atk_player = Player(user_id=attacker.id, game_id=game.id, turns_left=0)
+            def_player = Player(user_id=defender.id, game_id=game.id, turns_left=0)
+            db.session.add_all([atk_player, def_player])
+            db.session.flush()
+            game.invader_player_id = atk_player.id
+            game.winner_player_id = def_player.id
+            game.last_battle_result = {
+                'conquer_resolved': True,
+                'card_lost_suit': 'Hearts',
+                'card_lost_rank': 'K',
+                'conquer_loot_lost_cards': [{'suit': 'Hearts', 'rank': 'K'}],
+            }
+            db.session.add(LandAttackLog(
+                land_id=land.id,
+                attacker_user_id=attacker.id,
+                defender_user_id=defender.id,
+                result='defender_won',
+                card_lost_suit='Spades',
+                card_lost_rank='A',
+            ))
+            db.session.commit()
 
-class TestCardLootedNotification:
-    """A human attacker losing a conquer battle gets a card_looted notice."""
+            payload = _serialize_finished_conquer_result(game)
 
-    def test_human_attacker_loss_emits_notification(self, app, db):
+            assert payload['conquer_result'] == 'defender_won'
+            assert payload['card_lost_suit'] == 'Hearts'
+            assert payload['card_lost_rank'] == 'K'
+            assert payload['loot_lost_cards'] == [{'suit': 'Hearts', 'rank': 'K'}]
+
+    def test_finished_draw_payload_uses_cached_consumed_cards(self, app, db):
+        """Cached draw results report spent attack cards and ignore land logs."""
+        from routes.games import _serialize_finished_conquer_result
+        with app.app_context():
+            attacker = _make_user(db, username='att_cached_draw')
+            defender = _make_user(db, username='def_cached_draw')
+            land = _make_land(db, tier=2, owner_user_id=defender.id)
+            game = Game(mode='conquer', land_id=land.id, state='finished')
+            db.session.add(game)
+            db.session.flush()
+            atk_player = Player(user_id=attacker.id, game_id=game.id, turns_left=0)
+            def_player = Player(user_id=defender.id, game_id=game.id, turns_left=0)
+            db.session.add_all([atk_player, def_player])
+            db.session.flush()
+            game.invader_player_id = atk_player.id
+            game.last_battle_result = {
+                'conquer_resolved': True,
+                'conquer_result': 'draw',
+                'attacker_won': False,
+                'conquer_consumed_cards': [{'suit': 'Clubs', 'rank': '9'}],
+                'conquer_loot_lost_cards': [],
+                'cards_spent': 1,
+            }
+            db.session.add(LandAttackLog(
+                land_id=land.id,
+                attacker_user_id=attacker.id,
+                defender_user_id=defender.id,
+                result='attacker_won',
+                card_won_suit='Spades',
+                card_won_rank='A',
+            ))
+            db.session.commit()
+
+            payload = _serialize_finished_conquer_result(game)
+
+            assert payload['conquer_result'] == 'draw'
+            assert payload['consumed_cards'] == [{'suit': 'Clubs', 'rank': '9'}]
+            assert payload['cards_spent'] == 1
+            assert payload.get('card_won_suit') is None
+            assert payload.get('card_won_rank') is None
+
+
+class TestConquerLootNotifications:
+    """A human attacker losing a conquer battle gets one activity-feed row."""
+
+    def test_human_attacker_loss_uses_attack_log_not_duplicate_notification(self, app, db):
         from routes.games import _resolve_conquer_battle
         with app.app_context():
             attacker = _make_user(db, username='att_notif')
@@ -145,16 +225,27 @@ class TestCardLootedNotification:
             notes = KingdomNotification.query.filter_by(
                 user_id=attacker.id, kind='card_looted',
             ).all()
-            assert len(notes) == 1
-            payload = notes[0].payload or {}
-            assert payload.get('land_id') == land.id
-            assert payload.get('defender_name') == defender.username
-            assert payload.get('is_ai_defender') is False
+            assert notes == []
+
             # Suit/rank match the loot row in the payload.
             loot = (result.get('loot_lost_cards') or [])
             assert len(loot) == 1
-            assert payload.get('suit') == loot[0]['suit']
-            assert payload.get('rank') == loot[0]['rank']
+            log = LandAttackLog.query.filter_by(
+                land_id=land.id, attacker_user_id=attacker.id,
+            ).first()
+            assert log is not None
+            assert log.card_lost_suit == loot[0]['suit']
+            assert log.card_lost_rank == loot[0]['rank']
+
+            client = app.test_client()
+            resp = client.get('/kingdom/notifications',
+                              headers=_auth_headers(app, attacker))
+            data = resp.get_json()
+            assert resp.status_code == 200
+            rows = data.get('notifications') or []
+            assert len(rows) == 1
+            assert rows[0]['source'] == 'attack_log'
+            assert rows[0]['activity_detail'] == f"Card lost: {loot[0]['rank']} of {loot[0]['suit']}"
 
     def test_attacker_win_emits_no_card_looted(self, app, db):
         """No card_looted notification when the attacker wins."""
@@ -242,12 +333,12 @@ class TestStuckConquerSweeper:
             assert resolved == 1
             db.session.refresh(game)
             assert game.state == 'finished'
-            # Defender treated as the winner: an attack log + card_looted
-            # notification should now exist for the attacker.
+            # Defender treated as the winner: one attack log should now exist
+            # for the attacker. A separate card_looted event would duplicate it.
             assert LandAttackLog.query.filter_by(land_id=land.id).count() == 1
             assert KingdomNotification.query.filter_by(
                 user_id=attacker.id, kind='card_looted',
-            ).count() == 1
+            ).count() == 0
 
     def test_skips_recent_activity(self, app, db):
         from sweepers import sweep_stuck_conquer_games

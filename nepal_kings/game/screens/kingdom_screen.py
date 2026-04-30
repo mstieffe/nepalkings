@@ -628,7 +628,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 title = f'{attacker} conquered your land'
                 deleted = item.get('kingdom_deleted_name')
                 detail = (f'{deleted} had no lands left and was dissolved.' if deleted
-                          else self._card_detail(item, lost=True) or 'Land ownership changed.')
+                          else self._card_pair_detail(
+                              item, 'card_won_suit', 'card_won_rank', 'Card lost')
+                          or self._card_pair_detail(
+                              item, 'card_lost_suit', 'card_lost_rank', 'Card lost')
+                          or 'Land ownership changed.')
                 return title, detail, False
             if is_attacker_perspective:
                 title = f'You conquered {defender}'
@@ -640,7 +644,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if result == 'defender_won':
             if is_defender_perspective:
                 title = f'{attacker} failed to conquer you'
-                detail = self._card_detail(item, won=True) or 'Your defence held.'
+                detail = (
+                    self._card_pair_detail(
+                        item, 'card_lost_suit', 'card_lost_rank', 'Card won')
+                    or self._card_pair_detail(
+                        item, 'card_won_suit', 'card_won_rank', 'Card won')
+                    or 'Your defence held.'
+                )
                 return title, detail, True
             if is_attacker_perspective:
                 title = f'Your attack on {defender} failed'
@@ -734,15 +744,16 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     def _card_detail(self, item, won=False, lost=False):
         if won:
-            suit = item.get('card_won_suit')
-            rank = item.get('card_won_rank')
-            if suit and rank:
-                return f'Card won: {rank} of {suit}'
+            return self._card_pair_detail(item, 'card_won_suit', 'card_won_rank', 'Card won')
         if lost:
-            suit = item.get('card_lost_suit')
-            rank = item.get('card_lost_rank')
-            if suit and rank:
-                return f'Card lost: {rank} of {suit}'
+            return self._card_pair_detail(item, 'card_lost_suit', 'card_lost_rank', 'Card lost')
+        return ''
+
+    def _card_pair_detail(self, item, suit_key, rank_key, label):
+        suit = item.get(suit_key)
+        rank = item.get(rank_key)
+        if suit and rank:
+            return f'{label}: {rank} of {suit}'
         return ''
 
     def _activity_land_label(self, item):

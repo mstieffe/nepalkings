@@ -9,7 +9,7 @@ than :data:`server_settings.STUCK_CONQUER_TIMEOUT_SECONDS`.
 
 The defender is treated as the winner: the attacker forfeits.  This calls
 ``_resolve_conquer_battle`` which is idempotent and writes a LandAttackLog
-entry plus a ``card_looted`` KingdomNotification (see Phase 5).
+entry surfaced by the unified kingdom notification feed.
 """
 from __future__ import annotations
 

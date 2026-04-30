@@ -897,7 +897,7 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         for _k in ('card_won_suit', 'card_won_rank',
                    'card_lost_suit', 'card_lost_rank',
                    'loot_lost_cards', 'consumed_cards',
-                   'cards_spent'):
+                   'cards_spent', 'is_ai_defender'):
             if _k in conquer_payload:
                 info[_k] = conquer_payload[_k]
     return info
@@ -4701,7 +4701,8 @@ def finish_battle():
                                'card_won_suit', 'card_won_rank',
                                'card_lost_suit', 'card_lost_rank',
                                'loot_lost_cards', 'consumed_cards',
-                               'defence_consumed_cards', 'cards_spent'):
+                               'defence_consumed_cards', 'cards_spent',
+                               'is_ai_defender'):
                         if _k in conquer_payload:
                             already_response[_k] = conquer_payload[_k]
             except Exception:
@@ -4796,7 +4797,8 @@ def finish_battle():
     if total_diff == 0:
         # ──── DRAW ────
 
-        # Conquer mode draw: no consequences — game ends cleanly
+        # Conquer mode draw: land ownership is unchanged, but the attacker's
+        # single-use committed cards are spent and figure cards return.
         if game.mode == 'conquer':
             _return_unplayed_battle_move_cards(game_id)
             _delete_all_battle_moves(game_id)
@@ -4818,6 +4820,16 @@ def finish_battle():
                 draw_consumed_cards = _snapshot_config_battle_cards(atk_cfg)
                 _consume_config_battle_cards(atk_cfg)
                 _wipe_land_config(atk_cfg)
+
+            game.last_battle_result = {
+                'conquer_resolved': True,
+                'conquer_result': 'draw',
+                'attacker_won': False,
+                'conquer_consumed_cards': draw_consumed_cards,
+                'conquer_loot_lost_cards': [],
+                'cards_spent': len(draw_consumed_cards),
+            }
+            flag_modified(game, 'last_battle_result')
 
             log_entry = LogEntry(
                 game_id=game.id,
@@ -4842,6 +4854,7 @@ def finish_battle():
                             'spell cards were spent; figure cards return to your collection.'),
                 'consumed_cards': draw_consumed_cards,
                 'loot_lost_cards': [],
+                'cards_spent': len(draw_consumed_cards),
                 'game': game.serialize(),
             })
 
@@ -5012,7 +5025,8 @@ def finish_battle():
                        'card_won_suit', 'card_won_rank',
                        'card_lost_suit', 'card_lost_rank',
                        'loot_lost_cards', 'consumed_cards',
-                       'defence_consumed_cards', 'cards_spent'):
+                       'defence_consumed_cards', 'cards_spent',
+                       'is_ai_defender'):
                 if _k in conquer_payload:
                     response[_k] = conquer_payload[_k]
         return jsonify(response)
@@ -5246,28 +5260,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                             cc.lock_type = None
                             cc.lock_ref_id = None
 
-                        # Notify the (human) attacker that one of their cards
-                        # was looted by the defender.  Surfaces in the kingdom
-                        # notification feed alongside attack_notifications.
-                        if attacker_user and not getattr(attacker_user, 'is_ai', False):
-                            try:
-                                defender_name = (defender_user.username
-                                                 if defender_user else None)
-                                db.session.add(KingdomNotification(
-                                    user_id=attacker_user.id,
-                                    kind='card_looted',
-                                    kingdom_id=lost_kingdom_id,
-                                    payload={
-                                        'suit': cc.suit,
-                                        'rank': cc.rank,
-                                        'land_id': game.land_id,
-                                        'defender_name': defender_name,
-                                        'is_ai_defender': bool(is_ai_land),
-                                    },
-                                ))
-                            except Exception:
-                                logger.exception(
-                                    "Failed to record card_looted notification")
+                        # The LandAttackLog created below is returned to the
+                        # attacker by /kingdom/notifications.  Do not emit a
+                        # separate card_looted KingdomNotification for the same
+                        # card; otherwise the activity feed shows duplicates.
 
                 # Consume the entire attacker config: every remaining card
                 # (figures, plus any spell/modifier cards not already deleted
@@ -5328,6 +5324,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_lost_rank': card_lost_rank,
         'card_won_suit': card_won_suit,
         'card_won_rank': card_won_rank,
+        'is_ai_defender': bool(is_ai_land),
     })
     game.last_battle_result = merged_last_result
 
@@ -5345,6 +5342,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_won_rank': card_won_rank,
         'card_lost_suit': card_lost_suit,
         'card_lost_rank': card_lost_rank,
+        'is_ai_defender': bool(is_ai_land),
         'loot_lost_cards': looted_lost_cards,
         'consumed_cards': consumed_cards,
         'defence_consumed_cards': defence_consumed_cards,
@@ -5369,6 +5367,8 @@ def _serialize_finished_conquer_result(game):
         attacker_won = (game.winner_player_id == attacker_id)
         conquer_result = 'attacker_won' if attacker_won else 'defender_won'
 
+    last_result = game.last_battle_result if isinstance(game.last_battle_result, dict) else {}
+
     payload = {
         'success': True,
         'message': f'Conquer battle already resolved: {conquer_result}',
@@ -5381,6 +5381,49 @@ def _serialize_finished_conquer_result(game):
         'game': game.serialize(),
     }
 
+    card_detail_keys = ('card_won_suit', 'card_won_rank',
+                        'card_lost_suit', 'card_lost_rank')
+    for key in card_detail_keys:
+        if key in last_result:
+            payload[key] = last_result.get(key)
+
+    # Fallback for legacy finished rows that predate cached conquer details.
+    # Once any per-game result detail is cached, trust that cache and do not
+    # let a later attack on the same land override this game's persisted result.
+    has_cached_result_details = bool(
+        last_result.get('conquer_resolved')
+        or any(key in last_result for key in card_detail_keys)
+        or 'conquer_consumed_cards' in last_result
+        or 'conquer_loot_lost_cards' in last_result
+    )
+    if game.land_id and not has_cached_result_details:
+        latest_log = LandAttackLog.query.filter_by(
+            land_id=game.land_id
+        ).order_by(LandAttackLog.id.desc()).first()
+        if latest_log:
+            if payload.get('card_won_suit') is None:
+                payload['card_won_suit'] = latest_log.card_won_suit
+            if payload.get('card_won_rank') is None:
+                payload['card_won_rank'] = latest_log.card_won_rank
+            if payload.get('card_lost_suit') is None:
+                payload['card_lost_suit'] = latest_log.card_lost_suit
+            if payload.get('card_lost_rank') is None:
+                payload['card_lost_rank'] = latest_log.card_lost_rank
+    if 'cards_spent' in last_result:
+        payload['cards_spent'] = last_result.get('cards_spent')
+    if 'conquer_consumed_cards' in last_result:
+        payload['consumed_cards'] = last_result.get('conquer_consumed_cards') or []
+    if 'defence_consumed_cards' in last_result:
+        payload['defence_consumed_cards'] = last_result.get('defence_consumed_cards') or []
+    if 'conquer_loot_lost_cards' in last_result:
+        payload['loot_lost_cards'] = last_result.get('conquer_loot_lost_cards') or []
+    if 'is_ai_defender' in last_result:
+        payload['is_ai_defender'] = bool(last_result.get('is_ai_defender'))
+    if 'auto_loss_reason' in last_result:
+        payload['auto_loss_reason'] = last_result.get('auto_loss_reason')
+    if 'auto_loss_detail' in last_result:
+        payload['auto_loss_detail'] = last_result.get('auto_loss_detail')
+
     if conquer_result == 'draw':
         payload['outcome'] = 'draw'
         return payload
@@ -5392,31 +5435,6 @@ def _serialize_finished_conquer_result(game):
     defender_player_id = defender_player.id if defender_player else None
 
     payload['loser_player_id'] = defender_player_id if attacker_won else attacker_id
-
-    # Pull card transfer details from the latest attack log when available.
-    if game.land_id:
-        latest_log = LandAttackLog.query.filter_by(
-            land_id=game.land_id
-        ).order_by(LandAttackLog.id.desc()).first()
-        if latest_log:
-            payload['card_won_suit'] = latest_log.card_won_suit
-            payload['card_won_rank'] = latest_log.card_won_rank
-            payload['card_lost_suit'] = latest_log.card_lost_suit
-            payload['card_lost_rank'] = latest_log.card_lost_rank
-
-    last_result = game.last_battle_result if isinstance(game.last_battle_result, dict) else {}
-    if 'cards_spent' in last_result:
-        payload['cards_spent'] = last_result.get('cards_spent')
-    if 'conquer_consumed_cards' in last_result:
-        payload['consumed_cards'] = last_result.get('conquer_consumed_cards') or []
-    if 'defence_consumed_cards' in last_result:
-        payload['defence_consumed_cards'] = last_result.get('defence_consumed_cards') or []
-    if 'conquer_loot_lost_cards' in last_result:
-        payload['loot_lost_cards'] = last_result.get('conquer_loot_lost_cards') or []
-    if 'auto_loss_reason' in last_result:
-        payload['auto_loss_reason'] = last_result.get('auto_loss_reason')
-    if 'auto_loss_detail' in last_result:
-        payload['auto_loss_detail'] = last_result.get('auto_loss_detail')
 
     return payload
 

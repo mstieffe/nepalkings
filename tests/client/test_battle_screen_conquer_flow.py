@@ -229,6 +229,26 @@ class TestBattleScreenConquerFlow:
         assert handled[0]['conquer_result'] == 'draw'
         assert handled[0]['attacker_won'] is False
 
+    def test_conquer_draw_dialogue_explains_spent_one_shot_cards(self):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+
+        captured = {}
+        screen.game = SimpleNamespace(invader=True, game_over=False, mode='conquer')
+        screen.make_dialogue_box = lambda message, **kwargs: captured.update({
+            'message': message,
+            'kwargs': kwargs,
+        })
+
+        BattleScreen._handle_conquer_end(screen, {
+            'conquer_result': 'draw',
+            'attacker_won': False,
+        })
+
+        msg = captured.get('message', '')
+        assert 'land remains unchanged' in msg
+        assert 'battle moves and one-shot spell cards were spent' in msg
+
     def test_conquer_attacker_loss_dialogue_lists_looted_and_consumed_cards(self, monkeypatch):
         BattleScreen = _battle_screen_class()
         screen = BattleScreen.__new__(BattleScreen)
@@ -261,11 +281,42 @@ class TestBattleScreenConquerFlow:
         })
 
         msg = captured.get('message', '')
-        assert 'Looted by defender:' in msg
+        assert 'Card looted by defending kingdom:' in msg
         assert 'K of Hearts' in msg
         assert 'Consumed cards:' in msg
         assert '7 of Clubs' in msg
         assert '10 of Spades' in msg
+
+    def test_conquer_attacker_loss_dialogue_uses_ai_defence_wording(self, monkeypatch):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+
+        class _DummyCardImg:
+            def __init__(self, *_args, **_kwargs):
+                self.front_img = None
+
+        monkeypatch.setattr('game.components.cards.card_img.CardImg', _DummyCardImg)
+
+        captured = {}
+        screen.window = object()
+        screen.game = SimpleNamespace(invader=True, game_over=False, mode='conquer')
+        screen.make_dialogue_box = lambda message, **kwargs: captured.update({
+            'message': message,
+            'kwargs': kwargs,
+        })
+
+        BattleScreen._handle_conquer_end(screen, {
+            'conquer_result': 'defender_won',
+            'attacker_won': False,
+            'is_ai_defender': True,
+            'loot_lost_cards': [
+                {'suit': 'Hearts', 'rank': 'K'},
+            ],
+        })
+
+        msg = captured.get('message', '')
+        assert 'Card lost to AI defence:' in msg
+        assert 'Card looted by defending kingdom:' not in msg
 
     def test_conquer_defender_loss_dialogue_lists_consumed_defence_cards(self, monkeypatch):
         BattleScreen = _battle_screen_class()

@@ -2015,11 +2015,11 @@ class BattleScreen(SubScreen):
 
     def _show_draw_result(self, result):
         """Display draw dialogue — the defender gets to choose.
-        In conquer mode, draws resolve with no consequences."""
+        In conquer mode, land ownership is unchanged but one-shot cards are spent."""
         is_conquer = getattr(self.game, 'mode', 'duel') == 'conquer'
 
-        # Conquer mode: draw has no consequences — show result and return to
-        # kingdom. Support fallback payloads that only include outcome='draw'.
+        # Conquer mode: show result and return to kingdom. Support fallback
+        # payloads that only include outcome='draw'.
         if is_conquer and (
             result.get('conquer_result') == 'draw'
             or (result.get('outcome') == 'draw' and not result.get('conquer_result'))
@@ -2250,7 +2250,11 @@ class BattleScreen(SubScreen):
         if conquer_result == 'draw':
             title = "Draw!"
             icon = 'draw'
-            message = "The battle ended in a draw.\n\nNo consequences — the land remains unchanged."
+            message = (
+                "The battle ended in a draw.\n\n"
+                "The land remains unchanged, but battle moves and one-shot spell cards were spent. "
+                "Figure cards return to your collection."
+            )
         elif attacker_won and is_attacker:
             # Attacker won — we are the attacker
             land_tier = result.get('land_tier')
@@ -2315,6 +2319,7 @@ class BattleScreen(SubScreen):
             title = "Attack Failed"
             icon = 'defeat'
             cards_spent = int(result.get('cards_spent', 0) or 0)
+            is_ai_defender = bool(result.get('is_ai_defender'))
             loot_lost_cards = result.get('loot_lost_cards') or []
             consumed_cards = result.get('consumed_cards') or []
 
@@ -2361,7 +2366,8 @@ class BattleScreen(SubScreen):
                 images.append(card_img.front_img)
 
             if loot_lines:
-                message += "\n\nLooted by defender:\n" + "\n".join(
+                loot_title = "Card lost to AI defence:" if is_ai_defender else "Card looted by defending kingdom:"
+                message += f"\n\n{loot_title}\n" + "\n".join(
                     f"• {line}" for line in loot_lines
                 )
 

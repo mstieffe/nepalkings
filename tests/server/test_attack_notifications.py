@@ -184,7 +184,8 @@ class TestUnifiedKingdomNotifications:
             rival = _make_user(db, 'rival')
             land1 = _make_land(db, col=1, row=1, owner_user_id=current.id)
             land2 = _make_land(db, col=2, row=2, owner_user_id=rival.id)
-            _make_attack_log(db, land1, rival, current, result='defender_won')
+            _make_attack_log(db, land1, rival, current, result='defender_won',
+                             card_lost_suit='Hearts', card_lost_rank='K')
             _make_attack_log(db, land2, current, rival, result='attacker_won',
                              card_won_suit='Spades', card_won_rank='A')
 
@@ -204,6 +205,31 @@ class TestUnifiedKingdomNotifications:
             assert own_attack['activity_title'] == 'You conquered rival'
             assert own_attack['activity_detail'] == 'Card won: A of Spades'
             assert own_attack['activity_tone'] == 'good'
+            defence_win = next(n for n in data['notifications'] if n['role'] == 'defender')
+            assert defence_win['activity_title'] == 'rival failed to conquer you'
+            assert defence_win['activity_detail'] == 'Card won: K of Hearts'
+            assert defence_win['activity_tone'] == 'good'
+
+    def test_defender_loss_activity_reports_card_lost_from_attacker_reward_fields(self, app, db):
+        """Passive land-owner notifications translate attacker-centric card_won fields."""
+        with app.app_context():
+            current = _make_user(db, 'current_loss')
+            rival = _make_user(db, 'rival_loss')
+            land = _make_land(db, col=3, row=4, owner_user_id=current.id)
+            _make_attack_log(db, land, rival, current, result='attacker_won',
+                             card_won_suit='Clubs', card_won_rank='Q')
+
+            client = app.test_client()
+            resp = client.get('/kingdom/notifications',
+                              headers=_auth_headers(app, current))
+            data = resp.get_json()
+
+            assert resp.status_code == 200
+            notif = data['notifications'][0]
+            assert notif['role'] == 'defender'
+            assert notif['activity_title'] == 'rival_loss conquered your land'
+            assert notif['activity_detail'] == 'Card lost: Q of Clubs'
+            assert notif['activity_tone'] == 'bad'
 
     def test_seen_flags_are_role_specific(self, app, db):
         """Seen attacker logs are hidden without hiding defender logs."""

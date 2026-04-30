@@ -1249,7 +1249,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                                         for _k in ('card_won_suit', 'card_won_rank',
                                                    'card_lost_suit', 'card_lost_rank',
                                                    'loot_lost_cards', 'consumed_cards',
-                                                   'cards_spent'):
+                                                   'cards_spent', 'is_ai_defender'):
                                             if _k in conquer_payload:
                                                 checkmate_game_over[_k] = conquer_payload[_k]
                                 except Exception:

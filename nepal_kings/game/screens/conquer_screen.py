@@ -1649,7 +1649,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             image_groups.append({
                 'key': 'locked',
                 'title': 'Locked figure cards',
-                'description': 'These figure cards are committed to the attack and cannot be used elsewhere. The defender may loot one if you lose.',
+                'description': 'These figure cards are committed to the attack and cannot be used elsewhere. If you lose, one key card may be looted/lost and the remaining committed figure cards are consumed.',
                 'icon': 'lock',
                 'badge_icon': 'lock',
                 'items': locked_cards,
@@ -1661,7 +1661,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         after_msg = None
         if locked_cards:
-            after_msg = 'Locked figure cards may be taken as loot if you lose.'
+            after_msg = 'If you lose, one locked key card may be looted/lost and all other committed attack figure cards are consumed.'
 
         return msg, image_groups, after_msg
 

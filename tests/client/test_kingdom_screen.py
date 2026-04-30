@@ -162,6 +162,8 @@ class TestKingdomActivityPanel:
             'attacker_username': 'me',
             'defender_username': 'rival',
             'result': 'attacker_won',
+            'card_won_suit': 'Spades',
+            'card_won_rank': 'A',
         }
         defence_win = {
             'attacker_user_id': 8,
@@ -169,14 +171,18 @@ class TestKingdomActivityPanel:
             'attacker_username': 'rival',
             'defender_username': 'me',
             'result': 'defender_won',
+            'card_lost_suit': 'Hearts',
+            'card_lost_rank': 'K',
         }
 
-        title, _detail, good = KingdomScreen._format_activity_item(screen, own_win)
+        title, detail, good = KingdomScreen._format_activity_item(screen, own_win)
         assert title == 'You conquered rival'
+        assert detail == 'Card won: A of Spades'
         assert good is True
 
-        title, _detail, good = KingdomScreen._format_activity_item(screen, defence_win)
+        title, detail, good = KingdomScreen._format_activity_item(screen, defence_win)
         assert title == 'rival failed to conquer you'
+        assert detail == 'Card won: K of Hearts'
         assert good is True
 
     def test_alert_formatting_uses_server_role_not_list_membership(self):
@@ -198,6 +204,8 @@ class TestKingdomActivityPanel:
             'result': 'attacker_won',
             'role': 'defender',
             'seen': False,
+            'card_won_suit': 'Clubs',
+            'card_won_rank': 'Q',
         }
         screen._notifications = [own_attack_unseen, incoming_loss]
 
@@ -205,8 +213,9 @@ class TestKingdomActivityPanel:
         assert title == 'You conquered rival'
         assert good is True
 
-        title, _detail, good = KingdomScreen._format_activity_item(screen, incoming_loss)
+        title, detail, good = KingdomScreen._format_activity_item(screen, incoming_loss)
         assert title == 'rival conquered your land'
+        assert detail == 'Card lost: Q of Clubs'
         assert good is False
 
     def test_visible_notifications_excludes_seen_rows(self):
