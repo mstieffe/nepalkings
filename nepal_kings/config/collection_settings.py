@@ -47,6 +47,92 @@ COLLECTION_ACTION_BTN_GAP = int(0.015 * SCREEN_WIDTH)
 COLLECTION_ACTION_BTN_Y   = int(0.86 * SCREEN_HEIGHT)
 COLLECTION_ACTION_BTN_FONT_SIZE = FS_BODY
 
+# ── Booster / rarity tiers ─────────────────────────────────────────
+COLLECTION_TIER_LABELS = {
+	1: 'Common',
+	2: 'Uncommon',
+	3: 'Rare',
+}
+COLLECTION_TIER_MAIN_RANKS = {
+	1: ('7', '8', '9', '10'),
+	2: ('J', 'Q'),
+	3: ('K', 'A'),
+}
+COLLECTION_TIER_SIDE_RANKS = {
+	1: ('2', '3'),
+	2: ('4', '5'),
+	3: ('6',),
+}
+COLLECTION_MAIN_RANK_TO_TIER = {
+	rank: tier
+	for tier, ranks in COLLECTION_TIER_MAIN_RANKS.items()
+	for rank in ranks
+}
+COLLECTION_SIDE_RANK_TO_TIER = {
+	rank: tier
+	for tier, ranks in COLLECTION_TIER_SIDE_RANKS.items()
+	for rank in ranks
+}
+COLLECTION_TIER_COLORS = {
+	1: (176, 205, 226),
+	2: (255, 173, 78),
+	3: (252, 224, 82),
+}
+COLLECTION_TIER_BORDER_COLORS = {
+	1: (138, 174, 205, 130),
+	2: (255, 156, 64, 175),
+	3: (252, 224, 82, 215),
+}
+COLLECTION_TIER_GLOW_TINTS = {
+	1: (120, 170, 235, 150),
+	2: (255, 145, 55, 175),
+	3: (255, 230, 80, 220),
+}
+
+# ── Collection summary / pack panels ───────────────────────────────
+COLLECTION_STATS_STRIP_H = int(0.046 * SCREEN_HEIGHT)
+COLLECTION_STATS_FONT_SIZE = int(FS_BODY * 0.82)
+COLLECTION_STATS_BG_CLR = (24, 24, 30, 185)
+COLLECTION_STATS_BORDER_CLR = (118, 105, 78, 185)
+COLLECTION_STATS_TEXT_CLR = (225, 214, 184)
+COLLECTION_STATS_VALUE_CLR = (250, 221, 0)
+
+COLLECTION_PACK_PANEL_H = int(0.122 * SCREEN_HEIGHT)
+COLLECTION_PACK_PANEL_GAP = int(0.020 * SCREEN_WIDTH)
+COLLECTION_PACK_PANEL_PAD_X = int(0.010 * SCREEN_WIDTH)
+COLLECTION_PACK_PANEL_PAD_Y = int(0.010 * SCREEN_HEIGHT)
+COLLECTION_PACK_PANEL_BG_CLR = (24, 24, 30, 198)
+COLLECTION_PACK_PANEL_BORDER_CLR = (132, 116, 83, 205)
+COLLECTION_PACK_PANEL_TITLE_CLR = (250, 221, 0)
+COLLECTION_PACK_PANEL_TEXT_CLR = (218, 205, 172)
+COLLECTION_PACK_PANEL_MUTED_CLR = (150, 140, 118)
+COLLECTION_PACK_PANEL_BTN_W = int(0.108 * SCREEN_WIDTH)
+COLLECTION_PACK_PANEL_BTN_H = int(0.036 * SCREEN_HEIGHT)
+COLLECTION_PACK_PANEL_BTN_GAP = int(0.010 * SCREEN_WIDTH)
+COLLECTION_PACK_PANEL_TITLE_FONT_SIZE = FS_BODY
+COLLECTION_PACK_PANEL_DETAIL_FONT_SIZE = int(FS_BODY * 0.72)
+
+COLLECTION_PACK_PREVIEWS = {
+	'main': {
+		'title': 'Main Pack',
+		'range': 'Ranks 7-A',
+		'preview': '7-10 common · J/Q uncommon · K/A rare',
+		'odds': '30% / 30% / 40%',
+	},
+	'side': {
+		'title': 'Side Pack',
+		'range': 'Ranks 2-6',
+		'preview': '2/3 common · 4/5 uncommon · 6 rare',
+		'odds': '60% / 30% / 10%',
+	},
+}
+
+# ── Sell quantity controls ─────────────────────────────────────────
+COLLECTION_SELL_QTY_BTN_W = int(0.036 * SCREEN_WIDTH)
+COLLECTION_SELL_QTY_BTN_H = int(0.032 * SCREEN_HEIGHT)
+COLLECTION_SELL_QTY_MAX_W = int(0.054 * SCREEN_WIDTH)
+COLLECTION_SELL_QTY_GAP = int(0.006 * SCREEN_WIDTH)
+
 # ── Greyed out card overlay ─────────────────────────────────────────
 COLLECTION_GREY_ALPHA     = 160
 
@@ -57,6 +143,11 @@ COLLECTION_TITLE_Y         = int(0.02 * SCREEN_HEIGHT)
 
 # ── Sell dialogue ───────────────────────────────────────────────────
 COLLECTION_SELL_FONT_SIZE  = FS_BODY
+
+# ── Booster reveal overlay ─────────────────────────────────────────
+COLLECTION_REVEAL_FLIP_MS = 420
+COLLECTION_REVEAL_RARE_PULSE_MS = 900
+COLLECTION_REVEAL_TIER_LABEL_FONT_SIZE = int(FS_BODY * 0.82)
 
 # ── Booster prices (mirror server values for UI display) ────────────
 BOOSTER_PACK_PRICE       = 100

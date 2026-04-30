@@ -16,6 +16,22 @@ def _make_state():
     return state
 
 
+def _make_figure_object(figure_id, *, field='castle', cannot_attack=False,
+                       cannot_defend=False):
+    """Stub for `DefenceScreen._figure_objects` entries.
+
+    `_battle_figure_block_reason` only inspects ``cannot_attack``,
+    ``cannot_defend``, and ``family.field`` on the figure, so a thin
+    namespace is enough for readiness/selection tests.
+    """
+    return SimpleNamespace(
+        id=figure_id,
+        cannot_attack=cannot_attack,
+        cannot_defend=cannot_defend,
+        family=SimpleNamespace(field=field),
+    )
+
+
 def _make_config(**overrides):
     cfg = {
         'figures': [],
@@ -130,6 +146,7 @@ class TestDefenceReadiness:
         moves = [{'id': i, 'round_index': i} for i in range(3)]
         screen = self._screen_with_config(
             figures=figs, battle_moves=moves, battle_figure_id=1)
+        screen._figure_objects = [_make_figure_object(1)]
         assert screen._is_defence_ready() is True
 
     def test_ready_with_counter_spell(self):
@@ -742,6 +759,10 @@ class TestBattleFigureToggle:
                 {'id': 11, 'has_deficit': False, 'field': 'village'},
             ],
         )
+        screen._figure_objects = [
+            _make_figure_object(10, field='castle'),
+            _make_figure_object(11, field='village'),
+        ]
         screen._build_layout()
 
         # Clicking the empty battle_figure slot should enter selection mode
