@@ -179,6 +179,57 @@ class TestCollectionSettings:
         assert len(COLLECTION_BADGE_CLR) == 3
         assert len(COLLECTION_BADGE_BG_CLR) == 4  # RGBA
 
+    def test_common_tier_color_is_neutral_gray(self):
+        from config.collection_settings import COLLECTION_TIER_COLORS
+        common = COLLECTION_TIER_COLORS[1]
+        assert common[0] == common[1] == common[2]
+
+    def test_pack_preview_metadata_has_no_odds_or_contents(self):
+        from config.collection_settings import COLLECTION_PACK_PREVIEWS
+        assert set(COLLECTION_PACK_PREVIEWS['main']) == {'title'}
+        assert set(COLLECTION_PACK_PREVIEWS['side']) == {'title'}
+
+
+class TestBoosterRevealLayout:
+    """Guard against visual regressions in the booster reveal overlay."""
+
+    def test_reveal_uses_same_simple_back_for_all_cards(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': '7', 'value': 7, 'tier': 1},
+            {'suit': 'Clubs', 'rank': 'J', 'value': 1, 'tier': 2},
+            {'suit': 'Spades', 'rank': 'A', 'value': 3, 'tier': 3},
+        ])
+
+        encoded_backs = [pygame.image.tobytes(img, 'RGBA') for img in overlay._back_imgs]
+        assert len(set(encoded_backs)) == 1
+
+    def test_reveal_close_button_does_not_overlap_card_labels(self):
+        import pygame
+        from config import settings
+        from game.components.booster_reveal import BoosterRevealOverlay
+
+        window = pygame.display.get_surface() or pygame.display.set_mode(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        overlay = BoosterRevealOverlay(window, [
+            {'suit': 'Hearts', 'rank': '7', 'value': 7, 'tier': 1},
+            {'suit': 'Clubs', 'rank': 'J', 'value': 1, 'tier': 2},
+            {'suit': 'Spades', 'rank': 'A', 'value': 3, 'tier': 3},
+        ])
+
+        label_band = pygame.Rect(
+            overlay._slots[0].x,
+            overlay._slots[0].bottom,
+            overlay._slots[0].w,
+            int(0.055 * settings.SCREEN_HEIGHT),
+        )
+        assert overlay._close_rect.top > label_band.bottom
+
 
 class TestCollectionService:
     """Verify collection_service module structure."""

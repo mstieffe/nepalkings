@@ -185,11 +185,18 @@ class MenuScreenMixin:
             raw_booster = pygame.image.load(settings.GAME_MENU_BOOSTER_ICON_PATH).convert_alpha()
             raw_booster_side = pygame.image.load(settings.GAME_MENU_BOOSTER_SIDE_ICON_PATH).convert_alpha()
             sz = settings.GAME_MENU_GOLD_ICON_SZ
+            # Larger version used by dialogue boxes / pack panels so the icon
+            # stays crisp instead of being upscaled from the small HUD size.
+            dialog_sz = max(sz, settings.DIALOGUE_BOX_IMG_HEIGHT)
             cls._chrome_cache = {
-                'bg':           pygame.transform.smoothscale(raw_bg, (_SW, _SH)),
-                'gold':         pygame.transform.smoothscale(raw_gold, (sz, sz)),
-                'booster':      pygame.transform.smoothscale(raw_booster, (sz, sz)),
-                'booster_side': pygame.transform.smoothscale(raw_booster_side, (sz, sz)),
+                'bg':                  pygame.transform.smoothscale(raw_bg, (_SW, _SH)),
+                'gold':                pygame.transform.smoothscale(raw_gold, (sz, sz)),
+                'booster':             pygame.transform.smoothscale(raw_booster, (sz, sz)),
+                'booster_side':        pygame.transform.smoothscale(raw_booster_side, (sz, sz)),
+                'booster_dialog':      pygame.transform.smoothscale(
+                    raw_booster, (dialog_sz, dialog_sz)),
+                'booster_side_dialog': pygame.transform.smoothscale(
+                    raw_booster_side, (dialog_sz, dialog_sz)),
             }
         return cls._chrome_cache
 
@@ -200,6 +207,8 @@ class MenuScreenMixin:
         self._gold_icon = cache['gold']
         self._booster_icon = cache['booster']
         self._booster_side_icon = cache['booster_side']
+        self._booster_icon_dialog = cache['booster_dialog']
+        self._booster_side_icon_dialog = cache['booster_side_dialog']
         self._gold_font = settings.get_font(settings.GAME_MENU_GOLD_FONT_SIZE)
         self._gold_floaters = FloatingTextLayer()
         self._gold_floaters_last_tick = pygame.time.get_ticks()

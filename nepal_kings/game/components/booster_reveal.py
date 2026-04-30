@@ -15,8 +15,8 @@ _CARD_GAP = int(0.04 * _SW)
 _SCALE_HOVER = 1.15
 
 # Glow dimensions
-_GLOW_W = int(_CARD_W * 1.5)
-_GLOW_H = int(_CARD_H * 1.3)
+_GLOW_W = int(_CARD_W * 1.85)
+_GLOW_H = int(_CARD_H * 1.55)
 
 # Close button
 _CLOSE_W = int(0.12 * _SW)
@@ -69,13 +69,11 @@ class BoosterRevealOverlay:
         self._overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
         self._overlay.fill((0, 0, 0, 180))
 
-        # Load varied card backs for a little pack-opening texture.
+        # Use the same simple card back for every slot for a consistent pack reveal.
         self._back_imgs = []
         self._back_imgs_big = []
-        back_names = ('back.png', 'back2.png', 'back3.png')
+        back_raw = pygame.image.load(settings.CARD_IMG_PATH + 'back.png').convert_alpha()
         for i in range(max(1, len(self._cards))):
-            back_raw = pygame.image.load(
-                settings.CARD_IMG_PATH + back_names[i % len(back_names)]).convert_alpha()
             self._back_imgs.append(pygame.transform.smoothscale(back_raw, (_CARD_W, _CARD_H)))
             self._back_imgs_big.append(pygame.transform.smoothscale(
                 back_raw, (int(_CARD_W * _SCALE_HOVER), int(_CARD_H * _SCALE_HOVER))))
@@ -118,14 +116,13 @@ class BoosterRevealOverlay:
         # Close button (appears when all revealed)
         self._close_rect = pygame.Rect(
             (_SW - _CLOSE_W) // 2,
-            card_y + _CARD_H + int(0.04 * _SH),
+            card_y + _CARD_H + int(0.075 * _SH),
             _CLOSE_W, _CLOSE_H)
         self._close_font = settings.get_font(int(0.022 * _SH))
 
         # Title / label fonts
         self._title_font = settings.get_font(int(0.028 * _SH), bold=True)
         self._subtitle_font = settings.get_font(int(0.018 * _SH))
-        self._tier_font = settings.get_font(settings.COLLECTION_REVEAL_TIER_LABEL_FONT_SIZE, bold=True)
 
     def _make_tier_glow(self, tint):
         glow = self._glow_base.copy()
@@ -155,7 +152,7 @@ class BoosterRevealOverlay:
         tx = (_SW - title.get_width()) // 2
         ty = self._card_y - int(0.074 * _SH)
         self.window.blit(title, (tx, ty))
-        subtitle_text = 'Click each card to reveal its tier glow'
+        subtitle_text = 'Click each card to reveal its glow'
         if self.all_revealed:
             subtitle_text = 'All cards added to your collection'
         subtitle = self._subtitle_font.render(subtitle_text, True, (220, 210, 180))
@@ -223,43 +220,54 @@ class BoosterRevealOverlay:
 
     def _draw_card_labels(self, i, slot):
         c = self._cards[i]
-        tier = self._tiers[i]
-        tier_label = settings.COLLECTION_TIER_LABELS.get(tier, 'Common')
-        tier_color = settings.COLLECTION_TIER_COLORS.get(tier, (220, 210, 180))
 
         label = self._close_font.render(
             f"{c['suit']} {c['rank']}", True, (230, 220, 190))
         self.window.blit(label, label.get_rect(center=(slot.centerx, slot.bottom + int(0.012 * _SH))))
 
-        tier_surf = self._tier_font.render(tier_label.upper(), True, tier_color)
-        pill_pad_x = int(0.008 * _SW)
-        pill_pad_y = int(0.003 * _SH)
-        pill = pygame.Rect(0, 0,
-                           tier_surf.get_width() + pill_pad_x * 2,
-                           tier_surf.get_height() + pill_pad_y * 2)
-        pill.center = (slot.centerx, slot.bottom + int(0.040 * _SH))
-        pill_bg = pygame.Surface((pill.w, pill.h), pygame.SRCALPHA)
-        pygame.draw.rect(pill_bg, (24, 24, 30, 210), pill_bg.get_rect(), border_radius=6)
-        pygame.draw.rect(pill_bg, (*tier_color, 190), pill_bg.get_rect(), 1, border_radius=6)
-        self.window.blit(pill_bg, pill.topleft)
-        self.window.blit(tier_surf, tier_surf.get_rect(center=pill.center))
-
     def _draw_tier_glow(self, slot, tier, pulse=False):
         glow = self._tier_glows.get(tier) or self._tier_glows[1]
+        self._draw_soft_halo(slot, tier)
         if pulse:
             now = pygame.time.get_ticks()
             pulse_ms = max(1, settings.COLLECTION_REVEAL_RARE_PULSE_MS)
             phase = (now % pulse_ms) / pulse_ms
-            scale = 1.0 + (0.08 if tier == 3 else 0.04) * (1.0 - abs(0.5 - phase) * 2.0)
+            scale = 1.0 + (0.14 if tier == 3 else 0.08) * (1.0 - abs(0.5 - phase) * 2.0)
             if abs(scale - 1.0) > 0.01:
                 gw = max(1, int(glow.get_width() * scale))
                 gh = max(1, int(glow.get_height() * scale))
                 glow = pygame.transform.smoothscale(glow, (gw, gh))
         self._draw_glow(glow, slot)
 
-        if tier == 3:
-            ring = slot.inflate(int(0.018 * _SW), int(0.022 * _SH))
-            pygame.draw.rect(self.window, settings.COLLECTION_TIER_COLORS[3], ring, 2, border_radius=10)
+    def _draw_soft_halo(self, slot, tier):
+        """Draw a feathered radial halo behind the card.
+
+        Uses several concentric ellipses with decreasing alpha so the
+        halo fades smoothly into the dim overlay instead of showing a
+        hard edge.
+        """
+        color = settings.COLLECTION_TIER_COLORS.get(tier, (210, 210, 210))
+        peak_alpha = 80 if tier == 3 else 62 if tier == 2 else 52
+        halo_rect = slot.inflate(int(_CARD_W * 1.2), int(_CARD_H * 0.75))
+        halo = pygame.Surface((halo_rect.w, halo_rect.h), pygame.SRCALPHA)
+        layers = 8
+        for step in range(layers, 0, -1):
+            t = step / layers  # 1.0 outer → ~0 inner
+            inset_x = int(halo_rect.w * 0.5 * (1.0 - t))
+            inset_y = int(halo_rect.h * 0.5 * (1.0 - t))
+            ring = pygame.Rect(
+                inset_x, inset_y,
+                halo_rect.w - inset_x * 2,
+                halo_rect.h - inset_y * 2,
+            )
+            if ring.w <= 0 or ring.h <= 0:
+                continue
+            # Quadratic falloff so the centre stays bright and edges fade softly.
+            layer_alpha = max(0, int(peak_alpha * (1.0 - t) ** 2))
+            if layer_alpha == 0:
+                continue
+            pygame.draw.ellipse(halo, (*color, layer_alpha), ring)
+        self.window.blit(halo, halo_rect.topleft)
 
     def _draw_glow(self, glow, slot):
         gx = slot.centerx - glow.get_width() // 2

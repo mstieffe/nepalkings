@@ -4,10 +4,10 @@ from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE
 from config.font_settings import FS_BODY, FS_HEADING, FS_SUBTITLE
 
 # ── Card grid layout ────────────────────────────────────────────────
-COLLECTION_CARD_W         = int(0.052 * SCREEN_WIDTH)
-COLLECTION_CARD_H         = int(0.13 * SCREEN_HEIGHT)
-COLLECTION_CARD_GAP_X     = int(0.008 * SCREEN_WIDTH)
-COLLECTION_CARD_GAP_Y     = int(0.012 * SCREEN_HEIGHT)
+COLLECTION_CARD_W         = int(0.05 * SCREEN_WIDTH)
+COLLECTION_CARD_H         = int(0.120 * SCREEN_HEIGHT)
+COLLECTION_CARD_GAP_X     = int(0.007 * SCREEN_WIDTH)
+COLLECTION_CARD_GAP_Y     = int(0.010 * SCREEN_HEIGHT)
 
 # ── Grid panel ──────────────────────────────────────────────────────
 COLLECTION_PANEL_X        = int(0.04 * SCREEN_WIDTH)
@@ -49,44 +49,44 @@ COLLECTION_ACTION_BTN_FONT_SIZE = FS_BODY
 
 # ── Booster / rarity tiers ─────────────────────────────────────────
 COLLECTION_TIER_LABELS = {
-	1: 'Common',
-	2: 'Uncommon',
-	3: 'Rare',
+    1: 'Common',
+    2: 'Uncommon',
+    3: 'Rare',
 }
 COLLECTION_TIER_MAIN_RANKS = {
-	1: ('7', '8', '9', '10'),
-	2: ('J', 'Q'),
-	3: ('K', 'A'),
+    1: ('7', '8', '9', '10'),
+    2: ('J', 'Q'),
+    3: ('K', 'A'),
 }
 COLLECTION_TIER_SIDE_RANKS = {
-	1: ('2', '3'),
-	2: ('4', '5'),
-	3: ('6',),
+    1: ('2', '3'),
+    2: ('4', '5'),
+    3: ('6',),
 }
 COLLECTION_MAIN_RANK_TO_TIER = {
-	rank: tier
-	for tier, ranks in COLLECTION_TIER_MAIN_RANKS.items()
-	for rank in ranks
+    rank: tier
+    for tier, ranks in COLLECTION_TIER_MAIN_RANKS.items()
+    for rank in ranks
 }
 COLLECTION_SIDE_RANK_TO_TIER = {
-	rank: tier
-	for tier, ranks in COLLECTION_TIER_SIDE_RANKS.items()
-	for rank in ranks
+    rank: tier
+    for tier, ranks in COLLECTION_TIER_SIDE_RANKS.items()
+    for rank in ranks
 }
 COLLECTION_TIER_COLORS = {
-	1: (176, 205, 226),
-	2: (255, 173, 78),
-	3: (252, 224, 82),
+    1: (190, 190, 190),
+    2: (255, 173, 78),
+    3: (252, 224, 82),
 }
 COLLECTION_TIER_BORDER_COLORS = {
-	1: (138, 174, 205, 130),
-	2: (255, 156, 64, 175),
-	3: (252, 224, 82, 215),
+    1: (180, 180, 180, 130),
+    2: (255, 156, 64, 175),
+    3: (252, 224, 82, 215),
 }
 COLLECTION_TIER_GLOW_TINTS = {
-	1: (120, 170, 235, 150),
-	2: (255, 145, 55, 175),
-	3: (255, 230, 80, 220),
+    1: (210, 210, 210, 245),
+    2: (255, 150, 55, 250),
+    3: (255, 232, 74, 255),
 }
 
 # ── Collection summary / pack panels ───────────────────────────────
@@ -97,7 +97,7 @@ COLLECTION_STATS_BORDER_CLR = (118, 105, 78, 185)
 COLLECTION_STATS_TEXT_CLR = (225, 214, 184)
 COLLECTION_STATS_VALUE_CLR = (250, 221, 0)
 
-COLLECTION_PACK_PANEL_H = int(0.122 * SCREEN_HEIGHT)
+COLLECTION_PACK_PANEL_H = int(0.102 * SCREEN_HEIGHT)
 COLLECTION_PACK_PANEL_GAP = int(0.020 * SCREEN_WIDTH)
 COLLECTION_PACK_PANEL_PAD_X = int(0.010 * SCREEN_WIDTH)
 COLLECTION_PACK_PANEL_PAD_Y = int(0.010 * SCREEN_HEIGHT)
@@ -113,18 +113,12 @@ COLLECTION_PACK_PANEL_TITLE_FONT_SIZE = FS_BODY
 COLLECTION_PACK_PANEL_DETAIL_FONT_SIZE = int(FS_BODY * 0.72)
 
 COLLECTION_PACK_PREVIEWS = {
-	'main': {
-		'title': 'Main Pack',
-		'range': 'Ranks 7-A',
-		'preview': '7-10 common · J/Q uncommon · K/A rare',
-		'odds': '30% / 30% / 40%',
-	},
-	'side': {
-		'title': 'Side Pack',
-		'range': 'Ranks 2-6',
-		'preview': '2/3 common · 4/5 uncommon · 6 rare',
-		'odds': '60% / 30% / 10%',
-	},
+    'main': {
+        'title': 'Main Pack',
+    },
+    'side': {
+        'title': 'Side Pack',
+    },
 }
 
 # ── Sell quantity controls ─────────────────────────────────────────

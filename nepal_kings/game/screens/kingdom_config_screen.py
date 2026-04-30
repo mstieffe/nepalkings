@@ -520,9 +520,18 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 f'{settings.SERVER_URL}/kingdom/{kid}/collect_production',
                 json={}, timeout=12,
             )
-            data = resp.json()
         except Exception as exc:
             self._set_msg(f'Collect failed: {exc}')
+            return
+        try:
+            data = resp.json()
+        except ValueError:
+            snippet = (getattr(resp, 'text', '') or '').strip().splitlines()
+            head = snippet[0][:80] if snippet else ''
+            self._set_msg(
+                f'Collect failed: server returned HTTP {resp.status_code}'
+                + (f' ({head})' if head else '')
+            )
             return
         if not data.get('success'):
             self._set_msg(data.get('message', 'Collect failed'))
