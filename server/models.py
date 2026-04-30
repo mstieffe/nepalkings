@@ -735,6 +735,13 @@ class Kingdom(db.Model):
     # the last time accrual was advanced or collected.
     pending_gold             = db.Column(db.Float, nullable=False, default=0.0, server_default='0')
     last_gold_collection_at  = db.Column(db.DateTime, nullable=True)
+    # Per-kingdom booster production.  Each booster type stores at most one
+    # pending pack; collection transfers it to the owning user's collection and
+    # starts the next production cycle from the collection timestamp.
+    pending_main_boosters             = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_main_booster_collection_at   = db.Column(db.DateTime, nullable=True)
+    pending_side_boosters             = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_side_booster_collection_at   = db.Column(db.DateTime, nullable=True)
     created_at    = db.Column(db.DateTime, default=_utcnow)
     updated_at    = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -765,6 +772,16 @@ class Kingdom(db.Model):
             'last_gold_collection_at': (
                 self.last_gold_collection_at.isoformat()
                 if self.last_gold_collection_at else None
+            ),
+            'pending_main_boosters': int(self.pending_main_boosters or 0),
+            'last_main_booster_collection_at': (
+                self.last_main_booster_collection_at.isoformat()
+                if self.last_main_booster_collection_at else None
+            ),
+            'pending_side_boosters': int(self.pending_side_boosters or 0),
+            'last_side_booster_collection_at': (
+                self.last_side_booster_collection_at.isoformat()
+                if self.last_side_booster_collection_at else None
             ),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,

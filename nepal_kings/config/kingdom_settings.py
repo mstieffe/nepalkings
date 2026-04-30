@@ -332,10 +332,12 @@ KINGDOM_ACTIVITY_BAD_CLR = (230, 120, 105)
 # swapped in without changing the kingdom skill logic.
 KINGDOM_SHIELD_ICON_PATH = 'img/battle/icons/block.png'
 KINGDOM_SKILL_ICON_PATHS = {
-    'gold_production': 'img/dialogue_box/icons/gold.png',
-    'gold_vault': 'img/dialogue_box/icons/coins.png',
-    'shield_cost_reduction': 'img/resource_icons/shield.png',
-    'core_protection': 'img/battle/icons/block.png',
+    'gold_production': 'img/kingdom/skill_icons/gold.png',
+    'gold_vault': 'img/kingdom/skill_icons/gold_vault.png',
+    'main_booster_production': 'img/kingdom/skill_icons/main_booster_production.png',
+    'side_booster_production': 'img/kingdom/skill_icons/side_booster_production.png',
+    'shield_cost_reduction': 'img/kingdom/skill_icons/shield.png',
+    'core_protection': 'img/kingdom/skill_icons/core_protection.png',
 }
 
 # ── Kingdom level / XP / vault UI constants ───────────────────────

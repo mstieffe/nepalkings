@@ -139,6 +139,16 @@ with app.app_context():
     logger.info("Creating database tables...")
     db.create_all()
 
+    try:
+        from kingdom_service import ensure_kingdom_production_columns
+        added_columns = ensure_kingdom_production_columns()
+        if added_columns:
+            logger.info("Kingdom production schema upgraded: added %s",
+                        ', '.join(added_columns))
+    except Exception as _kingdom_schema_err:  # pragma: no cover — safety net
+        logger.exception("Kingdom production schema upgrade failed: %s", _kingdom_schema_err)
+        db.session.rollback()
+
     logger.info("Database initialized")
 
     # ── Orphan-lock sweep ─────────────────────────────────────────────
@@ -278,6 +288,8 @@ if __name__ == '__main__':
     try:
         with app.app_context():
             db.create_all()
+            from kingdom_service import ensure_kingdom_production_columns
+            ensure_kingdom_production_columns()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
         logger.error(f'Application failed to start: {e}')

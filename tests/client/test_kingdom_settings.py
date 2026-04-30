@@ -13,6 +13,8 @@ def test_kingdom_skill_icon_defaults_exist():
     assert set(settings.KINGDOM_SKILL_ICON_PATHS) == {
         'gold_production',
         'gold_vault',
+        'main_booster_production',
+        'side_booster_production',
         'shield_cost_reduction',
         'core_protection',
     }

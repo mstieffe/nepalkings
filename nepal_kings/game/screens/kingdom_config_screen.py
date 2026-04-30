@@ -36,6 +36,7 @@ HANDLED_KINGDOM_CONFIG_ACTIONS = frozenset({
     'rename_cancel',
     'upgrade_skill',
     'collect_kingdom_gold',
+    'collect_kingdom_production',
 })
 
 
@@ -126,6 +127,199 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._gold = gold_int
         if getattr(self.state, 'user_dict', None) is not None:
             self.state.user_dict['gold'] = gold_int
+
+    def _fallback_production_items(self):
+        default_cap = int((self._data or {}).get('vault_default_cap', 50) or 50)
+        vault_cap = int(self._kingdom.get('vault_cap') or 0) if self._kingdom else 0
+        if vault_cap <= 0:
+            vault_cap = default_cap
+        skills = (self._kingdom or {}).get('skills') or {}
+        main_skill = skills.get('main_booster_production') or {}
+        side_skill = skills.get('side_booster_production') or {}
+        return [
+            {
+                'key': 'gold',
+                'kind': 'gold',
+                'label': 'Gold Vault',
+                'skill_key': 'gold_vault',
+                'pending': float((self._kingdom or {}).get('pending_gold', 0) or 0),
+                'capacity': vault_cap,
+                'full': bool((self._kingdom or {}).get('vault_full')),
+                'collectable': int(float((self._kingdom or {}).get('pending_gold', 0) or 0)) > 0,
+                'progress_ratio': 0.0,
+            },
+            {
+                'key': 'main_booster',
+                'kind': 'booster',
+                'label': 'Main Booster Pack',
+                'skill_key': 'main_booster_production',
+                'pending': int((self._kingdom or {}).get('pending_main_boosters', 0) or 0),
+                'capacity': int((self._kingdom or {}).get('main_booster_capacity', 1) or 1),
+                'enabled': int(main_skill.get('level', 0) or 0) > 0,
+                'interval_hours': (self._kingdom or {}).get('main_booster_interval_hours'),
+                'seconds_remaining': (self._kingdom or {}).get('main_booster_seconds_remaining'),
+            },
+            {
+                'key': 'side_booster',
+                'kind': 'booster',
+                'label': 'Side Booster Pack',
+                'skill_key': 'side_booster_production',
+                'pending': int((self._kingdom or {}).get('pending_side_boosters', 0) or 0),
+                'capacity': int((self._kingdom or {}).get('side_booster_capacity', 1) or 1),
+                'enabled': int(side_skill.get('level', 0) or 0) > 0,
+                'interval_hours': (self._kingdom or {}).get('side_booster_interval_hours'),
+                'seconds_remaining': (self._kingdom or {}).get('side_booster_seconds_remaining'),
+            },
+        ]
+
+    def _production_items(self):
+        items = (self._kingdom or {}).get('production_items') or []
+        if items:
+            return items
+        return self._fallback_production_items()
+
+    def _format_seconds(self, seconds):
+        if seconds is None:
+            return ''
+        try:
+            seconds = max(0, int(seconds or 0))
+        except (TypeError, ValueError):
+            return ''
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        if hours >= 24:
+            days = hours // 24
+            rem = hours % 24
+            return f'{days}d {rem}h'
+        if hours > 0:
+            return f'{hours}h {minutes}m'
+        return f'{minutes}m'
+
+    def _draw_production_item_row(self, item, row):
+        key = item.get('key')
+        skill_key = item.get('skill_key')
+        icon = self._icons.get('gold_vault' if key == 'gold' else skill_key)
+        icon_sz = min(34, row.h - 12)
+        icon_x = row.x + 8
+        body_x = icon_x + icon_sz + 10
+        if icon and icon_sz > 0:
+            self.window.blit(pygame.transform.smoothscale(icon, (icon_sz, icon_sz)),
+                             (icon_x, row.y + (row.h - icon_sz) // 2))
+
+        title = item.get('label') or key
+        pending = float(item.get('pending') or 0)
+        capacity = float(item.get('capacity') or 0)
+        is_full = bool(item.get('full')) or (capacity > 0 and pending >= capacity)
+        title_clr = settings.KINGDOM_CONFIG_GOOD_CLR if is_full and key != 'gold' else settings.KINGDOM_CONFIG_TEXT_CLR
+        title_surf = self._small_font.render(title, True, title_clr)
+        self.window.blit(title_surf, (body_x, row.y + 5))
+
+        bar_x = body_x
+        bar_y = row.y + 28
+        bar_w = max(40, row.right - bar_x - 10)
+        bar_rect = pygame.Rect(bar_x, bar_y, bar_w, max(7, settings.KINGDOM_VAULT_BAR_H - 3))
+        ratio = max(0.0, min(1.0, float(item.get('progress_ratio', 0) or 0)))
+        if capacity > 0 and key == 'gold':
+            ratio = max(0.0, min(1.0, pending / capacity))
+        elif capacity > 0 and pending > 0:
+            ratio = max(ratio, min(1.0, pending / capacity))
+        pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_TRACK_CLR,
+                         bar_rect, border_radius=4)
+        if ratio > 0:
+            if ratio >= 1.0:
+                fill_clr = settings.KINGDOM_VAULT_BAR_FULL_CLR
+            elif ratio >= settings.KINGDOM_VAULT_NEAR_FULL_RATIO:
+                fill_clr = settings.KINGDOM_VAULT_BAR_NEAR_CLR
+            else:
+                fill_clr = settings.KINGDOM_VAULT_BAR_FILL_CLR
+            pygame.draw.rect(self.window, fill_clr,
+                             pygame.Rect(bar_rect.x, bar_rect.y,
+                                         max(2, int(bar_rect.w * ratio)), bar_rect.h),
+                             border_radius=4)
+        pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_BORDER_CLR,
+                         bar_rect, 1, border_radius=4)
+
+        if key == 'gold':
+            cap_int = int(capacity or 0)
+            amount_text = f'{int(pending)} / {cap_int} gold'
+            amount_surf = self._tiny_font.render(amount_text, True, settings.KINGDOM_CONFIG_TEXT_CLR)
+            self.window.blit(amount_surf, (body_x + title_surf.get_width() + 10, row.y + 7))
+
+            raw_rate = float(self._kingdom.get('raw_gold_rate', 0) or 0)
+            effective_rate = float(self._kingdom.get('effective_gold_rate', raw_rate) or raw_rate)
+            rate_per_hour = float(self._kingdom.get('gold_rate_per_hour', 0) or 0)
+            live_rate = rate_per_hour if rate_per_hour > 0 else effective_rate
+            gain = max(0.0, live_rate - raw_rate)
+            rate_y = min(bar_rect.bottom + 2, row.bottom - self._tiny_font.get_height() - 2)
+            rate_base = self._tiny_font.render(
+                f'Production: {raw_rate:.1f} gold/hr',
+                True,
+                settings.KINGDOM_CONFIG_HIGHLIGHT,
+            )
+            rate_bonus = self._tiny_font.render(
+                f' +{gain:.1f}',
+                True,
+                settings.KINGDOM_CONFIG_GOOD_CLR,
+            )
+            self.window.blit(rate_base, (bar_rect.x, rate_y))
+            self.window.blit(rate_bonus, (bar_rect.x + rate_base.get_width(), rate_y))
+            return
+
+        enabled = bool(item.get('enabled'))
+        interval = item.get('interval_hours')
+        if not enabled:
+            detail = 'Unlock skill to start production'
+            detail_clr = settings.KINGDOM_CONFIG_DIM_CLR
+        elif int(pending) > 0:
+            detail = f'Ready: {int(pending)} / {int(capacity or 1)}'
+            detail_clr = settings.KINGDOM_CONFIG_GOOD_CLR
+        else:
+            remaining = self._format_seconds(item.get('seconds_remaining'))
+            if remaining:
+                detail = f'Ready in {remaining}'
+            elif interval:
+                detail = f'Charging — every {self._format_hours(interval)}'
+            else:
+                detail = 'Charging'
+            detail_clr = settings.KINGDOM_CONFIG_HIGHLIGHT
+        detail_surf = self._tiny_font.render(detail, True, detail_clr)
+        self.window.blit(detail_surf, (bar_rect.x, min(bar_rect.bottom + 2, row.bottom - detail_surf.get_height() - 2)))
+
+    def _draw_vault_panel(self, rect):
+        """General Kingdom Production card: gold vault plus booster packs."""
+        self._draw_panel(rect, 'Kingdom Production')
+        self._collect_btn_rect = None
+        if not self._kingdom:
+            return
+
+        items = self._production_items()
+        collectable = any(
+            (int(float(item.get('pending') or 0)) > 0)
+            for item in items
+        )
+        collect_w = 96
+        collect_rect = pygame.Rect(rect.right - collect_w - 14, rect.y + 10, collect_w, 30)
+        self._collect_btn_rect = collect_rect
+        self._draw_button(collect_rect, 'Collect', 'collect_kingdom_production', None,
+                          disabled=not collectable)
+
+        content_y = rect.y + 44
+        available_h = max(1, rect.bottom - content_y - 8)
+        row_gap = 4
+        row_h = max(42, (available_h - row_gap * (len(items) - 1)) // max(1, len(items)))
+        row_h = min(58, row_h)
+        y = content_y
+        for item in items:
+            row = pygame.Rect(rect.x + 14, y, rect.w - 28, row_h)
+            bg = settings.KINGDOM_CONFIG_CARD_ACTIVE_BG if item.get('full') else settings.KINGDOM_CONFIG_CARD_BG
+            pygame.draw.rect(self.window, bg, row, border_radius=8)
+            self._draw_production_item_row(item, row)
+            y += row_h + row_gap
+
+        if self._kingdom.get('core_protection_active'):
+            badge = self._tiny_font.render('Sanctuary active',
+                                           True, settings.KINGDOM_CONFIG_GOOD_CLR)
+            self.window.blit(badge, (rect.x + 16, rect.bottom - badge.get_height() - 4))
 
     def _fetch_config(self):
         self._loading = True
@@ -289,13 +483,13 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._set_msg('Skill upgraded')
             self._fetch_quote(silent=True)
 
-    def _collect_kingdom_gold(self):
+    def _collect_kingdom_production(self):
         if not self._kingdom:
             return
         kid = self._kingdom['id']
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/{kid}/collect_gold',
+                f'{settings.SERVER_URL}/kingdom/{kid}/collect_production',
                 json={}, timeout=12,
             )
             data = resp.json()
@@ -305,23 +499,49 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         if not data.get('success'):
             self._set_msg(data.get('message', 'Collect failed'))
             return
-        collected = int(data.get('collected', 0) or 0)
+        collected = int(data.get('collected_gold', data.get('collected', 0)) or 0)
+        collected_main = int(data.get('collected_main_boosters', 0) or 0)
+        collected_side = int(data.get('collected_side_boosters', 0) or 0)
         if collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
             self._suppress_next_gold_floater()
         if 'gold' in data:
             self._sync_gold(data['gold'])
         elif 'total_gold' in data:
             self._sync_gold(data['total_gold'])
+        if getattr(self.state, 'user_dict', None) is not None:
+            if 'booster_packs' in data:
+                self.state.user_dict['booster_packs'] = int(data.get('booster_packs') or 0)
+            if 'booster_packs_side' in data:
+                self.state.user_dict['booster_packs_side'] = int(data.get('booster_packs_side') or 0)
         if self._kingdom is not None:
             if 'pending_gold' in data:
                 self._kingdom['pending_gold'] = float(data.get('pending_gold') or 0.0)
             if 'vault_cap' in data:
                 self._kingdom['vault_cap'] = int(data.get('vault_cap') or 0)
+            if 'production' in data:
+                self._kingdom['production'] = data.get('production') or {}
+            if 'production_items' in data:
+                self._kingdom['production_items'] = data.get('production_items') or []
+            for key in ('pending_main_boosters', 'pending_side_boosters'):
+                if key in data:
+                    self._kingdom[key] = int(data.get(key) or 0)
         # Refresh shield quote so price reflects current gold / kingdom state.
         self._fetch_quote(silent=True)
         if collected > 0 and self._collect_btn_rect is not None:
             self._spawn_collect_floater(collected, self._collect_btn_rect.center)
-            self._set_msg(f'Collected +{collected}g')
+        parts = []
+        if collected:
+            parts.append(f'+{collected}g')
+        if collected_main:
+            parts.append(f'+{collected_main} main booster')
+        if collected_side:
+            parts.append(f'+{collected_side} side booster')
+        if parts:
+            self._set_msg('Collected ' + ', '.join(parts))
+
+    def _collect_kingdom_gold(self):
+        """Backward-compatible handler name used by existing button tests."""
+        self._collect_kingdom_production()
 
     def _spawn_collect_floater(self, amount, pos, *, delay_ms=0):
         font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
@@ -421,8 +641,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     self._start_rename()
                 elif action == 'upgrade_skill':
                     self._upgrade_skill(value)
-                elif action == 'collect_kingdom_gold':
-                    self._collect_kingdom_gold()
+                elif action in ('collect_kingdom_gold', 'collect_kingdom_production'):
+                    self._collect_kingdom_production()
                 return
 
     def _handle_rename_event(self, event):
@@ -782,6 +1002,16 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return skill.get('next_bonus', 0) or 0
         return 0
 
+    @staticmethod
+    def _format_hours(value):
+        try:
+            value = float(value or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if abs(value - round(value)) < 1e-6:
+            return f'{int(round(value))}h'
+        return f'{value:.1f}h'
+
     def _skill_effect_text(self, key, skill):
         level = int(skill.get('level', 0) or 0)
         max_level = int(skill.get('max_level', 5) or 5)
@@ -800,6 +1030,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             next_cap = int(next_value) if level < max_level else current_cap
             current_text = f'cap {current_cap}'
             next_text = f'cap {next_cap}'
+        elif key in ('main_booster_production', 'side_booster_production'):
+            current_text = 'disabled' if level <= 0 else f'every {self._format_hours(current)}'
+            next_text = f'every {self._format_hours(next_value)}'
         elif key == 'core_protection':
             current_text = f'protect {int(current)} land' + ('s' if int(current) != 1 else '')
             next_text = f'protect {int(next_value)} land' + ('s' if int(next_value) != 1 else '')
@@ -1065,104 +1298,6 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._draw_button(btn, label, 'upgrade_skill', key, disabled=disabled)
             y += row_step
 
-    def _draw_vault_panel(self, rect):
-        """Standalone Gold Vault card.
-
-        Pending gold and the per-hour rate displayed here are computed lazily
-        on every ``/kingdom/config`` fetch (see ``serialize_kingdom_config``):
-        the server applies elapsed-time accrual against the vault cap when it
-        serializes the kingdom, so the values are always fresh as of the
-        most recent fetch \u2014 no background ticker is required.
-        """
-        self._draw_panel(rect, 'Gold Vault')
-        self._collect_btn_rect = None
-        if not self._kingdom:
-            return
-
-        pending = float(self._kingdom.get('pending_gold', 0) or 0)
-        default_cap = int((self._data or {}).get('vault_default_cap', 50) or 50)
-        vault_cap = int(self._kingdom.get('vault_cap') or 0)
-        if vault_cap <= 0:
-            vault_cap = default_cap
-        rate_per_hour = float(self._kingdom.get('gold_rate_per_hour', 0) or 0)
-
-        # Coin/vault icon on the left of the card.
-        icon = self._icons.get('gold_vault')
-        icon_sz = min(48, rect.h - 60)
-        icon_pad_x = rect.x + 14
-        body_x = icon_pad_x
-        if icon and icon_sz > 0:
-            self.window.blit(
-                pygame.transform.smoothscale(icon, (icon_sz, icon_sz)),
-                (icon_pad_x, rect.y + 44))
-            body_x = icon_pad_x + icon_sz + 12
-
-        # Vault progress bar (pending / cap), with collect button on the right.
-        collect_w = 96
-        bar_y = rect.y + 50
-        bar_rect = pygame.Rect(body_x, bar_y,
-                               rect.right - body_x - collect_w - 22,
-                               settings.KINGDOM_VAULT_BAR_H)
-        pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_TRACK_CLR,
-                         bar_rect, border_radius=4)
-        ratio = max(0.0, min(1.0, pending / float(vault_cap))) if vault_cap > 0 else 0.0
-        if ratio >= 1.0:
-            fill_clr = settings.KINGDOM_VAULT_BAR_FULL_CLR
-        elif ratio >= settings.KINGDOM_VAULT_NEAR_FULL_RATIO:
-            fill_clr = settings.KINGDOM_VAULT_BAR_NEAR_CLR
-        else:
-            fill_clr = settings.KINGDOM_VAULT_BAR_FILL_CLR
-        if ratio > 0:
-            fill_w = max(2, int(bar_rect.w * ratio))
-            pygame.draw.rect(self.window, fill_clr,
-                             pygame.Rect(bar_rect.x, bar_rect.y,
-                                         fill_w, bar_rect.h),
-                             border_radius=4)
-        pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_BORDER_CLR,
-                         bar_rect, 1, border_radius=4)
-        vault_label = f'{int(pending)} / {vault_cap} gold'
-        vault_surf = self._small_font.render(vault_label, True,
-                                             settings.KINGDOM_CONFIG_TEXT_CLR)
-        self.window.blit(vault_surf, (bar_rect.x, bar_rect.bottom + 4))
-
-        # Production rate (effective and base).
-        raw_rate = float(self._kingdom.get('raw_gold_rate', 0) or 0)
-        effective_rate = float(self._kingdom.get('effective_gold_rate', raw_rate) or raw_rate)
-        # Prefer the dedicated gold_rate_per_hour (skill-multiplied) when set,
-        # falling back to the kingdom-wide effective rate.
-        live_rate = rate_per_hour if rate_per_hour > 0 else effective_rate
-        gain = max(0.0, live_rate - raw_rate)
-        rate_y = bar_rect.bottom + 4 + vault_surf.get_height() + 2
-        rate_base = self._tiny_font.render(
-            f'Production: {raw_rate:.1f} gold/hr',
-            True,
-            settings.KINGDOM_CONFIG_HIGHLIGHT,
-        )
-        rate_bonus = self._tiny_font.render(
-            f' +{gain:.1f}',
-            True,
-            settings.KINGDOM_CONFIG_GOOD_CLR,
-        )
-        self.window.blit(rate_base, (bar_rect.x, rate_y))
-        self.window.blit(rate_bonus, (bar_rect.x + rate_base.get_width(), rate_y))
-        rate_line_h = max(rate_base.get_height(), rate_bonus.get_height())
-
-        # Collect button (right-aligned).
-        collect_rect = pygame.Rect(bar_rect.right + 12, bar_rect.y - 4,
-                                   collect_w, 30)
-        self._collect_btn_rect = collect_rect
-        self._draw_button(collect_rect, 'Collect', 'collect_kingdom_gold', None,
-                          disabled=int(pending) <= 0)
-
-        # Sanctuary badge for active core_protection.
-        if self._kingdom.get('core_protection_active'):
-            badge_y = (bar_rect.bottom + 4
-                       + vault_surf.get_height() + 2
-                       + rate_line_h + 2)
-            badge = self._tiny_font.render('Sanctuary active',
-                                           True, settings.KINGDOM_CONFIG_GOOD_CLR)
-            self.window.blit(badge, (bar_rect.x, badge_y))
-
     def _layout_rects(self):
         self._box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
         xsz = int(0.028 * _SH)
@@ -1187,9 +1322,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         content_h = max(1, content_bottom - content_top)
         shield_h = min(settings.KINGDOM_CONFIG_SHIELD_H, max(92, int(content_h * 0.24)))
         card_h = max(82, (content_h - shield_h - gap * 3) // 3)
-        # Right column splits into a dedicated Gold Vault card on top and the
+        # Right column splits into a Kingdom Production card on top and the
         # Skills/Level panel below.
-        vault_h = max(120, int(content_h * 0.22))
+        vault_h = max(210, int(content_h * 0.34))
         # Header pill spans the content row, leaving clearance for the X.
         header_right = _BOX_X + _BOX_W - _BOX_PAD - xsz - xmargin
         header_rect = pygame.Rect(content_x, header_y,

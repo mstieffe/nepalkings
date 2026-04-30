@@ -784,6 +784,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         num_kingdoms = len(my_kingdoms)
         pending_total = 0.0
         collectable_total = 0
+        collectable_main_boosters = 0
+        collectable_side_boosters = 0
         any_full = False
         any_near_full = False
         near_ratio = float(getattr(settings, 'KINGDOM_VAULT_NEAR_FULL_RATIO', 0.80))
@@ -798,6 +800,16 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     any_full = True
                 elif ratio >= near_ratio:
                     any_near_full = True
+            production = k.get('production') if isinstance(k.get('production'), dict) else {}
+            main_item = production.get('main_booster') if isinstance(production.get('main_booster'), dict) else {}
+            side_item = production.get('side_booster') if isinstance(production.get('side_booster'), dict) else {}
+            main_pending = int(main_item.get('pending', k.get('pending_main_boosters') or 0) or 0)
+            side_pending = int(side_item.get('pending', k.get('pending_side_boosters') or 0) or 0)
+            collectable_main_boosters += main_pending
+            collectable_side_boosters += side_pending
+            # NB: ``any_full`` only signals "gold production is stalled".
+            # Booster packs being ready is normal/desired, not a warning,
+            # so we deliberately do not set ``any_full`` for boosters.
 
         base_rate = float(rate or 0)
         bonus_rate = max(0.0, float(effective_rate or 0) - base_rate)
@@ -845,8 +857,19 @@ class KingdomScreen(MenuScreenMixin, Screen):
             # Server collects ``int(pending)`` per kingdom, then sums those
             # integers. Mirror that here so the button amount reflects what
             # would actually be collected right now.
-            collectable = collectable_total > 0
-            label = f'Collect All: {collectable_total}g'
+            collectable = (
+                collectable_total > 0
+                or collectable_main_boosters > 0
+                or collectable_side_boosters > 0
+            )
+            parts = []
+            if collectable_total > 0:
+                parts.append(f'{collectable_total}g')
+            if collectable_main_boosters:
+                parts.append(f'{collectable_main_boosters} main')
+            if collectable_side_boosters:
+                parts.append(f'{collectable_side_boosters} side')
+            label = 'Collect All' if not parts else 'Collect All: ' + ' + '.join(parts)
             if any_full:
                 label += '  (FULL!)'
             btn_font = self._nav_font
@@ -1019,37 +1042,48 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self.state.screen = 'game_menu'
 
     def _collect_all_gold(self):
-        """POST to /kingdom/collect_gold_all and spawn a floating-text burst."""
+        """POST to collect all kingdom production and spawn feedback."""
         if not self._collect_all_rect:
             return
         try:
             resp = requests.post(
-                f'{settings.SERVER_URL}/kingdom/collect_gold_all', timeout=15)
+                f'{settings.SERVER_URL}/kingdom/collect_production_all', timeout=15)
             if resp.status_code != 200:
-                logger.error(f'collect_gold_all failed: {resp.status_code}')
+                logger.error(f'collect_production_all failed: {resp.status_code}')
                 return
             data = resp.json() or {}
         except Exception as exc:
-            logger.error(f'collect_gold_all error: {exc}')
+            logger.error(f'collect_production_all error: {exc}')
             return
 
         gold_after = data.get('gold', data.get('total_gold'))
         total_collected = int(round(float(
-            data.get('collected_total', data.get('collected') or 0)
+            data.get('collected_gold_total', data.get('collected_total', data.get('collected') or 0))
         )))
+        main_collected = int(data.get('collected_main_boosters_total', 0) or 0)
+        side_collected = int(data.get('collected_side_boosters_total', 0) or 0)
         if total_collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
             # Keep collect feedback anchored to the clicked Collect-All button
             # instead of duplicating it at the top-left HUD gold widget.
             self._suppress_next_gold_floater()
         if gold_after is not None and getattr(self.state, 'user_dict', None) is not None:
             self.state.user_dict['gold'] = int(gold_after)
+        if getattr(self.state, 'user_dict', None) is not None:
+            if 'booster_packs' in data:
+                self.state.user_dict['booster_packs'] = int(data.get('booster_packs') or 0)
+            if 'booster_packs_side' in data:
+                self.state.user_dict['booster_packs_side'] = int(data.get('booster_packs_side') or 0)
 
         breakdown = data.get('kingdoms') or []
         if total_collected <= 0 and breakdown:
             total_collected = sum(
-                int(round(float(entry.get('collected') or 0)))
+                int(round(float(entry.get('collected_gold', entry.get('collected') or 0) or 0)))
                 for entry in breakdown
             )
+            main_collected = sum(int(entry.get('collected_main_boosters') or 0)
+                                 for entry in breakdown)
+            side_collected = sum(int(entry.get('collected_side_boosters') or 0)
+                                 for entry in breakdown)
         center = self._collect_all_rect.center
         rise_px = int(getattr(settings, 'COLLECT_FLOAT_RISE_PX',
                               int(0.07 * _SH)))
@@ -1064,6 +1098,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 rise_px=rise_px,
                 font=self._collect_float_font,
             ))
+        if main_collected or side_collected:
+            parts = []
+            if main_collected:
+                parts.append(f'+{main_collected} main booster')
+            if side_collected:
+                parts.append(f'+{side_collected} side booster')
+            if hasattr(self.state, 'set_msg'):
+                self.state.set_msg('Collected ' + ', '.join(parts))
         # Refresh map data so vault bars / pending totals update.
         # Reset the floater tick after the blocking reload so network latency
         # does not instantly age out the newly added burst.

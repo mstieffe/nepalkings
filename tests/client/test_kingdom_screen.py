@@ -476,7 +476,7 @@ class TestKingdomCollectAllFloater:
         )
         screen._suppress_next_gold_floater = MagicMock()
         screen._load_map = MagicMock()
-        screen.state = SimpleNamespace(user_dict={'gold': 100})
+        screen.state = SimpleNamespace(user_dict={'gold': 100}, set_msg=MagicMock())
         return KingdomScreen, screen
 
     def test_collect_all_spawns_floater_from_collect_button_center(self, monkeypatch):
@@ -542,6 +542,32 @@ class TestKingdomCollectAllFloater:
         assert item.text == '+70g'
         assert (item._x0, item._y0) == screen._collect_all_rect.center
         assert item._delay_ms == 0
+
+    def test_collect_all_syncs_booster_counts(self, monkeypatch):
+        import game.screens.kingdom_screen as module
+        KingdomScreen, screen = self._screen()
+        monkeypatch.setattr(module, 'FloatingText', _DummyFloatingText)
+
+        requested = []
+        monkeypatch.setattr(
+            module.requests,
+            'post',
+            lambda url, timeout=0: requested.append(url) or _Response({
+                'gold': 100,
+                'collected_gold_total': 0,
+                'collected_main_boosters_total': 1,
+                'collected_side_boosters_total': 2,
+                'booster_packs': 4,
+                'booster_packs_side': 5,
+            }),
+        )
+
+        KingdomScreen._collect_all_gold(screen)
+
+        assert requested and requested[0].endswith('/kingdom/collect_production_all')
+        assert screen.state.user_dict['booster_packs'] == 4
+        assert screen.state.user_dict['booster_packs_side'] == 5
+        screen.state.set_msg.assert_called_once()
 
 
 class TestKingdomInfoBarHeader:
@@ -622,5 +648,50 @@ class TestKingdomInfoBarHeader:
 
         KingdomScreen._draw_info_bar(screen)
 
-        assert ('Collect All: 0g', (240, 230, 180)) in captured_nav
+        assert ('Collect All', (240, 230, 180)) in captured_nav
         assert screen._collect_all_enabled is False
+
+    def test_info_bar_collect_all_enables_for_ready_booster(self):
+        from game.screens.kingdom_screen import KingdomScreen
+        from config import settings
+
+        screen = KingdomScreen.__new__(KingdomScreen)
+        screen.window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        screen._header_rect = pygame.Rect(40, 40, 900, 120)
+        screen._btn_close_rect = pygame.Rect(screen._header_rect.right - 30, 42, 28, 28)
+        title_font = settings.get_font(settings.SUB_SCREEN_TITLE_FONT_SIZE, bold=True)
+        screen._title_surf = title_font.render('Kingdom', True, settings.SUB_SCREEN_TITLE_CLR)
+        screen._cooldown = 0
+        screen._collect_all_rect = None
+        screen._collect_all_enabled = False
+        screen._map_data = {
+            'my_total_gold_rate': 0.0,
+            'my_effective_gold_rate': 0.0,
+            'my_lands_count': 1,
+            'my_kingdoms': [
+                {
+                    'pending_gold': 0.0,
+                    'vault_cap': 50.0,
+                    'production': {
+                        'main_booster': {'pending': 1, 'full': True},
+                        'side_booster': {'pending': 0},
+                    },
+                },
+            ],
+        }
+
+        screen._info_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE)
+        captured_nav = []
+        original_nav_font = settings.get_font(settings.KINGDOM_INFO_FONT_SIZE, bold=True)
+
+        class _RecordingNavFont:
+            def render(self, text, antialias, color):
+                captured_nav.append((text, tuple(color)))
+                return original_nav_font.render(text, antialias, color)
+
+        screen._nav_font = _RecordingNavFont()
+
+        KingdomScreen._draw_info_bar(screen)
+
+        assert any(text == 'Collect All: 1 main' for text, _ in captured_nav)
+        assert screen._collect_all_enabled is True

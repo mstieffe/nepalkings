@@ -59,6 +59,22 @@ class TestKingdomConfigRoutes:
         db.session.refresh(land)
         assert land.kingdom_id == kingdom['id']
 
+    def test_booster_production_skill_definitions_are_exposed(self, client, db,
+                                                             two_users,
+                                                             auth_headers_user1):
+        u1, _ = two_users
+        _add_land(db, 0, 0, owner_id=u1.id)
+
+        rv = client.get('/kingdom/config', headers=auth_headers_user1)
+
+        assert rv.status_code == 200
+        data = rv.get_json()
+        skills = data['kingdoms'][0]['skills']
+        assert skills['main_booster_production']['effect_values'] == [96, 48, 24, 12, 6]
+        assert skills['side_booster_production']['effect_values'] == [96, 48, 24, 12, 6]
+        assert skills['main_booster_production']['icon_path'].startswith('img/kingdom/skill_icons/')
+        assert data['booster_production_config']['main_booster']['capacity'] == 1
+
     def test_skill_upgrade_is_permanent_and_costs_skill_points(self, client, db, two_users,
                                                                auth_headers_user1):
         u1, _ = two_users
@@ -345,6 +361,47 @@ class TestKingdomConfigRoutes:
         assert 'gold_rate_per_hour' in payload
         assert payload['pending_gold'] == payload['vault_pending']
         assert payload['gold_rate_per_hour'] == payload['vault_rate_per_hour']
+
+    def test_serialize_kingdom_config_does_not_mutate_booster_accrual(self, db, two_users):
+        u1, _ = two_users
+        _add_land(db, 0, 0, owner_id=u1.id, gold_rate=0.0)
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+        from kingdom_service import kingdom_skill_allocations
+        allocations = kingdom_skill_allocations(kingdom.id)
+        allocations['main_booster_production'].level = 1
+        kingdom.pending_main_boosters = 0
+        kingdom.last_main_booster_collection_at = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=96)
+        )
+        db.session.commit()
+
+        pending_before = kingdom.pending_main_boosters
+        last_before = kingdom.last_main_booster_collection_at
+
+        payload = serialize_kingdom_config(kingdom)
+
+        assert payload['pending_main_boosters'] == 1
+        assert payload['production']['main_booster']['pending'] == 1
+        assert kingdom.pending_main_boosters == pending_before
+        assert kingdom.last_main_booster_collection_at == last_before
+
+    def test_booster_skill_upgrade_starts_timer_at_upgrade_time(self, client, db,
+                                                               two_users,
+                                                               auth_headers_user1):
+        u1, _ = two_users
+        _add_land(db, 0, 0, owner_id=u1.id)
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+        now = datetime(2026, 4, 30, 10, 0, 0)
+
+        with patch('routes.kingdom._utcnow', return_value=now):
+            rv = client.post(f'/kingdom/config/{kingdom.id}/skills/upgrade',
+                             headers=auth_headers_user1,
+                             json={'skill_key': 'main_booster_production'})
+
+        assert rv.status_code == 200
+        db.session.refresh(kingdom)
+        assert kingdom.pending_main_boosters == 0
+        assert kingdom.last_main_booster_collection_at == now
 
     def test_conquer_game_does_not_serialize_defender_kingdom_skills(self, db, two_users):
         """Conquer battles should not expose passive kingdom skills as battle info."""

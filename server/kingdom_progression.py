@@ -7,6 +7,7 @@ All values here are tunable.  The skill roster is data-driven via the
 SP cost is ``cost_multiplier * KINGDOM_SKILL_BASE_COST_CURVE[level - 1]``.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -26,6 +27,69 @@ KINGDOM_SKILL_BASE_COST_CURVE: Tuple[int, ...] = (1, 2, 4, 8, 16)
 
 # Vault capacity when the gold_vault skill is at level 0 (i.e. not invested).
 KINGDOM_VAULT_DEFAULT_CAP = 50
+
+# Booster production skills.  Level 0 is disabled; level 1 uses the base
+# interval, and every additional level multiplies the interval by the halving
+# factor.  Main and side packs are intentionally separate config knobs so they
+# can diverge later without another schema/API change.
+KINGDOM_MAIN_BOOSTER_PRODUCTION_BASE_HOURS = float(
+    os.getenv('KINGDOM_MAIN_BOOSTER_PRODUCTION_BASE_HOURS', '96')
+)
+KINGDOM_MAIN_BOOSTER_PRODUCTION_HALVING_FACTOR = float(
+    os.getenv('KINGDOM_MAIN_BOOSTER_PRODUCTION_HALVING_FACTOR', '0.5')
+)
+KINGDOM_MAIN_BOOSTER_PRODUCTION_CAPACITY = int(
+    os.getenv('KINGDOM_MAIN_BOOSTER_PRODUCTION_CAPACITY', '1')
+)
+KINGDOM_SIDE_BOOSTER_PRODUCTION_BASE_HOURS = float(
+    os.getenv('KINGDOM_SIDE_BOOSTER_PRODUCTION_BASE_HOURS', '96')
+)
+KINGDOM_SIDE_BOOSTER_PRODUCTION_HALVING_FACTOR = float(
+    os.getenv('KINGDOM_SIDE_BOOSTER_PRODUCTION_HALVING_FACTOR', '0.5')
+)
+KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY = int(
+    os.getenv('KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY', '1')
+)
+
+
+def _nice_number(value: float):
+    """Return an int for whole-number floats, otherwise a rounded float."""
+    value = float(value)
+    rounded = round(value)
+    if abs(value - rounded) < 1e-9:
+        return int(rounded)
+    return round(value, 3)
+
+
+def booster_production_interval_hours(item_key: str, level: int):
+    """Production interval in hours for a booster item at ``level``.
+
+    ``item_key`` is ``'main_booster'`` or ``'side_booster'``.  Level 0 returns
+    0, which callers treat as disabled.
+    """
+    try:
+        level = int(level or 0)
+    except (TypeError, ValueError):
+        level = 0
+    if level <= 0:
+        return 0
+    if item_key == 'main_booster':
+        base = KINGDOM_MAIN_BOOSTER_PRODUCTION_BASE_HOURS
+        factor = KINGDOM_MAIN_BOOSTER_PRODUCTION_HALVING_FACTOR
+    elif item_key == 'side_booster':
+        base = KINGDOM_SIDE_BOOSTER_PRODUCTION_BASE_HOURS
+        factor = KINGDOM_SIDE_BOOSTER_PRODUCTION_HALVING_FACTOR
+    else:
+        return 0
+    return _nice_number(max(0.0, float(base) * (float(factor) ** (level - 1))))
+
+
+def booster_production_effect_values(item_key: str, max_level: int = 5) -> Tuple[float, ...]:
+    """Return interval-hour effect values for booster-production skill levels."""
+    return tuple(
+        booster_production_interval_hours(item_key, level)
+        for level in range(1, int(max_level) + 1)
+    )
 
 
 @dataclass(frozen=True)
@@ -50,6 +114,7 @@ class KingdomSkillDef:
         * gold_vault: vault capacity in gold
         * shield_cost_reduction: fractional shield-cost discount (0.05 = -5%)
         * core_protection: number of lands shielded at threshold
+        * *_booster_production: production interval in hours
     icon_path
         Client-side asset key (rendered via ``KINGDOM_SKILL_ICON_PATHS`` on
         the client).  Stored here for completeness/server payloads.
@@ -84,7 +149,7 @@ KINGDOM_SKILL_DEFINITIONS: Tuple[KingdomSkillDef, ...] = (
         max_level=5,
         cost_multiplier=1,
         effect_values=(0.03, 0.06, 0.10, 0.15, 0.22),
-        icon_path='img/dialogue_box/icons/gold.png',
+        icon_path='img/kingdom/skill_icons/gold.png',
     ),
     KingdomSkillDef(
         key='gold_vault',
@@ -94,7 +159,35 @@ KINGDOM_SKILL_DEFINITIONS: Tuple[KingdomSkillDef, ...] = (
         max_level=5,
         cost_multiplier=1,
         effect_values=(100, 250, 500, 1000, 2000),
-        icon_path='img/dialogue_box/icons/coin.png',
+        icon_path='img/kingdom/skill_icons/gold_vault.png',
+    ),
+    KingdomSkillDef(
+        key='main_booster_production',
+        name='Main Booster Production',
+        description=(
+            f'Produces one main-card booster pack on a timer. '
+            f'Storage capacity is {KINGDOM_MAIN_BOOSTER_PRODUCTION_CAPACITY} '
+            f'pack; pending packs do not carry over and the timer restarts '
+            f'on collection.'
+        ),
+        max_level=5,
+        cost_multiplier=1,
+        effect_values=booster_production_effect_values('main_booster', 5),
+        icon_path='img/kingdom/skill_icons/main_booster_production.png',
+    ),
+    KingdomSkillDef(
+        key='side_booster_production',
+        name='Side Booster Production',
+        description=(
+            f'Produces one side-card booster pack on a timer. '
+            f'Storage capacity is {KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY} '
+            f'pack; pending packs do not carry over and the timer restarts '
+            f'on collection.'
+        ),
+        max_level=5,
+        cost_multiplier=1,
+        effect_values=booster_production_effect_values('side_booster', 5),
+        icon_path='img/kingdom/skill_icons/side_booster_production.png',
     ),
     KingdomSkillDef(
         key='shield_cost_reduction',
@@ -103,7 +196,7 @@ KINGDOM_SKILL_DEFINITIONS: Tuple[KingdomSkillDef, ...] = (
         max_level=5,
         cost_multiplier=2,
         effect_values=(0.05, 0.10, 0.16, 0.23, 0.32),
-        icon_path='img/resource_icons/shield.png',
+        icon_path='img/kingdom/skill_icons/shield.png',
     ),
     KingdomSkillDef(
         key='core_protection',
@@ -113,7 +206,7 @@ KINGDOM_SKILL_DEFINITIONS: Tuple[KingdomSkillDef, ...] = (
         max_level=5,
         cost_multiplier=3,
         effect_values=(1, 2, 3, 4, 5),
-        icon_path='img/battle/icons/block.png',
+        icon_path='img/kingdom/skill_icons/core_protection.png',
     ),
 )
 

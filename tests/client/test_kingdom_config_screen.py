@@ -246,9 +246,18 @@ class TestKingdomConfigInteractions:
             lambda url, json=None, timeout=0: _Response({
                 'success': True,
                 'collected': 12,
+                'collected_gold': 12,
+                'collected_main_boosters': 1,
+                'collected_side_boosters': 1,
                 'pending_gold': 0.5,
                 'vault_cap': 50,
                 'gold': 112,
+                'booster_packs': 3,
+                'booster_packs_side': 2,
+                'production': {
+                    'main_booster': {'pending': 0},
+                    'side_booster': {'pending': 0},
+                },
             }),
         )
         monkeypatch.setattr(KingdomConfigScreen, '_fetch_quote',
@@ -258,7 +267,10 @@ class TestKingdomConfigInteractions:
 
         assert screen._gold == 112
         assert screen.state.user_dict['gold'] == 112
+        assert screen.state.user_dict['booster_packs'] == 3
+        assert screen.state.user_dict['booster_packs_side'] == 2
         assert screen._kingdom['pending_gold'] == 0.5
+        assert screen._kingdom['production']['main_booster']['pending'] == 0
         screen._suppress_next_gold_floater.assert_called_once_with()
         assert quote_calls == [True]
 
@@ -443,6 +455,44 @@ class TestKingdomConfigInteractions:
         assert 'Current: cap 50' in text
         assert 'Next: cap 100' in text
 
+    def test_skill_effect_text_booster_production_uses_intervals(self):
+        KingdomConfigScreen, screen = _screen_base()
+
+        text = KingdomConfigScreen._skill_effect_text(screen, 'main_booster_production', {
+            'level': 0,
+            'max_level': 5,
+            'effect_values': [96, 48, 24, 12, 6],
+        })
+
+        assert 'Current: disabled' in text
+        assert 'Next: every 96h' in text
+
+    def test_production_panel_collects_when_booster_ready_without_gold(self):
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        kingdom = _kingdom_payload()
+        kingdom['pending_gold'] = 0.0
+        kingdom['vault_cap'] = 50
+        kingdom['production_items'] = [
+            {'key': 'gold', 'kind': 'gold', 'label': 'Gold Vault', 'pending': 0.0,
+             'capacity': 50, 'progress_ratio': 0.0},
+            {'key': 'main_booster', 'kind': 'booster', 'label': 'Main Booster Pack',
+             'skill_key': 'main_booster_production', 'enabled': True, 'pending': 1,
+             'capacity': 1, 'full': True, 'progress_ratio': 1.0},
+            {'key': 'side_booster', 'kind': 'booster', 'label': 'Side Booster Pack',
+             'skill_key': 'side_booster_production', 'enabled': False, 'pending': 0,
+             'capacity': 1, 'progress_ratio': 0.0},
+        ]
+        screen._kingdom = kingdom
+        screen._data = {'vault_default_cap': 50}
+
+        rect = pygame.Rect(20, 20, settings.KINGDOM_CONFIG_LEFT_W, 230)
+        KingdomConfigScreen._draw_vault_panel(screen, rect)
+
+        actions = {action for action, _value, _rect in screen._buttons}
+        assert 'collect_kingdom_production' in actions
+        assert screen._collect_btn_rect is not None
+
     def test_render_registers_skill_and_shield_actions(self):
         KingdomConfigScreen, screen = _screen_base()
         screen._kingdom = _kingdom_payload()
@@ -577,7 +627,7 @@ class TestKingdomConfigInteractions:
 
         # Collect button is present and enabled when pending > 0.
         actions = {action for action, _value, _rect in screen._buttons}
-        assert 'collect_kingdom_gold' in actions
+        assert 'collect_kingdom_production' in actions
         assert screen._collect_btn_rect is not None
         assert ('Production: 20.0 gold/hr', tuple(settings.KINGDOM_CONFIG_HIGHLIGHT)) in rendered_tiny
         assert (' +4.5', tuple(settings.KINGDOM_CONFIG_GOOD_CLR)) in rendered_tiny

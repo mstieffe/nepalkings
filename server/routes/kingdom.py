@@ -69,6 +69,22 @@ def _serialize_skill_definitions():
     return out
 
 
+def _booster_production_config_payload():
+    """Static booster-production constants exposed to the client."""
+    return {
+        'main_booster': {
+            'base_hours': config.KINGDOM_MAIN_BOOSTER_PRODUCTION_BASE_HOURS,
+            'halving_factor': config.KINGDOM_MAIN_BOOSTER_PRODUCTION_HALVING_FACTOR,
+            'capacity': config.KINGDOM_MAIN_BOOSTER_PRODUCTION_CAPACITY,
+        },
+        'side_booster': {
+            'base_hours': config.KINGDOM_SIDE_BOOSTER_PRODUCTION_BASE_HOURS,
+            'halving_factor': config.KINGDOM_SIDE_BOOSTER_PRODUCTION_HALVING_FACTOR,
+            'capacity': config.KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY,
+        },
+    }
+
+
 def _lock_user_for_spend(user_id):
     """Lock the User row before mutating gold to avoid lost-update races.
 
@@ -102,22 +118,23 @@ def _check_rename_rate_limit(user_id):
     return True
 
 
-# ── POST /kingdom/<id>/collect_gold ─────────────────────────────────────────
+# ── POST /kingdom/<id>/collect_gold|collect_production ─────────────────────
 
 @kingdom.route('/<int:kingdom_id>/collect_gold', methods=['POST'])
+@kingdom.route('/<int:kingdom_id>/collect_production', methods=['POST'])
 @require_token
-def collect_kingdom_gold_route(kingdom_id):
-    """Collect this kingdom's pending vault gold into the user's purse.
+def collect_kingdom_production_route(kingdom_id):
+    """Collect this kingdom's ready production into the user's account.
 
-    Gold accrues into ``Kingdom.pending_gold`` over time at the kingdom's
-    effective rate, capped by the gold_vault skill.  This endpoint advances
-    accrual to ``now`` and atomically transfers the full pending balance.
+    Gold uses the vault cap; booster production stores at most one pending
+    main/side pack per kingdom.  The legacy ``collect_gold`` path returns the
+    same gold aliases while also including booster fields for updated clients.
     """
     user = _lock_user_for_spend(g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
 
-    from kingdom_service import (collect_kingdom_gold,
+    from kingdom_service import (collect_kingdom_production,
                                  reconcile_user_kingdoms,
                                  summarize_user_kingdom)
 
@@ -127,34 +144,31 @@ def collect_kingdom_gold_route(kingdom_id):
     if not kingdom_row or kingdom_row.owner_user_id != user.id:
         return jsonify({'error': 'Kingdom not found'}), 404
 
-    collected, cap, gold_after = collect_kingdom_gold(kingdom_row, user, now=_utcnow())
+    result = collect_kingdom_production(kingdom_row, user, now=_utcnow())
     db.session.commit()
 
     return jsonify({
         'success': True,
         'kingdom_id': kingdom_row.id,
-        'collected': int(collected),
-        'pending_gold': float(kingdom_row.pending_gold or 0.0),
-        'vault_cap': int(cap),
-        'gold': int(gold_after),
-        'total_gold': int(gold_after),
+        **result,
         'kingdom': summarize_user_kingdom(user.id, None),
     })
 
 
 @kingdom.route('/collect_gold_all', methods=['POST'])
+@kingdom.route('/collect_production_all', methods=['POST'])
 @require_token
-def collect_gold_all_route():
-    """Collect pending gold from EVERY kingdom owned by the user.
+def collect_production_all_route():
+    """Collect ready production from EVERY kingdom owned by the user.
 
-    Returns one combined ``collected`` total plus a per-kingdom breakdown so
-    the client can stage floating-text animations.
+    Returns one combined gold total plus booster totals and a per-kingdom
+    breakdown so the client can stage floating-text animations.
     """
     user = _lock_user_for_spend(g.user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
 
-    from kingdom_service import (collect_kingdom_gold,
+    from kingdom_service import (collect_kingdom_production,
                                  reconcile_user_kingdoms,
                                  summarize_user_kingdom)
 
@@ -162,26 +176,42 @@ def collect_gold_all_route():
     db.session.flush()
     now = _utcnow()
     breakdown = []
-    total = 0
+    total_gold = 0
+    total_main = 0
+    total_side = 0
     cap_total = 0
     for k in KingdomModel.query.filter_by(owner_user_id=user.id).all():
-        collected, cap, _ = collect_kingdom_gold(k, user, now=now)
-        cap_total += int(cap)
-        total += int(collected)
+        result = collect_kingdom_production(k, user, now=now)
+        cap_total += int(result.get('vault_cap') or 0)
+        collected_gold = int(result.get('collected_gold', result.get('collected') or 0) or 0)
+        collected_main = int(result.get('collected_main_boosters') or 0)
+        collected_side = int(result.get('collected_side_boosters') or 0)
+        total_gold += collected_gold
+        total_main += collected_main
+        total_side += collected_side
         breakdown.append({
             'kingdom_id': k.id,
             'kingdom_name': k.name or f'Kingdom #{k.id}',
-            'collected': int(collected),
-            'vault_cap': int(cap),
+            'collected': collected_gold,
+            'collected_gold': collected_gold,
+            'collected_main_boosters': collected_main,
+            'collected_side_boosters': collected_side,
+            'vault_cap': int(result.get('vault_cap') or 0),
+            'production': result.get('production') or {},
         })
     db.session.commit()
 
     return jsonify({
         'success': True,
-        'collected_total': total,
+        'collected_total': total_gold,
+        'collected_gold_total': total_gold,
+        'collected_main_boosters_total': total_main,
+        'collected_side_boosters_total': total_side,
         'vault_cap_total': cap_total,
         'gold': int(user.gold or 0),
         'total_gold': int(user.gold or 0),
+        'booster_packs': int(user.booster_packs or 0),
+        'booster_packs_side': int(user.booster_packs_side or 0),
         'kingdoms': breakdown,
         'kingdom': summarize_user_kingdom(user.id, None),
     })
@@ -361,6 +391,7 @@ def kingdom_config_list():
         'level_max': int(config.KINGDOM_LEVEL_MAX),
         'skill_points_per_level': int(config.KINGDOM_SKILL_POINTS_PER_LEVEL),
         'vault_default_cap': int(config.KINGDOM_VAULT_DEFAULT_CAP),
+        'booster_production_config': _booster_production_config_payload(),
         'shield_options_hours': getattr(config, 'KINGDOM_SHIELD_DURATION_OPTIONS_HOURS', []),
         'shield_price_per_hour_per_land': getattr(config, 'KINGDOM_SHIELD_PRICE_PER_HOUR_PER_LAND', 0),
         'rename_price_gold': getattr(config, 'KINGDOM_RENAME_PRICE_GOLD', 0),
@@ -389,6 +420,7 @@ def kingdom_config_detail(kingdom_id):
         'level_max': int(config.KINGDOM_LEVEL_MAX),
         'skill_points_per_level': int(config.KINGDOM_SKILL_POINTS_PER_LEVEL),
         'vault_default_cap': int(config.KINGDOM_VAULT_DEFAULT_CAP),
+        'booster_production_config': _booster_production_config_payload(),
         'shield_options_hours': getattr(config, 'KINGDOM_SHIELD_DURATION_OPTIONS_HOURS', []),
         'rename_price_gold': getattr(config, 'KINGDOM_RENAME_PRICE_GOLD', 0),
         'kingdom': serialize_kingdom_config(kingdom_row),
@@ -552,9 +584,17 @@ def kingdom_config_skill_upgrade(kingdom_id):
     if spent + cost > granted:
         return jsonify({'success': False, 'message': 'Not enough skill points'}), 400
 
+    old_level = int(allocation.level or 0)
     allocation.level = next_level
-    allocation.last_upgraded_at = _utcnow()
-    kingdom_row.updated_at = _utcnow()
+    now = _utcnow()
+    allocation.last_upgraded_at = now
+    if old_level <= 0 and skill_key == 'main_booster_production':
+        kingdom_row.pending_main_boosters = 0
+        kingdom_row.last_main_booster_collection_at = now
+    elif old_level <= 0 and skill_key == 'side_booster_production':
+        kingdom_row.pending_side_boosters = 0
+        kingdom_row.last_side_booster_collection_at = now
+    kingdom_row.updated_at = now
     db.session.commit()
 
     return jsonify({
