@@ -629,5 +629,4 @@ class TestKingdomConfigInteractions:
         actions = {action for action, _value, _rect in screen._buttons}
         assert 'collect_kingdom_production' in actions
         assert screen._collect_btn_rect is not None
-        assert ('Production: 20.0 gold/hr', tuple(settings.KINGDOM_CONFIG_HIGHLIGHT)) in rendered_tiny
-        assert (' +4.5', tuple(settings.KINGDOM_CONFIG_GOOD_CLR)) in rendered_tiny
+        assert ('20.0 g/hr (+4.5)', tuple(settings.KINGDOM_CONFIG_HIGHLIGHT)) in rendered_tiny

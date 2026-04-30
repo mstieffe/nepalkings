@@ -75,6 +75,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._btn_close_rect = None
         self._cosmetic_scroll = {'flag': 0, 'border': 0, 'surface': 0}
         self._cosmetic_scroll_areas = {}
+        self._skills_scroll = 0
+        self._skills_scroll_area = None
+        self._skills_content_h = 0
         self._rename_dialog = None
         self._rename_input_rect = None
         self._rename_confirm_rect = None
@@ -196,35 +199,43 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         return f'{minutes}m'
 
     def _draw_production_item_row(self, item, row):
+        """Draw a single production item inside its column-cell.
+
+        Cells are laid out vertically (icon + title on top, progress bar in
+        the middle, amount and detail below) so three items can share one
+        compact row at one-third of the panel width each.
+        """
+        pad = 8
         key = item.get('key')
         skill_key = item.get('skill_key')
         icon = self._icons.get('gold_vault' if key == 'gold' else skill_key)
-        icon_sz = min(34, row.h - 12)
-        icon_x = row.x + 8
-        body_x = icon_x + icon_sz + 10
-        if icon and icon_sz > 0:
+        icon_sz = 22
+        icon_y = row.y + pad
+        if icon:
             self.window.blit(pygame.transform.smoothscale(icon, (icon_sz, icon_sz)),
-                             (icon_x, row.y + (row.h - icon_sz) // 2))
+                             (row.x + pad, icon_y))
 
         title = item.get('label') or key
         pending = float(item.get('pending') or 0)
         capacity = float(item.get('capacity') or 0)
         is_full = bool(item.get('full')) or (capacity > 0 and pending >= capacity)
         title_clr = settings.KINGDOM_CONFIG_GOOD_CLR if is_full and key != 'gold' else settings.KINGDOM_CONFIG_TEXT_CLR
-        title_surf = self._small_font.render(title, True, title_clr)
-        self.window.blit(title_surf, (body_x, row.y + 5))
+        title_text = self._fit_text(title, self._tiny_font,
+                                    max(1, row.w - pad * 2 - icon_sz - 6))
+        title_surf = self._tiny_font.render(title_text, True, title_clr)
+        self.window.blit(title_surf, (row.x + pad + icon_sz + 6, icon_y + 4))
 
-        bar_x = body_x
-        bar_y = row.y + 28
-        bar_w = max(40, row.right - bar_x - 10)
-        bar_rect = pygame.Rect(bar_x, bar_y, bar_w, max(7, settings.KINGDOM_VAULT_BAR_H - 3))
+        bar_y = icon_y + icon_sz + 6
+        bar_rect = pygame.Rect(row.x + pad, bar_y,
+                               max(20, row.w - pad * 2),
+                               max(6, settings.KINGDOM_VAULT_BAR_H - 4))
         ratio = max(0.0, min(1.0, float(item.get('progress_ratio', 0) or 0)))
         if capacity > 0 and key == 'gold':
             ratio = max(0.0, min(1.0, pending / capacity))
         elif capacity > 0 and pending > 0:
             ratio = max(ratio, min(1.0, pending / capacity))
         pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_TRACK_CLR,
-                         bar_rect, border_radius=4)
+                         bar_rect, border_radius=3)
         if ratio > 0:
             if ratio >= 1.0:
                 fill_clr = settings.KINGDOM_VAULT_BAR_FULL_CLR
@@ -235,55 +246,70 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             pygame.draw.rect(self.window, fill_clr,
                              pygame.Rect(bar_rect.x, bar_rect.y,
                                          max(2, int(bar_rect.w * ratio)), bar_rect.h),
-                             border_radius=4)
+                             border_radius=3)
         pygame.draw.rect(self.window, settings.KINGDOM_VAULT_BAR_BORDER_CLR,
-                         bar_rect, 1, border_radius=4)
+                         bar_rect, 1, border_radius=3)
+
+        text_y = bar_rect.bottom + 4
+        max_text_w = max(1, row.w - pad * 2)
 
         if key == 'gold':
             cap_int = int(capacity or 0)
-            amount_text = f'{int(pending)} / {cap_int} gold'
-            amount_surf = self._tiny_font.render(amount_text, True, settings.KINGDOM_CONFIG_TEXT_CLR)
-            self.window.blit(amount_surf, (body_x + title_surf.get_width() + 10, row.y + 7))
+            amount_text = f'{int(pending)} / {cap_int} g'
+            amount_surf = self._tiny_font.render(
+                self._fit_text(amount_text, self._tiny_font, max_text_w),
+                True, settings.KINGDOM_CONFIG_TEXT_CLR)
+            self.window.blit(amount_surf, (row.x + pad, text_y))
 
             raw_rate = float(self._kingdom.get('raw_gold_rate', 0) or 0)
             effective_rate = float(self._kingdom.get('effective_gold_rate', raw_rate) or raw_rate)
             rate_per_hour = float(self._kingdom.get('gold_rate_per_hour', 0) or 0)
             live_rate = rate_per_hour if rate_per_hour > 0 else effective_rate
             gain = max(0.0, live_rate - raw_rate)
-            rate_y = min(bar_rect.bottom + 2, row.bottom - self._tiny_font.get_height() - 2)
-            rate_base = self._tiny_font.render(
-                f'Production: {raw_rate:.1f} gold/hr',
-                True,
-                settings.KINGDOM_CONFIG_HIGHLIGHT,
-            )
-            rate_bonus = self._tiny_font.render(
-                f' +{gain:.1f}',
-                True,
-                settings.KINGDOM_CONFIG_GOOD_CLR,
-            )
-            self.window.blit(rate_base, (bar_rect.x, rate_y))
-            self.window.blit(rate_bonus, (bar_rect.x + rate_base.get_width(), rate_y))
+            rate_text = f'{raw_rate:.1f} g/hr'
+            if gain > 0:
+                rate_text += f' (+{gain:.1f})'
+            rate_text = self._fit_text(rate_text, self._tiny_font, max_text_w)
+            rate_surf = self._tiny_font.render(rate_text, True,
+                                               settings.KINGDOM_CONFIG_HIGHLIGHT)
+            self.window.blit(rate_surf,
+                             (row.x + pad,
+                              text_y + self._tiny_font.get_height() + 1))
             return
 
         enabled = bool(item.get('enabled'))
         interval = item.get('interval_hours')
         if not enabled:
-            detail = 'Unlock skill to start production'
+            amount_text = '—'
+            amount_clr = settings.KINGDOM_CONFIG_DIM_CLR
+            detail = 'Unlock skill to start'
             detail_clr = settings.KINGDOM_CONFIG_DIM_CLR
         elif int(pending) > 0:
-            detail = f'Ready: {int(pending)} / {int(capacity or 1)}'
+            amount_text = f'{int(pending)} / {int(capacity or 1)}'
+            amount_clr = settings.KINGDOM_CONFIG_GOOD_CLR
+            detail = 'Ready'
             detail_clr = settings.KINGDOM_CONFIG_GOOD_CLR
         else:
+            amount_text = f'0 / {int(capacity or 1)}'
+            amount_clr = settings.KINGDOM_CONFIG_TEXT_CLR
             remaining = self._format_seconds(item.get('seconds_remaining'))
             if remaining:
                 detail = f'Ready in {remaining}'
             elif interval:
-                detail = f'Charging — every {self._format_hours(interval)}'
+                detail = f'every {self._format_hours(interval)}'
             else:
                 detail = 'Charging'
             detail_clr = settings.KINGDOM_CONFIG_HIGHLIGHT
-        detail_surf = self._tiny_font.render(detail, True, detail_clr)
-        self.window.blit(detail_surf, (bar_rect.x, min(bar_rect.bottom + 2, row.bottom - detail_surf.get_height() - 2)))
+        amount_surf = self._tiny_font.render(
+            self._fit_text(amount_text, self._tiny_font, max_text_w),
+            True, amount_clr)
+        self.window.blit(amount_surf, (row.x + pad, text_y))
+        detail_surf = self._tiny_font.render(
+            self._fit_text(detail, self._tiny_font, max_text_w),
+            True, detail_clr)
+        self.window.blit(detail_surf,
+                         (row.x + pad,
+                          text_y + self._tiny_font.get_height() + 1))
 
     def _draw_vault_panel(self, rect):
         """General Kingdom Production card: gold vault plus booster packs."""
@@ -298,23 +324,25 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             for item in items
         )
         collect_w = 96
-        collect_rect = pygame.Rect(rect.right - collect_w - 14, rect.y + 10, collect_w, 30)
+        collect_rect = pygame.Rect(rect.right - collect_w - 14, rect.y + 10, collect_w, 28)
         self._collect_btn_rect = collect_rect
         self._draw_button(collect_rect, 'Collect', 'collect_kingdom_production', None,
                           disabled=not collectable)
 
-        content_y = rect.y + 44
+        content_y = rect.y + 42
         available_h = max(1, rect.bottom - content_y - 8)
-        row_gap = 4
-        row_h = max(42, (available_h - row_gap * (len(items) - 1)) // max(1, len(items)))
-        row_h = min(58, row_h)
-        y = content_y
+        n = max(1, len(items))
+        col_gap = 6
+        total_gap = col_gap * (n - 1)
+        cell_w = max(1, (rect.w - 28 - total_gap) // n)
+        cell_h = min(available_h, 92)
+        x = rect.x + 14
         for item in items:
-            row = pygame.Rect(rect.x + 14, y, rect.w - 28, row_h)
+            cell = pygame.Rect(x, content_y, cell_w, cell_h)
             bg = settings.KINGDOM_CONFIG_CARD_ACTIVE_BG if item.get('full') else settings.KINGDOM_CONFIG_CARD_BG
-            pygame.draw.rect(self.window, bg, row, border_radius=8)
-            self._draw_production_item_row(item, row)
-            y += row_h + row_gap
+            pygame.draw.rect(self.window, bg, cell, border_radius=8)
+            self._draw_production_item_row(item, cell)
+            x += cell_w + col_gap
 
         if self._kingdom.get('core_protection_active'):
             badge = self._tiny_font.render('Sanctuary active',
@@ -613,6 +641,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     if area.collidepoint(pos):
                         self._scroll_cosmetic_section(cosmetic_type, getattr(event, 'y', 0))
                         return
+                if self._skills_scroll_area and self._skills_scroll_area.collidepoint(pos):
+                    self._scroll_skills_panel(getattr(event, 'y', 0))
+                    return
                 continue
             if event.type != MOUSEBUTTONUP or event.button != 1:
                 continue
@@ -722,6 +753,16 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         current = int(self._cosmetic_scroll.get(cosmetic_type, 0) or 0)
         current -= int(wheel_y or 0) * item_h
         self._cosmetic_scroll[cosmetic_type] = max(0, min(max_scroll, current))
+
+    def _scroll_skills_panel(self, wheel_y):
+        area = self._skills_scroll_area
+        if not area:
+            return
+        step = max(1, int(settings.KINGDOM_CONFIG_SKILL_ROW_H))
+        max_scroll = max(0, int(self._skills_content_h or 0) - area.h)
+        current = int(self._skills_scroll or 0)
+        current -= int(wheel_y or 0) * step
+        self._skills_scroll = max(0, min(max_scroll, current))
 
     def update(self, events=None):
         super().update()
@@ -1244,6 +1285,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
 
     def _draw_skills_panel(self, rect):
         self._draw_panel(rect, 'Kingdom Skills')
+        self._skills_scroll_area = None
+        self._skills_content_h = 0
         if not self._kingdom:
             return
 
@@ -1261,42 +1304,86 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                          (rect.x + 14, sp_y))
 
         # ── Skill rows (data-driven) ─────────────────────────────────
-        y = sp_y + self._body_font.get_height() + 10
+        list_y = sp_y + self._body_font.get_height() + 10
         skills = self._kingdom.get('skills') or {}
-        row_step = settings.KINGDOM_CONFIG_SKILL_ROW_H
-        if skills:
-            available_h = max(1, rect.bottom - y - 12)
-            row_step = max(58, min(row_step, available_h // max(1, len(skills))))
-        for key, skill in skills.items():
-            row = pygame.Rect(rect.x + 14, y, rect.w - 28, max(52, row_step - 8))
-            pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_CARD_BG, row, border_radius=8)
-            icon = self._icons.get(key)
-            icon_sz = min(42, row.h - 16)
-            if icon:
-                self.window.blit(pygame.transform.smoothscale(icon, (icon_sz, icon_sz)),
-                                 (row.x + 10, row.y + 10))
-            name = skill.get('name', key)
-            level = int(skill.get('level', 0) or 0)
-            max_level = int(skill.get('max_level', 5) or 5)
-            self.window.blit(self._body_font.render(f'{name}  Lv {level}/{max_level}', True,
-                                                    settings.KINGDOM_CONFIG_TEXT_CLR),
-                             (row.x + 62, row.y + 8))
-            desc = skill.get('description', '')[:72]
-            self.window.blit(self._tiny_font.render(desc, True, settings.KINGDOM_CONFIG_DIM_CLR),
-                             (row.x + 62, row.y + 34))
-            cost = skill.get('next_cost')
-            if cost is None:
-                label = 'Max'
-                disabled = True
-            else:
-                label = f'Upgrade ({cost})'
-                disabled = available < int(cost)
-            effect = self._tiny_font.render(self._skill_effect_text(key, skill), True,
-                                            settings.KINGDOM_CONFIG_HIGHLIGHT)
-            self.window.blit(effect, (row.x + 62, row.y + 50))
-            btn = pygame.Rect(row.right - 120, row.y + (row.h - 30) // 2, 104, 30)
-            self._draw_button(btn, label, 'upgrade_skill', key, disabled=disabled)
-            y += row_step
+        if not skills:
+            return
+
+        # Use the configured row height as the natural per-row size and clip
+        # the list inside a scrollable area so tall skill lists never spill
+        # past the bottom of the panel.
+        row_step = max(64, settings.KINGDOM_CONFIG_SKILL_ROW_H)
+        row_h = max(58, row_step - 8)
+        list_rect = pygame.Rect(rect.x + 14, list_y,
+                                rect.w - 28,
+                                max(row_h, rect.bottom - list_y - 12))
+        self._skills_scroll_area = list_rect
+        content_h = row_step * len(skills)
+        self._skills_content_h = content_h
+        max_scroll = max(0, content_h - list_rect.h)
+        scroll = max(0, min(max_scroll, int(getattr(self, '_skills_scroll', 0) or 0)))
+        self._skills_scroll = scroll
+
+        scrollbar_w = 8 if max_scroll > 0 else 0
+        row_w = list_rect.w - (scrollbar_w + 4 if scrollbar_w else 0)
+
+        old_clip = self.window.get_clip()
+        self.window.set_clip(list_rect.clip(old_clip))
+        try:
+            for idx, (key, skill) in enumerate(skills.items()):
+                y = list_rect.y + idx * row_step - scroll
+                if y + row_h < list_rect.y or y > list_rect.bottom:
+                    continue
+                row = pygame.Rect(list_rect.x, y, row_w, row_h)
+                pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_CARD_BG, row,
+                                 border_radius=8)
+                icon = self._icons.get(key)
+                icon_sz = min(42, row.h - 16)
+                if icon:
+                    self.window.blit(pygame.transform.smoothscale(icon, (icon_sz, icon_sz)),
+                                     (row.x + 10, row.y + 10))
+                name = skill.get('name', key)
+                level = int(skill.get('level', 0) or 0)
+                max_level = int(skill.get('max_level', 5) or 5)
+                self.window.blit(self._body_font.render(f'{name}  Lv {level}/{max_level}', True,
+                                                        settings.KINGDOM_CONFIG_TEXT_CLR),
+                                 (row.x + 62, row.y + 8))
+                desc = skill.get('description', '')[:72]
+                self.window.blit(self._tiny_font.render(desc, True, settings.KINGDOM_CONFIG_DIM_CLR),
+                                 (row.x + 62, row.y + 34))
+                cost = skill.get('next_cost')
+                if cost is None:
+                    label = 'Max'
+                    disabled = True
+                else:
+                    label = f'Upgrade ({cost})'
+                    disabled = available < int(cost)
+                effect = self._tiny_font.render(self._skill_effect_text(key, skill), True,
+                                                settings.KINGDOM_CONFIG_HIGHLIGHT)
+                self.window.blit(effect, (row.x + 62, row.y + 50))
+                btn = pygame.Rect(row.right - 120, row.y + (row.h - 30) // 2, 104, 30)
+                # Drawing is clipped to the viewport, but `_draw_button`
+                # registers click hitboxes against the absolute rect — so
+                # only register the button when its full hitbox is visible
+                # to keep clicks from firing in empty space below the list.
+                if list_rect.contains(btn):
+                    self._draw_button(btn, label, 'upgrade_skill', key, disabled=disabled)
+                else:
+                    self._draw_button(btn, label, 'upgrade_skill', key, disabled=True)
+                    if self._buttons and self._buttons[-1][2] == btn:
+                        self._buttons.pop()
+        finally:
+            self.window.set_clip(old_clip)
+
+        if max_scroll > 0:
+            track = pygame.Rect(list_rect.right - scrollbar_w + 2, list_rect.y,
+                                scrollbar_w - 4, list_rect.h)
+            pygame.draw.rect(self.window, (52, 45, 42), track, border_radius=2)
+            thumb_h = max(20, int(list_rect.h * list_rect.h / max(1, content_h)))
+            thumb_y = track.y + int((track.h - thumb_h) * (scroll / max_scroll))
+            pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_HIGHLIGHT,
+                             pygame.Rect(track.x, thumb_y, track.w, thumb_h),
+                             border_radius=2)
 
     def _layout_rects(self):
         self._box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
@@ -1324,7 +1411,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         card_h = max(82, (content_h - shield_h - gap * 3) // 3)
         # Right column splits into a Kingdom Production card on top and the
         # Skills/Level panel below.
-        vault_h = max(210, int(content_h * 0.34))
+        vault_h = max(140, int(content_h * 0.22))
         # Header pill spans the content row, leaving clearance for the X.
         header_right = _BOX_X + _BOX_W - _BOX_PAD - xsz - xmargin
         header_rect = pygame.Rect(content_x, header_y,
