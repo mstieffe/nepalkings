@@ -66,16 +66,8 @@ def _defender_already_cast_counter_this_round(game, defender_player_id):
 
 def _figure_has_family_skill(figure, skill_name):
     """Return True when a runtime figure has a stored or family-derived skill."""
-    if not figure:
-        return False
-    if bool(getattr(figure, skill_name, False)):
-        return True
-    try:
-        from ai.figure_recipes import FAMILY_SKILLS
-        skills = FAMILY_SKILLS.get(figure.family_name) or FAMILY_SKILLS.get(figure.name) or {}
-        return bool(skills.get(skill_name))
-    except Exception:
-        return False
+    from game_service.figure_rule_helpers import figure_has_family_skill
+    return figure_has_family_skill(figure, skill_name)
 
 
 def _figure_can_counter_advance(figure, player_id, game_id):
@@ -84,6 +76,11 @@ def _figure_can_counter_advance(figure, player_id, game_id):
     if _figure_has_family_skill(figure, 'cannot_attack'):
         return False
     if _figure_has_family_skill(figure, 'cannot_defend'):
+        return False
+    game = db.session.get(Game, game_id)
+    modifiers = game.battle_modifier if game and isinstance(game.battle_modifier, list) else []
+    from game_service.figure_rule_helpers import modifiers_require_village
+    if modifiers_require_village(modifiers) and figure.field != 'village':
         return False
     if _check_figure_resource_deficit(figure, player_id, game_id):
         return False
@@ -105,9 +102,13 @@ def _must_be_attacked_defenders(game, defender_player_id):
         game_id=game.id,
         player_id=defender_player_id,
     ).all()
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    from game_service.figure_rule_helpers import modifiers_require_village
+    require_village = modifiers_require_village(modifiers)
     return [
         fig for fig in figures
         if _figure_can_be_selected_as_defender(fig)
+        and (not require_village or fig.field == 'village')
         and not getattr(fig, 'checkmate', False)
         and _figure_has_family_skill(fig, 'must_be_attacked')
     ]
@@ -246,11 +247,16 @@ def _conquer_defender_counter_advance_disabled(game):
     has_battle_fig = (cfg.battle_figure_id is not None)
 
     if has_battle_fig and not has_counter_spell:
+        if not game.defending_figure_id:
+            return True
         battle_cfg_fig = db.session.get(Figure, game.defending_figure_id)
         if battle_cfg_fig:
-            return False
-        cfg_fig = db.session.get(LandConfigFigure, cfg.battle_figure_id)
-        return not (cfg_fig and cfg_fig.config_id == cfg.id)
+            return not _figure_can_counter_advance(
+                battle_cfg_fig,
+                defender_player.id if defender_player else battle_cfg_fig.player_id,
+                game.id,
+            )
+        return True
 
     if has_counter_spell and not has_battle_fig:
         return False
@@ -526,6 +532,8 @@ def _guard_must_advance(game, player_id, *, action_label='action'):
         if fig.id in resting_ids:
             continue
         if (has_peasant_war or has_civil_war) and fig.field != 'village':
+            continue
+        if _figure_has_family_skill(fig, 'cannot_attack'):
             continue
         if _check_figure_resource_deficit(fig, player_id, game.id):
             continue
@@ -2262,6 +2270,17 @@ def conquer_defender_counter_spell():
                     post_data[key] = result[key]
         spell.effect_data = post_data
 
+        from game_service.battle_move_replenisher import replenish_automated_conquer_defender_moves
+        replenish_info = replenish_automated_conquer_defender_moves(
+            game,
+            defender_player,
+            reason='conquer_counter_spell',
+        )
+        if replenish_info.get('added'):
+            post_data = dict(spell.effect_data or {})
+            post_data['defender_replenished_battle_moves'] = replenish_info
+            spell.effect_data = post_data
+
         _consume_conquer_defender_response(game, defender_player)
 
         log_entry = LogEntry(
@@ -2281,6 +2300,7 @@ def conquer_defender_counter_spell():
             'spell_name': spell_name,
             'status': post_data.get('counter_status'),
             'result': result,
+            'defender_replenished_battle_moves': replenish_info,
             'game': game.serialize(),
         })
 
@@ -2348,6 +2368,9 @@ def advance_figure():
         if not figure or figure.player_id != player_id:
             return jsonify({'success': False, 'message': 'Figure not found or not yours'}), 400
 
+        if figure.id in set(game.resting_figure_ids or []):
+            return jsonify({'success': False, 'message': 'This figure is resting and cannot advance toward battle.', 'reason': 'resting_figure'}), 400
+
         # Check resource deficit — figures with deficit cannot advance or counter-advance
         if _check_figure_resource_deficit(figure, player_id, game.id):
             return jsonify({'success': False, 'message': 'This figure has a resource deficit and cannot advance toward battle.', 'reason': 'resource_deficit'}), 400
@@ -2358,9 +2381,10 @@ def advance_figure():
         has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
         has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
 
-        # Peasant War: only village figures can advance
-        if has_peasant_war and figure.field != 'village':
-            return jsonify({'success': False, 'message': 'Peasant War: only village figures can advance'}), 400
+        # Peasant War / Civil War: only village figures can advance/counter-advance
+        if (has_peasant_war or has_civil_war) and figure.field != 'village':
+            modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
+            return jsonify({'success': False, 'message': f'{modifier_name}: only village figures can advance'}), 400
 
         # Determine if this is a counter-advance (opponent already advanced)
         is_counter_advance = (game.advancing_figure_id is not None and 
@@ -2415,7 +2439,7 @@ def advance_figure():
                     ).all()
                     eligible_seconds = [
                         f for f in eligible_seconds
-                        if not _check_figure_resource_deficit(f, player_id, game.id)
+                        if _figure_can_counter_advance(f, player_id, game.id)
                     ]
                     if eligible_seconds:
                         civil_war_need_second = True
@@ -2447,9 +2471,12 @@ def advance_figure():
                         Figure.field == 'village',
                         Figure.color == figure.color
                     ).all()
+                    resting_ids = set(game.resting_figure_ids or [])
                     eligible_seconds = [
                         f for f in eligible_seconds
-                        if not _check_figure_resource_deficit(f, player_id, game.id)
+                        if f.id not in resting_ids
+                        and not _figure_has_family_skill(f, 'cannot_attack')
+                        and not _check_figure_resource_deficit(f, player_id, game.id)
                     ]
                     if eligible_seconds:
                         civil_war_need_second = True
@@ -2596,6 +2623,13 @@ def select_defender():
         if not _figure_can_be_selected_as_defender(figure):
             return jsonify({'success': False, 'message': f'{figure.name} cannot be selected as a defender'}), 400
 
+        modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+        has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+        if (has_peasant_war or has_civil_war) and figure.field != 'village':
+            modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
+            return jsonify({'success': False, 'message': f'{modifier_name}: only village figures can defend'}), 400
+
         mandatory_defenders = []
         if not _defender_selection_ignores_must_be_attacked(game):
             mandatory_defenders = _must_be_attacked_defenders(game, figure.player_id)
@@ -2619,15 +2653,13 @@ def select_defender():
             ).all()
             has_non_checkmate = any(
                 not getattr(f, 'checkmate', False)
+                and _figure_can_be_selected_as_defender(f)
+                and (not (has_peasant_war or has_civil_war) or f.field == 'village')
                 for f in other_figures
             )
             if has_non_checkmate:
                 return jsonify({'success': False, 'message': f'{figure.name} has Checkmate and cannot be selected as a defender'}), 400
             # else: opponent only has checkmate figures — allow targeting
-        
-        # Check battle modifiers for Civil War
-        modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
-        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
         
         civil_war_need_second = False
         civil_war_color = None
@@ -2672,6 +2704,10 @@ def select_defender():
                     Figure.field == 'village',
                     Figure.color == figure.color
                 ).all()
+                eligible_seconds = [
+                    f for f in eligible_seconds
+                    if _figure_can_be_selected_as_defender(f)
+                ]
                 if eligible_seconds:
                     civil_war_need_second = True
                     civil_war_color = figure.color
@@ -3604,17 +3640,18 @@ def _compute_wall_defence_total(walls):
 
 def _find_temple_blocker(target_figure, opponent_player_id, all_figures,
                          battle_ids, game_id):
-    """True if opponent has a non-deficit, non-battle Temple with suit
+    """True if opponent has a non-deficit blocks_bonus figure with suit
     advantage over *target_figure*.
+
+    Unlike field-only skills, an active battle Temple still blocks the
+    opponent's support bonus while it is fighting.
 
     Matches client ``_detect_blocks_bonus``.
     """
     for f in all_figures:
         if f.player_id != opponent_player_id:
             continue
-        if f.id in battle_ids:
-            continue
-        if 'Temple' not in (f.name or ''):
+        if not _figure_has_family_skill(f, 'blocks_bonus'):
             continue
         if _check_figure_resource_deficit(f, opponent_player_id, game_id):
             continue
@@ -3773,7 +3810,9 @@ def _compute_server_total_diff(game, return_breakdown=False):
 
     Mirrors the client's ``_get_total_diff()`` logic exactly:
     * figure power = base + healer + support + wall + enchant − DA
-    * Healer/Wall/Temple/Archer with resource deficit are skipped
+        * Healer/Wall/Archer with resource deficit are skipped
+        * Temple/blocks_bonus blockers with resource deficit are skipped, but
+            active battle Temples still block support
     * DA fires ONCE per archer per battle (battle figure first, then
       first matching call figure in rounds — never both)
     * Wall defence only applies to the DEFENDING side
@@ -3797,7 +3836,9 @@ def _compute_server_total_diff(game, return_breakdown=False):
         game_id=game.id, is_active=True, spell_type='enchantment').all()
     all_moves = BattleMove.query.filter_by(game_id=game.id).all()
 
-    # IDs of figures currently in battle (excluded from skill sources)
+    # IDs of figures currently in battle.  Field-only skill sources use this
+    # to exclude fighters; Temple/blocks_bonus intentionally still triggers
+    # when the Temple itself is the active battle figure.
     battle_ids = set()
     for fid in (game.advancing_figure_id, game.advancing_figure_id_2,
                 game.defending_figure_id, game.defending_figure_id_2):

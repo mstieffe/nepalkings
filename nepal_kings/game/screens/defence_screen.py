@@ -803,7 +803,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if data.get('success'):
                 self._apply_config(data['config'])
             else:
-                logger.warning(f'Set battle figure failed: {data.get("message")}')
+                msg = data.get('message') or 'Could not select battle figure'
+                self.state.set_msg(msg)
+                logger.warning(f'Set battle figure failed: {msg}')
         except Exception as e:
             logger.error(f'Set battle figure error: {e}')
 
@@ -2090,6 +2092,39 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 return fig
         return None
 
+    def _figure_object(self, figure_id):
+        return next((f for f in self._figure_objects if f.id == figure_id), None)
+
+    def _battle_modifier_requires_village(self):
+        if self._config.get('prelude_spell_name') in ('Peasant War', 'Civil War'):
+            return True
+        modifier = self._config.get('battle_modifier') or {}
+        return isinstance(modifier, dict) and modifier.get('type') in ('Peasant War', 'Civil War')
+
+    def _civil_war_battle_strategy(self):
+        if self._config.get('prelude_spell_name') == 'Civil War':
+            return True
+        modifier = self._config.get('battle_modifier') or {}
+        return isinstance(modifier, dict) and modifier.get('type') == 'Civil War'
+
+    def _battle_figure_block_reason(self, figure_id):
+        cfg_fig = self._get_config_fig(figure_id)
+        fig = self._figure_object(figure_id)
+        if not cfg_fig or not fig:
+            return 'Could not select that figure'
+        if cfg_fig.get('has_deficit', False):
+            return 'Cannot select a figure in deficit'
+        if getattr(fig, 'cannot_attack', False):
+            return 'This figure cannot counter-advance because it cannot attack'
+        if getattr(fig, 'cannot_defend', False):
+            return 'This figure cannot counter-advance because it cannot defend'
+        if self._battle_modifier_requires_village() and getattr(fig.family, 'field', None) != 'village':
+            return 'This battle modifier requires village figures'
+        return None
+
+    def _battle_figure_is_selectable(self, figure_id):
+        return self._battle_figure_block_reason(figure_id) is None
+
     def _prelude_health_target_id(self):
         data = self._config.get('prelude_spell_data') or {}
         if isinstance(data, dict):
@@ -2368,11 +2403,16 @@ class DefenceScreen(MenuScreenMixin, Screen):
         has_battle_fig = self._config.get('battle_figure_id') is not None
         has_counter_spell = self._config.get('counter_spell_name') is not None
         has_exactly_one_strategy = (has_battle_fig != has_counter_spell)
+        battle_fig_valid = (
+            not has_battle_fig
+            or self._battle_figure_is_selectable(self._config.get('battle_figure_id'))
+        )
         has_required_spell_targets = (
             self._has_health_boost_target('prelude')
             and self._has_health_boost_target('counter')
         )
-        return has_valid_figure and has_moves and has_exactly_one_strategy and has_required_spell_targets
+        return (has_valid_figure and has_moves and has_exactly_one_strategy
+                and battle_fig_valid and has_required_spell_targets)
 
     def _get_defence_problems(self):
         """Return a list of human-readable problems preventing save."""
@@ -2411,6 +2451,20 @@ class DefenceScreen(MenuScreenMixin, Screen):
             problems.append('Select exactly one strategy: battle figure or counter spell (not both).')
         elif not has_battle_fig and not has_counter_spell:
             problems.append('Select exactly one strategy: battle figure or counter spell.')
+        elif has_battle_fig:
+            reason = self._battle_figure_block_reason(self._config.get('battle_figure_id'))
+            if reason:
+                problems.append(reason)
+            if self._civil_war_battle_strategy():
+                fig2_id = self._config.get('battle_figure_id_2')
+                if not fig2_id:
+                    problems.append('Civil War requires two battle figures.')
+                elif fig2_id == self._config.get('battle_figure_id'):
+                    problems.append('Civil War requires two different battle figures.')
+                else:
+                    reason = self._battle_figure_block_reason(fig2_id)
+                    if reason:
+                        problems.append(f'Second battle figure: {reason}')
 
         if prelude == 'Health Boost' and not self._prelude_health_target_id():
             problems.append('Health Boost prelude needs one of your figures as target.')
@@ -2657,11 +2711,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         if icon.hovered:
                             fig = icon.figure
                             cfg_fig = self._get_config_fig(fig.id)
-                            if cfg_fig and not cfg_fig.get('has_deficit', False):
+                            reason = self._battle_figure_block_reason(fig.id)
+                            if cfg_fig and reason is None:
                                 self._server_set_battle_figure(fig.id)
                                 selected = True
                             else:
-                                self.state.set_msg('Cannot select a figure in deficit')
+                                self.state.set_msg(reason or 'Cannot select that figure')
                                 selected = True
                             break
                     self._selecting_battle_fig = False
@@ -2790,7 +2845,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 if self._battle_figure_rect and self._battle_figure_rect.collidepoint(pos):
                     if not self._config.get('battle_figure_id'):
                         figs = self._config.get('figures', [])
-                        valid = [f for f in figs if not f.get('has_deficit', False)]
+                        valid = [f for f in figs if self._battle_figure_is_selectable(f.get('id'))]
                         if valid:
                             # Clear counter spell first (mutually exclusive)
                             if self._config.get('counter_spell_name'):

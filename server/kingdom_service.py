@@ -1400,9 +1400,8 @@ def check_defence_incomplete(land_id, user_id):
         return True
 
     # Check if at least one figure is not in deficit
-    has_valid_figure = any(
-        not check_land_config_deficit(fig, figures) for fig in figures
-    )
+    deficit_map = {fig.id: check_land_config_deficit(fig, figures) for fig in figures}
+    has_valid_figure = any(not deficit_map.get(fig.id, False) for fig in figures)
     if not has_valid_figure:
         return True
 
@@ -1418,9 +1417,44 @@ def check_defence_incomplete(land_id, user_id):
     if has_battle_fig == has_counter_spell:
         return True
 
-    # Defensive check against stale battle_figure_id references.
-    if has_battle_fig and not any(fig.id == cfg.battle_figure_id for fig in figures):
-        return True
+    # Defensive check against stale or illegal battle_figure_id references.
+    figures_by_id = {fig.id: fig for fig in figures}
+    if has_battle_fig:
+        battle_fig = figures_by_id.get(cfg.battle_figure_id)
+        if not battle_fig:
+            return True
+        from game_service.figure_rule_helpers import (
+            config_strategy_modifiers,
+            figure_can_counter_advance,
+            modifiers_require_village,
+        )
+        require_village = modifiers_require_village(config_strategy_modifiers(cfg))
+        if not figure_can_counter_advance(
+            battle_fig,
+            require_village=require_village,
+            deficit=deficit_map.get(battle_fig.id, False),
+        ):
+            return True
+
+        is_civil_war = any(
+            mod.get('type') == 'Civil War'
+            for mod in config_strategy_modifiers(cfg)
+            if isinstance(mod, dict)
+        )
+        if is_civil_war:
+            battle_fig_2 = figures_by_id.get(cfg.battle_figure_id_2)
+            if not battle_fig_2 or battle_fig_2.id == battle_fig.id:
+                return True
+            if not figure_can_counter_advance(
+                battle_fig_2,
+                require_village=require_village,
+                deficit=deficit_map.get(battle_fig_2.id, False),
+            ):
+                return True
+            if battle_fig.color != battle_fig_2.color:
+                return True
+        elif cfg.battle_figure_id_2:
+            return True
 
     # Health Boost prelude/counter spells require an own-figure target.
     figure_ids = {fig.id for fig in figures}

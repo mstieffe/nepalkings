@@ -105,6 +105,8 @@ class TestKingdomActivityPanel:
         screen._mark_read_rect = None
         screen._mark_read_kind = None
         screen._activity_row_rects = []
+        screen._activity_scroll_offsets = {'alerts': 0, 'history': 0, 'messages': 0}
+        screen._activity_scrollbar_rect = None
         screen._hex_map = _DummyHexMap()
         screen.state = SimpleNamespace(set_msg=MagicMock(), user_dict={'id': 7})
         return KingdomScreen, screen
@@ -176,6 +178,138 @@ class TestKingdomActivityPanel:
         title, _detail, good = KingdomScreen._format_activity_item(screen, defence_win)
         assert title == 'rival failed to conquer you'
         assert good is True
+
+    def test_alert_formatting_uses_server_role_not_list_membership(self):
+        KingdomScreen, screen = self._screen()
+        own_attack_unseen = {
+            'attacker_user_id': 7,
+            'defender_user_id': 8,
+            'attacker_username': 'me',
+            'defender_username': 'rival',
+            'result': 'attacker_won',
+            'role': 'attacker',
+            'seen': False,
+        }
+        incoming_loss = {
+            'attacker_user_id': 8,
+            'defender_user_id': 7,
+            'attacker_username': 'rival',
+            'defender_username': 'me',
+            'result': 'attacker_won',
+            'role': 'defender',
+            'seen': False,
+        }
+        screen._notifications = [own_attack_unseen, incoming_loss]
+
+        title, _detail, good = KingdomScreen._format_activity_item(screen, own_attack_unseen)
+        assert title == 'You conquered rival'
+        assert good is True
+
+        title, _detail, good = KingdomScreen._format_activity_item(screen, incoming_loss)
+        assert title == 'rival conquered your land'
+        assert good is False
+
+    def test_visible_notifications_excludes_seen_rows(self):
+        KingdomScreen, screen = self._screen()
+        unseen = {'id': 1, 'seen': False}
+        legacy_without_seen = {'id': 2}
+        seen = {'id': 3, 'seen': True}
+        screen._notifications = [unseen, legacy_without_seen, seen]
+
+        assert KingdomScreen._visible_notifications(screen) == [unseen, legacy_without_seen]
+
+    def test_kingdom_event_formatting_covers_loot_and_shield(self):
+        KingdomScreen, screen = self._screen()
+        looted = {
+            'id': 1,
+            'source': 'kingdom_notification',
+            'kind': 'card_looted',
+            'payload': {
+                'rank': 'K',
+                'suit': 'Hearts',
+                'defender_name': 'rival',
+                'land_id': 42,
+            },
+            'seen': False,
+        }
+        shield = {
+            'id': 2,
+            'source': 'kingdom_notification',
+            'kind': 'shield_expired',
+            'payload': {'kingdom_name': 'High Garden'},
+            'seen': False,
+        }
+
+        title, detail, good = KingdomScreen._format_activity_item(screen, looted)
+        assert title == 'Card looted'
+        assert detail == 'K of Hearts lost to rival.'
+        assert good is False
+        assert KingdomScreen._activity_land_label(screen, looted) == 'Land #42'
+
+        title, detail, good = KingdomScreen._format_activity_item(screen, shield)
+        assert title == 'Shield expired'
+        assert detail == 'High Garden can be attacked again.'
+        assert good is False
+        assert KingdomScreen._activity_land_label(screen, shield) == 'High Garden'
+
+    def test_activity_formatting_prefers_server_presentation_contract(self):
+        KingdomScreen, screen = self._screen()
+        item = {
+            'attacker_user_id': 8,
+            'defender_user_id': 7,
+            'attacker_username': 'rival',
+            'defender_username': 'me',
+            'result': 'attacker_won',
+            'role': 'defender',
+            'activity_title': 'Server normalized title',
+            'activity_detail': 'Server normalized detail.',
+            'activity_tone': 'neutral',
+            'activity_land_label': 'Borderland',
+        }
+
+        title, detail, good = KingdomScreen._format_activity_item(screen, item)
+
+        assert title == 'Server normalized title'
+        assert detail == 'Server normalized detail.'
+        assert good is True
+        assert KingdomScreen._activity_land_label(screen, item) == 'Borderland'
+
+    def test_activity_panel_scrolls_beyond_first_page(self):
+        from game.screens.kingdom_screen import KingdomScreen
+        from config import settings
+
+        screen = KingdomScreen.__new__(KingdomScreen)
+        screen.window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        screen._activity_rect = pygame.Rect(10, 10, 360, 230)
+        screen._activity_tab = 'alerts'
+        screen._attack_history = []
+        screen._messages = []
+        screen._message_unread_count = 0
+        screen._activity_scroll_offsets = {'alerts': 2, 'history': 0, 'messages': 0}
+        screen._activity_title_font = settings.get_font(settings.FS_SMALL, bold=True)
+        screen._activity_font = settings.get_font(settings.FS_TINY)
+        screen._activity_small_font = settings.get_font(int(settings.FS_TINY * 0.86))
+        visible_count = KingdomScreen._activity_visible_count(screen)
+        screen._notifications = [
+            {
+                'id': idx,
+                'seen': False,
+                'land_id': idx,
+                'activity_title': f'Alert {idx}',
+                'activity_detail': 'detail',
+                'activity_tone': 'neutral',
+            }
+            for idx in range(visible_count + 4)
+        ]
+
+        KingdomScreen._draw_activity_panel(screen)
+
+        assert screen._activity_row_rects[0][1]['id'] == 2
+        assert len(screen._activity_row_rects) == visible_count
+        assert screen._activity_scrollbar_rect is not None
+
+        assert KingdomScreen._scroll_activity_tab(screen, -99) is True
+        assert screen._activity_scroll_offsets['alerts'] == 0
 
     def test_message_formatting_is_role_aware(self):
         KingdomScreen, screen = self._screen()

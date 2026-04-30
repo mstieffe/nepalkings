@@ -491,6 +491,56 @@ class TestDefenceBattleFigure:
         assert rv.status_code == 400
         assert 'deficit' in rv.get_json()['message'].lower()
 
+    def test_reject_cannot_attack_figure(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        c1 = _add_collection_card(db, u1.id, 'Clubs', 'Q', 3)
+
+        rv = _build_figure(client, auth_headers_user1, land.id, [c1.id],
+                           family='Himalaya Temple', field='village',
+                           produces={}, requires={})
+        fig_id = rv.get_json()['config']['figures'][0]['id']
+
+        rv = client.post('/kingdom/defence/set_battle_figure',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id, 'figure_id': fig_id})
+        assert rv.status_code == 400
+        assert 'cannot attack' in rv.get_json()['message'].lower()
+
+    def test_reject_cannot_defend_figure(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        c1 = _add_collection_card(db, u1.id, 'Hearts', '4', 4)
+
+        rv = _build_figure(client, auth_headers_user1, land.id, [c1.id],
+                           family='Cavalry', field='military', color='offensive',
+                           produces={}, requires={})
+        fig_id = rv.get_json()['config']['figures'][0]['id']
+
+        rv = client.post('/kingdom/defence/set_battle_figure',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id, 'figure_id': fig_id})
+        assert rv.status_code == 400
+        assert 'cannot defend' in rv.get_json()['message'].lower()
+
+    def test_peasant_war_rejects_non_village_battle_figure(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land, fig_id = self._setup_config_with_figure(
+            client, db, u1, auth_headers_user1)
+        _add_collection_card(db, u1.id, 'Hearts', 'J', 11)
+        _add_collection_card(db, u1.id, 'Hearts', 'J', 11)
+
+        client.post('/kingdom/defence/set_modifier',
+                    headers=auth_headers_user1,
+                    json={'land_id': land.id, 'modifier_type': 'Peasant War'})
+
+        rv = client.post('/kingdom/defence/set_battle_figure',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id, 'figure_id': fig_id})
+        assert rv.status_code == 400
+        assert 'village' in rv.get_json()['message'].lower()
+
     def test_mutual_exclusion_with_spell(self, client, db, two_users,
                                           auth_headers_user1):
         """Cannot set battle figure while a spell is active."""
@@ -518,8 +568,12 @@ class TestDefenceBattleFigure:
     def test_civil_war_requires_two_figures(self, client, db, two_users,
                                              auth_headers_user1):
         u1, _ = two_users
-        land, fig_id = self._setup_config_with_figure(
-            client, db, u1, auth_headers_user1)
+        land = _add_land(db, owner_id=u1.id)
+        c1 = _add_collection_card(db, u1.id, 'Clubs', 'J', 11)
+        rv = _build_figure(client, auth_headers_user1, land.id, [c1.id],
+                           family='Small Yack Farm', field='village',
+                           produces={}, requires={})
+        fig_id = rv.get_json()['config']['figures'][0]['id']
 
         # Civil War requires 2× 5 same-color
         _add_collection_card(db, u1.id, 'Hearts', '5', 5)
@@ -539,17 +593,18 @@ class TestDefenceBattleFigure:
         """Civil War: both figures must be the same color."""
         u1, _ = two_users
         land = _add_land(db, owner_id=u1.id)
-        c1 = _add_collection_card(db, u1.id, 'Clubs', 'K', 4)
-        c2 = _add_collection_card(db, u1.id, 'Hearts', 'K', 4)
+        c1 = _add_collection_card(db, u1.id, 'Clubs', 'J', 11)
+        c2 = _add_collection_card(db, u1.id, 'Hearts', 'J', 11)
         # Civil War requires 2× 5 same-color
         _add_collection_card(db, u1.id, 'Hearts', '5', 5)
         _add_collection_card(db, u1.id, 'Hearts', '5', 5)
 
         rv1 = _build_figure(client, auth_headers_user1, land.id, [c1.id],
-                            color='defensive', produces={'villager_black': 2})
+                    family='Small Yack Farm', field='village',
+                    color='defensive', produces={}, requires={})
         rv2 = _build_figure(client, auth_headers_user1, land.id, [c2.id],
-                            family='Djungle King', color='offensive',
-                            produces={'villager_red': 2})
+                    family='Small Rice Farm', field='village',
+                    color='offensive', produces={}, requires={})
         f1 = rv1.get_json()['config']['figures'][0]['id']
         f2 = rv2.get_json()['config']['figures'][-1]['id']
 
@@ -568,16 +623,18 @@ class TestDefenceBattleFigure:
                                            auth_headers_user1):
         u1, _ = two_users
         land = _add_land(db, owner_id=u1.id)
-        c1 = _add_collection_card(db, u1.id, 'Clubs', 'K', 4)
-        c2 = _add_collection_card(db, u1.id, 'Clubs', 'Q', 3)
+        c1 = _add_collection_card(db, u1.id, 'Clubs', 'J', 11)
+        c2 = _add_collection_card(db, u1.id, 'Clubs', '2', 2)
         # Civil War requires 2× 5 same-color
         _add_collection_card(db, u1.id, 'Hearts', '5', 5)
         _add_collection_card(db, u1.id, 'Hearts', '5', 5)
 
         rv1 = _build_figure(client, auth_headers_user1, land.id, [c1.id],
-                            produces={'villager_black': 2})
+                    family='Small Yack Farm', field='village',
+                    produces={}, requires={})
         rv2 = _build_figure(client, auth_headers_user1, land.id, [c2.id],
-                            family='Mountain Queen', produces={'villager_black': 1})
+                    family='Stone Mason', field='village',
+                    produces={}, requires={})
         f1 = rv1.get_json()['config']['figures'][0]['id']
         f2 = rv2.get_json()['config']['figures'][-1]['id']
 
@@ -593,6 +650,30 @@ class TestDefenceBattleFigure:
         cfg = rv.get_json()['config']
         assert cfg['battle_figure_id'] == f1
         assert cfg['battle_figure_id_2'] == f2
+
+    def test_civil_war_rejects_duplicate_battle_figure(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        c1 = _add_collection_card(db, u1.id, 'Clubs', 'J', 11)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+
+        rv = _build_figure(client, auth_headers_user1, land.id, [c1.id],
+                           family='Small Yack Farm', field='village',
+                           produces={}, requires={})
+        fig_id = rv.get_json()['config']['figures'][0]['id']
+
+        client.post('/kingdom/defence/set_modifier',
+                    headers=auth_headers_user1,
+                    json={'land_id': land.id, 'modifier_type': 'Civil War'})
+
+        rv = client.post('/kingdom/defence/set_battle_figure',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id, 'figure_id': fig_id,
+                               'figure_id_2': fig_id})
+        assert rv.status_code == 400
+        assert 'different' in rv.get_json()['message'].lower()
 
 
 # ═══════════════════════════════════════════════════════════════════

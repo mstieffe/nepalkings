@@ -87,6 +87,28 @@ class TestAttackNotifications:
             assert n['result'] == 'attacker_won'
             assert n['card_lost_suit'] == 'Hearts'
             assert n['card_lost_rank'] == 'K'
+            assert n['activity_title'] == 'attacker conquered your land'
+            assert n['activity_detail'] == 'Card lost: K of Hearts'
+            assert n['activity_tone'] == 'bad'
+            assert n['activity_land_label'] == 'Land (3, 2)'
+            assert resp.headers['Deprecation'] == 'true'
+            assert '/kingdom/notifications' in resp.headers['Link']
+
+    def test_defender_attack_notifications_alias_is_not_deprecated(self, app, db):
+        """Clear defender-only alias works without legacy deprecation headers."""
+        with app.app_context():
+            attacker = _make_user(db, 'attacker')
+            defender = _make_user(db, 'defender')
+            land = _make_land(db, owner_user_id=defender.id)
+            _make_attack_log(db, land, attacker, defender)
+
+            client = app.test_client()
+            resp = client.get('/kingdom/defender_attack_notifications',
+                              headers=_auth_headers(app, defender))
+
+            assert resp.status_code == 200
+            assert len(resp.get_json()['notifications']) == 1
+            assert 'Deprecation' not in resp.headers
 
     def test_excludes_seen(self, app, db):
         """Already-seen notifications are not returned."""
@@ -179,6 +201,9 @@ class TestUnifiedKingdomNotifications:
             own_attack = next(n for n in data['notifications'] if n['role'] == 'attacker')
             assert own_attack['result'] == 'attacker_won'
             assert own_attack['card_won_suit'] == 'Spades'
+            assert own_attack['activity_title'] == 'You conquered rival'
+            assert own_attack['activity_detail'] == 'Card won: A of Spades'
+            assert own_attack['activity_tone'] == 'good'
 
     def test_seen_flags_are_role_specific(self, app, db):
         """Seen attacker logs are hidden without hiding defender logs."""
@@ -249,6 +274,45 @@ class TestUnifiedKingdomNotifications:
             assert db.session.get(LandAttackLog, attack_log.id).seen_by_defender is True
             assert db.session.get(KingdomNotification, kingdom_notif.id).seen is False
 
+    def test_unified_notifications_are_globally_sorted(self, app, db):
+        """Attack logs and kingdom events are returned in one recency order."""
+        with app.app_context():
+            current = _make_user(db, 'current')
+            rival = _make_user(db, 'rival')
+            land1 = _make_land(db, col=1, row=1, owner_user_id=current.id)
+            land2 = _make_land(db, col=2, row=2, owner_user_id=current.id)
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            old_attack = _make_attack_log(
+                db, land1, rival, current,
+                result='attacker_won',
+                timestamp=now - timedelta(hours=2),
+            )
+            new_attack = _make_attack_log(
+                db, land2, rival, current,
+                result='defender_won',
+                timestamp=now,
+            )
+            level_note = KingdomNotification(
+                user_id=current.id,
+                kind='level_up',
+                kingdom_id=None,
+                payload={'new_level': 2},
+                created_at=now - timedelta(hours=1),
+            )
+            db.session.add(level_note)
+            db.session.commit()
+
+            client = app.test_client()
+            resp = client.get('/kingdom/notifications',
+                              headers=_auth_headers(app, current))
+            notifs = resp.get_json()['notifications']
+
+            assert [(n['source'], n['id']) for n in notifs] == [
+                ('attack_log', new_attack.id),
+                ('kingdom_notification', level_note.id),
+                ('attack_log', old_attack.id),
+            ]
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Kingdom user messages
@@ -282,6 +346,10 @@ class TestKingdomMessages:
                               headers=_auth_headers(app, recipient)).get_json()
             assert recv['unread_count'] == 1
             assert recv['messages'][0]['message'] == 'Nice land.'
+            assert recv['messages'][0]['activity_title'] == 'From sender'
+            assert recv['messages'][0]['activity_detail'] == 'Nice land.'
+            assert recv['messages'][0]['activity_tone'] == 'neutral'
+            assert recv['messages'][0]['activity_land_label'] == 'Land (4, 5)'
 
     def test_mark_messages_seen_only_for_recipient(self, app, db):
         """Only the recipient can mark a kingdom message as read."""

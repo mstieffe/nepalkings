@@ -119,9 +119,11 @@ class BattleScreen(SubScreen):
         self.opponent_figure_2 = None
 
         # Blocks-bonus: figures that auto-trigger to block opponent's support bonus
-        # Each is a Figure object (or None) from the player's/opponent's field
+        # Each is a Figure object (or None) from the player's/opponent's field/battle
         self.player_blocks_bonus_figure = None   # player's blocker → blocks opponent's bonus
         self.opponent_blocks_bonus_figure = None  # opponent's blocker → blocks player's bonus
+        self.player_blocks_bonus_figures = []
+        self.opponent_blocks_bonus_figures = []
 
         # Distance-attack: figures that auto-trigger to reduce opponent figure power
         self.player_distance_attack_figure = None
@@ -233,6 +235,8 @@ class BattleScreen(SubScreen):
         self.opponent_figure_2 = None
         self.player_blocks_bonus_figure = None
         self.opponent_blocks_bonus_figure = None
+        self.player_blocks_bonus_figures = []
+        self.opponent_blocks_bonus_figures = []
         self.player_distance_attack_figure = None
         self.opponent_distance_attack_figure = None
         self._player_da_hit_battle = False
@@ -588,20 +592,18 @@ class BattleScreen(SubScreen):
     # ────────────────── blocks_bonus detection ──────────────────
 
     def _detect_blocks_bonus(self, player_figures, opponent_figures):
-        """Check if any field figure has blocks_bonus whose suit advantage
-        matches the opponent's battle figure.  If so, store it as a blocker
-        and mark the targeted figure icon's bonus as blocked."""
+        """Check if any figure has blocks_bonus whose suit advantage matches
+        an opponent battle figure.
+
+        Temples keep blocking while they are active battle figures.  In Civil
+        War, every matching battle target is marked as blocked.
+        """
         from game.components.figures.family_configs.skill_config import get_advantage_suit
 
         self.player_blocks_bonus_figure = None
         self.opponent_blocks_bonus_figure = None
-
-        # Battle figure IDs to exclude (they are already in battle)
-        battle_ids = set()
-        for fig in (self.player_figure, self.player_figure_2,
-                    self.opponent_figure, self.opponent_figure_2):
-            if fig:
-                battle_ids.add(fig.id)
+        self.player_blocks_bonus_figures = []
+        self.opponent_blocks_bonus_figures = []
 
         # Collect opponent battle figure suits → icon mapping
         opp_targets = []
@@ -613,21 +615,20 @@ class BattleScreen(SubScreen):
         # Player's blocker → blocks opponent's battle figure bonus
         for opp_suit, opp_icon in opp_targets:
             for fig in player_figures:
-                if fig.id in battle_ids:
-                    continue
                 if getattr(fig, 'blocks_bonus', False):
                     # Skip figures with resource deficit
                     if self._figure_has_deficit(fig):
                         continue
                     adv_suit = get_advantage_suit(fig.suit)
                     if adv_suit and adv_suit == opp_suit:
-                        self.player_blocks_bonus_figure = fig
+                        if self.player_blocks_bonus_figure is None:
+                            self.player_blocks_bonus_figure = fig
+                        if fig not in self.player_blocks_bonus_figures:
+                            self.player_blocks_bonus_figures.append(fig)
                         if opp_icon:
                             opp_icon.battle_bonus_blocked = True
                         logger.debug(f"[BLOCKS_BONUS] Player's {fig.name} (suit={fig.suit}) blocks opponent's battle figure (suit={opp_suit}) bonus")
                         break
-            if self.player_blocks_bonus_figure:
-                break
 
         # Collect player battle figure suits → icon mapping
         player_targets = []
@@ -639,20 +640,19 @@ class BattleScreen(SubScreen):
         # Opponent's blocker → blocks player's battle figure bonus
         for player_suit, player_icon in player_targets:
             for fig in opponent_figures:
-                if fig.id in battle_ids:
-                    continue
                 if getattr(fig, 'blocks_bonus', False):
                     if self._figure_has_deficit(fig, self._opponent_resources_data):
                         continue
                     adv_suit = get_advantage_suit(fig.suit)
                     if adv_suit and adv_suit == player_suit:
-                        self.opponent_blocks_bonus_figure = fig
+                        if self.opponent_blocks_bonus_figure is None:
+                            self.opponent_blocks_bonus_figure = fig
+                        if fig not in self.opponent_blocks_bonus_figures:
+                            self.opponent_blocks_bonus_figures.append(fig)
                         if player_icon:
                             player_icon.battle_bonus_blocked = True
                         logger.debug(f"[BLOCKS_BONUS] Opponent's {fig.name} (suit={fig.suit}) blocks player's battle figure (suit={player_suit}) bonus")
                         break
-            if self.opponent_blocks_bonus_figure:
-                break
 
     # ────────────────── distance_attack detection ───────────────
 
@@ -3133,7 +3133,11 @@ class BattleScreen(SubScreen):
 
         # Collect player support figures (blocker / distance attacker / buffer)
         player_support = []
-        if self.player_blocks_bonus_figure:
+        player_blockers = getattr(self, 'player_blocks_bonus_figures', None)
+        if player_blockers:
+            for blocker in player_blockers:
+                player_support.append(('blocks_bonus', blocker))
+        elif self.player_blocks_bonus_figure:
             player_support.append(('blocks_bonus', self.player_blocks_bonus_figure))
         for archer in self._player_da_archers:
             if archer['hit_battle']:
@@ -3179,7 +3183,11 @@ class BattleScreen(SubScreen):
         # ─── Opponent figure (bottom) — centred in opponent sub-box ───
         # Collect opponent support figures (blocker / distance attacker / buffer)
         opp_support = []
-        if self.opponent_blocks_bonus_figure:
+        opponent_blockers = getattr(self, 'opponent_blocks_bonus_figures', None)
+        if opponent_blockers:
+            for blocker in opponent_blockers:
+                opp_support.append(('blocks_bonus', blocker))
+        elif self.opponent_blocks_bonus_figure:
             opp_support.append(('blocks_bonus', self.opponent_blocks_bonus_figure))
         for archer in self._opponent_da_archers:
             if archer['hit_battle']:

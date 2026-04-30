@@ -58,6 +58,7 @@ def _screen_base():
     screen._rename_input_rect = None
     screen._rename_confirm_rect = None
     screen._rename_cancel_rect = None
+    screen._pending_purchase = None
     screen._icons = {}
     screen._shield_icon = None
     screen._edit_icon = None
@@ -289,6 +290,67 @@ class TestKingdomConfigInteractions:
 
         KingdomConfigScreen._scroll_cosmetic_section(screen, 'flag', -1)
         assert screen._cosmetic_scroll['flag'] > 0
+
+    def test_paid_cosmetic_purchase_requires_confirmation(self, monkeypatch):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._catalog = {
+            'surface_stone': {
+                'type': 'surface',
+                'name': 'Stone Pattern',
+                'price_gold': 950,
+            },
+        }
+        bought = []
+        dialogues = []
+
+        def fake_dialogue(self, message, actions=None, title=''):
+            dialogues.append((message, actions, title))
+            self.dialogue_box = SimpleNamespace(update=lambda _events: None)
+
+        monkeypatch.setattr(KingdomConfigScreen, 'make_dialogue_box', fake_dialogue)
+        monkeypatch.setattr(KingdomConfigScreen, '_buy_cosmetic',
+                            lambda self, key: bought.append(key))
+
+        KingdomConfigScreen._confirm_cosmetic_purchase(screen, 'surface_stone')
+
+        assert bought == []
+        assert screen._pending_purchase['kind'] == 'cosmetic'
+        assert screen._pending_purchase['key'] == 'surface_stone'
+        assert 'Stone Pattern' in dialogues[0][0]
+        assert dialogues[0][1] == ['Confirm', 'Cancel']
+        assert dialogues[0][2] == 'Confirm Purchase'
+
+        screen.dialogue_box = SimpleNamespace(update=lambda _events: 'confirm')
+        assert KingdomConfigScreen._handle_pending_purchase_dialogue(screen, []) is True
+        assert bought == ['surface_stone']
+        assert screen._pending_purchase is None
+
+    def test_paid_shield_purchase_requires_confirmation(self, monkeypatch):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._quote = {'price_gold': 108, 'hours': 6}
+        bought = []
+        dialogues = []
+
+        def fake_dialogue(self, message, actions=None, title=''):
+            dialogues.append((message, actions, title))
+            self.dialogue_box = SimpleNamespace(update=lambda _events: None)
+
+        monkeypatch.setattr(KingdomConfigScreen, 'make_dialogue_box', fake_dialogue)
+        monkeypatch.setattr(KingdomConfigScreen, '_buy_shield',
+                            lambda self: bought.append(True))
+
+        KingdomConfigScreen._confirm_shield_purchase(screen)
+
+        assert bought == []
+        assert screen._pending_purchase['kind'] == 'shield'
+        assert screen._pending_purchase['hours'] == 6
+        assert '108 gold' in dialogues[0][0]
+
+        screen.dialogue_box = SimpleNamespace(update=lambda _events: 'cancel')
+        assert KingdomConfigScreen._handle_pending_purchase_dialogue(screen, []) is True
+        assert bought == []
+        assert screen._pending_purchase is None
+        screen.state.set_msg.assert_called_with('Purchase cancelled')
 
     def test_rename_submit_posts_name_and_updates_gold(self, monkeypatch):
         import game.screens.kingdom_config_screen as module

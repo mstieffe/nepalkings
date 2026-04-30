@@ -5,6 +5,8 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 from models import (Game, Land, Kingdom, KingdomCosmeticUnlock, KingdomNotification,
                     KingdomSkillAllocation)
 import server_settings as config
@@ -111,6 +113,54 @@ class TestKingdomConfigRoutes:
         assert data['gold'] == 25
         db.session.refresh(kingdom)
         assert kingdom.name == 'High Garden'
+
+    def test_cosmetic_purchase_unlocks_and_equips_skin(self, client, db, two_users,
+                                                       auth_headers_user1):
+        u1, _ = two_users
+        u1.gold = config.KINGDOM_COSMETIC_CATALOG['surface_stone']['price_gold'] + 25
+        db.session.commit()
+        _add_land(db, 0, 0, owner_id=u1.id)
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+
+        rv = client.post(f'/kingdom/config/{kingdom.id}/cosmetics/purchase',
+                         headers=auth_headers_user1,
+                         json={'cosmetic_key': 'surface_stone'})
+
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['kingdom']['style']['surface_key'] == 'surface_stone'
+        assert data['gold'] == 25
+        db.session.refresh(kingdom)
+        assert kingdom.surface_key == 'surface_stone'
+        assert KingdomCosmeticUnlock.query.filter_by(
+            kingdom_id=kingdom.id,
+            cosmetic_key='surface_stone',
+        ).one_or_none() is not None
+
+    @pytest.mark.parametrize('cosmetic_key', [
+        'surface_grass', 'surface_marble', 'surface_lava',
+        'border_rope_braid', 'border_thorned',
+    ])
+    def test_new_cosmetics_can_be_purchased(self, client, db, two_users,
+                                            auth_headers_user1, cosmetic_key):
+        u1, _ = two_users
+        entry = config.KINGDOM_COSMETIC_CATALOG[cosmetic_key]
+        u1.gold = entry['price_gold'] + 10
+        db.session.commit()
+        _add_land(db, 0, 0, owner_id=u1.id)
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+
+        rv = client.post(f'/kingdom/config/{kingdom.id}/cosmetics/purchase',
+                         headers=auth_headers_user1,
+                         json={'cosmetic_key': cosmetic_key})
+
+        assert rv.status_code == 200
+        data = rv.get_json()
+        field = f'{entry["type"]}_key'
+        assert data['kingdom']['style'][field] == cosmetic_key
+        assert data['gold'] == 10
+        db.session.refresh(kingdom)
+        assert getattr(kingdom, field) == cosmetic_key
 
     def test_kingdom_rename_rejects_short_long_and_control_chars(self, client, db, two_users,
                                                                  auth_headers_user1):

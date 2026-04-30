@@ -71,6 +71,42 @@ class TestBattleScreenConquerFlow:
 
         assert power == 10  # base only; normal support bonus is blocked
 
+    def test_active_temple_blocks_all_matching_battle_targets(self):
+        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
+        temple = SimpleNamespace(
+            id=1,
+            name='Himalaya Temple',
+            suit='Spades',
+            blocks_bonus=True,
+            requires={},
+        )
+        target_a = SimpleNamespace(id=2, name='Djungle Warrior', suit='Hearts')
+        target_b = SimpleNamespace(id=3, name='Djungle Cavalry', suit='Hearts')
+        icon_a = SimpleNamespace(battle_bonus_blocked=False)
+        icon_b = SimpleNamespace(battle_bonus_blocked=False)
+
+        screen.player_figure = temple
+        screen.player_figure_2 = None
+        screen.opponent_figure = target_a
+        screen.opponent_figure_2 = target_b
+        screen.player_figure_icon = SimpleNamespace(battle_bonus_blocked=False)
+        screen.player_figure_icon_2 = None
+        screen.opponent_figure_icon = icon_a
+        screen.opponent_figure_icon_2 = icon_b
+        screen._resources_data = {'produces': {}, 'requires': {}}
+        screen._opponent_resources_data = {'produces': {}, 'requires': {}}
+
+        BattleScreen._detect_blocks_bonus(
+            screen,
+            player_figures=[temple],
+            opponent_figures=[target_a, target_b],
+        )
+
+        assert icon_a.battle_bonus_blocked is True
+        assert icon_b.battle_bonus_blocked is True
+        assert screen.player_blocks_bonus_figure is temple
+        assert screen.player_blocks_bonus_figures == [temple]
+
     def test_kingdom_skills_do_not_modify_client_call_figure_preview(self):
         BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=False)
         screen.player_buffs_allies_figures = []

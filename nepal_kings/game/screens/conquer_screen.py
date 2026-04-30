@@ -141,6 +141,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._value_font = settings.get_font(settings.FS_BODY, bold=True)
         self._btn_font = settings.get_font(settings.FS_BUTTON, bold=True)
         self._small_font = settings.get_font(settings.FS_SMALL)
+        self._tiny_font = settings.get_font(settings.FS_TINY)
         self._res_font = settings.get_font(settings.FS_TINY)
 
         # ── Layout rects (initialised lazily after first data load) ─

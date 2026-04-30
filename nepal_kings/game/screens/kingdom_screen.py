@@ -110,6 +110,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._activity_tab = 'alerts'
         self._activity_tab_rects = {}
         self._activity_row_rects = []
+        self._activity_scroll_offsets = {'alerts': 0, 'history': 0, 'messages': 0}
+        self._activity_scrollbar_rect = None
         self._mark_read_rect = None
         self._mark_read_kind = None
         self._message_compose = None
@@ -265,11 +267,15 @@ class KingdomScreen(MenuScreenMixin, Screen):
             logger.warning(f'Failed to load notifications: {e}')
             self._notifications = []
 
+    def _visible_notifications(self):
+        """Return notification rows that should still appear in Alerts."""
+        return [n for n in getattr(self, '_notifications', []) if not n.get('seen', False)]
+
     def _load_messages(self):
         """Fetch recent kingdom messages for the activity panel."""
         try:
             resp = requests.get(
-                f'{settings.SERVER_URL}/kingdom/messages?limit=20', timeout=10)
+                f'{settings.SERVER_URL}/kingdom/messages?limit=50', timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 self._messages = data.get('messages', [])
@@ -287,7 +293,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._load_notifications()
         try:
             resp = requests.get(
-                f'{settings.SERVER_URL}/kingdom/attack_history?per_page=20', timeout=10)
+                f'{settings.SERVER_URL}/kingdom/attack_history?per_page=50', timeout=10)
             if resp.status_code == 200:
                 self._attack_history = resp.json().get('history', [])
             else:
@@ -365,11 +371,80 @@ class KingdomScreen(MenuScreenMixin, Screen):
         pygame.draw.rect(self.window, settings.KINGDOM_MAP_FRAME_BORDER, r,
                          settings.KINGDOM_MAP_FRAME_BORDER_W, border_radius=8)
 
+    def _activity_scroll_offsets_map(self):
+        offsets = getattr(self, '_activity_scroll_offsets', None)
+        if not isinstance(offsets, dict):
+            offsets = {'alerts': 0, 'history': 0, 'messages': 0}
+            self._activity_scroll_offsets = offsets
+        return offsets
+
+    def _activity_content_top(self):
+        tab_y = self._activity_rect.y + 34
+        tab_h = int(0.036 * _SH)
+        return tab_y + tab_h + 10
+
+    def _activity_visible_count(self):
+        row_h = settings.KINGDOM_ACTIVITY_ROW_H
+        available_h = self._activity_rect.bottom - 10 - self._activity_content_top()
+        return max(1, available_h // row_h)
+
+    def _activity_rows_for_tab(self, tab=None):
+        tab = tab or self._activity_tab
+        if tab == 'alerts':
+            return self._visible_notifications(), 'No new kingdom alerts.'
+        if tab == 'history':
+            return getattr(self, '_attack_history', []), 'No attacks yet.'
+        if tab == 'messages':
+            return (getattr(self, '_messages', []),
+                    'No kingdom messages yet. Click another player land and choose Message.')
+        return [], 'Select a kingdom activity tab.'
+
+    def _clamp_activity_scroll(self, tab=None, row_count=None, visible_count=None):
+        tab = tab or self._activity_tab
+        if row_count is None:
+            rows, _empty = self._activity_rows_for_tab(tab)
+            row_count = len(rows)
+        if visible_count is None:
+            visible_count = self._activity_visible_count()
+        max_offset = max(0, int(row_count) - int(visible_count))
+        offsets = self._activity_scroll_offsets_map()
+        offset = max(0, min(int(offsets.get(tab, 0) or 0), max_offset))
+        offsets[tab] = offset
+        return offset
+
+    def _scroll_activity_tab(self, delta_rows, tab=None):
+        """Scroll the active activity tab by row count. Returns True if changed."""
+        tab = tab or self._activity_tab
+        rows, _empty = self._activity_rows_for_tab(tab)
+        visible_count = self._activity_visible_count()
+        max_offset = max(0, len(rows) - visible_count)
+        offsets = self._activity_scroll_offsets_map()
+        before = self._clamp_activity_scroll(tab, len(rows), visible_count)
+        after = max(0, min(before + int(delta_rows), max_offset))
+        offsets[tab] = after
+        return after != before
+
+    def _draw_activity_scrollbar(self, panel_rect, content_top, max_bottom,
+                                 row_count, visible_count, offset):
+        if row_count <= visible_count:
+            self._activity_scrollbar_rect = None
+            return
+        track_h = max(1, max_bottom - content_top - 2)
+        track = pygame.Rect(panel_rect.right - 14, content_top, 5, track_h)
+        self._activity_scrollbar_rect = track
+        pygame.draw.rect(self.window, (48, 44, 58), track, border_radius=3)
+        knob_h = max(14, int(track.h * (visible_count / float(row_count))))
+        max_offset = max(1, row_count - visible_count)
+        knob_y = track.y + int((track.h - knob_h) * (offset / float(max_offset)))
+        knob = pygame.Rect(track.x, knob_y, track.w, knob_h)
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER, knob, border_radius=3)
+
     def _draw_activity_panel(self):
         """Draw the right-side activity panel with alert/history tabs."""
         r = self._activity_rect
         self._activity_tab_rects = {}
         self._activity_row_rects = []
+        self._activity_scrollbar_rect = None
         self._mark_read_rect = None
         self._mark_read_kind = None
 
@@ -384,10 +459,12 @@ class KingdomScreen(MenuScreenMixin, Screen):
             title = self._activity_title_font.render('Kingdom Activity', True, settings.KINGDOM_INFO_CLR)
             self.window.blit(title, (r.x + 10, r.y + 8))
 
+            alert_rows = self._visible_notifications()
+
             msg_label = 'Messages'
             if self._message_unread_count:
                 msg_label = f'Messages ({self._message_unread_count})'
-            tabs = [('alerts', f'Alerts ({len(self._notifications)})'),
+            tabs = [('alerts', f'Alerts ({len(alert_rows)})'),
                     ('history', 'History'),
                     ('messages', msg_label)]
             tab_y = r.y + 34
@@ -405,37 +482,26 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 lbl = self._activity_small_font.render(label, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
                 self.window.blit(lbl, lbl.get_rect(center=tr.center))
 
-            content_top = tab_y + tab_h + 10
-            if self._activity_tab == 'alerts':
-                rows = self._notifications
-                empty = 'No new kingdom alerts.'
-                if rows:
-                    self._mark_read_rect = pygame.Rect(r.right - 102, r.y + 8, 88, 20)
-                    self._mark_read_kind = 'alerts'
-                    pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_TAB_BG,
-                                     self._mark_read_rect, border_radius=5)
-                    pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
-                                     self._mark_read_rect, 1, border_radius=5)
-                    mark = self._activity_small_font.render('Mark read', True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
-                    self.window.blit(mark, mark.get_rect(center=self._mark_read_rect.center))
-            elif self._activity_tab == 'history':
-                rows = self._attack_history
-                empty = 'No attacks yet.'
-            elif self._activity_tab == 'messages':
-                rows = self._messages
-                empty = 'No kingdom messages yet. Click another player land and choose Message.'
-                if self._message_unread_count:
-                    self._mark_read_rect = pygame.Rect(r.right - 102, r.y + 8, 88, 20)
-                    self._mark_read_kind = 'messages'
-                    pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_TAB_BG,
-                                     self._mark_read_rect, border_radius=5)
-                    pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
-                                     self._mark_read_rect, 1, border_radius=5)
-                    mark = self._activity_small_font.render('Mark read', True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
-                    self.window.blit(mark, mark.get_rect(center=self._mark_read_rect.center))
-            else:
-                rows = []
-                empty = 'Select a kingdom activity tab.'
+            content_top = self._activity_content_top()
+            rows, empty = self._activity_rows_for_tab(self._activity_tab)
+            if self._activity_tab == 'alerts' and rows:
+                self._mark_read_rect = pygame.Rect(r.right - 102, r.y + 8, 88, 20)
+                self._mark_read_kind = 'alerts'
+                pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_TAB_BG,
+                                 self._mark_read_rect, border_radius=5)
+                pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
+                                 self._mark_read_rect, 1, border_radius=5)
+                mark = self._activity_small_font.render('Mark read', True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+                self.window.blit(mark, mark.get_rect(center=self._mark_read_rect.center))
+            elif self._activity_tab == 'messages' and self._message_unread_count:
+                self._mark_read_rect = pygame.Rect(r.right - 102, r.y + 8, 88, 20)
+                self._mark_read_kind = 'messages'
+                pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_TAB_BG,
+                                 self._mark_read_rect, border_radius=5)
+                pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
+                                 self._mark_read_rect, 1, border_radius=5)
+                mark = self._activity_small_font.render('Mark read', True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+                self.window.blit(mark, mark.get_rect(center=self._mark_read_rect.center))
 
             if not rows:
                 empty_rect = pygame.Rect(r.x + 12, content_top + 8,
@@ -447,10 +513,16 @@ class KingdomScreen(MenuScreenMixin, Screen):
             row_h = settings.KINGDOM_ACTIVITY_ROW_H
             y = content_top
             max_bottom = r.bottom - 10
-            for item in rows[:7]:
+            visible_count = self._activity_visible_count()
+            offset = self._clamp_activity_scroll(self._activity_tab, len(rows), visible_count)
+            scrolling = len(rows) > visible_count
+            row_right_pad = 30 if scrolling else 20
+            self._draw_activity_scrollbar(r, content_top, max_bottom,
+                                          len(rows), visible_count, offset)
+            for item in rows[offset:offset + visible_count]:
                 if y + row_h > max_bottom:
                     break
-                rr = pygame.Rect(r.x + 10, y, r.w - 20, row_h - 4)
+                rr = pygame.Rect(r.x + 10, y, r.w - row_right_pad, row_h - 4)
                 self._activity_row_rects.append((rr, item))
                 self._draw_activity_row(rr, item)
                 y += row_h
@@ -468,6 +540,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             unread = (item.get('recipient_user_id') == self._current_user_id()
                       and not item.get('seen_by_recipient'))
             title_clr = settings.KINGDOM_INFO_CLR if unread else settings.KINGDOM_ACTIVITY_TEXT_CLR
+        elif item.get('activity_tone') == 'neutral':
+            title_clr = settings.KINGDOM_ACTIVITY_TEXT_CLR
         else:
             title_clr = (settings.KINGDOM_ACTIVITY_GOOD_CLR if good else settings.KINGDOM_ACTIVITY_BAD_CLR)
         title_surf = self._activity_font.render(title, True, title_clr)
@@ -531,6 +605,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
         return (clipped + ellipsis) if clipped else ellipsis
 
     def _format_activity_item(self, item):
+        if item.get('activity_title') is not None or item.get('activity_detail') is not None:
+            title = item.get('activity_title') or 'Kingdom event'
+            detail = item.get('activity_detail') or ''
+            tone = item.get('activity_tone') or 'neutral'
+            return title, detail, tone != 'bad'
         if self._is_message_item(item):
             return self._format_message_item(item)
         if self._is_kingdom_event_item(item):
@@ -538,34 +617,45 @@ class KingdomScreen(MenuScreenMixin, Screen):
         attacker = item.get('attacker_username') or item.get('attacker_name') or 'Unknown'
         defender = item.get('defender_username') or 'AI'
         result = item.get('result')
-        is_defender_alert = item in self._notifications
+        role = item.get('role')
         current_user_id = self._current_user_id()
         is_attacker = current_user_id is not None and item.get('attacker_user_id') == current_user_id
         is_defender = current_user_id is not None and item.get('defender_user_id') == current_user_id
+        is_attacker_perspective = role == 'attacker' if role else is_attacker
+        is_defender_perspective = role == 'defender' if role else is_defender
         if result == 'attacker_won':
-            if is_defender_alert or is_defender:
+            if is_defender_perspective:
                 title = f'{attacker} conquered your land'
                 deleted = item.get('kingdom_deleted_name')
                 detail = (f'{deleted} had no lands left and was dissolved.' if deleted
                           else self._card_detail(item, lost=True) or 'Land ownership changed.')
                 return title, detail, False
-            if is_attacker:
+            if is_attacker_perspective:
                 title = f'You conquered {defender}'
                 detail = self._card_detail(item, won=True) or 'Attack succeeded.'
                 return title, detail, True
             title = f'{attacker} conquered {defender}'
             detail = self._card_detail(item, won=True) or 'Attack succeeded.'
             return title, detail, True
-        if is_defender_alert or is_defender:
-            title = f'{attacker} failed to conquer you'
-            detail = self._card_detail(item, won=True) or 'Your defence held.'
-            return title, detail, True
-        if is_attacker:
-            title = f'Your attack on {defender} failed'
+        if result == 'defender_won':
+            if is_defender_perspective:
+                title = f'{attacker} failed to conquer you'
+                detail = self._card_detail(item, won=True) or 'Your defence held.'
+                return title, detail, True
+            if is_attacker_perspective:
+                title = f'Your attack on {defender} failed'
+                detail = self._card_detail(item, lost=True) or 'Attack failed.'
+                return title, detail, False
+            title = f'{attacker} failed against {defender}'
             detail = self._card_detail(item, lost=True) or 'Attack failed.'
             return title, detail, False
-        title = f'{attacker} failed against {defender}'
-        detail = self._card_detail(item, lost=True) or 'Attack failed.'
+        if is_defender_perspective:
+            title = f'{attacker} failed to conquer you'
+        elif is_attacker_perspective:
+            title = f'Attack on {defender} updated'
+        else:
+            title = f'{attacker} vs {defender}'
+        detail = 'Battle result updated.'
         return title, detail, False
 
     def _is_message_item(self, item):
@@ -609,6 +699,20 @@ class KingdomScreen(MenuScreenMixin, Screen):
             title = 'Kingdoms merged'
             detail = f'{absorbed} absorbed ({lands} lands, +{xp} XP).'
             return title, detail, True
+        if kind == 'card_looted':
+            rank = payload.get('rank') or '?'
+            suit = payload.get('suit') or 'card'
+            defender = payload.get('defender_name')
+            if not defender and payload.get('is_ai_defender'):
+                defender = 'AI defender'
+            title = 'Card looted'
+            detail = f'{rank} of {suit} lost to {defender or "the defender"}.'
+            return title, detail, False
+        if kind == 'shield_expired':
+            name = payload.get('kingdom_name') or 'Your kingdom'
+            title = 'Shield expired'
+            detail = f'{name} can be attacked again.'
+            return title, detail, False
         if kind == 'kingdom_dissolved':
             name = payload.get('kingdom_name') or 'Your kingdom'
             title = 'Kingdom dissolved'
@@ -642,13 +746,25 @@ class KingdomScreen(MenuScreenMixin, Screen):
         return ''
 
     def _activity_land_label(self, item):
+        if item.get('activity_land_label'):
+            return str(item.get('activity_land_label'))
         col = item.get('land_col')
         row = item.get('land_row')
         land_id = item.get('land_id')
+        payload = item.get('payload') if isinstance(item.get('payload'), dict) else {}
+        if col is None:
+            col = payload.get('land_col')
+        if row is None:
+            row = payload.get('land_row')
+        if land_id is None:
+            land_id = payload.get('land_id')
         if col is not None and row is not None:
             return f'Land ({col}, {row})'
         if land_id is not None:
             return f'Land #{land_id}'
+        if self._is_kingdom_event_item(item):
+            kingdom_name = payload.get('kingdom_name') or payload.get('absorbed_kingdom_name')
+            return kingdom_name or 'Kingdom event'
         return 'Kingdom land'
 
     def _draw_info_bar(self):
@@ -847,6 +963,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     self._detail_box = None
                 continue
 
+            if event.type == MOUSEWHEEL:
+                if self._activity_rect.collidepoint(pygame.mouse.get_pos()):
+                    self._scroll_activity_tab(-getattr(event, 'y', 0))
+                    continue
+
             if event.type == MOUSEBUTTONUP and event.button == 1:
                 if self._handle_activity_click(event.pos):
                     continue
@@ -956,12 +1077,23 @@ class KingdomScreen(MenuScreenMixin, Screen):
         for key, rect in self._activity_tab_rects.items():
             if rect.collidepoint(pos):
                 self._activity_tab = key
+                self._clamp_activity_scroll(key)
                 return True
         if self._mark_read_rect and self._mark_read_rect.collidepoint(pos):
             if self._mark_read_kind == 'messages':
                 self._mark_messages_seen()
             else:
                 self._mark_notifications_seen()
+            return True
+        if self._activity_scrollbar_rect and self._activity_scrollbar_rect.collidepoint(pos):
+            rows, _empty = self._activity_rows_for_tab(self._activity_tab)
+            visible = self._activity_visible_count()
+            offset = self._clamp_activity_scroll(self._activity_tab, len(rows), visible)
+            direction = -visible if pos[1] < self._activity_scrollbar_rect.centery else visible
+            self._scroll_activity_tab(direction)
+            if offset == self._activity_scroll_offsets_map().get(self._activity_tab, 0):
+                # Keep the click consumed even if the list was already at an edge.
+                return True
             return True
         for rect, item in self._activity_row_rects:
             if rect.collidepoint(pos):
@@ -1148,7 +1280,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         """Tell the server to mark current notifications as seen."""
         attack_log_ids = []
         kingdom_notification_ids = []
-        for n in self._notifications:
+        for n in self._visible_notifications():
             nid = n.get('id')
             if not nid:
                 continue
@@ -1158,6 +1290,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 attack_log_ids.append(nid)
         if not attack_log_ids and not kingdom_notification_ids:
             self._notifications = []
+            self._activity_scroll_offsets_map()['alerts'] = 0
             return
         try:
             requests.post(
@@ -1169,6 +1302,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         except Exception as e:
             logger.warning(f'Failed to mark notifications seen: {e}')
         self._notifications = []
+        self._activity_scroll_offsets_map()['alerts'] = 0
 
     def _mark_messages_seen(self):
         """Tell the server to mark received kingdom messages as read."""
@@ -1177,6 +1311,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                if m.get('id') and m.get('recipient_user_id') == current_user_id]
         if not ids:
             self._message_unread_count = 0
+            self._activity_scroll_offsets_map()['messages'] = 0
             return
         try:
             requests.post(
@@ -1188,6 +1323,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if msg.get('id') in ids:
                 msg['seen_by_recipient'] = True
         self._message_unread_count = 0
+        self._activity_scroll_offsets_map()['messages'] = 0
 
     # ── Detail box ──────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ import pygame
 from pygame.locals import *
 
 from config import settings
+from game.components.hex_map import _draw_surface_pattern
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.screens._menu_base import MenuScreenMixin
 from game.screens.screen import Screen
@@ -77,6 +78,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._rename_input_rect = None
         self._rename_confirm_rect = None
         self._rename_cancel_rect = None
+        self._pending_purchase = None
         self._icons = {}
         self._shield_icon = self._load_icon(settings.KINGDOM_SHIELD_ICON_PATH)
         for key, path in settings.KINGDOM_SKILL_ICON_PATHS.items():
@@ -202,7 +204,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
     def _buy_cosmetic(self, key):
         data = self._post_action('cosmetics/purchase', {'cosmetic_key': key})
         if data:
-            self._set_msg('Cosmetic unlocked')
+            if data.get('already_unlocked'):
+                self._set_msg('Cosmetic already owned')
+            else:
+                self._set_msg('Cosmetic unlocked and equipped')
             self._fetch_config()
 
     def _equip_cosmetic(self, key):
@@ -210,6 +215,73 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         if data:
             self._set_msg('Kingdom style updated')
             self._fetch_config()
+
+    def _catalog_item(self, key):
+        item = (self._catalog or {}).get(key)
+        if not item:
+            return {}
+        row = dict(item)
+        row['key'] = key
+        return row
+
+    def _confirm_cosmetic_purchase(self, key):
+        item = self._catalog_item(key)
+        price = max(0, int(item.get('price_gold', 0) or 0))
+        if price <= 0:
+            self._buy_cosmetic(key)
+            return
+        name = item.get('name') or key
+        self._pending_purchase = {
+            'kind': 'cosmetic',
+            'key': key,
+            'name': name,
+            'price': price,
+        }
+        self.make_dialogue_box(
+            f'Buy {name} for {price} gold? It will be equipped immediately.',
+            actions=['Confirm', 'Cancel'],
+            title='Confirm Purchase',
+        )
+
+    def _confirm_shield_purchase(self):
+        quote = self._quote or {}
+        price = max(0, int(quote.get('price_gold', 0) or 0))
+        if price <= 0:
+            self._buy_shield()
+            return
+        hours = int(quote.get('hours', self._selected_hours) or self._selected_hours)
+        self._pending_purchase = {
+            'kind': 'shield',
+            'hours': hours,
+            'price': price,
+        }
+        self.make_dialogue_box(
+            f'Buy a {hours}h kingdom shield for {price} gold?',
+            actions=['Confirm', 'Cancel'],
+            title='Confirm Purchase',
+        )
+
+    def _handle_pending_purchase_dialogue(self, events):
+        if not self._pending_purchase:
+            return False
+        if not self.dialogue_box:
+            self._pending_purchase = None
+            return False
+        response = self.dialogue_box.update(events)
+        if not response:
+            return True
+
+        pending = self._pending_purchase
+        self._pending_purchase = None
+        self.dialogue_box = None
+        if response == 'confirm':
+            if pending.get('kind') == 'cosmetic':
+                self._buy_cosmetic(pending.get('key'))
+            elif pending.get('kind') == 'shield':
+                self._buy_shield()
+        else:
+            self._set_msg('Purchase cancelled')
+        return True
 
     def _upgrade_skill(self, key):
         data = self._post_action('skills/upgrade', {'skill_key': key})
@@ -301,6 +373,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._select_kingdom_at(self._selected_kingdom_index() + delta)
 
     def handle_events(self, events):
+        if self._handle_pending_purchase_dialogue(events):
+            return
         super().handle_events(events)
         if self.dialogue_box:
             return
@@ -338,9 +412,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     self._selected_hours = value
                     self._fetch_quote()
                 elif action == 'buy_shield':
-                    self._buy_shield()
+                    self._confirm_shield_purchase()
                 elif action == 'buy_cosmetic':
-                    self._buy_cosmetic(value)
+                    self._confirm_cosmetic_purchase(value)
                 elif action == 'equip_cosmetic':
                     self._equip_cosmetic(value)
                 elif action == 'rename_start':
@@ -748,12 +822,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             points.append((cx + int(radius * pygame.math.Vector2(1, 0).rotate_rad(angle).x),
                            cy + int(radius * pygame.math.Vector2(1, 0).rotate_rad(angle).y)))
         pygame.draw.polygon(self.window, tier_fill, points)
-        surface = settings.HEX_SURFACE_SKINS.get(style.get('surface_key'), {})
-        overlay = surface.get('overlay')
-        if overlay:
-            surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            pygame.draw.polygon(surf, overlay, [(x - rect.x, y - rect.y) for x, y in points])
-            self.window.blit(surf, rect.topleft)
+        self._draw_surface_skin_preview(style.get('surface_key'), points)
         border = settings.HEX_BORDER_SKINS.get(style.get('border_key'),
                                                settings.HEX_BORDER_SKINS['border_simple_gold'])
         pygame.draw.polygon(self.window, border.get('outer', (90, 70, 40)), points, 5)
@@ -768,6 +837,36 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                          (pole_x, pole_y, 30, 18), border_radius=2)
         pygame.draw.rect(self.window, flag.get('accent', (120, 90, 50)),
                          (pole_x, pole_y, 30, 18), 1, border_radius=2)
+
+    def _draw_surface_skin_preview(self, surface_key, points, seed=0):
+        skin = settings.HEX_SURFACE_SKINS.get(surface_key, {})
+        overlay = skin.get('overlay')
+        pattern = skin.get('pattern')
+        if not overlay and not pattern:
+            return
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        rect = pygame.Rect(int(min(xs)), int(min(ys)),
+                           max(1, int(max(xs) - min(xs)) + 1),
+                           max(1, int(max(ys) - min(ys)) + 1))
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        local = [(x - rect.x, y - rect.y) for x, y in points]
+        if overlay:
+            pygame.draw.polygon(surf, overlay, local)
+        if pattern:
+            pattern_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            _draw_surface_pattern(
+                pattern_surf,
+                pattern,
+                skin.get('pattern_clr', (0, 0, 0, 64)),
+                int(seed or 0),
+                max(1, min(rect.w, rect.h) / 2),
+            )
+            mask = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            pygame.draw.polygon(mask, (255, 255, 255, 255), local)
+            pattern_surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            surf.blit(pattern_surf, (0, 0))
+        self.window.blit(surf, rect.topleft)
 
     def _draw_cosmetic_chip(self, rect, cosmetic_type, key):
         pygame.draw.rect(self.window, (20, 18, 22), rect, border_radius=5)
@@ -794,11 +893,12 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                            cy + int(radius * pygame.math.Vector2(1, 0).rotate_rad(angle).y)))
         fill = settings.HEX_TIER_FILL.get(2, (100, 110, 90))
         if cosmetic_type == 'surface':
-            surface = settings.HEX_SURFACE_SKINS.get(key, {})
-            fill = surface.get('overlay') or fill
-            if isinstance(fill, tuple) and len(fill) == 4:
-                fill = fill[:3]
             pygame.draw.polygon(self.window, fill, points)
+            self._draw_surface_skin_preview(
+                key,
+                points,
+                seed=sum(ord(ch) for ch in str(key)),
+            )
             pygame.draw.polygon(self.window, (75, 62, 42), points, 2)
             return
 

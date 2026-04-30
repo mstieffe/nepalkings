@@ -66,8 +66,8 @@ Cards are NOT just their battle value — their true worth depends on what they 
 | **Large Rice Farm** | off (♥♦) | J + Q + number(7-10) main | food_red = number value | UPGRADE: add Q to Small Rice Farm | — | — |
 | Himalaya Temple | def (♣♠) | 2× Q (main) | — | 1 villager_black | Shield Manufactory | cannot_attack, blocks_bonus |
 | Djungle Temple | off (♥♦) | 2× Q (main) | — | 1 villager_red | Sword Manufactory | cannot_attack, blocks_bonus |
-| **Shield Manufactory** | def (♣♠) | 2× Q + 7 (main) | — | UPGRADE: add 7 to Himalaya Temple | — | cannot_attack, blocks_bonus |
-| **Sword Manufactory** | off (♥♦) | 2× Q + 7 (main) | — | UPGRADE: add 7 to Djungle Temple | — | cannot_attack, blocks_bonus |
+| **Shield Manufactory** | def (♣♠) | 2× Q + 7 (main) | — | UPGRADE: add 7 to Himalaya Temple | — | cannot_attack |
+| **Sword Manufactory** | off (♥♦) | 2× Q + 7 (main) | — | UPGRADE: add 7 to Djungle Temple | — | cannot_attack |
 | Himalaya Healer | def (♣♠) | 2× 2 (side) | — | 1 villager_black | Stone Mason | cannot_attack, buffs_allies (+4 to same-suit village figs) |
 | Djungle Healer | off (♥♦) | 2× 2 (side) | — | 1 villager_red | Carpenter | cannot_attack, buffs_allies (+4 to same-suit village figs) |
 | Stone Mason | def (♣♠) | 2 (side) + number(3/6 side) | material_black = number value | 1 villager_black | — | — |

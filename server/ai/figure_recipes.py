@@ -272,8 +272,8 @@ FAMILY_SKILLS.update({
     # Upgrade families (inherit parent skills)
     'Stone Fortress':        {'cannot_attack': True, 'must_be_attacked': True},
     'Elite Gorkha Warriors': {'instant_charge': True},
-    'Shield Manufactory':    {'cannot_attack': True, 'blocks_bonus': True},
-    'Sword Manufactory':     {'cannot_attack': True, 'blocks_bonus': True},
+    'Shield Manufactory':    {'cannot_attack': True},
+    'Sword Manufactory':     {'cannot_attack': True},
     # Castle upgrades
     'Himalaya Maharaja':     {'checkmate': True},
     'Djungle Maharaja':      {'checkmate': True},

@@ -625,6 +625,14 @@ def _figure_has_family_skill(figure, skill_name):
 def _conquer_figure_can_advance(figure, player_id, game_id, *, counter=False):
     if not figure:
         return False
+    from models import Game, db
+    game = db.session.get(Game, game_id)
+    if game and figure.id in set(game.resting_figure_ids or []):
+        return False
+    modifiers = game.battle_modifier if game and isinstance(game.battle_modifier, list) else []
+    from game_service.figure_rule_helpers import modifiers_require_village
+    if modifiers_require_village(modifiers) and figure.field != 'village':
+        return False
     if _figure_has_family_skill(figure, 'cannot_attack'):
         return False
     if counter and _figure_has_family_skill(figure, 'cannot_defend'):
@@ -1166,7 +1174,12 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
         ).first()
         if _conquer_figure_can_advance(fig, ai_player_id, game.id, counter=True):
             return fig.id
-        return None
+        logger.info(
+            "[CONQUER-AI] configured defender figure invalid for counter-advance; "
+            "falling back to another candidate game=%s figure_id=%s",
+            game.id,
+            game.defending_figure_id,
+        )
 
     candidates = Figure.query.filter_by(
         game_id=game.id,

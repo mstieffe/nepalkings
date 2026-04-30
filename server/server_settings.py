@@ -328,6 +328,20 @@ KINGDOM_COSMETIC_CATALOG = {
         'price_gold': 450,
         'asset_key': 'border_silver',
     },
+    'border_rope_braid': {
+        'type': 'border',
+        'name': 'Rope Braid Border',
+        'rarity': 'common',
+        'price_gold': 500,
+        'asset_key': 'border_rope_braid',
+    },
+    'border_thorned': {
+        'type': 'border',
+        'name': 'Thorned Border',
+        'rarity': 'epic',
+        'price_gold': 2050,
+        'asset_key': 'border_thorned',
+    },
     'surface_plain': {
         'type': 'surface',
         'name': 'Plain Ground',
@@ -369,6 +383,27 @@ KINGDOM_COSMETIC_CATALOG = {
         'rarity': 'epic',
         'price_gold': 1700,
         'asset_key': 'surface_dusk',
+    },
+    'surface_grass': {
+        'type': 'surface',
+        'name': 'Verdant Grass',
+        'rarity': 'common',
+        'price_gold': 350,
+        'asset_key': 'surface_grass',
+    },
+    'surface_marble': {
+        'type': 'surface',
+        'name': 'Veined Marble',
+        'rarity': 'rare',
+        'price_gold': 1100,
+        'asset_key': 'surface_marble',
+    },
+    'surface_lava': {
+        'type': 'surface',
+        'name': 'Molten Lava',
+        'rarity': 'epic',
+        'price_gold': 2100,
+        'asset_key': 'surface_lava',
     },
 }
 

@@ -540,6 +540,233 @@ class TestHexMapVisualSemantics:
         assert hm._same_owner_neighbour(tile, (1, 0)) is True
         assert hm._same_owner_neighbour(tile, (0, 1)) is False
 
+    def test_owner_border_skips_same_owner_internal_edge(self, monkeypatch):
+        from game.components import hex_map as module
+        from game.components.hex_map import HexMap, _hex_corners
+        from config import settings
+        import pygame
+        owner = {'user_id': 7, 'username': 'owner'}
+        window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        hm = HexMap([
+            _make_land(0, 0, land_id=1, owner=owner,
+                       owner_style={'border_key': 'border_simple_gold'}),
+            _make_land(1, 0, land_id=2, owner=owner,
+                       owner_style={'border_key': 'border_simple_gold'}),
+        ], window)
+        tile = hm.tiles[0]
+        corners = _hex_corners(100, 100, 30)
+        calls = []
+        monkeypatch.setattr(
+            module,
+            '_draw_capped_line',
+            lambda _surface, color, start, end, width: calls.append((color, start, end, width)),
+        )
+
+        hm._draw_owner_border(tile, corners)
+
+        # 'simple' style draws three outline layers for each of five true
+        # outside edges.  The shared same-owner edge is intentionally not drawn.
+        assert len(calls) == 15
+
+    def test_owner_border_insets_edge_shared_with_other_land(self, monkeypatch):
+        from game.components import hex_map as module
+        from game.components.hex_map import HexMap, _hex_corners
+        from config import settings
+        import pygame
+        owner = {'user_id': 7, 'username': 'owner'}
+        rival = {'user_id': 8, 'username': 'rival'}
+        window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        hm = HexMap([
+            _make_land(0, 0, land_id=1, owner=owner,
+                       owner_style={'border_key': 'border_simple_gold'}),
+            _make_land(1, 0, land_id=2, owner=rival,
+                       owner_style={'border_key': 'border_simple_gold'}),
+        ], window)
+        tile = hm.tiles[0]
+        corners = _hex_corners(100, 100, 30)
+        calls = []
+        monkeypatch.setattr(
+            module,
+            '_draw_capped_line',
+            lambda _surface, color, start, end, width: calls.append((color, start, end, width)),
+        )
+
+        hm._draw_owner_border(tile, corners)
+
+        # 5 outside edges + 1 shared edge × 3 layers each (simple style).
+        assert len(calls) == 18
+        original_start = corners[0]
+        original_end = corners[1]
+        centre = (100, 100)
+        shared_calls = calls[-3:]
+        for _color, start, end, _width in shared_calls:
+            assert start != original_start
+            assert end != original_end
+            assert math.hypot(start[0] - centre[0], start[1] - centre[1]) < math.hypot(
+                original_start[0] - centre[0], original_start[1] - centre[1])
+            assert math.hypot(end[0] - centre[0], end[1] - centre[1]) < math.hypot(
+                original_end[0] - centre[0], original_end[1] - centre[1])
+
+    def test_owner_border_dispatches_per_skin_style(self, monkeypatch):
+        from game.components import hex_map as module
+        from game.components.hex_map import HexMap, _hex_corners
+        from config import settings
+        import pygame
+        owner = {'user_id': 7, 'username': 'owner'}
+        window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        hm = HexMap([
+            _make_land(0, 0, land_id=1, owner=owner,
+                       owner_style={'border_key': 'border_rope_braid'}),
+        ], window)
+        tile = hm.tiles[0]
+        corners = _hex_corners(100, 100, 30)
+        calls = []
+        monkeypatch.setattr(
+            module,
+            '_draw_capped_line',
+            lambda _surface, color, start, end, width: calls.append((color, start, end, width)),
+        )
+
+        hm._draw_owner_border(tile, corners)
+
+        # Rope-braid style draws far more line primitives per edge than
+        # the simple 3-layer style.  6 external edges × > 3 calls each.
+        assert len(calls) > 6 * 3
+
+    def test_vertex_ornament_blitted_for_epic_border(self, monkeypatch):
+        from game.components import hex_map as module
+        from game.components.hex_map import HexMap, _hex_corners
+        from config import settings
+        import pygame
+
+        class _BlitSpy(pygame.Surface):
+            def __init__(self, size, sentinel):
+                super().__init__(size, pygame.SRCALPHA)
+                self._sentinel = sentinel
+                self.sentinel_blits = []
+
+            def blit(self, source, dest, *a, **kw):
+                if source is self._sentinel:
+                    self.sentinel_blits.append(dest)
+                return super().blit(source, dest, *a, **kw)
+
+        owner = {'user_id': 7, 'username': 'owner'}
+        sentinel = pygame.Surface((6, 6), pygame.SRCALPHA)
+        sentinel.fill((1, 2, 3, 255))
+        window = _BlitSpy((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), sentinel)
+        hm = HexMap([
+            _make_land(0, 0, land_id=1, owner=owner,
+                       owner_style={'border_key': 'border_ruby'}),
+        ], window)
+        tile = hm.tiles[0]
+        corners = _hex_corners(100, 100, 30)
+        monkeypatch.setattr(
+            module.hex_cosmetics,
+            'render_vertex_ornament',
+            lambda key, sz: sentinel,
+        )
+
+        hm._draw_owner_border(tile, corners)
+        assert len(window.sentinel_blits) == 6  # one per hex corner
+
+    def test_vertex_ornament_skipped_for_default_border(self, monkeypatch):
+        from game.components import hex_map as module
+        from game.components.hex_map import HexMap, _hex_corners
+        from config import settings
+        import pygame
+        owner = {'user_id': 7, 'username': 'owner'}
+        window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        hm = HexMap([
+            _make_land(0, 0, land_id=1, owner=owner,
+                       owner_style={'border_key': 'border_simple_gold'}),
+        ], window)
+        tile = hm.tiles[0]
+        corners = _hex_corners(100, 100, 30)
+        called = {'n': 0}
+
+        def boom(*_a, **_kw):
+            called['n'] += 1
+            return None
+
+        monkeypatch.setattr(
+            module.hex_cosmetics, 'render_vertex_ornament', boom)
+        hm._draw_owner_border(tile, corners)
+        # Default-rarity border short-circuits before consulting the renderer.
+        assert called['n'] == 0
+
+    def test_surface_skin_blits_cached_art_clipped_to_hex(self, monkeypatch):
+        from game.components import hex_map as module
+        from game.components.hex_map import HexMap, HexTile, _hex_corners
+        from game.components import hex_cosmetics
+        import pygame
+        owner = {'user_id': 7, 'username': 'owner'}
+        window = pygame.Surface((120, 120), pygame.SRCALPHA)
+        hm = HexMap.__new__(HexMap)
+        hm.window = window
+        tile = HexTile(_make_land(
+            0, 0, land_id=1, owner=owner,
+            owner_style={'surface_key': 'surface_stone'},
+        ), 60, 60)
+        corners = _hex_corners(60, 60, 30)
+        # Force a fresh render of the cached art for this size.
+        hex_cosmetics.clear_caches()
+
+        hm._draw_surface_skin(tile, corners, 60, 60, 30)
+
+        # Top-left of the hex bounding box is outside the polygon and must not
+        # receive surface pixels; the centre should show the surface skin.
+        assert window.get_at((30, 34)).a == 0
+        assert window.get_at((60, 60)).a > 0
+
+    def test_surface_renderer_uses_lru_cache(self):
+        from game.components import hex_cosmetics
+        hex_cosmetics.clear_caches()
+        a = hex_cosmetics.render_surface_art('surface_stone', 30)
+        b = hex_cosmetics.render_surface_art('surface_stone', 30)
+        assert a is b
+
+    def test_center_emblem_only_for_rare_or_higher_surface(self):
+        from game.components import hex_cosmetics
+        hex_cosmetics.clear_caches()
+        assert hex_cosmetics.render_center_emblem('surface_plain', 30) is None
+        assert hex_cosmetics.render_center_emblem('surface_grass', 30) is None
+        assert hex_cosmetics.render_center_emblem('surface_stone', 30) is not None
+        assert hex_cosmetics.render_center_emblem('surface_lava', 30) is not None
+
+    def test_vertex_ornament_only_for_rare_or_higher_border(self):
+        from game.components import hex_cosmetics
+        hex_cosmetics.clear_caches()
+        assert hex_cosmetics.render_vertex_ornament('border_simple_gold', 30) is None
+        assert hex_cosmetics.render_vertex_ornament('border_silver', 30) is None
+        assert hex_cosmetics.render_vertex_ornament('border_emerald_carved', 30) is not None
+        assert hex_cosmetics.render_vertex_ornament('border_ruby', 30) is not None
+
+    def test_render_layers_bases_before_borders_and_details(self, monkeypatch):
+        from game.components.hex_map import HexMap
+        from config import settings
+        import pygame
+        owner = {'user_id': 7, 'username': 'owner'}
+        window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        hm = HexMap([
+            _make_land(0, 0, land_id=1, owner=owner),
+            _make_land(1, 0, land_id=2, owner=owner),
+        ], window)
+        calls = []
+        monkeypatch.setattr(HexMap, '_draw_hex_base',
+                            lambda self, tile, *_args: calls.append(('base', tile.land_id)))
+        monkeypatch.setattr(HexMap, '_draw_hex_border',
+                            lambda self, tile, *_args: calls.append(('border', tile.land_id)))
+        monkeypatch.setattr(HexMap, '_draw_hex_details',
+                            lambda self, tile, *_args: calls.append(('details', tile.land_id)))
+        monkeypatch.setattr(HexMap, '_draw_kingdom_badges', lambda self, _sz: None)
+        monkeypatch.setattr(HexMap, '_draw_minimap', lambda self: None)
+
+        hm.render()
+
+        assert [phase for phase, _land_id in calls] == [
+            'base', 'base', 'border', 'border', 'details', 'details'
+        ]
+
     def test_land_info_visibility_uses_zoom_threshold(self):
         from game.components.hex_map import HexMap
         from config import settings

@@ -476,6 +476,9 @@ def kingdom_config_cosmetic_purchase(kingdom_id):
     user.gold -= price
     db.session.add(KingdomCosmeticUnlock(
         kingdom_id=kingdom_row.id, cosmetic_key=cosmetic_key))
+    style_field = _COSMETIC_STYLE_FIELDS.get(item.get('type'))
+    if style_field:
+        setattr(kingdom_row, style_field, cosmetic_key)
     kingdom_row.updated_at = _utcnow()
     db.session.commit()
 
@@ -971,6 +974,33 @@ def _validate_config_own_spell_target(cfg, target_fig_id):
     return fig, None
 
 
+def _config_counter_advance_error(fig, cfg, deficit_map=None, planned_modifiers=None):
+    """Return why a defence-config figure cannot be a battle figure."""
+    from game_service.figure_rule_helpers import (
+        config_strategy_modifiers,
+        explain_counter_advance_block,
+        modifiers_require_village,
+    )
+
+    modifiers = (planned_modifiers if planned_modifiers is not None
+                 else config_strategy_modifiers(cfg))
+    deficit = bool((deficit_map or {}).get(getattr(fig, 'id', None), False))
+    return explain_counter_advance_block(
+        fig,
+        require_village=modifiers_require_village(modifiers),
+        deficit=deficit,
+    )
+
+
+def _config_figure_can_counter_advance(fig, cfg, deficit_map=None, planned_modifiers=None):
+    return _config_counter_advance_error(
+        fig,
+        cfg,
+        deficit_map=deficit_map,
+        planned_modifiers=planned_modifiers,
+    ) is None
+
+
 def _lock_collection_cards(card_ids, lock_type, lock_ref_id):
     """Mark collection cards as locked."""
     CollectionCard.query.filter(
@@ -1275,18 +1305,25 @@ def _get_defence_config_problems(cfg):
     figures = list(cfg.figures)
     moves = list(cfg.battle_moves)
     prelude = cfg.prelude_spell_name
-    village_only = prelude in ('Peasant War', 'Civil War')
+    modifier_type = (
+        (cfg.battle_modifier or {}).get('type')
+        if isinstance(cfg.battle_modifier, dict) else None
+    )
+    village_only_name = (
+        prelude if prelude in ('Peasant War', 'Civil War') else modifier_type
+    )
+    village_only = village_only_name in ('Peasant War', 'Civil War')
+    deficit_map = get_config_deficit_map(cfg.id)
 
     if not figures:
         problems.append('No figures on the field.')
     else:
-        deficit_map = get_config_deficit_map(cfg.id)
         can_fight = [fig for fig in figures if not deficit_map.get(fig.id, False)]
         if not can_fight:
             problems.append('All figures have a resource deficit.')
         elif village_only and not any(fig.field == 'village' for fig in can_fight):
             problems.append(
-                f'{prelude} is selected — only village figures can fight, '
+                f'{village_only_name} is selected — only village figures can fight, '
                 'but none of your village figures are available.'
             )
 
@@ -1302,8 +1339,41 @@ def _get_defence_config_problems(cfg):
         problems.append('Select exactly one strategy: battle figure or counter spell.')
 
     figure_ids = {fig.id for fig in figures}
+    figures_by_id = {fig.id: fig for fig in figures}
     if has_battle_fig and cfg.battle_figure_id not in figure_ids:
         problems.append('Selected battle figure is no longer in this configuration.')
+    elif has_battle_fig:
+        err = _config_counter_advance_error(
+            figures_by_id.get(cfg.battle_figure_id),
+            cfg,
+            deficit_map=deficit_map,
+        )
+        if err:
+            problems.append(err)
+
+    is_civil_war = (
+        prelude == 'Civil War'
+        or (isinstance(cfg.battle_modifier, dict)
+            and cfg.battle_modifier.get('type') == 'Civil War')
+    )
+    if has_battle_fig and is_civil_war:
+        if not cfg.battle_figure_id_2:
+            problems.append('Civil War requires two battle figures.')
+        elif cfg.battle_figure_id_2 not in figure_ids:
+            problems.append('Second battle figure is no longer in this configuration.')
+        elif cfg.battle_figure_id_2 == cfg.battle_figure_id:
+            problems.append('Civil War requires two different battle figures.')
+        else:
+            fig1 = figures_by_id.get(cfg.battle_figure_id)
+            fig2 = figures_by_id.get(cfg.battle_figure_id_2)
+            err = _config_counter_advance_error(fig2, cfg, deficit_map=deficit_map)
+            if err:
+                problems.append(f'Second battle figure: {err}')
+            if fig1 and fig2 and fig1.color != fig2.color:
+                problems.append('Civil War: both battle figures must be the same color.')
+    elif cfg.battle_figure_id_2:
+        problems.append('Second battle figure is only valid with Civil War.')
+
     prelude_data = cfg.prelude_spell_data if isinstance(cfg.prelude_spell_data, dict) else {}
     if prelude == 'Health Boost':
         target_id = prelude_data.get('target_figure_id')
@@ -2687,30 +2757,42 @@ def defence_set_battle_figure():
     if not fig1 or fig1.config_id != cfg.id:
         return jsonify({'success': False, 'message': 'Figure not in this config'}), 400
 
-    # Check deficit
+    # Check counter-advance legality (includes resource deficit, family
+    # cannot_attack/cannot_defend, and Peasant/Civil village-only rules).
     deficit_map = get_config_deficit_map(cfg.id)
-    if deficit_map.get(figure_id, False):
-        return jsonify({'success': False, 'message': 'Cannot select a figure with resource deficit'}), 400
+    err_msg = _config_counter_advance_error(fig1, cfg, deficit_map=deficit_map)
+    if err_msg:
+        return jsonify({'success': False, 'message': err_msg}), 400
 
     # Spell and battle figure are mutually exclusive
     if cfg.spell_name:
         return jsonify({'success': False,
                         'message': 'Cannot set battle figure while a spell is active. Remove spell first.'}), 400
+    if cfg.counter_spell_name:
+        return jsonify({'success': False,
+                        'message': 'Cannot set battle figure while a counter spell is selected. Clear counter spell first.'}), 400
 
     # Civil War validation
-    modifier = cfg.battle_modifier or {}
-    is_civil_war = modifier.get('type') == 'Civil War'
+    from game_service.figure_rule_helpers import config_strategy_modifiers
+    is_civil_war = any(
+        mod.get('type') == 'Civil War'
+        for mod in config_strategy_modifiers(cfg)
+        if isinstance(mod, dict)
+    )
 
     if is_civil_war:
         if not figure_id_2:
             return jsonify({'success': False,
                             'message': 'Civil War requires two battle figures'}), 400
+        if figure_id_2 == figure_id:
+            return jsonify({'success': False,
+                            'message': 'Civil War requires two different battle figures'}), 400
         fig2 = db.session.get(LandConfigFigure, figure_id_2)
         if not fig2 or fig2.config_id != cfg.id:
             return jsonify({'success': False, 'message': 'Second figure not in this config'}), 400
-        if deficit_map.get(figure_id_2, False):
-            return jsonify({'success': False,
-                            'message': 'Cannot select a figure with resource deficit'}), 400
+        err_msg = _config_counter_advance_error(fig2, cfg, deficit_map=deficit_map)
+        if err_msg:
+            return jsonify({'success': False, 'message': err_msg}), 400
         if fig1.color != fig2.color:
             return jsonify({'success': False,
                             'message': 'Civil War: both figures must be the same color'}), 400
@@ -4053,6 +4135,7 @@ def conquer_start_battle():
     config (or AI template for unowned lands).
     """
     from kingdom_service import (check_land_config_deficit,
+                                 get_config_deficit_map,
                                  conquer_cooldown_seconds_for_target,
                                  reconcile_user_kingdoms)
 
@@ -4174,8 +4257,15 @@ def conquer_start_battle():
         battle_cfg_fig_valid = False
         if has_battle_fig:
             battle_cfg_fig = db.session.get(LandConfigFigure, def_cfg.battle_figure_id)
+            planned_modifiers = _planned_conquer_modifiers(def_cfg, atk_cfg)
             battle_cfg_fig_valid = bool(
                 battle_cfg_fig and battle_cfg_fig.config_id == def_cfg.id
+                and _config_figure_can_counter_advance(
+                    battle_cfg_fig,
+                    def_cfg,
+                    deficit_map=get_config_deficit_map(def_cfg.id),
+                    planned_modifiers=planned_modifiers,
+                )
             )
 
         if has_battle_fig and not has_counter_spell and battle_cfg_fig_valid:
@@ -4337,6 +4427,35 @@ def conquer_start_battle():
         mod = atk_cfg.battle_modifier
         game.battle_modifier = [mod] if isinstance(mod, dict) else mod
 
+    # Greed preludes such as Forced Deal / Dump Cards intentionally disrupt
+    # pre-built battle moves by moving or recycling their backing cards.  The
+    # conquerer can manually select replacements, but the configured/AI
+    # defender is automated; rebuild its missing moves from any new runtime
+    # hand cards after *both* players' preludes have resolved.
+    from game_service.battle_move_replenisher import replenish_automated_conquer_defender_moves
+    replenish_automated_conquer_defender_moves(
+        game,
+        def_player,
+        reason='conquer_prelude',
+    )
+
+    if game.defending_figure_id:
+        selected_defender = db.session.get(Figure, game.defending_figure_id)
+        from routes.games import _figure_can_counter_advance
+        if (
+            not selected_defender
+            or selected_defender.player_id != def_player.id
+            or not _figure_can_counter_advance(selected_defender, def_player.id, game.id)
+        ):
+            logger.info(
+                "[CONQUER] Clearing invalid preselected defender figure "
+                "game=%s figure_id=%s",
+                game.id,
+                game.defending_figure_id,
+            )
+            game.defending_figure_id = None
+            game.defending_figure_id_2 = None
+
     # ── Blitzkrieg: ignore the defender's pre-configured battle figure.
     #    The invader will select the opponent's figure via select_defender()
     #    after advancing (Blitzkrieg's core mechanic). ──
@@ -4493,6 +4612,204 @@ def _serialize_attack_activity(log, role=None):
         entry['role'] = role
         entry['seen'] = (log.seen_by_attacker if role == 'attacker'
                          else log.seen_by_defender)
+    entry.update(_attack_activity_presentation(entry))
+    entry['activity_land_label'] = _activity_land_label(entry)
+    return entry
+
+
+def _activity_card_detail(entry, won=False, lost=False):
+    """Return a short card outcome detail for an activity row."""
+    if won:
+        suit = entry.get('card_won_suit')
+        rank = entry.get('card_won_rank')
+        if suit and rank:
+            return f'Card won: {rank} of {suit}'
+    if lost:
+        suit = entry.get('card_lost_suit')
+        rank = entry.get('card_lost_rank')
+        if suit and rank:
+            return f'Card lost: {rank} of {suit}'
+    return ''
+
+
+def _attack_activity_presentation(entry):
+    """Presentation contract for attack log rows.
+
+    ``activity_tone`` is one of ``good``, ``bad``, or ``neutral`` from the
+    current user's perspective when ``role`` is present.
+    """
+    attacker = entry.get('attacker_username') or entry.get('attacker_name') or 'Unknown'
+    defender = entry.get('defender_username') or 'AI'
+    result = entry.get('result')
+    role = entry.get('role')
+    is_attacker_perspective = role == 'attacker'
+    is_defender_perspective = role == 'defender'
+
+    if result == 'attacker_won':
+        if is_defender_perspective:
+            deleted = entry.get('kingdom_deleted_name')
+            detail = (f'{deleted} had no lands left and was dissolved.' if deleted
+                      else _activity_card_detail(entry, lost=True)
+                      or 'Land ownership changed.')
+            return {
+                'activity_title': f'{attacker} conquered your land',
+                'activity_detail': detail,
+                'activity_tone': 'bad',
+            }
+        if is_attacker_perspective:
+            return {
+                'activity_title': f'You conquered {defender}',
+                'activity_detail': _activity_card_detail(entry, won=True) or 'Attack succeeded.',
+                'activity_tone': 'good',
+            }
+        return {
+            'activity_title': f'{attacker} conquered {defender}',
+            'activity_detail': _activity_card_detail(entry, won=True) or 'Attack succeeded.',
+            'activity_tone': 'neutral',
+        }
+
+    if result == 'defender_won':
+        if is_defender_perspective:
+            return {
+                'activity_title': f'{attacker} failed to conquer you',
+                'activity_detail': _activity_card_detail(entry, won=True) or 'Your defence held.',
+                'activity_tone': 'good',
+            }
+        if is_attacker_perspective:
+            return {
+                'activity_title': f'Your attack on {defender} failed',
+                'activity_detail': _activity_card_detail(entry, lost=True) or 'Attack failed.',
+                'activity_tone': 'bad',
+            }
+        return {
+            'activity_title': f'{attacker} failed against {defender}',
+            'activity_detail': _activity_card_detail(entry, lost=True) or 'Attack failed.',
+            'activity_tone': 'neutral',
+        }
+
+    if is_defender_perspective:
+        title = f'{attacker} failed to conquer you'
+    elif is_attacker_perspective:
+        title = f'Attack on {defender} updated'
+    else:
+        title = f'{attacker} vs {defender}'
+    return {
+        'activity_title': title,
+        'activity_detail': 'Battle result updated.',
+        'activity_tone': 'neutral',
+    }
+
+
+def _kingdom_event_activity_presentation(entry):
+    """Presentation contract for KingdomNotification rows."""
+    kind = entry.get('kind') or ''
+    payload = entry.get('payload') or {}
+    if kind == 'xp_gained':
+        amount = int(payload.get('amount') or 0)
+        reason = payload.get('reason') or 'conquer'
+        level = int(payload.get('level') or 0)
+        return {
+            'activity_title': f'+{amount} XP gained',
+            'activity_detail': (f'Kingdom level {level} ({reason}).'
+                                if level else f'Earned from {reason}.'),
+            'activity_tone': 'good',
+        }
+    if kind == 'level_up':
+        new_level = int(payload.get('new_level') or 0)
+        sp = int(payload.get('sp_gained') or 0)
+        return {
+            'activity_title': f'Kingdom reached level {new_level}!',
+            'activity_detail': (f'+{sp} skill point{"s" if sp != 1 else ""}.'
+                                if sp else 'Level up!'),
+            'activity_tone': 'good',
+        }
+    if kind == 'kingdoms_merged':
+        absorbed = payload.get('absorbed_kingdom_name') or 'A kingdom'
+        lands = int(payload.get('absorbed_lands') or 0)
+        xp = int(payload.get('xp_awarded') or 0)
+        return {
+            'activity_title': 'Kingdoms merged',
+            'activity_detail': f'{absorbed} absorbed ({lands} lands, +{xp} XP).',
+            'activity_tone': 'good',
+        }
+    if kind == 'card_looted':
+        rank = payload.get('rank') or '?'
+        suit = payload.get('suit') or 'card'
+        defender = payload.get('defender_name')
+        if not defender and payload.get('is_ai_defender'):
+            defender = 'AI defender'
+        return {
+            'activity_title': 'Card looted',
+            'activity_detail': f'{rank} of {suit} lost to {defender or "the defender"}.',
+            'activity_tone': 'bad',
+        }
+    if kind == 'shield_expired':
+        name = payload.get('kingdom_name') or 'Your kingdom'
+        return {
+            'activity_title': 'Shield expired',
+            'activity_detail': f'{name} can be attacked again.',
+            'activity_tone': 'bad',
+        }
+    if kind == 'kingdom_dissolved':
+        name = payload.get('kingdom_name') or 'Your kingdom'
+        return {
+            'activity_title': 'Kingdom dissolved',
+            'activity_detail': f'{name} had no lands left.',
+            'activity_tone': 'bad',
+        }
+    if kind == 'skill_downgraded':
+        skill = payload.get('skill') or 'A skill'
+        return {
+            'activity_title': 'Skill downgraded',
+            'activity_detail': f'{skill} level decreased.',
+            'activity_tone': 'bad',
+        }
+    return {
+        'activity_title': (kind or 'Kingdom event').replace('_', ' ').capitalize(),
+        'activity_detail': '',
+        'activity_tone': 'neutral',
+    }
+
+
+def _activity_land_label(entry):
+    """Return a normalized land/kingdom label for activity rows."""
+    payload = entry.get('payload') if isinstance(entry.get('payload'), dict) else {}
+    col = entry.get('land_col')
+    row = entry.get('land_row')
+    land_id = entry.get('land_id')
+    if col is None:
+        col = payload.get('land_col')
+    if row is None:
+        row = payload.get('land_row')
+    if land_id is None:
+        land_id = payload.get('land_id')
+    if col is not None and row is not None:
+        return f'Land ({col}, {row})'
+    if land_id is not None:
+        return f'Land #{land_id}'
+    kingdom_name = payload.get('kingdom_name') or payload.get('absorbed_kingdom_name')
+    return kingdom_name or 'Kingdom event'
+
+
+def _serialize_kingdom_notification_activity(notification):
+    """Serialize a KingdomNotification with activity presentation fields."""
+    entry = notification.serialize()
+    entry.update(_kingdom_event_activity_presentation(entry))
+    entry['activity_land_label'] = _activity_land_label(entry)
+    return entry
+
+
+def _serialize_kingdom_message_activity(message, current_user_id):
+    """Serialize a user message with activity presentation fields."""
+    entry = message.serialize()
+    is_sent = entry.get('sender_user_id') == current_user_id
+    other = entry.get('recipient_username') if is_sent else entry.get('sender_username')
+    other = other or 'Unknown'
+    entry['activity_role'] = 'sender' if is_sent else 'recipient'
+    entry['activity_title'] = f'To {other}' if is_sent else f'From {other}'
+    entry['activity_detail'] = entry.get('message') or ''
+    entry['activity_tone'] = 'neutral'
+    entry['activity_land_label'] = _activity_land_label(entry)
     return entry
 
 
@@ -4557,7 +4874,9 @@ def kingdom_notifications():
         user_id=g.user_id, seen=False
     ).order_by(KingdomNotification.created_at.desc()).all()
     for n in kingdom_notifs:
-        result.append(n.serialize())
+        result.append(_serialize_kingdom_notification_activity(n))
+
+    result.sort(key=lambda entry: entry.get('timestamp') or '', reverse=True)
 
     return jsonify({'success': True, 'notifications': result})
 
@@ -4616,11 +4935,21 @@ def kingdom_notifications_mark_seen():
     })
 
 
-# ── GET /kingdom/attack_notifications ────────────────────────────────────────
+# ── Defender-only attack notification compatibility endpoints ───────────────
 
-@kingdom.route('/attack_notifications', methods=['GET'])
-@require_token
-def attack_notifications():
+def _maybe_deprecate_attack_notifications_response(response):
+    """Mark legacy defender-only notification endpoints as deprecated."""
+    if request.path.startswith('/kingdom/attack_notifications'):
+        response.headers['Deprecation'] = 'true'
+        response.headers['Link'] = '</kingdom/notifications>; rel="successor-version"'
+        response.headers['Warning'] = (
+            '299 - "/kingdom/attack_notifications is defender-only and deprecated; '
+            'use /kingdom/notifications"'
+        )
+    return response
+
+
+def _defender_attack_notifications_payload():
     """Return unseen attack logs where the current user was the defender."""
     logs = LandAttackLog.query.filter_by(
         defender_user_id=g.user_id,
@@ -4631,15 +4960,32 @@ def attack_notifications():
     for log in logs:
         result.append(_serialize_attack_activity(log, role='defender'))
 
-    return jsonify({'success': True, 'notifications': result})
+    return {'success': True, 'notifications': result}
 
 
-# ── POST /kingdom/attack_notifications/mark_seen ────────────────────────────
+# ── GET /kingdom/defender_attack_notifications ──────────────────────────────
 
+@kingdom.route('/defender_attack_notifications', methods=['GET'])
+@kingdom.route('/attack_notifications', methods=['GET'])
+@require_token
+def attack_notifications():
+    """Return defender-only unseen attack logs.
+
+    Prefer unified ``/kingdom/notifications`` for new clients.  The clearer
+    ``/kingdom/defender_attack_notifications`` alias is retained for callers
+    that explicitly need defender-only rows.
+    """
+    return _maybe_deprecate_attack_notifications_response(
+        jsonify(_defender_attack_notifications_payload()))
+
+
+# ── POST /kingdom/defender_attack_notifications/mark_seen ───────────────────
+
+@kingdom.route('/defender_attack_notifications/mark_seen', methods=['POST'])
 @kingdom.route('/attack_notifications/mark_seen', methods=['POST'])
 @require_token
 def attack_notifications_mark_seen():
-    """Mark attack notifications as seen by the defender."""
+    """Mark defender-only attack notifications as seen."""
     data = request.json or {}
     notification_ids = data.get('notification_ids', [])
 
@@ -4654,7 +5000,8 @@ def attack_notifications_mark_seen():
 
     db.session.commit()
 
-    return jsonify({'success': True, 'marked': updated})
+    return _maybe_deprecate_attack_notifications_response(
+        jsonify({'success': True, 'marked': updated}))
 
 
 # ── GET /kingdom/attack_history ──────────────────────────────────────────────
@@ -4716,7 +5063,7 @@ def kingdom_messages():
     ).count()
     return jsonify({
         'success': True,
-        'messages': [m.serialize() for m in messages],
+        'messages': [_serialize_kingdom_message_activity(m, g.user_id) for m in messages],
         'unread_count': unread_count,
     })
 
