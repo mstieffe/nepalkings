@@ -38,6 +38,55 @@ def _ai_trigger_hook(response):
 MAX_BATTLE_MOVES = 3
 
 
+def _available_battle_move_card_count(game_id, player_id):
+    """Count unreserved in-hand cards that can still back battle moves."""
+    main_count = MainCard.query.filter_by(
+        game_id=game_id,
+        player_id=player_id,
+        in_deck=False,
+        part_of_figure=False,
+        part_of_battle_move=False,
+    ).count()
+    side_count = SideCard.query.filter_by(
+        game_id=game_id,
+        player_id=player_id,
+        in_deck=False,
+        part_of_figure=False,
+        part_of_battle_move=False,
+    ).count()
+    return main_count + side_count
+
+
+def _required_battle_move_count(game, player_id):
+    """Return how many moves this player must confirm for the battle.
+
+    Duel normally requires all three moves.  The only exception is the rare
+    exhausted-deck state where auto-fill could not leave enough in-hand cards;
+    then the player must confirm every move they can actually make.
+    """
+    if not game or game.mode == 'conquer':
+        return 0
+    existing = BattleMove.query.filter_by(
+        game_id=game.id,
+        player_id=player_id,
+    ).count()
+    available_cards = _available_battle_move_card_count(game.id, player_id)
+    return min(MAX_BATTLE_MOVES, existing + available_cards)
+
+
+def _battle_move_requirement_payload(game, player_id):
+    required = _required_battle_move_count(game, player_id)
+    existing = BattleMove.query.filter_by(
+        game_id=game.id,
+        player_id=player_id,
+    ).count() if game else 0
+    return {
+        'required_battle_moves': required,
+        'selected_battle_moves': existing,
+        'max_battle_moves': MAX_BATTLE_MOVES,
+    }
+
+
 def _is_battle_move_selection_phase(game):
     """Return True while players are selecting/confirming pre-battle moves."""
     return bool(game and game.battle_confirmed and game.battle_turn_player_id is None)
@@ -280,16 +329,20 @@ def confirm_battle_moves():
             'success': True,
             'both_ready': True,
             'game': game.serialize(),
+            **_battle_move_requirement_payload(game, player_id),
         })
 
-    # Verify the player has exactly MAX_BATTLE_MOVES battle moves
-    # (skip for conquer mode — moves are pre-built from config and may be
-    #  incomplete if the defender's config had fewer than 3 moves)
+    # Verify the player has all currently possible battle moves.  Duel normally
+    # requires three, but if auto-fill truly cannot provide enough cards (deck
+    # exhausted and no more unreserved hand cards), the player may confirm fewer.
+    # Conquer mode is config-driven and may have fewer prebuilt moves.
     move_count = BattleMove.query.filter_by(game_id=game_id, player_id=player_id).count()
-    if move_count < MAX_BATTLE_MOVES and game.mode != 'conquer':
+    required_count = _required_battle_move_count(game, player_id)
+    if game.mode != 'conquer' and move_count < required_count:
         return jsonify({
             'success': False,
-            'message': f'You must select {MAX_BATTLE_MOVES} battle moves before confirming.'
+            'message': f'You must select {required_count} battle move(s) before confirming.',
+            **_battle_move_requirement_payload(game, player_id),
         }), 400
 
     # Record this player's confirmation
@@ -311,7 +364,8 @@ def confirm_battle_moves():
         for pid in player_ids:
             pid_int = int(pid)
             cnt = BattleMove.query.filter_by(game_id=game_id, player_id=pid_int).count()
-            if cnt < MAX_BATTLE_MOVES:
+            required = _required_battle_move_count(game, pid_int)
+            if cnt < required:
                 not_ready_ids.append(pid)
 
         if not_ready_ids:
@@ -337,6 +391,7 @@ def confirm_battle_moves():
         'success': True,
         'both_ready': both_ready,
         'game': game.serialize(),
+        **_battle_move_requirement_payload(game, player_id),
     })
 
 

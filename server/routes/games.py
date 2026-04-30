@@ -3210,7 +3210,27 @@ def battle_decision():
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
 
-        is_advancing = (player_id == game.advancing_player_id)
+        if player.game_id != game_id:
+            return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
+
+        if game.mode == 'conquer' and decision == 'fold':
+            return jsonify({
+                'success': False,
+                'message': 'Conquer battles cannot be folded.',
+                'reason': 'conquer_no_fold',
+            }), 400
+
+        if game.fold_outcome:
+            # Idempotent: a duplicate request after the fold was finalized
+            # (e.g. network retry) should not appear as a hard error.
+            return jsonify({
+                'success': True,
+                'resolved': True,
+                'outcome': 'fold',
+                'fold_outcome': game.fold_outcome,
+                'already_resolved': True,
+                'game': game.serialize(),
+            })
 
         # Guard: battle already confirmed — no new decisions allowed
         if game.battle_confirmed:
@@ -3221,7 +3241,42 @@ def battle_decision():
                 'game': game.serialize()
             })
 
+        if not game.advancing_figure_id or not game.defending_figure_id:
+            return jsonify({
+                'success': False,
+                'message': 'Battle decision is only available after both battle figures are selected.',
+                'reason': 'battle_not_ready',
+            }), 400
+
+        defending_figure = db.session.get(Figure, game.defending_figure_id)
+        if not defending_figure:
+            return jsonify({
+                'success': False,
+                'message': 'Defending figure no longer exists.',
+                'reason': 'battle_not_ready',
+            }), 400
+
+        defender_player_id = defending_figure.player_id
+        participant_ids = {game.advancing_player_id, defender_player_id}
+        if player_id not in participant_ids:
+            return jsonify({
+                'success': False,
+                'message': 'Only battle participants can make this decision.',
+                'reason': 'not_battle_participant',
+            }), 403
+
+        is_advancing = (player_id == game.advancing_player_id)
+
         decisions = dict(game.battle_decisions) if game.battle_decisions else {}
+
+        if decisions.get(str(player_id)) == decision:
+            return jsonify({
+                'success': True,
+                'resolved': False,
+                'waiting': True,
+                'already_decided': True,
+                'game': game.serialize(),
+            })
 
         # Get player info
         user = db.session.get(User, player.user_id)
@@ -4252,6 +4307,81 @@ def _serialize_battle_card(card, card_type):
     return data
 
 
+def _post_battle_choice_timeout_seconds():
+    return max(int(getattr(settings, 'POST_BATTLE_CHOICE_TIMEOUT_SECONDS', 300)), 0)
+
+
+def _make_post_battle_pending_choice(choice_type, player_id, default):
+    now = _utcnow()
+    timeout = _post_battle_choice_timeout_seconds()
+    deadline = now + timedelta(seconds=timeout)
+    return {
+        'type': choice_type,
+        'player_id': player_id,
+        'default': default,
+        'created_at': now.isoformat(),
+        'deadline_at': deadline.isoformat(),
+        'timeout_seconds': timeout,
+    }
+
+
+def _parse_pending_choice_deadline(pending):
+    try:
+        deadline_raw = (pending or {}).get('deadline_at')
+        return datetime.fromisoformat(deadline_raw) if deadline_raw else None
+    except Exception:
+        return None
+
+
+def _pending_choice_expired(pending):
+    if not pending:
+        return False
+    if _post_battle_choice_timeout_seconds() == 0:
+        return True
+    deadline = _parse_pending_choice_deadline(pending)
+    return bool(deadline and _utcnow() >= deadline)
+
+
+def _set_post_battle_pending_choice(game, choice_type, player_id, default):
+    result = dict(game.last_battle_result) if isinstance(game.last_battle_result, dict) else {}
+    result['post_battle_pending_choice'] = _make_post_battle_pending_choice(
+        choice_type, player_id, default
+    )
+    game.last_battle_result = result
+    flag_modified(game, 'last_battle_result')
+
+
+def _clear_post_battle_pending_choice(game, *, defaulted=False, choice=None):
+    result = dict(game.last_battle_result) if isinstance(game.last_battle_result, dict) else {}
+    result.pop('post_battle_pending_choice', None)
+    if defaulted:
+        result['post_battle_choice_defaulted'] = True
+    if choice:
+        result['post_battle_choice'] = choice
+    game.last_battle_result = result
+    flag_modified(game, 'last_battle_result')
+
+
+def _first_deterministic_returnable_card(game_id):
+    bm_cards, _ = _collect_battle_move_cards(game_id)
+    orphaned_main = MainCard.query.filter_by(
+        game_id=game_id,
+        in_deck=False,
+        part_of_figure=False,
+        player_id=None,
+    ).all()
+    orphaned_side = SideCard.query.filter_by(
+        game_id=game_id,
+        in_deck=False,
+        part_of_figure=False,
+        player_id=None,
+    ).all()
+    candidates = bm_cards + [(c, 'main') for c in orphaned_main] + [(c, 'side') for c in orphaned_side]
+    if not candidates:
+        return None, None
+    return sorted(candidates, key=lambda pair: (pair[1], pair[0].id))[0]
+
+
 def _start_new_round(game, winner_player):
     """Bump round counter, set invader, reset turns, start ceasefire, draw 2 side cards per player."""
     game.invader_player_id = winner_player.id
@@ -4434,6 +4564,7 @@ def play_battle_move():
 
 
 @games.route('/get_battle_state', methods=['GET'])
+@require_token
 def get_battle_state():
     """Return the current 3-round battle state for polling.
 
@@ -4449,9 +4580,17 @@ def get_battle_state():
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
 
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
+
     game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    player = Player.query.filter_by(id=player_id, game_id=game_id).first()
+    if not player:
+        return jsonify({'success': False, 'message': 'Player not found in this game'}), 403
 
     # Get all battle moves for this game
     all_moves = BattleMove.query.filter_by(game_id=game_id).all()
@@ -4869,6 +5008,12 @@ def finish_battle():
                 break
 
         # Persist unplayed-card returns before responding
+        _set_post_battle_pending_choice(
+            game,
+            'draw_choice',
+            defender_player_id,
+            'points',
+        )
         db.session.commit()
 
         # Serialize the played battle move cards so the client can show them
@@ -4975,6 +5120,12 @@ def finish_battle():
             'destroyed_figure_family': destroyed_family,
             'checkmate_figure_name': checkmate_game_over.get('checkmate_figure_name') if checkmate_game_over else None,
         }
+        _set_post_battle_pending_choice(
+            game,
+            'winner_pick',
+            winner_player.id,
+            'first_available_card',
+        )
 
         # Check if someone reached the stake (will be finalized in pick_card)
         game_over_info = None
@@ -5752,10 +5903,12 @@ def finish_battle_pick_card():
     if picked_card_info:
         result_dict = dict(game.last_battle_result) if game.last_battle_result else {}
         result_dict['picked_card'] = picked_card_info
+        result_dict.pop('post_battle_pending_choice', None)
         game.last_battle_result = result_dict
         flag_modified(game, 'last_battle_result')
         logger.debug(f"[PICK_CARD] Stored picked_card in last_battle_result: {picked_card_info}")
     else:
+        _clear_post_battle_pending_choice(game, choice='winner_pick_skipped')
         logger.debug(f"[PICK_CARD] No card picked (winner skipped or no cards)")
 
     # Return remaining battle-move cards to deck
@@ -6006,6 +6159,8 @@ def finish_battle_draw():
     # Collect resting figure IDs BEFORE clearing battle state
     resting_ids = _collect_resting_figure_ids(game)
 
+    _clear_post_battle_pending_choice(game, choice=f'draw_{choice}')
+
     # Clear battle state
     _clear_battle_state(game)
 
@@ -6062,6 +6217,239 @@ def finish_battle_draw():
         'message': result_msg,
         'game': game.serialize(),
     })
+
+
+def _same_battle_card(card, card_type, picked_card, picked_type):
+    return bool(
+        picked_card is not None
+        and card_type == picked_type
+        and card.id == picked_card.id
+    )
+
+
+def _return_remaining_battle_cards_to_deck(game_id, *, picked_card=None, picked_type=None):
+    bm_cards, _ = _collect_battle_move_cards(game_id)
+    main_to_deck = []
+    side_to_deck = []
+    for card, ct in bm_cards:
+        if _same_battle_card(card, ct, picked_card, picked_type):
+            continue
+        card.part_of_battle_move = False
+        if isinstance(card, MainCard):
+            main_to_deck.append(card)
+        elif isinstance(card, SideCard):
+            side_to_deck.append(card)
+
+    orphaned_main = MainCard.query.filter_by(
+        game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
+    ).all()
+    orphaned_side = SideCard.query.filter_by(
+        game_id=game_id, in_deck=False, part_of_figure=False, player_id=None
+    ).all()
+    for card in orphaned_main:
+        if _same_battle_card(card, 'main', picked_card, picked_type):
+            continue
+        main_to_deck.append(card)
+    for card in orphaned_side:
+        if _same_battle_card(card, 'side', picked_card, picked_type):
+            continue
+        side_to_deck.append(card)
+
+    if main_to_deck:
+        DeckManager.return_cards_to_deck(main_to_deck)
+    if side_to_deck:
+        DeckManager.return_cards_to_deck(side_to_deck)
+
+
+def _default_winner_pick_after_timeout(game, requester):
+    winner_id = (game.last_battle_result or {}).get('winner_player_id') or game.fold_winner_id
+    winner = db.session.get(Player, winner_id) if winner_id else None
+    if not winner or winner.game_id != game.id:
+        return jsonify({'success': False, 'message': 'Pending winner not found'}), 400
+
+    _return_unplayed_battle_move_cards(game.id)
+    picked_card, picked_type = _first_deterministic_returnable_card(game.id)
+    picked_card_info = None
+    if picked_card is not None:
+        picked_card_info = {
+            'suit': picked_card.suit.value,
+            'rank': picked_card.rank.value,
+            'card_type': picked_type,
+        }
+        picked_card.player_id = winner.id
+        picked_card.in_deck = False
+        picked_card.part_of_figure = False
+        picked_card.part_of_battle_move = False
+
+    result_dict = dict(game.last_battle_result) if isinstance(game.last_battle_result, dict) else {}
+    if picked_card_info:
+        result_dict['picked_card'] = picked_card_info
+    game.last_battle_result = result_dict
+    flag_modified(game, 'last_battle_result')
+
+    _return_remaining_battle_cards_to_deck(
+        game.id, picked_card=picked_card, picked_type=picked_type
+    )
+    _delete_all_battle_moves(game.id)
+    _deactivate_all_spells(game)
+
+    resting_ids = _collect_resting_figure_ids(game)
+    _clear_post_battle_pending_choice(game, defaulted=True, choice='winner_pick_default')
+    _clear_battle_state(game)
+
+    game_over_info = _check_game_over(game)
+    if not game_over_info and game.state == 'finished':
+        game_over_info = _build_game_over_info_from_finished(game)
+    if game_over_info:
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'message': 'Post-battle choice defaulted. Game over!',
+            'defaulted': True,
+            'game_over': game_over_info,
+            'game': game.serialize(),
+        })
+
+    _start_new_round(game, winner)
+    if resting_ids:
+        game.resting_figure_ids = resting_ids
+
+    db.session.add(LogEntry(
+        game_id=game.id,
+        player_id=requester.id,
+        round_number=game.current_round,
+        turn_number=requester.turns_left,
+        message='Post-battle card pick timed out; default card choice was applied.',
+        author='System',
+        type='battle_win',
+    ))
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'message': 'Post-battle card pick defaulted. New round started.',
+        'defaulted': True,
+        'choice': 'winner_pick_default',
+        'game': game.serialize(),
+    })
+
+
+def _default_draw_choice_after_timeout(game, requester):
+    pending = ((game.last_battle_result or {}).get('post_battle_pending_choice') or {})
+    defender_id = pending.get('player_id')
+    defender = db.session.get(Player, defender_id) if defender_id else None
+    if not defender or defender.game_id != game.id:
+        return jsonify({'success': False, 'message': 'Pending defender not found'}), 400
+
+    defender.points += 10
+    _return_unplayed_battle_move_cards(game.id)
+    _return_remaining_battle_cards_to_deck(game.id)
+    _delete_all_battle_moves(game.id)
+    _deactivate_all_spells(game)
+
+    resting_ids = _collect_resting_figure_ids(game)
+    _clear_post_battle_pending_choice(game, defaulted=True, choice='draw_points')
+    _clear_battle_state(game)
+
+    db.session.add(LogEntry(
+        game_id=game.id,
+        player_id=defender.id,
+        round_number=game.current_round,
+        turn_number=defender.turns_left,
+        message='Draw choice timed out; defender received 10 points by default.',
+        author='System',
+        type='battle_draw',
+    ))
+
+    game_over_info = _check_game_over(game)
+    if not game_over_info and game.state == 'finished':
+        game_over_info = _build_game_over_info_from_finished(game)
+    if game_over_info:
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'outcome': 'draw',
+            'choice': 'points',
+            'defaulted': True,
+            'message': 'Draw choice defaulted to 10 points. Game over!',
+            'game_over': game_over_info,
+            'game': game.serialize(),
+        })
+
+    _start_new_round(game, defender)
+    if resting_ids:
+        game.resting_figure_ids = resting_ids
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'outcome': 'draw',
+        'choice': 'points',
+        'defaulted': True,
+        'message': 'Draw choice defaulted to 10 points. New round started.',
+        'game': game.serialize(),
+    })
+
+
+@games.route('/resolve_pending_battle_choice', methods=['POST'])
+@require_token
+def resolve_pending_battle_choice():
+    """Apply the configured default after a post-battle choice timeout."""
+    data = request.json or {}
+    game_id = data.get('game_id')
+    player_id = data.get('player_id')
+
+    if not game_id or not player_id:
+        return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
+
+    game = db.session.get(Game, game_id)
+    if not game:
+        return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    requester = Player.query.filter_by(id=player_id, game_id=game_id).first()
+    if not requester:
+        return jsonify({'success': False, 'message': 'Player not found in this game'}), 403
+
+    finished_conquer = _serialize_finished_conquer_result(game)
+    if finished_conquer:
+        return jsonify(finished_conquer)
+    if game.mode == 'conquer':
+        return jsonify({
+            'success': False,
+            'message': 'Conquer battles do not use duel post-battle choices.',
+            'reason': 'conquer_no_post_battle_choice',
+        }), 400
+
+    pending = ((game.last_battle_result or {}).get('post_battle_pending_choice') or {})
+    if not pending:
+        return jsonify({
+            'success': True,
+            'message': 'No pending post-battle choice.',
+            'already_resolved': True,
+            'game': game.serialize(),
+        })
+
+    if not _pending_choice_expired(pending):
+        return jsonify({
+            'success': False,
+            'message': 'Post-battle choice timeout has not expired yet.',
+            'reason': 'pending_choice_not_expired',
+            'deadline_at': pending.get('deadline_at'),
+            'game': game.serialize(),
+        }), 400
+
+    try:
+        if pending.get('type') == 'winner_pick':
+            return _default_winner_pick_after_timeout(game, requester)
+        if pending.get('type') == 'draw_choice':
+            return _default_draw_choice_after_timeout(game, requester)
+        return jsonify({'success': False, 'message': 'Unknown pending choice type'}), 400
+    except Exception:
+        db.session.rollback()
+        logger.exception('Failed to resolve pending battle choice default')
+        return jsonify({'success': False, 'message': 'Failed to resolve pending battle choice'}), 400
 
 
 @games.route('/game_results', methods=['GET'])

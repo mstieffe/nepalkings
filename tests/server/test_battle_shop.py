@@ -330,6 +330,78 @@ class TestBattlePrepFlow:
         assert game.battle_moves_confirmed[str(p1.id)] is True
         assert game.battle_moves_confirmed[str(p2.id)] is True
 
+    def test_confirm_battle_moves_rejects_fewer_when_more_cards_available(
+        self,
+        client,
+        db,
+        game_with_player,
+        auth_token_bs,
+    ):
+        game, p1, _p2, _, _ = game_with_player
+        game.battle_confirmed = True
+        game.battle_turn_player_id = None
+        db.session.commit()
+
+        used = []
+        for rank in ('J', 'Q'):
+            card = _get_hand_card_by_rank(db, game.id, p1.id, rank, exclude_ids=used)
+            used.append(card.id)
+            assert _buy_move(client, auth_token_bs, game, p1, card).get_json().get('success') is True
+
+        resp = client.post(
+            '/battle_shop/confirm_battle_moves',
+            data=json.dumps({'game_id': game.id, 'player_id': p1.id}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        data = resp.get_json()
+        assert data.get('success') is False
+        assert data.get('required_battle_moves') == 3
+
+    def test_confirm_battle_moves_allows_fewer_when_no_more_cards_available(
+        self,
+        client,
+        db,
+        game_with_player,
+        auth_token_bs,
+    ):
+        from models import MainCard, SideCard
+
+        game, p1, _p2, _, _ = game_with_player
+        game.battle_confirmed = True
+        game.battle_turn_player_id = None
+        db.session.commit()
+
+        used = []
+        for rank in ('J', 'Q'):
+            card = _get_hand_card_by_rank(db, game.id, p1.id, rank, exclude_ids=used)
+            used.append(card.id)
+            assert _buy_move(client, auth_token_bs, game, p1, card).get_json().get('success') is True
+
+        # Simulate the rare exhausted-hand/deck state after auto-fill: no more
+        # unreserved in-hand cards can become battle moves.
+        for card in MainCard.query.filter_by(game_id=game.id, player_id=p1.id, in_deck=False).all():
+            if not card.part_of_battle_move:
+                card.in_deck = True
+        for card in SideCard.query.filter_by(game_id=game.id, player_id=p1.id, in_deck=False).all():
+            if not card.part_of_battle_move:
+                card.in_deck = True
+        db.session.commit()
+
+        resp = client.post(
+            '/battle_shop/confirm_battle_moves',
+            data=json.dumps({'game_id': game.id, 'player_id': p1.id}),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        data = resp.get_json()
+        assert data.get('success') is True, data
+        assert data.get('both_ready') is False
+        assert data.get('required_battle_moves') == 2
+
+        db.session.refresh(game)
+        assert game.battle_moves_confirmed[str(p1.id)] is True
+
     def test_play_battle_move_rejects_wrong_turn_player(
         self,
         client,
@@ -400,7 +472,8 @@ class TestBattlePrepFlow:
         db.session.commit()
 
         state_resp = client.get(
-            f'/games/get_battle_state?game_id={game.id}&player_id={p1.id}'
+            f'/games/get_battle_state?game_id={game.id}&player_id={p1.id}',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
         )
         state_data = state_resp.get_json()
 
@@ -423,7 +496,8 @@ class TestBattlePrepFlow:
         db.session.commit()
 
         revealed_resp = client.get(
-            f'/games/get_battle_state?game_id={game.id}&player_id={p1.id}'
+            f'/games/get_battle_state?game_id={game.id}&player_id={p1.id}',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
         )
         revealed_data = revealed_resp.get_json()
         revealed_opp_move = next(m for m in revealed_data['opponent_moves'] if m['id'] == p2_move_id)

@@ -22,6 +22,7 @@ from game.components.figures.figure_manager import FigureManager
 from utils.background_poller import BackgroundPoller
 from game.core.game import Game
 import logging
+from datetime import datetime
 
 logger = logging.getLogger('nk.screens.game_screen')
 
@@ -527,6 +528,7 @@ class GameScreen(Screen):
         
         # Check for fold outcome and auto-proceed (polling detection for waiting player)
         self.check_fold_result()
+        self.check_pending_battle_choice_timeout()
         self.check_game_over()
         self.check_conquer_battle_ended()
         self.check_auto_proceed_to_battle()
@@ -2994,6 +2996,100 @@ class GameScreen(Screen):
             'icon': 'magic',
             'title': title
         })
+
+    def check_pending_battle_choice_timeout(self):
+        """Resolve expired post-battle choices with the server default."""
+        game = self.state.game
+        if not game or getattr(game, 'game_over', False):
+            return
+        if getattr(game, 'mode', 'duel') == 'conquer':
+            return
+        local_player_id = getattr(game, 'player_id', None)
+        if local_player_id is None:
+            return
+
+        last = getattr(game, 'last_battle_result', None) or {}
+        if not isinstance(last, dict):
+            return
+
+        # Surface a "defaulted" notice once even after the server already
+        # cleared the pending choice (covers the path where the opposite
+        # client triggered the default first).
+        if last.get('post_battle_choice_defaulted'):
+            seen_key = (last.get('post_battle_choice'), id(last))
+            if getattr(game, '_pending_choice_defaulted_seen', None) != seen_key:
+                game._pending_choice_defaulted_seen = seen_key
+                self.queue_or_show_notification({
+                    'message': 'A post-battle choice timed out and was resolved with the default.',
+                    'actions': ['ok'],
+                    'icon': 'magic',
+                    'title': 'Battle Choice Defaulted',
+                })
+
+        pending = last.get('post_battle_pending_choice')
+        if not pending:
+            return
+
+        pending_key = (pending.get('type'), pending.get('player_id'), pending.get('deadline_at'))
+        if getattr(game, '_pending_choice_resolve_inflight', False):
+            return
+
+        deadline_raw = pending.get('deadline_at')
+        try:
+            deadline = datetime.fromisoformat(deadline_raw) if deadline_raw else None
+            expired = bool(deadline and datetime.utcnow() >= deadline)
+        except Exception:
+            expired = False
+
+        if not expired:
+            if getattr(game, '_pending_choice_notice_key', None) != pending_key:
+                game._pending_choice_notice_key = pending_key
+                pending_player_id = pending.get('player_id')
+                if (pending_player_id is not None
+                        and pending_player_id != local_player_id):
+                    choice_type = pending.get('type')
+                    if choice_type == 'draw_choice':
+                        msg = "Waiting for the defender to choose the draw reward. A default will apply if they do not respond."
+                    else:
+                        msg = "Waiting for the battle winner to pick a card. A default will apply if they do not respond."
+                    self.queue_or_show_notification({
+                        'message': msg,
+                        'actions': ['ok'],
+                        'icon': 'info',
+                        'title': 'Waiting for Battle Choice',
+                    })
+            return
+
+        # Cooldown: avoid retrying the resolve endpoint every frame on
+        # transient failures or while the network round-trip is slow.
+        now_ts = datetime.utcnow().timestamp()
+        last_attempt = getattr(game, '_pending_choice_last_attempt_ts', 0.0)
+        if now_ts - last_attempt < 5.0:
+            return
+        game._pending_choice_last_attempt_ts = now_ts
+
+        from utils import game_service
+        game._pending_choice_resolve_inflight = True
+        try:
+            result = game_service.resolve_pending_battle_choice(
+                game.game_id, local_player_id
+            )
+        finally:
+            game._pending_choice_resolve_inflight = False
+
+        if result.get('success'):
+            if result.get('game'):
+                game.update_from_dict(result['game'])
+            if result.get('defaulted'):
+                self._reset_battle_state()
+                self.queue_or_show_notification({
+                    'message': result.get('message', 'Post-battle choice defaulted.'),
+                    'actions': ['ok'],
+                    'icon': 'magic',
+                    'title': 'Battle Choice Defaulted',
+                })
+        elif result.get('reason') != 'pending_choice_not_expired':
+            logger.warning(f"[POST_BATTLE_DEFAULT] Failed: {result.get('message')}")
 
     def check_game_over(self):
         """Check if the game has ended (detected via polling or response)."""

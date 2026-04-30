@@ -203,7 +203,7 @@ def create_figure():
             if not is_ic_counter:
                 player.turns_left -= 1
         
-        db.session.commit()
+        db.session.flush()
 
         # flip turn player id only if Infinite Hammer is not active
         game = db.session.get(Game, game_id)
@@ -292,6 +292,18 @@ def create_figure():
                             'success': True,
                             'is_counter_advance': is_counter_advance,
                         }
+
+        if instant_charge_advance and instant_charge_result and not instant_charge_result.get('success'):
+            # Build+advance is one atomic action.  If the advance/counter-advance
+            # part is illegal (ceasefire, Blitzkrieg, resource deficit, etc.),
+            # roll back the newly built figure and keep the player's final turn
+            # available for a legal action.
+            db.session.rollback()
+            return jsonify({
+                'success': False,
+                'message': instant_charge_result.get('message', 'Instant charge advance failed'),
+                'instant_charge': instant_charge_result,
+            }), 400
 
         if not has_infinite_hammer and game.turn_player_id == player_id:
             game.turn_player_id = other_player.id

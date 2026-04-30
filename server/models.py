@@ -172,7 +172,8 @@ class Game(db.Model):
 
     # Persisted battle result so the second client can retrieve it after cleanup
     # {winner_player_id, loser_player_id, winner_name, loser_name,
-    #  points_awarded, destroyed_figure_name, destroyed_figure_family}
+    #  points_awarded, destroyed_figure_name, destroyed_figure_family,
+    #  post_battle_pending_choice?}
     last_battle_result = db.Column(db.JSON, nullable=True)
 
     # Reason for auto-loss/fold so the waiting player knows WHY they won/lost

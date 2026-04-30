@@ -269,3 +269,16 @@ def finish_battle_draw(game_id, player_id, choice, picked_card_id=None, picked_c
         return response.json()
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to resolve draw: {str(e)}"}
+
+
+def resolve_pending_battle_choice(game_id, player_id):
+    """Apply a server-side default for an expired post-battle choice."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/resolve_pending_battle_choice',
+            json={'game_id': game_id, 'player_id': player_id},
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to resolve pending battle choice: {str(e)}"}

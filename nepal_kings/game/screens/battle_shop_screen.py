@@ -290,6 +290,31 @@ class BattleShopScreen(SubScreen):
         main, side = self.card_source.get_cards()
         return main + side
 
+    def _required_battle_move_count(self):
+        """How many moves must be confirmed right now.
+
+        Duel normally requires all 3 moves.  If no more buyable moves are
+        available (rare exhausted-deck/hand case), the player can ready with
+        all moves currently selected.
+        """
+        max_moves = settings.BATTLE_SHOP_MAX_MOVES
+        if _is_kingdom_config_mode(self.mode):
+            return min(max_moves, len(self.bought_moves))
+        hand = self._get_hand_cards()
+        bought_ids = self._get_bought_card_ids()
+        available = self.battle_move_manager.get_available_moves(hand, bought_ids)
+        available_card_ids = {
+            move.card.id
+            for moves in available.values()
+            for move in moves
+            if getattr(move, 'card', None) is not None
+        }
+        return min(max_moves, len(self.bought_moves) + len(available_card_ids))
+
+    def _can_ready_for_battle(self):
+        required = self._required_battle_move_count()
+        return len(self.bought_moves) >= required
+
     def _rebuild_card_source_kingdom(self):
         """Re-fetch collection and rebuild the card source for kingdom mode."""
         from utils import collection_service
@@ -378,7 +403,7 @@ class BattleShopScreen(SubScreen):
         # --- Ready button logic (only during mandatory phase) ---
         self.ready_button.disabled = True
         if in_phase and not self._battle_moves_confirmed:
-            if len(self.bought_moves) >= settings.BATTLE_SHOP_MAX_MOVES:
+            if self._can_ready_for_battle():
                 self.ready_button.disabled = False
 
         # Update icon active states based on available cards
@@ -883,13 +908,10 @@ class BattleShopScreen(SubScreen):
         self._pending_return_index = None
 
     def _on_ready_confirm(self):
-        """Player confirms their 3 battle moves — notify server."""
+        """Player confirms all required battle moves — notify server."""
         if getattr(self.game, 'game_over', False):
             return
-        # In conquer/defence mode moves are pre-built from config and may
-        # be fewer than MAX — the server already allows this.
-        if (len(self.bought_moves) < settings.BATTLE_SHOP_MAX_MOVES
-                and not _is_kingdom_config_mode(self.mode)):
+        if not self._can_ready_for_battle():
             return
 
         result = battle_shop_service.confirm_battle_moves(
@@ -941,7 +963,7 @@ class BattleShopScreen(SubScreen):
         if in_phase:
             self._draw_phase_banner()
             if not self._is_locked:
-                if len(self.bought_moves) >= settings.BATTLE_SHOP_MAX_MOVES:
+                if self._can_ready_for_battle():
                     self.ready_button.draw()
 
         # Detail box on top of everything except dialogue box / msg
@@ -955,6 +977,7 @@ class BattleShopScreen(SubScreen):
         box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         count = len(self.bought_moves)
         max_m = settings.BATTLE_SHOP_MAX_MOVES
+        required = self._required_battle_move_count()
 
         if self._waiting_for_opponent:
             text = "Waiting for opponent..."
@@ -962,11 +985,12 @@ class BattleShopScreen(SubScreen):
         elif self._is_locked:
             text = "Battle moves confirmed! Waiting for opponent..."
             color = settings.BATTLE_SHOP_PHASE_WAITING_COLOR
-        elif count >= max_m:
-            text = "All slots filled — press Ready!"
+        elif count >= required:
+            text = "All slots filled — press Ready!" if required >= max_m else "All available moves selected — press Ready!"
             color = settings.BATTLE_SHOP_PHASE_BANNER_COLOR
         else:
-            text = f"Select {max_m - count} more battle move{'s' if max_m - count > 1 else ''}!"
+            remaining = required - count
+            text = f"Select {remaining} more battle move{'s' if remaining > 1 else ''}!"
             color = settings.BATTLE_SHOP_PHASE_BANNER_COLOR
 
         banner = self.phase_banner_font.render(text, True, color)

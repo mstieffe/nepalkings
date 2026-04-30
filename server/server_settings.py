@@ -231,6 +231,9 @@ STUCK_CONQUER_TIMEOUT_SECONDS = int(
 STUCK_CONQUER_SWEEP_INTERVAL_SECONDS = int(
     os.getenv('STUCK_CONQUER_SWEEP_INTERVAL_SECONDS', str(60))
 )
+POST_BATTLE_CHOICE_TIMEOUT_SECONDS = int(
+    os.getenv('POST_BATTLE_CHOICE_TIMEOUT_SECONDS', str(5 * 60))
+)
 GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS = 7 * 24  # Cap at 7 days of uncollected gold
 
 # ── Kingdom cosmetics ──────────────────────────────────────────────
