@@ -596,6 +596,26 @@ class FieldScreen(SubScreen):
                             )
                             
                             if result.get('success'):
+                                if result.get('conquer_result'):
+                                    if result.get('game'):
+                                        self.game.update_from_dict(result['game'])
+                                    self.load_figures()
+                                    self.defender_selection_mode = False
+                                    self._reset_defender_selectable()
+                                    self.game.pending_defender_selection = False
+                                    if hasattr(self.game, 'civil_war_defender_second'):
+                                        self.game.civil_war_defender_second = False
+                                        self.game.civil_war_required_color = None
+                                    parent = getattr(self.state, 'parent_screen', None)
+                                    if parent and hasattr(parent, '_handle_conquer_result_response'):
+                                        parent._handle_conquer_result_response(result)
+                                    else:
+                                        self.game.game_over = True
+                                        self.game.conquer_result = result.get('conquer_result')
+                                    self.figure_pending_defender_selection = None
+                                    self.dialogue_box = None
+                                    return
+
                                 # Check if this was a deficit auto-loss
                                 if result.get('deficit_loss'):
                                     # Defender's figure had a deficit — they auto-lose
@@ -1338,16 +1358,27 @@ class FieldScreen(SubScreen):
                         )
                         return
                     
-                    # Check checkmate constraint (opponent cannot select checkmate figures)
+                    # Checkmate defenders are protected unless no other legal
+                    # defender exists; then they are the only valid target.
                     if hasattr(target_figure, 'checkmate') and target_figure.checkmate:
-                        self.make_dialogue_box(
-                            message=f"{target_figure.name} has Checkmate and cannot be selected as a defender.",
-                            actions=[],
-                            icon="error",
-                            title="Checkmate",
-                            auto_close_delay=2000
+                        has_non_checkmate = any(
+                            fig.player_id != self.game.player_id
+                            and not (hasattr(fig, 'cannot_defend') and fig.cannot_defend)
+                            and not (hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted)
+                            and not (hasattr(fig, 'checkmate') and fig.checkmate)
+                            and (not village_only or (
+                                hasattr(fig, 'family') and fig.family.field == 'village'))
+                            for fig in self.figures
                         )
-                        return
+                        if has_non_checkmate:
+                            self.make_dialogue_box(
+                                message=f"{target_figure.name} has Checkmate and cannot be selected as a defender.",
+                                actions=[],
+                                icon="error",
+                                title="Checkmate",
+                                auto_close_delay=2000
+                            )
+                            return
                     
                     # Check must_be_attacked constraint on opponent's eligible figures
                     # Exclude figures with cannot_defend, cannot_be_targeted, or checkmate

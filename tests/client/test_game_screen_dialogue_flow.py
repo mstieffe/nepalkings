@@ -27,6 +27,36 @@ class _DummyDialogueBox:
         return self._response
 
 
+class _DummyGame(SimpleNamespace):
+    def update_from_dict(self, data):
+        self.updated_with = data
+        for key, value in data.items():
+            setattr(self, key, value)
+
+
+def _make_conquer_game_screen():
+    GameScreen = _game_screen_class()
+    game_screen = GameScreen.__new__(GameScreen)
+    game_screen.state = SimpleNamespace(
+        game=_DummyGame(
+            game_id=1,
+            player_id=10,
+            mode='conquer',
+            invader=True,
+            player_name='Attacker',
+            opponent_name='Defender',
+            game_over=False,
+            conquer_result=None,
+            pending_game_over=False,
+        )
+    )
+    game_screen._conquer_result_dialogue_shown = False
+    game_screen._reset_battle_state = lambda: None
+    notifications = []
+    game_screen.queue_or_show_notification = notifications.append
+    return GameScreen, game_screen, notifications
+
+
 class TestGameScreenDialogueFlow:
     def test_notification_queue_order_is_preserved(self):
         GameScreen = _game_screen_class()
@@ -416,3 +446,87 @@ class TestGameScreenDialogueFlow:
         assert 'Blitzkrieg:' in msg_after
         assert 'Ceasefire is active until the last turn.' in msg_after
         assert submitted_decisions == ['battle']
+
+    def test_cannot_advance_conquer_result_routes_to_game_over_notification(self, monkeypatch):
+        GameScreen, game_screen, notifications = _make_conquer_game_screen()
+
+        result = {
+            'success': True,
+            'conquer_result': 'defender_won',
+            'attacker_won': False,
+            'auto_loss_reason': 'no_figures_to_advance',
+            'land': {'col': 4, 'row': 5},
+            'game': {'state': 'finished', 'winner_player_id': 20},
+        }
+        monkeypatch.setattr('utils.game_service.cannot_advance_loss', lambda *_args: result)
+
+        GameScreen._handle_cannot_advance_loss(game_screen)
+
+        assert game_screen.state.game.game_over is True
+        assert game_screen.state.game.conquer_result == 'defender_won'
+        assert len(notifications) == 1
+        payload = notifications[0]
+        assert payload['type'] == 'game_over'
+        assert payload['title'] == 'Attack Failed'
+        assert 'No figure could legally advance' in payload['message']
+
+    def test_defender_no_figures_conquer_result_routes_to_game_over_notification(self, monkeypatch):
+        GameScreen, game_screen, notifications = _make_conquer_game_screen()
+
+        result = {
+            'success': True,
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'auto_loss_reason': 'no_defender_figures',
+            'land': {'col': 6, 'row': 7},
+            'game': {'state': 'finished', 'winner_player_id': 10},
+        }
+        monkeypatch.setattr('utils.game_service.defender_no_figures_loss', lambda *_args: result)
+
+        GameScreen._handle_defender_no_figures_loss(game_screen)
+
+        assert game_screen.state.game.game_over is True
+        assert game_screen.state.game.conquer_result == 'attacker_won'
+        assert len(notifications) == 1
+        payload = notifications[0]
+        assert payload['type'] == 'game_over'
+        assert payload['title'] == 'Land Conquered!'
+        assert 'The defender had no legal battle figure' in payload['message']
+
+    def test_finished_conquer_game_poll_derives_result_once(self):
+        GameScreen, game_screen, notifications = _make_conquer_game_screen()
+        game_screen.state.game.state = 'finished'
+        game_screen.state.game.winner_player_id = 20
+        game_screen.state.game.last_battle_result = {
+            'conquer_attacker_player_id': 10,
+            'conquer_defender_player_id': 20,
+            'auto_loss_reason': 'no_figures_to_advance',
+        }
+
+        handled = GameScreen._try_handle_finished_conquer_game(game_screen)
+        handled_again = GameScreen._try_handle_finished_conquer_game(game_screen)
+
+        assert handled is True
+        assert handled_again is True
+        assert game_screen.state.game.conquer_result == 'defender_won'
+        assert len(notifications) == 1
+        assert notifications[0]['title'] == 'Attack Failed'
+
+    def test_defender_selectable_precheck_allows_checkmate_fallback(self):
+        GameScreen, game_screen, _notifications = _make_conquer_game_screen()
+        only_defender = SimpleNamespace(
+            id=200,
+            player_id=20,
+            checkmate=True,
+            family=SimpleNamespace(field='village'),
+        )
+        game_screen.state.game.advancing_figure_id = None
+        game_screen.state.game.battle_modifier = []
+        game_screen.subscreens = {
+            'field': SimpleNamespace(
+                categorized_figures={'opponent': {'village': [only_defender]}},
+                figures=[only_defender],
+            )
+        }
+
+        assert GameScreen._check_any_defender_selectable(game_screen) is True

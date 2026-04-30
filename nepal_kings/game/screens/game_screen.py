@@ -443,6 +443,9 @@ class GameScreen(Screen):
                 self._last_seen_battle_round = self._get_battle_snapshot()
             self.previous_subscreen = self.state.subscreen
         
+        if self._try_handle_finished_conquer_game():
+            return
+
         # ── Finished game: read-only mode — skip polling and notifications ──
         if self.state.game.game_over:
             self.state.game.game_over_shown = True  # suppress game-over dialogue
@@ -491,6 +494,9 @@ class GameScreen(Screen):
                 self._poller_data_version = self.state.game._game_data_version
                 self._game_poller.poll(
                     args=(self.state.game.game_id,))
+
+        if self._try_handle_finished_conquer_game():
+            return
         
         # ── Badge tracking (field & battle) ──
         self._update_field_badge()
@@ -1923,6 +1929,10 @@ class GameScreen(Screen):
         result = cannot_advance_loss(self.state.game.game_id, self.state.game.player_id)
         
         if result.get('success'):
+            if result.get('conquer_result'):
+                self._handle_conquer_result_response(result)
+                return
+
             # Check for game-over
             if result.get('game_over'):
                 if result.get('game'):
@@ -1994,16 +2004,21 @@ class GameScreen(Screen):
         skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
         
         eligible = []
+        checkmate_fallback = []
         for fig in all_opponent_figures:
             if hasattr(fig, 'cannot_defend') and fig.cannot_defend:
                 continue
             if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
                 continue
-            if hasattr(fig, 'checkmate') and fig.checkmate:
-                continue
             if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
                 continue
+            if hasattr(fig, 'checkmate') and fig.checkmate:
+                checkmate_fallback.append(fig)
+                continue
             eligible.append(fig)
+
+        if not eligible and checkmate_fallback:
+            eligible = checkmate_fallback
         
         if not eligible:
             return False
@@ -2022,6 +2037,10 @@ class GameScreen(Screen):
         result = defender_no_figures_loss(self.state.game.game_id, self.state.game.player_id)
         
         if result.get('success'):
+            if result.get('conquer_result'):
+                self._handle_conquer_result_response(result)
+                return
+
             # Check for game-over
             if result.get('game_over'):
                 if result.get('game'):
@@ -2764,6 +2783,9 @@ class GameScreen(Screen):
         
         if result.get('resolved'):
             outcome = result.get('outcome')
+            if result.get('conquer_result'):
+                self._handle_conquer_result_response(result)
+                return
             if outcome == 'battle':
                 # Both chose to fight — go to battle shop for move selection
                 if result.get('game'):
@@ -2981,6 +3003,189 @@ class GameScreen(Screen):
             return
         if self.state.game.pending_game_over:
             self._show_game_over_dialogue(self.state.game.pending_game_over)
+
+    def _card_line(self, card):
+        if not isinstance(card, dict):
+            return None
+        rank = card.get('rank')
+        suit = card.get('suit')
+        if rank and suit:
+            return f"{rank} of {suit}"
+        if rank:
+            return str(rank)
+        if suit:
+            return str(suit)
+        return None
+
+    def _card_lines(self, cards, max_lines=10):
+        lines = []
+        for card in cards or []:
+            label = self._card_line(card)
+            if label:
+                lines.append(label)
+        if len(lines) <= max_lines:
+            return lines
+        overflow = len(lines) - max_lines
+        return lines[:max_lines] + [f"... and {overflow} more"]
+
+    def _auto_loss_reason_text(self, result):
+        reason = result.get('auto_loss_reason')
+        detail = result.get('auto_loss_detail') or ''
+        if reason == 'no_figures_to_advance':
+            return 'No figure could legally advance, so the attack was forfeited.'
+        if reason == 'no_defender_figures':
+            return 'The defender had no legal battle figure, so the defence was forfeited.'
+        if reason == 'resource_deficit':
+            name = detail or 'A selected figure'
+            return f'{name} had a resource deficit and could not fight.'
+        if reason == 'fold':
+            return 'The battle was forfeited by fold.'
+        return ''
+
+    def _derive_finished_conquer_result(self):
+        game = self.state.game if self.state else None
+        if not game or game.mode != 'conquer' or game.state != 'finished':
+            return None
+
+        last = getattr(game, 'last_battle_result', None) or getattr(
+            game, '_last_polled_battle_result', {}) or {}
+        conquer_result = last.get('conquer_result')
+        attacker_won = last.get('attacker_won')
+        if conquer_result == 'draw' or game.winner_player_id is None:
+            conquer_result = 'draw'
+            attacker_won = False
+        elif conquer_result in ('attacker_won', 'defender_won'):
+            attacker_won = (conquer_result == 'attacker_won')
+        else:
+            attacker_player_id = last.get('conquer_attacker_player_id') or getattr(
+                game, 'invader_player_id', None)
+            attacker_won = bool(attacker_player_id and game.winner_player_id == attacker_player_id)
+            conquer_result = 'attacker_won' if attacker_won else 'defender_won'
+
+        result = {
+            'success': True,
+            'already_resolved': True,
+            'conquer_result': conquer_result,
+            'attacker_won': bool(attacker_won),
+            'land_id': getattr(game, 'land_id', None),
+            'land_tier': getattr(game, 'land_tier', None),
+            'land_gold_rate': getattr(game, 'land_gold_rate', 0),
+            'auto_loss_reason': last.get('auto_loss_reason'),
+            'auto_loss_detail': last.get('auto_loss_detail'),
+            'card_won_suit': last.get('card_won_suit'),
+            'card_won_rank': last.get('card_won_rank'),
+            'card_lost_suit': last.get('card_lost_suit'),
+            'card_lost_rank': last.get('card_lost_rank'),
+            'loot_lost_cards': last.get('conquer_loot_lost_cards') or last.get('loot_lost_cards') or [],
+            'consumed_cards': last.get('conquer_consumed_cards') or last.get('consumed_cards') or [],
+            'defence_consumed_cards': last.get('defence_consumed_cards') or [],
+            'cards_spent': last.get('cards_spent'),
+        }
+        return result
+
+    def _handle_conquer_result_response(self, result):
+        """Show conquer resolution from non-battle-screen server responses."""
+        if not result or not result.get('conquer_result') or not self.state.game:
+            return False
+
+        if result.get('game'):
+            self.state.game.update_from_dict(result['game'])
+
+        game = self.state.game
+        if getattr(game, '_conquer_result_dialogue_shown', False):
+            return True
+
+        game._conquer_result_dialogue_shown = True
+        game.game_over = True
+        game.conquer_result = result.get('conquer_result')
+        self._reset_battle_state()
+
+        attacker_won = bool(result.get('attacker_won'))
+        conquer_result = result.get('conquer_result')
+        is_attacker = bool(getattr(game, 'invader', False))
+        reason_text = self._auto_loss_reason_text(result)
+
+        if conquer_result == 'draw':
+            title = 'Draw!'
+            icon = 'draw'
+            message = 'The battle ended in a draw.\n\nNo consequences — the land remains unchanged.'
+        elif attacker_won and is_attacker:
+            land_tier = result.get('land_tier') or getattr(game, 'land_tier', None)
+            gold_rate = result.get('land_gold_rate', 0) or 0
+            land_label = f'Tier {land_tier} land' if land_tier else 'this land'
+            title = 'Land Conquered!'
+            icon = 'victory'
+            message = f'You have conquered {land_label}!'
+            if gold_rate:
+                message += f'\n\nGold production increased by {gold_rate:.1f} gold/hour.'
+            card_suit = result.get('card_won_suit')
+            card_rank = result.get('card_won_rank')
+            if card_suit and card_rank:
+                message += f'\n\nCard won: {card_rank} of {card_suit}'
+        elif attacker_won and not is_attacker:
+            title = 'Land Lost!'
+            icon = 'defeat'
+            message = 'The attacker has conquered your land.'
+            card_suit = result.get('card_lost_suit')
+            card_rank = result.get('card_lost_rank')
+            if card_suit and card_rank:
+                message += f'\n\nCard lost as loot: {card_rank} of {card_suit}'
+            defence_lines = self._card_lines(result.get('defence_consumed_cards'))
+            if defence_lines:
+                message += '\n\nDefence cards consumed:\n' + '\n'.join(
+                    f'• {line}' for line in defence_lines)
+        elif not attacker_won and is_attacker:
+            title = 'Attack Failed'
+            icon = 'defeat'
+            message = 'The defender held their ground.\n\nYou did not conquer this land.'
+            card_suit = result.get('card_lost_suit')
+            card_rank = result.get('card_lost_rank')
+            loot_lines = self._card_lines(result.get('loot_lost_cards'))
+            consumed_lines = self._card_lines(result.get('consumed_cards'))
+            if card_suit and card_rank:
+                message += f'\n\nKey card lost: {card_rank} of {card_suit}'
+            if loot_lines:
+                message += '\n\nLooted by defender:\n' + '\n'.join(
+                    f'• {line}' for line in loot_lines)
+            if consumed_lines:
+                message += '\n\nConsumed cards:\n' + '\n'.join(
+                    f'• {line}' for line in consumed_lines)
+            elif result.get('cards_spent'):
+                message += f"\n\nAll {int(result.get('cards_spent') or 0)} cards spent on this attack have been consumed."
+        else:
+            title = 'Defence Successful!'
+            icon = 'victory'
+            message = 'You defended your land successfully!'
+            card_suit = result.get('card_won_suit')
+            card_rank = result.get('card_won_rank')
+            if card_suit and card_rank:
+                message += f'\n\nCard won: {card_rank} of {card_suit}'
+
+        if reason_text:
+            message = f'{reason_text}\n\n{message}'
+
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'icon': icon,
+            'title': title,
+            'type': 'game_over',
+        })
+        return True
+
+    def _try_handle_finished_conquer_game(self):
+        """Safety net for finished conquer games resolved outside BattleScreen."""
+        game = self.state.game if self.state else None
+        if not game or game.mode != 'conquer' or game.state != 'finished':
+            return False
+        if getattr(game, '_conquer_result_dialogue_shown', False):
+            return True
+        if getattr(game, '_conquer_battle_ended', False):
+            return True
+        result = self._derive_finished_conquer_result()
+        if not result:
+            return False
+        return self._handle_conquer_result_response(result)
 
     def _show_game_over_dialogue(self, game_over_info):
         """Show a game-over dialogue with the result and gold awarded."""

@@ -29,6 +29,7 @@ class Game:
         self.turn_time_limit = game_dict.get('turn_time_limit')  # Seconds per turn (None = no limit)
         self.winner_player_id = game_dict.get('winner_player_id')
         self.finished_at = game_dict.get('finished_at')
+        self.last_battle_result = game_dict.get('last_battle_result') or {}
         self.players = game_dict.get('players', [])
         self.main_cards = game_dict.get('main_cards', [])
         self.side_cards = game_dict.get('side_cards', [])
@@ -364,6 +365,7 @@ class Game:
         self.stake = game_dict.get('stake', 45)
         self.winner_player_id = game_dict.get('winner_player_id')
         self.finished_at = game_dict.get('finished_at')
+        self.last_battle_result = game_dict.get('last_battle_result') or {}
         self.players = game_dict.get('players', [])
         self.main_cards = game_dict.get('main_cards', [])
         self.side_cards = game_dict.get('side_cards', [])
@@ -775,7 +777,7 @@ class Game:
         # Detect loot notification for battle loser (which card the winner kept)
         last_result = game_dict.get('last_battle_result') or {}
         # Keep a copy for the battle-screen safety net (missed result dialogue)
-        if last_result and last_result.get('winner_player_id'):
+        if last_result and (last_result.get('winner_player_id') or last_result.get('conquer_resolved')):
             self._last_polled_battle_result = dict(last_result)
         picked_card = last_result.get('picked_card')
         loser_id = last_result.get('loser_player_id')
@@ -811,6 +813,9 @@ class Game:
         self.land_suit_bonus_value = game_dict.get(
             'land_suit_bonus_value', self.land_suit_bonus_value)
         self.date = game_dict['date']
+        self.winner_player_id = game_dict.get('winner_player_id')
+        self.finished_at = game_dict.get('finished_at')
+        self.last_battle_result = game_dict.get('last_battle_result') or {}
         self.players = game_dict.get('players', [])
         self.main_cards = game_dict.get('main_cards', [])
         self.side_cards = game_dict.get('side_cards', [])

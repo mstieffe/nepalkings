@@ -564,6 +564,50 @@ def _guard_must_advance(game, player_id, *, action_label='action'):
     }), 400
 
 
+def _has_advanceable_figure(game, player_id):
+    """Return True if *player_id* has any figure that can legally advance."""
+    if not game or not player_id:
+        return False
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    resting_ids = set(game.resting_figure_ids or [])
+
+    figures = Figure.query.filter_by(player_id=player_id, game_id=game.id).all()
+    for fig in figures:
+        if fig.id in resting_ids:
+            continue
+        if (has_peasant_war or has_civil_war) and fig.field != 'village':
+            continue
+        if _figure_has_family_skill(fig, 'cannot_attack'):
+            continue
+        if _check_figure_resource_deficit(fig, player_id, game.id):
+            continue
+        return True
+    return False
+
+
+def _has_selectable_defender(game, defender_player_id):
+    """Return True if defender has any figure the invader may select."""
+    if not game or not defender_player_id:
+        return False
+    modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+    figures = Figure.query.filter_by(
+        player_id=defender_player_id,
+        game_id=game.id,
+    ).all()
+    for fig in figures:
+        if not _figure_can_be_selected_as_defender(fig):
+            continue
+        if (has_peasant_war or has_civil_war) and fig.field != 'village':
+            continue
+        return True
+    return False
+
+
 def _check_and_update_ceasefire(game):
     """
     Check if ceasefire should end and update game state accordingly.
@@ -2837,6 +2881,11 @@ def _resolve_conquer_auto_loss(game, winner_player, loser_player,
 
     result = _resolve_conquer_battle(game, winner_player, requesting_player)
 
+    last_result = dict(game.last_battle_result or {})
+    last_result['auto_loss_reason'] = auto_loss_reason
+    last_result['auto_loss_detail'] = auto_loss_detail
+    game.last_battle_result = last_result
+
     # Surface the auto-loss reason so the client can show a tailored
     # message even though the game is already 'finished'.
     result['auto_loss_reason'] = auto_loss_reason
@@ -2871,6 +2920,10 @@ def cannot_advance_loss():
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+        finished_conquer = _serialize_finished_conquer_result(game)
+        if finished_conquer:
+            return jsonify(finished_conquer)
+
         player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
@@ -2890,6 +2943,17 @@ def cannot_advance_loss():
 
         # ── Conquer mode: single-battle game, no new round / side cards. ──
         if game.mode == 'conquer':
+            if game.invader_player_id != player_id:
+                return jsonify({
+                    'success': False,
+                    'message': 'Only the conquer attacker can report no advanceable figures',
+                }), 400
+            if _has_advanceable_figure(game, player_id):
+                return jsonify({
+                    'success': False,
+                    'message': 'At least one figure can still advance',
+                    'reason': 'advanceable_figure_exists',
+                }), 400
             return jsonify(_resolve_conquer_auto_loss(
                 game,
                 winner_player=opponent,
@@ -2997,6 +3061,10 @@ def defender_no_figures_loss():
         if not game:
             return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+        finished_conquer = _serialize_finished_conquer_result(game)
+        if finished_conquer:
+            return jsonify(finished_conquer)
+
         player = db.session.get(Player, player_id)
         if not player:
             return jsonify({'success': False, 'message': 'Player not found'}), 404
@@ -3020,6 +3088,12 @@ def defender_no_figures_loss():
 
         # ── Conquer mode: single-battle game, no new round / side cards. ──
         if game.mode == 'conquer':
+            if _has_selectable_defender(game, opponent.id if opponent else None):
+                return jsonify({
+                    'success': False,
+                    'message': 'Defender still has a selectable battle figure',
+                    'reason': 'selectable_defender_exists',
+                }), 400
             return jsonify(_resolve_conquer_auto_loss(
                 game,
                 winner_player=player,
@@ -5240,6 +5314,8 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     merged_last_result = dict(saved) if isinstance(saved, dict) else {}
     merged_last_result.update({
         'conquer_resolved': True,
+        'winner_player_id': winner.id,
+        'loser_player_id': def_player.id if attacker_won else atk_player.id,
         'conquer_attacker_player_id': atk_player.id,
         'conquer_attacker_user_id': attacker_user.id if attacker_user else None,
         'conquer_defender_player_id': def_player.id,
@@ -5337,6 +5413,10 @@ def _serialize_finished_conquer_result(game):
         payload['defence_consumed_cards'] = last_result.get('defence_consumed_cards') or []
     if 'conquer_loot_lost_cards' in last_result:
         payload['loot_lost_cards'] = last_result.get('conquer_loot_lost_cards') or []
+    if 'auto_loss_reason' in last_result:
+        payload['auto_loss_reason'] = last_result.get('auto_loss_reason')
+    if 'auto_loss_detail' in last_result:
+        payload['auto_loss_detail'] = last_result.get('auto_loss_detail')
 
     return payload
 
@@ -5783,6 +5863,10 @@ def finish_battle_draw():
     player = Player.query.filter_by(id=player_id, game_id=game_id).first()
     if not player:
         return jsonify({'success': False, 'message': 'Player not found'}), 404
+
+    finished_conquer = _serialize_finished_conquer_result(game)
+    if finished_conquer:
+        return jsonify(finished_conquer)
 
     other_player = [p for p in game.players if p.id != player_id][0]
 
