@@ -67,3 +67,35 @@ def test_grouped_card_sections_use_more_tile_for_large_groups():
 
     flattened = [item for row in box.image_groups[0]['rows'] for item in row]
     assert any(item['kind'] == 'more' and item['text'] == '+4' for item in flattened)
+
+
+def test_dialogue_ignores_mouse_wheel_release_for_actions(monkeypatch):
+    from config import settings
+    from game.components.dialogue_box import DialogueBox
+    import pygame
+
+    pygame.display.set_mode((1, 1))
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+
+    box = DialogueBox(
+        window,
+        'Sell selected cards?',
+        actions=['Sell', 'Cancel'],
+        title='Sell Card',
+    )
+
+    # Hover over the first button so event filtering is the only gate.
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: box.buttons[0].rect.center)
+    box._created_at = pygame.time.get_ticks() - 500
+
+    wheel_release = pygame.event.Event(
+        pygame.MOUSEBUTTONUP,
+        {'button': 4, 'pos': box.buttons[0].rect.center},
+    )
+    left_release = pygame.event.Event(
+        pygame.MOUSEBUTTONUP,
+        {'button': 1, 'pos': box.buttons[0].rect.center},
+    )
+
+    assert box.update([wheel_release]) is None
+    assert box.update([left_release]) == 'sell'

@@ -106,16 +106,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._stats_font = settings.get_font(settings.COLLECTION_STATS_FONT_SIZE)
         self._pack_title_font = settings.get_font(settings.COLLECTION_PACK_PANEL_TITLE_FONT_SIZE, bold=True)
         self._pack_detail_font = settings.get_font(settings.COLLECTION_PACK_PANEL_DETAIL_FONT_SIZE)
-        self._tier_font = settings.get_font(settings.COLLECTION_BADGE_FONT_SIZE, bold=True)
         self._sell_control_font = settings.get_font(settings.COLLECTION_SELL_FONT_SIZE, bold=True)
 
         # ── Card ranks ──────────────────────────────────────────────
         self._main_ranks = list(reversed(settings.RANKS_MAIN_CARDS))  # A,K,Q,J,10,9,8,7
         self._side_ranks = list(reversed(settings.RANKS_SIDE_CARDS))  # 6,5,4,3,2
-
-        # ── Scroll offset for combined view ─────────────────────────
-        self._scroll_y = 0
-        self._content_height = 0  # computed in _compute_card_positions
 
         # ── Card data from server ───────────────────────────────────
         self._cards = {}       # {(suit,rank): quantity}
@@ -248,7 +243,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._gold = ud.get('gold', 0)
         self._boosters = ud.get('booster_packs', 0)
         self._boosters_side = ud.get('booster_packs_side', 0)
-        self._scroll_y = 0
         self._sell_card = None
         self._sell_dialogue = None
         self._reveal_overlay = None
@@ -302,7 +296,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         cards_x = px
 
         # Main section header & side section header on same row
-        header_y = py - self._scroll_y
+        header_y = py
         main_header_x = cards_x
         main_right_edge = cards_x + len(self._main_ranks) * (cw + gx) - gx
         side_x = main_right_edge + section_gap_x
@@ -328,13 +322,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 cx = side_x + col_i * (cw + gx)
                 positions.append((cx, row_y, suit, rank, 'side'))
                 self._card_rects.append((pygame.Rect(cx, row_y, cw, ch), suit, rank, 'side'))
-
-        last_row_bottom = (settings.COLLECTION_PANEL_PAD_Y + section_header_h +
-                   len(suits) * ch + max(0, len(suits) - 1) * gy +
-                   settings.COLLECTION_PANEL_PAD_Y)
-
-        # Total content height (for scroll clamping)
-        self._content_height = last_row_bottom
 
         return positions
 
@@ -390,11 +377,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         stats = _collection_stats(self._cards, self._locked)
         items = [
-            ('Unique', f"{stats['unique_owned']}/{stats['unique_total']}"),
-            ('Cards', str(stats['owned_total'])),
-            ('Missing', str(stats['missing_total'])),
+            ('Collection', f"{stats['unique_owned']}/{stats['unique_total']}"),
+            ('Total Cards', str(stats['owned_total'])),
             ('Locked', str(stats['locked_total'])),
-            ('Packs', f"M {self._boosters}  ·  S {self._boosters_side}"),
         ]
 
         rendered = []
@@ -443,14 +428,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         title = self._pack_title_font.render(info['title'], True, settings.COLLECTION_PACK_PANEL_TITLE_CLR)
         self.window.blit(title, (title_x, panel.y + pad_y - int(0.001 * _SH)))
         count_text = self._pack_detail_font.render(
-            f'Owned: {count}  ·  {info["range"]}', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
-        self.window.blit(count_text, (title_x, panel.y + pad_y + title.get_height() + int(0.002 * _SH)))
-
-        preview_y = panel.y + pad_y + icon_sz + int(0.008 * _SH)
-        preview = self._pack_detail_font.render(info['preview'], True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
-        self.window.blit(preview, (panel.x + pad_x, preview_y))
-        odds = self._pack_detail_font.render(f'Odds: {info["odds"]}', True, settings.COLLECTION_PACK_PANEL_MUTED_CLR)
-        self.window.blit(odds, (panel.x + pad_x, preview_y + preview.get_height() + int(0.002 * _SH)))
+            f'Owned: {count}', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+        self.window.blit(count_text, (title_x, panel.y + pad_y + title.get_height() + int(0.004 * _SH)))
 
         btns = self._pack_button_rects[pack_type]
         self._draw_action_button(btns['open'], f'Open ({count})', count > 0)
@@ -486,75 +465,119 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
             if qty > 0:
                 card.draw_front_bright(cx, cy)
-                self._draw_card_tier_accent(card_rect, rank, section, owned=True)
                 if hovered:
                     glow_surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
                     pygame.draw.rect(glow_surf, (250, 221, 0, 80), glow_surf.get_rect(), 2)
                     self.window.blit(glow_surf, (cx - 2, cy - 2))
                 self._draw_card_badge(cx, cy, cw, qty, locked)
+                if locked > 0:
+                    self._draw_lock_badge(cx, cy, cw, locked)
             else:
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
-                self._draw_card_tier_accent(card_rect, rank, section, owned=False)
-
-    def _draw_card_tier_accent(self, rect, rank, section, owned=True):
-        """Draw a subtle tier strip/corner marker without overpowering card art."""
-        tier = _card_tier(rank, section)
-        border = settings.COLLECTION_TIER_BORDER_COLORS.get(tier, (160, 160, 160, 120))
-        alpha_scale = 1.0 if owned else 0.38
-        color = (border[0], border[1], border[2], max(35, int(border[3] * alpha_scale)))
-        accent = pygame.Surface((rect.w + 4, rect.h + 4), pygame.SRCALPHA)
-        pygame.draw.rect(accent, color, accent.get_rect(), 2 if owned else 1, border_radius=5)
-        strip_h = max(3, int(0.0045 * _SH))
-        pygame.draw.rect(accent, color, pygame.Rect(2, 2, rect.w, strip_h), border_radius=2)
-        corner = max(10, int(0.012 * _SW))
-        pygame.draw.polygon(accent, color, [(rect.w + 1, 2), (rect.w + 1, corner), (rect.w + 1 - corner, 2)])
-        self.window.blit(accent, (rect.x - 2, rect.y - 2))
 
     def _draw_card_badge(self, cx, cy, cw, qty, locked=0):
-        """Draw ×N (free/total) badge at the bottom-right of a card."""
-        if locked > 0:
-            free = max(0, qty - locked)
-            badge_text = f'×{free}/{qty}'
-            if free == 0:
-                bg_clr = (88, 80, 66, 220)
-            else:
-                bg_clr = (126, 84, 32, 220)
+        """Draw the ×N owned badge at the bottom-right of a card.
+
+        Locked copies are displayed separately by `_draw_lock_badge` so this
+        badge stays a simple, easily-readable count.
+        """
+        badge_text = f'×{qty}'
+        if locked >= qty and qty > 0:
+            bg_clr = (88, 80, 66, 220)   # all locked → muted
         else:
-            badge_text = f'×{qty}'
             bg_clr = settings.COLLECTION_BADGE_BG_CLR
         badge_surf = self._badge_font.render(badge_text, True, settings.COLLECTION_BADGE_CLR)
-        lock_extra = int(0.013 * _SW) if locked > 0 else 0
-        bw = badge_surf.get_width() + settings.COLLECTION_BADGE_PAD_X * 2 + lock_extra
+        bw = badge_surf.get_width() + settings.COLLECTION_BADGE_PAD_X * 2
         bh = badge_surf.get_height() + settings.COLLECTION_BADGE_PAD_Y * 2
         bx = cx + cw - bw - 2
         by = cy + settings.COLLECTION_CARD_H - bh - 2
         bg = pygame.Surface((bw, bh), pygame.SRCALPHA)
         bg.fill(bg_clr)
         self.window.blit(bg, (bx, by))
-        text_x = bx + settings.COLLECTION_BADGE_PAD_X
-        if locked > 0:
-            icon_size = max(6, min(lock_extra, bh - 4))
-            self._draw_lock_icon(text_x, by + (bh - icon_size) // 2, icon_size)
-            text_x += lock_extra
-        self.window.blit(badge_surf, (text_x, by + settings.COLLECTION_BADGE_PAD_Y))
+        self.window.blit(badge_surf,
+                         (bx + settings.COLLECTION_BADGE_PAD_X,
+                          by + settings.COLLECTION_BADGE_PAD_Y))
+
+    def _draw_lock_badge(self, cx, cy, cw, locked):
+        """Draw a clear padlock + count badge in the top-right corner."""
+        if locked <= 0:
+            return
+        text = str(locked)
+        text_surf = self._badge_font.render(text, True, (255, 240, 200))
+        icon_size = max(10, int(self._badge_font.get_height() * 0.95))
+        gap = max(2, int(0.0015 * _SW))
+        pad_x = settings.COLLECTION_BADGE_PAD_X
+        pad_y = settings.COLLECTION_BADGE_PAD_Y
+        bw = icon_size + gap + text_surf.get_width() + pad_x * 2
+        bh = max(icon_size, text_surf.get_height()) + pad_y * 2
+        bx = cx + cw - bw - 2
+        by = cy + 2
+        bg = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        # High-contrast amber bg with a darker rim so it pops on any card art.
+        pygame.draw.rect(bg, (40, 28, 12, 235), bg.get_rect(), border_radius=4)
+        pygame.draw.rect(bg, (210, 170, 90, 230), bg.get_rect(), 1, border_radius=4)
+        self.window.blit(bg, (bx, by))
+        icon_x = bx + pad_x
+        icon_y = by + (bh - icon_size) // 2
+        self._draw_lock_icon(icon_x, icon_y, icon_size)
+        self.window.blit(text_surf,
+                         (icon_x + icon_size + gap,
+                          by + (bh - text_surf.get_height()) // 2))
 
     def _draw_lock_icon(self, x, y, size):
-        """Draw a tiny lock icon programmatically for locked collection cards."""
+        """Draw a clear filled padlock glyph at (x, y) within `size` pixels."""
         if size <= 0:
             return
-        color = (245, 226, 180, 235)
-        shackle = pygame.Rect(int(x + size * 0.25), int(y), int(size * 0.50), int(size * 0.55))
-        body = pygame.Rect(int(x + size * 0.14), int(y + size * 0.40),
-                           int(size * 0.72), int(size * 0.52))
-        pygame.draw.arc(self.window, color, shackle, 3.14, 6.28, max(1, size // 8))
-        pygame.draw.rect(self.window, color, body, border_radius=max(1, size // 8))
+        body_color = (250, 226, 150)
+        shackle_color = (235, 210, 130)
+        keyhole_color = (40, 28, 12)
+        # Body occupies the lower ~62% of the bounding box.
+        body_h = int(size * 0.62)
+        body_w = int(size * 0.78)
+        body_x = int(x + (size - body_w) / 2)
+        body_y = int(y + size - body_h)
+        body_rect = pygame.Rect(body_x, body_y, body_w, body_h)
+        radius = max(1, int(size * 0.10))
+        pygame.draw.rect(self.window, body_color, body_rect, border_radius=radius)
+        # Shackle: drawn as two short verticals + a top arc so it reads as a lock
+        # even at small sizes.
+        shackle_w = int(body_w * 0.62)
+        shackle_x = int(x + (size - shackle_w) / 2)
+        shackle_top = int(y + size * 0.04)
+        shackle_thick = max(2, int(size * 0.14))
+        shackle_h = body_y - shackle_top + shackle_thick // 2
+        # Top arc
+        arc_rect = pygame.Rect(shackle_x, shackle_top, shackle_w, shackle_h * 2)
+        pygame.draw.arc(self.window, shackle_color, arc_rect, 3.14159, 6.28318, shackle_thick)
+        # Side legs that extend down to the body
+        leg_top = shackle_top + shackle_h
+        pygame.draw.line(self.window, shackle_color,
+                         (shackle_x + shackle_thick // 2, leg_top),
+                         (shackle_x + shackle_thick // 2, body_y + 1), shackle_thick)
+        pygame.draw.line(self.window, shackle_color,
+                         (shackle_x + shackle_w - shackle_thick // 2, leg_top),
+                         (shackle_x + shackle_w - shackle_thick // 2, body_y + 1), shackle_thick)
+        # Keyhole
+        kh_r = max(1, int(body_w * 0.13))
+        kh_cx = body_rect.centerx
+        kh_cy = body_y + int(body_h * 0.42)
+        pygame.draw.circle(self.window, keyhole_color, (kh_cx, kh_cy), kh_r)
+        pygame.draw.rect(self.window, keyhole_color,
+                         pygame.Rect(kh_cx - max(1, kh_r // 2),
+                                     kh_cy,
+                                     max(2, kh_r),
+                                     max(2, int(body_h * 0.28))))
 
     def _draw_action_button(self, rect, text, enabled):
         """Draw one of the bottom action buttons."""
         mouse_pos = pygame.mouse.get_pos()
-        hovered = (rect.collidepoint(mouse_pos) and not self.dialogue_box
-               and not self._sell_dialogue and not self._reveal_overlay)
+        hovered = (
+            rect.collidepoint(mouse_pos)
+            and not self.dialogue_box
+            and not self._sell_dialogue
+            and not self._reveal_overlay
+        )
         from game.core.input_state import get_pressed as _get_pressed
         clicked = hovered and _get_pressed()[0]
 
@@ -590,8 +613,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         """Draw a small X close button in the top-right corner of the box."""
         r = self._btn_close_rect
         mouse_pos = pygame.mouse.get_pos()
-        hovered = (r.collidepoint(mouse_pos) and not self.dialogue_box
-               and not self._sell_dialogue and not self._reveal_overlay)
+        hovered = (
+            r.collidepoint(mouse_pos)
+            and not self.dialogue_box
+            and not self._sell_dialogue
+            and not self._reveal_overlay
+        )
 
         bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
         border_clr = (180, 160, 120) if hovered else (120, 100, 70)
@@ -631,8 +658,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         unit_price = _sell_price(rank, 1)
         card_img = self._card_imgs.get((suit, rank))
         images = [card_img] if card_img else []
-        tier = _tier_label(rank, _card_pack_type(rank))
-        msg = (f'{suit} {rank} · {tier} card\n'
+        msg = (f'Sell {suit} {rank}?\n'
                f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}')
         after_msg = self._sell_after_text(unit_price, qty, free, locked)
         self._sell_dialogue = DialogueBox(
@@ -762,10 +788,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         """Show confirmation dialogue for opening a booster."""
         self._pending_booster_type = pack_type
         info = settings.COLLECTION_PACK_PREVIEWS[pack_type]
+        pack_icon = self._booster_icon_dialog if pack_type == 'main' else self._booster_side_icon_dialog
         self.dialogue_box = DialogueBox(
             self.window,
-            f'Open a {info["title"]}?\n{info["preview"]}\nOdds: {info["odds"]}',
+            f'Open {info["title"]}?',
             actions=['open', 'cancel'],
+            images=[pack_icon],
             title='Open Booster')
 
     def _perform_open_booster(self):
@@ -799,10 +827,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._pending_booster_type = pack_type
         price = settings.BOOSTER_PACK_PRICE if pack_type == 'main' else settings.BOOSTER_PACK_SIDE_PRICE
         info = settings.COLLECTION_PACK_PREVIEWS[pack_type]
+        pack_icon = self._booster_icon_dialog if pack_type == 'main' else self._booster_side_icon_dialog
         self.dialogue_box = DialogueBox(
             self.window,
-            f'Buy a {info["title"]} for {price} gold?\n{info["preview"]}\nOdds: {info["odds"]}',
+            f'Buy {info["title"]} for {price} gold?',
             actions=['buy', 'cancel'],
+            images=[pack_icon],
             title='Buy Booster')
 
     def _perform_buy_booster(self):
@@ -882,7 +912,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         for event in events:
             # Reveal overlay captures all input when active
             if self._reveal_overlay:
-                if event.type == MOUSEBUTTONUP:
+                if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                     done = self._reveal_overlay.handle_click(event.pos)
                     if done:
                         self._reveal_overlay = None
@@ -890,7 +920,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
             # Sell dialogue captures input
             if self._sell_dialogue:
-                if event.type == MOUSEBUTTONUP:
+                if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                     if self._handle_sell_qty_click(event.pos):
                         continue
                     response = self._sell_dialogue.update([event])
@@ -921,7 +951,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 self.state.screen = 'game_menu'
                 return
 
-            if event.type == MOUSEBUTTONUP:
+            if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 # X close button
                 if self._btn_close_rect.collidepoint(event.pos):
                     self.state.screen = 'game_menu'
@@ -957,10 +987,3 @@ class CollectionScreen(MenuScreenMixin, Screen):
                         if rect.collidepoint(event.pos):
                             self._open_sell_dialogue(suit, rank)
                             break
-
-            # Scroll wheel within panel
-            if event.type == MOUSEWHEEL and self._panel_rect.collidepoint(pygame.mouse.get_pos()):
-                scroll_speed = int(0.04 * _SH)
-                self._scroll_y -= event.y * scroll_speed
-                max_scroll = max(0, self._content_height - self._panel_rect.h)
-                self._scroll_y = max(0, min(self._scroll_y, max_scroll))

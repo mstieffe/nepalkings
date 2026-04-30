@@ -654,7 +654,7 @@ class DialogueBox:
             return None
 
         for event in events:
-            if event.type == pygame.MOUSEBUTTONUP:
+            if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 for button in self.buttons:
                     if button.collide():
                         return button.text.lower()
