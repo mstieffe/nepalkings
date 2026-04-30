@@ -247,6 +247,8 @@ class TestOpenBooster:
             assert card['rank'] in ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
             assert card['suit'] in ['Hearts', 'Diamonds', 'Clubs', 'Spades']
             assert card['value'] > 0
+            assert card['tier'] in settings.BOOSTER_TIER_RANKS
+            assert card['rank'] in settings.BOOSTER_TIER_RANKS[card['tier']]
 
         # Cards should exist in DB
         db_cards = CollectionCard.query.filter_by(user_id=u1.id).all()
@@ -297,6 +299,8 @@ class TestOpenBoosterSide:
             assert card['rank'] in ['2', '3', '4', '5', '6']
             assert card['suit'] in ['Hearts', 'Diamonds', 'Clubs', 'Spades']
             assert card['value'] > 0
+            assert card['tier'] in settings.BOOSTER_SIDE_TIER_RANKS
+            assert card['rank'] in settings.BOOSTER_SIDE_TIER_RANKS[card['tier']]
 
         db_cards = CollectionCard.query.filter_by(user_id=u1.id).all()
         assert len(db_cards) == 3

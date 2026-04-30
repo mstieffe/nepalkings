@@ -45,7 +45,8 @@ def _draw_cards(count, tier_probs, tier_ranks):
         tier = random.choices(tiers, weights=weights, k=1)[0]
         rank = random.choice(tier_ranks[tier])
         suit = random.choice(SUITS)
-        cards.append({'suit': suit, 'rank': rank, 'value': RANK_TO_VALUE[rank]})
+        cards.append({'suit': suit, 'rank': rank,
+                      'value': RANK_TO_VALUE[rank], 'tier': tier})
     return cards
 
 

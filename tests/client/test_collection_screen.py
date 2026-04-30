@@ -98,6 +98,51 @@ class TestCardOrdering:
         assert 'Spades' in SUITS
 
 
+class TestCollectionTierMapping:
+    """Verify client rank-to-tier helpers mirror booster tables."""
+
+    def test_main_card_tiers(self):
+        from game.screens.collection_screen import _card_tier, _tier_label
+        assert _card_tier('7', 'main') == 1
+        assert _card_tier('J', 'main') == 2
+        assert _card_tier('A', 'main') == 3
+        assert _tier_label('K', 'main') == 'Rare'
+
+    def test_side_card_tiers(self):
+        from game.screens.collection_screen import _card_tier, _tier_label
+        assert _card_tier('2', 'side') == 1
+        assert _card_tier('4', 'side') == 2
+        assert _card_tier('6', 'side') == 3
+        assert _tier_label('6', 'side') == 'Rare'
+
+    def test_pack_type_inference(self):
+        from game.screens.collection_screen import _card_pack_type
+        assert _card_pack_type('A') == 'main'
+        assert _card_pack_type('6') == 'side'
+
+
+class TestCollectionStats:
+    """Verify collection summary helper values used by the stats strip."""
+
+    def test_collection_stats_counts_owned_unique_missing_locked(self):
+        from game.screens.collection_screen import _collection_stats
+        cards = {
+            ('Hearts', 'A'): 2,
+            ('Spades', '7'): 1,
+            ('Clubs', '2'): 3,
+        }
+        locked = {
+            ('Hearts', 'A'): 1,
+            ('Clubs', '2'): 2,
+        }
+        stats = _collection_stats(cards, locked)
+        assert stats['owned_total'] == 6
+        assert stats['unique_owned'] == 3
+        assert stats['unique_total'] == 52
+        assert stats['missing_total'] == 49
+        assert stats['locked_total'] == 3
+
+
 class TestCollectionSettings:
     """Verify collection settings are importable and reasonable."""
 
