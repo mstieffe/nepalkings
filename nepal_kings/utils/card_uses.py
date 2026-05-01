@@ -14,9 +14,9 @@ import logging
 
 logger = logging.getLogger('nk.utils.card_uses')
 
-_INDEX = None  # cached: {'figures': {(suit,rank): [(name, icon)]},
-               #           'spells':  {(suit,rank): [(name, icon)]},
-               #           'battle_moves': {rank:    [(name, icon)]}}
+_INDEX = None  # cached: {'figures': {(suit,rank): [(name, icon, description)]},
+               #           'spells':  {(suit,rank): [(name, icon, description)]},
+               #           'battle_moves': {rank:    [(name, icon, description)]}}
 
 
 def _build_index():
@@ -40,13 +40,20 @@ def _build_index():
         # Farm — Q is the upgrade-to-Large cost, not a Small-Farm card.
         cards = list(fig.cards)
         for c in cards:
+            # For K-rank cards only show regular King figures.
+            # Maharaja also requires K but is a castle upgrade; listing it
+            # alongside King adds confusion without adding actionable info.
+            if c.rank == 'K' and 'Maharaja' in fig.name:
+                continue
             key = (c.suit, c.rank)
             ident = (key, fig.name)
             if ident in seen_fig:
                 continue
             seen_fig.add(ident)
             icon = getattr(fig, 'icon_img', None) or getattr(fig.family, 'icon_img', None)
-            index['figures'][key].append((fig.name, icon))
+            desc = (getattr(fig, 'description', '') or
+                    getattr(getattr(fig, 'family', None), 'description', '') or '')
+            index['figures'][key].append((fig.name, icon, desc))
 
     # ── Spells ──────────────────────────────────────────────────────
     sm = SpellManager()
@@ -61,7 +68,8 @@ def _build_index():
             # Spell instances don't carry icon_img directly — only the family
             # surface is loaded in SpellManager.
             icon = getattr(getattr(sp, 'family', None), 'icon_img', None)
-            index['spells'][key].append((sp.name, icon))
+            desc = getattr(getattr(sp, 'family', None), 'description', '') or ''
+            index['spells'][key].append((sp.name, icon, desc))
 
     # ── Battle moves (rank only) ────────────────────────────────────
     bmm = BattleMoveManager()
@@ -71,8 +79,9 @@ def _build_index():
             continue
         ranks = ['7', '8', '9', '10'] if rr == 'number' else [rr]
         icon = getattr(fam, 'icon_img', None)
+        desc = getattr(fam, 'description', '') or ''
         for r in ranks:
-            index['battle_moves'][r].append((fam.name, icon))
+            index['battle_moves'][r].append((fam.name, icon, desc))
 
     return index
 

@@ -425,6 +425,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Profile dialogue
         if self._profile_dialogue:
             self._profile_dialogue.draw()
+            # Tooltip for hovered figure/spell/move icon
+            _tt = self._profile_dialogue.get_tooltip(pygame.mouse.get_pos())
+            if _tt:
+                self._draw_profile_tooltip(_tt)
 
         # Booster reveal overlay
         if self._reveal_overlay:
@@ -699,6 +703,37 @@ class CollectionScreen(MenuScreenMixin, Screen):
         txt = self._action_font.render(text, True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
+    def _draw_profile_tooltip(self, text):
+        """Draw a multi-line tooltip pill for a hovered profile group icon."""
+        font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
+        lines = text.split('\n')
+        line_surfs = [font.render(l, True, settings.TOOLTIP_TEXT_COLOR) for l in lines if l]
+        if not line_surfs:
+            return
+        line_h = font.get_height()
+        pad_x = settings.TOOLTIP_PAD_X
+        pad_y = settings.TOOLTIP_PAD_Y
+        corner_r = settings.TOOLTIP_CORNER_R
+        max_w = max(s.get_width() for s in line_surfs)
+        pill_w = pad_x * 2 + max_w
+        pill_h = pad_y * 2 + len(line_surfs) * line_h + max(0, len(line_surfs) - 1) * 2
+        mx, my = pygame.mouse.get_pos()
+        pill_x = mx + 14
+        pill_y = my - pill_h // 2
+        pill_x = max(4, min(pill_x, _SW - pill_w - 4))
+        pill_y = max(4, min(pill_y, _SH - pill_h - 4))
+        pill = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
+        pygame.draw.rect(pill, settings.TOOLTIP_BG_COLOR,
+                         (0, 0, pill_w, pill_h), border_radius=corner_r)
+        pygame.draw.rect(pill, settings.TOOLTIP_BORDER_COLOR,
+                         (0, 0, pill_w, pill_h),
+                         settings.TOOLTIP_BORDER_WIDTH, border_radius=corner_r)
+        self.window.blit(pill, (pill_x, pill_y))
+        y = pill_y + pad_y
+        for surf in line_surfs:
+            self.window.blit(surf, (pill_x + pad_x, y))
+            y += line_h + 2
+
     def _draw_close_x_button(self):
         """Draw a small X close button in the top-right corner of the box."""
         r = self._btn_close_rect
@@ -811,7 +846,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         section = _card_pack_type(rank)
         tier_label = _tier_label(rank, section)
 
-        # Card category — distinguishes key/number/side cards for the player.
+        # Card category — shown inside the Figures section, not the header.
         if rank in settings.NUMBER_CARDS:
             category_label = 'Number Card'
         elif rank in settings.RANKS_SIDE_CARDS:
@@ -827,26 +862,43 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         max_items = settings.COLLECTION_PROFILE_GROUP_MAX_ITEMS
 
-        def _group(title, entries):
-            icons = [icon for _name, icon in entries[:max_items] if icon is not None]
+        def _group(title, entries, note=''):
+            """Build a raw image-group dict for the profile dialogue."""
+            # entries are (name, icon, description) triples
+            pairs = [(name, icon, desc)
+                     for name, icon, desc in entries[:max_items]
+                     if icon is not None]
+            icons = [icon for _n, icon, _d in pairs]
+            tooltips = [f'{name}\n{desc}' if desc else name
+                        for name, _icon, desc in pairs]
             return {
                 'title': title,
                 'items': icons,
+                'item_tooltips': tooltips,
+                'item_unit': 'option',
                 'count': len(entries),
                 'show_when_empty': True,
-                'description': ', '.join(name for name, _ in entries[:max_items])
-                                if entries else 'No uses',
+                'description': note or (
+                    ', '.join(name for name, _, _ in entries[:max_items])
+                    if entries else 'No uses'
+                ),
             }
 
         groups = [
-            _group('Figures', uses['figures']),
+            _group('Figures', uses['figures'],
+                   note=f'{category_label}  ·  '
+                        + (', '.join(n for n, _, _ in uses['figures'][:max_items])
+                           if uses['figures'] else 'No uses')),
             _group('Spells', uses['spells']),
-            _group('Battle Moves', uses['battle_moves']),
+            _group('Battle Options', uses['battle_moves']),
         ]
 
         card_img = self._card_imgs.get((suit, rank))
-        msg = (f'{suit} {rank}  ·  {category_label}  ·  {tier_label}\n'
-               f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}  ·  Sell: {unit_price}g')
+        if qty > 0:
+            msg = (f'{suit} {rank}  ·  {tier_label}\n'
+                   f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}  ·  Sell: {unit_price}g')
+        else:
+            msg = f'{suit} {rank}  ·  {tier_label}\nNot in collection'
         self._profile_dialogue = DialogueBox(
             self.window, msg, actions=['close'],
             images=[card_img] if card_img else [],
@@ -1467,6 +1519,13 @@ class CollectionScreen(MenuScreenMixin, Screen):
             # Sell dialogue captures input
             if self._sell_dialogue:
                 if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                    # Click outside the dialogue box → close without action
+                    if (not self._sell_dialogue.rect.collidepoint(event.pos)
+                            and pygame.time.get_ticks() - self._sell_dialogue._created_at >= 200):
+                        self._sell_card = None
+                        self._sell_dialogue = None
+                        self._sell_qty_rects = {}
+                        continue
                     if self._handle_sell_qty_click(event.pos):
                         continue
                     response = self._sell_dialogue.update([event])
@@ -1488,6 +1547,15 @@ class CollectionScreen(MenuScreenMixin, Screen):
             # Trade dialogue captures input
             if self._trade_dialogue:
                 if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                    # Click outside the dialogue box → close without action
+                    if (not self._trade_dialogue.rect.collidepoint(event.pos)
+                            and pygame.time.get_ticks() - self._trade_dialogue._created_at >= 200):
+                        self._trade_card = None
+                        self._trade_target_suit = None
+                        self._trade_dialogue = None
+                        self._trade_qty_rects = {}
+                        self._trade_target_rects = {}
+                        continue
                     if self._handle_trade_overlay_click(event.pos):
                         continue
                     response = self._trade_dialogue.update([event])
@@ -1511,6 +1579,11 @@ class CollectionScreen(MenuScreenMixin, Screen):
             # Profile dialogue captures input
             if self._profile_dialogue:
                 if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                    # Click outside the dialogue box → close
+                    if (not self._profile_dialogue.rect.collidepoint(event.pos)
+                            and pygame.time.get_ticks() - self._profile_dialogue._created_at >= 200):
+                        self._profile_dialogue = None
+                        continue
                     response = self._profile_dialogue.update([event])
                     if response in ('close', 'ok', 'cancel'):
                         self._profile_dialogue = None
@@ -1579,8 +1652,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
                             elif self._mode == 'trade':
                                 self._open_trade_dialogue(suit, rank)
                             else:
-                                # Default — only show profile if card is owned;
-                                # unowned cards reveal nothing useful here.
-                                if self._cards.get((suit, rank), 0) > 0:
-                                    self._open_profile_dialogue(suit, rank)
+                                # Default mode — show profile for any card (owned or not)
+                                self._open_profile_dialogue(suit, rank)
                             break

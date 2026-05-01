@@ -210,6 +210,10 @@ class DialogueBox:
         # Keep border_rect for any legacy code that references it
         self.border_rect = self.rect.inflate(2, 2)
 
+        # Per-draw hover tracking for image-group item tooltips.
+        # Reset at the start of each draw() call.
+        self._hover_item_rects = []
+
         # Buttons
         if self.actions:
             _btn_w = settings.DIALOGUE_BOX_BTN_W
@@ -248,12 +252,15 @@ class DialogueBox:
         groups = []
         for raw_group in image_groups:
             raw_items = raw_group.get('items') or raw_group.get('images') or []
+            raw_tooltips = raw_group.get('item_tooltips') or []
             items = []
             max_items = getattr(settings, 'DIALOGUE_BOX_GROUP_MAX_ITEMS', 16)
-            for raw_item in raw_items[:max_items]:
+            for i, raw_item in enumerate(raw_items[:max_items]):
                 item = raw_item.get('image') if isinstance(raw_item, dict) else raw_item
                 normalized = self._normalize_group_item(item)
                 if normalized:
+                    normalized['tooltip'] = (raw_tooltips[i]
+                                             if i < len(raw_tooltips) else '')
                     items.append(normalized)
 
             count = raw_group.get('count') or len(raw_items)
@@ -272,10 +279,11 @@ class DialogueBox:
             icon_name = raw_group.get('icon')
             badge_name = raw_group.get('badge_icon') or icon_name
             title = raw_group.get('title', 'Cards')
+            item_unit = raw_group.get('item_unit', 'card')
             color = raw_group.get('color') or self._default_group_color(icon_name)
             group = {
                 'key': raw_group.get('key'),
-                'title': self._format_group_title(title, count),
+                'title': self._format_group_title(title, count, item_unit),
                 'description': raw_group.get('description') or raw_group.get('note') or '',
                 'items': items,
                 'count': count,
@@ -363,8 +371,8 @@ class DialogueBox:
             )
         return pad_y * 2 + header_h + note_h + cards_h
 
-    def _format_group_title(self, title, count):
-        suffix = 'card' if count == 1 else 'cards'
+    def _format_group_title(self, title, count, unit='card'):
+        suffix = unit if count == 1 else unit + 's'
         return f'{title}: {count} {suffix}'
 
     def _default_group_color(self, icon_name):
@@ -533,6 +541,7 @@ class DialogueBox:
             button.draw()
 
     def _draw_image_groups(self, start_y):
+        self._hover_item_rects = []  # reset per-draw
         group_x = self.rect.centerx - self._group_max_w // 2
         group_w = self._group_max_w
         current_y = start_y
@@ -586,6 +595,15 @@ class DialogueBox:
                     row_x = group_rect.centerx - row_w // 2
                     for item in row:
                         self._draw_group_item(item, row_x, y, group.get('badge_icon'))
+                        tooltip = item.get('tooltip', '')
+                        if tooltip:
+                            self._hover_item_rects.append({
+                                'rect': pygame.Rect(
+                                    row_x, y,
+                                    item['width'],
+                                    item['height']),
+                                'tooltip': tooltip,
+                            })
                         row_x += item['width'] + settings.DIALOGUE_BOX_GROUP_CARD_GAP_X
                     y += settings.DIALOGUE_BOX_GROUP_IMG_HEIGHT + settings.DIALOGUE_BOX_GROUP_ROW_GAP
 
@@ -659,3 +677,10 @@ class DialogueBox:
                     if button.collide():
                         return button.text.lower()
         return None
+
+    def get_tooltip(self, pos):
+        """Return tooltip text for the image-group item under *pos*, or ''."""
+        for entry in self._hover_item_rects:
+            if entry['rect'].collidepoint(pos):
+                return entry['tooltip']
+        return ''
