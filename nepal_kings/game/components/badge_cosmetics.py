@@ -119,6 +119,48 @@ def _pad_for(text_h):
     return pad_x, pad_y
 
 
+def _text_lane_rect(text_rect, bounds, *, pad_x=None, pad_y=None):
+    if pad_x is None:
+        pad_x = max(4, text_rect.h // 2)
+    if pad_y is None:
+        pad_y = max(2, text_rect.h // 5)
+    lane = text_rect.inflate(pad_x * 2, pad_y * 2)
+    clip = bounds.inflate(-2, -2)
+    if clip.w > 0 and clip.h > 0:
+        lane.clamp_ip(clip)
+    return lane
+
+
+def _text_panel_color(text_clr):
+    lum = (text_clr[0] * 0.299 + text_clr[1] * 0.587 + text_clr[2] * 0.114)
+    if lum >= 140:
+        return (8, 8, 10, 110), (255, 255, 255, 36)
+    return (248, 244, 232, 108), (24, 22, 18, 28)
+
+
+def _draw_text_lane(surf, lane_rect, style):
+    panel_fill, panel_border = _text_panel_color(
+        style.get('text', (255, 255, 255)))
+    overlay = pygame.Surface(lane_rect.size, pygame.SRCALPHA)
+    radius = max(3, min(lane_rect.h // 2, 8))
+    pygame.draw.rect(overlay, panel_fill, overlay.get_rect(),
+                     border_radius=radius)
+    pygame.draw.rect(overlay, panel_border, overlay.get_rect(), 1,
+                     border_radius=radius)
+    surf.blit(overlay, lane_rect.topleft)
+
+
+def _blit_text_centered(surf, text_surf, rect, style):
+    lane = _text_lane_rect(text_surf.get_rect(center=rect.center), rect)
+    _draw_text_lane(surf, lane, style)
+    text_rect = text_surf.get_rect(center=rect.center)
+    shadow = text_surf.copy()
+    shadow.fill((0, 0, 0, 120), special_flags=pygame.BLEND_RGBA_MULT)
+    surf.blit(shadow, shadow.get_rect(center=(rect.centerx + 1, rect.centery + 1)))
+    surf.blit(text_surf, text_rect)
+    return lane
+
+
 def _vertical_gradient(surf, rect, top_clr, bot_clr, *, steps=10,
                        border_radius=0):
     """Fill ``rect`` with a stacked-band vertical gradient.  Alpha-aware."""
@@ -178,7 +220,12 @@ def _render_pill(style, text_surf, th, shimmer_phase):
     pad_x, pad_y = _pad_for(text_surf.get_height())
     inner_w = text_surf.get_width()
     inner_h = th
-    w = inner_w + pad_x * 2
+    ornament_gutter = 0
+    if style.get('laurel_clr'):
+        ornament_gutter = max(ornament_gutter, int(th * 0.55))
+    if style.get('gem_left') or style.get('gem_right'):
+        ornament_gutter = max(ornament_gutter, int(th * 0.60))
+    w = inner_w + pad_x * 2 + ornament_gutter * 2
     h = inner_h + pad_y * 2
     surf = pygame.Surface((w, h), pygame.SRCALPHA)
     radius = max(2, h // 2)
@@ -222,8 +269,7 @@ def _render_pill(style, text_surf, th, shimmer_phase):
         pygame.draw.rect(surf, border, surf.get_rect(), 1,
                          border_radius=radius)
 
-    surf.blit(text_surf,
-              text_surf.get_rect(center=(w // 2, h // 2)))
+    _blit_text_centered(surf, text_surf, surf.get_rect(), style)
     return surf
 
 
@@ -241,6 +287,8 @@ def _render_scroll(style, text_surf, th, shimmer_phase):
     surf = pygame.Surface((w, h), pygame.SRCALPHA)
     body_x = curl_r + 2
     body_rect = pygame.Rect(body_x, 0, body_w, body_h)
+    text_lane = _text_lane_rect(text_surf.get_rect(center=body_rect.center),
+                                body_rect)
 
     top = style.get('fill_top', (244, 232, 198, 235))
     bot = style.get('fill_bot', (220, 198, 154, 235))
@@ -261,6 +309,8 @@ def _render_scroll(style, text_surf, th, shimmer_phase):
         fx = body_rect.x + int(rng() * body_w)
         fy = body_rect.y + int(rng() * body_h)
         flen = int(4 + rng() * 10)
+        if text_lane.collidepoint(fx, fy):
+            continue
         pygame.draw.line(surf, fiber, (fx, fy), (fx + flen, fy), 1)
 
     # Curls: filled circle backed by darker rim, attached to each short end.
@@ -281,8 +331,7 @@ def _render_scroll(style, text_surf, th, shimmer_phase):
     border = style.get('border', (122, 92, 56))
     pygame.draw.rect(surf, border, body_rect, 1, border_radius=4)
 
-    surf.blit(text_surf,
-              text_surf.get_rect(center=body_rect.center))
+    _blit_text_centered(surf, text_surf, body_rect, style)
     return surf
 
 
@@ -293,6 +342,8 @@ def _render_plank(style, text_surf, th, shimmer_phase):
     w = text_surf.get_width() + pad_x * 2
     h = max(th, text_surf.get_height() + pad_y * 2)
     surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    text_lane = _text_lane_rect(text_surf.get_rect(center=surf.get_rect().center),
+                                surf.get_rect())
 
     top = style.get('fill_top', (148, 110, 70, 235))
     bot = style.get('fill_bot', (96, 64, 38, 235))
@@ -303,6 +354,8 @@ def _render_plank(style, text_surf, th, shimmer_phase):
     rng = _lcg(_seed_for('plank', w, h))
     for _ in range(5):
         fy = int(rng() * h)
+        if text_lane.top <= fy <= text_lane.bottom:
+            continue
         pygame.draw.line(surf, fiber, (2, fy), (w - 2, fy), 1)
 
     # Iron border bands (top/bottom 2px) implied by the dark border below.
@@ -322,8 +375,7 @@ def _render_plank(style, text_surf, th, shimmer_phase):
                            max(1, rivet_r - 2))
         pygame.draw.circle(surf, (0, 0, 0), (rx, ry), rivet_r, 1)
 
-    surf.blit(text_surf,
-              text_surf.get_rect(center=(w // 2, h // 2)))
+    _blit_text_centered(surf, text_surf, surf.get_rect(), style)
     return surf
 
 
@@ -333,6 +385,8 @@ def _render_tablet(style, text_surf, th, shimmer_phase):
     w = text_surf.get_width() + pad_x * 2
     h = max(th, text_surf.get_height() + pad_y * 2)
     surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    text_lane = _text_lane_rect(text_surf.get_rect(center=surf.get_rect().center),
+                                surf.get_rect())
 
     top = style.get('fill_top', (188, 188, 192, 235))
     bot = style.get('fill_bot', (132, 130, 134, 235))
@@ -354,6 +408,8 @@ def _render_tablet(style, text_surf, th, shimmer_phase):
     for _ in range(4):
         nx = int(rng() * w)
         ny = int(rng() * h)
+        if text_lane.collidepoint(nx, ny):
+            continue
         pygame.draw.circle(surf, sh, (nx, ny), 1)
 
     border = style.get('border', (74, 72, 76))
@@ -363,18 +419,21 @@ def _render_tablet(style, text_surf, th, shimmer_phase):
     text_hl = style.get('text_highlight', (236, 236, 238))
     base_clr = style.get('text', (32, 30, 34))
     if base_clr != text_hl:
-        text_lower = pygame.Surface(text_surf.get_size(), pygame.SRCALPHA)
-        text_lower.blit(text_surf, (0, 0))
         # Pre-rendered text_surf already uses base_clr; for highlight pass
         # we draw a lightened ghost behind it.
         ghost_overlay = pygame.Surface(text_surf.get_size(), pygame.SRCALPHA)
         ghost_overlay.fill((*text_hl[:3], 180))
         ghost = text_surf.copy()
         ghost.blit(ghost_overlay, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        lane = _text_lane_rect(text_surf.get_rect(center=surf.get_rect().center),
+                               surf.get_rect())
+        _draw_text_lane(surf, lane, style)
         surf.blit(ghost,
                   ghost.get_rect(center=(w // 2 + 1, h // 2 + 1)))
-    surf.blit(text_surf,
-              text_surf.get_rect(center=(w // 2, h // 2)))
+        surf.blit(text_surf,
+                  text_surf.get_rect(center=(w // 2, h // 2)))
+        return surf
+    _blit_text_centered(surf, text_surf, surf.get_rect(), style)
     return surf
 
 
@@ -390,6 +449,7 @@ def _render_swallowtail(style, text_surf, th, shimmer_phase):
     top = style.get('fill_top', (188, 52, 60, 240))
     bot = style.get('fill_bot', (124, 28, 36, 240))
     body = pygame.Rect(notch, 0, inner_w, h)
+    text_lane = _text_lane_rect(text_surf.get_rect(center=body.center), body)
     _vertical_gradient(surf, body, top, bot)
 
     # Triangle "tails" extending past the body on each side.
@@ -403,8 +463,11 @@ def _render_swallowtail(style, text_surf, th, shimmer_phase):
     # Vertical fabric fold (subtle column dim down each side).
     fold_band = pygame.Surface((max(2, body.w // 14), body.h), pygame.SRCALPHA)
     fold_band.fill(fold)
-    surf.blit(fold_band, (body.x + body.w // 4, body.y))
-    surf.blit(fold_band, (body.x + body.w * 3 // 4, body.y))
+    left_fold_x = max(body.x + 2, text_lane.x - fold_band.get_width() - 2)
+    right_fold_x = min(body.right - fold_band.get_width() - 2,
+                       text_lane.right + 2)
+    surf.blit(fold_band, (left_fold_x, body.y))
+    surf.blit(fold_band, (right_fold_x, body.y))
 
     # Bottom accent stripe.
     stripe_h = max(1, h // 12)
@@ -424,8 +487,7 @@ def _render_swallowtail(style, text_surf, th, shimmer_phase):
     ]
     pygame.draw.polygon(surf, border, silhouette, 1)
 
-    surf.blit(text_surf,
-              text_surf.get_rect(center=(w // 2, h // 2)))
+    _blit_text_centered(surf, text_surf, body, style)
     return surf
 
 
@@ -441,6 +503,8 @@ def _render_plaque(style, text_surf, th, shimmer_phase):
     surf = pygame.Surface((w, h), pygame.SRCALPHA)
 
     body = pygame.Rect(head_w + 2, 0, body_w, h)
+    text_lane = _text_lane_rect(text_surf.get_rect(center=body.center), body,
+                                pad_x=max(6, text_surf.get_height() // 2 + 2))
     top = style.get('fill_top', (240, 236, 228, 240))
     bot = style.get('fill_bot', (210, 204, 192, 240))
     _vertical_gradient(surf, body, top, bot)
@@ -458,12 +522,16 @@ def _render_plaque(style, text_surf, th, shimmer_phase):
     for _ in range(4):
         sx = body.x + int(rng() * body.w)
         sy = body.y + int(rng() * body.h)
+        if text_lane.collidepoint(sx, sy):
+            sy = body.y + int(rng() * max(1, text_lane.top - body.y))
         last = (sx, sy)
         for _ in range(3):
             nx = last[0] + int((rng() - 0.5) * body.w * 0.4)
             ny = last[1] + int((rng() - 0.5) * body.h * 0.6)
             nx = max(body.x, min(body.right - 1, nx))
             ny = max(body.y, min(body.bottom - 1, ny))
+            if text_lane.collidepoint(nx, ny):
+                continue
             pygame.draw.line(surf, vein, last, (nx, ny), 1)
             last = (nx, ny)
 
@@ -505,8 +573,7 @@ def _render_plaque(style, text_surf, th, shimmer_phase):
     border = style.get('border', (124, 96, 36))
     pygame.draw.rect(surf, border, body, 1, border_radius=3)
 
-    surf.blit(text_surf,
-              text_surf.get_rect(center=body.center))
+    _blit_text_centered(surf, text_surf, body, style)
     return surf
 
 
