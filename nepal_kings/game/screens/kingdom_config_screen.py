@@ -357,11 +357,6 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._draw_production_item_row(item, cell)
             x += cell_w + col_gap
 
-        if self._kingdom.get('core_protection_active'):
-            badge = self._tiny_font.render('Sanctuary active',
-                                           True, settings.KINGDOM_CONFIG_GOOD_CLR)
-            self.window.blit(badge, (rect.x + 16, rect.bottom - badge.get_height() - 4))
-
     def _fetch_config(self):
         self._loading = True
         land_id = getattr(self.state, 'kingdom_config_land_id', None)
@@ -825,6 +820,26 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             clipped = clipped[:-1]
         return (clipped + ellipsis) if clipped else ellipsis
 
+    def _wrap_text(self, text, font, max_width):
+        """Word-wrap *text* into lines that each fit within *max_width* px."""
+        words = str(text).split()
+        lines, current = [], ''
+        for word in words:
+            test = (current + ' ' + word).strip()
+            if font.size(test)[0] <= max_width:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                if font.size(word)[0] > max_width:
+                    lines.append(self._fit_text(word, font, max_width))
+                    current = ''
+                else:
+                    current = word
+        if current:
+            lines.append(current)
+        return lines or ['']
+
     def _draw_status_pill(self, rect, text, color=None):
         pygame.draw.rect(self.window, (35, 29, 34, 200), rect, border_radius=8)
         pygame.draw.rect(self.window, (132, 112, 78), rect, 1, border_radius=8)
@@ -1030,6 +1045,26 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         xp_y = min(bar_rect.bottom + 2,
                    right_rect.bottom - xp_surf.get_height() - 4)
         self.window.blit(xp_surf, (bar_rect.x, xp_y))
+
+        # ── State notification pills (below XP) ─────────────────────
+        notifications = []
+        if self._kingdom.get('core_protection_active'):
+            notifications.append(('Sanctuary active', settings.KINGDOM_CONFIG_GOOD_CLR))
+        if notifications:
+            pill_h = self._tiny_font.get_height() + 6
+            pad_x = 8
+            nx = right_rect.x + right_pad_x
+            ny = xp_y + xp_surf.get_height() + 4
+            for text, color in notifications:
+                if ny + pill_h > right_rect.bottom - 2:
+                    break
+                text_surf = self._tiny_font.render(text, True, color)
+                pill_w = text_surf.get_width() + pad_x * 2
+                pill_rect = pygame.Rect(nx, ny, pill_w, pill_h)
+                pygame.draw.rect(self.window, (35, 29, 34, 180), pill_rect, border_radius=4)
+                pygame.draw.rect(self.window, color, pill_rect, 1, border_radius=4)
+                self.window.blit(text_surf, (nx + pad_x, ny + 3))
+                nx += pill_w + 6
 
     def _catalog_items(self, cosmetic_type):
         items = []
@@ -1374,12 +1409,46 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 name = skill.get('name', key)
                 level = int(skill.get('level', 0) or 0)
                 max_level = int(skill.get('max_level', 5) or 5)
-                self.window.blit(self._body_font.render(f'{name}  Lv {level}/{max_level}', True,
-                                                        settings.KINGDOM_CONFIG_TEXT_CLR),
-                                 (row.x + 62, row.y + 8))
-                desc = skill.get('description', '')[:72]
-                self.window.blit(self._tiny_font.render(desc, True, settings.KINGDOM_CONFIG_DIM_CLR),
-                                 (row.x + 62, row.y + 34))
+                btn = pygame.Rect(row.right - 120, row.y + (row.h - 30) // 2, 104, 30)
+                text_x = row.x + 62
+                # Clamp text width so it never reaches the upgrade button.
+                text_max_w = max(20, btn.x - text_x - 8)
+                bottom_limit = row.bottom - 2
+
+                # ── Name + level (single line, truncate) ────────────
+                body_h = self._body_font.get_height()
+                tiny_h = self._tiny_font.get_height()
+                name_y = row.y + 8
+                if name_y + body_h <= bottom_limit:
+                    self.window.blit(
+                        self._body_font.render(
+                            self._fit_text(f'{name}  Lv {level}/{max_level}',
+                                           self._body_font, text_max_w),
+                            True, settings.KINGDOM_CONFIG_TEXT_CLR),
+                        (text_x, name_y))
+
+                # ── Description (word-wrapped, ≤ 2 lines) ───────────
+                cur_y = name_y + body_h + 3
+                desc_lines = self._wrap_text(
+                    skill.get('description', ''), self._tiny_font, text_max_w)[:2]
+                for line in desc_lines:
+                    if cur_y + tiny_h > bottom_limit:
+                        break
+                    self.window.blit(
+                        self._tiny_font.render(line, True, settings.KINGDOM_CONFIG_DIM_CLR),
+                        (text_x, cur_y))
+                    cur_y += tiny_h + 1
+
+                # ── Effect (single line, truncate) below description ─
+                effect_y = cur_y + 2
+                if effect_y + tiny_h <= bottom_limit:
+                    self.window.blit(
+                        self._tiny_font.render(
+                            self._fit_text(self._skill_effect_text(key, skill),
+                                           self._tiny_font, text_max_w),
+                            True, settings.KINGDOM_CONFIG_HIGHLIGHT),
+                        (text_x, effect_y))
+
                 cost = skill.get('next_cost')
                 if cost is None:
                     label = 'Max'
@@ -1387,10 +1456,6 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 else:
                     label = f'Upgrade ({cost})'
                     disabled = available < int(cost)
-                effect = self._tiny_font.render(self._skill_effect_text(key, skill), True,
-                                                settings.KINGDOM_CONFIG_HIGHLIGHT)
-                self.window.blit(effect, (row.x + 62, row.y + 50))
-                btn = pygame.Rect(row.right - 120, row.y + (row.h - 30) // 2, 104, 30)
                 # Drawing is clipped to the viewport, but `_draw_button`
                 # registers click hitboxes against the absolute rect — so
                 # only register the button when its full hitbox is visible
