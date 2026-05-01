@@ -24,6 +24,34 @@ RANK_TO_VALUE = {
 ALL_MAIN_RANKS = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
 ALL_SIDE_RANKS = ['2', '3', '4', '5', '6']
 
+_RED_SUITS = {'Hearts', 'Diamonds'}
+_BLACK_SUITS = {'Clubs', 'Spades'}
+
+# Card-to-card conversion ratios.
+# Same colour: spend 2 source cards to get 1 target card.
+# Different colour: spend 4 source cards to get 1 target card.
+CONVERT_RATIO_SAME_COLOUR = 2
+CONVERT_RATIO_DIFFERENT_COLOUR = 4
+
+
+def _suit_colour(suit):
+    if suit in _RED_SUITS:
+        return 'red'
+    if suit in _BLACK_SUITS:
+        return 'black'
+    return None
+
+
+def _convert_ratio(source_suit, target_suit):
+    """Return number of source copies needed per produced target copy.
+
+    Returns ``None`` if either suit is invalid or both suits are equal.
+    """
+    sc, tc = _suit_colour(source_suit), _suit_colour(target_suit)
+    if sc is None or tc is None or source_suit == target_suit:
+        return None
+    return CONVERT_RATIO_SAME_COLOUR if sc == tc else CONVERT_RATIO_DIFFERENT_COLOUR
+
 
 def _sell_price(rank, quantity=1):
     """Calculate the gold earned from selling *quantity* cards of *rank*."""
@@ -265,4 +293,71 @@ def open_booster_side():
         'success': True,
         'cards': drawn,
         'booster_packs_side': user.booster_packs_side,
+    })
+
+
+# ── POST /collection/convert_card ──────────────────────────────────────────
+
+@collection.route('/convert_card', methods=['POST'])
+@require_token
+def convert_card():
+    """Convert N copies of one (suit, rank) card into copies of another suit.
+
+    Same rank only. Same colour conversion costs 2 source copies per target;
+    different colour costs 4. Only unlocked source copies are consumed.
+    """
+    data = request.get_json(silent=True) or {}
+    suit = data.get('suit', '').strip() if isinstance(data.get('suit'), str) else ''
+    rank = data.get('rank', '').strip() if isinstance(data.get('rank'), str) else ''
+    target_suit = data.get('target_suit', '').strip() if isinstance(data.get('target_suit'), str) else ''
+    quantity = data.get('quantity', 1)
+
+    if not suit or not rank or not target_suit:
+        return jsonify({'success': False, 'message': 'Missing suit, rank, or target_suit'}), 400
+    if suit not in SUITS:
+        return jsonify({'success': False, 'message': f'Invalid suit: {suit}'}), 400
+    if target_suit not in SUITS:
+        return jsonify({'success': False, 'message': f'Invalid target suit: {target_suit}'}), 400
+    if suit == target_suit:
+        return jsonify({'success': False, 'message': 'Source and target suits must differ'}), 400
+    if rank not in RANK_TO_VALUE:
+        return jsonify({'success': False, 'message': f'Invalid rank: {rank}'}), 400
+    if not isinstance(quantity, int) or quantity < 1:
+        return jsonify({'success': False, 'message': 'Quantity must be a positive integer'}), 400
+
+    ratio = _convert_ratio(suit, target_suit)
+    if ratio is None:
+        # Defensive — earlier checks should have handled all invalid cases.
+        return jsonify({'success': False, 'message': 'Invalid suit pair'}), 400
+    needed = ratio * quantity
+
+    user = db.session.get(User, g.user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+
+    free_cards = CollectionCard.query.filter_by(
+        user_id=user.id, suit=suit, rank=rank, locked=False
+    ).limit(needed).all()
+
+    if len(free_cards) < needed:
+        return jsonify({
+            'success': False,
+            'message': (f'Not enough free cards to convert '
+                        f'(have {len(free_cards)}, need {needed})'),
+        }), 400
+
+    value = RANK_TO_VALUE[rank]
+    for card in free_cards:
+        db.session.delete(card)
+    for _ in range(quantity):
+        db.session.add(CollectionCard(
+            user_id=user.id, suit=target_suit, rank=rank, value=value))
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'consumed': needed,
+        'produced': quantity,
+        'ratio': ratio,
+        'gold': user.gold,
     })

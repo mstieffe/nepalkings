@@ -67,3 +67,15 @@ def open_booster_side():
     )
     response.raise_for_status()
     return response.json()
+
+
+def convert_card(suit, rank, target_suit, quantity):
+    """POST /collection/convert_card — returns {consumed, produced, ratio, gold}."""
+    response = requests.post(
+        f'{settings.SERVER_URL}/collection/convert_card',
+        json={'suit': suit, 'rank': rank,
+              'target_suit': target_suit, 'quantity': quantity},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()

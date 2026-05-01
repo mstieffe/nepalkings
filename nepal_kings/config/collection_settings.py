@@ -53,10 +53,11 @@ COLLECTION_TIER_LABELS = {
     2: 'Uncommon',
     3: 'Rare',
 }
+# Keep these in sync with server BOOSTER_TIER_RANKS / BOOSTER_SIDE_TIER_RANKS.
 COLLECTION_TIER_MAIN_RANKS = {
-    1: ('7', '8', '9', '10'),
-    2: ('J', 'Q'),
-    3: ('K', 'A'),
+    1: ('7', '8', '9'),
+    2: ('J', '10', 'A'),
+    3: ('K', 'Q'),
 }
 COLLECTION_TIER_SIDE_RANKS = {
     1: ('2', '3'),
@@ -120,6 +121,32 @@ COLLECTION_PACK_PREVIEWS = {
         'title': 'Side Pack',
     },
 }
+
+# ── Mode / actions panel (3rd panel beside the booster panels) ──────
+# Hosts mutually-exclusive Sell / Trade mode toggles. When neither is
+# active, clicking a card opens a profile dialogue instead.
+COLLECTION_ACTIONS_PANEL_TITLE = 'Card Actions'
+COLLECTION_MODE_BTN_TEXT = {
+    'sell': 'Sell',
+    'trade': 'Trade',
+}
+
+# ── Card-to-card conversion (mirror server values) ──────────────────
+COLLECTION_CONVERT_RATIO_SAME_COLOR = 2
+COLLECTION_CONVERT_RATIO_DIFF_COLOR = 4
+COLLECTION_RED_SUITS = ('Hearts', 'Diamonds')
+COLLECTION_BLACK_SUITS = ('Clubs', 'Spades')
+
+# ── Trade dialogue layout ───────────────────────────────────────────
+COLLECTION_TRADE_TARGET_BTN_W = int(0.090 * SCREEN_WIDTH)
+COLLECTION_TRADE_TARGET_BTN_H = int(0.044 * SCREEN_HEIGHT)
+COLLECTION_TRADE_TARGET_GAP   = int(0.008 * SCREEN_WIDTH)
+COLLECTION_TRADE_TARGET_FONT_SIZE = int(FS_BODY * 0.85)
+COLLECTION_TRADE_RED_CLR   = (235, 96, 96)
+COLLECTION_TRADE_BLACK_CLR = (190, 190, 200)
+
+# ── Card profile dialogue ───────────────────────────────────────────
+COLLECTION_PROFILE_GROUP_MAX_ITEMS = 12
 
 # ── Sell quantity controls ─────────────────────────────────────────
 COLLECTION_SELL_QTY_BTN_W = int(0.036 * SCREEN_WIDTH)

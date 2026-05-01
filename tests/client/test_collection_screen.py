@@ -105,7 +105,8 @@ class TestCollectionTierMapping:
         from game.screens.collection_screen import _card_tier, _tier_label
         assert _card_tier('7', 'main') == 1
         assert _card_tier('J', 'main') == 2
-        assert _card_tier('A', 'main') == 3
+        assert _card_tier('A', 'main') == 2
+        assert _card_tier('Q', 'main') == 3
         assert _tier_label('K', 'main') == 'Rare'
 
     def test_side_card_tiers(self):
@@ -242,3 +243,69 @@ class TestCollectionService:
         assert hasattr(collection_service, 'buy_booster_side')
         assert hasattr(collection_service, 'open_booster')
         assert hasattr(collection_service, 'open_booster_side')
+
+
+class TestConvertRatio:
+    """Client-side mirror of server convert ratios (suit colour rules)."""
+
+    def _settings(self):
+        from config import settings
+        return settings
+
+    def test_same_colour_red_red_is_2(self):
+        s = self._settings()
+        assert s.COLLECTION_CONVERT_RATIO_SAME_COLOR == 2
+        assert 'Hearts' in s.COLLECTION_RED_SUITS
+        assert 'Diamonds' in s.COLLECTION_RED_SUITS
+
+    def test_same_colour_black_black_is_2(self):
+        s = self._settings()
+        assert 'Clubs' in s.COLLECTION_BLACK_SUITS
+        assert 'Spades' in s.COLLECTION_BLACK_SUITS
+
+    def test_different_colour_is_4(self):
+        s = self._settings()
+        assert s.COLLECTION_CONVERT_RATIO_DIFF_COLOR == 4
+
+    def test_red_and_black_disjoint(self):
+        s = self._settings()
+        assert not (set(s.COLLECTION_RED_SUITS) & set(s.COLLECTION_BLACK_SUITS))
+
+
+class TestServerConvertRatioHelper:
+    """Verify the server's _convert_ratio function matches the spec."""
+
+    def test_same_colour_returns_2(self):
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'server'))
+        from routes.collection import _convert_ratio  # noqa: E402
+        assert _convert_ratio('Hearts', 'Diamonds') == 2
+        assert _convert_ratio('Diamonds', 'Hearts') == 2
+        assert _convert_ratio('Clubs', 'Spades') == 2
+        assert _convert_ratio('Spades', 'Clubs') == 2
+
+    def test_different_colour_returns_4(self):
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'server'))
+        from routes.collection import _convert_ratio  # noqa: E402
+        assert _convert_ratio('Hearts', 'Spades') == 4
+        assert _convert_ratio('Diamonds', 'Clubs') == 4
+        assert _convert_ratio('Clubs', 'Hearts') == 4
+        assert _convert_ratio('Spades', 'Diamonds') == 4
+
+    def test_same_suit_returns_none(self):
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'server'))
+        from routes.collection import _convert_ratio  # noqa: E402
+        assert _convert_ratio('Hearts', 'Hearts') is None
+
+    def test_invalid_suit_returns_none(self):
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'server'))
+        from routes.collection import _convert_ratio  # noqa: E402
+        assert _convert_ratio('Hearts', 'Bogus') is None
+        assert _convert_ratio('Bogus', 'Hearts') is None

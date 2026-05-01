@@ -336,3 +336,129 @@ class TestRegistrationStarterPacks:
         # Also returned in serialized user
         assert data['user']['booster_packs'] == settings.STARTER_BOOSTER_PACKS
         assert data['user']['booster_packs_side'] == settings.STARTER_BOOSTER_PACKS_SIDE
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  POST /collection/convert_card
+# ═══════════════════════════════════════════════════════════════════
+
+class TestConvertCard:
+    def test_same_colour_conversion_two_to_one(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        # 4 free Hearts 7 → request producing 2 Diamonds 7 (cost 4)
+        _add_cards(db, u1.id, 'Hearts', '7', 7, count=4)
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': '7',
+                               'target_suit': 'Diamonds', 'quantity': 2},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['success'] is True
+        assert data['ratio'] == 2
+        assert data['consumed'] == 4
+        assert data['produced'] == 2
+        # Collection state
+        hearts = CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Hearts', rank='7').count()
+        diamonds = CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Diamonds', rank='7').count()
+        assert hearts == 0
+        assert diamonds == 2
+
+    def test_different_colour_conversion_four_to_one(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        _add_cards(db, u1.id, 'Hearts', 'K', 4, count=4)
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': 'K',
+                               'target_suit': 'Spades', 'quantity': 1},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['ratio'] == 4
+        assert data['consumed'] == 4
+        assert data['produced'] == 1
+        hearts = CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Hearts', rank='K').count()
+        spades = CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Spades', rank='K').count()
+        assert hearts == 0
+        assert spades == 1
+        # Verify created spade carries the same value as source
+        new_card = CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Spades', rank='K').first()
+        assert new_card.value == 4
+        assert new_card.locked is False
+
+    def test_locked_copies_excluded(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        _add_cards(db, u1.id, 'Hearts', '8', 8, count=1)              # 1 free
+        _add_cards(db, u1.id, 'Hearts', '8', 8, count=2, locked=True)  # 2 locked
+        # Need 2 source for 1 same-colour target, but only 1 free available
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': '8',
+                               'target_suit': 'Diamonds', 'quantity': 1},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 400
+        assert rv.get_json()['success'] is False
+        # Locked rows untouched
+        assert CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Hearts', rank='8', locked=True).count() == 2
+        assert CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Diamonds', rank='8').count() == 0
+
+    def test_insufficient_cards(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        _add_cards(db, u1.id, 'Hearts', '9', 9, count=1)
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': '9',
+                               'target_suit': 'Diamonds', 'quantity': 1},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 400
+        assert 'Not enough' in rv.get_json()['message']
+
+    def test_same_suit_rejected(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        _add_cards(db, u1.id, 'Hearts', '7', 7, count=4)
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': '7',
+                               'target_suit': 'Hearts', 'quantity': 1},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 400
+
+    def test_invalid_suit_rejected(self, client, auth_headers_user1):
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Bogus', 'rank': '7',
+                               'target_suit': 'Diamonds', 'quantity': 1},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 400
+
+    def test_invalid_quantity_rejected(self, client, auth_headers_user1):
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': '7',
+                               'target_suit': 'Diamonds', 'quantity': 0},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 400
+
+    def test_side_card_conversion(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        # Side cards work the same: rank 6 (Hearts) → 6 (Spades), diff colour 4:1
+        _add_cards(db, u1.id, 'Hearts', '6', 6, count=4)
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': '6',
+                               'target_suit': 'Spades', 'quantity': 1},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 200
+        assert rv.get_json()['ratio'] == 4
+
+    def test_partial_consumption(self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        # 5 free Hearts 7. Convert producing 2 Diamonds (cost 4); 1 should remain.
+        _add_cards(db, u1.id, 'Hearts', '7', 7, count=5)
+        rv = client.post('/collection/convert_card',
+                         json={'suit': 'Hearts', 'rank': '7',
+                               'target_suit': 'Diamonds', 'quantity': 2},
+                         headers=auth_headers_user1)
+        assert rv.status_code == 200
+        remaining = CollectionCard.query.filter_by(
+            user_id=u1.id, suit='Hearts', rank='7').count()
+        assert remaining == 1

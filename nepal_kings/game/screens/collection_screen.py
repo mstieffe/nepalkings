@@ -57,6 +57,17 @@ def _tier_label(rank, pack_type=None):
     return settings.COLLECTION_TIER_LABELS.get(_card_tier(rank, pack_type), 'Common')
 
 
+def _collection_sort_key(rank, pack_type):
+    """Sort key for the collection grid.
+
+    Order: tier desc → key cards before number cards → higher card value first.
+    """
+    tier = _card_tier(rank, pack_type)
+    is_number = 1 if rank in settings.NUMBER_CARDS else 0  # key (0) before number (1)
+    value = settings.RANK_TO_VALUE.get(rank, 0)
+    return (-tier, is_number, -value)
+
+
 def _collection_stats(cards, locked=None):
     """Return compact collection summary values for the UI header."""
     locked = locked or {}
@@ -109,8 +120,15 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._sell_control_font = settings.get_font(settings.COLLECTION_SELL_FONT_SIZE, bold=True)
 
         # ── Card ranks ──────────────────────────────────────────────
-        self._main_ranks = list(reversed(settings.RANKS_MAIN_CARDS))  # A,K,Q,J,10,9,8,7
-        self._side_ranks = list(reversed(settings.RANKS_SIDE_CARDS))  # 6,5,4,3,2
+        # Sort: tier desc → key cards before number cards → value desc.
+        self._main_ranks = sorted(
+            settings.RANKS_MAIN_CARDS,
+            key=lambda r: _collection_sort_key(r, 'main'),
+        )
+        self._side_ranks = sorted(
+            settings.RANKS_SIDE_CARDS,
+            key=lambda r: _collection_sort_key(r, 'side'),
+        )
 
         # ── Card data from server ───────────────────────────────────
         self._cards = {}       # {(suit,rank): quantity}
@@ -142,12 +160,16 @@ class CollectionScreen(MenuScreenMixin, Screen):
         _pack_gap = settings.COLLECTION_PACK_PANEL_GAP
         _pack_margin_x = int(0.020 * _SW)
         _pack_y = _BOX_BOTTOM - _BOX_PAD - _pack_h
-        _pack_w = (_BOX_W - _pack_margin_x * 2 - _pack_gap) // 2
+        _pack_w = (_BOX_W - _pack_margin_x * 2 - _pack_gap * 2) // 3
         _pack_x = _BOX_X + _pack_margin_x
         self._pack_panel_rects = {
             'main': pygame.Rect(_pack_x, _pack_y, _pack_w, _pack_h),
             'side': pygame.Rect(_pack_x + _pack_w + _pack_gap, _pack_y, _pack_w, _pack_h),
         }
+        # Third panel beside the two booster panels: hosts mutually-exclusive
+        # Sell / Trade mode toggles.
+        self._actions_panel_rect = pygame.Rect(
+            _pack_x + (_pack_w + _pack_gap) * 2, _pack_y, _pack_w, _pack_h)
         self._pack_button_rects = {}
         for _ptype, _panel in self._pack_panel_rects.items():
             _btn_h = settings.COLLECTION_PACK_PANEL_BTN_H
@@ -166,6 +188,24 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._btn_buy_main_rect = self._pack_button_rects['main']['buy']
         self._btn_open_side_rect = self._pack_button_rects['side']['open']
         self._btn_buy_side_rect = self._pack_button_rects['side']['buy']
+
+        # Mode toggle buttons inside the actions panel
+        _ap = self._actions_panel_rect
+        _mode_btn_h = settings.COLLECTION_PACK_PANEL_BTN_H
+        _mode_btn_gap = settings.COLLECTION_PACK_PANEL_BTN_GAP
+        _mode_btn_w = min(
+            settings.COLLECTION_PACK_PANEL_BTN_W,
+            (_ap.w - settings.COLLECTION_PACK_PANEL_PAD_X * 2 - _mode_btn_gap) // 2,
+        )
+        _mode_btn_y = _ap.bottom - settings.COLLECTION_PACK_PANEL_PAD_Y - _mode_btn_h
+        _mode_btn_x = _ap.centerx - (_mode_btn_w * 2 + _mode_btn_gap) // 2
+        self._mode_btn_rects = {
+            'sell': pygame.Rect(_mode_btn_x, _mode_btn_y, _mode_btn_w, _mode_btn_h),
+            'trade': pygame.Rect(_mode_btn_x + _mode_btn_w + _mode_btn_gap, _mode_btn_y,
+                                 _mode_btn_w, _mode_btn_h),
+        }
+        # Active mode: None | 'sell' | 'trade'. Drives card-click behaviour.
+        self._mode = None
 
         # ── X close button (top-right of box) ──
         _xsz = int(0.028 * _SH)
@@ -216,6 +256,18 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._sell_dialogue = None
         self._sell_qty_rects = {}
 
+        # ── Trade dialogue state ────────────────────────────────────
+        self._trade_card = None         # (suit, rank) source
+        self._trade_target_suit = None  # selected target suit
+        self._trade_qty = 1             # number of OUTPUT cards to produce
+        self._trade_max = 0             # max output for current target
+        self._trade_dialogue = None
+        self._trade_qty_rects = {}
+        self._trade_target_rects = {}   # {suit: pygame.Rect}
+
+        # ── Profile dialogue (default click) ────────────────────────
+        self._profile_dialogue = None
+
         # ── Booster reveal overlay ──────────────────────────────────
         self._reveal_overlay = None
         self._pending_booster_type = 'main'  # tracks which type for dialogue flow
@@ -246,6 +298,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._sell_card = None
         self._sell_dialogue = None
         self._reveal_overlay = None
+        self._trade_card = None
+        self._trade_dialogue = None
+        self._profile_dialogue = None
+        self._mode = None
         self._fetch_collection()
 
     # ── data fetching ───────────────────────────────────────────────
@@ -352,6 +408,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Booster controls
         self._draw_pack_panel('main')
         self._draw_pack_panel('side')
+        self._draw_actions_panel()
 
         self._draw_close_x_button()
 
@@ -359,6 +416,15 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if self._sell_dialogue:
             self._sell_dialogue.draw()
             self._draw_sell_qty_overlay()
+
+        # Trade dialogue
+        if self._trade_dialogue:
+            self._trade_dialogue.draw()
+            self._draw_trade_overlay()
+
+        # Profile dialogue
+        if self._profile_dialogue:
+            self._profile_dialogue.draw()
 
         # Booster reveal overlay
         if self._reveal_overlay:
@@ -461,10 +527,17 @@ class CollectionScreen(MenuScreenMixin, Screen):
             qty = self._cards.get((suit, rank), 0)
             locked = self._locked.get((suit, rank), 0)
             card_rect = pygame.Rect(cx, cy, cw, ch)
-            hovered = card_rect.collidepoint(mouse_pos) and not self._sell_dialogue and not self._reveal_overlay
+            hovered = (
+                card_rect.collidepoint(mouse_pos)
+                and not self._sell_dialogue
+                and not self._trade_dialogue
+                and not self._profile_dialogue
+                and not self._reveal_overlay
+            )
 
             if qty > 0:
                 card.draw_front_bright(cx, cy)
+                self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=True)
                 if hovered:
                     glow_surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
                     pygame.draw.rect(glow_surf, (250, 221, 0, 80), glow_surf.get_rect(), 2)
@@ -475,6 +548,21 @@ class CollectionScreen(MenuScreenMixin, Screen):
             else:
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
+                self._draw_tier_border(cx, cy, cw, ch, rank, section, owned=False)
+
+    def _draw_tier_border(self, cx, cy, cw, ch, rank, section, owned=True):
+        """Draw a subtle tier-coloured outline just outside the card edge."""
+        tier = _card_tier(rank, section)
+        clr = settings.COLLECTION_TIER_BORDER_COLORS.get(tier)
+        if not clr:
+            return
+        if not owned:
+            r, g, b, a = clr
+            clr = (r, g, b, max(0, a // 2))
+        thickness = 2 if tier >= 2 else 1
+        surf = pygame.Surface((cw + 4, ch + 4), pygame.SRCALPHA)
+        pygame.draw.rect(surf, clr, surf.get_rect(), thickness, border_radius=4)
+        self.window.blit(surf, (cx - 2, cy - 2))
 
     def _draw_card_badge(self, cx, cy, cw, qty, locked=0):
         """Draw the ×N owned badge at the bottom-right of a card.
@@ -576,6 +664,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             rect.collidepoint(mouse_pos)
             and not self.dialogue_box
             and not self._sell_dialogue
+            and not self._trade_dialogue
+            and not self._profile_dialogue
             and not self._reveal_overlay
         )
         from game.core.input_state import get_pressed as _get_pressed
@@ -617,6 +707,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             r.collidepoint(mouse_pos)
             and not self.dialogue_box
             and not self._sell_dialogue
+            and not self._trade_dialogue
+            and not self._profile_dialogue
             and not self._reveal_overlay
         )
 
@@ -631,6 +723,410 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         txt = self._close_font.render('\u00d7', True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=r.center))
+
+    # ── actions panel (mode toggles) ────────────────────────────────
+
+    def _draw_actions_panel(self):
+        """Draw the third panel with Sell / Trade mode toggles."""
+        panel = self._actions_panel_rect
+        surf = pygame.Surface((panel.w, panel.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, settings.COLLECTION_PACK_PANEL_BG_CLR,
+                         surf.get_rect(), border_radius=10)
+        pygame.draw.rect(surf, settings.COLLECTION_PACK_PANEL_BORDER_CLR,
+                         surf.get_rect(), 1, border_radius=10)
+        self.window.blit(surf, panel.topleft)
+
+        pad_x = settings.COLLECTION_PACK_PANEL_PAD_X
+        pad_y = settings.COLLECTION_PACK_PANEL_PAD_Y
+        title = self._pack_title_font.render(
+            settings.COLLECTION_ACTIONS_PANEL_TITLE, True,
+            settings.COLLECTION_PACK_PANEL_TITLE_CLR)
+        self.window.blit(title, (panel.x + pad_x, panel.y + pad_y))
+
+        if self._mode is None:
+            hint_text = 'Click a card to view its uses'
+        elif self._mode == 'sell':
+            hint_text = 'Click a card to sell copies'
+        else:
+            hint_text = 'Click a card to convert copies'
+        hint = self._pack_detail_font.render(
+            hint_text, True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+        self.window.blit(hint, (panel.x + pad_x,
+                                panel.y + pad_y + title.get_height() + int(0.004 * _SH)))
+
+        for mode_key, rect in self._mode_btn_rects.items():
+            label = settings.COLLECTION_MODE_BTN_TEXT[mode_key]
+            self._draw_mode_toggle_button(rect, label, mode_key == self._mode)
+
+    def _draw_mode_toggle_button(self, rect, text, active):
+        """Draw a mode toggle (active = highlighted)."""
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = (
+            rect.collidepoint(mouse_pos)
+            and not self.dialogue_box
+            and not self._sell_dialogue
+            and not self._trade_dialogue
+            and not self._profile_dialogue
+            and not self._reveal_overlay
+        )
+
+        if active:
+            bg_clr = (90, 75, 30, 235)
+            border_clr = (250, 221, 0)
+            txt_clr = (255, 245, 200)
+        elif hovered:
+            bg_clr = (60, 55, 35, 220)
+            border_clr = (200, 175, 110)
+            txt_clr = (250, 240, 200)
+        else:
+            bg_clr = (35, 35, 40, 200)
+            border_clr = (120, 110, 90, 200)
+            txt_clr = (200, 190, 160)
+
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=6)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 2 if active else 1,
+                         border_radius=6)
+        self.window.blit(surf, rect.topleft)
+        txt = self._action_font.render(text, True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=rect.center))
+
+    def _toggle_mode(self, mode):
+        """Mutually-exclusive mode toggle: clicking active mode deactivates."""
+        if self._mode == mode:
+            self._mode = None
+        else:
+            self._mode = mode
+
+    # ── card profile dialogue (default click) ──────────────────────
+
+    def _open_profile_dialogue(self, suit, rank):
+        """Show a profile dialogue with all uses of (suit, rank)."""
+        from utils.card_uses import get_card_uses
+
+        qty = self._cards.get((suit, rank), 0)
+        locked = self._locked.get((suit, rank), 0)
+        free = max(0, qty - locked)
+        unit_price = _sell_price(rank, 1)
+        section = _card_pack_type(rank)
+        tier_label = _tier_label(rank, section)
+
+        try:
+            uses = get_card_uses(suit, rank)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f'Card uses lookup failed: {e}')
+            uses = {'figures': [], 'spells': [], 'battle_moves': []}
+
+        max_items = settings.COLLECTION_PROFILE_GROUP_MAX_ITEMS
+
+        def _group(title, entries):
+            icons = [icon for _name, icon in entries[:max_items] if icon is not None]
+            return {
+                'title': title,
+                'items': icons,
+                'count': len(entries),
+                'show_when_empty': True,
+                'description': ', '.join(name for name, _ in entries[:max_items])
+                                if entries else 'No uses',
+            }
+
+        groups = [
+            _group('Figures', uses['figures']),
+            _group('Spells', uses['spells']),
+            _group('Battle Moves', uses['battle_moves']),
+        ]
+
+        card_img = self._card_imgs.get((suit, rank))
+        msg = (f'{suit} {rank}  ·  {tier_label}\n'
+               f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}  ·  Sell: {unit_price}g')
+        self._profile_dialogue = DialogueBox(
+            self.window, msg, actions=['close'],
+            images=[card_img] if card_img else [],
+            image_groups=groups,
+            title='Card Profile',
+        )
+
+    # ── trade dialogue ──────────────────────────────────────────────
+
+    def _open_trade_dialogue(self, suit, rank):
+        """Open the convert/trade dialogue for a card."""
+        qty = self._cards.get((suit, rank), 0)
+        locked = self._locked.get((suit, rank), 0)
+        free = max(0, qty - locked)
+        if free < settings.COLLECTION_CONVERT_RATIO_SAME_COLOR:
+            self._trade_card = None
+            self._trade_target_suit = None
+            self._trade_dialogue = DialogueBox(
+                self.window,
+                (f'You need at least '
+                 f'{settings.COLLECTION_CONVERT_RATIO_SAME_COLOR} free copies '
+                 f'of {suit} {rank} to convert.\n'
+                 f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}'),
+                actions=['ok'], title='Cannot trade',
+            )
+            return
+        # Default target: first other suit (preferring same-colour for cheapest ratio)
+        same_colour = self._other_suits_same_colour(suit)
+        diff_colour = self._other_suits_diff_colour(suit)
+        default_target = same_colour[0] if same_colour else diff_colour[0]
+
+        self._trade_card = (suit, rank)
+        self._trade_target_suit = default_target
+        self._trade_qty = 1
+        self._trade_max = self._compute_trade_max(suit, rank, default_target)
+        self._trade_qty_rects = {}
+        self._trade_target_rects = {}
+
+        card_img = self._card_imgs.get((suit, rank))
+        msg = (f'Convert {suit} {rank}\n'
+               f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}\n'
+               f'Same colour: {settings.COLLECTION_CONVERT_RATIO_SAME_COLOR}:1  ·  '
+               f'Different colour: {settings.COLLECTION_CONVERT_RATIO_DIFF_COLOR}:1')
+        after_msg = self._trade_after_text()
+        self._trade_dialogue = DialogueBox(
+            self.window, msg, actions=['trade', 'cancel'],
+            images=[card_img] if card_img else [],
+            title='Trade Card',
+            message_after_images=after_msg)
+
+    def _other_suits_same_colour(self, suit):
+        if suit in settings.COLLECTION_RED_SUITS:
+            return [s for s in settings.COLLECTION_RED_SUITS if s != suit]
+        return [s for s in settings.COLLECTION_BLACK_SUITS if s != suit]
+
+    def _other_suits_diff_colour(self, suit):
+        if suit in settings.COLLECTION_RED_SUITS:
+            return list(settings.COLLECTION_BLACK_SUITS)
+        return list(settings.COLLECTION_RED_SUITS)
+
+    def _convert_ratio_for(self, source_suit, target_suit):
+        if source_suit == target_suit:
+            return None
+        same_red = (source_suit in settings.COLLECTION_RED_SUITS
+                    and target_suit in settings.COLLECTION_RED_SUITS)
+        same_black = (source_suit in settings.COLLECTION_BLACK_SUITS
+                      and target_suit in settings.COLLECTION_BLACK_SUITS)
+        if same_red or same_black:
+            return settings.COLLECTION_CONVERT_RATIO_SAME_COLOR
+        return settings.COLLECTION_CONVERT_RATIO_DIFF_COLOR
+
+    def _compute_trade_max(self, suit, rank, target_suit):
+        qty = self._cards.get((suit, rank), 0)
+        locked = self._locked.get((suit, rank), 0)
+        free = max(0, qty - locked)
+        ratio = self._convert_ratio_for(suit, target_suit)
+        if not ratio:
+            return 0
+        return free // ratio
+
+    def _trade_after_text(self):
+        if not self._trade_card or not self._trade_target_suit:
+            return ''
+        suit, rank = self._trade_card
+        target = self._trade_target_suit
+        ratio = self._convert_ratio_for(suit, target) or 0
+        consumed = ratio * self._trade_qty
+        return (f'Target: {target} {rank}  ·  Ratio: {ratio}:1\n'
+                f'Producing {self._trade_qty} {target} card(s)  ·  '
+                f'Consuming {consumed} {suit} card(s).\n\n\n')
+
+    def _update_trade_after_text(self):
+        if not self._trade_dialogue:
+            return
+        new_text = self._trade_after_text()
+        _max_text_w = settings.DIALOGUE_BOX_WIDTH - int(0.08 * _SW)
+        self._trade_dialogue.after_lines = DialogueBox._wrap_text(
+            new_text, self._trade_dialogue.font, _max_text_w)
+        self._trade_dialogue.after_lines_surfaces = [
+            self._trade_dialogue.font.render(
+                l, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+            for l in self._trade_dialogue.after_lines]
+
+    def _layout_trade_target_rects(self):
+        """Lay out the 3 target-suit selector buttons centred above qty controls."""
+        if not self._trade_card or not self._trade_dialogue:
+            return {}
+        dlg = self._trade_dialogue
+        suit, _rank = self._trade_card
+        targets = [s for s in settings.SUITS if s != suit]
+        btn_w = settings.COLLECTION_TRADE_TARGET_BTN_W
+        btn_h = settings.COLLECTION_TRADE_TARGET_BTN_H
+        gap = settings.COLLECTION_TRADE_TARGET_GAP
+        total_w = btn_w * len(targets) + gap * (len(targets) - 1)
+        x = dlg.rect.centerx - total_w // 2
+        # Sit above the qty row (which sits above the action buttons)
+        qty_btn_h = settings.COLLECTION_SELL_QTY_BTN_H
+        y = (dlg.rect.bottom - dlg.button_height - qty_btn_h
+             - btn_h - int(0.022 * _SH))
+        rects = {}
+        for i, t in enumerate(targets):
+            rects[t] = pygame.Rect(x + i * (btn_w + gap), y, btn_w, btn_h)
+        return rects
+
+    def _layout_trade_qty_rects(self):
+        if not self._trade_dialogue:
+            return {}
+        dlg = self._trade_dialogue
+        btn_w = settings.COLLECTION_SELL_QTY_BTN_W
+        btn_h = settings.COLLECTION_SELL_QTY_BTN_H
+        max_w = settings.COLLECTION_SELL_QTY_MAX_W
+        gap = settings.COLLECTION_SELL_QTY_GAP
+        qty_w = int(btn_w * 1.28)
+        total_w = btn_w + gap + qty_w + gap + btn_w + gap + max_w
+        x = dlg.rect.centerx - total_w // 2
+        y = dlg.rect.bottom - dlg.button_height - btn_h - int(0.010 * _SH)
+        return {
+            'minus': pygame.Rect(x, y, btn_w, btn_h),
+            'qty': pygame.Rect(x + btn_w + gap, y, qty_w, btn_h),
+            'plus': pygame.Rect(x + btn_w + gap + qty_w + gap, y, btn_w, btn_h),
+            'max': pygame.Rect(x + btn_w + gap + qty_w + gap + btn_w + gap, y, max_w, btn_h),
+        }
+
+    def _draw_trade_overlay(self):
+        if not self._trade_card or not self._trade_dialogue:
+            return
+        dlg = self._trade_dialogue
+
+        # Target suit selector
+        target_rects = self._layout_trade_target_rects()
+        self._trade_target_rects = target_rects
+        if target_rects:
+            label = self._stats_font.render(
+                'Target Suit', True, settings.COLLECTION_STATS_TEXT_CLR)
+            first = next(iter(target_rects.values()))
+            self.window.blit(label, label.get_rect(
+                center=(dlg.rect.centerx, first.top - int(0.010 * _SH))))
+            for suit, rect in target_rects.items():
+                ratio = self._convert_ratio_for(self._trade_card[0], suit) or 0
+                self._draw_trade_target_button(
+                    rect, suit, ratio,
+                    selected=(suit == self._trade_target_suit))
+
+        # Qty selector
+        qty_rects = self._layout_trade_qty_rects()
+        self._trade_qty_rects = qty_rects
+        qty_label = self._stats_font.render(
+            'Output Qty', True, settings.COLLECTION_STATS_TEXT_CLR)
+        self.window.blit(qty_label, qty_label.get_rect(
+            center=(dlg.rect.centerx, qty_rects['qty'].top - int(0.010 * _SH))))
+        self._draw_sell_control_button(qty_rects['minus'], '−', self._trade_qty > 1)
+        self._draw_sell_control_button(qty_rects['plus'], '+',
+                                       self._trade_qty < self._trade_max)
+        self._draw_sell_control_button(qty_rects['max'], 'Max',
+                                       self._trade_qty < self._trade_max)
+        qty_surf = pygame.Surface((qty_rects['qty'].w, qty_rects['qty'].h),
+                                  pygame.SRCALPHA)
+        pygame.draw.rect(qty_surf, (25, 25, 30, 230),
+                         qty_surf.get_rect(), border_radius=6)
+        pygame.draw.rect(qty_surf, (180, 155, 95, 210),
+                         qty_surf.get_rect(), 1, border_radius=6)
+        self.window.blit(qty_surf, qty_rects['qty'].topleft)
+        qty_text = self._sell_control_font.render(
+            str(self._trade_qty), True, settings.COLLECTION_STATS_VALUE_CLR)
+        self.window.blit(qty_text, qty_text.get_rect(center=qty_rects['qty'].center))
+
+    def _draw_trade_target_button(self, rect, suit, ratio, selected):
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mouse_pos)
+        is_red = suit in settings.COLLECTION_RED_SUITS
+        accent = (settings.COLLECTION_TRADE_RED_CLR if is_red
+                  else settings.COLLECTION_TRADE_BLACK_CLR)
+        if selected:
+            bg = (75, 60, 25, 235)
+            border = (250, 221, 0)
+            txt_clr = (255, 245, 200)
+        elif hovered:
+            bg = (50, 45, 30, 220)
+            border = accent
+            txt_clr = accent
+        else:
+            bg = (32, 32, 38, 210)
+            border = (110, 100, 80, 210)
+            txt_clr = accent
+
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg, surf.get_rect(), border_radius=6)
+        pygame.draw.rect(surf, border, surf.get_rect(),
+                         2 if selected else 1, border_radius=6)
+        self.window.blit(surf, rect.topleft)
+
+        font = settings.get_font(settings.COLLECTION_TRADE_TARGET_FONT_SIZE, bold=True)
+        line1 = font.render(suit, True, txt_clr)
+        line2 = font.render(f'{ratio}:1', True, txt_clr)
+        total_h = line1.get_height() + line2.get_height()
+        ty = rect.centery - total_h // 2
+        self.window.blit(line1, line1.get_rect(centerx=rect.centerx, top=ty))
+        self.window.blit(line2, line2.get_rect(
+            centerx=rect.centerx, top=ty + line1.get_height()))
+
+    def _handle_trade_overlay_click(self, pos):
+        """Return True if the click hit a trade-overlay control."""
+        if not self._trade_card or not self._trade_dialogue:
+            return False
+        # Target buttons
+        for suit, rect in (self._trade_target_rects or {}).items():
+            if rect.collidepoint(pos):
+                if suit != self._trade_target_suit:
+                    self._trade_target_suit = suit
+                    s_suit, s_rank = self._trade_card
+                    self._trade_max = self._compute_trade_max(s_suit, s_rank, suit)
+                    if self._trade_qty > self._trade_max:
+                        self._trade_qty = max(1, self._trade_max)
+                    if self._trade_max < 1:
+                        # Display message but keep dialogue open so user can try other suit
+                        self._trade_qty = 1
+                    self._update_trade_after_text()
+                return True
+        # Qty buttons
+        rects = self._trade_qty_rects or self._layout_trade_qty_rects()
+        changed = False
+        if rects['minus'].collidepoint(pos) and self._trade_qty > 1:
+            self._trade_qty -= 1
+            changed = True
+        elif rects['plus'].collidepoint(pos) and self._trade_qty < self._trade_max:
+            self._trade_qty += 1
+            changed = True
+        elif rects['max'].collidepoint(pos) and self._trade_qty < self._trade_max:
+            self._trade_qty = self._trade_max
+            changed = True
+        if changed:
+            self._update_trade_after_text()
+            return True
+        return any(rect.collidepoint(pos) for rect in rects.values())
+
+    def _perform_trade(self):
+        """Execute the convert_card API call."""
+        if not self._trade_card or not self._trade_target_suit:
+            self._trade_dialogue = None
+            self._trade_card = None
+            return
+        suit, rank = self._trade_card
+        target = self._trade_target_suit
+        ratio = self._convert_ratio_for(suit, target) or 0
+        if self._trade_max < 1 or ratio < 1:
+            self.state.set_msg('Not enough free cards to convert')
+            self._trade_dialogue = None
+            self._trade_card = None
+            return
+        try:
+            result = collection_service.convert_card(
+                suit, rank, target, self._trade_qty)
+            consumed = result.get('consumed', ratio * self._trade_qty)
+            produced = result.get('produced', self._trade_qty)
+            old_src = self._cards.get((suit, rank), 0)
+            old_tgt = self._cards.get((target, rank), 0)
+            self._cards[(suit, rank)] = max(0, old_src - consumed)
+            self._cards[(target, rank)] = old_tgt + produced
+            self.state.set_msg(
+                f'Converted {consumed} {suit} {rank} → {produced} {target} {rank}')
+        except Exception as e:
+            logger.error(f'Convert failed: {e}')
+            self.state.set_msg('Failed to convert card')
+        self._trade_card = None
+        self._trade_target_suit = None
+        self._trade_dialogue = None
+        self._trade_qty_rects = {}
+        self._trade_target_rects = {}
 
     # ── sell dialogue ───────────────────────────────────────────────
 
@@ -890,6 +1386,12 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if self._sell_dialogue:
             for btn in self._sell_dialogue.buttons:
                 btn.update()
+        if self._trade_dialogue:
+            for btn in self._trade_dialogue.buttons:
+                btn.update()
+        if self._profile_dialogue:
+            for btn in self._profile_dialogue.buttons:
+                btn.update()
 
     def handle_events(self, events):
         super().handle_events(events)
@@ -903,8 +1405,21 @@ class CollectionScreen(MenuScreenMixin, Screen):
             self.reset_action()
             self._perform_buy_booster()
             return
-        if self.state.action['status'] in ('cancel', 'ok', 'close'):
+        if self.state.action['status'] == 'trade':
             self.reset_action()
+            self._perform_trade()
+            return
+        if self.state.action['status'] in ('cancel', 'ok', 'close'):
+            # Cancel/close — also close trade/profile dialogues if open
+            self.reset_action()
+            if self._trade_dialogue:
+                self._trade_card = None
+                self._trade_target_suit = None
+                self._trade_dialogue = None
+                self._trade_qty_rects = {}
+                self._trade_target_rects = {}
+            if self._profile_dialogue:
+                self._profile_dialogue = None
             return
         if self.dialogue_box:
             return
@@ -939,6 +1454,37 @@ class CollectionScreen(MenuScreenMixin, Screen):
                         self._update_sell_after_text()
                 continue
 
+            # Trade dialogue captures input
+            if self._trade_dialogue:
+                if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                    if self._handle_trade_overlay_click(event.pos):
+                        continue
+                    response = self._trade_dialogue.update([event])
+                    if response == 'trade':
+                        self._perform_trade()
+                    elif response in ('cancel', 'ok'):
+                        self._trade_card = None
+                        self._trade_target_suit = None
+                        self._trade_dialogue = None
+                        self._trade_qty_rects = {}
+                        self._trade_target_rects = {}
+                elif event.type == KEYDOWN:
+                    if event.key == K_LEFT and self._trade_qty > 1:
+                        self._trade_qty -= 1
+                        self._update_trade_after_text()
+                    elif event.key == K_RIGHT and self._trade_qty < self._trade_max:
+                        self._trade_qty += 1
+                        self._update_trade_after_text()
+                continue
+
+            # Profile dialogue captures input
+            if self._profile_dialogue:
+                if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                    response = self._profile_dialogue.update([event])
+                    if response in ('close', 'ok', 'cancel'):
+                        self._profile_dialogue = None
+                continue
+
             if self._handle_icon_events(event):
                 continue
 
@@ -946,6 +1492,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not self._sell_dialogue
+                    and not self._trade_dialogue
+                    and not self._profile_dialogue
                     and not self._reveal_overlay
                     and not pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H).collidepoint(event.pos)):
                 self.state.screen = 'game_menu'
@@ -981,9 +1529,27 @@ class CollectionScreen(MenuScreenMixin, Screen):
                         self.state.set_msg('Not enough gold')
                     continue
 
-                # Card clicks (only within panel)
+                # Mode toggle buttons (Sell / Trade)
+                _mode_clicked = None
+                for _mode_key, _mode_rect in self._mode_btn_rects.items():
+                    if _mode_rect.collidepoint(event.pos):
+                        _mode_clicked = _mode_key
+                        break
+                if _mode_clicked:
+                    self._toggle_mode(_mode_clicked)
+                    continue
+
+                # Card clicks (only within panel) — behaviour depends on mode
                 if self._panel_rect.collidepoint(event.pos):
                     for rect, suit, rank, section in self._card_rects:
                         if rect.collidepoint(event.pos):
-                            self._open_sell_dialogue(suit, rank)
+                            if self._mode == 'sell':
+                                self._open_sell_dialogue(suit, rank)
+                            elif self._mode == 'trade':
+                                self._open_trade_dialogue(suit, rank)
+                            else:
+                                # Default — only show profile if card is owned;
+                                # unowned cards reveal nothing useful here.
+                                if self._cards.get((suit, rank), 0) > 0:
+                                    self._open_profile_dialogue(suit, rank)
                             break
