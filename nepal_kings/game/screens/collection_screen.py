@@ -704,18 +704,39 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
     def _draw_profile_tooltip(self, text):
-        """Draw a multi-line tooltip pill for a hovered profile group icon."""
+        """Draw a multi-line, word-wrapped tooltip pill for a hovered profile group icon."""
         font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
-        lines = text.split('\n')
-        line_surfs = [font.render(l, True, settings.TOOLTIP_TEXT_COLOR) for l in lines if l]
-        if not line_surfs:
-            return
-        line_h = font.get_height()
         pad_x = settings.TOOLTIP_PAD_X
         pad_y = settings.TOOLTIP_PAD_Y
         corner_r = settings.TOOLTIP_CORNER_R
-        max_w = max(s.get_width() for s in line_surfs)
-        pill_w = pad_x * 2 + max_w
+        # Maximum tooltip width: 35% of screen width (capped to avoid overshooting)
+        max_content_w = int(0.35 * _SW)
+        # Word-wrap each paragraph separately
+        raw_lines = text.split('\n')
+        wrapped = []
+        for para in raw_lines:
+            if not para.strip():
+                wrapped.append('')
+                continue
+            words = para.split()
+            current = []
+            for word in words:
+                test = ' '.join(current + [word])
+                if font.size(test)[0] <= max_content_w:
+                    current.append(word)
+                else:
+                    if current:
+                        wrapped.append(' '.join(current))
+                    current = [word]
+            if current:
+                wrapped.append(' '.join(current))
+        line_surfs = [font.render(l, True, settings.TOOLTIP_TEXT_COLOR)
+                      for l in wrapped if l]
+        if not line_surfs:
+            return
+        line_h = font.get_height()
+        content_w = max(s.get_width() for s in line_surfs)
+        pill_w = pad_x * 2 + content_w
         pill_h = pad_y * 2 + len(line_surfs) * line_h + max(0, len(line_surfs) - 1) * 2
         mx, my = pygame.mouse.get_pos()
         pill_x = mx + 14
@@ -847,10 +868,16 @@ class CollectionScreen(MenuScreenMixin, Screen):
         tier_label = _tier_label(rank, section)
 
         # Card category — shown inside the Figures section, not the header.
+        # Side cards are further split into side-key (2,4,5) and side-number (3,6)
+        # based on which figure slot they typically fill.
+        _SIDE_KEY_RANKS = {'2', '4', '5'}
+        _SIDE_NUM_RANKS = {'3', '6'}
         if rank in settings.NUMBER_CARDS:
             category_label = 'Number Card'
-        elif rank in settings.RANKS_SIDE_CARDS:
-            category_label = 'Side Card'
+        elif rank in _SIDE_KEY_RANKS:
+            category_label = 'Side Key Card'
+        elif rank in _SIDE_NUM_RANKS:
+            category_label = 'Side Number Card'
         else:
             category_label = 'Key Card'
 
@@ -862,7 +889,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         max_items = settings.COLLECTION_PROFILE_GROUP_MAX_ITEMS
 
-        def _group(title, entries, note=''):
+        def _group(title, entries, note='', note_prefix=''):
             """Build a raw image-group dict for the profile dialogue."""
             # entries are (name, icon, description) triples
             pairs = [(name, icon, desc)
@@ -878,6 +905,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'item_unit': 'option',
                 'count': len(entries),
                 'show_when_empty': True,
+                'note_prefix': note_prefix,
                 'description': note or (
                     ', '.join(name for name, _, _ in entries[:max_items])
                     if entries else 'No uses'
@@ -886,9 +914,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         groups = [
             _group('Figures', uses['figures'],
-                   note=f'{category_label}  ·  '
-                        + (', '.join(n for n, _, _ in uses['figures'][:max_items])
-                           if uses['figures'] else 'No uses')),
+                   note=', '.join(n for n, _, _ in uses['figures'][:max_items])
+                        if uses['figures'] else 'No uses',
+                   note_prefix=category_label),
             _group('Spells', uses['spells']),
             _group('Battle Options', uses['battle_moves']),
         ]

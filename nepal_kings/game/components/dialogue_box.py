@@ -281,10 +281,12 @@ class DialogueBox:
             title = raw_group.get('title', 'Cards')
             item_unit = raw_group.get('item_unit', 'card')
             color = raw_group.get('color') or self._default_group_color(icon_name)
+            note_prefix = raw_group.get('note_prefix', '')
             group = {
                 'key': raw_group.get('key'),
                 'title': self._format_group_title(title, count, item_unit),
                 'description': raw_group.get('description') or raw_group.get('note') or '',
+                'note_prefix': note_prefix,
                 'items': items,
                 'count': count,
                 'icon_name': icon_name,
@@ -358,6 +360,12 @@ class DialogueBox:
             self.group_title_font.get_height(),
             settings.DIALOGUE_BOX_GROUP_ICON_SIZE if group.get('icon') else 0,
         )
+        # note_prefix occupies one extra line rendered in a bold font
+        prefix_h = 0
+        if group.get('note_prefix'):
+            bold_font = settings.get_font(
+                max(10, int(settings.FS_TINY * 0.82)), bold=True)
+            prefix_h = bold_font.get_height() + 1 + int(0.003 * settings.SCREEN_HEIGHT)
         note_h = len(group['note_lines']) * (self.group_note_font.get_height() + 1)
         if note_h:
             note_h += int(0.003 * settings.SCREEN_HEIGHT)
@@ -369,7 +377,7 @@ class DialogueBox:
                 + (len(rows) - 1) * settings.DIALOGUE_BOX_GROUP_ROW_GAP
                 + settings.DIALOGUE_BOX_GROUP_HEADER_GAP
             )
-        return pad_y * 2 + header_h + note_h + cards_h
+        return pad_y * 2 + header_h + prefix_h + note_h + cards_h
 
     def _format_group_title(self, title, count, unit='card'):
         suffix = unit if count == 1 else unit + 's'
@@ -580,6 +588,16 @@ class DialogueBox:
             self.window.blit(title_surf, (x, y + (header_h - title_surf.get_height()) // 2))
 
             y += header_h
+            # Bold prefix line (e.g. 'Key Card') drawn before the plain note
+            prefix = group.get('note_prefix', '')
+            if prefix:
+                bold_font = settings.get_font(
+                    max(10, int(settings.FS_TINY * 0.82)), bold=True)
+                y += int(0.003 * settings.SCREEN_HEIGHT)
+                prefix_surf = bold_font.render(
+                    prefix, True, settings.DIALOGUE_BOX_GROUP_NOTE_CLR)
+                self.window.blit(prefix_surf, (group_rect.x + pad_x, y))
+                y += bold_font.get_height() + 1
             if group['note_lines']:
                 y += int(0.003 * settings.SCREEN_HEIGHT)
                 for line in group['note_lines']:
