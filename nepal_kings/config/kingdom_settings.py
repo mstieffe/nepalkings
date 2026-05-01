@@ -82,49 +82,109 @@ HEX_MINE_BORDER_HIGHLIGHT = (255, 246, 196)
 
 # ── Kingdom cosmetic render presets ───────────────────────────────
 HEX_DEFAULT_OWNER_STYLE = {
-    'flag_key': 'flag_plain',
+    'badge_key': 'badge_plain',
     'border_key': 'border_simple_gold',
     'surface_key': 'surface_plain',
 }
 
-HEX_FLAG_STYLES = {
-    'flag_plain': {
-        'pole': (150, 120, 72),
-        'fill': (230, 214, 158),
-        'accent': (116, 86, 46),
-        'shape': 'pennant',
+# Kingdom name badge cosmetics.  Each style controls the procedural
+# background (fill colours / gradient), frame, and ornaments drawn behind
+# the kingdom's name pill.  Renderers live in
+# ``game.components.badge_cosmetics`` and aggressively cache the resulting
+# surfaces by ``(badge_key, text, font_id, target_h, shimmer_phase_bucket)``
+# so the per-frame work is a near-free blit.
+HEX_BADGE_STYLES = {
+    'badge_plain': {
+        'rarity': 'default',
+        'shape': 'pill',
+        'fill': (80, 55, 10, 220),
+        'border': (250, 221, 0),
+        'text': (255, 238, 150),
     },
-    'flag_crimson': {
-        'pole': (178, 136, 74),
-        'fill': (176, 42, 48),
-        'accent': (255, 224, 128),
-        'shape': 'banner',
+    'badge_parchment_scroll': {
+        'rarity': 'common',
+        'shape': 'scroll',
+        'fill_top': (244, 232, 198, 235),
+        'fill_bot': (220, 198, 154, 235),
+        'curl_clr': (162, 122, 76),
+        'fiber_clr': (180, 152, 110, 70),
+        'border': (122, 92, 56),
+        'text': (58, 36, 18),
     },
-    'flag_sun': {
-        'pole': (200, 150, 70),
-        'fill': (245, 181, 46),
-        'accent': (110, 55, 18),
+    'badge_iron_plank': {
+        'rarity': 'common',
+        'shape': 'plank',
+        'fill_top': (148, 110, 70, 235),
+        'fill_bot': (96, 64, 38, 235),
+        'fiber_clr': (60, 36, 18, 90),
+        'rivet_clr': (40, 36, 32),
+        'rivet_highlight': (210, 200, 188),
+        'border': (28, 22, 18),
+        'text': (240, 224, 196),
+    },
+    'badge_stone_tablet': {
+        'rarity': 'rare',
+        'shape': 'tablet',
+        'fill_top': (188, 188, 192, 235),
+        'fill_bot': (132, 130, 134, 235),
+        'highlight_clr': (224, 224, 226),
+        'shadow_clr': (52, 50, 54),
+        'border': (74, 72, 76),
+        'text': (32, 30, 34),
+        'text_highlight': (236, 236, 238),
+    },
+    'badge_banner_ribbon': {
+        'rarity': 'rare',
         'shape': 'swallowtail',
+        'fill_top': (188, 52, 60, 240),
+        'fill_bot': (124, 28, 36, 240),
+        'accent': (250, 220, 138),
+        'fold_clr': (96, 22, 28, 110),
+        'border': (60, 14, 18),
+        'text': (255, 240, 198),
     },
-    'flag_raven': {
-        'pole': (142, 132, 122),
-        'fill': (34, 36, 46),
-        'accent': (176, 188, 210),
-        'shape': 'banner',
+    'badge_gilded_laurel': {
+        'rarity': 'epic',
+        'shape': 'pill',
+        'fill_top': (252, 222, 130, 240),
+        'fill_bot': (196, 154, 60, 240),
+        'highlight_clr': (255, 244, 196, 220),
+        'border': (124, 90, 28),
+        'text': (62, 36, 8),
+        'laurel_clr': (172, 132, 48),
+        'laurel_highlight': (244, 222, 138),
+        'shimmer': True,
     },
-    'flag_lotus': {
-        'pole': (184, 126, 92),
-        'fill': (232, 104, 164),
-        'accent': (255, 228, 242),
-        'shape': 'pennant',
+    'badge_obsidian_gems': {
+        'rarity': 'epic',
+        'shape': 'pill',
+        'fill_top': (44, 44, 50, 245),
+        'fill_bot': (12, 12, 18, 245),
+        'highlight_clr': (130, 130, 142, 200),
+        'border': (190, 190, 200),
+        'text': (236, 232, 244),
+        'gem_left':  (224, 46, 70),
+        'gem_right': (90, 132, 232),
+        'gem_glow_left':  (255, 96, 120, 0),
+        'gem_glow_right': (140, 180, 255, 0),
+        'shimmer': True,
     },
-    'flag_mountain': {
-        'pole': (156, 120, 78),
-        'fill': (80, 120, 154),
-        'accent': (240, 246, 255),
-        'shape': 'swallowtail',
+    'badge_marble_serpent': {
+        'rarity': 'epic',
+        'shape': 'plaque',
+        'fill_top': (240, 236, 228, 240),
+        'fill_bot': (210, 204, 192, 240),
+        'vein_clr': (118, 108, 132, 180),
+        'border': (124, 96, 36),
+        'scrollwork_clr': (180, 144, 56),
+        'serpent_clr': (132, 96, 36),
+        'serpent_eye': (224, 64, 64),
+        'text': (44, 30, 36),
+        'shimmer': True,
     },
 }
+
+HEX_BADGE_DEFAULT_KEY = 'badge_plain'
 
 # Border skins.  Each skin has an edge ``style`` that controls *structural*
 # drawing (single line, double rope braid, carved notches, spikes, gem
@@ -289,8 +349,10 @@ HEX_MAP_ZOOM_MIN    = 0.25
 HEX_MAP_ZOOM_MAX    = 4.0
 HEX_MAP_ZOOM_STEP   = 0.50
 HEX_MAP_DRAG_THRESHOLD = 5                 # px before drag starts
-# Hide tier stars / gold / suit bonus at full zoom-out; show after one zoom-in.
-HEX_MAP_LAND_INFO_MIN_ZOOM = 2.0
+# Progressive disclosure thresholds for per-tile overlays.
+HEX_MAP_LAND_INFO_MIN_ZOOM       = 1.5    # icons (stat strip, tier ribbon)
+HEX_MAP_LAND_NUMBERS_MIN_ZOOM    = 2.0    # numeric labels appear here and above
+HEX_MAP_OWNER_NAME_MIN_ZOOM      = 2.0    # below this owner chip is dot only
 
 # ── Minimap ─────────────────────────────────────────────────────────
 MINIMAP_W           = int(0.12 * SCREEN_WIDTH)
@@ -385,9 +447,53 @@ KINGDOM_CONFIG_GOOD_CLR = (132, 220, 142)
 KINGDOM_CONFIG_BAD_CLR = (226, 112, 96)
 
 # ── Hex labels ──────────────────────────────────────────────────────
-HEX_LABEL_FONT_SIZE     = FS_TINY
-HEX_ICON_SIZE           = int(0.022 * SCREEN_HEIGHT)
+HEX_LABEL_FONT_SIZE     = FS_BODY
+HEX_ICON_SIZE           = int(0.028 * SCREEN_HEIGHT)
 HEX_GOLD_ICON_PATH      = 'img/dialogue_box/icons/coin.png'
+
+# ── Shared pill design tokens (for stat strip, badges, owner chip) ─
+HEX_PILL_BG_CLR         = (18, 16, 13, 215)
+HEX_PILL_BORDER_CLR     = (166, 142, 96)
+HEX_PILL_BORDER_OWN     = (250, 221, 0)
+HEX_PILL_RADIUS_PX      = max(2, int(0.004 * SCREEN_HEIGHT))
+HEX_PILL_PAD_X          = max(3, int(0.004 * SCREEN_WIDTH))
+HEX_PILL_PAD_Y          = max(1, int(0.003 * SCREEN_HEIGHT))
+
+# ── Tier ribbon (top-left corner) ──────────────────────────────────
+HEX_TIER_RIBBON_BG      = (24, 20, 12, 220)
+HEX_TIER_RIBBON_TIER_TINT = {
+    1: (124, 188, 132),
+    2: (216, 188, 96),
+    3: (188, 132, 220),
+    4: (224, 92, 96),
+}
+HEX_TIER_RIBBON_STAR_SZ_FACTOR = 0.11   # of hex sz; clamped to >= 4 px
+
+# ── Defence-incomplete warning badge ───────────────────────────────
+HEX_WARNING_BG_CLR      = (188, 36, 36, 230)
+HEX_WARNING_BORDER_CLR  = (255, 220, 200)
+HEX_WARNING_TEXT_CLR    = (255, 255, 255)
+HEX_WARNING_PULSE_HZ    = 1.4   # alpha pulse cycles per second
+
+# ── Owner chip (colored dot + name pill) ───────────────────────────
+HEX_OWNER_CHIP_BG       = (22, 20, 16, 210)
+HEX_OWNER_CHIP_BORDER   = (140, 130, 110)
+HEX_OWNER_CHIP_OWN_TXT  = (255, 238, 150)
+HEX_OWNER_CHIP_OTHER_TXT = (220, 215, 200)
+HEX_OWNER_CHIP_DOT_R_FACTOR = 0.07   # of hex sz
+
+# ── Hover ring ─────────────────────────────────────────────────────
+HEX_HOVER_RING_CLR      = (255, 255, 255, 165)
+HEX_HOVER_RING_W        = 2
+
+# ── Kingdom group badge polish ─────────────────────────────────────
+# Positive offset means *below* the cluster centre (nameplate plinth).  An
+# extra gap factor (relative to hex sz) keeps the badge clear of the suit
+# cluster icon's silhouette.
+HEX_GROUP_BADGE_OFFSET_Y = 0.55     # fraction of hex sz below geometric center
+HEX_GROUP_BADGE_GAP_FACTOR = 0.10
+HEX_GROUP_BADGE_SHADOW_CLR = (0, 0, 0, 140)
+HEX_GROUP_BADGE_SHADOW_OFFSET = (1, 2)
 
 # ── Land detail box ────────────────────────────────────────────────
 LAND_DETAIL_W           = int(0.28 * SCREEN_WIDTH)

@@ -194,7 +194,7 @@ class TestKingdomMap:
         rival_kingdom = KingdomModel(
             owner_user_id=u2.id,
             name='Rival Realm',
-            flag_key='flag_plain',
+            badge_key='badge_plain',
             border_key='border_simple_gold',
             surface_key='surface_plain',
         )
@@ -211,7 +211,7 @@ class TestKingdomMap:
 
         assert row['is_mine'] is False
         assert row['kingdom_name'] == 'Rival Realm'
-        assert row['owner_style']['flag_key'] == 'flag_plain'
+        assert row['owner_style']['badge_key'] == 'badge_plain'
         assert row['owner_style']['border_key'] == 'border_simple_gold'
         assert row['owner_style']['surface_key'] == 'surface_plain'
 
@@ -223,7 +223,7 @@ class TestKingdomMap:
         kingdom = KingdomModel(
             owner_user_id=u2.id,
             name='Sanctuary',
-            flag_key='flag_plain',
+            badge_key='badge_plain',
             border_key='border_simple_gold',
             surface_key='surface_plain',
         )

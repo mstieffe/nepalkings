@@ -720,7 +720,7 @@ class Kingdom(db.Model):
     id            = db.Column(db.Integer, primary_key=True)
     owner_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     name          = db.Column(db.String(80), nullable=True)
-    flag_key      = db.Column(db.String(80), nullable=False)
+    badge_key     = db.Column(db.String(80), nullable=False)
     border_key    = db.Column(db.String(80), nullable=False)
     surface_key   = db.Column(db.String(80), nullable=False)
     shield_until  = db.Column(db.DateTime, nullable=True)
@@ -752,7 +752,7 @@ class Kingdom(db.Model):
 
     def serialize_style(self):
         return {
-            'flag_key': self.flag_key,
+            'badge_key': self.badge_key,
             'border_key': self.border_key,
             'surface_key': self.surface_key,
         }
@@ -762,7 +762,7 @@ class Kingdom(db.Model):
             'id': self.id,
             'owner_user_id': self.owner_user_id,
             'name': self.name or f'Kingdom #{self.id}',
-            'flag_key': self.flag_key,
+            'badge_key': self.badge_key,
             'border_key': self.border_key,
             'surface_key': self.surface_key,
             'shield_until': self.shield_until.isoformat() if self.shield_until else None,

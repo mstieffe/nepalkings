@@ -22,7 +22,7 @@ def _utcnow():
 
 def _default_kingdom_style():
     return dict(getattr(config, 'KINGDOM_DEFAULT_STYLE', {}) or {
-        'flag_key': 'flag_plain',
+        'badge_key': 'badge_plain',
         'border_key': 'border_simple_gold',
         'surface_key': 'surface_plain',
     })
@@ -53,7 +53,7 @@ def create_kingdom(owner_user_id, source_kingdom=None):
     starter_sp = int(getattr(config, 'KINGDOM_SKILL_POINTS_PER_LEVEL', 3) or 0)
     kingdom = Kingdom(
         owner_user_id=owner_user_id,
-        flag_key=defaults['flag_key'],
+        badge_key=defaults['badge_key'],
         border_key=defaults['border_key'],
         surface_key=defaults['surface_key'],
         shield_until=source_kingdom.shield_until if source_kingdom else None,

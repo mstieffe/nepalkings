@@ -136,9 +136,9 @@ BOOSTER_TIER_PROBABILITIES = {              # Probability of drawing each tier (
     3: 0.40,   # rare
 }
 BOOSTER_TIER_RANKS = {                      # Card ranks per tier (main)
-    1: ['7', '8', '9', '10'],
-    2: ['J', 'Q'],
-    3: ['K', 'A'],
+    1: ['7', '8', '9'],
+    2: ['J', '10', 'A'],
+    3: ['K', 'Q'],
 }
 
 BOOSTER_SIDE_TIER_PROBABILITIES = {         # Probability of drawing each tier (side)
@@ -241,53 +241,67 @@ GOLD_PRODUCTION_MAX_ACCUMULATION_HOURS = 7 * 24  # Cap at 7 days of uncollected 
 # category; owned lands expose the equipped style in /kingdom/map so every
 # client can render each kingdom's identity.
 KINGDOM_DEFAULT_STYLE = {
-    'flag_key': 'flag_plain',
+    'badge_key': 'badge_plain',
     'border_key': 'border_simple_gold',
     'surface_key': 'surface_plain',
 }
 
 KINGDOM_COSMETIC_CATALOG = {
-    'flag_plain': {
-        'type': 'flag',
-        'name': 'Plain Pennant',
+    'badge_plain': {
+        'type': 'badge',
+        'name': 'Plain Pill',
         'rarity': 'default',
         'price_gold': 0,
-        'asset_key': 'flag_plain',
+        'asset_key': 'badge_plain',
     },
-    'flag_crimson': {
-        'type': 'flag',
-        'name': 'Crimson Banner',
+    'badge_parchment_scroll': {
+        'type': 'badge',
+        'name': 'Parchment Scroll',
         'rarity': 'common',
         'price_gold': 250,
-        'asset_key': 'flag_crimson',
+        'asset_key': 'badge_parchment_scroll',
     },
-    'flag_sun': {
-        'type': 'flag',
-        'name': 'Sun Banner',
+    'badge_iron_plank': {
+        'type': 'badge',
+        'name': 'Iron Riveted Plank',
+        'rarity': 'common',
+        'price_gold': 350,
+        'asset_key': 'badge_iron_plank',
+    },
+    'badge_stone_tablet': {
+        'type': 'badge',
+        'name': 'Stone Tablet',
         'rarity': 'rare',
         'price_gold': 850,
-        'asset_key': 'flag_sun',
+        'asset_key': 'badge_stone_tablet',
     },
-    'flag_raven': {
-        'type': 'flag',
-        'name': 'Raven Banner',
+    'badge_banner_ribbon': {
+        'type': 'badge',
+        'name': 'Banner Ribbon',
         'rarity': 'rare',
         'price_gold': 1100,
-        'asset_key': 'flag_raven',
+        'asset_key': 'badge_banner_ribbon',
     },
-    'flag_lotus': {
-        'type': 'flag',
-        'name': 'Lotus Banner',
+    'badge_gilded_laurel': {
+        'type': 'badge',
+        'name': 'Gilded Laurel',
         'rarity': 'epic',
         'price_gold': 1600,
-        'asset_key': 'flag_lotus',
+        'asset_key': 'badge_gilded_laurel',
     },
-    'flag_mountain': {
-        'type': 'flag',
-        'name': 'Mountain Banner',
+    'badge_obsidian_gems': {
+        'type': 'badge',
+        'name': 'Obsidian Gems',
+        'rarity': 'epic',
+        'price_gold': 1750,
+        'asset_key': 'badge_obsidian_gems',
+    },
+    'badge_marble_serpent': {
+        'type': 'badge',
+        'name': 'Marble Serpent Plaque',
         'rarity': 'epic',
         'price_gold': 1900,
-        'asset_key': 'flag_mountain',
+        'asset_key': 'badge_marble_serpent',
     },
     'border_simple_gold': {
         'type': 'border',

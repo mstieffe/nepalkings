@@ -31,7 +31,7 @@ def _utcnow():
 # ── Cosmetic / style helpers ────────────────────────────────────────────────
 
 _COSMETIC_STYLE_FIELDS = {
-    'flag': 'flag_key',
+    'badge': 'badge_key',
     'border': 'border_key',
     'surface': 'surface_key',
 }
@@ -43,7 +43,7 @@ def _cosmetic_catalog():
 
 def _default_style_dict():
     return dict(getattr(config, 'KINGDOM_DEFAULT_STYLE', {}) or {
-        'flag_key': 'flag_plain',
+        'badge_key': 'badge_plain',
         'border_key': 'border_simple_gold',
         'surface_key': 'surface_plain',
     })
@@ -346,7 +346,7 @@ def _kingdom_style_updates_from_payload(data):
             raise ValueError('Invalid cosmetic type')
         updates[style_field] = cosmetic_key
 
-    for style_field in ('flag_key', 'border_key', 'surface_key'):
+    for style_field in ('badge_key', 'border_key', 'surface_key'):
         key = data.get(style_field)
         if not key:
             continue

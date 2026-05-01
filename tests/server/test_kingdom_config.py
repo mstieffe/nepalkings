@@ -225,7 +225,7 @@ class TestKingdomConfigRoutes:
         u1, _ = two_users
         land = _add_land(db, 0, 0, owner_id=u1.id)
         kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
-        db.session.add(KingdomCosmeticUnlock(kingdom_id=kingdom.id, cosmetic_key='flag_crimson'))
+        db.session.add(KingdomCosmeticUnlock(kingdom_id=kingdom.id, cosmetic_key='badge_parchment_scroll'))
         db.session.commit()
 
         land.owner_user_id = None
@@ -277,7 +277,7 @@ class TestKingdomConfigRoutes:
         middle = _add_land(db, 1, 0, owner_id=u1.id)
         right = _add_land(db, 2, 0, owner_id=u1.id)
         kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
-        kingdom.flag_key = 'flag_crimson'
+        kingdom.badge_key = 'badge_parchment_scroll'
         kingdom.shield_until = datetime(2026, 4, 26, 18, 0, 0)
         kingdom.experience = 50
         kingdom.level = 5
@@ -296,7 +296,7 @@ class TestKingdomConfigRoutes:
         assert left.kingdom_id != right.kingdom_id
         rows = Kingdom.query.filter(Kingdom.id.in_(kingdom_ids)).all()
         # Style and shield are inherited (player paid for them).
-        assert {row.flag_key for row in rows} == {'flag_crimson'}
+        assert {row.badge_key for row in rows} == {'badge_parchment_scroll'}
         assert {row.shield_until for row in rows} == {datetime(2026, 4, 26, 18, 0, 0)}
         # Only the original kingdom keeps progression; the new daughter
         # restarts at level 1 with starter SP and 0 XP.
@@ -432,12 +432,12 @@ class TestKingdomConfigRoutes:
         db.session.refresh(right)
         left_kingdom = db.session.get(Kingdom, left.kingdom_id)
         right_kingdom = db.session.get(Kingdom, right.kingdom_id)
-        left_kingdom.flag_key = 'flag_crimson'
-        right_kingdom.flag_key = 'flag_sun'
+        left_kingdom.badge_key = 'badge_parchment_scroll'
+        right_kingdom.badge_key = 'badge_banner_ribbon'
         right_kingdom.shield_until = datetime(2026, 4, 26, 18, 0, 0)
         db.session.add(KingdomCosmeticUnlock(
             kingdom_id=right_kingdom.id,
-            cosmetic_key='flag_sun',
+            cosmetic_key='badge_banner_ribbon',
         ))
         db.session.commit()
 
@@ -447,11 +447,11 @@ class TestKingdomConfigRoutes:
         assert len(kingdoms) == 1
         winner = kingdoms[0]
         assert winner.id == left_kingdom.id
-        assert winner.flag_key == 'flag_crimson'
+        assert winner.badge_key == 'badge_parchment_scroll'
         assert winner.shield_until == datetime(2026, 4, 26, 18, 0, 0)
         assert KingdomCosmeticUnlock.query.filter_by(
             kingdom_id=winner.id,
-            cosmetic_key='flag_sun',
+            cosmetic_key='badge_banner_ribbon',
         ).one_or_none() is not None
         for land in (left, right, bridge):
             db.session.refresh(land)

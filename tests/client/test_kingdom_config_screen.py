@@ -52,7 +52,7 @@ def _screen_base():
     screen._buttons = []
     screen._box_rect = pygame.Rect(0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
     screen._btn_close_rect = None
-    screen._cosmetic_scroll = {'flag': 0, 'border': 0, 'surface': 0}
+    screen._cosmetic_scroll = {'badge': 0, 'border': 0, 'surface': 0}
     screen._cosmetic_scroll_areas = {}
     screen._rename_dialog = None
     screen._rename_input_rect = None
@@ -81,13 +81,13 @@ def _kingdom_payload():
         'id': 4,
         'name': 'North Pass',
         'style': {
-            'flag_key': 'flag_plain',
+            'badge_key': 'badge_plain',
             'border_key': 'border_simple_gold',
             'surface_key': 'surface_plain',
         },
         'land_ids': [12, 13],
         'lands_count': 2,
-        'unlocked_cosmetics': ['flag_plain', 'border_simple_gold', 'surface_plain'],
+        'unlocked_cosmetics': ['badge_plain', 'border_simple_gold', 'surface_plain'],
         'shield_remaining': 0,
         'skill_points_total': 2,
         'skill_points_spent': 0,
@@ -280,28 +280,28 @@ class TestKingdomConfigInteractions:
         screen._kingdom = _kingdom_payload()
         screen._gold = 5000
         screen._catalog = {
-            f'flag_{idx}': {
-                'type': 'flag',
-                'name': f'Flag {idx}',
+            f'badge_{idx}': {
+                'type': 'badge',
+                'name': f'Badge {idx}',
                 'price_gold': idx * 100,
             }
             for idx in range(6)
         }
-        screen._catalog['flag_plain'] = {
-            'type': 'flag',
+        screen._catalog['badge_plain'] = {
+            'type': 'badge',
             'name': 'Plain',
             'price_gold': 0,
         }
 
         rect = pygame.Rect(20, 20, settings.KINGDOM_CONFIG_LEFT_W, settings.KINGDOM_CONFIG_CARD_H)
-        KingdomConfigScreen._draw_cosmetic_section(screen, rect, 'flag', 'Flag')
+        KingdomConfigScreen._draw_cosmetic_section(screen, rect, 'badge', 'Kingdom Badge')
 
         actions = [action for action, _value, _rect in screen._buttons]
         assert 'cosmetic_page_next' not in actions
-        assert 'flag' in screen._cosmetic_scroll_areas
+        assert 'badge' in screen._cosmetic_scroll_areas
 
-        KingdomConfigScreen._scroll_cosmetic_section(screen, 'flag', -1)
-        assert screen._cosmetic_scroll['flag'] > 0
+        KingdomConfigScreen._scroll_cosmetic_section(screen, 'badge', -1)
+        assert screen._cosmetic_scroll['badge'] > 0
 
     def test_paid_cosmetic_purchase_requires_confirmation(self, monkeypatch):
         KingdomConfigScreen, screen = _screen_base()
@@ -498,7 +498,7 @@ class TestKingdomConfigInteractions:
         screen._kingdom = _kingdom_payload()
         screen._data = {'shield_options_hours': [6, 12, 24]}
         screen._catalog = {
-            'flag_plain': {'type': 'flag', 'name': 'Plain', 'price_gold': 0},
+            'badge_plain': {'type': 'badge', 'name': 'Plain', 'price_gold': 0},
             'border_simple_gold': {'type': 'border', 'name': 'Gold', 'price_gold': 0},
             'surface_plain': {'type': 'surface', 'name': 'Plain', 'price_gold': 0},
         }
@@ -528,7 +528,7 @@ class TestKingdomConfigInteractions:
         screen._kingdom = _kingdom_payload()
         screen._data = {'shield_options_hours': [6, 12, 24]}
         screen._catalog = {
-            'flag_plain': {'type': 'flag', 'name': 'Plain', 'price_gold': 0},
+            'badge_plain': {'type': 'badge', 'name': 'Plain', 'price_gold': 0},
             'border_simple_gold': {'type': 'border', 'name': 'Gold', 'price_gold': 0},
             'surface_plain': {'type': 'surface', 'name': 'Plain', 'price_gold': 0},
         }
@@ -552,7 +552,7 @@ class TestKingdomConfigInteractions:
         screen._kingdom = first
         screen._data = {'shield_options_hours': [6, 12, 24], 'kingdoms': [first, second]}
         screen._catalog = {
-            'flag_plain': {'type': 'flag', 'name': 'Plain', 'price_gold': 0},
+            'badge_plain': {'type': 'badge', 'name': 'Plain', 'price_gold': 0},
             'border_simple_gold': {'type': 'border', 'name': 'Gold', 'price_gold': 0},
             'surface_plain': {'type': 'surface', 'name': 'Plain', 'price_gold': 0},
         }

@@ -6,7 +6,7 @@ import math
 import os
 import pygame
 from config import settings
-from game.components import hex_cosmetics
+from game.components import hex_cosmetics, badge_cosmetics
 import logging
 
 logger = logging.getLogger('nk.components.hex_map')
@@ -283,11 +283,23 @@ class HexMap:
 
         self._shield_icon_raw = None
         try:
-            shield_path = os.path.join(settings.RESOURCE_BASE,
-                                       settings.KINGDOM_SHIELD_ICON_PATH)
-            self._shield_icon_raw = pygame.image.load(shield_path).convert_alpha()
+            # Hex map uses a richer shield art than the in-battle block
+            # icon — load it directly so we keep the battle icon path
+            # untouched for other consumers.
+            hex_shield_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__)))),
+                'img', 'kingdom', 'skill_icons', 'shield.png')
+            self._shield_icon_raw = pygame.image.load(
+                hex_shield_path).convert_alpha()
         except Exception:
-            logger.warning('Could not load kingdom shield icon for hex map')
+            try:
+                shield_path = os.path.join(settings.RESOURCE_BASE,
+                                           settings.KINGDOM_SHIELD_ICON_PATH)
+                self._shield_icon_raw = pygame.image.load(
+                    shield_path).convert_alpha()
+            except Exception:
+                logger.warning('Could not load kingdom shield icon for hex map')
 
         # Fonts
         self._label_font = settings.get_font(settings.HEX_LABEL_FONT_SIZE)
@@ -576,6 +588,9 @@ class HexMap:
         for tile, corners, scx, scy in visible_hexes:
             self._draw_hex_details(tile, scx, scy, sz)
 
+        # Suit cluster icons (drawn before kingdom badges so the kingdom
+        # name pill always sits on top of the suit icon).
+        self._draw_suit_cluster_icons(sz)
         self._draw_kingdom_badges(sz)
 
         self.window.set_clip(old_clip)
@@ -640,58 +655,325 @@ class HexMap:
                                     max(1, int((self._border_w + 1) * self.zoom)))
 
     def _draw_hex_details(self, tile, scx, scy, sz):
-        """Draw labels, flags, broken-defence, and shield badges."""
-        show_land_info = self._should_draw_land_info(sz)
+        """Draw the per-tile overlays.
 
-        # Gold-rate and suit-bonus icon size scales with zoom.
-        icon_sz = int(settings.HEX_ICON_SIZE * self.zoom)
+        Layout (high zoom):
+          - top edge:      tier stars (no frame), straddling the flat top
+          - centre:        suit icon with the bonus number on top
+          - bottom-centre: core/timed shield (when shielded)
+          - bottom edge:   owner chip (badge cosmetic + colored dot + name)
+          - top-right:     pulsing warning badge (if defences incomplete)
 
-        # Tier stars (top of hex), drawn as vector shapes to avoid missing glyphs.
-        if show_land_info:
-            self._draw_tier_stars(scx, scy - sz * 0.47, tile.tier, sz)
+        At low zoom per-tile suit icon is suppressed; a single suit icon
+        is rendered at the cluster centre and a single name badge is
+        rendered below it by ``_draw_kingdom_badges``.
+        """
+        zoom = self.zoom
+        sz_ok_icons = (zoom >= settings.HEX_MAP_LAND_INFO_MIN_ZOOM
+                       and sz >= 18)
+        per_tile_suit = (zoom >= settings.HEX_MAP_LAND_NUMBERS_MIN_ZOOM
+                         and sz >= 24)
 
-        # Gold rate (centre-left with icon)
-        if show_land_info and icon_sz > 6 and self._gold_icon_raw:
-            gold_icon = self._get_scaled_icon('gold', self._gold_icon_raw, icon_sz)
-            gold_text = self._label_font.render(f'{tile.gold_rate:.0f}', True, (250, 221, 0))
-            total_w = icon_sz + 2 + gold_text.get_width()
-            start_x = scx - total_w // 2
-            self.window.blit(gold_icon, (start_x, scy - icon_sz // 2))
-            self.window.blit(gold_text, (start_x + icon_sz + 2,
-                                         scy - gold_text.get_height() // 2))
+        if sz_ok_icons:
+            self._draw_tier_ribbon(tile, scx, scy, sz)
 
-        # Suit bonus (bottom, with suit icon)
-        suit_icon = self._suit_icon_raw.get(tile.suit_bonus_suit)
-        if show_land_info and icon_sz > 6 and suit_icon:
-            s_icon = self._get_scaled_icon(tile.suit_bonus_suit, suit_icon, icon_sz)
-            bonus_text = self._label_font.render(f'+{tile.suit_bonus_value}', True, (220, 210, 195))
-            total_w = icon_sz + 2 + bonus_text.get_width()
-            start_x = scx - total_w // 2
-            iy = scy + sz * 0.15
-            self.window.blit(s_icon, (start_x, iy))
-            self.window.blit(bonus_text, (start_x + icon_sz + 2,
-                                          iy + (icon_sz - bonus_text.get_height()) // 2))
-
-        # Owner name (bottom of hex).  Own lands use the clearer YOURS badge below.
-        if tile.owner_username and not tile.is_mine and sz > 30:
-            name_surf = self._label_font.render(tile.owner_username, True, (200, 200, 200))
-            name_rect = name_surf.get_rect(centerx=scx, bottom=scy + sz * 0.75)
-            self.window.blit(name_surf, name_rect)
-
-        if tile.owner and sz > 24:
-            self._draw_owner_flag(tile, scx, scy, sz)
-
-        # Broken icon for incomplete defence (only on player's own tiles)
-        if tile.defence_incomplete and self._broken_icon_raw and icon_sz > 6:
-            broken_sz = int(icon_sz * 2)
-            b_icon = pygame.transform.smoothscale(
-                self._broken_icon_raw, (broken_sz, broken_sz))
-            bx = int(scx + sz * 0.20)
-            by = int(scy - sz * 0.65)
-            self.window.blit(b_icon, (bx, by))
+        if per_tile_suit:
+            self._draw_center_suit(tile, scx, scy, sz)
 
         if tile.kingdom_is_shielded and sz > 24:
             self._draw_shield_badge(tile, scx, scy, sz)
+
+        if tile.defence_incomplete and sz_ok_icons:
+            self._draw_warning_badge(tile, scx, scy, sz,
+                                     pygame.time.get_ticks())
+
+        if tile is self.hovered_tile:
+            self._draw_hover_ring(scx, scy, sz)
+
+    # ── Pill / overlay helpers ─────────────────────────────────────
+
+    def _draw_pill(self, rect, *, role='default'):
+        """Render a rounded pill background+border. Returns the rect drawn."""
+        bg = settings.HEX_PILL_BG_CLR
+        if role == 'own':
+            border = settings.HEX_PILL_BORDER_OWN
+        elif role == 'warn':
+            border = settings.HEX_WARNING_BORDER_CLR
+        elif role == 'shield':
+            border = (140, 190, 255)
+        else:
+            border = settings.HEX_PILL_BORDER_CLR
+        radius = settings.HEX_PILL_RADIUS_PX
+        cache = getattr(self, '_pill_cache', None)
+        if cache is None:
+            cache = {}
+            self._pill_cache = cache
+        key = (role, rect.w, rect.h)
+        surf = cache.get(key)
+        if surf is None:
+            surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(surf, bg, surf.get_rect(), border_radius=radius)
+            pygame.draw.rect(surf, border, surf.get_rect(), 1,
+                             border_radius=radius)
+            cache[key] = surf
+        self.window.blit(surf, rect.topleft)
+        return rect
+
+    def _draw_tier_ribbon(self, tile, scx, scy, sz, *, y_offset=0):
+        """One frameless star per tier level, centred on the hex's flat
+        top edge so the stars visually click into the tile silhouette.
+        No background pill — just stars + a soft drop shadow for legibility.
+        """
+        tier = max(1, min(4, int(getattr(tile, 'tier', 1) or 1)))
+        star_r = max(4, int(sz * settings.HEX_TIER_RIBBON_STAR_SZ_FACTOR))
+        inner_r = max(2, int(star_r * 0.5))
+        gap = max(2, int(star_r * 0.6))
+        total_w = tier * (star_r * 2) + (tier - 1) * gap
+        # Top flat edge of the flat-top hex sits at y = scy - sz*sqrt(3)/2.
+        # Nudge stars a touch inside the tile so they don't kiss the border.
+        top_edge_y = int(scy - sz * (math.sqrt(3) / 2))
+        edge_inset = max(1, int(sz * 0.14))
+        cy = top_edge_y + edge_inset + int(y_offset)
+        start_x = int(scx - total_w / 2) + star_r
+        outline_w = 1 if star_r >= 5 else 0
+        for i in range(tier):
+            sx = start_x + i * (star_r * 2 + gap)
+            shadow = _star_points(sx + 1, cy + 2, star_r, inner_r)
+            pts = _star_points(sx, cy, star_r, inner_r)
+            pygame.draw.polygon(self.window, (16, 12, 4), shadow)
+            pygame.draw.polygon(self.window, settings.HEX_STAR_FILL, pts)
+            if outline_w:
+                pygame.draw.polygon(self.window, settings.HEX_STAR_BORDER,
+                                    pts, outline_w)
+
+    def _draw_center_suit(self, tile, scx, scy, sz):
+        """Large centred suit icon with the bonus number rendered on top.
+
+        Replaces the bottom stat strip: gold rate is now only shown in the
+        land detail box. The bonus number is drawn without a leading ``+``
+        per the latest design.
+        """
+        suit = getattr(tile, 'suit_bonus_suit', None)
+        suit_raw = self._suit_icon_raw.get(suit)
+        if suit_raw is None:
+            return
+        icon_sz = max(14, int(sz * 0.62))
+        icon = self._get_scaled_icon(suit, suit_raw, icon_sz)
+        if icon is None:
+            return
+        # Slight transparency so the suit doesn't overpower the tile fill.
+        try:
+            ghost = icon.copy()
+            ghost.set_alpha(190)
+            icon = ghost
+        except Exception:
+            pass
+        rect = icon.get_rect(center=(int(scx), int(scy)))
+        self.window.blit(icon, rect)
+
+        bonus = int(getattr(tile, 'suit_bonus_value', 0) or 0)
+        if bonus <= 0:
+            return
+        # Bonus number in a bold tier-style font, sized relative to icon.
+        font_px = max(10, int(icon_sz * 0.55))
+        font = settings.get_font(font_px, bold=True)
+        text = font.render(str(bonus), True, (255, 244, 200))
+        # Crisp dark outline for legibility on bright tile fills.
+        outline = font.render(str(bonus), True, (24, 16, 4))
+        cx_i, cy_i = int(scx), int(scy)
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            self.window.blit(outline,
+                             outline.get_rect(center=(cx_i + dx, cy_i + dy)))
+        self.window.blit(text, text.get_rect(center=(cx_i, cy_i)))
+
+    def _draw_warning_badge(self, tile, scx, scy, sz, now_ms):
+        """Pulsing red badge with the broken icon for incomplete defences.
+        Anchored to the hex's top-right flat corner."""
+        r = max(8, int(sz * 0.20))
+        # Anchor to the top-right flat corner of the flat-top hex.
+        cx = int(scx + sz * 0.50) - max(1, int(self.zoom))
+        cy = int(scy - sz * (math.sqrt(3) / 2)) + r + max(1, int(self.zoom))
+        phase = (now_ms / 1000.0) * settings.HEX_WARNING_PULSE_HZ * 2 * math.pi
+        alpha = 200 + int(40 * math.sin(phase))
+        alpha = max(160, min(240, alpha))
+        bg = (*settings.HEX_WARNING_BG_CLR[:3], alpha)
+        size = r * 2 + 4
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.circle(surf, bg, (r + 2, r + 2), r)
+        pygame.draw.circle(surf, settings.HEX_WARNING_BORDER_CLR,
+                           (r + 2, r + 2), r, 1)
+        if self._broken_icon_raw:
+            icon_sz = max(6, int(r * 1.7))
+            icon = self._get_scaled_icon('broken', self._broken_icon_raw,
+                                          icon_sz)
+            if icon is not None:
+                surf.blit(icon, icon.get_rect(center=(r + 2, r + 2)))
+        else:
+            txt = self._tier_font.render('!', True,
+                                          settings.HEX_WARNING_TEXT_CLR)
+            surf.blit(txt, txt.get_rect(center=(r + 2, r + 2)))
+        self.window.blit(surf, (cx - r - 2, cy - r - 2))
+
+    def _draw_owner_chip(self, tile, scx, scy, sz, *, show_name):
+        """Colored owner dot (+ truncated username) anchored on the bottom
+        flat edge of the hex.
+
+        The pill behind the name inherits the kingdom's equipped *badge*
+        cosmetic so the player's identity is visually consistent across
+        zoom levels.  The colored dot sits to the left of the badge
+        surface and remains a quick suit-agnostic owner indicator.
+        """
+        dot_r = max(4, int(sz * settings.HEX_OWNER_CHIP_DOT_R_FACTOR))
+        is_mine = tile.is_mine
+        owner_clr = (settings.HEX_MINE_BORDER if is_mine
+                     else (_owner_color(tile.owner_user_id) or (180, 180, 180)))
+        font = self._label_font
+        name = tile.owner_username or ''
+        if is_mine:
+            name = 'You'
+        if show_name and name:
+            max_text_w = max(20, int(sz * 1.4))
+            # Truncate to the chip's text budget before sending to the
+            # badge renderer so the cache keys cleanly per truncation.
+            truncated = name
+            if font.size(name)[0] > max_text_w:
+                while truncated and font.size(truncated + '…')[0] > max_text_w:
+                    truncated = truncated[:-1]
+                truncated = (truncated + '…') if truncated else '…'
+            badge_key = (self._owner_style_key(tile, 'badge_key')
+                         or settings.HEX_BADGE_DEFAULT_KEY)
+            target_h = font.get_height() + max(2, settings.HEX_PILL_PAD_Y * 2)
+            shimmer_phase = badge_cosmetics.shimmer_phase_for(
+                pygame.time.get_ticks())
+            badge_surf = badge_cosmetics.render_badge(
+                badge_key, truncated, font,
+                target_h=target_h, shimmer_phase=shimmer_phase,
+            )
+        else:
+            badge_surf = None
+
+        gap = max(2, int(2 * self.zoom))
+        badge_w = badge_surf.get_width() if badge_surf else 0
+        badge_h = badge_surf.get_height() if badge_surf else dot_r * 2
+        rect_w = dot_r * 2 + (gap + badge_w if badge_surf else 0)
+        rect_h = max(dot_r * 2, badge_h)
+        # Sit straddling the hex bottom edge: half above, half below, so
+        # the chip visually clicks onto the tile boundary.
+        y = int(scy + sz * (math.sqrt(3) / 2)) - rect_h // 2
+        x = int(scx - rect_w / 2)
+        mid_y = y + rect_h // 2
+        pygame.draw.circle(self.window, owner_clr,
+                           (x + dot_r, mid_y), dot_r)
+        pygame.draw.circle(self.window, (12, 10, 8),
+                           (x + dot_r, mid_y), dot_r, 1)
+        if badge_surf:
+            bx = x + dot_r * 2 + gap
+            by = mid_y - badge_surf.get_height() // 2
+            self.window.blit(badge_surf, (bx, by))
+
+    def _draw_hover_ring(self, scx, scy, sz):
+        """Thin white-alpha inner ring around the hovered hex."""
+        inner_sz = max(4, sz - max(2, int(2 * self.zoom)))
+        pts = _hex_corners(scx, scy, inner_sz)
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        min_x = int(min(xs)) - 2
+        min_y = int(min(ys)) - 2
+        max_x = int(max(xs)) + 2
+        max_y = int(max(ys)) + 2
+        surf = pygame.Surface((max_x - min_x, max_y - min_y),
+                              pygame.SRCALPHA)
+        local = [(p[0] - min_x, p[1] - min_y) for p in pts]
+        pygame.draw.polygon(surf, settings.HEX_HOVER_RING_CLR, local,
+                            settings.HEX_HOVER_RING_W)
+        self.window.blit(surf, (min_x, min_y))
+
+    # ── Suit clusters ──────────────────────────────────────────────
+
+    def _suit_clusters(self):
+        """Return one descriptor per connected component of same-suit tiles.
+
+        Connectivity uses the same odd-q flat-top hex neighbour layout as
+        the kingdom-component logic. Tiles without a suit bonus are
+        skipped entirely.
+        """
+        coord_to_tile = {(t.col, t.row): t for t in self.tiles}
+        visited = set()
+        clusters = []
+        for start in self.tiles:
+            if start.land_id in visited:
+                continue
+            suit = getattr(start, 'suit_bonus_suit', None)
+            if not suit:
+                visited.add(start.land_id)
+                continue
+            stack = [start]
+            members = []
+            while stack:
+                cur = stack.pop()
+                if cur.land_id in visited:
+                    continue
+                if getattr(cur, 'suit_bonus_suit', None) != suit:
+                    continue
+                visited.add(cur.land_id)
+                members.append(cur)
+                for ncoord in _edge_neighbour_coords(cur.col, cur.row):
+                    nb = coord_to_tile.get(ncoord)
+                    if nb is None or nb.land_id in visited:
+                        continue
+                    if getattr(nb, 'suit_bonus_suit', None) == suit:
+                        stack.append(nb)
+            if not members:
+                continue
+            cx = sum(t.cx for t in members) / len(members)
+            cy = sum(t.cy for t in members) / len(members)
+            clusters.append({
+                'suit': suit,
+                'center_x': cx,
+                'center_y': cy,
+                'tile_count': len(members),
+            })
+        return clusters
+
+    def _draw_suit_cluster_icons(self, sz):
+        """Draw one large suit icon at the centre of every connected
+        same-suit region. Only visible when zoomed out (per-tile suit
+        icons are hidden); suppressed at high zoom."""
+        if sz <= 8:
+            return
+        if self.zoom >= settings.HEX_MAP_LAND_NUMBERS_MIN_ZOOM:
+            return
+        vp = self.viewport_rect
+        icon_sz = max(20, int(sz * 1.05))
+        for cluster in self._suit_clusters():
+            # Tiny single-tile clusters can rely on the per-tile icon at
+            # higher zoom; skip the cluster overlay so it doesn't fight
+            # with the regular tile fill.
+            if cluster['tile_count'] < 2:
+                continue
+            scx, scy = self.world_to_screen(
+                cluster['center_x'], cluster['center_y'])
+            if scx < vp.left - 100 or scx > vp.right + 100:
+                continue
+            if scy < vp.top - 100 or scy > vp.bottom + 100:
+                continue
+            suit = cluster['suit']
+            suit_raw = self._suit_icon_raw.get(suit)
+            if suit_raw is None:
+                continue
+            icon = self._get_scaled_icon(
+                f'cluster_{suit}', suit_raw, icon_sz)
+            if icon is None:
+                continue
+            try:
+                ghost = icon.copy()
+                ghost.set_alpha(190)
+                icon = ghost
+            except Exception:
+                pass
+            self.window.blit(
+                icon,
+                icon.get_rect(center=(int(scx), int(scy))))
 
     def _kingdom_badges(self):
         """Return grouped badge descriptors for all visible owned kingdoms."""
@@ -714,12 +996,20 @@ class HexMap:
                 'name': None,
                 'kingdom_id': tile.kingdom_id,
                 'owner_username': tile.owner_username,
+                'badge_keys': {},
+                'suit_keys': {},
             })
             group['tiles'].append(tile)
             if not group['name']:
                 name = str(tile.kingdom_name or '').strip()
                 if name:
                     group['name'] = name
+            bk = (self._owner_style_key(tile, 'badge_key')
+                  or settings.HEX_BADGE_DEFAULT_KEY)
+            group['badge_keys'][bk] = group['badge_keys'].get(bk, 0) + 1
+            sk = getattr(tile, 'suit_bonus_suit', None)
+            if sk:
+                group['suit_keys'][sk] = group['suit_keys'].get(sk, 0) + 1
 
         badges = []
         for group in groups.values():
@@ -736,61 +1026,96 @@ class HexMap:
                     name = str(group['owner_username'])
                 else:
                     name = 'Kingdom'
+            badge_key = (max(group['badge_keys'].items(),
+                             key=lambda kv: kv[1])[0]
+                         if group['badge_keys']
+                         else settings.HEX_BADGE_DEFAULT_KEY)
+            suit_key = (max(group['suit_keys'].items(), key=lambda kv: kv[1])[0]
+                        if group['suit_keys'] else None)
             badges.append({
                 'name': name,
                 'center_x': center_x,
                 'center_y': center_y,
                 'tile_count': len(tiles),
+                'badge_key': badge_key,
+                'suit_key': suit_key,
+                'representative_tile': tiles[0],
             })
         return badges
 
     def _draw_kingdom_badges(self, sz):
-        """Draw one centered badge per owned kingdom/component."""
-        if sz <= 26:
+        """Draw the kingdom name badge as a nameplate plinth below each
+        owned cluster's suit icon.
+
+        The badge background, ornaments and text are produced as a single
+        cached surface by ``badge_cosmetics.render_badge`` so per-frame
+        cost is one ``blit`` per visible kingdom.
+        """
+        # Allow the kingdom name to show even when zoomed all the way out
+        # — it's the most useful low-zoom information.
+        if sz <= 8:
+            return
+        if self.zoom >= settings.HEX_MAP_OWNER_NAME_MIN_ZOOM:
             return
 
         vp = self.viewport_rect
-        pad_x = max(3, int(4 * self.zoom))
-        pad_y = max(1, int(2 * self.zoom))
         font = self._label_font
+        offset_y = sz * settings.HEX_GROUP_BADGE_OFFSET_Y
+        gap_px = max(1, int(sz * settings.HEX_GROUP_BADGE_GAP_FACTOR))
+        target_h = max(font.get_height() + 6,
+                       int(font.get_height() * 1.6))
+        # Suit cluster icon footprint (matches _draw_suit_cluster_icons).
+        cluster_icon_sz = max(20, int(sz * 1.05))
+        shimmer_phase = badge_cosmetics.shimmer_phase_for(
+            pygame.time.get_ticks())
 
         for badge_data in self._kingdom_badges():
-            scx, scy = self.world_to_screen(
-                badge_data['center_x'],
-                badge_data['center_y'],
-            )
-            # Keep badge rendering scoped to visible map area.
-            if scx < vp.left - 80 or scx > vp.right + 80:
+            cx_w, cy_w = badge_data['center_x'], badge_data['center_y']
+            scx, scy = self.world_to_screen(cx_w, cy_w)
+            # Keep cluster rendering scoped to visible map area.
+            if scx < vp.left - 100 or scx > vp.right + 100:
                 continue
-            if scy < vp.top - 30 or scy > vp.bottom + 30:
+            if scy < vp.top - 60 or scy > vp.bottom + 100:
                 continue
 
-            badge = font.render(
+            badge_key = (badge_data.get('badge_key')
+                         or settings.HEX_BADGE_DEFAULT_KEY)
+            badge_surf = badge_cosmetics.render_badge(
+                badge_key,
                 str(badge_data['name']),
-                True,
-                settings.HEX_MINE_BADGE_CLR,
+                font,
+                target_h=target_h,
+                shimmer_phase=shimmer_phase,
             )
-            br = badge.get_rect(center=(scx, scy))
-            bg = pygame.Rect(
-                br.x - pad_x,
-                br.y - pad_y,
-                br.w + pad_x * 2,
-                br.h + pad_y * 2,
-            )
-            pygame.draw.rect(
-                self.window,
-                settings.HEX_MINE_BADGE_BG,
-                bg,
-                border_radius=max(2, int(3 * self.zoom)),
-            )
-            pygame.draw.rect(
-                self.window,
-                settings.HEX_MINE_BORDER,
-                bg,
-                1,
-                border_radius=max(2, int(3 * self.zoom)),
-            )
-            self.window.blit(badge, br)
+
+            # Anchor the badge below the suit cluster icon.
+            label_y = scy + offset_y + cluster_icon_sz * 0.55 + gap_px
+            br = badge_surf.get_rect(center=(int(scx), int(label_y)))
+
+            shadow_dx, shadow_dy = settings.HEX_GROUP_BADGE_SHADOW_OFFSET
+            shadow_radius = max(2, int(3 * self.zoom))
+            shadow = self._shadow_for(badge_surf.get_size(), shadow_radius)
+            self.window.blit(shadow,
+                             (br.x + shadow_dx, br.y + shadow_dy))
+            self.window.blit(badge_surf, br)
+
+    def _shadow_for(self, size, radius):
+        """Return a cached drop-shadow surface for the given pixel size."""
+        cache = getattr(self, '_badge_shadow_cache', None)
+        if cache is None:
+            cache = {}
+            self._badge_shadow_cache = cache
+        key = (size, radius)
+        surf = cache.get(key)
+        if surf is None:
+            surf = pygame.Surface(size, pygame.SRCALPHA)
+            pygame.draw.rect(surf, settings.HEX_GROUP_BADGE_SHADOW_CLR,
+                             surf.get_rect(), border_radius=radius)
+            # Bound cache so it never grows without limit.
+            if len(cache) > 32:
+                cache.pop(next(iter(cache)))
+            cache[key] = surf
+        return surf
 
     def _format_countdown(self, seconds):
         if int(seconds or 0) < 0:
@@ -803,25 +1128,53 @@ class HexMap:
         return f'{seconds}s'
 
     def _draw_shield_badge(self, tile, scx, scy, sz):
-        icon_sz = max(10, int(sz * 0.25))
-        x = int(scx - sz * 0.58)
-        y = int(scy - sz * 0.58)
-        bg = pygame.Rect(x - 2, y - 2, int(icon_sz * 2.2), icon_sz + 4)
-        pygame.draw.rect(self.window, (24, 38, 70, 210), bg,
-                         border_radius=max(2, int(3 * self.zoom)))
-        pygame.draw.rect(self.window, (140, 190, 255), bg, 1,
-                         border_radius=max(2, int(3 * self.zoom)))
+        """Shield icon anchored at the lower bottom-center of the hex.
+
+        Core kingdoms (``remaining < 0``) are permanently shielded; the
+        shield is drawn without a number. Timed shields overlay the
+        remaining time *on top* of the shield (centred over the icon).
+        """
+        remaining = int(tile.kingdom_shield_remaining or 0)
+        is_core = remaining < 0
+        # Larger than before so the shield reads clearly and a number can
+        # sit legibly on top of it.
+        icon_sz = max(20, int(sz * (0.55 if is_core else 0.50)))
+        cx = int(scx)
+        # Bottom of icon sits slightly above the hex bottom edge.
+        bottom_y = int(round(scy + sz * (math.sqrt(3) / 2) - sz * 0.10))
+        icon_center = (cx, bottom_y - icon_sz // 2)
         if self._shield_icon_raw:
-            icon = pygame.transform.smoothscale(self._shield_icon_raw, (icon_sz, icon_sz))
-            self.window.blit(icon, (x, y))
+            icon = self._get_scaled_icon('shield', self._shield_icon_raw,
+                                         icon_sz)
+            if icon is not None:
+                rect = icon.get_rect(midbottom=(cx, bottom_y))
+                icon_center = rect.center
+                self.window.blit(icon, rect)
         else:
+            r = icon_sz // 2
+            cy = icon_center[1]
             pygame.draw.polygon(self.window, (140, 190, 255), [
-                (x + icon_sz // 2, y), (x + icon_sz, y + icon_sz // 3),
-                (x + icon_sz // 2, y + icon_sz), (x, y + icon_sz // 3),
+                (cx, cy - r),
+                (cx + r, cy - r // 3),
+                (cx, cy + r),
+                (cx - r, cy - r // 3),
             ])
-        txt = self._label_font.render(self._format_countdown(tile.kingdom_shield_remaining),
-                                      True, (220, 235, 255))
-        self.window.blit(txt, (x + icon_sz + 3, y + max(0, (icon_sz - txt.get_height()) // 2)))
+        if is_core:
+            return
+        # Overlay the remaining duration *on top* of the shield, slightly
+        # below centre so it visually sits inside the shield's body.
+        label = self._format_countdown(remaining)
+        font_px = max(10, int(icon_sz * 0.42))
+        font = settings.get_font(font_px, bold=True)
+        txt = font.render(label, True, (255, 248, 220))
+        outline = font.render(label, True, (16, 12, 4))
+        center = (icon_center[0], icon_center[1] + int(icon_sz * 0.05))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1),
+                       (-1, -1), (1, -1), (-1, 1), (1, 1)):
+            self.window.blit(outline,
+                             outline.get_rect(center=(center[0] + dx,
+                                                      center[1] + dy)))
+        self.window.blit(txt, txt.get_rect(center=center))
 
     def _draw_surface_skin(self, tile, corners, scx, scy, sz):
         """Blit cached cosmetic surface art (and emblem) for owned lands."""
@@ -1077,40 +1430,6 @@ class HexMap:
         _draw_capped_line(self.window, outer_clr, start, end, outer_w)
         _draw_capped_line(self.window, main_clr, start, end, main_w)
         _draw_capped_line(self.window, highlight_clr, start, end, inner_w)
-
-    def _draw_owner_flag(self, tile, scx, scy, sz):
-        """Draw the owner's equipped flag/badge cosmetic."""
-        key = self._owner_style_key(tile, 'flag_key')
-        style = settings.HEX_FLAG_STYLES.get(
-            key, settings.HEX_FLAG_STYLES.get('flag_plain', {}))
-        pole_h = max(8, int(sz * 0.34))
-        flag_w = max(8, int(sz * 0.26))
-        flag_h = max(6, int(sz * 0.17))
-        pole_x = int(scx + sz * 0.35)
-        pole_y = int(scy - sz * 0.42)
-        pole_clr = style.get('pole', (150, 120, 72))
-        fill = style.get('fill', (230, 214, 158))
-        accent = style.get('accent', (116, 86, 46))
-        pygame.draw.line(self.window, pole_clr, (pole_x, pole_y),
-                         (pole_x, pole_y + pole_h), max(1, int(2 * self.zoom)))
-
-        shape = style.get('shape')
-        if shape == 'banner':
-            flag = pygame.Rect(pole_x, pole_y, flag_w, flag_h)
-            pygame.draw.rect(self.window, fill, flag, border_radius=max(1, int(2 * self.zoom)))
-            pygame.draw.line(self.window, accent, flag.midleft, flag.midright, 1)
-            pygame.draw.rect(self.window, accent, flag, 1, border_radius=max(1, int(2 * self.zoom)))
-        elif shape == 'swallowtail':
-            pts = [(pole_x, pole_y), (pole_x + flag_w, pole_y),
-                   (pole_x + int(flag_w * 0.74), pole_y + flag_h // 2),
-                   (pole_x + flag_w, pole_y + flag_h), (pole_x, pole_y + flag_h)]
-            pygame.draw.polygon(self.window, fill, pts)
-            pygame.draw.polygon(self.window, accent, pts, 1)
-        else:
-            pts = [(pole_x, pole_y), (pole_x + flag_w, pole_y + flag_h // 2),
-                   (pole_x, pole_y + flag_h)]
-            pygame.draw.polygon(self.window, fill, pts)
-            pygame.draw.polygon(self.window, accent, pts, 1)
 
     def _draw_tier_stars(self, cx, cy, tier, sz):
         """Draw one star per tier level."""

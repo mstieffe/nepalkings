@@ -59,7 +59,7 @@ class TestHexTile:
     def test_owner_style_payload_is_preserved(self):
         from game.components.hex_map import HexTile
         style = {
-            'flag_key': 'flag_sun',
+            'badge_key': 'badge_banner_ribbon',
             'border_key': 'border_royal_blue',
             'surface_key': 'surface_stone',
         }
@@ -497,8 +497,8 @@ class TestHexMapVisualSemantics:
         land = _make_land(0, 0, owner={'user_id': 2, 'username': 'bob'})
         hm = HexMap([land], window)
 
-        assert hm._owner_style_key(hm.tiles[0], 'flag_key') == \
-            settings.HEX_DEFAULT_OWNER_STYLE['flag_key']
+        assert hm._owner_style_key(hm.tiles[0], 'badge_key') == \
+            settings.HEX_DEFAULT_OWNER_STYLE['badge_key']
 
     def test_minimap_click_centres_camera_in_viewport(self):
         from game.components.hex_map import HexMap
@@ -789,23 +789,23 @@ class TestHexMapVisualSemantics:
         tile = hm.tiles[0]
         scx, scy = hm.world_to_screen(tile.cx, tile.cy)
 
-        called = {'stars': False}
+        called = {'ribbon': False}
 
-        def _mark_stars(*_args, **_kwargs):
-            called['stars'] = True
+        def _mark_ribbon(*_args, **_kwargs):
+            called['ribbon'] = True
 
-        hm._draw_tier_stars = _mark_stars
+        hm._draw_tier_ribbon = _mark_ribbon
         hm.zoom = settings.HEX_MAP_LAND_INFO_MIN_ZOOM - 0.01
         sz = hm._size * hm.zoom
         corners = _hex_corners(scx, scy, sz)
         hm._draw_hex(tile, corners, scx, scy, sz)
-        assert called['stars'] is False
+        assert called['ribbon'] is False
 
         hm.zoom = settings.HEX_MAP_LAND_INFO_MIN_ZOOM
         sz = hm._size * hm.zoom
         corners = _hex_corners(scx, scy, sz)
         hm._draw_hex(tile, corners, scx, scy, sz)
-        assert called['stars'] is True
+        assert called['ribbon'] is True
 
     def test_kingdom_badges_group_tiles_once_per_kingdom_for_all_players(self):
         from game.components.hex_map import HexMap

@@ -8,6 +8,7 @@ from pygame.locals import *
 
 from config import settings
 from game.components.hex_map import _draw_surface_pattern
+from game.components import badge_cosmetics
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.screens._menu_base import MenuScreenMixin
 from game.screens.screen import Screen
@@ -73,7 +74,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._buttons = []
         self._box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
         self._btn_close_rect = None
-        self._cosmetic_scroll = {'flag': 0, 'border': 0, 'surface': 0}
+        self._cosmetic_scroll = {'badge': 0, 'border': 0, 'surface': 0}
         self._cosmetic_scroll_areas = {}
         self._skills_scroll = 0
         self._skills_scroll_area = None
@@ -1110,16 +1111,16 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                                                settings.HEX_BORDER_SKINS['border_simple_gold'])
         pygame.draw.polygon(self.window, border.get('outer', (90, 70, 40)), points, 5)
         pygame.draw.polygon(self.window, border.get('main', (250, 221, 0)), points, 3)
-        flag = settings.HEX_FLAG_STYLES.get(style.get('flag_key'),
-                                            settings.HEX_FLAG_STYLES['flag_plain'])
-        pole_x = rect.right - 28
-        pole_y = rect.y + 24
-        pygame.draw.line(self.window, flag.get('pole', (150, 120, 72)),
-                         (pole_x, pole_y), (pole_x, pole_y + 40), 3)
-        pygame.draw.rect(self.window, flag.get('fill', (230, 214, 158)),
-                         (pole_x, pole_y, 30, 18), border_radius=2)
-        pygame.draw.rect(self.window, flag.get('accent', (120, 90, 50)),
-                         (pole_x, pole_y, 30, 18), 1, border_radius=2)
+        badge_key = style.get('badge_key', settings.HEX_BADGE_DEFAULT_KEY)
+        badge_h = max(18, min(rect.h // 3, 30))
+        shimmer_phase = badge_cosmetics.shimmer_phase_for(
+            pygame.time.get_ticks())
+        badge_surf = badge_cosmetics.render_badge(
+            badge_key, 'Kingdom', self._small_font,
+            target_h=badge_h, shimmer_phase=shimmer_phase)
+        bx = rect.centerx - badge_surf.get_width() // 2
+        by = rect.bottom - badge_surf.get_height() - 6
+        self.window.blit(badge_surf, (bx, by))
 
     def _draw_surface_skin_preview(self, surface_key, points, seed=0):
         skin = settings.HEX_SURFACE_SKINS.get(surface_key, {})
@@ -1154,17 +1155,24 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
     def _draw_cosmetic_chip(self, rect, cosmetic_type, key):
         pygame.draw.rect(self.window, (20, 18, 22), rect, border_radius=5)
         pygame.draw.rect(self.window, (84, 74, 58), rect, 1, border_radius=5)
-        if cosmetic_type == 'flag':
-            flag = settings.HEX_FLAG_STYLES.get(key, settings.HEX_FLAG_STYLES['flag_plain'])
-            pole_x = rect.x + 7
-            pole_y = rect.y + 5
-            pygame.draw.line(self.window, flag.get('pole', (150, 120, 72)),
-                             (pole_x, pole_y), (pole_x, rect.bottom - 5), 2)
-            flag_rect = pygame.Rect(pole_x, pole_y, rect.w - 11, max(10, rect.h // 2))
-            pygame.draw.rect(self.window, flag.get('fill', (230, 214, 158)), flag_rect,
-                             border_radius=2)
-            pygame.draw.rect(self.window, flag.get('accent', (120, 90, 50)), flag_rect, 1,
-                             border_radius=2)
+        if cosmetic_type == 'badge':
+            badge_h = max(14, min(rect.h - 8, 26))
+            shimmer_phase = badge_cosmetics.shimmer_phase_for(
+                pygame.time.get_ticks())
+            badge_surf = badge_cosmetics.render_badge(
+                key, 'Realm', self._tiny_font,
+                target_h=badge_h, shimmer_phase=shimmer_phase)
+            # Scale to fit chip width while preserving aspect.
+            max_w = rect.w - 8
+            if badge_surf.get_width() > max_w:
+                scale = max_w / badge_surf.get_width()
+                new_size = (int(badge_surf.get_width() * scale),
+                            int(badge_surf.get_height() * scale))
+                badge_surf = pygame.transform.smoothscale(
+                    badge_surf, new_size)
+            bx = rect.centerx - badge_surf.get_width() // 2
+            by = rect.centery - badge_surf.get_height() // 2
+            self.window.blit(badge_surf, (bx, by))
             return
 
         cx, cy = rect.center
@@ -1532,7 +1540,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         gap = layout['gap']
         card_h = layout['card_h']
         self._draw_cosmetic_section(pygame.Rect(left_x, top, left_w, card_h),
-                                    'flag', 'Flag')
+                                    'badge', 'Kingdom Badge')
         self._draw_cosmetic_section(pygame.Rect(left_x, top + card_h + gap, left_w, card_h),
                                     'border', 'Border')
         self._draw_cosmetic_section(pygame.Rect(left_x, top + (card_h + gap) * 2, left_w, card_h),
