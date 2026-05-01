@@ -758,7 +758,7 @@ def _compute_game_stats(game_id, player_ids):
 
 
 def _award_booster_packs(user, total_packs):
-    """Award *total_packs* booster packs to *user*.
+    """[DEPRECATED] Legacy reward path; kept for backward compatibility.
 
     Each pack is randomly assigned as main or side based on
     DUEL_BOOSTER_REWARD_PROBABILITIES.
@@ -779,6 +779,29 @@ def _award_booster_packs(user, total_packs):
 
     user.booster_packs += awarded['main']
     user.booster_packs_side += awarded['side']
+    return awarded
+
+
+def _award_duel_rewards(user, draws):
+    """Award ``draws`` independent items from the duel reward pool.
+
+    Each draw is one of: ``main_booster``, ``side_booster``, ``map``, or
+    ``gold`` (a fixed gold amount per gold draw).  Returns the awarded
+    breakdown dict.
+    """
+    awarded = {'main_booster': 0, 'side_booster': 0, 'map': 0, 'gold': 0}
+    if not user or draws <= 0:
+        return awarded
+    probs = settings.DUEL_REWARD_POOL_PROBABILITIES
+    keys = list(probs.keys())
+    weights = [probs[k] for k in keys]
+    for _ in range(int(draws)):
+        chosen = random.choices(keys, weights=weights, k=1)[0]
+        awarded[chosen] += 1
+    user.booster_packs       += awarded['main_booster']
+    user.booster_packs_side  += awarded['side_booster']
+    user.maps                += awarded['map']
+    user.gold                += awarded['gold'] * int(settings.DUEL_REWARD_GOLD_AMOUNT)
     return awarded
 
 
@@ -810,8 +833,18 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         pass
 
     # ── Booster pack rewards ────────────────────────────────────────
-    winner_boosters = _award_booster_packs(winner_user, settings.DUEL_WINNER_BOOSTER_PACKS)
-    loser_boosters = _award_booster_packs(loser_user, settings.DUEL_LOSER_BOOSTER_PACKS)
+    winner_rewards = _award_duel_rewards(winner_user, settings.DUEL_WINNER_REWARD_DRAWS)
+    loser_rewards = _award_duel_rewards(loser_user, settings.DUEL_LOSER_REWARD_DRAWS)
+    # Legacy booster shape kept for older clients that still read
+    # ``winner_boosters`` / ``loser_boosters``.
+    winner_boosters = {
+        'main': winner_rewards['main_booster'],
+        'side': winner_rewards['side_booster'],
+    }
+    loser_boosters = {
+        'main': loser_rewards['main_booster'],
+        'side': loser_rewards['side_booster'],
+    }
 
     winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
     loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
@@ -889,6 +922,9 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         'stats': game_stats,
         'winner_boosters': winner_boosters,
         'loser_boosters': loser_boosters,
+        'winner_rewards': winner_rewards,
+        'loser_rewards': loser_rewards,
+        'reward_gold_amount': int(settings.DUEL_REWARD_GOLD_AMOUNT),
     }
     if isinstance(conquer_payload, dict):
         info['conquer_result'] = conquer_payload.get('conquer_result')

@@ -144,13 +144,17 @@ class TestGameOver:
     def test_game_over_awards_gold_to_winner(self, app, db, created_game):
         from models import Player, Game, User
         from routes.games import _check_game_over
+        from unittest.mock import patch
         game = db.session.get(Game, created_game['id'])
         winner_player = game.players[0]
         winner_user = db.session.get(User, winner_player.user_id)
         gold_before = winner_user.gold
         winner_player.points = game.stake
         db.session.commit()
-        _check_game_over(game)
+        # Force reward pool to never roll gold so we can isolate the
+        # stake-payout from the duel reward draws.
+        with patch('routes.games.random.choices', return_value=['main_booster']):
+            _check_game_over(game)
         db.session.commit()
         db.session.refresh(winner_user)
         assert winner_user.gold == gold_before + game.stake * 2

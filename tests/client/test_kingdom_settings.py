@@ -15,6 +15,8 @@ def test_kingdom_skill_icon_defaults_exist():
         'gold_vault',
         'main_booster_production',
         'side_booster_production',
+        'map_production',
+        'atlas',
         'shield_cost_reduction',
         'core_protection',
     }

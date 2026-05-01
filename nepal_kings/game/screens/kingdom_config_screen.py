@@ -140,6 +140,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         skills = (self._kingdom or {}).get('skills') or {}
         main_skill = skills.get('main_booster_production') or {}
         side_skill = skills.get('side_booster_production') or {}
+        map_skill = skills.get('map_production') or {}
         return [
             {
                 'key': 'gold',
@@ -173,6 +174,17 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 'enabled': int(side_skill.get('level', 0) or 0) > 0,
                 'interval_hours': (self._kingdom or {}).get('side_booster_interval_hours'),
                 'seconds_remaining': (self._kingdom or {}).get('side_booster_seconds_remaining'),
+            },
+            {
+                'key': 'map',
+                'kind': 'map',
+                'label': 'Map',
+                'skill_key': 'map_production',
+                'pending': int((self._kingdom or {}).get('pending_maps', 0) or 0),
+                'capacity': int((self._kingdom or {}).get('map_capacity', 1) or 1),
+                'enabled': int(map_skill.get('level', 0) or 0) > 0,
+                'interval_hours': (self._kingdom or {}).get('map_interval_hours'),
+                'seconds_remaining': (self._kingdom or {}).get('map_seconds_remaining'),
             },
         ]
 

@@ -66,6 +66,8 @@ def create_kingdom(owner_user_id, source_kingdom=None):
         last_main_booster_collection_at=_utcnow(),
         pending_side_boosters=0,
         last_side_booster_collection_at=_utcnow(),
+        pending_maps=0,
+        last_maps_collection_at=_utcnow(),
     )
     db.session.add(kingdom)
     db.session.flush()
@@ -100,6 +102,8 @@ def ensure_kingdom_production_columns():
         ('last_main_booster_collection_at', datetime_type),
         ('pending_side_boosters', 'INTEGER NOT NULL DEFAULT 0'),
         ('last_side_booster_collection_at', datetime_type),
+        ('pending_maps', 'INTEGER NOT NULL DEFAULT 0'),
+        ('last_maps_collection_at', datetime_type),
     ]
     added = []
     for name, ddl_type in specs:
@@ -107,6 +111,15 @@ def ensure_kingdom_production_columns():
             continue
         db.session.execute(text(f'ALTER TABLE kingdom ADD COLUMN {name} {ddl_type}'))
         added.append(name)
+
+    # User.maps lives on a different table but follows the same pattern.
+    if 'user' in inspector.get_table_names():
+        user_cols = {col['name'] for col in inspector.get_columns('user')}
+        if 'maps' not in user_cols:
+            db.session.execute(text(
+                'ALTER TABLE "user" ADD COLUMN maps INTEGER NOT NULL DEFAULT 0'))
+            added.append('user.maps')
+
     if added:
         db.session.commit()
     return added
@@ -926,6 +939,20 @@ _BOOSTER_PRODUCTION_ITEMS = {
         'capacity_attr': 'KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY',
         'icon_path': 'img/kingdom/skill_icons/side_booster_production.png',
     },
+    'map': {
+        'key': 'map',
+        'kind': 'map',
+        'label': 'Map',
+        'skill_key': 'map_production',
+        'pending_attr': 'pending_maps',
+        'last_attr': 'last_maps_collection_at',
+        'user_attr': 'maps',
+        # Capacity is dynamic (driven by the 'atlas' skill); see
+        # ``_booster_capacity``.
+        'capacity_attr': None,
+        'capacity_skill': 'atlas',
+        'icon_path': 'img/kingdom/skill_icons/map_production.png',
+    },
 }
 
 
@@ -933,10 +960,18 @@ def _booster_spec(item_key):
     return _BOOSTER_PRODUCTION_ITEMS.get(item_key)
 
 
-def _booster_capacity(item_key):
+def _booster_capacity(item_key, kingdom=None):
     spec = _booster_spec(item_key)
     if not spec:
         return 0
+    if spec.get('capacity_skill'):
+        # Dynamic capacity driven by a kingdom skill (e.g. atlas for maps).
+        skill_key = spec['capacity_skill']
+        level = kingdom_skill_level(kingdom.id, skill_key) if kingdom else 0
+        if skill_key == 'atlas':
+            return max(0, int(config.map_pending_capacity_for_atlas_level(level)))
+        # Generic fallback: capacity = effect value (must be int-like).
+        return max(0, int(config.skill_effect_at_level(skill_key, level) or 0))
     return max(0, int(getattr(config, spec['capacity_attr'], 1) or 0))
 
 
@@ -987,7 +1022,7 @@ def kingdom_booster_state(kingdom, item_key, *, now=None):
         return None
     now = now or _utcnow()
     level = kingdom_booster_production_level(kingdom, item_key) if kingdom else 0
-    capacity = _booster_capacity(item_key)
+    capacity = _booster_capacity(item_key, kingdom=kingdom)
     stored_pending = int(getattr(kingdom, spec['pending_attr'], 0) or 0) if kingdom else 0
     pending = max(0, min(capacity, stored_pending))
     interval_hours = config.booster_production_interval_hours(item_key, level)
@@ -1073,7 +1108,7 @@ def kingdom_production_state(kingdom, *, now=None):
     """Return ordered production snapshots keyed by item."""
     now = now or _utcnow()
     items = [_gold_production_item(kingdom, now=now)]
-    for item_key in ('main_booster', 'side_booster'):
+    for item_key in ('main_booster', 'side_booster', 'map'):
         state = kingdom_booster_state(kingdom, item_key, now=now)
         if state:
             items.append(state)
@@ -1083,7 +1118,7 @@ def kingdom_production_state(kingdom, *, now=None):
 def kingdom_production_items(kingdom, *, now=None):
     """Return ordered production snapshots as a list."""
     state = kingdom_production_state(kingdom, now=now)
-    return [state[key] for key in ('gold', 'main_booster', 'side_booster') if key in state]
+    return [state[key] for key in ('gold', 'main_booster', 'side_booster', 'map') if key in state]
 
 
 def collect_kingdom_production(kingdom, user, *, now=None):
@@ -1093,11 +1128,13 @@ def collect_kingdom_production(kingdom, user, *, now=None):
             'collected_gold': 0,
             'collected_main_boosters': 0,
             'collected_side_boosters': 0,
+            'collected_maps': 0,
             'collected_items': [],
             'gold': int(getattr(user, 'gold', 0) or 0),
             'total_gold': int(getattr(user, 'gold', 0) or 0),
             'booster_packs': int(getattr(user, 'booster_packs', 0) or 0),
             'booster_packs_side': int(getattr(user, 'booster_packs_side', 0) or 0),
+            'maps': int(getattr(user, 'maps', 0) or 0),
             'collected': 0,
             'pending_gold': 0.0,
             'vault_cap': int(config.KINGDOM_VAULT_DEFAULT_CAP),
@@ -1107,7 +1144,7 @@ def collect_kingdom_production(kingdom, user, *, now=None):
     now = now or _utcnow()
 
     _accrue_pending_gold(kingdom, now=now)
-    for item_key in ('main_booster', 'side_booster'):
+    for item_key in ('main_booster', 'side_booster', 'map'):
         _accrue_pending_booster(kingdom, item_key, now=now)
 
     cap = kingdom_vault_cap(kingdom)
@@ -1120,7 +1157,8 @@ def collect_kingdom_production(kingdom, user, *, now=None):
 
     collected_boosters = {}
     for item_key, spec in _BOOSTER_PRODUCTION_ITEMS.items():
-        pending = min(_booster_capacity(item_key), int(getattr(kingdom, spec['pending_attr'], 0) or 0))
+        pending = min(_booster_capacity(item_key, kingdom=kingdom),
+                      int(getattr(kingdom, spec['pending_attr'], 0) or 0))
         collected_boosters[item_key] = pending
         if pending > 0:
             setattr(user, spec['user_attr'], int(getattr(user, spec['user_attr'], 0) or 0) + pending)
@@ -1136,21 +1174,27 @@ def collect_kingdom_production(kingdom, user, *, now=None):
         collected_items.append({'key': 'main_booster', 'amount': collected_boosters['main_booster']})
     if collected_boosters.get('side_booster'):
         collected_items.append({'key': 'side_booster', 'amount': collected_boosters['side_booster']})
+    if collected_boosters.get('map'):
+        collected_items.append({'key': 'map', 'amount': collected_boosters['map']})
 
     return {
         'collected_gold': int(collected_gold),
         'collected_main_boosters': int(collected_boosters.get('main_booster', 0)),
         'collected_side_boosters': int(collected_boosters.get('side_booster', 0)),
+        'collected_maps': int(collected_boosters.get('map', 0)),
         'collected_items': collected_items,
         'gold': int(user.gold or 0),
         'total_gold': int(user.gold or 0),
         'booster_packs': int(getattr(user, 'booster_packs', 0) or 0),
         'booster_packs_side': int(getattr(user, 'booster_packs_side', 0) or 0),
+        'maps': int(getattr(user, 'maps', 0) or 0),
         'collected': int(collected_gold),
         'pending_gold': float(kingdom.pending_gold or 0.0),
         'vault_cap': int(cap),
         'production': production,
-        'production_items': [production[key] for key in ('gold', 'main_booster', 'side_booster')],
+        'production_items': [production[key]
+                             for key in ('gold', 'main_booster', 'side_booster', 'map')
+                             if key in production],
     }
 
 
@@ -1307,7 +1351,7 @@ def _merge_source_kingdom_into_target(source_kingdom, target_kingdom):
     for item_key, spec in _BOOSTER_PRODUCTION_ITEMS.items():
         _accrue_pending_booster(target_kingdom, item_key, now=now)
         _accrue_pending_booster(source_kingdom, item_key, now=now)
-        capacity = _booster_capacity(item_key)
+        capacity = _booster_capacity(item_key, kingdom=target_kingdom)
         target_boosters = int(getattr(target_kingdom, spec['pending_attr'], 0) or 0)
         source_boosters = int(getattr(source_kingdom, spec['pending_attr'], 0) or 0)
         combined = target_boosters + source_boosters
@@ -1504,11 +1548,12 @@ def serialize_kingdom_config(kingdom):
     vault_state = kingdom_vault_state(kingdom, now=now)
     production = kingdom_production_state(kingdom, now=now)
     production_items = [
-        production[key] for key in ('gold', 'main_booster', 'side_booster')
+        production[key] for key in ('gold', 'main_booster', 'side_booster', 'map')
         if key in production
     ]
     main_booster = production.get('main_booster') or {}
     side_booster = production.get('side_booster') or {}
+    map_item = production.get('map') or {}
 
     # Level / XP progression.
     level = int(kingdom.level or 1)
@@ -1570,6 +1615,11 @@ def serialize_kingdom_config(kingdom):
         'side_booster_full': bool(side_booster.get('full')),
         'side_booster_interval_hours': side_booster.get('interval_hours'),
         'side_booster_seconds_remaining': side_booster.get('seconds_remaining'),
+        'pending_maps': int(map_item.get('pending') or 0),
+        'map_capacity': int(map_item.get('capacity') or 0),
+        'map_full': bool(map_item.get('full')),
+        'map_interval_hours': map_item.get('interval_hours'),
+        'map_seconds_remaining': map_item.get('seconds_remaining'),
     }
 
 

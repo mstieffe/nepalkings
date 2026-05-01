@@ -173,6 +173,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._move_detail_box = None
         self._config_version = 0       # incremented on config change
         self._pending_battle_confirm = False
+        self._pending_map_confirm = False
         self._pending_leave_confirm = False
         self._pending_prelude_spell = None   # spell name pending confirmation
         self._pending_prelude_clear = False  # pending clear confirmation
@@ -1728,18 +1729,24 @@ class ConquerScreen(MenuScreenMixin, Screen):
         else:
             self._leave_screen()
 
-    def _start_battle(self):
+    def _start_battle(self, use_map=False):
         """Call start_battle endpoint and transition to the game screen."""
         try:
+            payload = {'land_id': self._land_id}
+            if use_map:
+                payload['use_map'] = True
             resp = requests.post(
                 f'{settings.SERVER_URL}/kingdom/conquer/start_battle',
-                json={'land_id': self._land_id},
+                json=payload,
                 timeout=15,
             )
             data = resp.json()
             if data.get('game_id'):
                 game_id = data['game_id']
                 self.state.game_id = game_id
+                # Update local maps count if a map was consumed.
+                if data.get('map_consumed') and self.state.user_dict is not None:
+                    self.state.user_dict['maps'] = int(data.get('maps', 0))
                 # Fetch and create a real Game object for the game screen
                 try:
                     game_dict = fetch_game(game_id)
@@ -1751,14 +1758,42 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     logger.error(f'Failed to fetch game after battle start: {e}')
                     self.state.game = None
                 self.state.screen = 'game'
-                logger.info(f'Battle started: game_id={game_id}')
-            else:
-                self._error = (
-                    data.get('message')
-                    or data.get('error')
-                    or 'Failed to start battle'
-                )
-                logger.warning(f'Start battle failed: {self._error}')
+                logger.info(f'Battle started: game_id={game_id} use_map={use_map}')
+                return
+            # Cooldown branch: offer to consume a map.
+            if data.get('code') == 'cooldown':
+                maps_available = int(data.get('maps_available') or 0)
+                remaining = int(data.get('cooldown_remaining') or 0)
+                hours = remaining // 3600
+                minutes = (remaining % 3600) // 60
+                if hours > 0:
+                    cd_text = f'{hours}h {minutes}m'
+                else:
+                    cd_text = f'{minutes}m'
+                if maps_available > 0:
+                    self._pending_map_confirm = True
+                    self.dialogue_box = DialogueBox(
+                        self.window,
+                        f'Conquer is on cooldown ({cd_text} remaining).\n'
+                        f'Use 1 map to bypass? (You have {maps_available}.)',
+                        actions=['Use Map', 'Cancel'],
+                        title='Conquer on Cooldown',
+                    )
+                else:
+                    self.dialogue_box = DialogueBox(
+                        self.window,
+                        f'Conquer is on cooldown ({cd_text} remaining) '
+                        f'and you have no maps to bypass it.',
+                        actions=['OK'],
+                        title='Conquer on Cooldown',
+                    )
+                return
+            self._error = (
+                data.get('message')
+                or data.get('error')
+                or 'Failed to start battle'
+            )
+            logger.warning(f'Start battle failed: {self._error}')
         except Exception as e:
             self._error = 'Connection error'
             logger.error(f'Start battle error: {e}')
@@ -1801,6 +1836,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self.reset_action()
             if response == 'confirm':
                 self._start_battle()
+            return
+        if response and self._pending_map_confirm:
+            self._pending_map_confirm = False
+            self.reset_action()
+            if response == 'use map':
+                self._start_battle(use_map=True)
             return
         if response and self._pending_leave_confirm:
             self._pending_leave_confirm = False

@@ -80,6 +80,7 @@ class User(db.Model):
     # v2.0: Collection & Kingdom
     booster_packs = db.Column(db.Integer, nullable=False, default=0)
     booster_packs_side = db.Column(db.Integer, nullable=False, default=0)
+    maps = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     last_conquer_at = db.Column(db.DateTime, nullable=True)
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
                                         foreign_keys='Challenge.challenger_id')
@@ -99,6 +100,7 @@ class User(db.Model):
             'email_verified': self.email_verified,
             'booster_packs': self.booster_packs,
             'booster_packs_side': self.booster_packs_side,
+            'maps': int(self.maps or 0),
             'challenges_issued': [challenge.serialize() for challenge in self.challenges_issued],
             'challenges_received': [challenge.serialize() for challenge in self.challenges_received]
         }
@@ -743,6 +745,8 @@ class Kingdom(db.Model):
     last_main_booster_collection_at   = db.Column(db.DateTime, nullable=True)
     pending_side_boosters             = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     last_side_booster_collection_at   = db.Column(db.DateTime, nullable=True)
+    pending_maps                      = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_maps_collection_at           = db.Column(db.DateTime, nullable=True)
     created_at    = db.Column(db.DateTime, default=_utcnow)
     updated_at    = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -783,6 +787,11 @@ class Kingdom(db.Model):
             'last_side_booster_collection_at': (
                 self.last_side_booster_collection_at.isoformat()
                 if self.last_side_booster_collection_at else None
+            ),
+            'pending_maps': int(self.pending_maps or 0),
+            'last_maps_collection_at': (
+                self.last_maps_collection_at.isoformat()
+                if self.last_maps_collection_at else None
             ),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,

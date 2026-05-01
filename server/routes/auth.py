@@ -265,6 +265,7 @@ def register():
             email_verification_sent_at=_utcnow() if email else None,
             booster_packs=settings.STARTER_BOOSTER_PACKS,
             booster_packs_side=settings.STARTER_BOOSTER_PACKS_SIDE,
+            maps=settings.STARTER_MAPS,
         )
         db.session.add(user)
         db.session.commit()

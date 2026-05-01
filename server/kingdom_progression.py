@@ -51,6 +51,21 @@ KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY = int(
     os.getenv('KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY', '1')
 )
 
+# Map production: same halving model as boosters; capacity comes from the
+# atlas storage skill (see ``map_pending_capacity_for_atlas_level``).  Default
+# base interval (48h) halves with every level — L1=48h, L2=24h, ..., L5=3h.
+KINGDOM_MAP_PRODUCTION_BASE_HOURS = float(
+    os.getenv('KINGDOM_MAP_PRODUCTION_BASE_HOURS', '48')
+)
+KINGDOM_MAP_PRODUCTION_HALVING_FACTOR = float(
+    os.getenv('KINGDOM_MAP_PRODUCTION_HALVING_FACTOR', '0.5')
+)
+# Atlas storage capacity at level 0 (no investment).  Higher levels add +1
+# per level via ``map_pending_capacity_for_atlas_level``.
+KINGDOM_ATLAS_DEFAULT_CAPACITY = int(
+    os.getenv('KINGDOM_ATLAS_DEFAULT_CAPACITY', '1')
+)
+
 
 def _nice_number(value: float):
     """Return an int for whole-number floats, otherwise a rounded float."""
@@ -79,6 +94,9 @@ def booster_production_interval_hours(item_key: str, level: int):
     elif item_key == 'side_booster':
         base = KINGDOM_SIDE_BOOSTER_PRODUCTION_BASE_HOURS
         factor = KINGDOM_SIDE_BOOSTER_PRODUCTION_HALVING_FACTOR
+    elif item_key == 'map':
+        base = KINGDOM_MAP_PRODUCTION_BASE_HOURS
+        factor = KINGDOM_MAP_PRODUCTION_HALVING_FACTOR
     else:
         return 0
     return _nice_number(max(0.0, float(base) * (float(factor) ** (level - 1))))
@@ -88,6 +106,27 @@ def booster_production_effect_values(item_key: str, max_level: int = 5) -> Tuple
     """Return interval-hour effect values for booster-production skill levels."""
     return tuple(
         booster_production_interval_hours(item_key, level)
+        for level in range(1, int(max_level) + 1)
+    )
+
+
+def map_pending_capacity_for_atlas_level(level: int) -> int:
+    """Per-kingdom pending-maps capacity at the given ``atlas`` skill level.
+
+    Level 0 returns ``KINGDOM_ATLAS_DEFAULT_CAPACITY`` (1 by default), and
+    every additional level adds one storage slot.
+    """
+    try:
+        level = max(0, int(level or 0))
+    except (TypeError, ValueError):
+        level = 0
+    return int(KINGDOM_ATLAS_DEFAULT_CAPACITY) + level
+
+
+def atlas_capacity_effect_values(max_level: int = 5) -> Tuple[int, ...]:
+    """Effect values (capacity) for the atlas skill at levels 1..max_level."""
+    return tuple(
+        map_pending_capacity_for_atlas_level(level)
         for level in range(1, int(max_level) + 1)
     )
 
@@ -115,6 +154,8 @@ class KingdomSkillDef:
         * shield_cost_reduction: fractional shield-cost discount (0.05 = -5%)
         * core_protection: number of lands shielded at threshold
         * *_booster_production: production interval in hours
+        * map_production: production interval in hours
+        * atlas: per-kingdom pending-maps capacity
     icon_path
         Client-side asset key (rendered via ``KINGDOM_SKILL_ICON_PATHS`` on
         the client).  Stored here for completeness/server payloads.
@@ -188,6 +229,31 @@ KINGDOM_SKILL_DEFINITIONS: Tuple[KingdomSkillDef, ...] = (
         cost_multiplier=1,
         effect_values=booster_production_effect_values('side_booster', 5),
         icon_path='img/kingdom/skill_icons/side_booster_production.png',
+    ),
+    KingdomSkillDef(
+        key='map_production',
+        name='Map Production',
+        description=(
+            'Produces one map on a timer. Each level halves the production '
+            'time. Maps can be spent to bypass the conquer cooldown. '
+            'Storage capacity is set by the Atlas skill.'
+        ),
+        max_level=5,
+        cost_multiplier=1,
+        effect_values=booster_production_effect_values('map', 5),
+        icon_path='img/kingdom/skill_icons/map_production.png',
+    ),
+    KingdomSkillDef(
+        key='atlas',
+        name='Atlas',
+        description=(
+            'Increases the maximum number of pending maps this kingdom can '
+            'hold before production stops.'
+        ),
+        max_level=5,
+        cost_multiplier=1,
+        effect_values=atlas_capacity_effect_values(5),
+        icon_path='img/kingdom/skill_icons/atlas.png',
     ),
     KingdomSkillDef(
         key='shield_cost_reduction',

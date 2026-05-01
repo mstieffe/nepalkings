@@ -83,6 +83,7 @@ def get_cards():
         'cards': cards,
         'booster_packs': user.booster_packs,
         'booster_packs_side': user.booster_packs_side,
+        'maps': int(user.maps or 0),
         'gold': user.gold,
     })
 

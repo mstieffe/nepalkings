@@ -82,6 +82,11 @@ def _booster_production_config_payload():
             'halving_factor': config.KINGDOM_SIDE_BOOSTER_PRODUCTION_HALVING_FACTOR,
             'capacity': config.KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY,
         },
+        'map': {
+            'base_hours': config.KINGDOM_MAP_PRODUCTION_BASE_HOURS,
+            'halving_factor': config.KINGDOM_MAP_PRODUCTION_HALVING_FACTOR,
+            'default_capacity': config.KINGDOM_ATLAS_DEFAULT_CAPACITY,
+        },
     }
 
 
@@ -179,6 +184,7 @@ def collect_production_all_route():
     total_gold = 0
     total_main = 0
     total_side = 0
+    total_maps = 0
     cap_total = 0
     for k in KingdomModel.query.filter_by(owner_user_id=user.id).all():
         result = collect_kingdom_production(k, user, now=now)
@@ -186,9 +192,11 @@ def collect_production_all_route():
         collected_gold = int(result.get('collected_gold', result.get('collected') or 0) or 0)
         collected_main = int(result.get('collected_main_boosters') or 0)
         collected_side = int(result.get('collected_side_boosters') or 0)
+        collected_maps = int(result.get('collected_maps') or 0)
         total_gold += collected_gold
         total_main += collected_main
         total_side += collected_side
+        total_maps += collected_maps
         breakdown.append({
             'kingdom_id': k.id,
             'kingdom_name': k.name or f'Kingdom #{k.id}',
@@ -196,6 +204,7 @@ def collect_production_all_route():
             'collected_gold': collected_gold,
             'collected_main_boosters': collected_main,
             'collected_side_boosters': collected_side,
+            'collected_maps': collected_maps,
             'vault_cap': int(result.get('vault_cap') or 0),
             'production': result.get('production') or {},
         })
@@ -207,11 +216,13 @@ def collect_production_all_route():
         'collected_gold_total': total_gold,
         'collected_main_boosters_total': total_main,
         'collected_side_boosters_total': total_side,
+        'collected_maps_total': total_maps,
         'vault_cap_total': cap_total,
         'gold': int(user.gold or 0),
         'total_gold': int(user.gold or 0),
         'booster_packs': int(user.booster_packs or 0),
         'booster_packs_side': int(user.booster_packs_side or 0),
+        'maps': int(user.maps or 0),
         'kingdoms': breakdown,
         'kingdom': summarize_user_kingdom(user.id, None),
     })
@@ -594,6 +605,9 @@ def kingdom_config_skill_upgrade(kingdom_id):
     elif old_level <= 0 and skill_key == 'side_booster_production':
         kingdom_row.pending_side_boosters = 0
         kingdom_row.last_side_booster_collection_at = now
+    elif old_level <= 0 and skill_key == 'map_production':
+        kingdom_row.pending_maps = 0
+        kingdom_row.last_maps_collection_at = now
     kingdom_row.updated_at = now
     db.session.commit()
 
@@ -4227,12 +4241,40 @@ def conquer_start_battle():
 
     # Cooldown check
     effective_conquer_cooldown = conquer_cooldown_seconds_for_target(user.id, land)
+    use_map = bool((data or {}).get('use_map'))
+    cooldown_remaining = 0
     if user.last_conquer_at:
         elapsed = (_utcnow() - user.last_conquer_at).total_seconds()
         if elapsed < effective_conquer_cooldown:
-            remaining = int(effective_conquer_cooldown - elapsed)
-            return jsonify({'success': False,
-                            'message': f'Conquer on cooldown. {remaining}s remaining.'}), 400
+            cooldown_remaining = int(effective_conquer_cooldown - elapsed)
+
+    if cooldown_remaining > 0:
+        if not use_map:
+            return jsonify({
+                'success': False,
+                'message': f'Conquer on cooldown. {cooldown_remaining}s remaining.',
+                'code': 'cooldown',
+                'cooldown_remaining': cooldown_remaining,
+                'maps_available': int(user.maps or 0),
+            }), 400
+        if int(user.maps or 0) <= 0:
+            return jsonify({
+                'success': False,
+                'message': 'No maps available to bypass the cooldown.',
+                'code': 'no_maps',
+                'cooldown_remaining': cooldown_remaining,
+                'maps_available': 0,
+            }), 400
+        # Map will be consumed at the very end (after all other checks pass),
+        # so a failed start_battle never burns a map.
+    elif use_map:
+        return jsonify({
+            'success': False,
+            'message': 'Cooldown is not active; no map needed.',
+            'code': 'no_cooldown',
+            'cooldown_remaining': 0,
+            'maps_available': int(user.maps or 0),
+        }), 400
 
     # Load attacker's conquer config
     atk_cfg = LandConfig.query.filter_by(
@@ -4506,18 +4548,27 @@ def conquer_start_battle():
         game.defending_figure_id_2 = None
 
     # Set cooldown
-    user.last_conquer_at = _utcnow()
+    map_consumed = False
+    if cooldown_remaining > 0 and use_map:
+        # All pre-battle validation has passed; safe to consume the map now.
+        user.maps = max(0, int(user.maps or 0) - 1)
+        user.last_conquer_at = None
+        map_consumed = True
+    else:
+        user.last_conquer_at = _utcnow()
 
     db.session.commit()
 
     logger.info(f"[CONQUER] Battle started: game={game.id} land={land_id} "
                 f"attacker={user.username} defender={defender_user.username} "
-                f"ai_land={is_ai_land}")
+                f"ai_land={is_ai_land} map_consumed={map_consumed}")
 
     return jsonify({
         'success': True,
         'game_id': game.id,
         'game': game.serialize(),
+        'map_consumed': map_consumed,
+        'maps': int(user.maps or 0),
     })
 
 

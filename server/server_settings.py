@@ -123,11 +123,26 @@ STARTER_BOOSTER_PACKS_SIDE = 2              # Free side-card packs on registrati
 BOOSTER_PACK_PRICE = 100                    # Gold cost per main pack
 BOOSTER_PACK_SIDE_PRICE = 100               # Gold cost per side pack
 BOOSTER_PACK_CARDS = 3                      # Cards drawn per pack (both types)
-DUEL_WINNER_BOOSTER_PACKS = 2              # Packs awarded to duel winner
-DUEL_LOSER_BOOSTER_PACKS = 1              # Packs awarded to duel loser
-DUEL_BOOSTER_REWARD_PROBABILITIES = {       # Probability of reward type per pack
+DUEL_WINNER_BOOSTER_PACKS = 2              # [DEPRECATED] Legacy: see DUEL_WINNER_REWARD_DRAWS
+DUEL_LOSER_BOOSTER_PACKS = 1               # [DEPRECATED] Legacy: see DUEL_LOSER_REWARD_DRAWS
+DUEL_BOOSTER_REWARD_PROBABILITIES = {       # [DEPRECATED] superseded by DUEL_REWARD_POOL_PROBABILITIES
     'main': 0.60,
     'side': 0.40,
+}
+
+# ── Maps ──
+STARTER_MAPS = 0                            # Free maps on registration
+
+# ── Duel rewards (pool-based) ──
+# Each duel awards N independent draws from a shared reward pool.
+DUEL_WINNER_REWARD_DRAWS = 3
+DUEL_LOSER_REWARD_DRAWS = 1
+DUEL_REWARD_GOLD_AMOUNT = 25                # Gold awarded per 'gold' draw
+DUEL_REWARD_POOL_PROBABILITIES = {          # Must sum to 1.0
+    'main_booster': 0.30,
+    'side_booster': 0.30,
+    'map':          0.15,
+    'gold':         0.25,
 }
 
 BOOSTER_TIER_PROBABILITIES = {              # Probability of drawing each tier (main)
@@ -457,10 +472,15 @@ from kingdom_progression import (  # noqa: F401  (public re-export)
     KINGDOM_SIDE_BOOSTER_PRODUCTION_BASE_HOURS,
     KINGDOM_SIDE_BOOSTER_PRODUCTION_HALVING_FACTOR,
     KINGDOM_SIDE_BOOSTER_PRODUCTION_CAPACITY,
+    KINGDOM_MAP_PRODUCTION_BASE_HOURS,
+    KINGDOM_MAP_PRODUCTION_HALVING_FACTOR,
+    KINGDOM_ATLAS_DEFAULT_CAPACITY,
     KingdomSkillDef,
     KINGDOM_SKILL_DEFINITIONS,
     booster_production_interval_hours,
     booster_production_effect_values,
+    map_pending_capacity_for_atlas_level,
+    atlas_capacity_effect_values,
     skill_definition,
     skill_keys,
     skill_cost_to_buy_level,

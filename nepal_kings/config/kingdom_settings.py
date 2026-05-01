@@ -398,6 +398,8 @@ KINGDOM_SKILL_ICON_PATHS = {
     'gold_vault': 'img/kingdom/skill_icons/gold_vault.png',
     'main_booster_production': 'img/kingdom/skill_icons/main_booster_production.png',
     'side_booster_production': 'img/kingdom/skill_icons/side_booster_production.png',
+    'map_production': 'img/kingdom/skill_icons/map_production.png',
+    'atlas': 'img/kingdom/skill_icons/atlas.png',
     'shield_cost_reduction': 'img/kingdom/skill_icons/shield.png',
     'core_protection': 'img/kingdom/skill_icons/core_protection.png',
 }
