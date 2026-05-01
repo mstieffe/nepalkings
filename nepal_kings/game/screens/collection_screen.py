@@ -811,6 +811,14 @@ class CollectionScreen(MenuScreenMixin, Screen):
         section = _card_pack_type(rank)
         tier_label = _tier_label(rank, section)
 
+        # Card category — distinguishes key/number/side cards for the player.
+        if rank in settings.NUMBER_CARDS:
+            category_label = 'Number Card'
+        elif rank in settings.RANKS_SIDE_CARDS:
+            category_label = 'Side Card'
+        else:
+            category_label = 'Key Card'
+
         try:
             uses = get_card_uses(suit, rank)
         except Exception as e:  # pragma: no cover - defensive
@@ -837,7 +845,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         ]
 
         card_img = self._card_imgs.get((suit, rank))
-        msg = (f'{suit} {rank}  ·  {tier_label}\n'
+        msg = (f'{suit} {rank}  ·  {category_label}  ·  {tier_label}\n'
                f'Owned: {qty}  ·  Free: {free}  ·  Locked: {locked}  ·  Sell: {unit_price}g')
         self._profile_dialogue = DialogueBox(
             self.window, msg, actions=['close'],
@@ -926,9 +934,13 @@ class CollectionScreen(MenuScreenMixin, Screen):
         target = self._trade_target_suit
         ratio = self._convert_ratio_for(suit, target) or 0
         consumed = ratio * self._trade_qty
+        # Reserve vertical space for the two control rows (target + qty) and
+        # their labels with trailing blank lines so the overlay never
+        # collides with the visible after-text.
         return (f'Target: {target} {rank}  ·  Ratio: {ratio}:1\n'
                 f'Producing {self._trade_qty} {target} card(s)  ·  '
-                f'Consuming {consumed} {suit} card(s).\n\n\n')
+                f'Consuming {consumed} {suit} card(s).\n'
+                + '\n' * 7)
 
     def _update_trade_after_text(self):
         if not self._trade_dialogue:
@@ -954,10 +966,14 @@ class CollectionScreen(MenuScreenMixin, Screen):
         gap = settings.COLLECTION_TRADE_TARGET_GAP
         total_w = btn_w * len(targets) + gap * (len(targets) - 1)
         x = dlg.rect.centerx - total_w // 2
-        # Sit above the qty row (which sits above the action buttons)
+        # Stack target row above qty row with enough gap to fit the 'Output
+        # Qty' label between them.
         qty_btn_h = settings.COLLECTION_SELL_QTY_BTN_H
+        # Target row sits qty_btn_h + qty-label gap (~0.022*SH) + intra-row
+        # gap (~0.012*SH) + target_btn_h + bottom margin (~0.010*SH) above
+        # the dialog's action-button area.
         y = (dlg.rect.bottom - dlg.button_height - qty_btn_h
-             - btn_h - int(0.022 * _SH))
+             - int(0.034 * _SH) - btn_h)
         rects = {}
         for i, t in enumerate(targets):
             rects[t] = pygame.Rect(x + i * (btn_w + gap), y, btn_w, btn_h)
@@ -986,6 +1002,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if not self._trade_card or not self._trade_dialogue:
             return
         dlg = self._trade_dialogue
+        s_suit, s_rank = self._trade_card
 
         # Target suit selector
         target_rects = self._layout_trade_target_rects()
@@ -995,12 +1012,14 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'Target Suit', True, settings.COLLECTION_STATS_TEXT_CLR)
             first = next(iter(target_rects.values()))
             self.window.blit(label, label.get_rect(
-                center=(dlg.rect.centerx, first.top - int(0.010 * _SH))))
+                center=(dlg.rect.centerx, first.top - int(0.012 * _SH))))
             for suit, rect in target_rects.items():
-                ratio = self._convert_ratio_for(self._trade_card[0], suit) or 0
+                ratio = self._convert_ratio_for(s_suit, suit) or 0
+                affordable = self._compute_trade_max(s_suit, s_rank, suit) >= 1
                 self._draw_trade_target_button(
                     rect, suit, ratio,
-                    selected=(suit == self._trade_target_suit))
+                    selected=(suit == self._trade_target_suit),
+                    enabled=affordable)
 
         # Qty selector
         qty_rects = self._layout_trade_qty_rects()
@@ -1008,7 +1027,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         qty_label = self._stats_font.render(
             'Output Qty', True, settings.COLLECTION_STATS_TEXT_CLR)
         self.window.blit(qty_label, qty_label.get_rect(
-            center=(dlg.rect.centerx, qty_rects['qty'].top - int(0.010 * _SH))))
+            center=(dlg.rect.centerx, qty_rects['qty'].top - int(0.012 * _SH))))
         self._draw_sell_control_button(qty_rects['minus'], '−', self._trade_qty > 1)
         self._draw_sell_control_button(qty_rects['plus'], '+',
                                        self._trade_qty < self._trade_max)
@@ -1025,13 +1044,17 @@ class CollectionScreen(MenuScreenMixin, Screen):
             str(self._trade_qty), True, settings.COLLECTION_STATS_VALUE_CLR)
         self.window.blit(qty_text, qty_text.get_rect(center=qty_rects['qty'].center))
 
-    def _draw_trade_target_button(self, rect, suit, ratio, selected):
+    def _draw_trade_target_button(self, rect, suit, ratio, selected, enabled=True):
         mouse_pos = pygame.mouse.get_pos()
-        hovered = rect.collidepoint(mouse_pos)
+        hovered = rect.collidepoint(mouse_pos) and enabled
         is_red = suit in settings.COLLECTION_RED_SUITS
         accent = (settings.COLLECTION_TRADE_RED_CLR if is_red
                   else settings.COLLECTION_TRADE_BLACK_CLR)
-        if selected:
+        if not enabled:
+            bg = (28, 28, 32, 180)
+            border = (80, 75, 65, 160)
+            txt_clr = (110, 105, 95)
+        elif selected:
             bg = (75, 60, 25, 235)
             border = (250, 221, 0)
             txt_clr = (255, 245, 200)
@@ -1063,18 +1086,26 @@ class CollectionScreen(MenuScreenMixin, Screen):
         """Return True if the click hit a trade-overlay control."""
         if not self._trade_card or not self._trade_dialogue:
             return False
+        s_suit, s_rank = self._trade_card
         # Target buttons
         for suit, rect in (self._trade_target_rects or {}).items():
             if rect.collidepoint(pos):
+                cap = self._compute_trade_max(s_suit, s_rank, suit)
+                if cap < 1:
+                    # Unaffordable target — surface a clear notification
+                    # instead of silently selecting an invalid suit.
+                    ratio = self._convert_ratio_for(s_suit, suit) or 0
+                    free = max(0, self._cards.get((s_suit, s_rank), 0)
+                                - self._locked.get((s_suit, s_rank), 0))
+                    self.state.set_msg(
+                        f'Need {ratio} free {s_suit} {s_rank} for one '
+                        f'{suit} (have {free}).')
+                    return True
                 if suit != self._trade_target_suit:
                     self._trade_target_suit = suit
-                    s_suit, s_rank = self._trade_card
-                    self._trade_max = self._compute_trade_max(s_suit, s_rank, suit)
+                    self._trade_max = cap
                     if self._trade_qty > self._trade_max:
                         self._trade_qty = max(1, self._trade_max)
-                    if self._trade_max < 1:
-                        # Display message but keep dialogue open so user can try other suit
-                        self._trade_qty = 1
                     self._update_trade_after_text()
                 return True
         # Qty buttons

@@ -34,7 +34,11 @@ def _build_index():
     fm = FigureManager()
     seen_fig = set()
     for fig in fm.figures:
-        cards = list(getattr(fig, 'cards_including_upgrade', None) or fig.cards)
+        # Use only the cards required to *build* the figure (key + number).
+        # ``cards_including_upgrade`` would also pull in the upgrade card,
+        # which causes false positives like Q showing up under Small Rice
+        # Farm — Q is the upgrade-to-Large cost, not a Small-Farm card.
+        cards = list(fig.cards)
         for c in cards:
             key = (c.suit, c.rank)
             ident = (key, fig.name)
@@ -54,7 +58,9 @@ def _build_index():
             if ident in seen_sp:
                 continue
             seen_sp.add(ident)
-            icon = getattr(sp, 'icon_img', None)
+            # Spell instances don't carry icon_img directly — only the family
+            # surface is loaded in SpellManager.
+            icon = getattr(getattr(sp, 'family', None), 'icon_img', None)
             index['spells'][key].append((sp.name, icon))
 
     # ── Battle moves (rank only) ────────────────────────────────────
