@@ -225,7 +225,7 @@ class TestPreludeSpellToggle:
 
 class TestConquerConfirmData:
 
-    def test_battle_confirmation_separates_consumed_and_locked_cards(self):
+    def test_battle_confirmation_lists_all_committed_cards_as_loot_risk(self):
         from game.screens.conquer_screen import ConquerScreen
         import pygame
         state = _make_state()
@@ -257,16 +257,13 @@ class TestConquerConfirmData:
             msg, image_groups, after_msg = screen._build_confirm_data()
 
         assert 'starting this conquer battle' in msg
-        assert [group['key'] for group in image_groups] == ['consumed', 'locked']
-        consumed, locked = image_groups
-        assert consumed['icon'] == 'remove'
-        assert consumed['badge_icon'] == 'remove'
-        assert len(consumed['items']) == 3
-        assert locked['icon'] == 'lock'
-        assert locked['badge_icon'] == 'lock'
-        assert len(locked['items']) == 1
-        assert 'exactly one committed figure key card is looted/lost' in locked['description']
-        assert 'exactly one committed figure key card is looted/lost' in after_msg
+        assert [group['key'] for group in image_groups] == ['loot_risk']
+        group = image_groups[0]
+        assert group['icon'] == 'lock'
+        assert group['badge_icon'] == 'lock'
+        assert len(group['items']) == 4
+        assert 'defending kingdom may loot cards' in group['description']
+        assert 'No conquer cards are consumed automatically' in after_msg
 
 
 class TestConquerScreenLayout:

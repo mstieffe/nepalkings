@@ -19,6 +19,7 @@ def test_kingdom_skill_icon_defaults_exist():
         'atlas',
         'shield_cost_reduction',
         'core_protection',
+        'loot_chance',
     }
     missing = [path for path in settings.KINGDOM_SKILL_ICON_PATHS.values()
                if not (client_root / path).is_file()]

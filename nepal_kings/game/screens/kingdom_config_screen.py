@@ -38,6 +38,8 @@ HANDLED_KINGDOM_CONFIG_ACTIONS = frozenset({
     'upgrade_skill',
     'collect_kingdom_gold',
     'collect_kingdom_production',
+    'collect_loot',
+    'acknowledge_loot',
 })
 
 
@@ -357,6 +359,72 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._draw_production_item_row(item, cell)
             x += cell_w + col_gap
 
+    def _draw_loot_inbox_panel(self, rect):
+        """Loot Inbox card: pending gained cards and unseen lost cards."""
+        self._draw_panel(rect, 'Loot Inbox')
+        inbox = (self._kingdom or {}).get('loot_inbox') or {}
+        gained = inbox.get('gained') or []
+        lost = inbox.get('lost') or []
+        gained_count = int(inbox.get('gained_card_count') or 0)
+        lost_count = int(inbox.get('lost_card_count') or 0)
+
+        btn_w = 96
+        btn_h = 26
+        top_btn_y = rect.y + 10
+        collect_rect = pygame.Rect(rect.right - btn_w * 2 - 22, top_btn_y, btn_w, btn_h)
+        noticed_rect = pygame.Rect(rect.right - btn_w - 14, top_btn_y, btn_w, btn_h)
+        self._draw_button(collect_rect, 'Collect', 'collect_loot', None,
+                          disabled=gained_count <= 0)
+        self._draw_button(noticed_rect, 'Noticed', 'acknowledge_loot', None,
+                          disabled=lost_count <= 0)
+
+        body_x = rect.x + 14
+        body_y = rect.y + 42
+        body_w = rect.w - 28
+        summary = f'Gained {gained_count} • Lost {lost_count}'
+        summary_surf = self._small_font.render(summary, True, settings.KINGDOM_CONFIG_TEXT_CLR)
+        self.window.blit(summary_surf, (body_x, body_y))
+
+        def card_label(card):
+            if not isinstance(card, dict):
+                return None
+            rank = card.get('rank')
+            suit = card.get('suit')
+            source = card.get('source')
+            if not rank or not suit:
+                return None
+            label = f'{rank} of {suit}'
+            if source:
+                label += f' ({str(source).replace("_", " ")})'
+            return label
+
+        def event_labels(events, prefix):
+            labels = []
+            for event in events:
+                for card in (event.get('cards') or []):
+                    label = card_label(card)
+                    if label:
+                        labels.append(f'{prefix}: {label}')
+            return labels
+
+        labels = event_labels(gained, 'Gain') + event_labels(lost, 'Lost')
+        if not labels:
+            labels = ['No pending loot. Won loot waits here until collected.']
+        max_rows = max(1, (rect.bottom - body_y - summary_surf.get_height() - 8) //
+                       max(1, self._tiny_font.get_height() + 2))
+        y = body_y + summary_surf.get_height() + 6
+        for index, label in enumerate(labels[:max_rows]):
+            color = settings.KINGDOM_CONFIG_GOOD_CLR if label.startswith('Gain') else settings.KINGDOM_CONFIG_DIM_CLR
+            if label.startswith('Lost'):
+                color = settings.KINGDOM_CONFIG_BAD_CLR
+            if index == max_rows - 1 and len(labels) > max_rows:
+                label = f'... and {len(labels) - max_rows + 1} more'
+                color = settings.KINGDOM_CONFIG_DIM_CLR
+            surf = self._tiny_font.render(
+                self._fit_text(label, self._tiny_font, body_w), True, color)
+            self.window.blit(surf, (body_x, y))
+            y += self._tiny_font.get_height() + 2
+
     def _fetch_config(self):
         self._loading = True
         land_id = getattr(self.state, 'kingdom_config_land_id', None)
@@ -588,6 +656,24 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         """Backward-compatible handler name used by existing button tests."""
         self._collect_kingdom_production()
 
+    def _collect_loot(self):
+        data = self._post_action('loot/collect', {})
+        if data:
+            count = int(data.get('collected_count') or 0)
+            if count:
+                self._set_msg(f'Collected {count} looted card{"s" if count != 1 else ""}')
+            else:
+                self._set_msg('No pending loot to collect')
+
+    def _acknowledge_loot(self):
+        data = self._post_action('loot/acknowledge', {})
+        if data:
+            count = int(data.get('acknowledged_count') or 0)
+            if count:
+                self._set_msg('Loot losses noticed')
+            else:
+                self._set_msg('No lost loot notices pending')
+
     def _spawn_collect_floater(self, amount, pos, *, delay_ms=0):
         font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
         self._floating_text.add(FloatingText(
@@ -691,6 +777,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     self._upgrade_skill(value)
                 elif action in ('collect_kingdom_gold', 'collect_kingdom_production'):
                     self._collect_kingdom_production()
+                elif action == 'collect_loot':
+                    self._collect_loot()
+                elif action == 'acknowledge_loot':
+                    self._acknowledge_loot()
                 return
 
     def _handle_rename_event(self, event):
@@ -1506,9 +1596,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         content_h = max(1, content_bottom - content_top)
         shield_h = min(settings.KINGDOM_CONFIG_SHIELD_H, max(92, int(content_h * 0.24)))
         card_h = max(82, (content_h - shield_h - gap * 3) // 3)
-        # Right column splits into a Kingdom Production card on top and the
+        # Right column splits into Kingdom Production, Loot Inbox, and the
         # Skills/Level panel below.
         vault_h = max(140, int(content_h * 0.22))
+        loot_h = max(128, int(content_h * 0.18))
         # Header pill spans the content row, leaving clearance for the X.
         header_right = _BOX_X + _BOX_W - _BOX_PAD - xsz - xmargin
         header_rect = pygame.Rect(content_x, header_y,
@@ -1526,6 +1617,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             'shield_h': shield_h,
             'card_h': card_h,
             'vault_h': vault_h,
+            'loot_h': loot_h,
             'header': header_rect,
         }
 
@@ -1637,7 +1729,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         gap_v = layout['gap']
         vault_rect = pygame.Rect(right_x, right_top, right_w, vault_h)
         self._draw_vault_panel(vault_rect)
-        skills_y = vault_rect.bottom + gap_v
+        loot_y = vault_rect.bottom + gap_v
+        loot_rect = pygame.Rect(right_x, loot_y, right_w, layout['loot_h'])
+        self._draw_loot_inbox_panel(loot_rect)
+        skills_y = loot_rect.bottom + gap_v
         skills_h = max(120, right_bottom - skills_y)
         self._draw_skills_panel(pygame.Rect(right_x, skills_y, right_w, skills_h))
 

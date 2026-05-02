@@ -628,11 +628,12 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 title = f'{attacker} conquered your land'
                 deleted = item.get('kingdom_deleted_name')
                 detail = (f'{deleted} had no lands left and was dissolved.' if deleted
-                          else self._card_pair_detail(
-                              item, 'card_won_suit', 'card_won_rank', 'Key card lost')
+                          else (self._loot_detail(item, 'Loot lost')
                           or self._card_pair_detail(
-                              item, 'card_lost_suit', 'card_lost_rank', 'Key card lost')
-                          or 'Land ownership changed.')
+                              item, 'card_won_suit', 'card_won_rank', 'Loot lost')
+                          or self._card_pair_detail(
+                              item, 'card_lost_suit', 'card_lost_rank', 'Loot lost')
+                          or 'Land ownership changed.'))
                 return title, detail, False
             if is_attacker_perspective:
                 title = f'You conquered {defender}'
@@ -645,10 +646,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if is_defender_perspective:
                 title = f'{attacker} failed to conquer you'
                 detail = (
-                    self._card_pair_detail(
-                        item, 'card_lost_suit', 'card_lost_rank', 'Key card won')
+                    self._loot_detail(item, 'Loot gained')
                     or self._card_pair_detail(
-                        item, 'card_won_suit', 'card_won_rank', 'Key card won')
+                        item, 'card_lost_suit', 'card_lost_rank', 'Loot gained')
+                    or self._card_pair_detail(
+                        item, 'card_won_suit', 'card_won_rank', 'Loot gained')
                     or 'Your defence held.'
                 )
                 return title, detail, True
@@ -744,10 +746,27 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     def _card_detail(self, item, won=False, lost=False):
         if won:
-            return self._card_pair_detail(item, 'card_won_suit', 'card_won_rank', 'Key card won')
+            return self._loot_detail(item, 'Loot gained') or self._card_pair_detail(
+                item, 'card_won_suit', 'card_won_rank', 'Loot gained')
         if lost:
-            return self._card_pair_detail(item, 'card_lost_suit', 'card_lost_rank', 'Key card lost')
+            return self._loot_detail(item, 'Loot lost') or self._card_pair_detail(
+                item, 'card_lost_suit', 'card_lost_rank', 'Loot lost')
         return ''
+
+    def _loot_detail(self, item, label):
+        cards = item.get('loot_cards') or []
+        count = int(item.get('loot_card_count') or len(cards or []))
+        if not count:
+            return ''
+        first = cards[0] if cards else {}
+        first_label = ''
+        if isinstance(first, dict) and first.get('rank') and first.get('suit'):
+            first_label = f" ({first.get('rank')} of {first.get('suit')}"
+            if count > 1:
+                first_label += f' + {count - 1} more'
+            first_label += ')'
+        noun = 'card' if count == 1 else 'cards'
+        return f'{label}: {count} {noun}{first_label}'
 
     def _card_pair_detail(self, item, suit_key, rank_key, label):
         suit = item.get(suit_key)

@@ -7,7 +7,8 @@ from datetime import datetime, timezone, timedelta
 
 from models import (db, User, Land, LandConfig, LandConfigFigure,
                     LandConfigBattleMove, CollectionCard, Game, Player,
-                    Figure, BattleMove, MainCard, LandAttackLog, ActiveSpell)
+                    Figure, BattleMove, MainCard, LandAttackLog, ActiveSpell,
+                    KingdomLootEvent)
 from kingdom_service import seed_kingdom_map
 import server_settings as config
 
@@ -2194,8 +2195,8 @@ class TestAITemplateCardRewards:
         db.session.commit()
         return result, user, land, game, cfg
 
-    def test_attacker_wins_ai_land_gets_card(self, app, db):
-        """Attacker beating an AI land receives a card from the template."""
+    def test_attacker_wins_ai_land_gets_pending_loot(self, app, db):
+        """Attacker beating an AI land receives pending template loot."""
         with app.app_context():
             result, user, land, game, cfg = self._start_battle_and_resolve(
                 app, db, attacker_wins=True)
@@ -2209,18 +2210,25 @@ class TestAITemplateCardRewards:
             assert log.card_won_suit is not None
             assert log.card_won_rank is not None
 
-            # A CollectionCard was created for the attacker
-            from models import CollectionCard
-            new_cards = CollectionCard.query.filter_by(
-                user_id=user.id, locked=False
-            ).all()
-            rewarded = [c for c in new_cards
-                        if c.suit == log.card_won_suit
-                        and c.rank == log.card_won_rank]
-            assert len(rewarded) >= 1
+            # Loot is pending until the player collects it from the inbox.
+            assert CollectionCard.query.filter_by(
+                user_id=user.id,
+                suit=log.card_won_suit,
+                rank=log.card_won_rank,
+                locked=False,
+            ).first() is None
+            event = KingdomLootEvent.query.filter_by(
+                user_id=user.id,
+                direction='gained',
+                collected=False,
+            ).first()
+            assert event is not None
+            assert any(c.get('suit') == log.card_won_suit and
+                       c.get('rank') == log.card_won_rank
+                       for c in (event.cards or []))
 
-    def test_attacker_wins_ai_land_rewards_only_template_key_cards(self, app, db, monkeypatch):
-        """AI/template loot rewards are selected only from figure key cards."""
+    def test_attacker_wins_ai_land_rewards_key_and_support_template_cards(self, app, db, monkeypatch):
+        """AI/template loot rewards include tier quota key and support cards."""
         with app.app_context():
             import importlib
             from routes.games import _resolve_conquer_battle
@@ -2254,7 +2262,10 @@ class TestAITemplateCardRewards:
                 choices = list(options)
                 seen_choices.append(choices)
                 assert choices
-                assert all(card.get('role') == 'key' for card in choices)
+                if len(seen_choices) == 1:
+                    assert all(card.get('role') == 'key' for card in choices)
+                else:
+                    assert all(card.get('role') != 'key' for card in choices)
                 return choices[0]
 
             monkeypatch.setattr(random_module, 'choice', choose_first)
@@ -2264,14 +2275,19 @@ class TestAITemplateCardRewards:
 
             assert result['conquer_result'] == 'attacker_won'
             assert seen_choices
+            assert len(seen_choices) >= 2
             assert result['card_won_suit'] == 'Hearts'
             assert result['card_won_rank'] == 'J'
             assert CollectionCard.query.filter_by(
                 user_id=user.id, suit='Hearts', rank='J', locked=False,
-            ).first() is not None
-            assert CollectionCard.query.filter_by(
-                user_id=user.id, suit='Hearts', rank='8', locked=False,
             ).first() is None
+            event = KingdomLootEvent.query.filter_by(
+                user_id=user.id, direction='gained', collected=False,
+            ).first()
+            assert event is not None
+            pairs = {(c.get('suit'), c.get('rank')) for c in event.cards or []}
+            assert ('Hearts', 'J') in pairs
+            assert ('Hearts', '8') in pairs
 
     def test_attacker_wins_ai_land_transfers_ownership(self, app, db):
         """Attacker winning transfers land ownership."""
@@ -2350,8 +2366,8 @@ class TestAITemplateCardRewards:
             db.session.refresh(land)
             assert land.owner_user_id is None
 
-    def test_player_defender_win_reports_loot_and_consumed_cards(self, app, db):
-        """Defender win payload includes looted and consumed card lists."""
+    def test_player_defender_win_reports_loot_and_returns_unlooted_cards(self, app, db):
+        """Defender win payload includes looted cards and consumes none."""
         with app.app_context():
             from routes.games import _resolve_conquer_battle
 
@@ -2394,22 +2410,30 @@ class TestAITemplateCardRewards:
 
             loot_cards = result.get('loot_lost_cards') or []
             consumed_cards = result.get('consumed_cards') or []
-            assert len(loot_cards) == 1
-            assert len(consumed_cards) >= 1
-            assert result.get('cards_spent') == (len(loot_cards) + len(consumed_cards))
+            assert len(loot_cards) == 3
+            assert consumed_cards == []
+            assert result.get('cards_spent') == len(loot_cards)
 
             loot_pair = (loot_cards[0].get('suit'), loot_cards[0].get('rank'))
-            consumed_pairs = {(c.get('suit'), c.get('rank')) for c in consumed_cards}
             assert loot_pair == ('Diamonds', 'J')
-            assert loot_pair not in consumed_pairs
-            assert ('Diamonds', 'Q') in consumed_pairs
-            assert db.session.get(CollectionCard, prelude_card_id) is None
+            loot_pairs = {(c.get('suit'), c.get('rank')) for c in loot_cards}
+            prelude_after = db.session.get(CollectionCard, prelude_card_id)
+            if ('Diamonds', 'Q') in loot_pairs:
+                assert prelude_after is None
+            else:
+                assert prelude_after is not None
+                assert prelude_after.locked is False
 
             defender_cards = CollectionCard.query.filter_by(user_id=defender.id, locked=False).all()
-            assert any((c.suit, c.rank) == loot_pair for c in defender_cards)
+            assert not any((c.suit, c.rank) == loot_pair for c in defender_cards)
+            event = KingdomLootEvent.query.filter_by(
+                user_id=defender.id, direction='gained', collected=False,
+            ).first()
+            assert event is not None
+            assert len(event.cards or []) == len(loot_cards)
 
-    def test_attacker_win_consumes_old_defence_battle_and_spell_cards(self, app, db):
-        """Defence battle/spell cards are consumed only when the land falls."""
+    def test_attacker_win_loots_from_old_defence_and_returns_the_rest(self, app, db):
+        """Only selected defence cards are lost when the land falls."""
         with app.app_context():
             from routes.games import _resolve_conquer_battle
 
@@ -2449,12 +2473,27 @@ class TestAITemplateCardRewards:
 
             assert result['conquer_result'] == 'attacker_won'
             assert (result['card_won_suit'], result['card_won_rank']) == ('Spades', 'K')
-            assert db.session.get(CollectionCard, move_card_id) is None
-            assert db.session.get(CollectionCard, counter_card_id) is None
+            loot_pairs = {(c.get('suit'), c.get('rank'))
+                          for c in (result.get('loot_gained_cards') or [])}
+            move_card_after = db.session.get(CollectionCard, move_card_id)
+            counter_after = db.session.get(CollectionCard, counter_card_id)
+            if ('Spades', '8') in loot_pairs:
+                assert move_card_after is None
+            else:
+                assert move_card_after is not None
+                assert move_card_after.locked is False
+            if ('Hearts', '3') in loot_pairs:
+                assert counter_after is None
+            else:
+                assert counter_after is not None
+                assert counter_after.locked is False
             defence_consumed = result.get('defence_consumed_cards') or []
-            consumed_pairs = {(c.get('suit'), c.get('rank')) for c in defence_consumed}
-            assert ('Spades', '8') in consumed_pairs
-            assert ('Hearts', '3') in consumed_pairs
+            assert defence_consumed == []
+            event = KingdomLootEvent.query.filter_by(
+                user_id=attacker.id, direction='gained', collected=False,
+            ).first()
+            assert event is not None
+            assert {(c.get('suit'), c.get('rank')) for c in event.cards or []} == loot_pairs
 
     def test_attacker_wins_config_converted_to_defence(self, app, db):
         """Attacker's conquer config becomes the new defence config."""
@@ -2466,3 +2505,83 @@ class TestAITemplateCardRewards:
             assert cfg.config_type == 'defence'
             db.session.refresh(land)
             assert land.defence_config_id == cfg.id
+
+
+class TestConquerLootInboxRoutes:
+    """Pending loot collection and lost-loot acknowledgement endpoints."""
+
+    def _kingdom_for_user(self, db, user):
+        from kingdom_service import reconcile_user_kingdoms
+        from models import Kingdom
+
+        _make_land(db, owner_user_id=user.id)
+        reconcile_user_kingdoms(user.id, commit=False)
+        db.session.flush()
+        return Kingdom.query.filter_by(owner_user_id=user.id).first()
+
+    def test_collect_pending_loot_creates_collection_cards(self, app, db):
+        with app.app_context():
+            user = _make_user(db, username='loot_collect')
+            kingdom = self._kingdom_for_user(db, user)
+            event = KingdomLootEvent(
+                user_id=user.id,
+                kingdom_id=kingdom.id,
+                direction='gained',
+                source='attacker_win',
+                cards=[{'suit': 'Hearts', 'rank': 'K', 'value': 13,
+                        'role': 'key', 'source': 'figure', 'bucket': 'key'}],
+                collected=False,
+                seen=False,
+            )
+            db.session.add(event)
+            db.session.commit()
+
+            client = app.test_client()
+            resp = client.post(
+                f'/kingdom/config/{kingdom.id}/loot/collect',
+                json={},
+                headers=_auth_headers(app, user),
+            )
+            data = resp.get_json()
+
+            assert resp.status_code == 200
+            assert data['success'] is True
+            assert data['collected_count'] == 1
+            assert CollectionCard.query.filter_by(
+                user_id=user.id, suit='Hearts', rank='K', locked=False,
+            ).first() is not None
+            db.session.refresh(event)
+            assert event.collected is True
+            assert event.seen is True
+
+    def test_acknowledge_lost_loot_marks_event_seen(self, app, db):
+        with app.app_context():
+            user = _make_user(db, username='loot_ack')
+            kingdom = self._kingdom_for_user(db, user)
+            event = KingdomLootEvent(
+                user_id=user.id,
+                kingdom_id=kingdom.id,
+                direction='lost',
+                source='defender_win',
+                cards=[{'suit': 'Spades', 'rank': '9', 'value': 9,
+                        'role': 'battle_move', 'source': 'battle_move', 'bucket': 'support'}],
+                collected=True,
+                seen=False,
+            )
+            db.session.add(event)
+            db.session.commit()
+
+            client = app.test_client()
+            resp = client.post(
+                f'/kingdom/config/{kingdom.id}/loot/acknowledge',
+                json={},
+                headers=_auth_headers(app, user),
+            )
+            data = resp.get_json()
+
+            assert resp.status_code == 200
+            assert data['success'] is True
+            assert data['acknowledged_count'] == 1
+            assert data['loot_inbox']['lost'] == []
+            db.session.refresh(event)
+            assert event.seen is True

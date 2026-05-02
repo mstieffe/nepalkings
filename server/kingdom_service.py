@@ -6,7 +6,7 @@ import math
 import random
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import inspect, or_, text
+from sqlalchemy import inspect, text
 
 from ai.defence.generator import pick_ai_defence_seed
 import server_settings as config
@@ -1514,8 +1514,8 @@ def kingdom_by_land_for_user(user_id, land_id=None, kingdom_id=None):
 def serialize_loot_inbox(user_id, kingdom_id=None, limit=50):
     """Return pending gained loot and unseen lost-loot rows for a user.
 
-    Global rows (``kingdom_id`` is ``None``) are included with every kingdom so
-    failed-attack losses remain visible even though attacks have no origin land.
+    The inbox is user-wide rather than strictly kingdom-scoped.  That keeps
+    pending loot visible even when the source kingdom was dissolved.
     """
     if not user_id:
         return {
@@ -1525,12 +1525,6 @@ def serialize_loot_inbox(user_id, kingdom_id=None, limit=50):
             'lost_card_count': 0,
             'has_pending': False,
         }
-
-    def apply_scope(query):
-        if kingdom_id:
-            return query.filter(or_(KingdomLootEvent.kingdom_id == kingdom_id,
-                                    KingdomLootEvent.kingdom_id.is_(None)))
-        return query
 
     gained_query = KingdomLootEvent.query.filter_by(
         user_id=user_id,
@@ -1542,10 +1536,10 @@ def serialize_loot_inbox(user_id, kingdom_id=None, limit=50):
         direction='lost',
         seen=False,
     )
-    gained = apply_scope(gained_query).order_by(
+    gained = gained_query.order_by(
         KingdomLootEvent.created_at.desc(), KingdomLootEvent.id.desc()
     ).limit(limit).all()
-    lost = apply_scope(lost_query).order_by(
+    lost = lost_query.order_by(
         KingdomLootEvent.created_at.desc(), KingdomLootEvent.id.desc()
     ).limit(limit).all()
     gained_cards = sum(len(event.cards or []) for event in gained)

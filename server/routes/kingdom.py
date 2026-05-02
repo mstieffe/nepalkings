@@ -455,8 +455,7 @@ def kingdom_config_loot_collect(kingdom_id):
         user_id=g.user_id,
         direction='gained',
         collected=False,
-    ).filter((KingdomLootEvent.kingdom_id == kingdom_id) |
-             (KingdomLootEvent.kingdom_id.is_(None)))
+    )
     if event_ids:
         query = query.filter(KingdomLootEvent.id.in_(event_ids))
     events = query.order_by(KingdomLootEvent.created_at.asc(),
@@ -514,8 +513,7 @@ def kingdom_config_loot_acknowledge(kingdom_id):
         user_id=g.user_id,
         direction='lost',
         seen=False,
-    ).filter((KingdomLootEvent.kingdom_id == kingdom_id) |
-             (KingdomLootEvent.kingdom_id.is_(None)))
+    )
     if event_ids:
         query = query.filter(KingdomLootEvent.id.in_(event_ids))
     events = query.all()

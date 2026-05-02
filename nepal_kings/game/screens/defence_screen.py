@@ -1989,74 +1989,57 @@ class DefenceScreen(MenuScreenMixin, Screen):
         """Build confirmation data: message text, grouped cards, and after-message."""
         from game.components.cards.card_img import CardImg
 
-        locked_cards = []
-        consumed_if_lost_cards = []
+        at_risk_cards = []
 
         def add_card(target, suit, rank):
             if suit and rank:
                 ci = CardImg(self.window, suit, rank)
                 target.append(ci.front_img)
 
-        # Figures — locked (use card_details from server config)
+        # Every committed card is locked and at loot risk; conquer no longer
+        # consumes non-looted cards when a land falls.
         for fig in self._config.get('figures', []):
             for cd in fig.get('card_details', []):
-                add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
+                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Battle moves — consumed only if the active defence loses.
         for mv in self._config.get('battle_moves', []):
             if mv.get('card_id'):
-                add_card(consumed_if_lost_cards, mv.get('suit', ''), mv.get('rank', ''))
+                add_card(at_risk_cards, mv.get('suit', ''), mv.get('rank', ''))
 
-        # Modifiers / legacy spell cards — consumed only if the defence loses
         for cd in self._config.get('modifier_card_details') or []:
-            add_card(consumed_if_lost_cards, cd.get('suit', ''), cd.get('rank', ''))
+            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
         for cd in self._config.get('spell_card_details') or []:
-            add_card(consumed_if_lost_cards, cd.get('suit', ''), cd.get('rank', ''))
+            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Prelude spell — consumed only if the active defence loses.
         prelude_details = self._config.get('prelude_spell_card_details') or []
         if prelude_details:
             for cd in prelude_details:
-                add_card(consumed_if_lost_cards, cd.get('suit', ''), cd.get('rank', ''))
+                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Counter spell — consumed only if the active defence loses.
         counter_details = self._config.get('counter_spell_card_details') or []
         if counter_details:
             for cd in counter_details:
-                add_card(consumed_if_lost_cards, cd.get('suit', ''), cd.get('rank', ''))
+                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
 
         image_groups = []
-        if consumed_if_lost_cards:
+        if at_risk_cards:
             image_groups.append({
-                'key': 'consumed_if_lost',
-                'title': 'Consumed if land falls',
-                'description': 'These battle and spell cards are reserved while this defence is active, and consumed only if the land is conquered.',
-                'icon': 'remove',
-                'badge_icon': 'remove',
-                'items': consumed_if_lost_cards,
-            })
-        if locked_cards:
-            image_groups.append({
-                'key': 'locked',
-                'title': 'Locked figure cards',
-                'description': 'These figure cards are committed to the defence and cannot be used elsewhere. They may be looted if the land is conquered.',
+                'key': 'loot_risk',
+                'title': 'Locked and at loot risk',
+                'description': 'All committed defence cards stay locked while the land is yours. If the land falls, the attacker may loot cards based on land tier; every unlooted card returns.',
                 'icon': 'lock',
                 'badge_icon': 'lock',
-                'items': locked_cards,
+                'items': at_risk_cards,
             })
 
-        msg = 'Review the card costs before saving this defence.'
+        msg = 'Review the locked cards and loot risk before saving this defence.'
         if not image_groups:
             msg = 'No cards are used in this configuration.'
 
         after_msg_parts = []
-        if locked_cards:
+        if at_risk_cards:
             after_msg_parts.append(
-                'Locked figure cards may be taken as loot if this defence loses.'
-            )
-        if consumed_if_lost_cards or locked_cards:
-            after_msg_parts.append(
-                'Cards you remove from this defence return to your collection while the land is still yours.'
+                'No defence cards are consumed automatically. If this defence loses, only cards selected as loot are lost; all others return.'
             )
         after_msg = ' '.join(after_msg_parts) if after_msg_parts else None
 

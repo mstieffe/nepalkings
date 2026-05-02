@@ -2015,7 +2015,7 @@ class BattleScreen(SubScreen):
 
     def _show_draw_result(self, result):
         """Display draw dialogue — the defender gets to choose.
-        In conquer mode, land ownership is unchanged but one-shot cards are spent."""
+        In conquer mode, land ownership is unchanged and attack cards return."""
         is_conquer = getattr(self.game, 'mode', 'duel') == 'conquer'
 
         # Conquer mode: show result and return to kingdom. Support fallback
@@ -2247,13 +2247,53 @@ class BattleScreen(SubScreen):
         is_attacker = self.game and self.game.invader
         images = []
 
+        def _card_line(card):
+            if not isinstance(card, dict):
+                return None
+            rank = card.get('rank')
+            suit = card.get('suit')
+            if rank and suit:
+                return f"{rank} of {suit}"
+            if rank:
+                return str(rank)
+            if suit:
+                return str(suit)
+            return None
+
+        def _card_lines(cards, max_lines=10):
+            lines = []
+            for card in cards or []:
+                label = _card_line(card)
+                if label:
+                    lines.append(label)
+            if len(lines) <= max_lines:
+                return lines
+            overflow = len(lines) - max_lines
+            clipped = lines[:max_lines]
+            clipped.append(f"... and {overflow} more")
+            return clipped
+
+        def _append_card_images(cards):
+            for card in (cards or [])[:4]:
+                if not isinstance(card, dict):
+                    continue
+                suit = card.get('suit')
+                rank = card.get('rank')
+                if suit and rank:
+                    images.append(CardImg(self.window, suit, rank).front_img)
+
+        def _append_loot_section(message, title, cards):
+            lines = _card_lines(cards)
+            if lines:
+                message += f"\n\n{title}\n" + "\n".join(f"• {line}" for line in lines)
+            return message
+
         if conquer_result == 'draw':
             title = "Draw!"
             icon = 'draw'
             message = (
                 "The battle ended in a draw.\n\n"
-                "The land remains unchanged, but battle moves and one-shot spell cards were spent. "
-                "Figure cards return to your collection."
+                "The land remains unchanged. No cards were looted; all attack cards returned to your collection."
             )
         elif attacker_won and is_attacker:
             # Attacker won — we are the attacker
@@ -2265,129 +2305,52 @@ class BattleScreen(SubScreen):
             message = "You have conquered {}!".format(land_label)
             if gold_rate:
                 message += "\n\nGold production increased by {:.1f} gold/hour.".format(gold_rate)
-            # Use the card the player actually picked in the card picker
-            picked = getattr(self, '_picked_card_data', None)
-            card_suit = picked.get('suit') if picked else result.get('card_won_suit')
-            card_rank = picked.get('rank') if picked else result.get('card_won_rank')
-            if card_suit and card_rank:
-                message += "\n\nKey card won:"
-                card_img = CardImg(self.window, card_suit, card_rank)
-                images.append(card_img.front_img)
+            loot_gained = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []
+            if loot_gained:
+                message = _append_loot_section(
+                    message,
+                    "Loot gained (pending collection):",
+                    loot_gained,
+                )
+                message += "\n\nCollect looted cards from the Loot Inbox in your kingdom configuration."
+                _append_card_images(loot_gained)
         elif attacker_won and not is_attacker:
             # Attacker won — we are the defender
             title = "Land Lost!"
             icon = 'defeat'
             message = "The attacker has conquered your land."
-            card_suit = result.get('card_lost_suit')
-            card_rank = result.get('card_lost_rank')
-            if card_suit and card_rank:
-                message += "\n\nKey card lost as loot:"
-                card_img = CardImg(self.window, card_suit, card_rank)
-                images.append(card_img.front_img)
-
-            defence_consumed = result.get('defence_consumed_cards') or []
-
-            def _card_line_def(card):
-                if not isinstance(card, dict):
-                    return None
-                rank = card.get('rank')
-                suit = card.get('suit')
-                if rank and suit:
-                    return f"{rank} of {suit}"
-                if rank:
-                    return str(rank)
-                if suit:
-                    return str(suit)
-                return None
-
-            consumed_lines = []
-            for card in defence_consumed:
-                label = _card_line_def(card)
-                if label:
-                    consumed_lines.append(label)
-            if len(consumed_lines) > 10:
-                overflow = len(consumed_lines) - 10
-                consumed_lines = consumed_lines[:10]
-                consumed_lines.append(f"... and {overflow} more")
-
-            if consumed_lines:
-                message += "\n\nDefence cards consumed:\n" + "\n".join(
-                    f"• {line}" for line in consumed_lines
-                )
+            loot_lost = result.get('loot_lost_cards') or result.get('loot_gained_cards') or []
+            if loot_lost:
+                message = _append_loot_section(message, "Loot lost:", loot_lost)
+                _append_card_images(loot_lost)
+            message += "\n\nEvery unlooted defence card returned to your collection."
         elif not attacker_won and is_attacker:
             # Defender won — we are the attacker (we lost)
             title = "Attack Failed"
             icon = 'defeat'
-            cards_spent = int(result.get('cards_spent', 0) or 0)
             is_ai_defender = bool(result.get('is_ai_defender'))
             loot_lost_cards = result.get('loot_lost_cards') or []
-            consumed_cards = result.get('consumed_cards') or []
-
-            def _card_line(card):
-                if not isinstance(card, dict):
-                    return None
-                rank = card.get('rank')
-                suit = card.get('suit')
-                if rank and suit:
-                    return f"{rank} of {suit}"
-                if rank:
-                    return str(rank)
-                if suit:
-                    return str(suit)
-                return None
-
-            def _card_lines(cards, max_lines=10):
-                lines = []
-                for card in cards:
-                    label = _card_line(card)
-                    if label:
-                        lines.append(label)
-                if len(lines) <= max_lines:
-                    return lines
-                overflow = len(lines) - max_lines
-                clipped = lines[:max_lines]
-                clipped.append(f"... and {overflow} more")
-                return clipped
 
             message = "The defender held their ground.\n\nYou did not conquer this land."
-            card_suit = result.get('card_lost_suit')
-            card_rank = result.get('card_lost_rank')
-            if (not card_suit or not card_rank) and loot_lost_cards:
-                first_loot = loot_lost_cards[0]
-                card_suit = first_loot.get('suit')
-                card_rank = first_loot.get('rank')
-
-            loot_lines = _card_lines(loot_lost_cards)
-            consumed_lines = _card_lines(consumed_cards)
-
-            if card_suit and card_rank:
-                message += "\n\nKey card lost:"
-                card_img = CardImg(self.window, card_suit, card_rank)
-                images.append(card_img.front_img)
-
-            if loot_lines:
-                loot_title = "Key card destroyed by AI defence:" if is_ai_defender else "Key card looted by defending kingdom:"
-                message += f"\n\n{loot_title}\n" + "\n".join(
-                    f"• {line}" for line in loot_lines
-                )
-
-            if consumed_lines:
-                message += "\n\nConsumed cards:\n" + "\n".join(
-                    f"• {line}" for line in consumed_lines
-                )
-            elif cards_spent:
-                message += "\n\nAll {} cards spent on this attack have been consumed.".format(cards_spent)
+            if loot_lost_cards:
+                loot_title = "Cards destroyed by AI defence:" if is_ai_defender else "Cards looted by defending kingdom:"
+                message = _append_loot_section(message, loot_title, loot_lost_cards)
+                _append_card_images(loot_lost_cards)
+            message += "\n\nEvery unlooted attack card returned to your collection."
         else:
             # Defender won — we are the defender
             title = "Defence Successful!"
             icon = 'victory'
             message = "You defended your land successfully!"
-            card_suit = result.get('card_won_suit')
-            card_rank = result.get('card_won_rank')
-            if card_suit and card_rank:
-                message += "\n\nKey card won:"
-                card_img = CardImg(self.window, card_suit, card_rank)
-                images.append(card_img.front_img)
+            loot_gained = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []
+            if loot_gained:
+                message = _append_loot_section(
+                    message,
+                    "Loot gained (pending collection):",
+                    loot_gained,
+                )
+                message += "\n\nCollect looted cards from the Loot Inbox in your kingdom configuration."
+                _append_card_images(loot_gained)
 
         # Mark game as over so the game_screen routes back to kingdom
         if self.game:

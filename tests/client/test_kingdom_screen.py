@@ -177,12 +177,12 @@ class TestKingdomActivityPanel:
 
         title, detail, good = KingdomScreen._format_activity_item(screen, own_win)
         assert title == 'You conquered rival'
-        assert detail == 'Key card won: A of Spades'
+        assert detail == 'Loot gained: A of Spades'
         assert good is True
 
         title, detail, good = KingdomScreen._format_activity_item(screen, defence_win)
         assert title == 'rival failed to conquer you'
-        assert detail == 'Key card won: K of Hearts'
+        assert detail == 'Loot gained: K of Hearts'
         assert good is True
 
     def test_alert_formatting_uses_server_role_not_list_membership(self):
@@ -215,7 +215,7 @@ class TestKingdomActivityPanel:
 
         title, detail, good = KingdomScreen._format_activity_item(screen, incoming_loss)
         assert title == 'rival conquered your land'
-        assert detail == 'Key card lost: Q of Clubs'
+        assert detail == 'Loot lost: Q of Clubs'
         assert good is False
 
     def test_visible_notifications_excludes_seen_rows(self):

@@ -321,9 +321,10 @@ class TestBattleScreenConquerFlow:
 
         msg = captured.get('message', '')
         assert 'land remains unchanged' in msg
-        assert 'battle moves and one-shot spell cards were spent' in msg
+        assert 'No cards were looted' in msg
+        assert 'all attack cards returned' in msg
 
-    def test_conquer_attacker_loss_dialogue_lists_looted_and_consumed_cards(self, monkeypatch):
+    def test_conquer_attacker_loss_dialogue_lists_looted_and_returned_cards(self, monkeypatch):
         BattleScreen = _battle_screen_class()
         screen = BattleScreen.__new__(BattleScreen)
 
@@ -347,19 +348,13 @@ class TestBattleScreenConquerFlow:
             'loot_lost_cards': [
                 {'suit': 'Hearts', 'rank': 'K'},
             ],
-            'consumed_cards': [
-                {'suit': 'Clubs', 'rank': '7'},
-                {'suit': 'Spades', 'rank': '10'},
-            ],
-            'cards_spent': 3,
         })
 
         msg = captured.get('message', '')
-        assert 'Key card looted by defending kingdom:' in msg
+        assert 'Cards looted by defending kingdom:' in msg
         assert 'K of Hearts' in msg
-        assert 'Consumed cards:' in msg
-        assert '7 of Clubs' in msg
-        assert '10 of Spades' in msg
+        assert 'Every unlooted attack card returned' in msg
+        assert 'Consumed cards:' not in msg
 
     def test_conquer_attacker_loss_dialogue_uses_ai_defence_wording(self, monkeypatch):
         BattleScreen = _battle_screen_class()
@@ -389,10 +384,10 @@ class TestBattleScreenConquerFlow:
         })
 
         msg = captured.get('message', '')
-        assert 'Key card destroyed by AI defence:' in msg
-        assert 'Key card looted by defending kingdom:' not in msg
+        assert 'Cards destroyed by AI defence:' in msg
+        assert 'Cards looted by defending kingdom:' not in msg
 
-    def test_conquer_defender_loss_dialogue_lists_consumed_defence_cards(self, monkeypatch):
+    def test_conquer_defender_loss_dialogue_lists_lost_loot_and_returned_cards(self, monkeypatch):
         BattleScreen = _battle_screen_class()
         screen = BattleScreen.__new__(BattleScreen)
 
@@ -413,19 +408,17 @@ class TestBattleScreenConquerFlow:
         BattleScreen._handle_conquer_end(screen, {
             'conquer_result': 'attacker_won',
             'attacker_won': True,
-            'card_lost_suit': 'Hearts',
-            'card_lost_rank': 'K',
-            'defence_consumed_cards': [
+            'loot_lost_cards': [
                 {'suit': 'Spades', 'rank': '8'},
                 {'suit': 'Hearts', 'rank': '3'},
             ],
         })
 
         msg = captured.get('message', '')
-        assert 'Key card lost as loot:' in msg
-        assert 'Defence cards consumed:' in msg
+        assert 'Loot lost:' in msg
         assert '8 of Spades' in msg
         assert '3 of Hearts' in msg
+        assert 'Every unlooted defence card returned' in msg
 
     def test_try_resolve_server_finished_battle_handles_finished_conquer_draw(self):
         BattleScreen = _battle_screen_class()

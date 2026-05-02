@@ -160,8 +160,8 @@ class TestResolveConquerIdempotency:
             assert payload['card_lost_rank'] == 'K'
             assert payload['loot_lost_cards'] == [{'suit': 'Hearts', 'rank': 'K'}]
 
-    def test_finished_draw_payload_uses_cached_consumed_cards(self, app, db):
-        """Cached draw results report spent attack cards and ignore land logs."""
+    def test_finished_draw_payload_uses_cached_returned_cards(self, app, db):
+        """Cached draw results report no spent attack cards and ignore land logs."""
         from routes.games import _serialize_finished_conquer_result
         with app.app_context():
             attacker = _make_user(db, username='att_cached_draw')
@@ -179,9 +179,10 @@ class TestResolveConquerIdempotency:
                 'conquer_resolved': True,
                 'conquer_result': 'draw',
                 'attacker_won': False,
-                'conquer_consumed_cards': [{'suit': 'Clubs', 'rank': '9'}],
+                'conquer_consumed_cards': [],
+                'conquer_loot_gained_cards': [],
                 'conquer_loot_lost_cards': [],
-                'cards_spent': 1,
+                'cards_spent': 0,
             }
             db.session.add(LandAttackLog(
                 land_id=land.id,
@@ -196,8 +197,9 @@ class TestResolveConquerIdempotency:
             payload = _serialize_finished_conquer_result(game)
 
             assert payload['conquer_result'] == 'draw'
-            assert payload['consumed_cards'] == [{'suit': 'Clubs', 'rank': '9'}]
-            assert payload['cards_spent'] == 1
+            assert payload['consumed_cards'] == []
+            assert payload['loot_gained_cards'] == []
+            assert payload['cards_spent'] == 0
             assert payload.get('card_won_suit') is None
             assert payload.get('card_won_rank') is None
 
@@ -227,9 +229,9 @@ class TestConquerLootNotifications:
             ).all()
             assert notes == []
 
-            # Suit/rank match the loot row in the payload.
+            # The first suit/rank pair in the attack log matches the loot payload.
             loot = (result.get('loot_lost_cards') or [])
-            assert len(loot) == 1
+            assert len(loot) == 3
             log = LandAttackLog.query.filter_by(
                 land_id=land.id, attacker_user_id=attacker.id,
             ).first()
@@ -245,7 +247,7 @@ class TestConquerLootNotifications:
             rows = data.get('notifications') or []
             assert len(rows) == 1
             assert rows[0]['source'] == 'attack_log'
-            assert rows[0]['activity_detail'] == f"Key card lost: {loot[0]['rank']} of {loot[0]['suit']}"
+            assert rows[0]['activity_detail'].startswith('Loot lost: 3 cards')
 
     def test_attacker_win_emits_no_card_looted(self, app, db):
         """No card_looted notification when the attacker wins."""

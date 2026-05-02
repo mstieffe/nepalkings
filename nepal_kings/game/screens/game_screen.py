@@ -3172,6 +3172,7 @@ class GameScreen(Screen):
             'card_won_rank': last.get('card_won_rank'),
             'card_lost_suit': last.get('card_lost_suit'),
             'card_lost_rank': last.get('card_lost_rank'),
+            'loot_gained_cards': last.get('conquer_loot_gained_cards') or last.get('loot_gained_cards') or [],
             'loot_lost_cards': last.get('conquer_loot_lost_cards') or last.get('loot_lost_cards') or [],
             'consumed_cards': last.get('conquer_consumed_cards') or last.get('consumed_cards') or [],
             'defence_consumed_cards': last.get('defence_consumed_cards') or [],
@@ -3207,8 +3208,7 @@ class GameScreen(Screen):
             icon = 'draw'
             message = (
                 'The battle ended in a draw.\n\n'
-                'The land remains unchanged, but battle moves and one-shot spell cards were spent. '
-                'Figure cards return to your collection.'
+                'The land remains unchanged. No cards were looted; all attack cards returned to your collection.'
             )
         elif attacker_won and is_attacker:
             land_tier = result.get('land_tier') or getattr(game, 'land_tier', None)
@@ -3219,50 +3219,40 @@ class GameScreen(Screen):
             message = f'You have conquered {land_label}!'
             if gold_rate:
                 message += f'\n\nGold production increased by {gold_rate:.1f} gold/hour.'
-            card_suit = result.get('card_won_suit')
-            card_rank = result.get('card_won_rank')
-            if card_suit and card_rank:
-                message += f'\n\nKey card won: {card_rank} of {card_suit}'
+            loot_lines = self._card_lines(result.get('loot_gained_cards') or result.get('loot_lost_cards'))
+            if loot_lines:
+                message += '\n\nLoot gained (pending collection):\n' + '\n'.join(
+                    f'• {line}' for line in loot_lines)
+                message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
         elif attacker_won and not is_attacker:
             title = 'Land Lost!'
             icon = 'defeat'
             message = 'The attacker has conquered your land.'
-            card_suit = result.get('card_lost_suit')
-            card_rank = result.get('card_lost_rank')
-            if card_suit and card_rank:
-                message += f'\n\nKey card lost as loot: {card_rank} of {card_suit}'
-            defence_lines = self._card_lines(result.get('defence_consumed_cards'))
-            if defence_lines:
-                message += '\n\nDefence cards consumed:\n' + '\n'.join(
-                    f'• {line}' for line in defence_lines)
+            loot_lines = self._card_lines(result.get('loot_lost_cards') or result.get('loot_gained_cards'))
+            if loot_lines:
+                message += '\n\nLoot lost:\n' + '\n'.join(
+                    f'• {line}' for line in loot_lines)
+            message += '\n\nEvery unlooted defence card returned to your collection.'
         elif not attacker_won and is_attacker:
             title = 'Attack Failed'
             icon = 'defeat'
             message = 'The defender held their ground.\n\nYou did not conquer this land.'
-            card_suit = result.get('card_lost_suit')
-            card_rank = result.get('card_lost_rank')
             loot_lines = self._card_lines(result.get('loot_lost_cards'))
-            consumed_lines = self._card_lines(result.get('consumed_cards'))
             is_ai_defender = bool(result.get('is_ai_defender'))
-            if card_suit and card_rank:
-                message += f'\n\nKey card lost: {card_rank} of {card_suit}'
             if loot_lines:
-                loot_title = 'Key card destroyed by AI defence:' if is_ai_defender else 'Key card looted by defending kingdom:'
+                loot_title = 'Cards destroyed by AI defence:' if is_ai_defender else 'Cards looted by defending kingdom:'
                 message += f'\n\n{loot_title}\n' + '\n'.join(
                     f'• {line}' for line in loot_lines)
-            if consumed_lines:
-                message += '\n\nConsumed cards:\n' + '\n'.join(
-                    f'• {line}' for line in consumed_lines)
-            elif result.get('cards_spent'):
-                message += f"\n\nAll {int(result.get('cards_spent') or 0)} cards spent on this attack have been consumed."
+            message += '\n\nEvery unlooted attack card returned to your collection.'
         else:
             title = 'Defence Successful!'
             icon = 'victory'
             message = 'You defended your land successfully!'
-            card_suit = result.get('card_won_suit')
-            card_rank = result.get('card_won_rank')
-            if card_suit and card_rank:
-                message += f'\n\nCard won: {card_rank} of {card_suit}'
+            loot_lines = self._card_lines(result.get('loot_gained_cards') or result.get('loot_lost_cards'))
+            if loot_lines:
+                message += '\n\nLoot gained (pending collection):\n' + '\n'.join(
+                    f'• {line}' for line in loot_lines)
+                message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
 
         if reason_text:
             message = f'{reason_text}\n\n{message}'
@@ -3305,13 +3295,12 @@ class GameScreen(Screen):
             winner_pid = game_over_info.get('winner_player_id')
             is_attacker = self.state.game.invader
             if winner_pid is None:
-                # Draw — land ownership unchanged, but one-shot attack cards were spent.
+                # Draw — land ownership unchanged and attack cards returned.
                 title = "Draw!"
                 icon = 'draw'
                 message = (
                     "The battle ended in a draw.\n\n"
-                    "The land remains unchanged, but battle moves and one-shot spell cards were spent. "
-                    "Figure cards return to your collection."
+                    "The land remains unchanged. No cards were looted; all attack cards returned to your collection."
                 )
             elif is_winner and is_attacker:
                 land_tier = self.state.game.land_tier

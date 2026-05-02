@@ -782,6 +782,37 @@ def _award_booster_packs(user, total_packs):
     return awarded
 
 
+def _award_duel_rewards(user, total_draws):
+    """Award v2 duel reward-pool draws to *user*.
+
+    Returns ``{'main_booster': N, 'side_booster': N, 'map': N, 'gold': amount}``.
+    Gold is returned as the awarded amount, not the number of gold draws.
+    """
+    rewards = {'main_booster': 0, 'side_booster': 0, 'map': 0, 'gold': 0}
+    if not user or total_draws <= 0:
+        return rewards
+
+    probs = settings.DUEL_REWARD_POOL_PROBABILITIES
+    types = list(probs.keys())
+    weights = [probs[t] for t in types]
+    for _ in range(int(total_draws)):
+        chosen = random.choices(types, weights=weights, k=1)[0]
+        if chosen == 'main_booster':
+            rewards['main_booster'] += 1
+            user.booster_packs += 1
+        elif chosen == 'side_booster':
+            rewards['side_booster'] += 1
+            user.booster_packs_side += 1
+        elif chosen == 'map':
+            rewards['map'] += 1
+            user.maps += 1
+        elif chosen == 'gold':
+            amount = int(settings.DUEL_REWARD_GOLD_AMOUNT or 0)
+            rewards['gold'] += amount
+            user.gold += amount
+    return rewards
+
+
 def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_name=None):
     """Finalize a game-over: mark finished, award gold, create GameResult.
 
@@ -809,9 +840,19 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         # Loser already "bet" their stake when the game started — no further deduction
         pass
 
-    # ── Booster pack rewards ────────────────────────────────────────
-    winner_boosters = _award_booster_packs(winner_user, settings.DUEL_WINNER_BOOSTER_PACKS)
-    loser_boosters = _award_booster_packs(loser_user, settings.DUEL_LOSER_BOOSTER_PACKS)
+    # ── Duel reward-pool draws ──────────────────────────────────────
+    winner_rewards = _award_duel_rewards(winner_user, settings.DUEL_WINNER_REWARD_DRAWS)
+    loser_rewards = _award_duel_rewards(loser_user, settings.DUEL_LOSER_REWARD_DRAWS)
+    # Legacy payload shape preserved for older clients that only display
+    # booster pack rewards.
+    winner_boosters = {
+        'main': int(winner_rewards.get('main_booster') or 0),
+        'side': int(winner_rewards.get('side_booster') or 0),
+    }
+    loser_boosters = {
+        'main': int(loser_rewards.get('main_booster') or 0),
+        'side': int(loser_rewards.get('side_booster') or 0),
+    }
 
     winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
     loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
@@ -887,6 +928,8 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         'stake': stake,
         'rounds_played': game.current_round,
         'stats': game_stats,
+        'winner_rewards': winner_rewards,
+        'loser_rewards': loser_rewards,
         'winner_boosters': winner_boosters,
         'loser_boosters': loser_boosters,
     }
@@ -5221,6 +5264,8 @@ def _conquer_loot_base_quota(land_tier):
 
 
 def _loot_role_bucket(role):
+    if hasattr(role, 'value'):
+        role = role.value
     return 'key' if str(role or '').lower() == 'key' else 'support'
 
 
@@ -5249,7 +5294,7 @@ def _normalise_loot_card(card, *, source, role=None, card_id=None):
         'suit': suit,
         'rank': rank,
         'value': int(value or 0),
-        'role': str(card_role or source or 'card'),
+        'role': str(getattr(card_role, 'value', card_role) or source or 'card'),
         'source': source,
         'bucket': _loot_role_bucket(card_role),
     }
@@ -5683,7 +5728,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             try:
                 from kingdom_service import kingdom_skill_level
                 level = kingdom_skill_level(lost_kingdom_id, 'loot_chance')
-                extra_chance = config.skill_effect_at_level('loot_chance', level)
+                extra_chance = settings.skill_effect_at_level('loot_chance', level)
             except Exception as _loot_skill_err:
                 logger.warning('Failed to resolve defensive loot skill: %s', _loot_skill_err)
         if game.conquer_config_id:
