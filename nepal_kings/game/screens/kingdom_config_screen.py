@@ -1134,6 +1134,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         elif key == 'core_protection':
             current_text = f'protect {int(current)} land' + ('s' if int(current) != 1 else '')
             next_text = f'protect {int(next_value)} land' + ('s' if int(next_value) != 1 else '')
+        elif key == 'loot_chance':
+            current_text = f'{int(round(float(current) * 100))}% extra loot'
+            next_text = f'{int(round(float(next_value) * 100))}% extra loot'
         else:
             current_text = f'+{current}'
             next_text = f'+{next_value}'

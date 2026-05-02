@@ -100,7 +100,7 @@ _RIGHT_SECTION_INFO = {
         'title': 'Prelude Spell',
         'message': (
             'Prelude spells are optional effects that trigger before the conquer battle starts. '
-            'They can draw cards, weaken the defender, or change battle restrictions, and their card cost is consumed when battle begins.'
+            'They can draw cards, weaken the defender, or change battle restrictions. Their card cost is locked while committed and can be looted if the attack fails.'
         ),
     },
 }
@@ -1602,67 +1602,54 @@ class ConquerScreen(MenuScreenMixin, Screen):
         """Build confirmation data: message text, grouped cards, and after-message."""
         from game.components.cards.card_img import CardImg
 
-        locked_cards = []
-        consumed_cards = []
+        at_risk_cards = []
 
         def add_card(target, suit, rank):
             if suit and rank:
                 ci = CardImg(self.window, suit, rank)
                 target.append(ci.front_img)
 
-        # Figures — locked (use card_details from server config)
+        # Every committed card is locked and at loot risk; none are consumed
+        # automatically in conquer mode.
         for fig in self._config.get('figures', []):
             for cd in fig.get('card_details', []):
-                add_card(locked_cards, cd.get('suit', ''), cd.get('rank', ''))
+                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Battle moves — spent on this conquer attempt.
         for mv in self._config.get('battle_moves', []):
             if mv.get('card_id'):
-                add_card(consumed_cards, mv.get('suit', ''), mv.get('rank', ''))
+                add_card(at_risk_cards, mv.get('suit', ''), mv.get('rank', ''))
 
-        # Modifiers / spell cards — spent on this conquer attempt.
         for cd in self._config.get('modifier_card_details') or []:
-            add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
+            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
         for cd in self._config.get('spell_card_details') or []:
-            add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
+            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Prelude spell — consumed
         prelude_details = self._config.get('prelude_spell_card_details') or []
         if prelude_details:
             for cd in prelude_details:
-                add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
+                add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
 
-        # Counter spell — included for consistency if conquer configs ever carry one.
         for cd in self._config.get('counter_spell_card_details') or []:
-            add_card(consumed_cards, cd.get('suit', ''), cd.get('rank', ''))
+            add_card(at_risk_cards, cd.get('suit', ''), cd.get('rank', ''))
 
         image_groups = []
-        if consumed_cards:
+        if at_risk_cards:
             image_groups.append({
-                'key': 'consumed',
-                'title': 'Consumed when battle starts',
-                'description': 'These battle and spell cards are consumed when the conquer battle begins, win or lose.',
-                'icon': 'remove',
-                'badge_icon': 'remove',
-                'items': consumed_cards,
-            })
-        if locked_cards:
-            image_groups.append({
-                'key': 'locked',
-                'title': 'Locked figure cards',
-                'description': 'These figure cards are committed to the attack and cannot be used elsewhere. If you lose, one key card may be looted/lost and the remaining committed figure cards are consumed.',
+                'key': 'loot_risk',
+                'title': 'Locked and at loot risk',
+                'description': 'All committed cards stay locked during the attack. If you lose, the defending kingdom may loot cards based on the land tier and its loot skill; every unlooted card returns.',
                 'icon': 'lock',
                 'badge_icon': 'lock',
-                'items': locked_cards,
+                'items': at_risk_cards,
             })
 
-        msg = 'Review the card costs before starting this conquer battle.'
+        msg = 'Review the locked cards and loot risk before starting this conquer battle.'
         if not image_groups:
             msg = 'No cards are used in this configuration.'
 
         after_msg = None
-        if locked_cards:
-            after_msg = 'If you lose, one locked key card may be looted/lost and all other committed attack figure cards are consumed.'
+        if at_risk_cards:
+            after_msg = 'No conquer cards are consumed automatically. A failed attack only loses cards that are selected as loot; all other committed cards return.'
 
         return msg, image_groups, after_msg
 

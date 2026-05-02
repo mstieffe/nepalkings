@@ -402,6 +402,7 @@ KINGDOM_SKILL_ICON_PATHS = {
     'atlas': 'img/kingdom/skill_icons/atlas.png',
     'shield_cost_reduction': 'img/kingdom/skill_icons/shield.png',
     'core_protection': 'img/kingdom/skill_icons/core_protection.png',
+    'loot_chance': 'img/kingdom/skill_icons/loot_chance.png',
 }
 
 # ── Kingdom level / XP / vault UI constants ───────────────────────

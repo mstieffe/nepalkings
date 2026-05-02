@@ -3222,7 +3222,7 @@ class GameScreen(Screen):
             card_suit = result.get('card_won_suit')
             card_rank = result.get('card_won_rank')
             if card_suit and card_rank:
-                message += f'\n\nCard won: {card_rank} of {card_suit}'
+                message += f'\n\nKey card won: {card_rank} of {card_suit}'
         elif attacker_won and not is_attacker:
             title = 'Land Lost!'
             icon = 'defeat'
@@ -3230,7 +3230,7 @@ class GameScreen(Screen):
             card_suit = result.get('card_lost_suit')
             card_rank = result.get('card_lost_rank')
             if card_suit and card_rank:
-                message += f'\n\nCard lost as loot: {card_rank} of {card_suit}'
+                message += f'\n\nKey card lost as loot: {card_rank} of {card_suit}'
             defence_lines = self._card_lines(result.get('defence_consumed_cards'))
             if defence_lines:
                 message += '\n\nDefence cards consumed:\n' + '\n'.join(
@@ -3247,7 +3247,7 @@ class GameScreen(Screen):
             if card_suit and card_rank:
                 message += f'\n\nKey card lost: {card_rank} of {card_suit}'
             if loot_lines:
-                loot_title = 'Card lost to AI defence:' if is_ai_defender else 'Card looted by defending kingdom:'
+                loot_title = 'Key card destroyed by AI defence:' if is_ai_defender else 'Key card looted by defending kingdom:'
                 message += f'\n\n{loot_title}\n' + '\n'.join(
                     f'• {line}' for line in loot_lines)
             if consumed_lines:
@@ -3413,38 +3413,18 @@ class GameScreen(Screen):
         opp_stats = stats.get(opp_id) or stats.get(str(opp_id)) or {}
         opp_name = loser_name if is_winner else winner_name
 
-        # Reward info — prefer the new ``winner_rewards`` / ``loser_rewards``
-        # shape (main_booster / side_booster / map / gold counts) and fall
-        # back to the legacy ``winner_boosters`` / ``loser_boosters`` shape
-        # (only main / side boosters) for older servers.
-        rewards_key = 'winner_rewards' if is_winner else 'loser_rewards'
-        rewards = game_over_info.get(rewards_key)
-        if rewards:
-            gold_per = int(game_over_info.get('reward_gold_amount', 0) or 0)
-            parts = []
-            if rewards.get('main_booster', 0) > 0:
-                parts.append(f"{rewards['main_booster']} main pack")
-            if rewards.get('side_booster', 0) > 0:
-                parts.append(f"{rewards['side_booster']} side pack")
-            if rewards.get('map', 0) > 0:
-                parts.append(f"{rewards['map']} map")
-            if rewards.get('gold', 0) > 0:
-                amount = rewards['gold'] * gold_per
-                parts.append(f"{amount} gold" if amount else f"{rewards['gold']} gold draws")
-            if parts:
-                message_after += f"\nRewards: {', '.join(parts)}"
-        else:
-            boosters_key = 'winner_boosters' if is_winner else 'loser_boosters'
-            boosters = game_over_info.get(boosters_key)
-            if boosters:
-                total = boosters.get('main', 0) + boosters.get('side', 0)
-                if total > 0:
-                    parts = []
-                    if boosters.get('main', 0) > 0:
-                        parts.append(f"{boosters['main']} main")
-                    if boosters.get('side', 0) > 0:
-                        parts.append(f"{boosters['side']} side")
-                    message_after += f"\nBooster packs: {', '.join(parts)}"
+        # Booster pack reward info
+        boosters_key = 'winner_boosters' if is_winner else 'loser_boosters'
+        boosters = game_over_info.get(boosters_key)
+        if boosters:
+            total = boosters.get('main', 0) + boosters.get('side', 0)
+            if total > 0:
+                parts = []
+                if boosters.get('main', 0) > 0:
+                    parts.append(f"{boosters['main']} main")
+                if boosters.get('side', 0) > 0:
+                    parts.append(f"{boosters['side']} side")
+                message_after += f"\nBooster packs: {', '.join(parts)}"
 
         if my_stats or opp_stats:
             stats_lines = [f"\nRounds played: {rounds_played}"]

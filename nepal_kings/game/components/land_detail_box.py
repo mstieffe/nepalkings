@@ -192,6 +192,25 @@ class LandDetailBox:
         land_cooldown = max(0, self._base_land_cooldown - elapsed)
         return cooldown, land_cooldown
 
+    def _line_height(self, kind):
+        """Return the vertical space reserved for a rendered detail row."""
+        body_h = self._body_font.get_height()
+        small_h = self._small_font.get_height()
+
+        if kind == 'title':
+            return self._title_font.get_height() + 4
+        if kind == 'spacer':
+            return int(body_h * 0.4)
+        if kind == 'gold':
+            return max(self._icon_sz if self._gold_icon else 0, body_h) + 2
+        if kind == 'suit':
+            return max(self._icon_sz if self._suit_icon else 0, body_h) + 2
+        if kind == 'defence_warning':
+            return max(self._icon_sz if self._broken_icon else 0, body_h) + 2
+        if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield'):
+            return small_h + 2
+        return body_h + 2
+
     def _build_layout(self):
         tile = self.tile
         cooldown, land_cooldown = self._current_cooldowns()
@@ -199,7 +218,6 @@ class LandDetailBox:
 
         pad = settings.LAND_DETAIL_PAD
         w = settings.LAND_DETAIL_W
-        line_h = self._body_font.get_height()
 
         # Pre-render text lines
         self._lines = []
@@ -251,20 +269,6 @@ class LandDetailBox:
                 ('shield',
                  f'Kingdom shield active: {_format_cooldown_text(shield_remaining)} remaining'))
 
-        # Calculate height
-        content_h = pad  # top padding
-        for kind, _ in self._lines:
-            if kind == 'title':
-                content_h += self._title_font.get_height() + 4
-            elif kind == 'spacer':
-                content_h += int(line_h * 0.4)
-            elif kind == 'defence_warning':
-                content_h += max(self._icon_sz, line_h) + 2
-            else:
-                content_h += line_h + 2
-
-        # Buttons
-        content_h += pad
         button_actions = []
         if tile.is_mine:
             button_actions.append('defence')
@@ -278,11 +282,17 @@ class LandDetailBox:
         shield_remaining = getattr(tile, 'kingdom_shield_remaining', 0) or 0
         shield_reason = getattr(tile, 'kingdom_shield_reason', None)
         core_protected = shield_reason == 'core_protection' or shield_remaining < 0
+        extra_after_conquer = 0
         if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0 or core_protected) and not tile.is_mine:
-            content_h += int(line_h * 0.8)  # cooldown sub-text
-        content_h += settings.LAND_DETAIL_BTN_H * btn_count
-        content_h += button_gap * max(0, btn_count - 1)
-        content_h += pad  # bottom padding
+            extra_after_conquer = int(self._body_font.get_height() * 0.8)
+
+        text_h = sum(self._line_height(kind) for kind, _ in self._lines)
+        button_stack_h = (
+            settings.LAND_DETAIL_BTN_H * btn_count
+            + button_gap * max(0, btn_count - 1)
+            + extra_after_conquer
+        )
+        content_h = pad + text_h + pad + button_stack_h + pad
 
         # Position box (centred on screen)
         sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
@@ -299,14 +309,8 @@ class LandDetailBox:
 
         # Create buttons
         btn_x = self._box_rect.centerx - settings.LAND_DETAIL_BTN_W // 2
-        extra_after_conquer = 0
-        shield_remaining = getattr(tile, 'kingdom_shield_remaining', 0) or 0
-        shield_reason = getattr(tile, 'kingdom_shield_reason', None)
-        core_protected = shield_reason == 'core_protection' or shield_remaining < 0
-        if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0 or core_protected) and not tile.is_mine:
-            extra_after_conquer = int(self._body_font.get_height() * 0.8)
-        button_stack_h = settings.LAND_DETAIL_BTN_H * btn_count + button_gap * max(0, btn_count - 1)
-        btn_y = self._box_rect.bottom - pad - button_stack_h - extra_after_conquer
+        self._text_bottom_y = self._box_rect.y + pad + text_h
+        btn_y = self._text_bottom_y + pad
 
         self._buttons = []
         if tile.is_mine:

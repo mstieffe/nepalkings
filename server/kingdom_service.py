@@ -6,13 +6,13 @@ import math
 import random
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, or_, text
 
 from ai.defence.generator import pick_ai_defence_seed
 import server_settings as config
 from models import (db, User, Land, Kingdom, KingdomCosmeticUnlock,
                     KingdomSkillAllocation, KingdomNotification,
-                    CollectionCard, LandConfigFigure,
+                    KingdomLootEvent, CollectionCard, LandConfigFigure,
                     LandConfig, LandConfigBattleMove)
 
 
@@ -746,6 +746,9 @@ def describe_kingdom_bonuses(bonuses):
     core = int(bonuses.get('core_protection', 0) or 0)
     if core:
         lines.append(f'Last {core} land(s) cannot be conquered')
+    loot_chance = float(bonuses.get('loot_chance', 0.0) or 0.0)
+    if loot_chance:
+        lines.append(f'+{int(round(loot_chance * 100))}% defensive loot chance')
     return lines
 
 
@@ -1508,6 +1511,54 @@ def kingdom_by_land_for_user(user_id, land_id=None, kingdom_id=None):
     return None
 
 
+def serialize_loot_inbox(user_id, kingdom_id=None, limit=50):
+    """Return pending gained loot and unseen lost-loot rows for a user.
+
+    Global rows (``kingdom_id`` is ``None``) are included with every kingdom so
+    failed-attack losses remain visible even though attacks have no origin land.
+    """
+    if not user_id:
+        return {
+            'gained': [],
+            'lost': [],
+            'gained_card_count': 0,
+            'lost_card_count': 0,
+            'has_pending': False,
+        }
+
+    def apply_scope(query):
+        if kingdom_id:
+            return query.filter(or_(KingdomLootEvent.kingdom_id == kingdom_id,
+                                    KingdomLootEvent.kingdom_id.is_(None)))
+        return query
+
+    gained_query = KingdomLootEvent.query.filter_by(
+        user_id=user_id,
+        direction='gained',
+        collected=False,
+    )
+    lost_query = KingdomLootEvent.query.filter_by(
+        user_id=user_id,
+        direction='lost',
+        seen=False,
+    )
+    gained = apply_scope(gained_query).order_by(
+        KingdomLootEvent.created_at.desc(), KingdomLootEvent.id.desc()
+    ).limit(limit).all()
+    lost = apply_scope(lost_query).order_by(
+        KingdomLootEvent.created_at.desc(), KingdomLootEvent.id.desc()
+    ).limit(limit).all()
+    gained_cards = sum(len(event.cards or []) for event in gained)
+    lost_cards = sum(len(event.cards or []) for event in lost)
+    return {
+        'gained': [event.serialize() for event in gained],
+        'lost': [event.serialize() for event in lost],
+        'gained_card_count': gained_cards,
+        'lost_card_count': lost_cards,
+        'has_pending': bool(gained or lost),
+    }
+
+
 def serialize_kingdom_config(kingdom):
     if not kingdom:
         return None
@@ -1605,6 +1656,7 @@ def serialize_kingdom_config(kingdom):
         # General kingdom production (gold + booster packs; extensible shape).
         'production': production,
         'production_items': production_items,
+        'loot_inbox': serialize_loot_inbox(kingdom.owner_user_id, kingdom.id),
         'pending_main_boosters': int(main_booster.get('pending') or 0),
         'main_booster_capacity': int(main_booster.get('capacity') or 0),
         'main_booster_full': bool(main_booster.get('full')),

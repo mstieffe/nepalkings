@@ -629,9 +629,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 deleted = item.get('kingdom_deleted_name')
                 detail = (f'{deleted} had no lands left and was dissolved.' if deleted
                           else self._card_pair_detail(
-                              item, 'card_won_suit', 'card_won_rank', 'Card lost')
+                              item, 'card_won_suit', 'card_won_rank', 'Key card lost')
                           or self._card_pair_detail(
-                              item, 'card_lost_suit', 'card_lost_rank', 'Card lost')
+                              item, 'card_lost_suit', 'card_lost_rank', 'Key card lost')
                           or 'Land ownership changed.')
                 return title, detail, False
             if is_attacker_perspective:
@@ -646,9 +646,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 title = f'{attacker} failed to conquer you'
                 detail = (
                     self._card_pair_detail(
-                        item, 'card_lost_suit', 'card_lost_rank', 'Card won')
+                        item, 'card_lost_suit', 'card_lost_rank', 'Key card won')
                     or self._card_pair_detail(
-                        item, 'card_won_suit', 'card_won_rank', 'Card won')
+                        item, 'card_won_suit', 'card_won_rank', 'Key card won')
                     or 'Your defence held.'
                 )
                 return title, detail, True
@@ -744,9 +744,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     def _card_detail(self, item, won=False, lost=False):
         if won:
-            return self._card_pair_detail(item, 'card_won_suit', 'card_won_rank', 'Card won')
+            return self._card_pair_detail(item, 'card_won_suit', 'card_won_rank', 'Key card won')
         if lost:
-            return self._card_pair_detail(item, 'card_lost_suit', 'card_lost_rank', 'Card lost')
+            return self._card_pair_detail(item, 'card_lost_suit', 'card_lost_rank', 'Key card lost')
         return ''
 
     def _card_pair_detail(self, item, suit_key, rank_key, label):

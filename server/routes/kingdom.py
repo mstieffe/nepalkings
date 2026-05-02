@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from flask import Blueprint, jsonify, request, g
 
 from models import (db, User, Land, LandAttackLog, KingdomMessage,
-                    KingdomNotification,
+                    KingdomNotification, KingdomLootEvent,
                     Kingdom as KingdomModel, KingdomCosmeticUnlock,
                     KingdomSkillAllocation,
                     CollectionCard,
@@ -436,6 +436,97 @@ def kingdom_config_detail(kingdom_id):
         'rename_price_gold': getattr(config, 'KINGDOM_RENAME_PRICE_GOLD', 0),
         'kingdom': serialize_kingdom_config(kingdom_row),
         'gold': db.session.get(User, g.user_id).gold,
+    })
+
+
+@kingdom.route('/config/<int:kingdom_id>/loot/collect', methods=['POST'])
+@require_token
+def kingdom_config_loot_collect(kingdom_id):
+    """Move pending looted cards from the inbox into the user's collection."""
+    from kingdom_service import serialize_kingdom_config, serialize_loot_inbox
+
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    if not kingdom_row:
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+
+    data = request.json or {}
+    event_ids = data.get('event_ids') or []
+    query = KingdomLootEvent.query.filter_by(
+        user_id=g.user_id,
+        direction='gained',
+        collected=False,
+    ).filter((KingdomLootEvent.kingdom_id == kingdom_id) |
+             (KingdomLootEvent.kingdom_id.is_(None)))
+    if event_ids:
+        query = query.filter(KingdomLootEvent.id.in_(event_ids))
+    events = query.order_by(KingdomLootEvent.created_at.asc(),
+                            KingdomLootEvent.id.asc()).all()
+
+    collected_cards = []
+    for event in events:
+        for card in event.cards or []:
+            suit = card.get('suit')
+            rank = card.get('rank')
+            if not suit or not rank:
+                continue
+            new_card = CollectionCard(
+                user_id=g.user_id,
+                suit=suit,
+                rank=rank,
+                value=int(card.get('value') or 0),
+                locked=False,
+            )
+            db.session.add(new_card)
+            collected_cards.append({
+                'suit': suit,
+                'rank': rank,
+                'value': int(card.get('value') or 0),
+                'role': card.get('role'),
+                'source': card.get('source'),
+                'bucket': card.get('bucket'),
+            })
+        event.collected = True
+        event.seen = True
+
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'collected_count': len(collected_cards),
+        'collected_cards': collected_cards,
+        'loot_inbox': serialize_loot_inbox(g.user_id, kingdom_id),
+        'kingdom': serialize_kingdom_config(kingdom_row),
+    })
+
+
+@kingdom.route('/config/<int:kingdom_id>/loot/acknowledge', methods=['POST'])
+@require_token
+def kingdom_config_loot_acknowledge(kingdom_id):
+    """Mark lost-loot rows as noticed in the kingdom loot inbox."""
+    from kingdom_service import serialize_kingdom_config, serialize_loot_inbox
+
+    kingdom_row = _kingdom_config_or_404(kingdom_id)
+    if not kingdom_row:
+        return jsonify({'success': False, 'message': 'Kingdom not found'}), 404
+
+    data = request.json or {}
+    event_ids = data.get('event_ids') or []
+    query = KingdomLootEvent.query.filter_by(
+        user_id=g.user_id,
+        direction='lost',
+        seen=False,
+    ).filter((KingdomLootEvent.kingdom_id == kingdom_id) |
+             (KingdomLootEvent.kingdom_id.is_(None)))
+    if event_ids:
+        query = query.filter(KingdomLootEvent.id.in_(event_ids))
+    events = query.all()
+    for event in events:
+        event.seen = True
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'acknowledged_count': len(events),
+        'loot_inbox': serialize_loot_inbox(g.user_id, kingdom_id),
+        'kingdom': serialize_kingdom_config(kingdom_row),
     })
 
 
@@ -4703,6 +4794,21 @@ def _serialize_attack_activity(log, role=None):
         entry['role'] = role
         entry['seen'] = (log.seen_by_attacker if role == 'attacker'
                          else log.seen_by_defender)
+    direction = None
+    if role == 'attacker':
+        direction = 'gained' if log.result == 'attacker_won' else 'lost'
+    elif role == 'defender':
+        direction = 'lost' if log.result == 'attacker_won' else 'gained'
+    if direction:
+        loot_event = KingdomLootEvent.query.filter_by(
+            attack_log_id=log.id,
+            user_id=g.user_id,
+            direction=direction,
+        ).order_by(KingdomLootEvent.id.desc()).first()
+        if loot_event:
+            entry['loot_cards'] = loot_event.cards or []
+            entry['loot_card_count'] = len(loot_event.cards or [])
+            entry['loot_direction'] = direction
     entry.update(_attack_activity_presentation(entry))
     entry['activity_land_label'] = _activity_land_label(entry)
     return entry
@@ -4710,13 +4816,34 @@ def _serialize_attack_activity(log, role=None):
 
 def _activity_card_detail(entry, won=False, lost=False):
     """Return a short card outcome detail for an activity row."""
+    loot_direction = entry.get('loot_direction')
+    if won and loot_direction == 'gained':
+        return _activity_loot_detail(entry, 'Loot gained')
+    if lost and loot_direction == 'lost':
+        return _activity_loot_detail(entry, 'Loot lost')
     if won:
         return _activity_card_pair_detail(
-            entry, 'card_won_suit', 'card_won_rank', 'Card won')
+            entry, 'card_won_suit', 'card_won_rank', 'Loot gained')
     if lost:
         return _activity_card_pair_detail(
-            entry, 'card_lost_suit', 'card_lost_rank', 'Card lost')
+            entry, 'card_lost_suit', 'card_lost_rank', 'Loot lost')
     return ''
+
+
+def _activity_loot_detail(entry, label):
+    cards = entry.get('loot_cards') or []
+    count = int(entry.get('loot_card_count') or len(cards or []))
+    if not count:
+        return ''
+    first = cards[0] if cards else {}
+    first_label = ''
+    if first.get('rank') and first.get('suit'):
+        first_label = f" ({first.get('rank')} of {first.get('suit')}"
+        if count > 1:
+            first_label += f' + {count - 1} more'
+        first_label += ')'
+    noun = 'card' if count == 1 else 'cards'
+    return f'{label}: {count} {noun}{first_label}'
 
 
 def _activity_card_pair_detail(entry, suit_key, rank_key, label):
@@ -4744,10 +4871,11 @@ def _attack_activity_presentation(entry):
         if is_defender_perspective:
             deleted = entry.get('kingdom_deleted_name')
             detail = (f'{deleted} had no lands left and was dissolved.' if deleted
-                      else _activity_card_pair_detail(
-                          entry, 'card_won_suit', 'card_won_rank', 'Card lost')
+                      else _activity_loot_detail(entry, 'Loot lost')
                       or _activity_card_pair_detail(
-                          entry, 'card_lost_suit', 'card_lost_rank', 'Card lost')
+                          entry, 'card_won_suit', 'card_won_rank', 'Loot lost')
+                      or _activity_card_pair_detail(
+                          entry, 'card_lost_suit', 'card_lost_rank', 'Loot lost')
                       or 'Land ownership changed.')
             return {
                 'activity_title': f'{attacker} conquered your land',
@@ -4770,10 +4898,11 @@ def _attack_activity_presentation(entry):
         if is_defender_perspective:
             return {
                 'activity_title': f'{attacker} failed to conquer you',
-                'activity_detail': _activity_card_pair_detail(
-                    entry, 'card_lost_suit', 'card_lost_rank', 'Card won')
+                'activity_detail': _activity_loot_detail(entry, 'Loot gained')
                     or _activity_card_pair_detail(
-                        entry, 'card_won_suit', 'card_won_rank', 'Card won')
+                    entry, 'card_lost_suit', 'card_lost_rank', 'Loot gained')
+                    or _activity_card_pair_detail(
+                        entry, 'card_won_suit', 'card_won_rank', 'Loot gained')
                     or 'Your defence held.',
                 'activity_tone': 'good',
             }

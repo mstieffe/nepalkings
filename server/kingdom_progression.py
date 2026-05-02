@@ -274,6 +274,16 @@ KINGDOM_SKILL_DEFINITIONS: Tuple[KingdomSkillDef, ...] = (
         effect_values=(1, 2, 3, 4, 5),
         icon_path='img/kingdom/skill_icons/core_protection.png',
     ),
+    KingdomSkillDef(
+        key='loot_chance',
+        name='Defensive Looting',
+        description='When this kingdom successfully defends, each remaining '
+                    'enemy committed card has an additional chance to be looted.',
+        max_level=5,
+        cost_multiplier=2,
+        effect_values=(0.05, 0.10, 0.15, 0.20, 0.25),
+        icon_path='img/kingdom/skill_icons/loot_chance.png',
+    ),
 )
 
 # Indexed once at import time for O(1) lookups.

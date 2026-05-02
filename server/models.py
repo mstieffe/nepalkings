@@ -995,6 +995,48 @@ class LandAttackLog(db.Model):
         }
 
 
+class KingdomLootEvent(db.Model):
+    """Pending / acknowledged card-loot event for the kingdom UI."""
+    __tablename__ = 'kingdom_loot_event'
+
+    id                 = db.Column(db.Integer, primary_key=True)
+    user_id            = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    kingdom_id         = db.Column(db.Integer, nullable=True, index=True)
+    land_id            = db.Column(db.Integer, db.ForeignKey('land.id'), nullable=True, index=True)
+    attack_log_id      = db.Column(db.Integer, db.ForeignKey('land_attack_log.id'), nullable=True, index=True)
+    direction          = db.Column(db.String(10), nullable=False, index=True)  # gained|lost
+    source             = db.Column(db.String(30), nullable=True)               # attacker_win|defender_win
+    counterparty_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    cards              = db.Column(db.JSON, nullable=False, default=list)
+    collected          = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    seen               = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    created_at         = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+    counterparty = db.relationship('User', foreign_keys=[counterparty_user_id])
+    land = db.relationship('Land', foreign_keys=[land_id])
+    attack_log = db.relationship('LandAttackLog', foreign_keys=[attack_log_id])
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'source': 'kingdom_loot_event',
+            'user_id': self.user_id,
+            'kingdom_id': self.kingdom_id,
+            'land_id': self.land_id,
+            'attack_log_id': self.attack_log_id,
+            'direction': self.direction,
+            'event_source': self.source,
+            'counterparty_user_id': self.counterparty_user_id,
+            'counterparty_username': self.counterparty.username if self.counterparty else None,
+            'cards': self.cards or [],
+            'card_count': len(self.cards or []),
+            'collected': self.collected,
+            'seen': self.seen,
+            'timestamp': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class KingdomMessage(db.Model):
     """User-to-user messages attached to the kingdom layer."""
     __tablename__ = 'kingdom_message'

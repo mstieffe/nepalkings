@@ -88,7 +88,7 @@ class TestAttackNotifications:
             assert n['card_lost_suit'] == 'Hearts'
             assert n['card_lost_rank'] == 'K'
             assert n['activity_title'] == 'attacker conquered your land'
-            assert n['activity_detail'] == 'Card lost: K of Hearts'
+            assert n['activity_detail'] == 'Key card lost: K of Hearts'
             assert n['activity_tone'] == 'bad'
             assert n['activity_land_label'] == 'Land (3, 2)'
             assert resp.headers['Deprecation'] == 'true'
@@ -203,11 +203,11 @@ class TestUnifiedKingdomNotifications:
             assert own_attack['result'] == 'attacker_won'
             assert own_attack['card_won_suit'] == 'Spades'
             assert own_attack['activity_title'] == 'You conquered rival'
-            assert own_attack['activity_detail'] == 'Card won: A of Spades'
+            assert own_attack['activity_detail'] == 'Key card won: A of Spades'
             assert own_attack['activity_tone'] == 'good'
             defence_win = next(n for n in data['notifications'] if n['role'] == 'defender')
             assert defence_win['activity_title'] == 'rival failed to conquer you'
-            assert defence_win['activity_detail'] == 'Card won: K of Hearts'
+            assert defence_win['activity_detail'] == 'Key card won: K of Hearts'
             assert defence_win['activity_tone'] == 'good'
 
     def test_defender_loss_activity_reports_card_lost_from_attacker_reward_fields(self, app, db):
@@ -228,7 +228,7 @@ class TestUnifiedKingdomNotifications:
             notif = data['notifications'][0]
             assert notif['role'] == 'defender'
             assert notif['activity_title'] == 'rival_loss conquered your land'
-            assert notif['activity_detail'] == 'Card lost: Q of Clubs'
+            assert notif['activity_detail'] == 'Key card lost: Q of Clubs'
             assert notif['activity_tone'] == 'bad'
 
     def test_seen_flags_are_role_specific(self, app, db):

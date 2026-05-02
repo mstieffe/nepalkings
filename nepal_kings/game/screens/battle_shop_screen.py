@@ -14,6 +14,7 @@ from game.components.battle_moves.battle_move_icon_renderer import draw_battle_m
 from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
+from game.components.floating_text import FloatingText, FloatingTextLayer
 from utils import battle_shop_service
 import logging
 
@@ -82,6 +83,10 @@ class BattleShopScreen(SubScreen):
             self._sy(settings.BATTLE_SHOP_CONFIRM_BUTTON_Y),
             "buy!"
         )
+
+        # Floating text layer (buy feedback, similar to collect in kingdom config)
+        self._floating_text = FloatingTextLayer()
+        self._last_render_ms = pygame.time.get_ticks()
 
         # Pending action state
         self._pending_buy_move = None
@@ -638,6 +643,7 @@ class BattleShopScreen(SubScreen):
                 icon="figure",
                 title="Battle Move Bought",
             )
+            self._spawn_buy_floater(move)
         else:
             self.make_dialogue_box(
                 message=f"Failed: {result.get('message', 'Unknown error')}",
@@ -647,6 +653,18 @@ class BattleShopScreen(SubScreen):
             )
 
         self._pending_buy_move = None
+
+    def _spawn_buy_floater(self, move):
+        """Spawn a rising '+MoveName' floater from the buy button (like collect in kingdom config)."""
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            f'+{move.family.name}',
+            self.confirm_button.rect.center,
+            color=settings.COLLECT_FLOAT_GOLD_CLR,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+        ))
 
     def _buy_move_kingdom(self, move, card_type):
         """Buy a battle move via the kingdom config endpoint."""
@@ -969,6 +987,13 @@ class BattleShopScreen(SubScreen):
         # Detail box on top of everything except dialogue box / msg
         if self.battle_move_detail_box:
             self.battle_move_detail_box.draw()
+
+        # Drive and draw the floating-text layer (buy feedback, like collect in kingdom config).
+        now_ms = pygame.time.get_ticks()
+        dt_ms = max(0, now_ms - (self._last_render_ms or now_ms))
+        self._last_render_ms = now_ms
+        self._floating_text.update(dt_ms)
+        self._floating_text.draw(self.window)
 
         super().draw_on_top()
 

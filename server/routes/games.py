@@ -6,7 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 import random
 import logging
 from datetime import datetime, timezone, timedelta
-from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom, KingdomNotification
+from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom, KingdomNotification, KingdomLootEvent
 from game_service.deck_manager import DeckManager
 from routes.auth import require_token, verify_player_ownership
 from ai.defence.config import AI_DEFENCE_RANK_VALUES
@@ -758,7 +758,7 @@ def _compute_game_stats(game_id, player_ids):
 
 
 def _award_booster_packs(user, total_packs):
-    """[DEPRECATED] Legacy reward path; kept for backward compatibility.
+    """Award *total_packs* booster packs to *user*.
 
     Each pack is randomly assigned as main or side based on
     DUEL_BOOSTER_REWARD_PROBABILITIES.
@@ -779,29 +779,6 @@ def _award_booster_packs(user, total_packs):
 
     user.booster_packs += awarded['main']
     user.booster_packs_side += awarded['side']
-    return awarded
-
-
-def _award_duel_rewards(user, draws):
-    """Award ``draws`` independent items from the duel reward pool.
-
-    Each draw is one of: ``main_booster``, ``side_booster``, ``map``, or
-    ``gold`` (a fixed gold amount per gold draw).  Returns the awarded
-    breakdown dict.
-    """
-    awarded = {'main_booster': 0, 'side_booster': 0, 'map': 0, 'gold': 0}
-    if not user or draws <= 0:
-        return awarded
-    probs = settings.DUEL_REWARD_POOL_PROBABILITIES
-    keys = list(probs.keys())
-    weights = [probs[k] for k in keys]
-    for _ in range(int(draws)):
-        chosen = random.choices(keys, weights=weights, k=1)[0]
-        awarded[chosen] += 1
-    user.booster_packs       += awarded['main_booster']
-    user.booster_packs_side  += awarded['side_booster']
-    user.maps                += awarded['map']
-    user.gold                += awarded['gold'] * int(settings.DUEL_REWARD_GOLD_AMOUNT)
     return awarded
 
 
@@ -833,18 +810,8 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         pass
 
     # ── Booster pack rewards ────────────────────────────────────────
-    winner_rewards = _award_duel_rewards(winner_user, settings.DUEL_WINNER_REWARD_DRAWS)
-    loser_rewards = _award_duel_rewards(loser_user, settings.DUEL_LOSER_REWARD_DRAWS)
-    # Legacy booster shape kept for older clients that still read
-    # ``winner_boosters`` / ``loser_boosters``.
-    winner_boosters = {
-        'main': winner_rewards['main_booster'],
-        'side': winner_rewards['side_booster'],
-    }
-    loser_boosters = {
-        'main': loser_rewards['main_booster'],
-        'side': loser_rewards['side_booster'],
-    }
+    winner_boosters = _award_booster_packs(winner_user, settings.DUEL_WINNER_BOOSTER_PACKS)
+    loser_boosters = _award_booster_packs(loser_user, settings.DUEL_LOSER_BOOSTER_PACKS)
 
     winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
     loser_username = loser_user.username if loser_user else f"Player {loser_player.id}"
@@ -922,9 +889,6 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         'stats': game_stats,
         'winner_boosters': winner_boosters,
         'loser_boosters': loser_boosters,
-        'winner_rewards': winner_rewards,
-        'loser_rewards': loser_rewards,
-        'reward_gold_amount': int(settings.DUEL_REWARD_GOLD_AMOUNT),
     }
     if isinstance(conquer_payload, dict):
         info['conquer_result'] = conquer_payload.get('conquer_result')
@@ -4972,8 +4936,8 @@ def finish_battle():
     if total_diff == 0:
         # ──── DRAW ────
 
-        # Conquer mode draw: land ownership is unchanged, but the attacker's
-        # single-use committed cards are spent and figure cards return.
+        # Conquer mode draw: land ownership is unchanged.  No cards are looted
+        # or consumed; all attack-config cards return and defender config stays.
         if game.mode == 'conquer':
             _return_unplayed_battle_move_cards(game_id)
             _delete_all_battle_moves(game_id)
@@ -4984,25 +4948,20 @@ def finish_battle():
             # No winner — draw
             game.winner_player_id = None
 
-            # Consume the attacker's single-use cards (battle moves,
-            # modifiers, spells) and return their figure cards.  The defender's
-            # active defence remains in place because the land did not fall.
-            draw_consumed_cards = []
             atk_cfg = (db.session.get(LandConfig, game.conquer_config_id)
                        if game.conquer_config_id else None)
 
             if atk_cfg:
-                draw_consumed_cards = _snapshot_config_battle_cards(atk_cfg)
-                _consume_config_battle_cards(atk_cfg)
                 _wipe_land_config(atk_cfg)
 
             game.last_battle_result = {
                 'conquer_resolved': True,
                 'conquer_result': 'draw',
                 'attacker_won': False,
-                'conquer_consumed_cards': draw_consumed_cards,
+                'conquer_consumed_cards': [],
+                'conquer_loot_gained_cards': [],
                 'conquer_loot_lost_cards': [],
-                'cards_spent': len(draw_consumed_cards),
+                'cards_spent': 0,
             }
             flag_modified(game, 'last_battle_result')
 
@@ -5011,8 +4970,8 @@ def finish_battle():
                 player_id=player_id,
                 round_number=game.current_round,
                 turn_number=player.turns_left,
-                message=("Conquer battle ended in a draw. Battle moves and one-shot "
-                         "spell cards were spent; figure cards return to your collection."),
+                message=("Conquer battle ended in a draw. No cards were looted; "
+                         "all attack cards returned to your collection."),
                 author="System",
                 type='battle_draw'
             )
@@ -5025,11 +4984,12 @@ def finish_battle():
                 'conquer_result': 'draw',
                 'attacker_won': False,
                 'land_id': game.land_id,
-                'message': ('Conquer battle ended in a draw. Battle moves and one-shot '
-                            'spell cards were spent; figure cards return to your collection.'),
-                'consumed_cards': draw_consumed_cards,
+                'message': ('Conquer battle ended in a draw. No cards were looted; '
+                            'all attack cards returned to your collection.'),
+                'consumed_cards': [],
+                'loot_gained_cards': [],
                 'loot_lost_cards': [],
-                'cards_spent': len(draw_consumed_cards),
+                'cards_spent': 0,
                 'game': game.serialize(),
             })
 
@@ -5219,6 +5179,328 @@ def finish_battle():
         return jsonify(response)
 
 
+def _config_figure_key_card_ids(cfg):
+    """Return collection card IDs used as key cards in a land config's figures."""
+    if not cfg:
+        return []
+    key_card_ids = []
+    for fig in cfg.figures:
+        for cid, role in zip(fig.card_ids or [], fig.card_roles or []):
+            if str(role or '').lower() == 'key':
+                key_card_ids.append(cid)
+    return key_card_ids
+
+
+def _template_figure_key_cards(template):
+    """Return AI-template figure cards explicitly marked as key cards."""
+    key_cards = []
+    for fig in (template or {}).get('figures', []):
+        cards = list(fig.get('cards') or [])
+        roles = list(fig.get('card_roles') or [])
+        for index, card in enumerate(cards):
+            if not isinstance(card, dict):
+                continue
+            role = card.get('role')
+            if role is None and index < len(roles):
+                role = roles[index]
+            if str(role or '').lower() == 'key':
+                key_cards.append(card)
+    return key_cards
+
+
+def _conquer_loot_base_quota(land_tier):
+    """Return ``(key_cards, support_cards)`` base loot quota for a land tier."""
+    try:
+        tier = max(1, int(land_tier or 1))
+    except (TypeError, ValueError):
+        tier = 1
+    # The rule is intentionally simple and scales linearly: tier 1 loots up to
+    # 1 key + 1 support card, tier 2 up to 2 + 2, etc.  This also handles
+    # future tier-4 maps without another branch.
+    return tier, tier
+
+
+def _loot_role_bucket(role):
+    return 'key' if str(role or '').lower() == 'key' else 'support'
+
+
+def _normalise_loot_card(card, *, source, role=None, card_id=None):
+    """Return a stable loot-card dict from a CollectionCard/template card."""
+    if not card:
+        return None
+    if isinstance(card, dict):
+        suit = card.get('suit')
+        rank = card.get('rank')
+        value = card.get('value')
+        card_role = role if role is not None else card.get('role')
+        source_card_id = card_id if card_id is not None else card.get('id')
+    else:
+        suit = getattr(card, 'suit', None)
+        rank = getattr(card, 'rank', None)
+        value = getattr(card, 'value', None)
+        card_role = role
+        source_card_id = card_id if card_id is not None else getattr(card, 'id', None)
+    if not suit or not rank:
+        return None
+    if value is None:
+        value = AI_DEFENCE_RANK_VALUES.get(rank, 0)
+    return {
+        'id': source_card_id,
+        'suit': suit,
+        'rank': rank,
+        'value': int(value or 0),
+        'role': str(card_role or source or 'card'),
+        'source': source,
+        'bucket': _loot_role_bucket(card_role),
+    }
+
+
+def _snapshot_config_loot_cards(cfg):
+    """Snapshot every persistent card in a conquer/defence config for loot risk.
+
+    Figure key cards are in the ``key`` bucket. Every other committed card —
+    figure number/upgrade cards, battle moves, modifiers, and spells — is in
+    the ``support`` bucket.  The snapshot includes collection-card IDs so the
+    loser can lose the exact physical copies.
+    """
+    if not cfg:
+        return []
+    rows = []
+    seen = set()
+
+    def add_card_id(cid, source, role):
+        if not cid or cid in seen:
+            return
+        cc = db.session.get(CollectionCard, cid)
+        if not cc:
+            return
+        data = _normalise_loot_card(cc, source=source, role=role, card_id=cid)
+        if data:
+            rows.append(data)
+            seen.add(cid)
+
+    for fig in cfg.figures:
+        roles = list(fig.card_roles or [])
+        for index, cid in enumerate(fig.card_ids or []):
+            role = roles[index] if index < len(roles) else 'number'
+            add_card_id(cid, 'figure', role)
+    for move in cfg.battle_moves:
+        add_card_id(move.card_id, 'battle_move', 'battle_move')
+    for source, ids in (
+        ('modifier', cfg.modifier_card_ids),
+        ('spell', cfg.spell_card_ids),
+        ('prelude_spell', cfg.prelude_spell_card_ids),
+        ('counter_spell', cfg.counter_spell_card_ids),
+    ):
+        for cid in ids or []:
+            add_card_id(cid, source, source)
+    return rows
+
+
+def _snapshot_template_loot_cards(template):
+    """Snapshot every AI-template card that can become conquer loot."""
+    rows = []
+    for fig in (template or {}).get('figures', []):
+        cards = list(fig.get('cards') or [])
+        roles = list(fig.get('card_roles') or [])
+        for index, card in enumerate(cards):
+            if not isinstance(card, dict):
+                continue
+            role = card.get('role')
+            if role is None and index < len(roles):
+                role = roles[index]
+            data = _normalise_loot_card(card, source='figure', role=role)
+            if data:
+                rows.append(data)
+    for move in (template or {}).get('battle_moves', []) or []:
+        data = _normalise_loot_card(
+            move,
+            source='battle_move',
+            role='battle_move',
+        )
+        if data:
+            rows.append(data)
+    return rows
+
+
+def _random_pick_without_replacement(pool, count, rng):
+    chosen = []
+    remaining = list(pool or [])
+    count = min(max(0, int(count or 0)), len(remaining))
+    for _ in range(count):
+        picked = rng.choice(remaining)
+        chosen.append(picked)
+        remaining.remove(picked)
+    return chosen
+
+
+def _select_conquer_loot_cards(cards, land_tier, *, extra_chance=0.0, rng=None):
+    """Select loot cards from eligible snapshot rows.
+
+    Base selection takes up to the tier quota from key and support buckets.
+    ``extra_chance`` then rolls independently for every remaining card; this is
+    used only by the defending kingdom's loot skill.
+    """
+    rng = rng or random
+    key_quota, support_quota = _conquer_loot_base_quota(land_tier)
+    cards = list(cards or [])
+    key_cards = [c for c in cards if c.get('bucket') == 'key']
+    support_cards = [c for c in cards if c.get('bucket') != 'key']
+
+    selected = []
+    selected.extend(_random_pick_without_replacement(key_cards, key_quota, rng))
+    selected.extend(_random_pick_without_replacement(support_cards, support_quota, rng))
+    selected_ids = {id(c) for c in selected}
+
+    try:
+        chance = max(0.0, min(1.0, float(extra_chance or 0.0)))
+    except (TypeError, ValueError):
+        chance = 0.0
+    if chance > 0:
+        for card in cards:
+            if id(card) in selected_ids:
+                continue
+            if rng.random() < chance:
+                selected.append(card)
+                selected_ids.add(id(card))
+    return selected
+
+
+def _loot_cards_public(cards, include_id=False):
+    """Strip internal fields from loot-card rows for API/UI/event storage."""
+    out = []
+    for card in cards or []:
+        if not isinstance(card, dict):
+            continue
+        row = {
+            'suit': card.get('suit'),
+            'rank': card.get('rank'),
+            'value': int(card.get('value') or 0),
+            'role': card.get('role'),
+            'source': card.get('source'),
+            'bucket': card.get('bucket'),
+        }
+        if include_id and card.get('id'):
+            row['id'] = card.get('id')
+        out.append(row)
+    return out
+
+
+def _create_kingdom_loot_events(*, attack_log_id, land_id, gained_user_id,
+                                lost_user_id=None, gained_kingdom_id=None,
+                                lost_kingdom_id=None, source=None,
+                                cards=None):
+    """Create pending gain/loss inbox rows for selected loot cards."""
+    public_cards = _loot_cards_public(cards, include_id=False)
+    if not public_cards:
+        return
+    if gained_user_id:
+        db.session.add(KingdomLootEvent(
+            user_id=gained_user_id,
+            kingdom_id=gained_kingdom_id,
+            land_id=land_id,
+            attack_log_id=attack_log_id,
+            direction='gained',
+            source=source,
+            counterparty_user_id=lost_user_id,
+            cards=public_cards,
+            collected=False,
+            seen=False,
+        ))
+    if lost_user_id:
+        db.session.add(KingdomLootEvent(
+            user_id=lost_user_id,
+            kingdom_id=lost_kingdom_id,
+            land_id=land_id,
+            attack_log_id=attack_log_id,
+            direction='lost',
+            source=source,
+            counterparty_user_id=gained_user_id,
+            cards=public_cards,
+            collected=True,
+            seen=False,
+        ))
+
+
+def _delete_looted_collection_cards(cards):
+    ids = [c.get('id') for c in cards or [] if c.get('id')]
+    if ids:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(ids)
+        ).delete(synchronize_session='fetch')
+
+
+def _wipe_land_config_return_unlooted(cfg, looted_card_ids=None):
+    """Delete a config, deleting only looted cards and unlocking the rest."""
+    from models import CollectionCard, LandConfigFigure, LandConfigBattleMove
+
+    looted = set(looted_card_ids or [])
+    card_ids = []
+    for fig in cfg.figures:
+        if fig.card_ids:
+            card_ids.extend(fig.card_ids)
+    for move in cfg.battle_moves:
+        if move.card_id:
+            card_ids.append(move.card_id)
+    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
+                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
+        if arr:
+            card_ids.extend(arr)
+
+    unlock_ids = [cid for cid in card_ids if cid not in looted]
+    if unlock_ids:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(unlock_ids)
+        ).update({
+            CollectionCard.locked: False,
+            CollectionCard.lock_type: None,
+            CollectionCard.lock_ref_id: None,
+        }, synchronize_session='fetch')
+    if looted:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(looted)
+        ).delete(synchronize_session='fetch')
+
+    LandConfigBattleMove.query.filter_by(config_id=cfg.id).delete()
+    LandConfigFigure.query.filter_by(config_id=cfg.id).delete()
+    db.session.delete(cfg)
+
+
+def _return_config_non_figure_cards(cfg):
+    """Unlock and remove non-figure cards from a surviving config."""
+    from models import CollectionCard, LandConfigBattleMove
+
+    card_ids = []
+    for move in list(cfg.battle_moves):
+        if move.card_id:
+            card_ids.append(move.card_id)
+        db.session.delete(move)
+    for arr in (cfg.modifier_card_ids, cfg.spell_card_ids,
+                cfg.prelude_spell_card_ids, cfg.counter_spell_card_ids):
+        if arr:
+            card_ids.extend(arr)
+    if card_ids:
+        CollectionCard.query.filter(
+            CollectionCard.id.in_(card_ids)
+        ).update({
+            CollectionCard.locked: False,
+            CollectionCard.lock_type: None,
+            CollectionCard.lock_ref_id: None,
+        }, synchronize_session='fetch')
+    cfg.battle_modifier = None
+    cfg.modifier_card_ids = []
+    cfg.spell_name = None
+    cfg.spell_target_figure_id = None
+    cfg.spell_card_ids = []
+    cfg.prelude_spell_name = None
+    cfg.prelude_spell_data = None
+    cfg.prelude_spell_card_ids = []
+    cfg.counter_spell_name = None
+    cfg.counter_spell_data = None
+    cfg.counter_spell_card_ids = []
+    cfg.counter_spell_target_figure_id = None
+
+
 def _resolve_conquer_battle(game, winner, requesting_player):
     """Resolve a conquer battle after the single battle round.
 
@@ -5266,76 +5548,53 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     game.winner_player_id = winner.id
     game.finished_at = _utcnow()
 
-    # Snapshot all cards committed to this attack before any consumption.
-    all_attack_cards = []
+    # Snapshot all cards committed to this attack before any loot/cleanup.
+    attack_loot_pool = []
     if game.conquer_config_id:
         atk_cfg_cards = db.session.get(LandConfig, game.conquer_config_id)
-        if atk_cfg_cards:
-            attack_card_ids = []
-            for fig in atk_cfg_cards.figures:
-                if fig.card_ids:
-                    attack_card_ids.extend(fig.card_ids)
-            attack_card_ids.extend(_config_battle_card_ids(atk_cfg_cards))
-            all_attack_cards = _snapshot_collection_cards(attack_card_ids, include_id=True)
-
-    # ── Consume attacker's conquer config battle-move cards ──
-    if game.conquer_config_id:
-        atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
-        if atk_cfg:
-            _consume_config_battle_cards(atk_cfg)
+        attack_loot_pool = _snapshot_config_loot_cards(atk_cfg_cards)
 
     # ── Card reward / penalty ──
     card_won_suit = None
     card_won_rank = None
     card_lost_suit = None
     card_lost_rank = None
+    loot_gained_cards = []
     looted_lost_cards = []
     defence_consumed_cards = []
 
     if attacker_won:
-        # ── Attacker wins: gets a card from the defender ──
+        # ── Attacker wins: loot from defender config/template by land tier ──
+        defender_loot_pool = []
+        defender_looted_ids = set()
         if is_ai_land and land:
-            # AI land: create a new CollectionCard from the generated template.
             tpl = get_ai_defence_template_for_land(land)
             if tpl:
-                # Collect all template cards
-                all_cards = []
-                for fig in tpl.get('figures', []):
-                    all_cards.extend(fig.get('cards', []))
-                if all_cards:
-                    picked = _random.choice(all_cards)
-                    new_cc = CollectionCard(
-                        user_id=attacker_user.id,
-                        suit=picked['suit'],
-                        rank=picked['rank'],
-                        value=AI_DEFENCE_RANK_VALUES.get(picked['rank'], 0),
-                        locked=False,
+                defender_loot_pool = _snapshot_template_loot_cards(tpl)
+                if not defender_loot_pool:
+                    logger.warning(
+                        '[CONQUER_RESOLVE] AI template for land=%s had no lootable cards to reward',
+                        game.land_id,
                     )
-                    db.session.add(new_cc)
-                    card_won_suit = picked['suit']
-                    card_won_rank = picked['rank']
         else:
-            # Player land: take a random key card from defender's config
             if game.defence_config_id:
                 def_cfg = db.session.get(LandConfig, game.defence_config_id)
                 if def_cfg:
-                    key_cards = []
-                    for fig in def_cfg.figures:
-                        if fig.card_ids and fig.card_roles:
-                            for cid, role in zip(fig.card_ids, fig.card_roles):
-                                if role == 'key':
-                                    key_cards.append(cid)
-                    if key_cards:
-                        chosen_id = _random.choice(key_cards)
-                        cc = db.session.get(CollectionCard, chosen_id)
-                        if cc:
-                            card_won_suit = cc.suit
-                            card_won_rank = cc.rank
-                            # Transfer to attacker
-                            cc.user_id = attacker_user.id
-                            cc.locked = False
-                            cc.lock_type = None
-                            cc.lock_ref_id = None
+                    defender_loot_pool = _snapshot_config_loot_cards(def_cfg)
+
+        defender_looted_cards = _select_conquer_loot_cards(
+            defender_loot_pool,
+            land.tier if land else 1,
+            rng=_random,
+        )
+        loot_gained_cards = _loot_cards_public(defender_looted_cards)
+        looted_lost_cards = list(loot_gained_cards)
+        if loot_gained_cards:
+            card_won_suit = loot_gained_cards[0].get('suit')
+            card_won_rank = loot_gained_cards[0].get('rank')
+        defender_looted_ids = {
+            c.get('id') for c in defender_looted_cards if c.get('id')
+        }
 
         # Transfer land ownership
         if land:
@@ -5349,28 +5608,26 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             else:
                 land.conquer_cooldown_until = None
 
-        # Convert attacker's conquer config to defence config.
-        # Battle/modifier/spell cards have already been consumed above,
-        # so only figure cards remain locked — re-key their lock_type so
-        # subsequent defence-side cleanup recognises them.
+        # Convert attacker's conquer config to defence config.  Only figure
+        # cards remain committed to the new defence; attack-only battle,
+        # modifier, and spell cards return instead of being consumed.
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
+                _return_config_non_figure_cards(atk_cfg)
                 atk_cfg.config_type = 'defence'
                 atk_cfg.land_id = game.land_id
                 _rekey_config_lock_types(atk_cfg, 'defence')
                 if land:
                     land.defence_config_id = atk_cfg.id
 
-        # The old defender's battle moves and spells are one-shot, but only
-        # finally consumed when the land falls.  Figure cards are handled by
-        # loot/unlock rules inside `_wipe_land_config`.
+        # The old defender's config is removed.  Looted cards are deleted from
+        # the loser and placed in the attacker's pending loot inbox; every
+        # unlooted card returns to the defender's collection.
         if game.defence_config_id:
             def_cfg = db.session.get(LandConfig, game.defence_config_id)
             if def_cfg:
-                defence_consumed_cards = _snapshot_config_battle_cards(def_cfg)
-                _consume_config_battle_cards(def_cfg)
-                _wipe_land_config(def_cfg)
+                _wipe_land_config_return_unlooted(def_cfg, defender_looted_ids)
         if defender_user:
             _wipe_defence_drafts_for_lost_land(defender_user.id, game.land_id)
         try:
@@ -5420,55 +5677,35 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             raise
 
     else:
-        # ── Defender wins: attacker loses a key card ──
+        # ── Defender wins: loot from attacker config by tier + defender skill ──
+        extra_chance = 0.0
+        if lost_kingdom_id:
+            try:
+                from kingdom_service import kingdom_skill_level
+                level = kingdom_skill_level(lost_kingdom_id, 'loot_chance')
+                extra_chance = config.skill_effect_at_level('loot_chance', level)
+            except Exception as _loot_skill_err:
+                logger.warning('Failed to resolve defensive loot skill: %s', _loot_skill_err)
         if game.conquer_config_id:
             atk_cfg = db.session.get(LandConfig, game.conquer_config_id)
             if atk_cfg:
-                key_cards = []
-                for fig in atk_cfg.figures:
-                    if fig.card_ids and fig.card_roles:
-                        for cid, role in zip(fig.card_ids, fig.card_roles):
-                            if role == 'key':
-                                key_cards.append(cid)
-                if key_cards:
-                    chosen_id = _random.choice(key_cards)
-                    cc = db.session.get(CollectionCard, chosen_id)
-                    if cc:
-                        card_lost_suit = cc.suit
-                        card_lost_rank = cc.rank
-                        looted_lost_cards = [{'id': cc.id, 'suit': cc.suit, 'rank': cc.rank}]
-                        if is_ai_land:
-                            # AI defender: just delete the card
-                            db.session.delete(cc)
-                        else:
-                            # Player defender: transfer to defender
-                            cc.user_id = defender_user.id
-                            cc.locked = False
-                            cc.lock_type = None
-                            cc.lock_ref_id = None
+                defender_looted_cards = _select_conquer_loot_cards(
+                    attack_loot_pool,
+                    land.tier if land else 1,
+                    extra_chance=extra_chance,
+                    rng=_random,
+                )
+                loot_gained_cards = _loot_cards_public(defender_looted_cards)
+                looted_lost_cards = list(loot_gained_cards)
+                if looted_lost_cards:
+                    card_lost_suit = looted_lost_cards[0].get('suit')
+                    card_lost_rank = looted_lost_cards[0].get('rank')
+                looted_ids = {
+                    c.get('id') for c in defender_looted_cards if c.get('id')
+                }
+                _wipe_land_config_return_unlooted(atk_cfg, looted_ids)
 
-                        # The LandAttackLog created below is returned to the
-                        # attacker by /kingdom/notifications.  Do not emit a
-                        # separate card_looted KingdomNotification for the same
-                        # card; otherwise the activity feed shows duplicates.
-
-                # Consume the entire attacker config: every remaining card
-                # (figures, plus any spell/modifier cards not already deleted
-                # in `_consume_config_battle_cards` if a future code-path
-                # changes ordering) is destroyed, and the cfg row removed.
-                protected_ids = [c['id'] for c in looted_lost_cards if c.get('id')]
-                _destroy_land_config(atk_cfg, exclude_card_ids=protected_ids)
-
-    looted_ids = {c['id'] for c in looted_lost_cards if c.get('id')}
-    consumed_cards = [
-        {'suit': c['suit'], 'rank': c['rank']}
-        for c in all_attack_cards
-        if c.get('id') not in looted_ids
-    ]
-    looted_lost_cards = [
-        {'suit': c['suit'], 'rank': c['rank']}
-        for c in looted_lost_cards
-    ]
+    consumed_cards = []
 
     # Create attack log
     log = LandAttackLog(
@@ -5486,13 +5723,38 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         seen_by_defender=False,
     )
     db.session.add(log)
+    db.session.flush()
+
+    if attacker_won:
+        gained_kingdom_id = land.kingdom_id if land else None
+        lost_user_for_event = None if is_ai_land else (defender_user.id if defender_user else None)
+        _create_kingdom_loot_events(
+            attack_log_id=log.id,
+            land_id=game.land_id,
+            gained_user_id=attacker_user.id if attacker_user else None,
+            lost_user_id=lost_user_for_event,
+            gained_kingdom_id=gained_kingdom_id,
+            lost_kingdom_id=lost_kingdom_id,
+            source='attacker_win',
+            cards=loot_gained_cards,
+        )
+    else:
+        _create_kingdom_loot_events(
+            attack_log_id=log.id,
+            land_id=game.land_id,
+            gained_user_id=defender_user.id if (defender_user and not is_ai_land) else None,
+            lost_user_id=attacker_user.id if attacker_user else None,
+            gained_kingdom_id=lost_kingdom_id,
+            lost_kingdom_id=None,
+            source='defender_win',
+            cards=loot_gained_cards,
+        )
 
     result = 'attacker_won' if attacker_won else 'defender_won'
     logger.info(f"[CONQUER_RESOLVE] game={game.id} land={game.land_id} "
                 f"result={result}")
 
-    # For failed attacks, all committed cards are either consumed or looted.
-    cards_spent = 0 if attacker_won else (len(consumed_cards) + len(looted_lost_cards))
+    cards_spent = len(looted_lost_cards)
 
     merged_last_result = dict(saved) if isinstance(saved, dict) else {}
     merged_last_result.update({
@@ -5505,6 +5767,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'conquer_defender_user_id': defender_user.id if defender_user else None,
         'conquer_consumed_cards': consumed_cards,
         'defence_consumed_cards': defence_consumed_cards,
+        'conquer_loot_gained_cards': loot_gained_cards,
         'conquer_loot_lost_cards': looted_lost_cards,
         'cards_spent': cards_spent,
         'card_lost_suit': card_lost_suit,
@@ -5531,6 +5794,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_lost_rank': card_lost_rank,
         'is_ai_defender': bool(is_ai_land),
         'loot_lost_cards': looted_lost_cards,
+        'loot_gained_cards': loot_gained_cards,
         'consumed_cards': consumed_cards,
         'defence_consumed_cards': defence_consumed_cards,
         'cards_spent': cards_spent,
@@ -5581,6 +5845,7 @@ def _serialize_finished_conquer_result(game):
         last_result.get('conquer_resolved')
         or any(key in last_result for key in card_detail_keys)
         or 'conquer_consumed_cards' in last_result
+        or 'conquer_loot_gained_cards' in last_result
         or 'conquer_loot_lost_cards' in last_result
     )
     if game.land_id and not has_cached_result_details:
@@ -5604,6 +5869,8 @@ def _serialize_finished_conquer_result(game):
         payload['defence_consumed_cards'] = last_result.get('defence_consumed_cards') or []
     if 'conquer_loot_lost_cards' in last_result:
         payload['loot_lost_cards'] = last_result.get('conquer_loot_lost_cards') or []
+    if 'conquer_loot_gained_cards' in last_result:
+        payload['loot_gained_cards'] = last_result.get('conquer_loot_gained_cards') or []
     if 'is_ai_defender' in last_result:
         payload['is_ai_defender'] = bool(last_result.get('is_ai_defender'))
     if 'auto_loss_reason' in last_result:

@@ -245,7 +245,7 @@ class TestConquerLootNotifications:
             rows = data.get('notifications') or []
             assert len(rows) == 1
             assert rows[0]['source'] == 'attack_log'
-            assert rows[0]['activity_detail'] == f"Card lost: {loot[0]['rank']} of {loot[0]['suit']}"
+            assert rows[0]['activity_detail'] == f"Key card lost: {loot[0]['rank']} of {loot[0]['suit']}"
 
     def test_attacker_win_emits_no_card_looted(self, app, db):
         """No card_looted notification when the attacker wins."""

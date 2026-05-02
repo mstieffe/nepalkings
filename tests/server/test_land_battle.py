@@ -2219,6 +2219,60 @@ class TestAITemplateCardRewards:
                         and c.rank == log.card_won_rank]
             assert len(rewarded) >= 1
 
+    def test_attacker_wins_ai_land_rewards_only_template_key_cards(self, app, db, monkeypatch):
+        """AI/template loot rewards are selected only from figure key cards."""
+        with app.app_context():
+            import importlib
+            from routes.games import _resolve_conquer_battle
+            import random as random_module
+
+            games_routes = importlib.import_module('routes.games')
+
+            user = _make_user(db, username='ai_key_reward')
+            land = _make_land(db, tier=1)
+            _make_conquer_config(db, user, land)
+
+            client = app.test_client()
+            headers = _auth_headers(app, user)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            data = resp.get_json()
+            game = db.session.get(Game, data['game_id'])
+
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = [p for p in game.players if p.id != atk_player.id][0]
+
+            monkeypatch.setattr(
+                games_routes,
+                'get_ai_defence_template_for_land',
+                lambda _land: _scripted_ai_template(),
+            )
+
+            seen_choices = []
+
+            def choose_first(options):
+                choices = list(options)
+                seen_choices.append(choices)
+                assert choices
+                assert all(card.get('role') == 'key' for card in choices)
+                return choices[0]
+
+            monkeypatch.setattr(random_module, 'choice', choose_first)
+
+            result = _resolve_conquer_battle(game, atk_player, atk_player)
+            db.session.commit()
+
+            assert result['conquer_result'] == 'attacker_won'
+            assert seen_choices
+            assert result['card_won_suit'] == 'Hearts'
+            assert result['card_won_rank'] == 'J'
+            assert CollectionCard.query.filter_by(
+                user_id=user.id, suit='Hearts', rank='J', locked=False,
+            ).first() is not None
+            assert CollectionCard.query.filter_by(
+                user_id=user.id, suit='Hearts', rank='8', locked=False,
+            ).first() is None
+
     def test_attacker_wins_ai_land_transfers_ownership(self, app, db):
         """Attacker winning transfers land ownership."""
         with app.app_context():
@@ -2346,6 +2400,7 @@ class TestAITemplateCardRewards:
 
             loot_pair = (loot_cards[0].get('suit'), loot_cards[0].get('rank'))
             consumed_pairs = {(c.get('suit'), c.get('rank')) for c in consumed_cards}
+            assert loot_pair == ('Diamonds', 'J')
             assert loot_pair not in consumed_pairs
             assert ('Diamonds', 'Q') in consumed_pairs
             assert db.session.get(CollectionCard, prelude_card_id) is None
@@ -2393,6 +2448,7 @@ class TestAITemplateCardRewards:
             db.session.commit()
 
             assert result['conquer_result'] == 'attacker_won'
+            assert (result['card_won_suit'], result['card_won_rank']) == ('Spades', 'K')
             assert db.session.get(CollectionCard, move_card_id) is None
             assert db.session.get(CollectionCard, counter_card_id) is None
             defence_consumed = result.get('defence_consumed_cards') or []

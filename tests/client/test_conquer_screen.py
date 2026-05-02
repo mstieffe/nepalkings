@@ -265,7 +265,8 @@ class TestConquerConfirmData:
         assert locked['icon'] == 'lock'
         assert locked['badge_icon'] == 'lock'
         assert len(locked['items']) == 1
-        assert 'loot' in after_msg
+        assert 'exactly one committed figure key card is looted/lost' in locked['description']
+        assert 'exactly one committed figure key card is looted/lost' in after_msg
 
 
 class TestConquerScreenLayout:
