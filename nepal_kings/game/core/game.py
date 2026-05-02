@@ -731,7 +731,8 @@ class Game:
             logger.info(f"[FOLD] Detected fold outcome: {self.fold_outcome}, winner: {self.fold_winner_id}")
 
         # Detect both chose battle (transition from False to True)
-        if self.battle_confirmed and not previous_battle_confirmed and self.waiting_for_battle_decision:
+        if (self.battle_confirmed and not previous_battle_confirmed and
+                (self.waiting_for_battle_decision or self.mode == 'conquer')):
             self.auto_proceed_to_battle = True
             self.waiting_for_battle_decision = False
             logger.info(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
@@ -906,7 +907,7 @@ class Game:
 
         # Detect both chose battle (transition) — mirrors _apply_game_dict
         if (self.battle_confirmed and not previous_battle_confirmed and
-                self.waiting_for_battle_decision):
+                (self.waiting_for_battle_decision or self.mode == 'conquer')):
             self.auto_proceed_to_battle = True
             self.waiting_for_battle_decision = False
             logger.info("[BATTLE_DECISION] update_from_dict: both players chose battle — auto-proceeding")

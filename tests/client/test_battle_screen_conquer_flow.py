@@ -420,6 +420,36 @@ class TestBattleScreenConquerFlow:
         assert '3 of Hearts' in msg
         assert 'Every unlooted defence card returned' in msg
 
+    def test_invader_swap_attacker_win_uses_original_attacker_identity(self):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+
+        captured = {}
+        screen.window = object()
+        screen.game = SimpleNamespace(
+            player_id=10,
+            invader=False,
+            game_over=False,
+            mode='conquer',
+            last_battle_result={
+                'conquer_attacker_player_id': 10,
+                'conquer_defender_player_id': 20,
+            },
+        )
+        screen.make_dialogue_box = lambda message, **kwargs: captured.update({
+            'message': message,
+            'kwargs': kwargs,
+        })
+
+        BattleScreen._handle_conquer_end(screen, {
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'land_tier': 2,
+        })
+
+        assert captured['kwargs']['title'] == 'Land Conquered!'
+        assert 'You have conquered' in captured['message']
+
     def test_try_resolve_server_finished_battle_handles_finished_conquer_draw(self):
         BattleScreen = _battle_screen_class()
         screen = BattleScreen.__new__(BattleScreen)

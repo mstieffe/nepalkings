@@ -6080,6 +6080,10 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'message': f'Conquer battle resolved: {result}',
         'conquer_result': result,
         'attacker_won': attacker_won,
+        'conquer_attacker_player_id': atk_player.id,
+        'conquer_defender_player_id': def_player.id,
+        'conquer_attacker_user_id': attacker_user.id if attacker_user else None,
+        'conquer_defender_user_id': defender_user.id if defender_user else None,
         'land_id': game.land_id,
         'land_gold_rate': land.gold_rate if land else 0,
         'land_tier': land.tier if land else None,
@@ -6170,6 +6174,10 @@ def _serialize_finished_conquer_result(game):
         payload['loot_gained_cards'] = last_result.get('conquer_loot_gained_cards') or []
     if 'is_ai_defender' in last_result:
         payload['is_ai_defender'] = bool(last_result.get('is_ai_defender'))
+    for key in ('conquer_attacker_player_id', 'conquer_defender_player_id',
+                'conquer_attacker_user_id', 'conquer_defender_user_id'):
+        if key in last_result:
+            payload[key] = last_result.get(key)
     if 'auto_loss_reason' in last_result:
         payload['auto_loss_reason'] = last_result.get('auto_loss_reason')
     if 'auto_loss_detail' in last_result:

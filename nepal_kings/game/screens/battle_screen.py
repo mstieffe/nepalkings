@@ -2244,7 +2244,7 @@ class BattleScreen(SubScreen):
         from game.components.cards.card_img import CardImg
         attacker_won = result.get('attacker_won', False)
         conquer_result = result.get('conquer_result', '')
-        is_attacker = self.game and self.game.invader
+        is_attacker = self._is_current_player_conquer_attacker(result)
         images = []
 
         def _card_line(card):
@@ -2359,6 +2359,40 @@ class BattleScreen(SubScreen):
 
         self.make_dialogue_box(message, actions=['ok'], icon=icon, title=title, images=images if images else None)
         self._dialogue_callback = self._on_conquer_end_acknowledged
+
+    def _is_current_player_conquer_attacker(self, result=None):
+        """Return whether this client is the original conquer attacker."""
+        game = self.game
+        if not game:
+            return False
+
+        result = result or {}
+        last = getattr(game, 'last_battle_result', None) or getattr(
+            game, '_last_polled_battle_result', {}) or {}
+        attacker_id = (
+            result.get('conquer_attacker_player_id')
+            or last.get('conquer_attacker_player_id')
+        )
+        if attacker_id is not None:
+            return str(attacker_id) == str(getattr(game, 'player_id', None))
+
+        active_spells = (
+            getattr(game, 'cached_active_spells', None)
+            or getattr(game, 'active_spells', None)
+            or []
+        )
+        for spell in active_spells:
+            if not isinstance(spell, dict):
+                continue
+            effect_data = spell.get('effect_data')
+            if (spell.get('spell_name') == 'Invader Swap'
+                    and isinstance(effect_data, dict)
+                    and effect_data.get('conquer_invader_swap')):
+                old_invader_id = effect_data.get('old_invader_id')
+                if old_invader_id is not None:
+                    return str(old_invader_id) == str(getattr(game, 'player_id', None))
+
+        return bool(getattr(game, 'invader', False))
 
     def _on_conquer_end_acknowledged(self, response):
         """After conquer end dialogue, reset and route to kingdom screen."""

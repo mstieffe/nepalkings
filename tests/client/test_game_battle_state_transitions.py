@@ -125,6 +125,23 @@ class TestGameBattleStateTransitions:
         assert any('[BATTLE_READY_BLOCKED]' in msg for msg in messages)
         assert any('battle_ready_shown' in msg for msg in messages)
 
+    def test_conquer_battle_confirmed_auto_proceeds_without_wait_flag(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.waiting_for_battle_decision = False
+        game.auto_proceed_to_battle = False
+
+        confirmed = _mk_game_dict()
+        confirmed['mode'] = 'conquer'
+        confirmed['battle_confirmed'] = True
+
+        game._apply_game_dict(confirmed)
+
+        assert game.auto_proceed_to_battle is True
+
     def test_suppress_turn_summary_only_when_turn_is_ours(self):
         """After fold, suppress_next_turn_summary should be True only for the
         player whose turn it is (fold winner/invader).  The defender's first

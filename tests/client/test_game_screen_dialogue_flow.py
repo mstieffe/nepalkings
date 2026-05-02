@@ -447,6 +447,78 @@ class TestGameScreenDialogueFlow:
         assert 'Ceasefire is active until the last turn.' in msg_after
         assert submitted_decisions == ['battle']
 
+    def test_conquer_defender_waits_for_invader_battle_decision(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.dialogue_box = None
+
+        submitted_decisions = []
+        game_screen._submit_battle_decision = submitted_decisions.append
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                pending_battle_ready=True,
+                battle_ready_shown=False,
+                advancing_figure_id=201,
+                defending_figure_id=101,
+                advancing_player_id=20,
+                player_id=10,
+                mode='conquer',
+                battle_confirmed=False,
+                battle_decisions={},
+            )
+        )
+
+        GameScreen.check_battle_ready(game_screen)
+
+        assert submitted_decisions == []
+        assert game_screen.state.game.pending_battle_ready is False
+        assert game_screen.state.game.battle_ready_shown is False
+
+    def test_conquer_defender_submits_after_invader_battle_decision(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game_screen.dialogue_box = None
+
+        submitted_decisions = []
+        game_screen._submit_battle_decision = submitted_decisions.append
+        game_screen.state = SimpleNamespace(
+            game=SimpleNamespace(
+                pending_battle_ready=True,
+                battle_ready_shown=False,
+                advancing_figure_id=201,
+                defending_figure_id=101,
+                advancing_player_id=20,
+                player_id=10,
+                mode='conquer',
+                battle_confirmed=False,
+                battle_decisions={'20': 'battle'},
+            )
+        )
+
+        GameScreen.check_battle_ready(game_screen)
+
+        assert submitted_decisions == ['battle']
+        assert game_screen.state.game.pending_battle_ready is False
+
+    def test_conquer_result_uses_original_attacker_after_invader_swap(self):
+        GameScreen, game_screen, notifications = _make_conquer_game_screen()
+        game_screen.state.game.invader = False
+        game_screen.state.game.last_battle_result = {
+            'conquer_attacker_player_id': 10,
+            'conquer_defender_player_id': 20,
+        }
+
+        handled = GameScreen._handle_conquer_result_response(game_screen, {
+            'success': True,
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'land_tier': 2,
+        })
+
+        assert handled is True
+        assert len(notifications) == 1
+        assert notifications[0]['title'] == 'Land Conquered!'
+
     def test_cannot_advance_conquer_result_routes_to_game_over_notification(self, monkeypatch):
         GameScreen, game_screen, notifications = _make_conquer_game_screen()
 

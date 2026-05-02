@@ -2559,6 +2559,24 @@ class GameScreen(Screen):
             self.state.game.battle_ready_shown = True
 
             is_invader = (self.state.game.advancing_player_id == self.state.game.player_id)
+            if not is_invader:
+                decisions = self.state.game.battle_decisions or {}
+                invader_decided = (
+                    decisions.get(str(self.state.game.advancing_player_id)) == 'battle'
+                )
+                if not invader_decided:
+                    # Invader Swap can make the human the defender in conquer
+                    # mode. The server still enforces invader-first battle
+                    # decisions, so wait for the automated invader instead of
+                    # submitting a defender decision that would be rejected.
+                    self.state.game.pending_battle_ready = False
+                    self.state.game.battle_ready_shown = False
+                    logger.info(
+                        "[BATTLE_READY] Conquer defender waiting for invader "
+                        "battle decision"
+                    )
+                    return
+
             if is_invader:
                 # Check for Blitzkrieg (invader already selected defender's figure)
                 modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
@@ -3219,6 +3237,8 @@ class GameScreen(Screen):
             'defence_consumed_cards': last.get('defence_consumed_cards') or [],
             'cards_spent': last.get('cards_spent'),
             'is_ai_defender': bool(last.get('is_ai_defender')),
+            'conquer_attacker_player_id': last.get('conquer_attacker_player_id'),
+            'conquer_defender_player_id': last.get('conquer_defender_player_id'),
         }
         return result
 
@@ -3241,7 +3261,7 @@ class GameScreen(Screen):
 
         attacker_won = bool(result.get('attacker_won'))
         conquer_result = result.get('conquer_result')
-        is_attacker = bool(getattr(game, 'invader', False))
+        is_attacker = self._is_current_player_conquer_attacker(result)
         reason_text = self._auto_loss_reason_text(result)
 
         if conquer_result == 'draw':
@@ -3307,6 +3327,45 @@ class GameScreen(Screen):
         })
         return True
 
+    def _is_current_player_conquer_attacker(self, result=None):
+        """Return whether the local player is the original conquer attacker.
+
+        In conquer Invader Swap the current invader becomes the automated
+        defender, so game.invader no longer identifies the player whose
+        conquer config is attacking the land.
+        """
+        game = self.state.game if self.state else None
+        if not game:
+            return False
+
+        result = result or {}
+        last = getattr(game, 'last_battle_result', None) or getattr(
+            game, '_last_polled_battle_result', {}) or {}
+        attacker_id = (
+            result.get('conquer_attacker_player_id')
+            or last.get('conquer_attacker_player_id')
+        )
+        if attacker_id is not None:
+            return str(attacker_id) == str(getattr(game, 'player_id', None))
+
+        active_spells = (
+            getattr(game, 'cached_active_spells', None)
+            or getattr(game, 'active_spells', None)
+            or []
+        )
+        for spell in active_spells:
+            if not isinstance(spell, dict):
+                continue
+            effect_data = spell.get('effect_data')
+            if (spell.get('spell_name') == 'Invader Swap'
+                    and isinstance(effect_data, dict)
+                    and effect_data.get('conquer_invader_swap')):
+                old_invader_id = effect_data.get('old_invader_id')
+                if old_invader_id is not None:
+                    return str(old_invader_id) == str(getattr(game, 'player_id', None))
+
+        return bool(getattr(game, 'invader', False))
+
     def _try_handle_finished_conquer_game(self):
         """Safety net for finished conquer games resolved outside BattleScreen."""
         game = self.state.game if self.state else None
@@ -3334,7 +3393,7 @@ class GameScreen(Screen):
         # handled by battle_screen._handle_conquer_end with richer data)
         if self.state.game.mode == 'conquer':
             winner_pid = game_over_info.get('winner_player_id')
-            is_attacker = self.state.game.invader
+            is_attacker = self._is_current_player_conquer_attacker(game_over_info)
             if winner_pid is None:
                 # Draw — land ownership unchanged and attack cards returned.
                 title = "Draw!"
@@ -3518,8 +3577,10 @@ class GameScreen(Screen):
         # battle_confirmed before _apply_game_dict could detect the
         # transition), force the transition now.
         if (self.state.game.battle_confirmed and
-                self.state.game.waiting_for_battle_decision and
+                (self.state.game.waiting_for_battle_decision or
+                 self.state.game.mode == 'conquer') and
                 not self.state.game.battle_moves_phase and
+                not self.state.game.battle_moves_ready and
                 not self.state.game.in_battle_phase):
             logger.warning("[BATTLE_DECISION] Safety net: battle_confirmed=True but "
                   "auto_proceed missed — forcing transition to battle shop")
@@ -5038,5 +5099,3 @@ class GameScreen(Screen):
         # Pass events to the active subscreen
         if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
             self.subscreens[self.state.subscreen].handle_events(events)
-
-
