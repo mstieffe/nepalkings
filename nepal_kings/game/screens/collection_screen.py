@@ -4,6 +4,7 @@ import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
+from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.components.cards.card_img import CardImg
 from game.components.dialogue_box import DialogueBox
 from config import settings
@@ -284,6 +285,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._hovered_btn = None
         self._clicked_btn = None
 
+        # ── Floating text layer ──────────────────────────────────────
+        self._floating_text = FloatingTextLayer()
+        self._last_render_ms = pygame.time.get_ticks()
+
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def on_enter(self):
@@ -433,6 +438,13 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Booster reveal overlay
         if self._reveal_overlay:
             self._reveal_overlay.draw()
+
+        # Floating text (buy booster animation)
+        now_ms = pygame.time.get_ticks()
+        dt_ms = max(0, now_ms - self._last_render_ms)
+        self._last_render_ms = now_ms
+        self._floating_text.update(dt_ms)
+        self._floating_text.draw(self.window)
 
         # Icon buttons + messages overlay
         self._draw_menu_overlay()
@@ -1442,6 +1454,21 @@ class CollectionScreen(MenuScreenMixin, Screen):
             images=[pack_icon],
             title='Buy Booster')
 
+    def _spawn_booster_floater(self, pack_type):
+        """Spawn a rising '+1 Main Pack' / '+1 Side Pack' floater from the buy button."""
+        btn_rect = self._btn_buy_main_rect if pack_type == 'main' else self._btn_buy_side_rect
+        text = '+1 Main Pack' if pack_type == 'main' else '+1 Side Pack'
+        color = settings.COLLECT_FLOAT_XP_CLR
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            text,
+            btn_rect.center,
+            color=color,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+        ))
+
     def _perform_buy_booster(self):
         """Execute the buy booster API call."""
         pack_type = getattr(self, '_pending_booster_type', 'main')
@@ -1460,6 +1487,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
             if self.state.user_dict:
                 self.state.user_dict['gold'] = self._gold
             self.state.set_msg('Booster pack purchased!')
+            self._spawn_booster_floater(pack_type)
         except Exception as e:
             logger.error(f'Buy booster failed: {e}')
             self.state.set_msg('Failed to buy booster pack')
