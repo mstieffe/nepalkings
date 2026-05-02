@@ -126,6 +126,80 @@ class TestBattleScreenConquerFlow:
 
         assert power == 12  # 7 base +5 matching call move only
 
+    def test_defender_call_figure_power_ignores_wall_bonus(self):
+        BattleScreen, screen = self._screen_for_kingdom_bonus(player_is_invader=True)
+        screen.player_buffs_allies_figures = []
+        screen.opponent_buffs_allies_figures = []
+        screen.player_buffs_allies_defence_figures = []
+        screen.opponent_buffs_allies_defence_figures = [
+            SimpleNamespace(number_card=SimpleNamespace(value=3)),
+            SimpleNamespace(number_card=SimpleNamespace(value=6)),
+        ]
+        screen._player_da_archers = []
+        screen._opponent_da_archers = []
+        call_fig = self._figure(base=7, suit='Clubs', field='military')
+        move = {
+            'family_name': 'Call Military',
+            'value': 5,
+            'suit': 'Clubs',
+            '_call_figure': call_fig,
+        }
+
+        power = BattleScreen._get_move_effective_power(
+            screen, move, is_player=False, round_idx=0)
+
+        assert power == 12  # 7 base +5 matching call move only; wall excluded
+
+    def test_round_slot_called_figure_omits_wall_support_icons(self, monkeypatch):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+        screen.window = SimpleNamespace(blit=lambda *args, **kwargs: None)
+        screen.battle_move_detail_box = None
+        screen.figure_detail_box = None
+        screen.player_buffs_allies_figures = []
+        screen.opponent_buffs_allies_figures = []
+        screen.player_buffs_allies_defence_figures = []
+        screen.opponent_buffs_allies_defence_figures = [
+            SimpleNamespace(number_card=SimpleNamespace(value=6),
+                            family=SimpleNamespace(icon_img=object())),
+        ]
+        screen.player_distance_attack_figure = None
+        screen.opponent_distance_attack_figure = None
+        screen._round_fig_icons = []
+        screen._slot_glow_cache = {}
+        screen._slot_icon_cache = {}
+        screen._slot_frame_cache = {}
+        screen._slot_suit_icon_cache = {}
+        screen.font_icon_value = None
+        screen.font_small = None
+        screen._get_da_call_penalty = lambda *args, **kwargs: 0
+
+        captured = {}
+
+        def fake_draw_slot_figure_icons(self, cx, slot_cy, sw, slot_figures, is_player, r_index):
+            captured['slot_figures'] = slot_figures
+
+        monkeypatch.setattr(BattleScreen, '_draw_slot_figure_icons', fake_draw_slot_figure_icons)
+        monkeypatch.setattr('game.screens.battle_screen.draw_battle_move_icon',
+                            lambda *args, **kwargs: None)
+
+        call_fig = SimpleNamespace(
+            suit='Clubs',
+            family=SimpleNamespace(field='military', icon_img=object()),
+            get_value=lambda: 7,
+        )
+        played_move = {
+            'family_name': 'Call Military',
+            'suit': 'Clubs',
+            'value': 5,
+            '_call_figure': call_fig,
+        }
+
+        BattleScreen._draw_round_slot(
+            screen, 0, 0, played_move, False, is_player=False, r_index=0)
+
+        assert captured['slot_figures'] == [(call_fig, 'call')]
+
     def test_conquer_defeat_ack_queries_finish_battle_and_sets_fallback_game_over(self, monkeypatch):
         BattleScreen = _battle_screen_class()
         screen = BattleScreen.__new__(BattleScreen)
@@ -281,7 +355,7 @@ class TestBattleScreenConquerFlow:
         })
 
         msg = captured.get('message', '')
-        assert 'Card looted by defending kingdom:' in msg
+        assert 'Key card looted by defending kingdom:' in msg
         assert 'K of Hearts' in msg
         assert 'Consumed cards:' in msg
         assert '7 of Clubs' in msg
@@ -315,8 +389,8 @@ class TestBattleScreenConquerFlow:
         })
 
         msg = captured.get('message', '')
-        assert 'Card lost to AI defence:' in msg
-        assert 'Card looted by defending kingdom:' not in msg
+        assert 'Key card destroyed by AI defence:' in msg
+        assert 'Key card looted by defending kingdom:' not in msg
 
     def test_conquer_defender_loss_dialogue_lists_consumed_defence_cards(self, monkeypatch):
         BattleScreen = _battle_screen_class()
@@ -348,7 +422,7 @@ class TestBattleScreenConquerFlow:
         })
 
         msg = captured.get('message', '')
-        assert 'Card lost as loot:' in msg
+        assert 'Key card lost as loot:' in msg
         assert 'Defence cards consumed:' in msg
         assert '8 of Spades' in msg
         assert '3 of Hearts' in msg

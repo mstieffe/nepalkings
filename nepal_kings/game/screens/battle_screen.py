@@ -1121,7 +1121,7 @@ class BattleScreen(SubScreen):
         already fired on a battle figure it won't fire again on a call
         figure; otherwise it fires on the first matching call figure only.
         Buffs-allies bonus is added as base power for village call figures.
-        Buffs-allies-defence bonus applies to ALL call figures when defending.
+        Buffs-allies-defence bonus does NOT apply to call figures.
         """
         if not move:
             return 0
@@ -2270,7 +2270,7 @@ class BattleScreen(SubScreen):
             card_suit = picked.get('suit') if picked else result.get('card_won_suit')
             card_rank = picked.get('rank') if picked else result.get('card_won_rank')
             if card_suit and card_rank:
-                message += "\n\nCard won:"
+                message += "\n\nKey card won:"
                 card_img = CardImg(self.window, card_suit, card_rank)
                 images.append(card_img.front_img)
         elif attacker_won and not is_attacker:
@@ -2281,7 +2281,7 @@ class BattleScreen(SubScreen):
             card_suit = result.get('card_lost_suit')
             card_rank = result.get('card_lost_rank')
             if card_suit and card_rank:
-                message += "\n\nCard lost as loot:"
+                message += "\n\nKey card lost as loot:"
                 card_img = CardImg(self.window, card_suit, card_rank)
                 images.append(card_img.front_img)
 
@@ -2366,7 +2366,7 @@ class BattleScreen(SubScreen):
                 images.append(card_img.front_img)
 
             if loot_lines:
-                loot_title = "Card lost to AI defence:" if is_ai_defender else "Card looted by defending kingdom:"
+                loot_title = "Key card destroyed by AI defence:" if is_ai_defender else "Key card looted by defending kingdom:"
                 message += f"\n\n{loot_title}\n" + "\n".join(
                     f"• {line}" for line in loot_lines
                 )
@@ -2385,7 +2385,7 @@ class BattleScreen(SubScreen):
             card_suit = result.get('card_won_suit')
             card_rank = result.get('card_won_rank')
             if card_suit and card_rank:
-                message += "\n\nCard won:"
+                message += "\n\nKey card won:"
                 card_img = CardImg(self.window, card_suit, card_rank)
                 images.append(card_img.front_img)
 
@@ -3819,16 +3819,6 @@ class BattleScreen(SubScreen):
                                 hasattr(buff_fig.family, 'icon_img')):
                             slot_figures.append((buff_fig, 'buffs_allies'))
 
-            # Add buffs_allies_defence figures on the OWNER's rounds panel
-            # Defence buff applies to ALL call figures when defending
-            if call_fig:
-                defence_list = (self.player_buffs_allies_defence_figures if is_player
-                                else self.opponent_buffs_allies_defence_figures)
-                for buff_fig in defence_list:
-                    if (hasattr(buff_fig, 'family') and
-                            hasattr(buff_fig.family, 'icon_img')):
-                        slot_figures.append((buff_fig, 'buffs_allies_defence'))
-
             # Draw all figure sub-icons for this slot (supports multiple)
             if slot_figures:
                 self._draw_slot_figure_icons(
@@ -3987,16 +3977,6 @@ class BattleScreen(SubScreen):
                         buffs_bonus_txt = self.font_small.render(
                             f"+{total_buff}", True, (255, 255, 255))
 
-                # Check if this call figure receives buffs_allies_defence bonus
-                defence_bonus_txt = None
-                defence_list = (self.player_buffs_allies_defence_figures if is_player
-                                else self.opponent_buffs_allies_defence_figures)
-                if defence_list:
-                    total_def = sum(bf.number_card.value for bf in defence_list if bf.number_card)
-                    if total_def > 0:
-                        defence_bonus_txt = self.font_small.render(
-                            f"+{total_def}", True, (255, 255, 255))
-
                 # Check if this call figure is targeted by distance attack
                 da_penalty_txt = None
                 if r_index is not None:
@@ -4008,9 +3988,8 @@ class BattleScreen(SubScreen):
 
                 ico_w = (suit_ico.get_width() + 3) if suit_ico else 0
                 buffs_w = buffs_bonus_txt.get_width() if buffs_bonus_txt else 0
-                defence_w = defence_bonus_txt.get_width() if defence_bonus_txt else 0
                 penalty_w = da_penalty_txt.get_width() if da_penalty_txt else 0
-                info_w = ico_w + pwr_txt.get_width() + buffs_w + defence_w + penalty_w + 8
+                info_w = ico_w + pwr_txt.get_width() + buffs_w + penalty_w + 8
                 info_h = max(pwr_txt.get_height(),
                              suit_ico.get_height() if suit_ico else 0) + 4
 
@@ -4038,11 +4017,6 @@ class BattleScreen(SubScreen):
                         buffs_bonus_txt,
                         (draw_x, info_rect.centery - buffs_bonus_txt.get_height() // 2))
                     draw_x += buffs_bonus_txt.get_width()
-                if defence_bonus_txt:
-                    self.window.blit(
-                        defence_bonus_txt,
-                        (draw_x, info_rect.centery - defence_bonus_txt.get_height() // 2))
-                    draw_x += defence_bonus_txt.get_width()
                 if da_penalty_txt:
                     self.window.blit(
                         da_penalty_txt,
