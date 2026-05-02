@@ -35,10 +35,13 @@ class FieldScreen(SubScreen):
         self.figure_pending_pickup = None  # Figure waiting for pickup confirmation
         self.figure_pending_upgrade = None  # Figure waiting for upgrade confirmation
         self.figure_pending_defender_selection = None  # Figure waiting for defender selection confirmation
+        self.figure_pending_own_defender_selection = None  # Own figure waiting for own-defender confirmation (Invader Swap)
         self._pending_advance_figure = None  # Figure waiting for advance confirmation
         
         # Defender selection mode flag (True when player needs to select defender vs opponent advance)
         self.defender_selection_mode = False
+        # Conquer own-defender mode (True when Invader Swap conquerer must pick their OWN defender)
+        self.conquer_own_defender_mode = False
         
         # Version of cached figure data last processed by load_figures
         self._last_figures_version = -1
@@ -107,8 +110,10 @@ class FieldScreen(SubScreen):
         self.figure_pending_pickup = None
         self.figure_pending_upgrade = None
         self.figure_pending_defender_selection = None
+        self.figure_pending_own_defender_selection = None
         self._pending_advance_figure = None
         self.defender_selection_mode = False
+        self.conquer_own_defender_mode = False
         self.opponent_card_cache = []
         self.opponent_card_cache_main_count = 0
         self.last_opponent_card_ids = set()
@@ -709,6 +714,47 @@ class FieldScreen(SubScreen):
                         
                         self.figure_pending_defender_selection = None
                     
+                    elif self.figure_pending_own_defender_selection:
+                        # Invader Swap: conquerer confirmed selection of their own defender
+                        target_figure = self.figure_pending_own_defender_selection
+                        from utils.game_service import select_conquer_own_defender
+                        try:
+                            self.game.lock_actions()
+                            result = select_conquer_own_defender(
+                                self.game.game_id,
+                                self.game.player_id,
+                                target_figure.id,
+                            )
+                            if result.get('success'):
+                                if result.get('game'):
+                                    self.game.update_from_dict(result['game'])
+                                self.load_figures()
+                                self.conquer_own_defender_mode = False
+                                self._reset_defender_selectable()
+                                self.game.pending_conquer_own_defender_selection = False
+                                # Re-arm battle-ready
+                                if (self.game.advancing_figure_id
+                                        and self.game.defending_figure_id
+                                        and not self.game.battle_confirmed
+                                        and not self.game.fold_outcome):
+                                    self.game.waiting_for_battle_decision = False
+                                    self.game.battle_ready_shown = False
+                                    self.game.pending_battle_ready = True
+                                self.state.set_msg(f"Selected {target_figure.name} as your defender.")
+                            else:
+                                error_msg = result.get('message', 'Unknown error')
+                                self.make_dialogue_box(
+                                    message=f"Failed to select defender: {error_msg}",
+                                    actions=['ok'],
+                                    icon="error",
+                                    title="Error",
+                                )
+                                self.game.unlock_actions()
+                        except Exception:
+                            self.game.unlock_actions()
+                            raise
+                        self.figure_pending_own_defender_selection = None
+
                     elif self.figure_pending_upgrade:
                         # User confirmed upgrade
                         self.game.lock_actions()
@@ -794,6 +840,7 @@ class FieldScreen(SubScreen):
                     self.figure_pending_pickup = None
                     self.figure_pending_upgrade = None
                     self.figure_pending_defender_selection = None
+                    self.figure_pending_own_defender_selection = None
                     self._pending_advance_figure = None
                     # Restore advance overlay flag on all icons (was disabled for dialogue preview)
                     for icon in self.figure_icons:
@@ -860,6 +907,11 @@ class FieldScreen(SubScreen):
         # If in defender selection mode, only allow selecting own figures as defender
         if self.defender_selection_mode:
             self._handle_defender_selection(events)
+            return
+
+        # If in conquer own-defender mode, original conquerer picks their OWN figure to defend
+        if self.conquer_own_defender_mode:
+            self._handle_conquer_own_defender_selection(events)
             return
         
         # Handle figure detail box events first (if open)
@@ -1445,6 +1497,73 @@ class FieldScreen(SubScreen):
                     )
                     return
 
+    def _handle_conquer_own_defender_selection(self, events):
+        """Handle Invader Swap conquer own-defender mode: conquerer selects their OWN figure."""
+        modifiers = self.game.battle_modifier if isinstance(self.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        has_peasant_war = 'Peasant War' in modifier_types
+        has_civil_war = 'Civil War' in modifier_types
+        village_only = has_peasant_war or has_civil_war
+
+        for event in events:
+            if event.type == MOUSEBUTTONDOWN:
+                clicked_icon = None
+                for icon in reversed(self.figure_icons):
+                    if icon.hovered:
+                        clicked_icon = icon
+                        break
+
+                if not clicked_icon:
+                    continue
+
+                target_figure = clicked_icon.figure
+
+                # Must select own figure
+                if target_figure.player_id != self.game.player_id:
+                    self.make_dialogue_box(
+                        message="You must select one of your OWN figures to defend against the invader.",
+                        actions=[],
+                        icon="error",
+                        title="Invalid Selection",
+                        auto_close_delay=2000,
+                    )
+                    continue
+
+                # Village-only restriction
+                if village_only and hasattr(target_figure, 'family') and target_figure.family.field != 'village':
+                    active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
+                    mod_icons = self._get_modifier_icon_images(active_mod)
+                    self.make_dialogue_box(
+                        message=f"{active_mod} is active — only village figures can defend.",
+                        actions=[],
+                        images=mod_icons if mod_icons else None,
+                        icon="error" if not mod_icons else None,
+                        title=active_mod,
+                        auto_close_delay=2000,
+                    )
+                    continue
+
+                if hasattr(target_figure, 'cannot_defend') and target_figure.cannot_defend:
+                    self.make_dialogue_box(
+                        message=f"{target_figure.name} cannot defend.",
+                        actions=[],
+                        icon="error",
+                        title="Cannot Defend",
+                        auto_close_delay=2000,
+                    )
+                    continue
+
+                # Valid own figure — confirm
+                self.figure_pending_own_defender_selection = target_figure
+                confirm_msg = f"Select {target_figure.name} as your defending figure?"
+                self.make_dialogue_box(
+                    message=confirm_msg,
+                    actions=['yes', 'no'],
+                    images=[clicked_icon],
+                    title="Confirm Own Defender",
+                )
+                return
+
     def _apply_spell_to_target(self, target_figure):
         """
         Apply a pending spell cast to the selected target figure.
@@ -2011,6 +2130,48 @@ class FieldScreen(SubScreen):
         pulse_surface.set_alpha(pulse_alpha)
         self.window.blit(pulse_surface, (text_x, text_y))
 
+    def _draw_conquer_own_defender_prompt(self):
+        """Draw a prominent prompt for Invader Swap own-defender selection."""
+        prompt_text = "SELECT YOUR DEFENDER (INVADER SWAP)"
+        prompt_surface = self.target_prompt_font.render(prompt_text, True, (255, 200, 80))  # Gold
+
+        info_font = settings.get_font(int(settings.FIELD_TITLE_FONT_SIZE * 0.9))
+        info_text = "Click one of your own figures to defend against the invader"
+        info_surface = info_font.render(info_text, True, (255, 220, 140))
+
+        line_gap = int(0.009 * settings.SCREEN_HEIGHT)
+        text_width = max(prompt_surface.get_width(), info_surface.get_width())
+        text_height = prompt_surface.get_height() + info_surface.get_height() + line_gap
+        padding = int(0.018 * settings.SCREEN_HEIGHT)
+        border_w = max(2, int(0.004 * settings.SCREEN_HEIGHT))
+
+        box_rect = pygame.Rect(
+            (settings.SCREEN_WIDTH - text_width - 2 * padding) // 2,
+            settings.get_y(0.02),
+            text_width + 2 * padding,
+            text_height + 2 * padding,
+        )
+
+        background = pygame.Surface((box_rect.width, box_rect.height))
+        background.set_alpha(200)
+        background.fill((0, 0, 0))
+        self.window.blit(background, box_rect.topleft)
+
+        pygame.draw.rect(self.window, (255, 200, 80), box_rect, border_w)
+
+        text_x = box_rect.centerx - prompt_surface.get_width() // 2
+        text_y = box_rect.top + padding
+        self.window.blit(prompt_surface, (text_x, text_y))
+
+        info_x = box_rect.centerx - info_surface.get_width() // 2
+        info_y = text_y + prompt_surface.get_height() + line_gap
+        self.window.blit(info_surface, (info_x, info_y))
+
+        pulse_alpha = int(128 + 127 * abs(pygame.time.get_ticks() % 1000 - 500) / 500)
+        pulse_surface = prompt_surface.copy()
+        pulse_surface.set_alpha(pulse_alpha)
+        self.window.blit(pulse_surface, (text_x, text_y))
+
     def _force_immediate_redraw(self):
         """
         Force an immediate redraw of the field screen to show visual feedback.
@@ -2278,6 +2439,10 @@ class FieldScreen(SubScreen):
         # Draw defender selection prompt if in defender selection mode
         if self.defender_selection_mode:
             self._draw_defender_selection_prompt()
+
+        # Draw own-defender selection prompt for Invader Swap
+        if self.conquer_own_defender_mode:
+            self._draw_conquer_own_defender_prompt()
 
     def _update_defender_selectable(self):
         """Mark figure icons as selectable/non-selectable for defender selection mode."""

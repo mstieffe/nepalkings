@@ -1342,51 +1342,132 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 spell_effect['error'] = True
         
         elif spell.spell_name == 'Invader Swap':
-            try:
-                old_invader_id = game.invader_player_id
-                new_invader = next((p for p in game.players if p.id != old_invader_id), None)
-                
-                if not new_invader:
-                    spell_effect['effect'] = 'Failed to swap invader: opponent not found'
-                    spell_effect['error'] = 'Player not found'
-                else:
-                    old_invader = db.session.get(Player, old_invader_id)
-                    old_invader_name = old_invader.serialize()['username'] if old_invader else 'Unknown'
-                    new_invader_name = new_invader.serialize()['username']
-                    
-                    # Swap invader
-                    game.invader_player_id = new_invader.id
-                    
-                    # Set both players' turns left to 2
-                    old_invader.turns_left = 2
-                    new_invader.turns_left = 2
-                    
-                    # Invader starts next turn
-                    game.turn_player_id = new_invader.id
+            # Conquer prelude path: swap roles with conquer-specific 1-action budget
+            if (
+                game.mode == 'conquer'
+                and isinstance(spell.effect_data, dict)
+                and spell.effect_data.get('prelude_origin')
+            ):
+                try:
+                    old_invader_id = game.invader_player_id
+                    # Validate caster is the original conquerer/attacker
+                    if caster.id != old_invader_id:
+                        logger.warning(
+                            f"[INVADER SWAP CONQUER] Caster {caster.id} is not the "
+                            f"original conquerer {old_invader_id}; rejecting."
+                        )
+                        spell_effect['effect'] = 'Invader Swap can only be used by the conquerer'
+                        spell_effect['error'] = True
+                    else:
+                        new_invader = next((p for p in game.players if p.id != old_invader_id), None)
+                        if not new_invader:
+                            spell_effect['effect'] = 'Failed to swap invader: opponent not found'
+                            spell_effect['error'] = 'Player not found'
+                        else:
+                            old_invader = db.session.get(Player, old_invader_id)
+                            old_invader_name = old_invader.serialize()['username'] if old_invader else 'Unknown'
+                            new_invader_name = new_invader.serialize()['username']
 
-                    # Clear any in-progress advance/defend state to prevent
-                    # a stale advancing_player_id from causing a battle
-                    # deadlock after the swap (Bug #3).
-                    game.advancing_figure_id = None
-                    game.advancing_figure_id_2 = None
-                    game.advancing_player_id = None
-                    game.defending_figure_id = None
-                    game.defending_figure_id_2 = None
-                    
-                    logger.info(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
-                    logger.info(f"[INVADER SWAP] Both players' turns_left set to 2. Advance/defend state cleared. Invader starts next turn.")
-                    
-                    spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 2 turns left. The invader starts next turn.'
-                    spell_effect['turn_set'] = True
-                    spell_effect['sets_turns'] = True
-                    spell_effect['old_invader_id'] = old_invader_id
-                    spell_effect['new_invader_id'] = new_invader.id
-                    spell_effect['invader_swapped'] = True
-            except Exception as e:
-                db.session.rollback()
-                logger.exception('Invader Swap failed')
-                spell_effect['effect'] = 'Failed to swap invader'
-                spell_effect['error'] = True
+                            # Swap invader role
+                            game.invader_player_id = new_invader.id
+
+                            # Conquer-only budget: 1 action each
+                            old_invader.turns_left = 1
+                            new_invader.turns_left = 1
+
+                            # New invader (original defender) acts first
+                            game.turn_player_id = new_invader.id
+
+                            # Clear any stale advance/defend state
+                            game.advancing_figure_id = None
+                            game.advancing_figure_id_2 = None
+                            game.advancing_player_id = None
+                            game.defending_figure_id = None
+                            game.defending_figure_id_2 = None
+                            game.battle_decisions = None
+                            game.battle_confirmed = False
+
+                            # Log ignored defence counter spell (server-only, no player notification)
+                            if game.defence_config_id:
+                                from models import LandConfig
+                                cfg = db.session.get(LandConfig, game.defence_config_id)
+                                if cfg and cfg.counter_spell_name:
+                                    logger.info(
+                                        f"[INVADER SWAP CONQUER] Ignoring defence counter spell "
+                                        f"'{cfg.counter_spell_name}' after conquer Invader Swap "
+                                        f"(game={game.id})"
+                                    )
+
+                            logger.info(
+                                f"[INVADER SWAP CONQUER] Swapped invader from "
+                                f"{old_invader_name} (id={old_invader_id}) to "
+                                f"{new_invader_name} (id={new_invader.id}). "
+                                f"Both players' turns_left set to 1."
+                            )
+
+                            spell_effect['effect'] = (
+                                f'Invader Swap (conquer): {new_invader_name} is now the invader. '
+                                f'They must advance first. Both players have 1 action.'
+                            )
+                            spell_effect['turn_set'] = True
+                            spell_effect['sets_turns'] = True
+                            spell_effect['old_invader_id'] = old_invader_id
+                            spell_effect['new_invader_id'] = new_invader.id
+                            spell_effect['invader_swapped'] = True
+                            spell_effect['conquer_invader_swap'] = True
+                except Exception as e:
+                    db.session.rollback()
+                    logger.exception('Conquer Invader Swap failed')
+                    spell_effect['effect'] = 'Failed to swap invader'
+                    spell_effect['error'] = True
+
+            else:
+                # Duel path: existing behavior (2 turns each)
+                try:
+                    old_invader_id = game.invader_player_id
+                    new_invader = next((p for p in game.players if p.id != old_invader_id), None)
+
+                    if not new_invader:
+                        spell_effect['effect'] = 'Failed to swap invader: opponent not found'
+                        spell_effect['error'] = 'Player not found'
+                    else:
+                        old_invader = db.session.get(Player, old_invader_id)
+                        old_invader_name = old_invader.serialize()['username'] if old_invader else 'Unknown'
+                        new_invader_name = new_invader.serialize()['username']
+
+                        # Swap invader
+                        game.invader_player_id = new_invader.id
+
+                        # Set both players' turns left to 2
+                        old_invader.turns_left = 2
+                        new_invader.turns_left = 2
+
+                        # Invader starts next turn
+                        game.turn_player_id = new_invader.id
+
+                        # Clear any in-progress advance/defend state to prevent
+                        # a stale advancing_player_id from causing a battle
+                        # deadlock after the swap (Bug #3).
+                        game.advancing_figure_id = None
+                        game.advancing_figure_id_2 = None
+                        game.advancing_player_id = None
+                        game.defending_figure_id = None
+                        game.defending_figure_id_2 = None
+
+                        logger.info(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
+                        logger.info(f"[INVADER SWAP] Both players' turns_left set to 2. Advance/defend state cleared. Invader starts next turn.")
+
+                        spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 2 turns left. The invader starts next turn.'
+                        spell_effect['turn_set'] = True
+                        spell_effect['sets_turns'] = True
+                        spell_effect['old_invader_id'] = old_invader_id
+                        spell_effect['new_invader_id'] = new_invader.id
+                        spell_effect['invader_swapped'] = True
+                except Exception as e:
+                    db.session.rollback()
+                    logger.exception('Invader Swap failed')
+                    spell_effect['effect'] = 'Failed to swap invader'
+                    spell_effect['error'] = True
         
         elif spell.spell_name in ('Civil War', 'Peasant War', 'Blitzkrieg'):
             try:

@@ -73,6 +73,7 @@ _SPELL_CARD_COST = {
     'Fill up to 10':    ('10', 1, None),
     'Dump Cards':       ('7', 4, None),
     'Forced Deal':      ('4', 2, None),
+    'Invader Swap':     ('A', 2, None),
     'Poison':           ('3', 2, 'black'),
     'Health Boost':     ('3', 2, 'red'),
     'All Seeing Eye':   ('9', 2, None),
@@ -86,6 +87,7 @@ _CONQUER_PRELUDE_SPELLS = [
     'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
+    'Invader Swap',
 ]
 
 _RIGHT_SECTION_INFO = {

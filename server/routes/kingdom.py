@@ -914,12 +914,14 @@ _SPELL_CARD_COST = {
     'Peasant War':      ('J', 2, None),
     'Civil War':        ('5', 2, None),
     'Blitzkrieg':       ('Q', 2, None),
+    'Invader Swap':     ('A', 2, None),
 }
 
 _CONQUER_PRELUDE_SPELLS = frozenset({
     'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
+    'Invader Swap',
 })
 
 _TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
@@ -990,6 +992,7 @@ _SPELL_TYPE_MAP = {
     'Peasant War':      'tactics',
     'Civil War':        'tactics',
     'Blitzkrieg':       'tactics',
+    'Invader Swap':     'tactics',
 }
 
 
@@ -4258,6 +4261,8 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
                 'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
                 'drawn_cards', 'opponent_drawn_cards', 'cards_given',
                 'cards_received', 'opponent_notification',
+                'conquer_invader_swap', 'old_invader_id', 'new_invader_id',
+                'invader_swapped',
             ):
                 if key in result:
                     extras[key] = result[key]

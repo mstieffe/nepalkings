@@ -523,6 +523,7 @@ class GameScreen(Screen):
         self.check_own_advance_notification()
         self.check_opponent_advance_notification()
         self.check_defender_selection_needed()
+        self.check_conquer_own_defender_selection()
         self.check_waiting_for_defender_pick()
         self.check_battle_ready()
         
@@ -2123,6 +2124,16 @@ class GameScreen(Screen):
         modifier_desc = self._get_battle_modifier_description(spell_name)
         if modifier_desc:
             return f"{spell_name}: {modifier_desc}"
+        if spell_name == 'Invader Swap':
+            if effect_data.get('conquer_invader_swap'):
+                if own:
+                    return ("Invader Swap: the defender became the invader. "
+                            "They must advance first; you will choose a defender "
+                            "unless the advance cannot be blocked.")
+                else:
+                    return ("Opponent cast Invader Swap: you are now the invader "
+                            "and must advance first.")
+            return "Invader Swap: roles have been swapped."
         if spell_name == 'Poison':
             if target_name:
                 return f"Poison: {target_name} receives -6 battle power."
@@ -2439,6 +2450,36 @@ class GameScreen(Screen):
         """Handle response from forced advance confirmation — switch to field screen."""
         self.state.subscreen = 'field'
     
+    def check_conquer_own_defender_selection(self):
+        """After a conquer Invader Swap blockable advance, prompt the original
+        conquerer to select one of their own figures as their defender."""
+        if not self.state.game or not self.state.game.pending_conquer_own_defender_selection:
+            return
+        if self.state.game.conquer_own_defender_selection_shown:
+            return
+
+        self.state.game.conquer_own_defender_selection_shown = True
+
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        restriction_note = ""
+        if 'Civil War' in modifier_types:
+            restriction_note = "\n\nCivil War is active — only village figures may defend."
+        elif 'Peasant War' in modifier_types:
+            restriction_note = "\n\nPeasant War is active — only village figures may defend."
+
+        message = (
+            f"Invader Swap — Choose Your Defender\n\n"
+            f"The opponent has advanced. Select one of your own figures to defend against them.\n\n"
+            f"Fortresses may also defend if legal.{restriction_note}"
+        )
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'icon': 'info',
+            'title': 'Invader Swap — Choose Defender',
+        })
+
     def check_waiting_for_defender_pick(self):
         """Check if defender (Player B) should be notified that opponent is picking their battle figure.
         Instead of a click-through dialogue, we just activate the persistent 'BATTLE INCOMING' prompt."""
@@ -4848,6 +4889,14 @@ class GameScreen(Screen):
                         field_screen.defender_selection_mode = True
                         field_screen._update_defender_selectable()
                     self.state.game.defender_selection_dialogue_shown = True
+                # Handle Invader Swap own-defender selection 'ok' response
+                elif (response == 'ok' and self.state.game and
+                      getattr(self.state.game, 'pending_conquer_own_defender_selection', False)
+                      and not getattr(self.state.game, 'defending_figure_id', None)):
+                    self.state.subscreen = 'field'
+                    field_screen = self.subscreens.get('field')
+                    if field_screen:
+                        field_screen.conquer_own_defender_mode = True
                 elif (response == 'got it!' and self.state.game and
                       getattr(self.state.game, 'pending_conquer_prelude_target', False)):
                     self.state.subscreen = 'field'

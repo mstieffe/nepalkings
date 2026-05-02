@@ -100,6 +100,19 @@ def select_defender(game_id, player_id, figure_id):
         return {'success': False, 'message': f"Failed to select defender: {str(e)}"}
 
 
+def select_conquer_own_defender(game_id, player_id, figure_id):
+    """Select own figure as defender after a conquer Invader Swap advance."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/conquer_select_own_defender',
+            json={'game_id': game_id, 'player_id': player_id, 'figure_id': figure_id},
+            timeout=10
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to select own defender: {str(e)}"}
+
+
 def resolve_conquer_prelude_target(game_id, spell_id, target_figure_id):
     """Resolve pending conquer prelude target selection for the invader."""
     try:

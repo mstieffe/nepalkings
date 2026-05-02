@@ -155,6 +155,11 @@ class Game:
         self.civil_war_defender_second = False  # True when waiting for second defender figure
         self.civil_war_required_color = None  # 'offensive' or 'defensive' — required color for second pick
 
+        # Conquer Invader Swap: original conquerer must select their own defender
+        # after the automated invader advances a blockable figure.
+        self.pending_conquer_own_defender_selection = False
+        self.conquer_own_defender_selection_shown = False
+
         # Battle decision tracking (fold/battle)
         self.battle_decisions = game_dict.get('battle_decisions')
         self.battle_confirmed = game_dict.get('battle_confirmed', False)
@@ -573,6 +578,46 @@ class Game:
             not self.waiting_for_defender_pick_shown and
             not (has_civil_war and my_turns_left > 0)):
             self.pending_waiting_for_defender_pick = True
+
+        # Detect: Conquer Invader Swap — original conquerer must select own defender.
+        # Active when: mode=conquer, Invader Swap spell executed, we are the
+        # original conquerer (old_invader_id), opponent has advanced, it's our
+        # turn, no defender chosen, and advance is blockable.
+        if (not battle_active
+                and self.mode == 'conquer'
+                and is_now_our_turn
+                and self.advancing_figure_id
+                and self.advancing_player_id != self.player_id
+                and not self.defending_figure_id
+                and not self.pending_conquer_own_defender_selection
+                and not self.conquer_own_defender_selection_shown):
+            active_spells = game_dict.get('active_spells', [])
+            swap_spell = next(
+                (s for s in active_spells
+                 if s.get('spell_name') == 'Invader Swap'
+                 and isinstance(s.get('effect_data'), dict)
+                 and s['effect_data'].get('conquer_invader_swap')
+                 and s['effect_data'].get('old_invader_id') == self.player_id),
+                None,
+            )
+            if swap_spell:
+                # Check if the advancing figure is cannot_be_blocked
+                # (if so, AI picks the target, not the conquerer)
+                adv_fig_blockable = True
+                for p in game_dict.get('players', []):
+                    for fig in p.get('figures', []):
+                        if fig.get('id') == self.advancing_figure_id:
+                            if fig.get('cannot_be_blocked'):
+                                adv_fig_blockable = False
+                            break
+                if adv_fig_blockable:
+                    self.pending_conquer_own_defender_selection = True
+                    # Suppress the generic waiting-for-defender notification
+                    self.pending_waiting_for_defender_pick = False
+                    logger.info(
+                        f"[INVADER_SWAP] Own defender selection triggered: "
+                        f"advancing={self.advancing_figure_id}"
+                    )
         
         # Battle is ready when both sides have their figures set
         battle_ready = (not battle_active and

@@ -1087,8 +1087,17 @@ def _conquer_play_battle_round(base, game, ai_player_id):
 
 
 def _conquer_should_cast_counter_spell(game, ai_player_id):
-    """Return True when this defender response should use its configured counter spell."""
+    """Return True when this defender response should use its configured counter spell.
+
+    Returns False when Invader Swap is active because the counter spell is
+    ignored after the role swap (see plan section 7).
+    """
     if not game or game.mode != 'conquer':
+        return False
+    # After Invader Swap the AI may now be the invader — counter spell
+    # is only cast by the defender, and is always ignored after swap anyway.
+    from routes.games import _conquer_invader_swap_active
+    if _conquer_invader_swap_active(game):
         return False
     automated_defender = _conquer_automated_defender_player(game)
     if automated_defender and automated_defender.id != ai_player_id:
@@ -1127,10 +1136,62 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
     Normally this selects a counter-advance defender.  After Invader Swap the
     same original land defender may be the current invader, so normal advance
     eligibility must not reject figures with ``cannot_defend``.
+
+    After Invader Swap and when the AI is the new invader, this function picks
+    the advance figure using defence-config priority: configured battle figure
+    first (if legal), then strongest legal figure by power proxy.
     """
-    from models import Figure
+    from models import Figure, LandConfig
+    from routes.games import _conquer_invader_swap_active
     modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
     has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+    # After Invader Swap: AI is the new invader advancing for the first time
+    swap_active = _conquer_invader_swap_active(game)
+    is_new_invader_after_swap = (
+        swap_active
+        and game.invader_player_id == ai_player_id
+        and not game.advancing_figure_id
+    )
+
+    if is_new_invader_after_swap:
+        # Try configured defence battle figure first
+        if game.defence_config_id:
+            cfg = db.session.get(LandConfig, game.defence_config_id)
+            if cfg and cfg.battle_figure_id:
+                game_fig = Figure.query.filter_by(
+                    game_id=game.id,
+                    player_id=ai_player_id,
+                    source_config_figure_id=cfg.battle_figure_id,
+                ).first()
+                if game_fig and _conquer_figure_can_advance(
+                    game_fig, ai_player_id, game.id, counter=False
+                ):
+                    return game_fig.id
+
+        # Fallback: strongest legal advance figure (proxy: sum of card values)
+        candidates = Figure.query.filter_by(
+            game_id=game.id,
+            player_id=ai_player_id,
+        ).all()
+        legal = [
+            f for f in candidates
+            if _conquer_figure_can_advance(f, ai_player_id, game.id, counter=False)
+        ]
+        if not legal:
+            return None
+        def _figure_power_proxy(fig):
+            try:
+                card_sum = sum(
+                    c.card.value for c in fig.cards
+                    if c.card and hasattr(c.card, 'value') and c.card.value
+                )
+            except Exception:
+                card_sum = 0
+            return (card_sum, -(fig.id))
+        legal.sort(key=_figure_power_proxy, reverse=True)
+        return legal[0].id
+
     is_counter = bool(game.advancing_figure_id and game.advancing_player_id != ai_player_id)
 
     def _pick_second(first_id):
@@ -1290,21 +1351,49 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                     break
 
             elif phase == 'select_defender':
-                # AI picks opponent figure — choose first available
+                # AI picks opponent figure — for normal conquer: choose first available.
+                # After Invader Swap with a cannot_be_blocked advance: use
+                # field-priority selection (village → military → castle).
                 with app.app_context():
                     from models import Game, Player, Figure, db
+                    from routes.games import _conquer_invader_swap_active, _figure_can_be_selected_as_defender
                     game = db.session.get(Game, game_id)
                     opp_player = Player.query.filter(
                         Player.game_id == game_id,
                         Player.id != ai_player_id
                     ).first()
-                    if opp_player:
+                    fig_id = None
+                    if opp_player and game:
                         opp_figs = Figure.query.filter_by(
                             game_id=game_id, player_id=opp_player.id
                         ).all()
-                        fig_id = opp_figs[0].id if opp_figs else None
-                    else:
-                        fig_id = None
+                        # Check if this is an Invader Swap + unblockable advance
+                        swap_unblockable = (
+                            _conquer_invader_swap_active(game)
+                            and game.advancing_figure_id
+                        )
+                        adv_fig = db.session.get(Figure, game.advancing_figure_id) if game.advancing_figure_id else None
+                        if swap_unblockable and adv_fig and getattr(adv_fig, 'cannot_be_blocked', False):
+                            # Field-priority selection: village → military → castle
+                            modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+                            from game_service.figure_rule_helpers import modifiers_require_village
+                            village_only = modifiers_require_village(modifiers)
+                            valid_figs = [
+                                f for f in opp_figs
+                                if _figure_can_be_selected_as_defender(f)
+                                and (not village_only or f.field == 'village')
+                            ]
+                            for field_priority in ('village', 'military', 'castle'):
+                                pool = [f for f in valid_figs if f.field == field_priority]
+                                if pool:
+                                    import random as _random
+                                    fig_id = _random.choice(pool).id
+                                    break
+                            if not fig_id and valid_figs:
+                                import random as _random
+                                fig_id = _random.choice(valid_figs).id
+                        else:
+                            fig_id = opp_figs[0].id if opp_figs else None
                 if fig_id:
                     _exec_select_defender(base, game_id, ai_player_id,
                                           {'figure_id': fig_id})

@@ -24,6 +24,7 @@ _CONQUER_PRELUDE_SPELLS = frozenset({
     'Draw 2 MainCards', 'Fill up to 10', 'Dump Cards', 'Forced Deal',
     'Poison', 'Health Boost', 'All Seeing Eye', 'Explosion',
     'Peasant War', 'Civil War', 'Blitzkrieg',
+    'Invader Swap',
 })
 
 _TARGETED_PRELUDE_SPELLS = frozenset({'Poison', 'Health Boost', 'Explosion'})
@@ -171,6 +172,31 @@ def _conquer_original_defender_player(game):
     if not attacker or not game or not game.players:
         return None
     return next((p for p in game.players if p.id != attacker.id), None)
+
+
+def _conquer_invader_swap_spell(game):
+    """Return the executed conquer Invader Swap ActiveSpell, or None."""
+    if not game or game.mode != 'conquer':
+        return None
+    from models import ActiveSpell
+    spell = ActiveSpell.query.filter_by(
+        game_id=game.id,
+        spell_name='Invader Swap',
+    ).first()
+    if spell and isinstance(spell.effect_data, dict) and spell.effect_data.get('conquer_invader_swap'):
+        return spell
+    return None
+
+
+def _conquer_invader_swap_active(game):
+    """True when a conquer Invader Swap has executed and roles have been swapped."""
+    if not game or game.mode != 'conquer':
+        return False
+    attacker = _conquer_attacker_player(game)
+    if not attacker:
+        return False
+    # Swap is active when the original conquerer is no longer the invader
+    return game.invader_player_id != attacker.id and _conquer_invader_swap_spell(game) is not None
 
 
 def _get_ai_template_counter_spell(game):
@@ -2893,6 +2919,232 @@ def skip_civil_war_second():
         db.session.rollback()
         logger.exception('Failed to skip civil war second')
         return jsonify({'success': False, 'message': 'Failed to skip'}), 400
+
+
+@games.route('/conquer_select_own_defender', methods=['POST'])
+@require_token
+def conquer_select_own_defender():
+    """After a conquer Invader Swap, the original conquerer (now defender)
+    selects one of their own figures to defend against the automated invader's
+    blockable advance.
+
+    Request JSON:
+    {
+        "game_id": int,
+        "player_id": int,
+        "figure_id": int
+    }
+    """
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+        figure_id = data['figure_id']
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
+
+        game = db.session.get(Game, game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        if game.mode != 'conquer':
+            return jsonify({'success': False, 'message': 'Only available in conquer mode'}), 400
+
+        if not _conquer_invader_swap_active(game):
+            return jsonify({'success': False, 'message': 'Invader Swap is not active'}), 400
+
+        # The caller must be the original conquerer (now acting as defender)
+        attacker = _conquer_attacker_player(game)
+        if not attacker or attacker.id != player_id:
+            return jsonify({'success': False, 'message': 'Only the original conquerer can select their own defender'}), 403
+
+        # It must be this player's turn
+        if game.turn_player_id != player_id:
+            return jsonify({'success': False, 'message': 'Not your turn'}), 400
+
+        # The automated invader must have already advanced
+        if not game.advancing_figure_id or not game.advancing_player_id:
+            return jsonify({'success': False, 'message': 'No advance in progress'}), 400
+
+        # The advancing player must be the opponent (automated invader)
+        if game.advancing_player_id == player_id:
+            return jsonify({'success': False, 'message': 'You are the advancing player'}), 400
+
+        # If the advancing figure is cannot_be_blocked, reject — AI selects target
+        adv_fig = db.session.get(Figure, game.advancing_figure_id)
+        if adv_fig and _figure_has_family_skill(adv_fig, 'cannot_be_blocked'):
+            return jsonify({
+                'success': False,
+                'message': 'Cannot select own defender: the advancing figure cannot be blocked. The invader selects the target.',
+                'reason': 'cannot_be_blocked',
+            }), 400
+
+        figure = db.session.get(Figure, figure_id)
+        if not figure:
+            return jsonify({'success': False, 'message': 'Figure not found'}), 404
+
+        # Figure must belong to this player (own defender)
+        if figure.player_id != player_id:
+            return jsonify({'success': False, 'message': 'You must select your own figure'}), 400
+
+        # Figure must not be already advancing
+        if figure.id == game.advancing_figure_id or figure.id == game.advancing_figure_id_2:
+            return jsonify({'success': False, 'message': 'This figure is already advancing'}), 400
+
+        # Check battle modifiers (Peasant War/Civil War: village only)
+        modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
+        has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+        has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+        if (has_peasant_war or has_civil_war) and figure.field != 'village':
+            modifier_name = 'Civil War' if has_civil_war else 'Peasant War'
+            return jsonify({'success': False, 'message': f'{modifier_name}: only village figures can defend'}), 400
+
+        # cannot_defend blocks selection (but cannot_attack is allowed — fortresses)
+        if _figure_has_family_skill(figure, 'cannot_defend'):
+            return jsonify({'success': False, 'message': f'{figure.name} cannot defend'}), 400
+
+        # cannot_be_targeted blocks selection
+        if _figure_has_family_skill(figure, 'cannot_be_targeted'):
+            return jsonify({'success': False, 'message': f'{figure.name} cannot be targeted'}), 400
+
+        # Enforce must_be_attacked among own figures
+        own_mandatory = _must_be_attacked_defenders(game, player_id)
+        if not game.defending_figure_id and own_mandatory and figure.id not in {f.id for f in own_mandatory}:
+            forced_names = ', '.join(sorted(f.name for f in own_mandatory))
+            return jsonify({
+                'success': False,
+                'message': f'Must attack {forced_names} before selecting another defender',
+                'reason': 'must_be_attacked',
+            }), 400
+
+        # Checkmate: can only be selected if no other legal non-checkmate defender exists
+        if getattr(figure, 'checkmate', False):
+            other_own = Figure.query.filter(
+                Figure.player_id == player_id,
+                Figure.id != figure_id,
+                Figure.game_id == game_id,
+            ).all()
+            has_non_checkmate = any(
+                not getattr(f, 'checkmate', False)
+                and not _figure_has_family_skill(f, 'cannot_defend')
+                and not _figure_has_family_skill(f, 'cannot_be_targeted')
+                and (not (has_peasant_war or has_civil_war) or f.field == 'village')
+                for f in other_own
+            )
+            if has_non_checkmate:
+                return jsonify({'success': False, 'message': f'{figure.name} has Checkmate and cannot be selected as a defender'}), 400
+
+        # Resource deficit: if selected figure is in deficit, auto-lose
+        if _check_figure_resource_deficit(figure, player_id, game.id):
+            # Check if any non-deficit own defender is available
+            all_own = Figure.query.filter_by(player_id=player_id, game_id=game_id).all()
+            non_deficit_valid = [
+                f for f in all_own
+                if not _check_figure_resource_deficit(f, player_id, game.id)
+                and not _figure_has_family_skill(f, 'cannot_defend')
+                and not _figure_has_family_skill(f, 'cannot_be_targeted')
+                and (not (has_peasant_war or has_civil_war) or f.field == 'village')
+            ]
+            if non_deficit_valid:
+                return jsonify({'success': False, 'message': f'{figure.name} has a resource deficit'}), 400
+            # No valid non-deficit defender — auto-lose for original conquerer
+            invader_player = db.session.get(Player, game.advancing_player_id)
+            original_conquerer = attacker
+            user = db.session.get(User, original_conquerer.user_id)
+            username = user.username if user else f"Player {player_id}"
+            result = _resolve_conquer_auto_loss(
+                game, invader_player, original_conquerer,
+                original_conquerer,
+                f"{username} has no valid defending figures (all in deficit).",
+                'auto_loss',
+                'no_valid_own_defender',
+                'all_own_defenders_in_deficit',
+            )
+            return jsonify({'success': True, **result})
+
+        civil_war_need_second = False
+        civil_war_color = None
+        is_second_pick = False
+
+        if has_civil_war:
+            if game.defending_figure_id and not game.defending_figure_id_2:
+                if figure_id == game.defending_figure_id:
+                    return jsonify({'success': False, 'message': 'This figure is already selected'}), 400
+                first_defender = db.session.get(Figure, game.defending_figure_id)
+                if first_defender and first_defender.color != figure.color:
+                    msg = (f"Civil War requires same-color defenders. "
+                           f"Keeping first defender only: {first_defender.name}.")
+                    return jsonify({
+                        'success': True,
+                        'figure_name': first_defender.name,
+                        'civil_war_need_second': False,
+                        'civil_war_color': first_defender.color,
+                        'is_second_pick': False,
+                        'civil_war_second_rejected': True,
+                        'message': msg,
+                        'game': game.serialize()
+                    })
+                game.defending_figure_id_2 = figure_id
+                is_second_pick = True
+            else:
+                game.defending_figure_id = figure_id
+                # Check if a second same-color village defender is available
+                eligible_seconds = Figure.query.filter(
+                    Figure.player_id == player_id,
+                    Figure.id != figure_id,
+                    Figure.field == 'village',
+                    Figure.color == figure.color,
+                    Figure.game_id == game_id,
+                ).all()
+                eligible_seconds = [
+                    f for f in eligible_seconds
+                    if not _figure_has_family_skill(f, 'cannot_defend')
+                    and not _figure_has_family_skill(f, 'cannot_be_targeted')
+                ]
+                if eligible_seconds:
+                    civil_war_need_second = True
+                    civil_war_color = figure.color
+        else:
+            game.defending_figure_id = figure_id
+
+        player = db.session.get(Player, player_id)
+
+        if not civil_war_need_second:
+            # Consume the defender response turn; flip to automated invader
+            player.turns_left -= 1
+            game.turn_player_id = game.advancing_player_id
+
+        # Log
+        user = db.session.get(User, player.user_id)
+        username = user.username if user else f"Player {player_id}"
+        pick_suffix = " (2nd Civil War pick)" if is_second_pick else ""
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=player.turns_left,
+            message=f"{username} chose {figure.name} to defend against the invader.{pick_suffix}",
+            author=username,
+            type='own_defender_select',
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'figure_name': figure.name,
+            'civil_war_need_second': civil_war_need_second,
+            'civil_war_color': civil_war_color,
+            'is_second_pick': is_second_pick,
+            'game': game.serialize(),
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        logger.exception('Failed to select own defender')
+        return jsonify({'success': False, 'message': 'Failed to select own defender'}), 400
 
 
 def _resolve_conquer_auto_loss(game, winner_player, loser_player,
