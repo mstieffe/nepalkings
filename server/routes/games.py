@@ -3260,11 +3260,14 @@ def _resolve_conquer_auto_loss(game, winner_player, loser_player,
     last_result['auto_loss_reason'] = auto_loss_reason
     last_result['auto_loss_detail'] = auto_loss_detail
     game.last_battle_result = last_result
+    game.auto_loss_reason = auto_loss_reason
+    game.auto_loss_detail = auto_loss_detail
 
     # Surface the auto-loss reason so the client can show a tailored
     # message even though the game is already 'finished'.
     result['auto_loss_reason'] = auto_loss_reason
     result['auto_loss_detail'] = auto_loss_detail
+    result['game'] = game.serialize()
 
     db.session.commit()
     logger.info(
@@ -3272,6 +3275,71 @@ def _resolve_conquer_auto_loss(game, winner_player, loser_player,
         f"winner={winner_player.id} loser={loser_player.id}"
     )
     return result
+
+
+@games.route('/conquer_withdraw', methods=['POST'])
+@require_token
+def conquer_withdraw():
+    """Let the original conquer attacker intentionally forfeit the conquest."""
+    try:
+        data = request.json
+        game_id = data['game_id']
+        player_id = data['player_id']
+
+        err = verify_player_ownership(player_id)
+        if err:
+            return err
+
+        game = db.session.get(Game, game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        finished_conquer = _serialize_finished_conquer_result(game)
+        if finished_conquer:
+            return jsonify(finished_conquer)
+
+        if game.mode != 'conquer':
+            return jsonify({
+                'success': False,
+                'message': 'Withdraw is only available in conquer battles',
+            }), 400
+
+        attacker = _conquer_attacker_player(game)
+        if not attacker or attacker.id != player_id:
+            return jsonify({
+                'success': False,
+                'message': 'Only the conquer attacker can withdraw',
+            }), 403
+
+        defender = _conquer_original_defender_player(game)
+        if defender is None:
+            return jsonify({
+                'success': False,
+                'message': 'Could not determine defender',
+            }), 400
+
+        attacker_user = db.session.get(User, attacker.user_id)
+        defender_user = db.session.get(User, defender.user_id)
+        attacker_name = attacker_user.username if attacker_user else f'Player {attacker.id}'
+        defender_name = defender_user.username if defender_user else 'Defender'
+
+        return jsonify(_resolve_conquer_auto_loss(
+            game,
+            winner_player=defender,
+            loser_player=attacker,
+            requesting_player=attacker,
+            log_message=(
+                f'{attacker_name} withdrew from the conquest. '
+                f'{defender_name} holds the land.'
+            ),
+            log_type='auto_loss',
+            auto_loss_reason='withdraw',
+            auto_loss_detail=attacker_name,
+        ))
+    except Exception as e:
+        db.session.rollback()
+        logger.exception(f"[CONQUER_WITHDRAW] Error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @games.route('/cannot_advance_loss', methods=['POST'])

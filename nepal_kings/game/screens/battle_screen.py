@@ -1555,6 +1555,16 @@ class BattleScreen(SubScreen):
         self.player_played[skipped_round] = {
             'family_name': 'Skip', 'value': 0, 'suit': '', '_skipped': True
         }
+        parent = getattr(self.state, 'parent_screen', None)
+        if (getattr(self.game, 'mode', 'duel') == 'conquer'
+                and parent and hasattr(parent, 'emit_conquer_event')):
+            parent.emit_conquer_event(
+                key=f'battle_auto_skip:{skipped_round}',
+                title='Round skipped',
+                detail=f'Round {skipped_round + 1}: no unused battle move was available.',
+                phase='battle',
+                tone='warning',
+            )
 
         # Update round and turn from server response
         self.current_round = result.get('battle_round', self.current_round)
@@ -1850,6 +1860,16 @@ class BattleScreen(SubScreen):
 
         # Mark the move as used in the player_moves list too
         self.player_moves[move_idx]['played_round'] = played_round
+        parent = getattr(self.state, 'parent_screen', None)
+        if (getattr(self.game, 'mode', 'duel') == 'conquer'
+                and parent and hasattr(parent, 'emit_conquer_event')):
+            parent.emit_conquer_event(
+                key=f'battle_move_played:{played_round}:{move_idx}',
+                title='Battle move played',
+                detail=f'Round {played_round + 1}: {family_name} committed.',
+                phase='battle',
+                tone='action',
+            )
 
         self._has_played_move_this_turn = True
         self._gambled_this_round = False

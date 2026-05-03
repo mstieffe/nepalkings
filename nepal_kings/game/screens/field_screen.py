@@ -15,6 +15,16 @@ import logging
 logger = logging.getLogger('nk.screens.field')
 
 
+class _ImmediateDialogueResponse:
+    """Tiny adapter used by conquer command-panel confirmations."""
+
+    def __init__(self, response):
+        self.response = response
+
+    def update(self, _events):
+        return self.response
+
+
 
 class FieldScreen(SubScreen):
     """Screen for displaying figures on the field."""
@@ -534,6 +544,15 @@ class FieldScreen(SubScreen):
                             if result.get('success'):
                                 logger.debug(f"[FIELD] Advanced {figure.name} successfully")
                                 self.state.set_msg(f"Advanced {figure.name} toward battle!")
+                                parent = self._conquer_parent()
+                                if parent and hasattr(parent, 'emit_conquer_event'):
+                                    parent.emit_conquer_event(
+                                        key=f'advance_success:{figure.id}',
+                                        title='Figure advanced',
+                                        detail=f'{figure.name} advanced toward battle.',
+                                        phase='advance',
+                                        tone='good',
+                                    )
                                 # Update game state from response
                                 # (update_from_dict -> unlock_actions)
                                 if result.get('game'):
@@ -679,6 +698,15 @@ class FieldScreen(SubScreen):
                                             title='Civil War'
                                         )
                                     self.state.set_msg(f"Selected {selected_name} as opponent's defender.")
+                                    parent = self._conquer_parent()
+                                    if parent and hasattr(parent, 'emit_conquer_event'):
+                                        parent.emit_conquer_event(
+                                            key=f'defender_selected:{target_figure.id}',
+                                            title='Defender selected',
+                                            detail=f'{selected_name} will defend against your advance.',
+                                            phase='defender',
+                                            tone='good',
+                                        )
                                     self.game.pending_defender_selection = False
                                     # Defender was selected manually. Re-arm battle-ready
                                     # transition in case a stale guard flag was left set.
@@ -758,6 +786,16 @@ class FieldScreen(SubScreen):
                                         self.game.pending_battle_ready = True
                                     selected_name = result.get('figure_name', target_figure.name)
                                     self.state.set_msg(f"Selected {selected_name} as your defender.")
+                                    parent = self._conquer_parent()
+                                    if parent and hasattr(parent, 'emit_conquer_event'):
+                                        parent.emit_conquer_event(
+                                            key=f'own_defender_selected:{target_figure.id}',
+                                            title='Own defender selected',
+                                            detail=f'{selected_name} will defend against the Invader Swap advance.',
+                                            phase='defender',
+                                            tone='good',
+                                            spell_names=['Invader Swap'],
+                                        )
                             else:
                                 error_msg = result.get('message', 'Unknown error')
                                 self.make_dialogue_box(
@@ -979,13 +1017,23 @@ class FieldScreen(SubScreen):
                             resources_data={}
                         )
                     advance_icon.show_advance_overlay = False
-                    self.make_dialogue_box(
-                        message=f"Do you want to advance {figure.name} toward battle?",
-                        actions=['yes', 'cancel'],
-                        images=[advance_icon],
-                        icon=None,
-                        title="Advance Figure"
-                    )
+                    conquer_parent = self._conquer_parent()
+                    if conquer_parent:
+                        conquer_parent.request_conquer_figure_confirmation(
+                            'advance',
+                            figure,
+                            icon=advance_icon,
+                            message=f"Advance {figure.name} toward battle?",
+                            title="Advance Figure",
+                        )
+                    else:
+                        self.make_dialogue_box(
+                            message=f"Do you want to advance {figure.name} toward battle?",
+                            actions=['yes', 'cancel'],
+                            images=[advance_icon],
+                            icon=None,
+                            title="Advance Figure"
+                        )
                     # Close detail box
                     self.figure_detail_box = None
                     for icon in self.figure_icons:
@@ -1247,6 +1295,47 @@ class FieldScreen(SubScreen):
         """Handle actions when a figure is clicked."""
         logger.debug(f"Selected figure: {figure.name}")
         # Add additional functionality for interacting with the figure
+
+    def _conquer_parent(self):
+        parent = getattr(self.state, 'parent_screen', None)
+        if (parent and getattr(self.game, 'mode', 'duel') == 'conquer'
+                and hasattr(parent, 'request_conquer_figure_confirmation')):
+            return parent
+        return None
+
+    def cancel_conquer_panel_confirmation(self):
+        """Cancel a command-panel figure confirmation."""
+        self.figure_pending_defender_selection = None
+        self.figure_pending_own_defender_selection = None
+        self._pending_advance_figure = None
+        for icon in self.figure_icons:
+            icon.show_advance_overlay = True
+        parent = self._conquer_parent()
+        if parent and hasattr(parent, 'clear_conquer_figure_confirmation'):
+            parent.clear_conquer_figure_confirmation()
+
+    def _confirm_conquer_panel_pending(self):
+        """Run the existing yes-confirmation path without opening a modal."""
+        if getattr(self.game, 'game_over', False) or self.game.action_in_progress:
+            return False
+        self.dialogue_box = _ImmediateDialogueResponse('yes')
+        self.handle_events([])
+        parent = self._conquer_parent()
+        if parent and hasattr(parent, 'clear_conquer_figure_confirmation'):
+            parent.clear_conquer_figure_confirmation()
+        return True
+
+    def confirm_pending_advance(self):
+        return bool(getattr(self, '_pending_advance_figure', None)
+                    and self._confirm_conquer_panel_pending())
+
+    def confirm_pending_defender_selection(self):
+        return bool(self.figure_pending_defender_selection
+                    and self._confirm_conquer_panel_pending())
+
+    def confirm_pending_own_defender_selection(self):
+        return bool(self.figure_pending_own_defender_selection
+                    and self._confirm_conquer_panel_pending())
     
     def _handle_target_selection(self, events):
         """Handle events when in target selection mode."""
@@ -1521,12 +1610,22 @@ class FieldScreen(SubScreen):
                         confirm_msg = f"Are you sure you want to select {target_figure.name} as the defender for battle?"
                     else:
                         confirm_msg = "Are you sure you want to select this hidden figure as the defender for battle?"
-                    self.make_dialogue_box(
-                        message=confirm_msg,
-                        actions=['yes', 'no'],
-                        images=[clicked_icon],
-                        title="Confirm Defender"
-                    )
+                    conquer_parent = self._conquer_parent()
+                    if conquer_parent:
+                        conquer_parent.request_conquer_figure_confirmation(
+                            'opponent_defender',
+                            target_figure,
+                            icon=clicked_icon,
+                            message=confirm_msg,
+                            title="Confirm Defender",
+                        )
+                    else:
+                        self.make_dialogue_box(
+                            message=confirm_msg,
+                            actions=['yes', 'no'],
+                            images=[clicked_icon],
+                            title="Confirm Defender"
+                        )
                     return
 
     def _handle_conquer_own_defender_selection(self, events):
@@ -1613,15 +1712,25 @@ class FieldScreen(SubScreen):
                     )
                     continue
 
-                # Valid own figure — confirm
+                # Valid own figure - confirm
                 self.figure_pending_own_defender_selection = target_figure
                 confirm_msg = f"Select {target_figure.name} as your defending figure?"
-                self.make_dialogue_box(
-                    message=confirm_msg,
-                    actions=['yes', 'no'],
-                    images=[clicked_icon],
-                    title="Confirm Own Defender",
-                )
+                conquer_parent = self._conquer_parent()
+                if conquer_parent:
+                    conquer_parent.request_conquer_figure_confirmation(
+                        'own_defender',
+                        target_figure,
+                        icon=clicked_icon,
+                        message=confirm_msg,
+                        title="Confirm Own Defender",
+                    )
+                else:
+                    self.make_dialogue_box(
+                        message=confirm_msg,
+                        actions=['yes', 'no'],
+                        images=[clicked_icon],
+                        title="Confirm Own Defender",
+                    )
                 return
 
     def _apply_spell_to_target(self, target_figure):
@@ -1841,13 +1950,23 @@ class FieldScreen(SubScreen):
             title = "Prelude Spell"
             if 'Explosion' in spell_name and 'destroyed' in success_msg.lower():
                 title = "Figure Destroyed"
-
-            self.make_dialogue_box(
-                message=success_msg,
-                actions=['ok'],
-                icon="magic",
-                title=title
-            )
+            parent = self._conquer_parent()
+            if parent and hasattr(parent, 'emit_conquer_event'):
+                parent.emit_conquer_event(
+                    key=f'prelude_resolved:{spell_id}:{target_figure.id}',
+                    title=title,
+                    detail=success_msg,
+                    phase='prelude',
+                    tone='good' if title != 'Figure Destroyed' else 'warning',
+                    spell_names=[spell_name],
+                )
+            else:
+                self.make_dialogue_box(
+                    message=success_msg,
+                    actions=['ok'],
+                    icon="magic",
+                    title=title
+                )
 
             game_over_info = spell_effect.get('game_over')
             if game_over_info:
@@ -2491,17 +2610,20 @@ class FieldScreen(SubScreen):
 
         # Note: Figure detail box is drawn in game_screen.py to ensure it's on top of hand cards
         
+        conquer_parent = self._conquer_parent()
+
         # Draw target selection prompt if in target selection mode
         if ((hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast)
-            or getattr(self.state, 'pending_conquer_prelude_target', None)):
+            or (getattr(self.state, 'pending_conquer_prelude_target', None)
+                and not conquer_parent)):
             self._draw_target_selection_prompt()
         
         # Draw defender selection prompt if in defender selection mode
-        if self.defender_selection_mode:
+        if self.defender_selection_mode and not conquer_parent:
             self._draw_defender_selection_prompt()
 
         # Draw own-defender selection prompt for Invader Swap
-        if self.conquer_own_defender_mode:
+        if self.conquer_own_defender_mode and not conquer_parent:
             self._draw_conquer_own_defender_prompt()
 
     def _update_defender_selectable(self):

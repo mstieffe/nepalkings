@@ -1299,6 +1299,9 @@ class GameScreen(Screen):
                     'actions': ['ok'],
                     'icon': 'welcome',
                     'title': 'Conquer Battle',
+                    'phase': 'start',
+                    'tone': 'info',
+                    'event_key': f"conquer_start:{getattr(self.state.game, 'game_id', 'local')}",
                 })
 
                 # (2) Own prelude spell success (if any)
@@ -1333,6 +1336,11 @@ class GameScreen(Screen):
                         'images': all_images if all_images else None,
                         'icon': None if all_images else 'magic',
                         'title': 'Prelude Spell',
+                        'phase': 'prelude',
+                        'tone': 'good',
+                        'spell_names': [s['spell_name'] for s in own_spells],
+                        'event_key': 'own_prelude:' + ','.join(
+                            str(s.get('id') or s.get('spell_name')) for s in own_spells),
                     })
 
                 # (3) Opponent prelude spell turn notification (if any)
@@ -1359,6 +1367,11 @@ class GameScreen(Screen):
                         'icon': None if opp_images else 'info',
                         'title': 'Opponent Prelude',
                         'message_after_images': opp_msg_after,
+                        'phase': 'prelude',
+                        'tone': 'warning',
+                        'spell_names': [s['spell_name'] for s in opp_spells],
+                        'event_key': 'opponent_prelude:' + ','.join(
+                            str(s.get('id') or s.get('spell_name')) for s in opp_spells),
                     })
 
                 # (4) Explicit no-target notifications
@@ -1372,6 +1385,10 @@ class GameScreen(Screen):
                         'images': spell_images if spell_images else None,
                         'icon': None if spell_images else 'info',
                         'title': 'No Valid Target',
+                        'phase': 'prelude',
+                        'tone': 'warning',
+                        'spell_names': [spell_name],
+                        'event_key': f'own_no_target:{spell_name}',
                     })
 
                 for spell_info in opponent_no_target_spells:
@@ -1384,6 +1401,10 @@ class GameScreen(Screen):
                         'images': spell_images if spell_images else None,
                         'icon': None if spell_images else 'info',
                         'title': 'Opponent Prelude',
+                        'phase': 'prelude',
+                        'tone': 'warning',
+                        'spell_names': [spell_name],
+                        'event_key': f'opponent_no_target:{spell_name}',
                     })
 
                 # (5) Pending attacker prelude target selection
@@ -1407,6 +1428,10 @@ class GameScreen(Screen):
                         'images': spell_images if spell_images else None,
                         'icon': None if spell_images else 'magic',
                         'title': 'Select Prelude Target',
+                        'phase': 'prelude',
+                        'tone': 'action',
+                        'spell_names': [spell_name],
+                        'event_key': f'prelude_target:{pending_prelude_target.get("spell_id") or spell_name}',
                     })
 
                 self.state.game.pending_opponent_turn_summary = None
@@ -1867,7 +1892,13 @@ class GameScreen(Screen):
                 'actions': ['ok'],
                 'images': images if images else None,
                 'icon': None if images else "info",
-                'title': title
+                'title': title,
+                'phase': 'advance',
+                'tone': 'action',
+                'event_key': (
+                    f"forced_advance:{getattr(self.state.game, 'game_id', 'local')}:"
+                    f"{getattr(self.state.game, 'current_round', 'current')}"
+                ),
             })
     
     def _check_any_figure_can_advance(self):
@@ -2241,6 +2272,10 @@ class GameScreen(Screen):
                 'images': images if images else None,
                 'icon': None if images else "info",
                 'title': title,
+                'phase': 'advance',
+                'tone': 'action' if has_blitzkrieg else 'good',
+                'spell_names': ['Blitzkrieg'] if has_blitzkrieg else [],
+                'event_key': f'own_advance:{self.state.game.advancing_figure_id}:{has_blitzkrieg}',
             })
             return
         
@@ -2378,7 +2413,12 @@ class GameScreen(Screen):
             'images': images if images else None,
             'icon': None if images else "info",
             'title': title,
-            'message_after_images': message_after
+            'message_after_images': message_after,
+            'phase': 'advance',
+            'tone': 'warning',
+            'spell_names': [m for m in ('Blitzkrieg', 'Civil War', 'Peasant War')
+                            if m in modifier_types],
+            'event_key': f'opponent_advance:{self.state.game.advancing_figure_id}',
         })
         
         self.state.game.pending_advance_notification = False
@@ -2452,7 +2492,12 @@ class GameScreen(Screen):
             'actions': ['got it!'],
             'images': images if images else None,
             'icon': None if images else "info",
-            'title': "Select Opponent's Defender"
+            'title': "Select Opponent's Defender",
+            'phase': 'defender',
+            'tone': 'action',
+            'spell_names': [m for m in ('Civil War', 'Peasant War')
+                            if m in modifier_types],
+            'event_key': f'select_defender:{self.state.game.advancing_figure_id}',
         })
         
         # Prevent re-queuing on subsequent update cycles
@@ -2490,6 +2535,10 @@ class GameScreen(Screen):
             'actions': ['ok'],
             'icon': 'info',
             'title': 'Invader Swap — Choose Defender',
+            'phase': 'defender',
+            'tone': 'action',
+            'spell_names': ['Invader Swap'],
+            'event_key': f"invader_swap_own_defender:{getattr(self.state.game, 'game_id', 'local')}",
         })
 
     def check_waiting_for_defender_pick(self):
@@ -2657,6 +2706,9 @@ class GameScreen(Screen):
                         'images': images if images else None,
                         'icon': None if images else 'info',
                         'title': 'Defender Response',
+                        'phase': 'defender',
+                        'tone': 'warning',
+                        'event_key': f'defender_response:{self.state.game.defending_figure_id}',
                     })
 
                 elif counter_spells:
@@ -2682,6 +2734,11 @@ class GameScreen(Screen):
                         'icon': None if spell_images else 'info',
                         'title': 'Defender Counter Spell',
                         'message_after_images': msg_after,
+                        'phase': 'defender',
+                        'tone': 'warning',
+                        'spell_names': [s.get('spell_name', '') for s in counter_spells],
+                        'event_key': 'defender_counter:' + ','.join(
+                            str(s.get('id') or s.get('spell_name')) for s in counter_spells),
                     })
 
                     # (8) Defender used last turn for spell — did not counter-advance
@@ -2710,6 +2767,9 @@ class GameScreen(Screen):
                             'images': sel_images,
                             'icon': None if sel_images else 'info',
                             'title': "Select Opponent's Defender",
+                            'phase': 'defender',
+                            'tone': 'action',
+                            'event_key': f'defender_no_counter:{self.state.game.advancing_figure_id}',
                         })
 
             logger.info("[BATTLE_READY] Conquer mode — auto-submitting 'battle' decision")
@@ -3233,6 +3293,9 @@ class GameScreen(Screen):
             return f'{name} had a resource deficit and could not fight.'
         if reason == 'fold':
             return 'The battle was forfeited by fold.'
+        if reason == 'withdraw':
+            name = detail or 'The attacker'
+            return f'{name} withdrew from the conquest.'
         return ''
 
     def _derive_finished_conquer_result(self):
@@ -3708,11 +3771,14 @@ class GameScreen(Screen):
                     shop._load_bought_moves()
                 self.queue_or_show_notification({
                     'message': "You have extra cards from your prelude spell!\n\n"
-                               "You may buy additional battle moves, or press\n"
+                               "You may swap battle moves, or press\n"
                                "'Ready!' to proceed with your current moves.",
                     'actions': ['got it!'],
                     'icon': 'magic',
                     'title': 'Battle Shop',
+                    'phase': 'moves',
+                    'tone': 'action',
+                    'event_key': f"extra_cards_battle_shop:{getattr(self.state.game, 'game_id', 'local')}",
                 })
                 return
 
@@ -3726,6 +3792,14 @@ class GameScreen(Screen):
             self.state.game.battle_moves_ready = True
             self.state.game.waiting_for_opponent_battle_moves = False
             self.battle_button.locked = False
+            if hasattr(self, 'emit_conquer_event'):
+                self.emit_conquer_event(
+                    key=f"auto_confirm_moves:{getattr(self.state.game, 'game_id', 'local')}",
+                    title='Battle moves locked',
+                    detail='Your committed conquer moves were confirmed automatically.',
+                    phase='moves',
+                    tone='good',
+                )
             return
 
         self.state.game.battle_moves_phase = True

@@ -204,6 +204,95 @@ class TestResolveConquerIdempotency:
             assert payload.get('card_won_rank') is None
 
 
+class TestConquerWithdraw:
+    def test_attacker_can_withdraw_and_defender_wins(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='withdraw_attacker')
+            defender = _make_user(db, username='withdraw_defender')
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            _make_defence_config(db, defender, land)
+
+            game = _start_conquer_battle(app, db, attacker, land)
+            atk_player = db.session.get(Player, game.invader_player_id)
+            client = app.test_client()
+
+            resp = client.post(
+                '/games/conquer_withdraw',
+                json={'game_id': game.id, 'player_id': atk_player.id},
+                headers=_auth_headers(app, attacker),
+            )
+            data = resp.get_json()
+
+            assert resp.status_code == 200, data
+            assert data['success'] is True
+            assert data['conquer_result'] == 'defender_won'
+            db.session.refresh(game)
+            assert game.state == 'finished'
+            assert game.last_battle_result.get('auto_loss_reason') == 'withdraw'
+            assert data['game']['state'] == 'finished'
+            assert data['game']['last_battle_result']['auto_loss_reason'] == 'withdraw'
+
+    def test_new_battle_after_withdraw_starts_open(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='withdraw_restart_attacker')
+            defender = _make_user(db, username='withdraw_restart_defender')
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            _make_defence_config(db, defender, land)
+
+            first_game = _start_conquer_battle(app, db, attacker, land)
+            atk_player = db.session.get(Player, first_game.invader_player_id)
+            client = app.test_client()
+
+            withdraw_resp = client.post(
+                '/games/conquer_withdraw',
+                json={'game_id': first_game.id, 'player_id': atk_player.id},
+                headers=_auth_headers(app, attacker),
+            )
+            assert withdraw_resp.status_code == 200, withdraw_resp.get_json()
+
+            db.session.refresh(attacker)
+            attacker.last_conquer_at = None
+            _make_conquer_config(db, attacker, land)
+            db.session.commit()
+
+            start_resp = client.post(
+                '/kingdom/conquer/start_battle',
+                json={'land_id': land.id},
+                headers=_auth_headers(app, attacker),
+            )
+            data = start_resp.get_json()
+
+            assert start_resp.status_code == 200, data
+            assert data['game_id'] != first_game.id
+            assert data['game']['state'] == 'open'
+            assert data['game']['winner_player_id'] is None
+            assert data['game']['last_battle_result'] is None
+
+    def test_non_attacker_cannot_withdraw(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='withdraw_attacker_no')
+            defender = _make_user(db, username='withdraw_defender_no')
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            _make_defence_config(db, defender, land)
+
+            game = _start_conquer_battle(app, db, attacker, land)
+            defender_player = [p for p in game.players if p.id != game.invader_player_id][0]
+            client = app.test_client()
+
+            resp = client.post(
+                '/games/conquer_withdraw',
+                json={'game_id': game.id, 'player_id': defender_player.id},
+                headers=_auth_headers(app, defender),
+            )
+            data = resp.get_json()
+
+            assert resp.status_code == 403
+            assert data['success'] is False
+
+
 class TestConquerLootNotifications:
     """A human attacker losing a conquer battle gets one activity-feed row."""
 

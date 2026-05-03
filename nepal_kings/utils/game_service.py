@@ -182,6 +182,19 @@ def defender_no_figures_loss(game_id, player_id):
         return {'success': False, 'message': f"Failed to process defender auto-loss: {str(e)}"}
 
 
+def conquer_withdraw(game_id, player_id):
+    """Withdraw from a conquer battle, making the original defender win."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/conquer_withdraw',
+            json={'game_id': game_id, 'player_id': player_id},
+            timeout=10
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to withdraw: {str(e)}"}
+
+
 def finish_battle(game_id, player_id, total_diff):
     """Submit the final battle result to the server for resolution."""
     try:

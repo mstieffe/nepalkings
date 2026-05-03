@@ -88,6 +88,8 @@ class TestGameplayScreenRouting:
 
 class TestConquerGameShell:
     def test_initializes_only_three_conquer_tab_buttons(self):
+        from config import settings
+
         ConquerGameScreen = _conquer_screen_class()
         screen = ConquerGameScreen.__new__(ConquerGameScreen)
         screen.window = pygame.Surface((1200, 800))
@@ -105,6 +107,10 @@ class TestConquerGameShell:
         assert all('spell' not in name for name in names)
         assert all('log' not in name for name in names)
         assert screen.battle_button.locked is False
+        assert screen.field_button.x == screen.battle_shop_button.x == screen.battle_button.x
+        assert screen.field_button.y < screen.battle_shop_button.y < screen.battle_button.y
+        sub_x, _sub_y = ConquerGameScreen._conquer_subscreen_origin(screen)
+        assert screen.field_button.x + settings.FIELD_BUTTON_WIDTH < sub_x
 
     def test_normalizes_hidden_duel_subscreen_to_field(self):
         ConquerGameScreen, screen = _base_conquer_screen()
