@@ -182,3 +182,55 @@ class TestGameBattleStateTransitions:
 
         game_l.suppress_next_turn_summary = bool(game_l.turn)
         assert game_l.suppress_next_turn_summary is False
+
+
+class TestConquerFigureHydration:
+    @staticmethod
+    def _gorkha_figure_data():
+        return {
+            'id': 31,
+            'player_id': 113,
+            'family_name': 'Gorkha Warriors',
+            'name': 'Gorkha Warriors',
+            'suit': 'Hearts',
+            'description': (
+                'The Gorkha Warriors is an offensive military figure that charges instantly into battle '
+                'when placed on the field. Requires food equal to its number-card value.'
+            ),
+            'cards': [
+                {'rank': 'A', 'suit': 'Hearts', 'value': 3, 'role': 'key'},
+                {'rank': '7', 'suit': 'Hearts', 'value': 7, 'role': 'number'},
+            ],
+            'produces': {},
+            'requires': {'warrior_red': 1, 'food_red': 7},
+        }
+
+    def test_conquer_mode_hides_instant_advance_on_loaded_figures(self):
+        from game.core.game import Game
+        from game.components.figures.figure_manager import FigureManager
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'conquer'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.cached_figures_data = {game.player_id: [self._gorkha_figure_data()]}
+
+        figures = game.get_figures(FigureManager().families)
+
+        assert len(figures) == 1
+        assert figures[0].instant_charge is False
+        assert 'charges instantly into battle' not in figures[0].description.lower()
+        assert 'charges instantly into battle' not in figures[0].family.description.lower()
+
+    def test_duel_mode_keeps_instant_advance_on_loaded_figures(self):
+        from game.core.game import Game
+        from game.components.figures.figure_manager import FigureManager
+
+        initial = _mk_game_dict()
+        initial['mode'] = 'duel'
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+        game.cached_figures_data = {game.player_id: [self._gorkha_figure_data()]}
+
+        figures = game.get_figures(FigureManager().families)
+
+        assert len(figures) == 1
+        assert figures[0].instant_charge is True

@@ -388,7 +388,10 @@ def render_surface_art(skin_key, hex_size):
     blit it at ``(scx - hex_size, scy - hex_size)``.  Pixels outside the hex
     polygon have alpha 0.  The result is cached per ``(skin_key, hex_size)``.
     """
-    sz = max(8, int(hex_size))
+    target_sz = max(8, int(hex_size))
+    # Supersample small hexes so procedural detail survives downscaling.
+    scale = 4 if target_sz < 16 else (2 if target_sz < 32 else 1)
+    sz = target_sz * scale
     surf = _make_alpha(sz * 2, sz * 2)
     cx, cy = sz, sz
     skin = settings.HEX_SURFACE_SKINS.get(skin_key) or \
@@ -396,9 +399,13 @@ def render_surface_art(skin_key, hex_size):
     style = skin.get('style')
     drawer = _SURFACE_DRAWERS.get(style)
     if drawer is None:
+        if scale > 1:
+            return pygame.transform.smoothscale(surf, (target_sz * 2, target_sz * 2))
         return surf
     drawer(surf, cx, cy, sz, skin)
     _apply_hex_mask(surf, sz)
+    if scale > 1:
+        surf = pygame.transform.smoothscale(surf, (target_sz * 2, target_sz * 2))
     return surf
 
 
@@ -514,9 +521,13 @@ def render_center_emblem(skin_key, hex_size):
     drawer = _EMBLEM_DRAWERS.get(name)
     if drawer is None:
         return None
-    sz = max(10, int(hex_size * 0.40))
+    target_sz = max(10, int(hex_size * 0.40))
+    scale = 4 if target_sz < 16 else (2 if target_sz < 32 else 1)
+    sz = target_sz * scale
     surf = _make_alpha(sz * 2, sz * 2)
     drawer(surf, sz, sz, sz * 0.85, _emblem_clr(skin))
+    if scale > 1:
+        surf = pygame.transform.smoothscale(surf, (target_sz * 2, target_sz * 2))
     return surf
 
 
@@ -538,7 +549,9 @@ def render_vertex_ornament(border_key, hex_size):
     rarity = skin.get('rarity')
     if rarity not in ('rare', 'epic'):
         return None
-    r = max(3, int(hex_size * 0.10))
+    target_r = max(3, int(hex_size * 0.10))
+    scale = 4 if target_r < 6 else (2 if target_r < 12 else 1)
+    r = target_r * scale
     surf = _make_alpha(r * 4, r * 4)
     cx = cy = r * 2
     outer = skin.get('outer', (40, 40, 40))
@@ -558,6 +571,8 @@ def render_vertex_ornament(border_key, hex_size):
             pts.append((cx + math.cos(a) * rr, cy + math.sin(a) * rr))
         pygame.draw.polygon(surf, outer, pts)
         pygame.draw.polygon(surf, main, pts, max(1, int(r * 0.30)))
+    if scale > 1:
+        surf = pygame.transform.smoothscale(surf, (target_r * 4, target_r * 4))
     return surf
 
 

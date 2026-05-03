@@ -28,14 +28,14 @@ def _add_collection_card(db, user_id, suit='Hearts', rank='K', value=4):
 
 def _build_figure(client, headers, land_id, card_ids, card_roles=None,
                   family='Himalaya King', field='castle', color='defensive',
-                  produces=None, requires=None):
+                  produces=None, requires=None, suit='Clubs'):
     """Helper to build a figure and return the response JSON."""
     rv = client.post('/kingdom/defence/build_figure', headers=headers,
                      json={
                          'land_id': land_id,
                          'family_name': family,
                          'name': family,
-                         'suit': 'Clubs',
+                         'suit': suit,
                          'color': color,
                          'field': field,
                          'card_ids': card_ids,
@@ -504,6 +504,37 @@ class TestDefenceBattleFigure:
         rv = client.post('/kingdom/defence/set_battle_figure',
                          headers=auth_headers_user1,
                          json={'land_id': land.id, 'figure_id': fig_id})
+        assert rv.status_code == 400
+        assert 'cannot attack' in rv.get_json()['message'].lower()
+
+    def test_civil_war_rejects_sword_manufactory_as_second_battle_figure(
+            self, client, db, two_users, auth_headers_user1):
+        u1, _ = two_users
+        land = _add_land(db, owner_id=u1.id)
+        c1 = _add_collection_card(db, u1.id, 'Hearts', 'J', 11)
+        c2 = _add_collection_card(db, u1.id, 'Hearts', 'Q', 2)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+        _add_collection_card(db, u1.id, 'Hearts', '5', 5)
+
+        rv1 = _build_figure(client, auth_headers_user1, land.id, [c1.id],
+                            family='Small Rice Farm', field='village',
+                            color='offensive', suit='Hearts',
+                            produces={}, requires={})
+        rv2 = _build_figure(client, auth_headers_user1, land.id, [c2.id],
+                            family='Sword Manufactory', field='village',
+                            color='offensive', suit='Hearts',
+                            produces={}, requires={})
+        f1 = rv1.get_json()['config']['figures'][0]['id']
+        f2 = rv2.get_json()['config']['figures'][-1]['id']
+
+        client.post('/kingdom/defence/set_modifier',
+                    headers=auth_headers_user1,
+                    json={'land_id': land.id, 'modifier_type': 'Civil War'})
+
+        rv = client.post('/kingdom/defence/set_battle_figure',
+                         headers=auth_headers_user1,
+                         json={'land_id': land.id, 'figure_id': f1,
+                               'figure_id_2': f2})
         assert rv.status_code == 400
         assert 'cannot attack' in rv.get_json()['message'].lower()
 

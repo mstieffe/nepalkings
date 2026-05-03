@@ -2,12 +2,24 @@
 # See LICENSE file in the project root for full license information.
 """Modal overlay showing detailed info for a single hex / land tile."""
 
+import math
 import pygame
 from config import settings
 from game.core.input_state import get_pressed as _get_pressed
 import logging
 
 logger = logging.getLogger('nk.components.land_detail_box')
+
+
+def _star_points(cx, cy, outer_r, inner_r, points=5):
+    pts = []
+    start = -math.pi / 2
+    step = math.pi / points
+    for i in range(points * 2):
+        r = outer_r if i % 2 == 0 else inner_r
+        a = start + i * step
+        pts.append((cx + math.cos(a) * r, cy + math.sin(a) * r))
+    return pts
 
 
 def _format_cooldown_text(seconds):
@@ -131,7 +143,7 @@ class LandDetailBox:
 
     def __init__(self, window, tile, cooldown=0, land_cooldown=0,
                  on_conquer=None, on_defence=None, on_close=None,
-                 on_message=None, on_config=None):
+                 on_message=None, on_config=None, conquest_outcome=None):
         self.window = window
         self.tile = tile
         self._base_cooldown = max(0, int(cooldown or 0))
@@ -141,6 +153,7 @@ class LandDetailBox:
         self._on_config = on_config
         self._on_close = on_close
         self._on_message = on_message
+        self._conquest_outcome = conquest_outcome
         self._created_at = pygame.time.get_ticks()
         self._last_render_cooldowns = None
 
@@ -207,7 +220,7 @@ class LandDetailBox:
             return max(self._icon_sz if self._suit_icon else 0, body_h) + 2
         if kind == 'defence_warning':
             return max(self._icon_sz if self._broken_icon else 0, body_h) + 2
-        if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield'):
+        if kind in ('since', 'kingdom_bonus', 'land_cd', 'shield', 'conquest_hint'):
             return small_h + 2
         return body_h + 2
 
@@ -221,9 +234,8 @@ class LandDetailBox:
 
         # Pre-render text lines
         self._lines = []
-        tier_label = settings.TIER_LABELS.get(tile.tier, '')
         self._lines.append(('title', f'Land ({tile.col}, {tile.row})'))
-        self._lines.append(('tier', f'Tier {tile.tier}  {tier_label}'))
+        self._lines.append(('tier', tile.tier))
         self._lines.append(('spacer', ''))
         self._lines.append(('gold', f'Gold production: {tile.gold_rate:.1f} / hour'))
         if tile.suit_bonus_suit == 'Neutral' or not tile.suit_bonus_value:
@@ -235,10 +247,10 @@ class LandDetailBox:
             land_word = 'land' if size == 1 else 'lands'
             self._lines.append(('kingdom', f'Kingdom: {size} connected {land_word}'))
             bonuses = getattr(tile, 'kingdom_bonuses', {}) or {}
-            if bonuses:
-                bonus_text = ', '.join(str(key).replace('_', ' ')
-                                       for key in sorted(bonuses.keys()))
-                self._lines.append(('kingdom_bonus', f'Bonus: {bonus_text}'))
+            loot_chance = float(bonuses.get('loot_chance', 0.0) or 0.0)
+            if loot_chance:
+                pct = int(round(loot_chance * 100))
+                self._lines.append(('kingdom_bonus', f'+{pct}% defensive loot chance'))
 
         if tile.is_mine and tile.defence_incomplete:
             self._lines.append(('defence_warning', 'Defence config incomplete!'))
@@ -253,6 +265,12 @@ class LandDetailBox:
             self._lines.append(('since', f'Since: {since}'))
         else:
             self._lines.append(('owner', 'Unclaimed (AI defended)'))
+
+        if not tile.is_mine and self._conquest_outcome:
+            if self._conquest_outcome == 'expand':
+                self._lines.append(('conquest_hint', 'Conquering expands your existing kingdom'))
+            else:
+                self._lines.append(('conquest_hint', 'Conquering starts a new separate kingdom'))
 
         if not tile.is_mine and land_cooldown > 0:
             self._lines.append(
@@ -423,9 +441,21 @@ class LandDetailBox:
             elif kind == 'spacer':
                 y += int(self._body_font.get_height() * 0.4)
             elif kind == 'tier':
-                surf = self._body_font.render(text, True, settings.LAND_DETAIL_TITLE_CLR)
-                self.window.blit(surf, (x, y))
-                y += surf.get_height() + 2
+                tier = int(text)
+                label_surf = self._body_font.render(f'Tier {tier}  ', True, settings.LAND_DETAIL_TITLE_CLR)
+                self.window.blit(label_surf, (x, y))
+                body_h = self._body_font.get_height()
+                outer = max(4, int(body_h * 0.38))
+                inner = max(2, int(outer * 0.50))
+                gap = max(2, int(outer * 0.55))
+                star_cy = y + body_h // 2
+                outline_w = 1
+                for i in range(tier):
+                    sx = x + label_surf.get_width() + outer + i * (outer * 2 + gap)
+                    pygame.draw.polygon(self.window, (36, 24, 8), _star_points(sx + 1, star_cy + 1, outer, inner))
+                    pygame.draw.polygon(self.window, settings.HEX_STAR_FILL, _star_points(sx, star_cy, outer, inner))
+                    pygame.draw.polygon(self.window, settings.HEX_STAR_BORDER, _star_points(sx, star_cy, outer, inner), outline_w)
+                y += body_h + 2
             elif kind == 'gold':
                 if self._gold_icon:
                     self.window.blit(self._gold_icon, (x, y))
@@ -467,6 +497,12 @@ class LandDetailBox:
                 y += surf.get_height() + 2
             elif kind in ('land_cd', 'shield'):
                 surf = self._small_font.render(text, True, settings.LAND_DETAIL_TITLE_CLR)
+                self.window.blit(surf, (x, y))
+                y += surf.get_height() + 2
+            elif kind == 'conquest_hint':
+                clr = ((110, 195, 110) if self._conquest_outcome == 'expand'
+                       else (170, 140, 90))
+                surf = self._small_font.render(text, True, clr)
                 self.window.blit(surf, (x, y))
                 y += surf.get_height() + 2
             elif kind == 'defence_warning':

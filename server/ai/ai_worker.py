@@ -1141,7 +1141,7 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
     the advance figure using defence-config priority: configured battle figure
     first (if legal), then strongest legal figure by power proxy.
     """
-    from models import Figure, LandConfig
+    from models import Figure, LandConfig, db
     from routes.games import _conquer_invader_swap_active
     modifiers = game.battle_modifier if isinstance(game.battle_modifier, list) else []
     has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
@@ -1154,20 +1154,29 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
         and not game.advancing_figure_id
     )
 
+    def _configured_defence_game_figure(cfg_figure_id):
+        if not cfg_figure_id:
+            return None
+        return Figure.query.filter_by(
+            game_id=game.id,
+            player_id=ai_player_id,
+            source_config_figure_id=cfg_figure_id,
+        ).first()
+
+    def _defence_config():
+        if not game.defence_config_id:
+            return None
+        return db.session.get(LandConfig, game.defence_config_id)
+
     if is_new_invader_after_swap:
         # Try configured defence battle figure first
-        if game.defence_config_id:
-            cfg = db.session.get(LandConfig, game.defence_config_id)
-            if cfg and cfg.battle_figure_id:
-                game_fig = Figure.query.filter_by(
-                    game_id=game.id,
-                    player_id=ai_player_id,
-                    source_config_figure_id=cfg.battle_figure_id,
-                ).first()
-                if game_fig and _conquer_figure_can_advance(
-                    game_fig, ai_player_id, game.id, counter=False
-                ):
-                    return game_fig.id
+        cfg = _defence_config()
+        if cfg and cfg.battle_figure_id:
+            game_fig = _configured_defence_game_figure(cfg.battle_figure_id)
+            if game_fig and _conquer_figure_can_advance(
+                game_fig, ai_player_id, game.id, counter=False
+            ):
+                return game_fig.id
 
         # Fallback: strongest legal advance figure (proxy: sum of card values)
         candidates = Figure.query.filter_by(
@@ -1194,7 +1203,7 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
 
     is_counter = bool(game.advancing_figure_id and game.advancing_player_id != ai_player_id)
 
-    def _pick_second(first_id):
+    def _pick_second(first_id, preferred_config_figure_id=None):
         first = Figure.query.filter_by(
             id=first_id,
             game_id=game.id,
@@ -1202,6 +1211,20 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
         ).first()
         if not first:
             return None
+        preferred = _configured_defence_game_figure(preferred_config_figure_id)
+        if (
+            preferred
+            and preferred.id != first.id
+            and preferred.field == 'village'
+            and preferred.color == first.color
+            and _conquer_figure_can_advance(
+                preferred,
+                ai_player_id,
+                game.id,
+                counter=is_counter,
+            )
+        ):
+            return preferred.id
         second_candidates = Figure.query.filter(
             Figure.game_id == game.id,
             Figure.player_id == ai_player_id,
@@ -1220,12 +1243,16 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
         return None
 
     if has_civil_war and is_counter and game.defending_figure_id and not game.defending_figure_id_2:
-        return _pick_second(game.defending_figure_id)
+        cfg = _defence_config()
+        preferred_id = cfg.battle_figure_id_2 if cfg else None
+        return _pick_second(game.defending_figure_id, preferred_id)
 
     if has_civil_war and not is_counter and game.advancing_figure_id \
             and game.advancing_player_id == ai_player_id \
             and not game.advancing_figure_id_2:
-        return _pick_second(game.advancing_figure_id)
+        cfg = _defence_config() if swap_active and game.invader_player_id == ai_player_id else None
+        preferred_id = cfg.battle_figure_id_2 if cfg else None
+        return _pick_second(game.advancing_figure_id, preferred_id)
 
     if is_counter and game.defending_figure_id:
         fig = Figure.query.filter_by(

@@ -36,6 +36,28 @@ def _make_checkmate_family():
     return family, description
 
 
+def _make_instant_charge_family():
+    description = (
+        'The Gorkha Warriors is an offensive military figure that charges instantly into battle '
+        'when placed on the field. Requires food equal to its number-card value.'
+    )
+    matched = SimpleNamespace(
+        suit='Hearts',
+        name='Gorkha Warriors',
+        sub_name='Hearts 7',
+        key_cards=[],
+        number_card=None,
+        upgrade_card=None,
+        instant_charge=True,
+    )
+    family = SimpleNamespace(
+        name='Gorkha Warriors',
+        description=description,
+        figures=[matched],
+    )
+    return family, description
+
+
 class TestConquerScreenInit:
 
     def test_initial_state(self):
@@ -298,6 +320,24 @@ class TestConquerScreenLayout:
         assert fig.checkmate is False
         assert 'checkmate' not in fig.description.lower()
         assert 'checkmate' not in fig.family.description.lower()
+
+    def test_config_figures_hide_instant_advance_in_conquer(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        family, description = _make_instant_charge_family()
+
+        fig = screen._config_fig_to_figure({
+            'id': 11,
+            'family_name': 'Gorkha Warriors',
+            'name': 'Gorkha Warriors',
+            'suit': 'Hearts',
+            'description': description,
+        }, {'Gorkha Warriors': family})
+
+        assert fig.instant_charge is False
+        assert 'charges instantly into battle' not in fig.description.lower()
+        assert 'charges instantly into battle' not in fig.family.description.lower()
 
     def test_right_panels_stack_without_overlap(self):
         from game.screens.conquer_screen import ConquerScreen

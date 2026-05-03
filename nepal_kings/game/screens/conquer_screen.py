@@ -3,7 +3,6 @@
 """Conquer screen — configure figures + battle moves for attacking a land."""
 
 import pygame
-from copy import copy
 from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
@@ -11,9 +10,15 @@ from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.prelude_spell_screen import PreludeSpellScreen
 from game.core.card_source import CollectionCardSource
+from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.core.kingdom_game_proxy import KingdomGameProxy
 from game.components.cards.card import Card
 from game.components.figures.figure import Figure
+from game.components.figures.skill_display_filters import (
+    filter_family_for_display,
+    filter_figure_for_display,
+    strip_duel_only_skill_description,
+)
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
 from game.components.dialogue_box import DialogueBox
@@ -23,6 +28,7 @@ from game.components.battle_moves.battle_move_icon_renderer import draw_battle_m
 from game.components.battle_moves.battle_move_detail_box import BattleMoveDetailBox
 from game.components.spells.spell_manager import SpellManager
 from game.core.game import Game
+from game.core.screen_routing import gameplay_screen_for
 from utils.game_service import fetch_game
 from config import settings
 from utils import http_compat as requests
@@ -52,19 +58,19 @@ def _draw_panel(window, rect, corner_r=None):
 
 
 def _strip_duel_only_skill_description(text):
-    """Remove duel-only skill wording from kingdom config descriptions."""
-    return (text or '').replace(' Triggers checkmate when defeated.', '').replace(
-        'Triggers checkmate when defeated.', '').strip()
+    return strip_duel_only_skill_description(
+        text,
+        hide_checkmate=True,
+        hide_instant_charge=True,
+    )
 
 
 def _display_family_without_duel_only_skills(family):
-    description = getattr(family, 'description', '')
-    clean_description = _strip_duel_only_skill_description(description)
-    if clean_description == description:
-        return family
-    display_family = copy(family)
-    display_family.description = clean_description
-    return display_family
+    return filter_family_for_display(
+        family,
+        hide_checkmate=True,
+        hide_instant_charge=True,
+    )
 
 
 # Card requirements per modifier/spell: rank, count, color_constraint
@@ -489,7 +495,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         # ── Divider positions ──────────────────────────────────────
         # Vertical: between left fields/resources and right battle column
         self._divider_v_x = right_x - pad // 2
-        self._divider_v_top = top
+        self._divider_v_top = content_top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
         self._divider_h1_y = None
 
@@ -686,6 +692,14 @@ class ConquerScreen(MenuScreenMixin, Screen):
             )
             self._figure_icons[fig.id] = icon
 
+        apply_buffs_allies_to_icon_map(
+            self._figure_objects,
+            self._figure_icons,
+            has_deficit=lambda fig: (
+                fig.id in self._figure_icons and self._figure_icons[fig.id].has_deficit
+            ),
+        )
+
     def _config_fig_to_figure(self, cfg_fig, families):
         """Convert a config figure dict to a real Figure object."""
         family_name = cfg_fig.get('family_name', '')
@@ -709,13 +723,32 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     matched = fam_fig
                     break
 
-        key_cards = matched.key_cards if matched else []
-        number_card = matched.number_card if matched else None
-        upgrade_card = matched.upgrade_card if matched else None
+        card_specs = cfg_fig.get('card_specs') or []
+        card_roles = cfg_fig.get('card_roles') or []
+        key_cards = []
+        number_card = None
+        upgrade_card = None
+        if card_specs:
+            for spec, role in zip(card_specs, card_roles):
+                if not spec:
+                    continue
+                card = Card(
+                    rank=spec['rank'], suit=spec['suit'], value=spec['value'],
+                )
+                if role == 'key':
+                    key_cards.append(card)
+                elif role == 'number':
+                    number_card = card
+                elif role == 'upgrade':
+                    upgrade_card = card
+        if not key_cards and not number_card and not upgrade_card:
+            key_cards = matched.key_cards if matched else []
+            number_card = matched.number_card if matched else None
+            upgrade_card = matched.upgrade_card if matched else None
 
         display_family = _display_family_without_duel_only_skills(family)
 
-        return Figure(
+        figure = Figure(
             name=name,
             sub_name=matched.sub_name if matched else '',
             suit=suit,
@@ -740,6 +773,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
             cannot_be_blocked=cfg_fig.get('cannot_be_blocked', False),
             cannot_be_targeted=getattr(matched, 'cannot_be_targeted', False) if matched else False,
             override_base_power=getattr(matched, 'override_base_power', None) if matched else None,
+        )
+        return filter_figure_for_display(
+            figure,
+            hide_checkmate=True,
+            hide_instant_charge=True,
         )
 
     def _calc_resources(self):
@@ -1005,11 +1043,9 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self.window.blit(suit_icon, (specs_x + specs_surf.get_width() + 2,
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
 
-        effects = land.get('kingdom_skill_effects') or []
-        if effects:
-            kingdom_name = land.get('kingdom_name') or 'Defender kingdom'
-            effect_text = f'{kingdom_name} skills: ' + ', '.join(effects[:4])
-            effect_text = self._fit_text(effect_text, self._tiny_font, int(_BOX_W * 0.72))
+        loot_effects = [e for e in (land.get('kingdom_skill_effects') or []) if 'loot chance' in e]
+        if loot_effects:
+            effect_text = self._fit_text(loot_effects[0], self._tiny_font, int(_BOX_W * 0.72))
             effect_surf = self._tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
             self.window.blit(effect_surf, effect_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
                                                                top=specs_y + specs_surf.get_height() + 3))
@@ -1746,7 +1782,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 except Exception as e:
                     logger.error(f'Failed to fetch game after battle start: {e}')
                     self.state.game = None
-                self.state.screen = 'game'
+                self.state.screen = gameplay_screen_for(self.state.game)
                 logger.info(f'Battle started: game_id={game_id} use_map={use_map}')
                 return
             # Cooldown branch: offer to consume a map.

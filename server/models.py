@@ -906,6 +906,12 @@ class LandConfigFigure(db.Model):
     rest_after_attack   = db.Column(db.Boolean, default=False, nullable=False)
 
     def serialize(self):
+        card_specs = []
+        for cid in (self.card_ids or []):
+            cc = db.session.get(CollectionCard, cid)
+            card_specs.append(
+                {'rank': cc.rank, 'suit': cc.suit, 'value': cc.value} if cc else None
+            )
         return {
             'id': self.id,
             'config_id': self.config_id,
@@ -916,6 +922,7 @@ class LandConfigFigure(db.Model):
             'field': self.field,
             'card_ids': self.card_ids,
             'card_roles': self.card_roles,
+            'card_specs': card_specs,
             'produces': self.produces or {},
             'requires': self.requires or {},
             'description': self.description or '',

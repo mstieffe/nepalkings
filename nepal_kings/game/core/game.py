@@ -8,6 +8,7 @@ from game.components.cards.card import Card
 from utils.msg_service import fetch_log_entries, add_log_entry, fetch_chat_messages, send_chat_message
 from utils.figure_service import fetch_figures
 from game.components.figures.figure import Figure, FigureFamily
+from game.components.figures.skill_display_filters import filter_figure_for_display
 from typing import List, Dict
 import logging
 
@@ -1165,34 +1166,23 @@ class Game:
                 number_card = cards.get('number')[0] if cards.get('number') else None
                 upgrade_card = cards.get('upgrade')[0] if cards.get('upgrade') else None
 
-                # If upgrade_card is not in the saved cards, try to get it from the family definition
-                # Match this figure to the correct variant in the family to get upgrade_card and combat attributes
+                # Match this figure to the correct variant in the family to get upgrade_card
+                # and combat attributes that are not stored on the server Figure model.
+                # Match by suit only — key-card rank matching is intentionally skipped because
+                # players may use collection cards with non-standard ranks, which would cause
+                # the match to fail and silently zero-out all combat attributes.
                 key_cards = cards.get('key', [])
                 matched_family_figure = None
-                
-                # Find matching figure in family definitions
+
                 for family_figure in family.figures:
-                    # Match by suit and cards
-                    if (family_figure.suit == figure_data['suit'] and 
-                        len(family_figure.key_cards) == len(key_cards)):
-                        # Check if key cards match
-                        key_cards_match = all(
-                            any(kc.rank == fkc.rank and kc.suit == fkc.suit 
-                                for fkc in family_figure.key_cards)
-                            for kc in key_cards
-                        )
-                        # Check if number cards match (if present)
-                        number_cards_match = True
-                        if number_card and family_figure.number_card:
-                            number_cards_match = (number_card.rank == family_figure.number_card.rank and
-                                                number_card.suit == family_figure.number_card.suit)
-                        elif number_card or family_figure.number_card:
-                            number_cards_match = False
-                        
-                        if key_cards_match and number_cards_match:
-                            matched_family_figure = family_figure
-                            if not upgrade_card:
-                                upgrade_card = family_figure.upgrade_card
+                    if family_figure.suit != figure_data['suit']:
+                        continue
+                    matched_family_figure = family_figure
+                    if not upgrade_card:
+                        upgrade_card = family_figure.upgrade_card
+                    # Prefer the variant whose number-card rank exactly matches.
+                    if number_card and family_figure.number_card:
+                        if number_card.rank == family_figure.number_card.rank:
                             break
 
                 # Extract combat attributes from matched family figure
@@ -1238,6 +1228,11 @@ class Game:
                     checkmate=checkmate,
                     override_base_power=override_base_power,
                 )
+                if self.mode == 'conquer':
+                    figure = filter_figure_for_display(
+                        figure,
+                        hide_instant_charge=True,
+                    )
                 figures.append(figure)
 
             # Load active enchantments for all figures

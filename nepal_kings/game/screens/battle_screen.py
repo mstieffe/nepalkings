@@ -12,6 +12,7 @@ Layout (left → right):
 import pygame
 from pygame.locals import *
 from config import settings
+from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.screens.sub_screen import SubScreen
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
 from game.components.battle_moves.battle_move_detail_box import BattleMoveDetailBox
@@ -785,46 +786,36 @@ class BattleScreen(SubScreen):
             if fig:
                 battle_ids.add(fig.id)
 
-        # --- Player's buffers → buff player's own village battle figures ---
-        for fig in player_figures:
-            if fig.id in battle_ids:
-                continue
-            if getattr(fig, 'buffs_allies', False):
-                if self._figure_has_deficit(fig):
-                    continue
-                self.player_buffs_allies_figures.append(fig)
+        player_icon_map = {
+            fig.id: icon
+            for fig, icon in (
+                (self.player_figure, self.player_figure_icon),
+                (self.player_figure_2, self.player_figure_icon_2),
+            )
+            if fig and icon
+        }
+        self.player_buffs_allies_figures = apply_buffs_allies_to_icon_map(
+            player_figures,
+            player_icon_map,
+            has_deficit=self._figure_has_deficit,
+            exclude_ids=battle_ids,
+        )
 
-        # Apply +4 to player's village battle figure icons with matching suit
-        if self.player_buffs_allies_figures:
-            for buff_fig in self.player_buffs_allies_figures:
-                for battle_fig, icon in [(self.player_figure, self.player_figure_icon),
-                                         (self.player_figure_2, self.player_figure_icon_2)]:
-                    if not battle_fig or not icon:
-                        continue
-                    if (hasattr(battle_fig.family, 'field') and
-                            battle_fig.family.field == 'village' and
-                            battle_fig.suit == buff_fig.suit):
-                        icon.buffs_allies_bonus = getattr(icon, 'buffs_allies_bonus', 0) + 4
-
-        # --- Opponent's buffers → buff opponent's own village battle figures ---
-        for fig in opponent_figures:
-            if fig.id in battle_ids:
-                continue
-            if getattr(fig, 'buffs_allies', False):
-                if self._figure_has_deficit(fig, self._opponent_resources_data):
-                    continue
-                self.opponent_buffs_allies_figures.append(fig)
-
-        if self.opponent_buffs_allies_figures:
-            for buff_fig in self.opponent_buffs_allies_figures:
-                for battle_fig, icon in [(self.opponent_figure, self.opponent_figure_icon),
-                                         (self.opponent_figure_2, self.opponent_figure_icon_2)]:
-                    if not battle_fig or not icon:
-                        continue
-                    if (hasattr(battle_fig.family, 'field') and
-                            battle_fig.family.field == 'village' and
-                            battle_fig.suit == buff_fig.suit):
-                        icon.buffs_allies_bonus = getattr(icon, 'buffs_allies_bonus', 0) + 4
+        opponent_icon_map = {
+            fig.id: icon
+            for fig, icon in (
+                (self.opponent_figure, self.opponent_figure_icon),
+                (self.opponent_figure_2, self.opponent_figure_icon_2),
+            )
+            if fig and icon
+        }
+        self.opponent_buffs_allies_figures = apply_buffs_allies_to_icon_map(
+            opponent_figures,
+            opponent_icon_map,
+            has_deficit=lambda fig: self._figure_has_deficit(
+                fig, self._opponent_resources_data),
+            exclude_ids=battle_ids,
+        )
 
     # ────────────────── buffs_allies_defence detection ──────────
 
@@ -1032,6 +1023,12 @@ class BattleScreen(SubScreen):
                 best_power = total
                 best_idx = i
         return best_idx
+
+    def _figure_power_bonuses(self, figures, is_player):
+        return {
+            fig.id: self._get_buffs_allies_bonus(fig, is_player)
+            for fig in figures or []
+        }
 
     # ────────────────── power calculations ─────────────────────
 
@@ -1677,7 +1674,6 @@ class BattleScreen(SubScreen):
     def _handle_panel_icon_click(self, event):
         """Check if player clicked a battle move icon in the left panel."""
         mx, my = event.pos
-        panel_cx = settings.BATTLE_PANEL_X + settings.BATTLE_PANEL_W // 2
         icon_s = settings.BATTLE_PANEL_ICON_SIZE
 
         # Build the same filtered list used by _draw_battle_panel so
@@ -1686,7 +1682,7 @@ class BattleScreen(SubScreen):
                          if not self._is_move_used(i)]
 
         for slot, (i, move) in enumerate(visible_moves):
-            icon_cy = settings.BATTLE_PANEL_ICON_START_Y + slot * settings.BATTLE_PANEL_ICON_DELTA_Y
+            panel_cx, icon_cy = self._battle_panel_icon_center(slot)
             icon_rect = pygame.Rect(
                 panel_cx - icon_s // 2,
                 icon_cy - icon_s // 2,
@@ -1718,6 +1714,8 @@ class BattleScreen(SubScreen):
                     dismantle_disabled=dismantle_off,
                     best_figure_index=self._get_best_figure_index(
                         eligible, bm_suit, move.get('value', 0)),
+                    figure_power_bonuses=self._figure_power_bonuses(
+                        eligible, is_player=True),
                 )
                 break
 
@@ -2986,6 +2984,35 @@ class BattleScreen(SubScreen):
 
     # ────────────────────── drawing ─────────────────────────────
 
+    def _battle_panel_rect(self):
+        return pygame.Rect(
+            self._sx(settings.BATTLE_PANEL_X),
+            self._sy(settings.BATTLE_PANEL_Y),
+            settings.BATTLE_PANEL_W,
+            settings.BATTLE_PANEL_H,
+        )
+
+    def _figures_panel_rect(self):
+        return pygame.Rect(
+            self._sx(settings.FIGURES_PANEL_X),
+            self._sy(settings.FIGURES_PANEL_Y),
+            settings.FIGURES_PANEL_W,
+            settings.FIGURES_PANEL_H,
+        )
+
+    def _rounds_panel_rect(self):
+        return pygame.Rect(
+            self._sx(settings.ROUNDS_PANEL_X),
+            self._sy(settings.ROUNDS_PANEL_Y),
+            settings.ROUNDS_PANEL_W,
+            settings.ROUNDS_PANEL_H,
+        )
+
+    def _battle_panel_icon_center(self, slot):
+        panel = self._battle_panel_rect()
+        icon_y = settings.BATTLE_PANEL_ICON_START_Y + slot * settings.BATTLE_PANEL_ICON_DELTA_Y
+        return panel.centerx, self._sy(icon_y)
+
     def draw(self):
         """Draw the entire battle screen."""
         super().draw()
@@ -3018,10 +3045,9 @@ class BattleScreen(SubScreen):
 
     def _draw_battle_panel(self):
         """Draw the left panel with the player's 3 battle moves (hover-responsive + suit icons)."""
-        px = settings.BATTLE_PANEL_X
-        py = settings.BATTLE_PANEL_Y
-        pw = settings.BATTLE_PANEL_W
-        ph = settings.BATTLE_PANEL_H
+        panel_rect = self._battle_panel_rect()
+        px, py = panel_rect.topleft
+        pw, ph = panel_rect.size
 
         # Panel background
         panel_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
@@ -3044,7 +3070,7 @@ class BattleScreen(SubScreen):
         visible_moves = [(i, m) for i, m in enumerate(self.player_moves) if not self._is_move_used(i)]
 
         for slot, (i, move) in enumerate(visible_moves):
-            icon_cy = settings.BATTLE_PANEL_ICON_START_Y + slot * settings.BATTLE_PANEL_ICON_DELTA_Y
+            _, icon_cy = self._battle_panel_icon_center(slot)
 
             family_name = move.get('family_name', '')
             suit = move.get('suit', '')
@@ -3090,10 +3116,9 @@ class BattleScreen(SubScreen):
 
     def _draw_figures_panel(self):
         """Draw the two battling figures and their power difference."""
-        px = settings.FIGURES_PANEL_X
-        py = settings.FIGURES_PANEL_Y
-        pw = settings.FIGURES_PANEL_W
-        ph = settings.FIGURES_PANEL_H
+        panel_rect = self._figures_panel_rect()
+        px, py = panel_rect.topleft
+        pw, ph = panel_rect.size
         gap = int(0.005 * settings.SCREEN_HEIGHT)
 
         # ─── Centre the diff area in the panel for perfect symmetry ───
@@ -3629,10 +3654,9 @@ class BattleScreen(SubScreen):
 
     def _draw_rounds_panel(self):
         """Draw the 3 round columns with slots and labels."""
-        px = settings.ROUNDS_PANEL_X
-        py = settings.ROUNDS_PANEL_Y
-        pw = settings.ROUNDS_PANEL_W
-        ph = settings.ROUNDS_PANEL_H
+        panel_rect = self._rounds_panel_rect()
+        px, py = panel_rect.topleft
+        pw, ph = panel_rect.size
         gap = int(0.005 * settings.SCREEN_HEIGHT)
 
         # Use the same centred diff area as the figures panel for alignment
@@ -3663,7 +3687,7 @@ class BattleScreen(SubScreen):
 
             # ─── Player slot (top) ───
             self._draw_round_slot(
-                col_cx, settings.ROUNDS_PLAYER_SLOT_Y,
+                col_cx, self._sy(settings.ROUNDS_PLAYER_SLOT_Y),
                 self.player_played[r], is_current and self.is_player_turn,
                 is_player=True, r_index=r,
             )
@@ -3679,7 +3703,7 @@ class BattleScreen(SubScreen):
 
             # ─── Opponent slot (bottom) ───
             self._draw_round_slot(
-                col_cx, settings.ROUNDS_OPPONENT_SLOT_Y,
+                col_cx, self._sy(settings.ROUNDS_OPPONENT_SLOT_Y),
                 self.opponent_played[r], is_current and not self.is_player_turn,
                 is_player=False, r_index=r,
             )
@@ -3688,8 +3712,9 @@ class BattleScreen(SubScreen):
         """Draw every power circle AFTER all panels so they sit on top."""
         # --- Figures panel circles ---
         # Compute diff area boundaries (same logic as _draw_figures_panel)
-        py = settings.FIGURES_PANEL_Y
-        ph = settings.FIGURES_PANEL_H
+        panel_rect = self._figures_panel_rect()
+        py = panel_rect.y
+        ph = panel_rect.h
         gap = int(0.005 * settings.SCREEN_HEIGHT)
         diff_margin_top = int(0.03 * settings.SCREEN_HEIGHT)
         diff_margin_bot = int(0.01 * settings.SCREEN_HEIGHT)
@@ -3705,7 +3730,7 @@ class BattleScreen(SubScreen):
         player_circle_y = player_box_bottom - r - int(0.005 * settings.SCREEN_HEIGHT)
         opp_circle_y = opp_box_top + r + int(0.005 * settings.SCREEN_HEIGHT)
 
-        fig_cx = settings.FIGURES_PANEL_X + settings.FIGURES_PANEL_W // 2
+        fig_cx = panel_rect.centerx
         player_power = self._get_figure_total_power(self.player_figure, self.player_figure_icon)
         player_power += self._get_figure_total_power(self.player_figure_2, self.player_figure_icon_2)
         self._draw_power_circle(fig_cx, player_circle_y, player_power)
@@ -3715,9 +3740,8 @@ class BattleScreen(SubScreen):
         self._draw_power_circle(fig_cx, opp_circle_y, opp_power)
 
         # --- Rounds panel circles (3 columns) ---
-        rpx = settings.ROUNDS_PANEL_X
-        rpw = settings.ROUNDS_PANEL_W
-        panel_cx = rpx + rpw // 2
+        rounds_rect = self._rounds_panel_rect()
+        panel_cx = rounds_rect.centerx
         total_span = 2 * settings.ROUNDS_COL_DELTA_X
         col_start_x = panel_cx - total_span // 2
 
@@ -3745,10 +3769,10 @@ class BattleScreen(SubScreen):
                     o_crossed = True
 
             # Player circle
-            self._draw_power_circle(col_cx, settings.POWER_CIRCLE_PLAYER_Y, p_val,
+            self._draw_power_circle(col_cx, self._sy(settings.POWER_CIRCLE_PLAYER_Y), p_val,
                                     crossed_out=p_crossed)
             # Opponent circle
-            self._draw_power_circle(col_cx, settings.POWER_CIRCLE_OPPONENT_Y, o_val,
+            self._draw_power_circle(col_cx, self._sy(settings.POWER_CIRCLE_OPPONENT_Y), o_val,
                                     crossed_out=o_crossed)
 
     def _draw_round_slot(self, cx, cy, played_move, is_active_slot, is_player=True, r_index=0):
@@ -4223,8 +4247,8 @@ class BattleScreen(SubScreen):
 
     def _draw_total_circle(self):
         """Draw the summary circle showing the running total difference."""
-        cx = settings.TOTAL_CIRCLE_X
-        cy = settings.TOTAL_CIRCLE_Y
+        cx = self._sx(settings.TOTAL_CIRCLE_X)
+        cy = self._sy(settings.TOTAL_CIRCLE_Y)
         r = settings.TOTAL_CIRCLE_RADIUS
 
         total = self._get_total_diff()
@@ -4255,16 +4279,16 @@ class BattleScreen(SubScreen):
 
     def _draw_turn_indicator(self):
         """Draw whose turn it is — or a 'finish!' button when all moves are played."""
-        cx = settings.TURN_INDICATOR_X
-        ty = settings.TURN_INDICATOR_Y
+        cx = self._sx(settings.TURN_INDICATOR_X)
+        ty = self._sy(settings.TURN_INDICATOR_Y)
 
         if self._all_moves_played():
             # ─── render a clickable "finish!" button ───
             btn_w = settings.FINISH_BTN_W
             btn_h = settings.FINISH_BTN_H
             btn_rect = pygame.Rect(
-                settings.FINISH_BTN_X - btn_w // 2,
-                settings.FINISH_BTN_Y,
+                self._sx(settings.FINISH_BTN_X) - btn_w // 2,
+                self._sy(settings.FINISH_BTN_Y),
                 btn_w, btn_h
             )
             self._finish_btn_rect = btn_rect

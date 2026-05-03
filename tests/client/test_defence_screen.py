@@ -71,6 +71,28 @@ def _make_checkmate_family():
     return family, description
 
 
+def _make_instant_charge_family():
+    description = (
+        'The Gorkha Warriors is an offensive military figure that charges instantly into battle '
+        'when placed on the field. Requires food equal to its number-card value.'
+    )
+    matched = SimpleNamespace(
+        suit='Hearts',
+        name='Gorkha Warriors',
+        sub_name='Hearts 7',
+        key_cards=[],
+        number_card=None,
+        upgrade_card=None,
+        instant_charge=True,
+    )
+    family = SimpleNamespace(
+        name='Gorkha Warriors',
+        description=description,
+        figures=[matched],
+    )
+    return family, description
+
+
 class TestDefenceScreenInit:
 
     def test_initial_state(self):
@@ -572,6 +594,54 @@ class TestDefenceScreenLayout:
         assert 'checkmate' not in fig.description.lower()
         assert 'checkmate' not in fig.family.description.lower()
 
+    def test_config_figures_hide_instant_advance_in_defence(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        family, description = _make_instant_charge_family()
+
+        fig = screen._config_fig_to_figure({
+            'id': 11,
+            'family_name': 'Gorkha Warriors',
+            'name': 'Gorkha Warriors',
+            'suit': 'Hearts',
+            'description': description,
+        }, {'Gorkha Warriors': family})
+
+        assert fig.instant_charge is False
+        assert 'charges instantly into battle' not in fig.description.lower()
+        assert 'charges instantly into battle' not in fig.family.description.lower()
+
+    def test_config_manufactories_keep_cannot_attack_flag(self):
+        from game.components.figures.family_configs.village_config import village_dict_list
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        by_name = {cfg['name']: cfg for cfg in village_dict_list}
+
+        for family_name, suit in (
+            ('Shield Manufactory', 'Clubs'),
+            ('Sword Manufactory', 'Hearts'),
+        ):
+            cfg = by_name[family_name]
+            family = SimpleNamespace(
+                name=family_name,
+                description=cfg['description'],
+                field='village',
+                figures=[],
+            )
+            family.figures = cfg['figures'](family, suit)
+
+            fig = screen._config_fig_to_figure({
+                'id': 11,
+                'family_name': family_name,
+                'name': family_name,
+                'suit': suit,
+                'description': cfg['description'],
+            }, {family_name: family})
+
+            assert fig.cannot_attack is True
+
     def test_right_panels_stack_without_overlap(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
@@ -767,6 +837,154 @@ class TestBattleFigureToggle:
         event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
         screen.handle_events([event])
         assert screen._selecting_battle_fig is True
+
+    def test_civil_war_battle_figure_selection_sends_same_color_pair(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(
+            prelude_spell_name='Civil War',
+            figures=[
+                {'id': 10, 'has_deficit': False, 'field': 'village',
+                 'color': 'offensive'},
+                {'id': 11, 'has_deficit': False, 'field': 'village',
+                 'color': 'offensive'},
+            ],
+        )
+        screen._figure_objects = [
+            _make_figure_object(10, field='village'),
+            _make_figure_object(11, field='village'),
+        ]
+        screen._figure_icons = {
+            10: SimpleNamespace(hovered=True, figure=SimpleNamespace(id=10)),
+            11: SimpleNamespace(hovered=False, figure=SimpleNamespace(id=11)),
+        }
+        screen._selecting_battle_fig = True
+
+        first = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))
+        second = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))
+        with patch.object(screen, '_server_set_battle_figure') as mock_set:
+            screen.handle_events([first])
+            assert screen._selecting_battle_fig is True
+            assert screen._pending_civil_war_battle_fig_1 == 10
+            mock_set.assert_not_called()
+
+            screen._figure_icons[10].hovered = False
+            screen._figure_icons[11].hovered = True
+            screen.handle_events([second])
+
+        mock_set.assert_called_once_with(10, 11)
+        assert screen._selecting_battle_fig is False
+        assert screen._pending_civil_war_battle_fig_1 is None
+
+    def test_civil_war_battle_figure_selection_rejects_wrong_color_second(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(
+            prelude_spell_name='Civil War',
+            figures=[
+                {'id': 10, 'has_deficit': False, 'field': 'village',
+                 'color': 'offensive'},
+                {'id': 11, 'has_deficit': False, 'field': 'village',
+                 'color': 'defensive'},
+                {'id': 12, 'has_deficit': False, 'field': 'village',
+                 'color': 'offensive'},
+            ],
+        )
+        screen._figure_objects = [
+            _make_figure_object(10, field='village'),
+            _make_figure_object(11, field='village'),
+            _make_figure_object(12, field='village'),
+        ]
+        screen._pending_civil_war_battle_fig_1 = 10
+        screen._selecting_battle_fig = True
+        screen._figure_icons = {
+            11: SimpleNamespace(hovered=True, figure=SimpleNamespace(id=11)),
+        }
+
+        with patch.object(screen, '_server_set_battle_figure') as mock_set:
+            event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))
+            screen.handle_events([event])
+
+        mock_set.assert_not_called()
+        assert screen._selecting_battle_fig is True
+        assert screen._pending_civil_war_battle_fig_1 == 10
+        state.set_msg.assert_called_with(
+            'Civil War requires two battle figures of the same color')
+
+    def test_civil_war_second_pick_rejects_sword_manufactory(self):
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        state.action = {}
+        screen = DefenceScreen(state)
+        screen._land_id = 7
+        screen._config = _make_config(
+            prelude_spell_name='Civil War',
+            figures=[
+                {'id': 10, 'has_deficit': False, 'field': 'village',
+                 'color': 'offensive'},
+                {'id': 11, 'has_deficit': False, 'field': 'village',
+                 'family_name': 'Sword Manufactory', 'color': 'offensive'},
+                {'id': 12, 'has_deficit': False, 'field': 'village',
+                 'color': 'offensive'},
+            ],
+        )
+        screen._figure_objects = [
+            _make_figure_object(10, field='village'),
+            _make_figure_object(11, field='village', cannot_attack=True),
+            _make_figure_object(12, field='village'),
+        ]
+        screen._pending_civil_war_battle_fig_1 = 10
+        screen._selecting_battle_fig = True
+        screen._figure_icons = {
+            11: SimpleNamespace(hovered=True, figure=SimpleNamespace(id=11)),
+        }
+
+        with patch.object(screen, '_server_set_battle_figure') as mock_set:
+            event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))
+            screen.handle_events([event])
+
+        mock_set.assert_not_called()
+        assert screen._selecting_battle_fig is True
+        assert screen._pending_civil_war_battle_fig_1 == 10
+        state.set_msg.assert_called_with(
+            'This figure cannot counter-advance because it cannot attack')
+
+    def test_civil_war_readiness_requires_second_same_color_battle_figure(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._config = _make_config(
+            prelude_spell_name='Civil War',
+            figures=[
+                {'id': 10, 'has_deficit': False, 'field': 'village',
+                 'color': 'offensive'},
+                {'id': 11, 'has_deficit': False, 'field': 'village',
+                 'color': 'defensive'},
+            ],
+            battle_moves=[
+                {'id': 1, 'round_index': 0},
+                {'id': 2, 'round_index': 1},
+                {'id': 3, 'round_index': 2},
+            ],
+            battle_figure_id=10,
+            battle_figure_id_2=11,
+        )
+        screen._figure_objects = [
+            _make_figure_object(10, field='village'),
+            _make_figure_object(11, field='village'),
+        ]
+
+        assert screen._is_defence_ready() is False
+        assert 'same color' in ' '.join(screen._get_defence_problems())
 
     def test_health_boost_target_selection_ignores_duel_only_checkmate(self):
         from game.screens.defence_screen import DefenceScreen

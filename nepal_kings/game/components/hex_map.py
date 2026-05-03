@@ -112,7 +112,7 @@ def _draw_capped_line(surface, color, start, end, width):
     jagged stair-steps that are especially visible on diagonal hex edges.
     """
     width = max(1, int(width or 1))
-    scale = 2 if width >= 2 else 1
+    scale = 2
     pad = width + 3
     min_x = int(math.floor(min(start[0], end[0]) - pad))
     min_y = int(math.floor(min(start[1], end[1]) - pad))
@@ -137,6 +137,51 @@ def _draw_capped_line(surface, color, start, end, width):
     if scale > 1:
         line_surf = pygame.transform.smoothscale(line_surf, (surf_w, surf_h))
     surface.blit(line_surf, (min_x, min_y))
+
+
+def _clip_line_to_convex_polygon(pts, p1, p2):
+    """Cyrus-Beck parametric clip of segment p1→p2 to a convex polygon.
+
+    Works for any winding order: each edge's inward normal is oriented toward
+    the polygon centroid.  Returns (q1, q2) or None if fully outside.
+    """
+    n = len(pts)
+    if n < 3:
+        return None
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+    t_enter, t_exit = 0.0, 1.0
+    for i in range(n):
+        ax, ay = pts[i]
+        bx, by = pts[(i + 1) % n]
+        ex, ey = bx - ax, by - ay
+        # Left-hand perpendicular; flip if it points away from centroid.
+        nx, ny = -ey, ex
+        if nx * (cx - ax) + ny * (cy - ay) < 0:
+            nx, ny = -nx, -ny
+        numer = nx * (p1[0] - ax) + ny * (p1[1] - ay)
+        denom = nx * dx + ny * dy
+        if abs(denom) < 1e-10:
+            if numer < 0:
+                return None
+        elif denom > 0:            # entering the half-plane
+            t = -numer / denom
+            if t > t_enter:
+                t_enter = t
+        else:                      # exiting the half-plane
+            t = -numer / denom
+            if t < t_exit:
+                t_exit = t
+        if t_enter >= t_exit:
+            return None
+    if t_enter >= t_exit:
+        return None
+    return (
+        (p1[0] + t_enter * dx, p1[1] + t_enter * dy),
+        (p1[0] + t_exit  * dx, p1[1] + t_exit  * dy),
+    )
 
 
 def _draw_surface_pattern(*_args, **_kwargs):
@@ -350,6 +395,89 @@ class HexMap:
             self.tiles.append(tile)
             self._tile_by_coord[(tile.col, tile.row)] = tile
         self._update_world_bounds()
+        self._precompute_conquest_outcomes()
+
+    def _precompute_conquest_outcomes(self):
+        """Pre-compute whether each non-player tile would expand an existing kingdom
+        or start a new isolated one.  Stored as {land_id: 'expand' | 'new'}."""
+        my_coords = frozenset(
+            (t.col, t.row) for t in self.tiles if t.is_mine
+        )
+        outcomes = {}
+        if my_coords:
+            for tile in self.tiles:
+                if tile.is_mine:
+                    continue
+                neighbours = _edge_neighbour_coords(tile.col, tile.row)
+                outcomes[tile.land_id] = (
+                    'expand' if any(n in my_coords for n in neighbours) else 'new'
+                )
+        self._conquest_outcomes = outcomes
+        self._conquest_ovl_cache = {}
+        # Cache the player's surface skin key so the hover preview can use it.
+        self._player_surface_key = None
+        for t in self.tiles:
+            if t.is_mine:
+                self._player_surface_key = self._owner_style_key(t, 'surface_key')
+                break
+
+    def conquest_outcome_for(self, tile):
+        """Return 'expand', 'new', or None for a non-player tile."""
+        if tile.is_mine:
+            return None
+        return getattr(self, '_conquest_outcomes', {}).get(tile.land_id)
+
+    def _get_conquest_overlay(self, sz, inner_sz, outcome):
+        """Return a cached hex-shaped alpha surface for conquest outcome overlays.
+
+        Both outcomes use mathematically clipped hatch lines so pixels between
+        the lines are guaranteed fully transparent — the tile's own colour is
+        completely unaffected outside the line strokes.
+
+        'new'    → grey  \\ lines (slope +1, 45°)
+        'expand' → golden / lines (slope −1, 135°)
+        """
+        key = (int(sz), int(inner_sz), outcome)
+        cache = getattr(self, '_conquest_ovl_cache', None)
+        if cache is None:
+            cache = {}
+            self._conquest_ovl_cache = cache
+        surf = cache.get(key)
+        if surf is None:
+            pad = 2
+            w = int(sz * 2) + pad * 2
+            h = int(sz * math.sqrt(3)) + pad * 2
+            surf = pygame.Surface((w, h), pygame.SRCALPHA)
+            lcx, lcy = w // 2, h // 2
+            pts = _hex_corners(lcx, lcy, inner_sz)
+
+            if outcome == 'new':
+                gap = max(4, int(inner_sz * 0.28))
+                lw  = max(1, int(inner_sz * 0.07))
+                clr = (120, 120, 120, 175)
+                # Lines y = x + c  (slope +1, \\ direction)
+                for c in range(-w, h + gap, gap):
+                    seg = _clip_line_to_convex_polygon(
+                        pts, (0.0, float(c)), (float(w), float(c + w)))
+                    if seg:
+                        pygame.draw.line(surf, clr,
+                            (int(round(seg[0][0])), int(round(seg[0][1]))),
+                            (int(round(seg[1][0])), int(round(seg[1][1]))), lw)
+            else:  # 'expand'
+                gap = max(4, int(inner_sz * 0.28))
+                lw  = max(1, int(inner_sz * 0.07))
+                clr = (210, 165, 45, 115)
+                # Lines y = -x + c  (slope −1, / direction)
+                for c in range(-gap, w + h + 2 * gap, gap):
+                    seg = _clip_line_to_convex_polygon(
+                        pts, (0.0, float(c)), (float(w), float(c - w)))
+                    if seg:
+                        pygame.draw.line(surf, clr,
+                            (int(round(seg[0][0])), int(round(seg[0][1]))),
+                            (int(round(seg[1][0])), int(round(seg[1][1]))), lw)
+
+            cache[key] = surf
+        return surf
 
     def _update_world_bounds(self):
         """Cache world bounds including hex extents for camera clamping."""
@@ -638,6 +766,39 @@ class HexMap:
         if tile.owner:
             self._draw_surface_skin(tile, corners, scx, scy, sz)
 
+        # Conquest territory hint: dark overlay for isolated new-kingdom tiles,
+        # warm golden tint for tiles adjacent to the player's existing kingdom.
+        # The polygon is inset so it stays within the border and leaves the
+        # border edges visually unaffected.
+        if not tile.is_mine:
+            outcome = getattr(self, '_conquest_outcomes', {}).get(tile.land_id)
+            if outcome == 'new' and tile is not self.hovered_tile:
+                # Reducing circumradius by `inset` shrinks the perpendicular
+                # distance to each flat edge by inset * sqrt(3)/2, so to clear
+                # a border of `border_px` screen pixels the correct inset is
+                # border_px * 2/sqrt(3).  An extra +1 adds a 1-px safety gap.
+                border_px = max(1, int(self._border_w * self.zoom))
+                border_inset = int(border_px * 2.0 / math.sqrt(3)) + 1
+                inner_sz = max(4, sz - border_inset)
+                ovl = self._get_conquest_overlay(sz, inner_sz, outcome)
+                self.window.blit(ovl, ovl.get_rect(center=(int(scx), int(scy))))
+
+            # Hover expansion preview: ghost the player's own kingdom skin over
+            # the tile so the player can see how it would look if conquered.
+            if (outcome == 'expand' and tile is self.hovered_tile):
+                psk = getattr(self, '_player_surface_key', None)
+                if psk and psk != 'surface_plain':
+                    sz_int = max(8, int(sz))
+                    art = hex_cosmetics.render_surface_art(psk, sz_int)
+                    if art is not None:
+                        try:
+                            ghost = art.copy()
+                            ghost.set_alpha(140)
+                            self.window.blit(ghost,
+                                             (int(scx) - sz_int, int(scy) - sz_int))
+                        except Exception:
+                            pass
+
     def _draw_hex_border(self, tile, corners):
         """Draw selection and border cosmetics after all hex fills."""
         if tile.owner:
@@ -689,6 +850,42 @@ class HexMap:
 
         if tile is self.hovered_tile:
             self._draw_hover_ring(scx, scy, sz)
+            if not tile.is_mine and sz >= 22:
+                outcome = getattr(self, '_conquest_outcomes', {}).get(tile.land_id)
+                if outcome:
+                    self._draw_conquest_hover_label(scx, scy, sz, outcome)
+
+    def _draw_conquest_hover_label(self, scx, scy, sz, outcome):
+        """Small pill label above the hovered tile indicating conquest outcome."""
+        if outcome == 'expand':
+            text = '+ Add to kingdom'
+            bg_clr = (20, 70, 20, 215)
+            border_clr = (100, 185, 100)
+            text_clr = (175, 240, 175)
+        else:
+            text = '+ New kingdom'
+            bg_clr = (55, 42, 12, 215)
+            border_clr = (185, 150, 70)
+            text_clr = (225, 190, 105)
+
+        font_px = max(8, int(sz * 0.27))
+        font = settings.get_font(font_px)
+        txt_surf = font.render(text, True, text_clr)
+        pad_x = max(5, int(sz * 0.11))
+        pad_y = max(2, int(sz * 0.05))
+        pill_w = txt_surf.get_width() + pad_x * 2
+        pill_h = txt_surf.get_height() + pad_y * 2
+
+        top_y = int(scy - sz * (math.sqrt(3) / 2))
+        pill_y = top_y - pill_h - 3
+        pill_x = int(scx - pill_w / 2)
+
+        pill = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
+        r = pill_h // 2
+        pygame.draw.rect(pill, bg_clr, pill.get_rect(), border_radius=r)
+        pygame.draw.rect(pill, border_clr, pill.get_rect(), 1, border_radius=r)
+        pill.blit(txt_surf, (pad_x, pad_y))
+        self.window.blit(pill, (pill_x, pill_y))
 
     # ── Pill / overlay helpers ─────────────────────────────────────
 
@@ -1019,7 +1216,7 @@ class HexMap:
                 group['suit_keys'][sk] = group['suit_keys'].get(sk, 0) + 1
 
         badges = []
-        for group in groups.values():
+        for gk, group in groups.items():
             tiles = group['tiles']
             if not tiles:
                 continue
@@ -1052,6 +1249,7 @@ class HexMap:
                 'badge_key': badge_key,
                 'suit_key': suit_key,
                 'representative_tile': tiles[0],
+                'group_key': gk,
             })
         return badges
 
@@ -1063,12 +1261,24 @@ class HexMap:
         cached surface by ``badge_cosmetics.render_badge`` so per-frame
         cost is one ``blit`` per visible kingdom.
         """
-        # Allow the kingdom name to show even when zoomed all the way out
-        # — it's the most useful low-zoom information.
         if sz <= 8:
             return
         if self.zoom >= settings.HEX_MAP_OWNER_NAME_MIN_ZOOM:
             return
+
+        # At minimum zoom the map is very cluttered; only show the badge for
+        # the kingdom the mouse is currently hovering over.
+        hover_group_key = None
+        if self.zoom <= settings.HEX_MAP_ZOOM_MIN:
+            ht = self.hovered_tile
+            if ht is None or not ht.owner_user_id:
+                return
+            if ht.kingdom_id is not None:
+                hover_group_key = ('kingdom', ht.kingdom_id)
+            elif ht.kingdom_component_id is not None:
+                hover_group_key = ('component', ht.owner_user_id, ht.kingdom_component_id)
+            else:
+                return
 
         vp = self.viewport_rect
         font = self._label_font
@@ -1085,6 +1295,8 @@ class HexMap:
             pygame.time.get_ticks())
 
         for badge_data in self._kingdom_badges():
+            if hover_group_key is not None and badge_data.get('group_key') != hover_group_key:
+                continue
             cx_w, cy_w = badge_data['center_x'], badge_data['center_y']
             scx, scy = self.world_to_screen(cx_w, cy_w)
             # Keep cluster rendering scoped to visible map area.

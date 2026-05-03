@@ -16,6 +16,7 @@ from game.screens.conquer_screen import ConquerScreen
 from game.screens.defence_screen import DefenceScreen
 from game.screens.collection_screen import CollectionScreen
 from game.screens.game_screen import GameScreen
+from game.screens.conquer_game_screen import ConquerGameScreen
 from game.core.state import State
 from game.core.input_state import process_events as _process_input
 from config import settings
@@ -80,6 +81,7 @@ class Client:
             ('defence',    'Loading defence …',      DefenceScreen,    1),
             ('collection', 'Loading collection …',   CollectionScreen, 1),
             ('game',       'Loading game …',         GameScreen,      12),
+            ('conquer_game', 'Loading conquer battle …', ConquerGameScreen, 8),
         ]
         total_weight = sum(w for *_, w in screen_steps)
 

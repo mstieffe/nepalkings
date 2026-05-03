@@ -126,6 +126,19 @@ def test_detect_phase_defender_waits_for_invader_battle_decision():
     assert detect_phase(game_dict, 10) == 'battle_decision'
 
 
+def test_detect_phase_conquer_civil_war_current_invader_second_advance():
+    game_dict = _base_game_dict(ai_id=10, opp_id=11)
+    game_dict['mode'] = 'conquer'
+    game_dict['battle_modifier'] = [{'type': 'Civil War'}]
+    game_dict['advancing_figure_id'] = 101
+    game_dict['advancing_figure_id_2'] = None
+    game_dict['advancing_player_id'] = 10
+    game_dict['defending_figure_id'] = None
+    game_dict['turn_player_id'] = 10
+
+    assert detect_phase(game_dict, 10) == 'normal_turn'
+
+
 def test_all_battle_rounds_done_requires_both_players_to_cover_all_rounds():
     game_dict = _base_game_dict(ai_id=1, opp_id=2)
     game_dict['battle_confirmed'] = True

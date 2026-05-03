@@ -9,7 +9,7 @@ from models import (db, User, Land, LandConfig, LandConfigFigure,
 from tests.server.test_land_battle import (
     _auth_headers, _make_user, _make_land,
     _make_conquer_config, _make_defence_config,
-    _scripted_ai_template,
+    _scripted_ai_template, _add_conquer_config_figure,
 )
 
 
@@ -252,6 +252,89 @@ class TestConquerOwnDefenderEndpoint:
         _set_prelude_invader_swap(db, cfg)
         return attacker, land, cfg
 
+    def _setup_swap_civil_war_game(self, db):
+        """Create Invader Swap + defender Civil War with second-pick options."""
+        attacker = _make_user(db, username='atk')
+        defender = _make_user(db, username='def')
+        land = _make_land(db, tier=1, owner_user_id=defender.id)
+        atk_cfg = _make_conquer_config(db, attacker, land)
+        def_cfg = _make_defence_config(db, defender, land)
+        _set_prelude_invader_swap(db, atk_cfg)
+        def_cfg.prelude_spell_name = 'Civil War'
+        def_cfg.prelude_spell_data = {}
+
+        same_color_cfg = _add_conquer_config_figure(
+            db, atk_cfg, attacker,
+            family_name='Small Rice Farm',
+            name='Second Rice Farm',
+            suit='Hearts',
+            color='offensive',
+            field='village',
+        )
+        wrong_color_cfg = _add_conquer_config_figure(
+            db, atk_cfg, attacker,
+            family_name='Small Rice Farm',
+            name='Wrong Color Rice Farm',
+            suit='Spades',
+            color='defensive',
+            field='village',
+        )
+        _add_conquer_config_figure(
+            db, def_cfg, defender,
+            family_name='Small Rice Farm',
+            name='Defender Rice Farm',
+            suit='Hearts',
+            color='defensive',
+            field='village',
+        )
+        db.session.commit()
+        return attacker, defender, land, same_color_cfg, wrong_color_cfg
+
+    def _put_swap_game_after_automated_advance(
+        self, db, game, attacker, defender, *,
+        same_color_cfg=None, wrong_color_cfg=None,
+    ):
+        atk_player = next(p for p in game.players if p.user_id == attacker.id)
+        invader_player = next(p for p in game.players if p.user_id == defender.id)
+        assert game.invader_player_id == invader_player.id
+
+        adv_fig = Figure.query.filter_by(
+            game_id=game.id, player_id=invader_player.id, field='village'
+        ).first()
+        assert adv_fig is not None
+        own_figures = Figure.query.filter_by(
+            game_id=game.id, player_id=atk_player.id
+        ).all()
+        excluded_cfg_ids = {
+            cfg.id for cfg in (same_color_cfg, wrong_color_cfg) if cfg is not None
+        }
+        first = next(
+            f for f in own_figures
+            if f.color == 'offensive'
+            and f.source_config_figure_id not in excluded_cfg_ids
+        )
+        same_color = next(
+            (f for f in own_figures
+             if same_color_cfg and f.source_config_figure_id == same_color_cfg.id),
+            None,
+        )
+        wrong_color = next(
+            (f for f in own_figures
+             if wrong_color_cfg and f.source_config_figure_id == wrong_color_cfg.id),
+            None,
+        )
+
+        game.advancing_figure_id = adv_fig.id
+        game.advancing_player_id = invader_player.id
+        game.defending_figure_id = None
+        game.defending_figure_id_2 = None
+        game.battle_decisions = None
+        game.turn_player_id = atk_player.id
+        for p in game.players:
+            p.turns_left = 1
+        db.session.commit()
+        return atk_player, invader_player, first, same_color, wrong_color
+
     def test_own_defender_rejects_if_no_swap(self, app, db):
         """Endpoint rejects when no Invader Swap spell is active."""
         with app.app_context():
@@ -310,6 +393,295 @@ class TestConquerOwnDefenderEndpoint:
             }, headers=headers)
             assert resp.status_code == 400, resp.get_json()
             assert not resp.get_json().get('success')
+
+    def test_own_defender_records_automated_invader_decision(self, app, db):
+        """After own-defender selection, the automated invader is ready to fight."""
+        with app.app_context():
+            attacker, land, _ = self._setup_swap_game(app, db)
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+
+            atk_player = next(p for p in game.players if p.user_id == attacker.id)
+            invader_player = db.session.get(Player, game.invader_player_id)
+            assert invader_player.id != atk_player.id
+
+            adv_fig = next(
+                f for f in Figure.query.filter_by(
+                    game_id=game.id, player_id=invader_player.id
+                ).all()
+                if not getattr(f, 'cannot_be_blocked', False)
+            )
+            own_fig = Figure.query.filter_by(
+                game_id=game.id, player_id=atk_player.id
+            ).first()
+            assert own_fig is not None
+
+            game.advancing_figure_id = adv_fig.id
+            game.advancing_player_id = invader_player.id
+            game.defending_figure_id = None
+            game.battle_decisions = None
+            game.turn_player_id = atk_player.id
+            db.session.commit()
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': own_fig.id,
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            data_r = resp.get_json()
+            decisions = data_r['game'].get('battle_decisions') or {}
+            assert decisions.get(str(invader_player.id)) == 'battle'
+
+            db.session.refresh(game)
+            assert game.defending_figure_id == own_fig.id
+            assert game.battle_decisions == {str(invader_player.id): 'battle'}
+
+            resp = client.post('/games/battle_decision', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'decision': 'battle',
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            data_r = resp.get_json()
+            assert data_r.get('outcome') == 'battle'
+            assert data_r['game']['battle_confirmed'] is True
+
+    def test_own_defender_civil_war_second_pick_completes(self, app, db):
+        """Invader Swap + Civil War lets the conquerer pick a second defender."""
+        with app.app_context():
+            attacker, defender, land, same_cfg, wrong_cfg = (
+                self._setup_swap_civil_war_game(db)
+            )
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+            atk_player, invader_player, first, same_color, _ = (
+                self._put_swap_game_after_automated_advance(
+                    db, game, attacker, defender,
+                    same_color_cfg=same_cfg,
+                    wrong_color_cfg=wrong_cfg,
+                )
+            )
+            assert same_color is not None
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': first.id,
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            first_data = resp.get_json()
+            assert first_data.get('civil_war_need_second') is True
+            assert (first_data['game'].get('battle_decisions') or {}) == {}
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': same_color.id,
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            data_r = resp.get_json()
+            decisions = data_r['game'].get('battle_decisions') or {}
+            assert decisions.get(str(invader_player.id)) == 'battle'
+            assert data_r['game']['defending_figure_id_2'] == same_color.id
+
+            resp = client.post('/games/battle_decision', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'decision': 'battle',
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            assert resp.get_json()['game']['battle_confirmed'] is True
+
+    def test_own_defender_civil_war_skip_completes_with_one(self, app, db):
+        """Skipping the second own defender records the automated invader fight."""
+        with app.app_context():
+            attacker, defender, land, same_cfg, wrong_cfg = (
+                self._setup_swap_civil_war_game(db)
+            )
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+            atk_player, invader_player, first, _same_color, _wrong = (
+                self._put_swap_game_after_automated_advance(
+                    db, game, attacker, defender,
+                    same_color_cfg=same_cfg,
+                    wrong_color_cfg=wrong_cfg,
+                )
+            )
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': first.id,
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            assert resp.get_json().get('civil_war_need_second') is True
+
+            resp = client.post('/games/skip_civil_war_second', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'context': 'own_defender',
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            data_r = resp.get_json()
+            decisions = data_r['game'].get('battle_decisions') or {}
+            assert decisions.get(str(invader_player.id)) == 'battle'
+            assert data_r['game']['defending_figure_id'] == first.id
+            assert data_r['game']['defending_figure_id_2'] is None
+
+    def test_own_defender_civil_war_wrong_color_completes_with_one(
+        self, app, db
+    ):
+        """A wrong-color second own defender proceeds with the first defender."""
+        with app.app_context():
+            attacker, defender, land, same_cfg, wrong_cfg = (
+                self._setup_swap_civil_war_game(db)
+            )
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+            atk_player, invader_player, first, _same_color, wrong = (
+                self._put_swap_game_after_automated_advance(
+                    db, game, attacker, defender,
+                    same_color_cfg=same_cfg,
+                    wrong_color_cfg=wrong_cfg,
+                )
+            )
+            assert wrong is not None
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': first.id,
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            assert resp.get_json().get('civil_war_need_second') is True
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': wrong.id,
+            }, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            data_r = resp.get_json()
+            decisions = data_r['game'].get('battle_decisions') or {}
+            assert data_r.get('civil_war_second_rejected') is True
+            assert decisions.get(str(invader_player.id)) == 'battle'
+            assert data_r['game']['defending_figure_id'] == first.id
+            assert data_r['game']['defending_figure_id_2'] is None
+
+    def test_generic_select_defender_blocked_after_swap_blockable_advance(
+        self, app, db
+    ):
+        """Invader Swap must route blockable advances through own-defender pick."""
+        with app.app_context():
+            attacker, defender, land, same_cfg, wrong_cfg = (
+                self._setup_swap_civil_war_game(db)
+            )
+            client = app.test_client()
+            atk_headers = _auth_headers(app, attacker)
+            def_headers = _auth_headers(app, defender)
+            data = _start_battle(client, atk_headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+            atk_player, invader_player, first, _same_color, _wrong = (
+                self._put_swap_game_after_automated_advance(
+                    db, game, attacker, defender,
+                    same_color_cfg=same_cfg,
+                    wrong_color_cfg=wrong_cfg,
+                )
+            )
+            game.turn_player_id = invader_player.id
+            db.session.commit()
+
+            resp = client.post('/games/select_defender', json={
+                'game_id': game.id,
+                'player_id': invader_player.id,
+                'figure_id': first.id,
+            }, headers=def_headers)
+
+            assert resp.status_code == 400
+            data_r = resp.get_json()
+            assert data_r.get('reason') == 'own_defender_required'
+
+    def test_swapped_civil_war_invader_prefers_configured_second_figure(
+        self, app, db
+    ):
+        """Automated swapped invader uses defence battle_figure_id_2 when valid."""
+        with app.app_context():
+            attacker = _make_user(db, username='atk')
+            defender = _make_user(db, username='def')
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            atk_cfg = _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+            _set_prelude_invader_swap(db, atk_cfg)
+            def_cfg.prelude_spell_name = 'Civil War'
+            def_cfg.prelude_spell_data = {}
+            first_cfg = _add_conquer_config_figure(
+                db, def_cfg, defender,
+                name='Configured First',
+                suit='Hearts',
+                color='defensive',
+                field='village',
+            )
+            fallback_cfg = _add_conquer_config_figure(
+                db, def_cfg, defender,
+                name='Earlier Same Color Fallback',
+                suit='Diamonds',
+                color='defensive',
+                field='village',
+            )
+            second_cfg = _add_conquer_config_figure(
+                db, def_cfg, defender,
+                name='Configured Second',
+                suit='Clubs',
+                color='defensive',
+                field='village',
+            )
+            def_cfg.battle_figure_id = first_cfg.id
+            def_cfg.battle_figure_id_2 = second_cfg.id
+            def_cfg.counter_spell_name = None
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+            invader_player = next(p for p in game.players if p.user_id == defender.id)
+            first = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=invader_player.id,
+                source_config_figure_id=first_cfg.id,
+            ).first()
+            fallback = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=invader_player.id,
+                source_config_figure_id=fallback_cfg.id,
+            ).first()
+            second = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=invader_player.id,
+                source_config_figure_id=second_cfg.id,
+            ).first()
+            assert first and fallback and second
+
+            game.advancing_figure_id = first.id
+            game.advancing_figure_id_2 = None
+            game.advancing_player_id = invader_player.id
+            game.turn_player_id = invader_player.id
+            db.session.commit()
+
+            from ai.ai_worker import _conquer_pick_counter_advance_figure
+            picked = _conquer_pick_counter_advance_figure(game, invader_player.id)
+
+            assert picked == second.id
+            assert picked != fallback.id
 
 
 class TestConquerInvaderSwapGameFlow:

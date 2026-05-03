@@ -314,6 +314,12 @@ def detect_phase(game_dict: dict, ai_player_id: int) -> str:
     has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
     if (game_dict.get('mode') == 'conquer' and has_civil_war and
             game_dict.get('advancing_figure_id') and
+            not game_dict.get('advancing_figure_id_2') and
+            game_dict.get('advancing_player_id') == ai_player_id and
+            game_dict.get('turn_player_id') == ai_player_id):
+        return 'normal_turn'
+    if (game_dict.get('mode') == 'conquer' and has_civil_war and
+            game_dict.get('advancing_figure_id') and
             game_dict.get('defending_figure_id') and
             not game_dict.get('defending_figure_id_2') and
             game_dict.get('advancing_player_id') != ai_player_id and

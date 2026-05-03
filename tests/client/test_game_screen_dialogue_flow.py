@@ -37,6 +37,7 @@ class _DummyGame(SimpleNamespace):
 def _make_conquer_game_screen():
     GameScreen = _game_screen_class()
     game_screen = GameScreen.__new__(GameScreen)
+    game_screen.window = object()
     game_screen.state = SimpleNamespace(
         game=_DummyGame(
             game_id=1,
@@ -518,6 +519,60 @@ class TestGameScreenDialogueFlow:
         assert handled is True
         assert len(notifications) == 1
         assert notifications[0]['title'] == 'Land Conquered!'
+
+    def test_conquer_result_gain_notification_uses_loot_card_images(self, monkeypatch):
+        GameScreen, game_screen, notifications = _make_conquer_game_screen()
+
+        class _DummyCardImg:
+            def __init__(self, _window, suit, rank):
+                self.front_img = f'{rank}-{suit}'
+
+        monkeypatch.setattr('game.components.cards.card_img.CardImg', _DummyCardImg)
+
+        handled = GameScreen._handle_conquer_result_response(game_screen, {
+            'success': True,
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'land_tier': 2,
+            'loot_gained_cards': [
+                {'suit': 'Hearts', 'rank': 'K'},
+                {'suit': 'Spades', 'rank': '8'},
+            ],
+        })
+
+        assert handled is True
+        payload = notifications[0]
+        assert payload['title'] == 'Land Conquered!'
+        assert payload['message'].endswith('Loot gained (pending collection):')
+        assert 'K of Hearts' not in payload['message']
+        assert payload['images'] == ['K-Hearts', '8-Spades']
+        assert 'Collect looted cards from the Loot Inbox' in payload['message_after_images']
+
+    def test_conquer_result_loss_notification_uses_loot_card_images(self, monkeypatch):
+        GameScreen, game_screen, notifications = _make_conquer_game_screen()
+
+        class _DummyCardImg:
+            def __init__(self, _window, suit, rank):
+                self.front_img = f'{rank}-{suit}'
+
+        monkeypatch.setattr('game.components.cards.card_img.CardImg', _DummyCardImg)
+
+        handled = GameScreen._handle_conquer_result_response(game_screen, {
+            'success': True,
+            'conquer_result': 'defender_won',
+            'attacker_won': False,
+            'loot_lost_cards': [
+                {'suit': 'Clubs', 'rank': '4'},
+            ],
+        })
+
+        assert handled is True
+        payload = notifications[0]
+        assert payload['title'] == 'Attack Failed'
+        assert payload['message'].endswith('Cards looted by defending kingdom:')
+        assert '4 of Clubs' not in payload['message']
+        assert payload['images'] == ['4-Clubs']
+        assert 'Every unlooted attack card returned to your collection.' in payload['message_after_images']
 
     def test_cannot_advance_conquer_result_routes_to_game_over_notification(self, monkeypatch):
         GameScreen, game_screen, notifications = _make_conquer_game_screen()

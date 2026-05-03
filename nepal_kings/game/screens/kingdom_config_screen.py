@@ -402,9 +402,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         max_width = max(card_w, int(max_width or card_w))
         if card_count <= 1:
             return {'step': 0.0, 'total_w': float(card_w)}
-        preferred_step = max(8.0, card_w * 0.38)
         max_step = max(0.0, float(max_width - card_w) / float(card_count - 1))
-        step = min(preferred_step, max_step)
+        step = min(float(card_w), max_step)
         total_w = float(card_w) + float(card_count - 1) * step
         return {'step': step, 'total_w': total_w}
 
@@ -823,6 +822,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         if data:
             count = int(data.get('acknowledged_count') or 0)
             if count:
+                loot_rect = getattr(self, '_loot_lost_rect', None)
+                if loot_rect is not None:
+                    self._spawn_loot_lost_floater(count, loot_rect.center)
                 self._set_msg('Loot losses noticed')
             else:
                 self._set_msg('No lost loot notices pending')
@@ -856,6 +858,17 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             color=settings.KINGDOM_CONFIG_GOOD_CLR,
             duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
             rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+            delay_ms=delay_ms,
+        ))
+
+    def _spawn_loot_lost_floater(self, count, pos, *, delay_ms=0):
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            f'-{int(count)} card{"s" if int(count) != 1 else ""}', pos,
+            color=settings.KINGDOM_CONFIG_BAD_CLR,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=-settings.COLLECT_FLOAT_RISE_PX,
             font=font,
             delay_ms=delay_ms,
         ))

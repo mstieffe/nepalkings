@@ -3,7 +3,6 @@
 """Defence screen — configure figures, battle moves, spells & gamble for defending a land."""
 
 import pygame
-from copy import copy
 from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
@@ -11,9 +10,15 @@ from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.prelude_spell_screen import PreludeSpellScreen
 from game.core.card_source import CollectionCardSource
+from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.core.kingdom_game_proxy import KingdomGameProxy
 from game.components.cards.card import Card
 from game.components.figures.figure import Figure
+from game.components.figures.skill_display_filters import (
+    filter_family_for_display,
+    filter_figure_for_display,
+    strip_duel_only_skill_description,
+)
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
 from game.components.figures.figure_manager import FigureManager
@@ -50,19 +55,19 @@ def _draw_panel(window, rect, corner_r=None):
 
 
 def _strip_duel_only_skill_description(text):
-    """Remove duel-only skill wording from kingdom config descriptions."""
-    return (text or '').replace(' Triggers checkmate when defeated.', '').replace(
-        'Triggers checkmate when defeated.', '').strip()
+    return strip_duel_only_skill_description(
+        text,
+        hide_checkmate=True,
+        hide_instant_charge=True,
+    )
 
 
 def _display_family_without_duel_only_skills(family):
-    description = getattr(family, 'description', '')
-    clean_description = _strip_duel_only_skill_description(description)
-    if clean_description == description:
-        return family
-    display_family = copy(family)
-    display_family.description = clean_description
-    return display_family
+    return filter_family_for_display(
+        family,
+        hide_checkmate=True,
+        hide_instant_charge=True,
+    )
 
 
 _SPELL_CARD_COST = {
@@ -180,7 +185,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._counter_spell_rect = None   # Rect for counter spell icon slot
         self._counter_x_rect = None       # Rect for counter X remove button
         self._battle_figure_rect = None   # Rect for battle figure icon slot
+        self._battle_figure_rect_2 = None # Rect for Civil War second battle figure slot
         self._battle_figure_x_rect = None # Rect for battle figure X remove button
+        self._battle_figure_x_rect_2 = None
         self._info_button_rects = {}
         self._active_info_key = None
         self._active_info_popup_rect = None
@@ -200,6 +207,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._draft_dirty = False
         self._collection_cards = None
         self._selecting_battle_fig = False  # True when prompting user to pick a figure
+        self._pending_civil_war_battle_fig_1 = None
         self._selecting_spell_target = None  # 'prelude' or 'counter' while choosing Health Boost target
 
         # ── Figure display (eagerly loaded) ─────────────────────────
@@ -561,6 +569,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
         final_x = self._counter_panel_rect.x + panel_pad
         # Battle figure slot
         self._battle_figure_rect = pygame.Rect(final_x, self._final_section_y, fsz, fsz)
+        cw_gap = max(4, int(0.006 * _SW))
+        self._battle_figure_rect_2 = pygame.Rect(
+            self._battle_figure_rect.right + cw_gap,
+            self._final_section_y,
+            fsz,
+            fsz,
+        )
         # Counter spell slot (to the right of battle figure with separator gap)
         spell_gap = min(
             fsz + int(0.11 * _SW),
@@ -589,7 +604,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         # ── Divider positions (computed from layout) ────────────────
         self._divider_v_x = right_x - pad // 2
-        self._divider_v_top = top
+        self._divider_v_top = content_top
         self._divider_v_bottom = _BOX_BOTTOM - _BOX_PAD
         self._divider_h1_y = None
         self._divider_h2_y = None
@@ -609,6 +624,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _apply_config(self, config):
         self._config = config
         self._draft_dirty = bool((config or {}).get('draft_dirty', True))
+        if (not config or not self._civil_war_battle_strategy()
+                or config.get('battle_figure_id_2')):
+            self._pending_civil_war_battle_fig_1 = None
 
     def _load_config(self):
         self._loading = True
@@ -1014,6 +1032,14 @@ class DefenceScreen(MenuScreenMixin, Screen):
             )
             self._figure_icons[fig.id] = icon
 
+        apply_buffs_allies_to_icon_map(
+            self._figure_objects,
+            self._figure_icons,
+            has_deficit=lambda fig: (
+                fig.id in self._figure_icons and self._figure_icons[fig.id].has_deficit
+            ),
+        )
+
     def _config_fig_to_figure(self, cfg_fig, families):
         """Convert a config figure dict to a real Figure object."""
         family_name = cfg_fig.get('family_name', '')
@@ -1041,7 +1067,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         display_family = _display_family_without_duel_only_skills(family)
 
-        return Figure(
+        figure = Figure(
             name=name,
             sub_name=matched.sub_name if matched else '',
             suit=suit,
@@ -1066,6 +1092,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
             cannot_be_blocked=cfg_fig.get('cannot_be_blocked', False),
             cannot_be_targeted=getattr(matched, 'cannot_be_targeted', False) if matched else False,
             override_base_power=getattr(matched, 'override_base_power', None) if matched else None,
+        )
+        return filter_figure_for_display(
+            figure,
+            hide_checkmate=True,
+            hide_instant_charge=True,
         )
 
     def _calc_resources(self):
@@ -1103,12 +1134,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.window.blit(suit_icon, (specs_x + specs_surf.get_width() + 2,
                                         specs_y + (specs_surf.get_height() - suit_icon.get_height()) // 2))
 
-        effects = land.get('kingdom_skill_effects') or []
-        if effects:
-            kingdom_name = land.get('kingdom_name') or 'Kingdom'
-            effect_text = f'{kingdom_name} skills: ' + ', '.join(effects[:4])
+        loot_effects = [e for e in (land.get('kingdom_skill_effects') or []) if 'loot chance' in e]
+        if loot_effects:
             tiny_font = getattr(self, '_tiny_font', self._res_font)
-            effect_text = self._fit_text(effect_text, tiny_font, int(_BOX_W * 0.72))
+            effect_text = self._fit_text(loot_effects[0], tiny_font, int(_BOX_W * 0.72))
             effect_surf = tiny_font.render(effect_text, True, settings.KINGDOM_CONFIG_HIGHLIGHT)
             self.window.blit(effect_surf, effect_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
                                                                top=specs_y + specs_surf.get_height() + 3))
@@ -1732,19 +1761,38 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _draw_counter_action(self):
         """Draw the counter action section: battle figure OR counter spell."""
         counter_spell = self._config.get('counter_spell_name')
+        is_civil_war = self._civil_war_battle_strategy()
         bf_id = self._config.get('battle_figure_id')
+        bf2_id = self._config.get('battle_figure_id_2')
+        if is_civil_war and self._pending_civil_war_battle_fig_1 and not bf2_id:
+            bf_id = self._pending_civil_war_battle_fig_1
         fsz = self._spell_frame_size
         mx_mouse, my_mouse = pygame.mouse.get_pos()
 
         # ── Battle figure slot ──
         bf_rect = self._battle_figure_rect
         if bf_rect:
-            self._draw_battle_figure_icon(bf_rect, bf_id, mx_mouse, my_mouse)
+            self._draw_battle_figure_icon(
+                bf_rect, bf_id, mx_mouse, my_mouse,
+                x_attr='_battle_figure_x_rect',
+                empty_label='Battle Fig',
+            )
+
+        bf2_rect = self._battle_figure_rect_2 if is_civil_war else None
+        if bf2_rect:
+            self._draw_battle_figure_icon(
+                bf2_rect, bf2_id, mx_mouse, my_mouse,
+                x_attr='_battle_figure_x_rect_2',
+                empty_label='CW Fig',
+            )
+        elif not is_civil_war:
+            self._battle_figure_x_rect_2 = None
 
         # ── Vertical separator between figure and spell ──
         cs_rect = self._counter_spell_rect
         if bf_rect and cs_rect:
-            sep_x = (bf_rect.right + cs_rect.x) // 2
+            left_edge = bf2_rect.right if bf2_rect else bf_rect.right
+            sep_x = (left_edge + cs_rect.x) // 2
             sep_y1 = self._final_section_y
             sep_y2 = self._final_section_y + fsz
             pygame.draw.line(self.window, (100, 90, 70), (sep_x, sep_y1), (sep_x, sep_y2), 1)
@@ -1819,7 +1867,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             text_h = sum(font.get_height() for _, font, _ in lines) + 2
             self._draw_caption_lines(lines, caption_x, cy - text_h // 2, caption_w)
 
-    def _draw_battle_figure_icon(self, rect, bf_id, mx, my_mouse):
+    def _draw_battle_figure_icon(
+        self, rect, bf_id, mx, my_mouse, *,
+        x_attr='_battle_figure_x_rect', empty_label='Battle Fig',
+    ):
         """Draw the battle figure slot in the final round section."""
         fsz = self._spell_frame_size
         cx = rect.x + fsz // 2
@@ -1847,7 +1898,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         # Only show label when slot is empty
         if not is_selected:
-            ntxt = self._res_font.render('Battle Fig', True, (130, 130, 130))
+            ntxt = self._res_font.render(empty_label, True, (130, 130, 130))
             self.window.blit(ntxt, ntxt.get_rect(centerx=cx, top=rect.bottom + 2))
 
         if is_selected:
@@ -1860,7 +1911,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
             x_hovered = xrect.collidepoint(mx, my_mouse)
             if rect.collidepoint(mx, my_mouse) or x_hovered:
-                self._battle_figure_x_rect = xrect
+                setattr(self, x_attr, xrect)
                 bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                 bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
                 tc = (255, 255, 255) if x_hovered else (200, 180, 180)
@@ -1870,9 +1921,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 xt = xf.render('\u00d7', True, tc)
                 self.window.blit(xt, xt.get_rect(center=xrect.center))
             else:
-                self._battle_figure_x_rect = None
+                setattr(self, x_attr, None)
         else:
-            self._battle_figure_x_rect = None
+            setattr(self, x_attr, None)
 
     def _draw_auto_gamble(self):
         enabled = self._config.get('auto_gamble', False)
@@ -2107,6 +2158,69 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _battle_figure_is_selectable(self, figure_id):
         return self._battle_figure_block_reason(figure_id) is None
+
+    def _battle_figure_color(self, figure_id):
+        cfg_fig = self._get_config_fig(figure_id)
+        if cfg_fig:
+            return cfg_fig.get('color')
+        fig = self._figure_object(figure_id)
+        return getattr(fig, 'color', None)
+
+    def _civil_war_valid_second_ids(self, first_id):
+        first_color = self._battle_figure_color(first_id)
+        if not first_color:
+            return []
+        return [
+            f.get('id')
+            for f in self._config.get('figures', [])
+            if f.get('id') != first_id
+            and f.get('color') == first_color
+            and self._battle_figure_is_selectable(f.get('id'))
+        ]
+
+    def _begin_battle_figure_selection(self):
+        if self._config.get('counter_spell_name'):
+            self._server_clear_counter_spell()
+        self._selecting_battle_fig = True
+        self._pending_civil_war_battle_fig_1 = None
+        if self._civil_war_battle_strategy():
+            current_first = self._config.get('battle_figure_id')
+            current_second = self._config.get('battle_figure_id_2')
+            if current_first and not current_second and self._battle_figure_is_selectable(current_first):
+                self._pending_civil_war_battle_fig_1 = current_first
+                self.state.set_msg('Select a second same-color Civil War battle figure')
+            else:
+                self.state.set_msg('Select the first Civil War battle figure')
+
+    def _handle_battle_figure_pick(self, figure_id):
+        if not self._civil_war_battle_strategy():
+            self._server_set_battle_figure(figure_id)
+            self._selecting_battle_fig = False
+            self._pending_civil_war_battle_fig_1 = None
+            return
+
+        first_id = self._pending_civil_war_battle_fig_1
+        if not first_id:
+            valid_seconds = self._civil_war_valid_second_ids(figure_id)
+            if not valid_seconds:
+                self.state.set_msg('Civil War needs two same-color village battle figures')
+                self._selecting_battle_fig = False
+                self._pending_civil_war_battle_fig_1 = None
+                return
+            self._pending_civil_war_battle_fig_1 = figure_id
+            self.state.set_msg('Select a second same-color Civil War battle figure')
+            return
+
+        if figure_id == first_id:
+            self.state.set_msg('Civil War requires two different battle figures')
+            return
+        if self._battle_figure_color(figure_id) != self._battle_figure_color(first_id):
+            self.state.set_msg('Civil War requires two battle figures of the same color')
+            return
+
+        self._server_set_battle_figure(first_id, figure_id)
+        self._selecting_battle_fig = False
+        self._pending_civil_war_battle_fig_1 = None
 
     def _prelude_health_target_id(self):
         data = self._config.get('prelude_spell_data') or {}
@@ -2390,6 +2504,18 @@ class DefenceScreen(MenuScreenMixin, Screen):
             not has_battle_fig
             or self._battle_figure_is_selectable(self._config.get('battle_figure_id'))
         )
+        if has_battle_fig and self._civil_war_battle_strategy():
+            fig1_id = self._config.get('battle_figure_id')
+            fig2_id = self._config.get('battle_figure_id_2')
+            battle_fig_valid = (
+                battle_fig_valid
+                and bool(fig2_id)
+                and fig2_id != fig1_id
+                and self._battle_figure_is_selectable(fig2_id)
+                and self._battle_figure_color(fig1_id) == self._battle_figure_color(fig2_id)
+            )
+        elif self._config.get('battle_figure_id_2'):
+            battle_fig_valid = False
         has_required_spell_targets = (
             self._has_health_boost_target('prelude')
             and self._has_health_boost_target('counter')
@@ -2448,6 +2574,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     reason = self._battle_figure_block_reason(fig2_id)
                     if reason:
                         problems.append(f'Second battle figure: {reason}')
+                    elif (self._battle_figure_color(fig2_id)
+                          != self._battle_figure_color(self._config.get('battle_figure_id'))):
+                        problems.append('Civil War: both battle figures must be the same color.')
+        elif self._config.get('battle_figure_id_2'):
+            problems.append('Second battle figure is only valid with Civil War.')
 
         if prelude == 'Health Boost' and not self._prelude_health_target_id():
             problems.append('Health Boost prelude needs one of your figures as target.')
@@ -2696,16 +2827,19 @@ class DefenceScreen(MenuScreenMixin, Screen):
                             cfg_fig = self._get_config_fig(fig.id)
                             reason = self._battle_figure_block_reason(fig.id)
                             if cfg_fig and reason is None:
-                                self._server_set_battle_figure(fig.id)
+                                self._handle_battle_figure_pick(fig.id)
                                 selected = True
                             else:
                                 self.state.set_msg(reason or 'Cannot select that figure')
                                 selected = True
                             break
-                    self._selecting_battle_fig = False
+                    if not selected:
+                        self._selecting_battle_fig = False
+                        self._pending_civil_war_battle_fig_1 = None
                     return
                 if event.type == KEYDOWN and event.key == K_ESCAPE:
                     self._selecting_battle_fig = False
+                    self._pending_civil_war_battle_fig_1 = None
                     return
             return
 
@@ -2751,7 +2885,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         )
                     continue
 
-                if self._battle_figure_x_rect and self._battle_figure_x_rect.collidepoint(pos):
+                if ((self._battle_figure_x_rect and self._battle_figure_x_rect.collidepoint(pos))
+                        or (self._battle_figure_x_rect_2 and self._battle_figure_x_rect_2.collidepoint(pos))):
+                    self._pending_civil_war_battle_fig_1 = None
                     self._server_clear_battle_figure()
                     continue
 
@@ -2825,15 +2961,23 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     continue
 
                 # Counter action: battle figure slot click
-                if self._battle_figure_rect and self._battle_figure_rect.collidepoint(pos):
-                    if not self._config.get('battle_figure_id'):
+                battle_slot_clicked = (
+                    self._battle_figure_rect and self._battle_figure_rect.collidepoint(pos)
+                ) or (
+                    self._civil_war_battle_strategy()
+                    and self._battle_figure_rect_2
+                    and self._battle_figure_rect_2.collidepoint(pos)
+                )
+                if battle_slot_clicked:
+                    civil_war_incomplete = (
+                        self._civil_war_battle_strategy()
+                        and not self._config.get('battle_figure_id_2')
+                    )
+                    if not self._config.get('battle_figure_id') or civil_war_incomplete:
                         figs = self._config.get('figures', [])
                         valid = [f for f in figs if self._battle_figure_is_selectable(f.get('id'))]
                         if valid:
-                            # Clear counter spell first (mutually exclusive)
-                            if self._config.get('counter_spell_name'):
-                                self._server_clear_counter_spell()
-                            self._selecting_battle_fig = True
+                            self._begin_battle_figure_selection()
                         else:
                             self.state.set_msg('No valid figures available')
                     continue

@@ -5,6 +5,7 @@ from pygame.locals import *
 from collections import Counter
 from config import settings
 from game.components.figures.family_configs.skill_config import SKILL_KEYS
+from game.components.figures.skill_display_filters import filter_figure_for_display
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
@@ -24,8 +25,6 @@ def _is_kingdom_config_mode(mode):
 
 def _kingdom_mode_path(mode):
     return 'defence/draft' if mode == 'defence_draft' else mode
-
-
 
 class BuildFigureScreen(SubScreen):
     """Screen for building a figure by selecting figures and suits."""
@@ -201,6 +200,9 @@ class BuildFigureScreen(SubScreen):
         - is_counter: True if this would be a counter-advance
         - reason: Short description of why not (if can_advance is False)
         """
+        if _is_kingdom_config_mode(self.mode):
+            return False, False, 'disabled_in_kingdom_config'
+
         if not getattr(figure, 'instant_charge', False):
             return False, False, 'no_instant_charge'
 
@@ -262,6 +264,16 @@ class BuildFigureScreen(SubScreen):
                     return False, is_counter, 'resource_deficit'
 
         return True, is_counter, None
+
+    def _display_figure_for_mode(self, figure):
+        """Hide duel-only skill display in kingdom config builders."""
+        if not _is_kingdom_config_mode(self.mode):
+            return figure
+        return filter_figure_for_display(
+            figure,
+            hide_checkmate=True,
+            hide_instant_charge=True,
+        )
 
     def _check_build_causes_deficit(self, figure):
         """
@@ -713,20 +725,21 @@ class BuildFigureScreen(SubScreen):
             self.scroll_text_list = []
             for suit in button.family.suits:
                 for figure in button.family.get_figures_by_suit(suit):
+                    display_figure = self._display_figure_for_mode(figure)
                     self.scroll_text_list.append({
                         "title": button.family.name,
-                        "figure_type": f"{figure.family.field.capitalize()} Figure",
-                        "text": button.family.description,
+                        "figure_type": f"{display_figure.family.field.capitalize()} Figure",
+                        "text": display_figure.family.description,
                         # Don't show power when cards are missing
-                        "support": figure.get_battle_bonus(),
-                        "produces": figure.produces if figure.produces else None,
-                        "requires": figure.requires if figure.requires else None,
-                        **{k: getattr(figure, k, False) for k in SKILL_KEYS},
+                        "support": display_figure.get_battle_bonus(),
+                        "produces": display_figure.produces if display_figure.produces else None,
+                        "requires": display_figure.requires if display_figure.requires else None,
+                        **{k: getattr(display_figure, k, False) for k in SKILL_KEYS},
                         "suit": suit,
-                        "cards": self.get_given_cards_for_figure(figure),
-                        "missing_cards": self.get_missing_cards_converted_ZK_for_figure(figure),
+                        "cards": self.get_given_cards_for_figure(display_figure),
+                        "missing_cards": self.get_missing_cards_converted_ZK_for_figure(display_figure),
                         "content": None,
-                        "_sort_power": figure.get_value()
+                        "_sort_power": display_figure.get_value()
                     })
             self.scroll_text_list.sort(key=lambda x: x["_sort_power"], reverse=True)
         self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
@@ -814,7 +827,7 @@ class BuildFigureScreen(SubScreen):
             figure_counter = Counter(card.to_tuple() for card in figure.cards)
             # Check if the hand has enough cards to build the figure
             if all(hand_counter[card] >= count for card, count in figure_counter.items()):
-                possible_figures.append(figure)
+                possible_figures.append(self._display_figure_for_mode(figure))
 
         return possible_figures
     

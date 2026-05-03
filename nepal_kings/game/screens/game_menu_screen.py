@@ -13,6 +13,7 @@ from utils.game_service import fetch_user_games, fetch_user, fetch_game, remove_
 from utils.auth_service import send_heartbeat
 from utils.background_poller import BackgroundPoller
 from game.core.game import Game
+from game.core.screen_routing import gameplay_screen_for
 import logging
 
 logger = logging.getLogger('nk.screens.game_menu')
@@ -253,12 +254,14 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             if user and self.state.user_dict:
                 self.state.user_dict['gold'] = user.get('gold', self.state.user_dict.get('gold', 0))
 
-            current_game_ids = {g['id'] for g in game_dicts}
+            current_game_ids = {g['id'] for g in game_dicts if g.get('mode', 'duel') == 'duel'}
             if self.state._known_game_ids is None:
                 # First poll after login — check which games appeared while offline
                 if last_seen:
                     new_ids = set()
                     for g in game_dicts:
+                        if g.get('mode', 'duel') != 'duel':
+                            continue
                         dt = self._parse_date(str(g.get('date', '')))
                         if dt and dt > last_seen:
                             new_ids.add(g['id'])
@@ -396,7 +399,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                         self.state._notified_accepted_challenges.discard(challenge_id)
                         self.state._pending_accepted_challenge = None
                         self.reset_action()
-                        self.state.screen = "game"
+                        self.state.screen = gameplay_screen_for(self.state.game)
                         return
                     else:
                         self.state.set_msg("Failed to load game")

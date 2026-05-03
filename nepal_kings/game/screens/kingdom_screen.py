@@ -1401,6 +1401,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     def _open_detail(self, tile):
         """Open the land detail modal for *tile*."""
+        conquest_outcome = (
+            self._hex_map.conquest_outcome_for(tile)
+            if self._hex_map else None
+        )
         self._detail_box = LandDetailBox(
             self.window, tile,
             cooldown=self._cooldown,
@@ -1410,6 +1414,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             on_config=self._on_configure_kingdom,
             on_message=self._on_message_owner,
             on_close=lambda: setattr(self, '_detail_box', None),
+            conquest_outcome=conquest_outcome,
         )
 
     def _on_conquer(self, tile):

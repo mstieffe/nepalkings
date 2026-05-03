@@ -5,6 +5,7 @@ from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin, ListButton
 from game.core.game import Game
+from game.core.screen_routing import gameplay_screen_for
 from config import settings
 from utils.utils import Button, InputField
 from utils.game_service import fetch_users, fetch_user, create_challenge, remove_challenge, create_game, fetch_game
@@ -639,7 +640,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
                         self.state._notified_accepted_challenges.discard(challenge_id)
                         self.state._pending_accepted_challenge = None
                         self.reset_action()
-                        self.state.screen = "game"
+                        self.state.screen = gameplay_screen_for(self.state.game)
                         return
                     else:
                         self.state.set_msg("Failed to load game")
@@ -793,7 +794,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
         response = create_game(challenge['id'])
         if response['success'] and 'game' in response:
             self.state.game = Game(response['game'], self.state.user_dict)
-            self.state.screen = "game"
+            self.state.screen = gameplay_screen_for(self.state.game)
         else:
             self.state.set_msg(response['message'])
 

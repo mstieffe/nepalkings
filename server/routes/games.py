@@ -199,6 +199,21 @@ def _conquer_invader_swap_active(game):
     return game.invader_player_id != attacker.id and _conquer_invader_swap_spell(game) is not None
 
 
+def _conquer_own_defender_selection_required(game):
+    """True when Invader Swap makes the original conquerer choose own defender."""
+    if not game or game.mode != 'conquer' or not _conquer_invader_swap_active(game):
+        return False
+    attacker = _conquer_attacker_player(game)
+    if not attacker or not game.advancing_figure_id or not game.advancing_player_id:
+        return False
+    if game.advancing_player_id == attacker.id:
+        return False
+    advancing_figure = db.session.get(Figure, game.advancing_figure_id)
+    if advancing_figure and _figure_has_family_skill(advancing_figure, 'cannot_be_blocked'):
+        return False
+    return True
+
+
 def _get_ai_template_counter_spell(game):
     if not game or game.defence_config_id or not game.land_id:
         return None, None
@@ -366,6 +381,49 @@ def _consume_conquer_defender_response(game, defender_player):
         defender_player.turns_left = defender_player.turns_left - 1
     if game.advancing_player_id:
         game.turn_player_id = game.advancing_player_id
+
+
+def _record_conquer_automated_invader_battle_decision(game):
+    """Record the automated conquer invader's mandatory fight decision."""
+    if not game or game.mode != 'conquer' or not game.advancing_player_id:
+        return False
+
+    decisions = dict(game.battle_decisions or {})
+    advancing_key = str(game.advancing_player_id)
+    if decisions.get(advancing_key) == 'battle':
+        return False
+
+    decisions[advancing_key] = 'battle'
+    game.battle_decisions = decisions
+
+    invader_player = db.session.get(Player, game.advancing_player_id)
+    invader_user = db.session.get(User, invader_player.user_id) if invader_player else None
+    invader_name = invader_user.username if invader_user else 'Invader'
+    db.session.add(LogEntry(
+        game_id=game.id,
+        player_id=game.advancing_player_id,
+        round_number=game.current_round,
+        turn_number=invader_player.turns_left if invader_player else 0,
+        message=f"{invader_name} chose to fight.",
+        author="System",
+        type='battle_decision',
+    ))
+    logger.info(
+        "[CONQUER] Auto-recorded automated invader battle decision "
+        "game=%s player=%s",
+        game.id,
+        game.advancing_player_id,
+    )
+    return True
+
+
+def _complete_conquer_own_defender_response(game, defender_player):
+    """Finish the swapped conquer defender response and return to invader."""
+    if defender_player and (defender_player.turns_left or 0) > 0:
+        defender_player.turns_left = defender_player.turns_left - 1
+    if game and game.advancing_player_id:
+        game.turn_player_id = game.advancing_player_id
+    _record_conquer_automated_invader_battle_decision(game)
 
 @games.after_request
 def _ai_trigger_hook(response):
@@ -2726,6 +2784,13 @@ def select_defender():
         if game.turn_player_id != player_id:
             return jsonify({'success': False, 'message': 'Not your turn to select defender'}), 400
 
+        if _conquer_own_defender_selection_required(game):
+            return jsonify({
+                'success': False,
+                'message': 'After Invader Swap, the original conquerer must select their own defender',
+                'reason': 'own_defender_required',
+            }), 400
+
         # Validate figure belongs to the OPPONENT (not the advancing player)
         figure = db.session.get(Figure, figure_id)
         if not figure:
@@ -2869,7 +2934,7 @@ def skip_civil_war_second():
         data = request.json
         game_id = data['game_id']
         player_id = data['player_id']
-        context = data.get('context', 'advance')  # 'advance' or 'defender'
+        context = data.get('context', 'advance')  # 'advance', 'defender', or 'own_defender'
 
         err = verify_player_ownership(player_id)
         if err:
@@ -2892,6 +2957,19 @@ def skip_civil_war_second():
         if context == 'advance':
             other_player = game.players[0] if game.players[0].id != player_id else game.players[1]
             game.turn_player_id = other_player.id
+        elif context == 'own_defender':
+            if game.mode != 'conquer' or not _conquer_invader_swap_active(game):
+                return jsonify({'success': False, 'message': 'Invader Swap is not active'}), 400
+            attacker = _conquer_attacker_player(game)
+            if not attacker or attacker.id != player_id:
+                return jsonify({'success': False, 'message': 'Only the original conquerer can skip this defender pick'}), 403
+            if not game.advancing_figure_id or game.advancing_player_id == player_id:
+                return jsonify({'success': False, 'message': 'No automated advance in progress'}), 400
+            if not game.defending_figure_id:
+                return jsonify({'success': False, 'message': 'No defender selected to continue with'}), 400
+            _complete_conquer_own_defender_response(game, player)
+        elif context != 'defender':
+            return jsonify({'success': False, 'message': 'Invalid Civil War context'}), 400
 
         # Log
         user = db.session.get(User, player.user_id)
@@ -3076,6 +3154,9 @@ def conquer_select_own_defender():
                 if first_defender and first_defender.color != figure.color:
                     msg = (f"Civil War requires same-color defenders. "
                            f"Keeping first defender only: {first_defender.name}.")
+                    player = db.session.get(Player, player_id)
+                    _complete_conquer_own_defender_response(game, player)
+                    db.session.commit()
                     return jsonify({
                         'success': True,
                         'figure_name': first_defender.name,
@@ -3113,8 +3194,7 @@ def conquer_select_own_defender():
 
         if not civil_war_need_second:
             # Consume the defender response turn; flip to automated invader
-            player.turns_left -= 1
-            game.turn_player_id = game.advancing_player_id
+            _complete_conquer_own_defender_response(game, player)
 
         # Log
         user = db.session.get(User, player.user_id)

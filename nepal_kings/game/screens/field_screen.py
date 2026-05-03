@@ -3,6 +3,7 @@
 import pygame
 from pygame.locals import *
 from config import settings
+from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.figures.figure_icon import FieldFigureIcon
@@ -198,13 +199,18 @@ class FieldScreen(SubScreen):
         """
         compartments = {'self': {}, 'opponent': {}}
 
-        compartments['self']['castle'] = pygame.Rect(settings.FIELD_SELF_X, settings.FIELD_Y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
-        compartments['self']['village'] = pygame.Rect(settings.FIELD_SELF_X + settings.FIELD_ICON_WIDTH + settings.FIELD_ICON_PADDING_X, settings.FIELD_Y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
-        compartments['self']['military'] = pygame.Rect(settings.FIELD_SELF_X + 2*(settings.FIELD_ICON_WIDTH + settings.FIELD_ICON_PADDING_X), settings.FIELD_Y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
+        self_x = self._sx(settings.FIELD_SELF_X)
+        opponent_x = self._sx(settings.FIELD_OPPONENT_X)
+        field_y = self._sy(settings.FIELD_Y)
+        field_step = settings.FIELD_ICON_WIDTH + settings.FIELD_ICON_PADDING_X
 
-        compartments['opponent']['military'] = pygame.Rect(settings.FIELD_OPPONENT_X, settings.FIELD_Y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
-        compartments['opponent']['village'] = pygame.Rect(settings.FIELD_OPPONENT_X + settings.FIELD_ICON_WIDTH + settings.FIELD_ICON_PADDING_X, settings.FIELD_Y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
-        compartments['opponent']['castle'] = pygame.Rect(settings.FIELD_OPPONENT_X + 2*(settings.FIELD_ICON_WIDTH + settings.FIELD_ICON_PADDING_X), settings.FIELD_Y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
+        compartments['self']['castle'] = pygame.Rect(self_x, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
+        compartments['self']['village'] = pygame.Rect(self_x + field_step, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
+        compartments['self']['military'] = pygame.Rect(self_x + 2 * field_step, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
+
+        compartments['opponent']['military'] = pygame.Rect(opponent_x, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
+        compartments['opponent']['village'] = pygame.Rect(opponent_x + field_step, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
+        compartments['opponent']['castle'] = pygame.Rect(opponent_x + 2 * field_step, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
 
         self.compartments = compartments
 
@@ -402,31 +408,17 @@ class FieldScreen(SubScreen):
                     self.figure_icons.append(self.icon_cache[figure.id])
 
         # ── Apply buffs_allies bonus to village figure icons ──
-        # After all icons are created/updated, find figures with buffs_allies
-        # and apply +4 base power buff to same-suit village figures on the same side.
         for category in ('self', 'opponent'):
             all_figs = []
             for field_type, figures in self.categorized_figures[category].items():
                 all_figs.extend(figures)
-            # Find buffer figures (with buffs_allies skill, no deficit)
-            buffers = [f for f in all_figs if getattr(f, 'buffs_allies', False)
-                       and f.id in self.icon_cache and not self.icon_cache[f.id].has_deficit]
-            if not buffers:
-                # Reset any stale buff on this side's village icons
-                for f in all_figs:
-                    if (f.id in self.icon_cache and hasattr(f.family, 'field')
-                            and f.family.field == 'village'):
-                        self.icon_cache[f.id].buffs_allies_bonus = 0
-                continue
-            for f in all_figs:
-                if f.id not in self.icon_cache:
-                    continue
-                icon = self.icon_cache[f.id]
-                if not (hasattr(f.family, 'field') and f.family.field == 'village'):
-                    icon.buffs_allies_bonus = 0
-                    continue
-                total_buff = sum(4 for bf in buffers if bf.suit == f.suit)
-                icon.buffs_allies_bonus = total_buff
+            apply_buffs_allies_to_icon_map(
+                all_figs,
+                self.icon_cache,
+                has_deficit=lambda fig: (
+                    fig.id in self.icon_cache and self.icon_cache[fig.id].has_deficit
+                ),
+            )
 
     def handle_events(self, events):
         """Handle events for interacting with the field."""
@@ -649,10 +641,15 @@ class FieldScreen(SubScreen):
                                     )
                                 # Check if Civil War needs a second defender
                                 elif result.get('civil_war_need_second'):
+                                    if result.get('game'):
+                                        self.game.update_from_dict(result['game'])
+                                    self.load_figures()
                                     civil_war_color = result.get('civil_war_color', '')
                                     color_name = 'red' if civil_war_color == 'offensive' else 'black'
                                     self.game.civil_war_defender_second = True
                                     self.game.civil_war_required_color = civil_war_color
+                                    self.game.pending_battle_ready = False
+                                    self.game.battle_ready_shown = False
                                     cw_icons = self._get_modifier_icon_images('Civil War')
                                     self.make_dialogue_box(
                                         message=f"Civil War! You may select a second opponent village figure of the same color ({color_name}), or proceed with only one.",
@@ -729,18 +726,38 @@ class FieldScreen(SubScreen):
                                 if result.get('game'):
                                     self.game.update_from_dict(result['game'])
                                 self.load_figures()
-                                self.conquer_own_defender_mode = False
-                                self._reset_defender_selectable()
                                 self.game.pending_conquer_own_defender_selection = False
-                                # Re-arm battle-ready
-                                if (self.game.advancing_figure_id
-                                        and self.game.defending_figure_id
-                                        and not self.game.battle_confirmed
-                                        and not self.game.fold_outcome):
-                                    self.game.waiting_for_battle_decision = False
+                                if result.get('civil_war_need_second'):
+                                    civil_war_color = result.get('civil_war_color', '')
+                                    color_name = 'red' if civil_war_color == 'offensive' else 'black'
+                                    self.conquer_own_defender_mode = True
+                                    self.game.civil_war_defender_second = True
+                                    self.game.civil_war_required_color = civil_war_color
+                                    self.game.pending_battle_ready = False
                                     self.game.battle_ready_shown = False
-                                    self.game.pending_battle_ready = True
-                                self.state.set_msg(f"Selected {target_figure.name} as your defender.")
+                                    cw_icons = self._get_modifier_icon_images('Civil War')
+                                    self.make_dialogue_box(
+                                        message=f"Civil War! You may select a second own village figure of the same color ({color_name}), or proceed with only one.",
+                                        actions=['select second', 'skip'],
+                                        images=cw_icons if cw_icons else None,
+                                        icon="magic" if not cw_icons else None,
+                                        title="Civil War - Second Defender",
+                                    )
+                                else:
+                                    self.conquer_own_defender_mode = False
+                                    self._reset_defender_selectable()
+                                    self.game.civil_war_defender_second = False
+                                    self.game.civil_war_required_color = None
+                                    # Re-arm battle-ready
+                                    if (self.game.advancing_figure_id
+                                            and self.game.defending_figure_id
+                                            and not self.game.battle_confirmed
+                                            and not self.game.fold_outcome):
+                                        self.game.waiting_for_battle_decision = False
+                                        self.game.battle_ready_shown = False
+                                        self.game.pending_battle_ready = True
+                                    selected_name = result.get('figure_name', target_figure.name)
+                                    self.state.set_msg(f"Selected {selected_name} as your defender.")
                             else:
                                 error_msg = result.get('message', 'Unknown error')
                                 self.make_dialogue_box(
@@ -874,17 +891,32 @@ class FieldScreen(SubScreen):
                         self.game.pending_own_advance_notification = True
                         self.game.own_advance_figure_name = None
                     elif getattr(self.game, 'civil_war_defender_second', False):
+                        skip_context = (
+                            'own_defender' if self.conquer_own_defender_mode
+                            else 'defender'
+                        )
                         result = skip_civil_war_second(
-                            self.game.game_id, self.game.player_id, 'defender'
+                            self.game.game_id, self.game.player_id, skip_context
                         )
                         if result.get('success'):
                             if result.get('game'):
                                 self.game.update_from_dict(result['game'])
-                        self.game.civil_war_defender_second = False
-                        self.game.civil_war_required_color = None
-                        self.defender_selection_mode = False
-                        self._reset_defender_selectable()
-                        self.game.pending_defender_selection = False
+                            self.game.civil_war_defender_second = False
+                            self.game.civil_war_required_color = None
+                            if self.conquer_own_defender_mode:
+                                self.conquer_own_defender_mode = False
+                                self.game.pending_conquer_own_defender_selection = False
+                            else:
+                                self.defender_selection_mode = False
+                                self._reset_defender_selectable()
+                                self.game.pending_defender_selection = False
+                        else:
+                            self.make_dialogue_box(
+                                message=f"Failed to skip second figure: {result.get('message', 'Unknown error')}",
+                                actions=['ok'],
+                                icon="error",
+                                title="Error",
+                            )
                 elif response == 'ok' or response == 'got it!':
                     # Simple acknowledgment
                     pass
@@ -1542,6 +1574,34 @@ class FieldScreen(SubScreen):
                         auto_close_delay=2000,
                     )
                     continue
+
+                if (getattr(self.game, 'civil_war_defender_second', False)
+                        and has_civil_war):
+                    required_color = getattr(self.game, 'civil_war_required_color', None)
+                    figure_color = getattr(target_figure, 'color', None)
+                    if required_color and figure_color != required_color:
+                        color_name = 'red' if required_color == 'offensive' else 'black'
+                        mod_icons = self._get_modifier_icon_images('Civil War')
+                        self.make_dialogue_box(
+                            message=f"Civil War requires a second village figure of the same color ({color_name}).",
+                            actions=[],
+                            images=mod_icons if mod_icons else None,
+                            icon="error" if not mod_icons else None,
+                            title="Wrong Color",
+                            auto_close_delay=2000,
+                        )
+                        continue
+                    if target_figure.id == self.game.defending_figure_id:
+                        mod_icons = self._get_modifier_icon_images('Civil War')
+                        self.make_dialogue_box(
+                            message="This figure is already selected for battle. Choose a different figure.",
+                            actions=[],
+                            images=mod_icons if mod_icons else None,
+                            icon="error" if not mod_icons else None,
+                            title="Already Selected",
+                            auto_close_delay=2000,
+                        )
+                        continue
 
                 if hasattr(target_figure, 'cannot_defend') and target_figure.cannot_defend:
                     self.make_dialogue_box(

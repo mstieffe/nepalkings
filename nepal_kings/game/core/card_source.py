@@ -94,9 +94,27 @@ class CollectionCardSource(CardSource):
                     matched = fam_fig
                     break
 
-        key_cards = matched.key_cards if matched else []
-        number_card = matched.number_card if matched else None
-        upgrade_card = matched.upgrade_card if matched else None
+        card_specs = cfg_fig.get('card_specs') or []
+        card_roles = cfg_fig.get('card_roles') or []
+        key_cards = []
+        number_card = None
+        upgrade_card = None
+        if card_specs:
+            from game.components.cards.card import Card as _Card
+            for spec, role in zip(card_specs, card_roles):
+                if not spec:
+                    continue
+                card = _Card(rank=spec['rank'], suit=spec['suit'], value=spec['value'])
+                if role == 'key':
+                    key_cards.append(card)
+                elif role == 'number':
+                    number_card = card
+                elif role == 'upgrade':
+                    upgrade_card = card
+        if not key_cards and not number_card and not upgrade_card:
+            key_cards = matched.key_cards if matched else []
+            number_card = matched.number_card if matched else None
+            upgrade_card = matched.upgrade_card if matched else None
 
         return Figure(
             name=name,

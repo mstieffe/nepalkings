@@ -5,6 +5,7 @@
 import pygame
 from pygame.locals import *
 from config import settings
+from game.core.figure_buffs import buffs_allies_bonus_for, buffs_allies_sources
 from game.core.input_state import get_pressed as _get_pressed
 from game.screens.sub_screen import SubScreen
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
@@ -735,6 +736,7 @@ class BattleShopScreen(SubScreen):
                         self.battle_move_manager.families_by_name,
                         self.game,
                         eligible_figures=eligible,
+                        figure_power_bonuses=self._figure_power_bonuses(),
                     )
                 break
 
@@ -786,12 +788,7 @@ class BattleShopScreen(SubScreen):
         bm_is_red = bm_suit in self._RED_SUITS
 
         # IDs of figures already in battle
-        fighting_ids = set()
-        for attr in ('advancing_figure_id', 'advancing_figure_id_2',
-                     'defending_figure_id', 'defending_figure_id_2'):
-            fid = getattr(self.game, attr, None)
-            if fid is not None:
-                fighting_ids.add(fid)
+        fighting_ids = self._fighting_figure_ids()
 
         eligible = []
         for fig in self._player_figures:
@@ -830,8 +827,8 @@ class BattleShopScreen(SubScreen):
         """Return the power to display for a battle move icon.
 
         For Call moves the value is the maximum combined power
-        (figure base + move bonus if suit matches) across all eligible
-        figures.  For other moves the raw move value is shown.
+        (figure base + healer buff + move bonus if suit matches) across all
+        eligible figures.  For other moves the raw move value is shown.
         """
         family_name = bm.get('family_name', '')
         bm_suit = bm.get('suit', '')
@@ -848,14 +845,44 @@ class BattleShopScreen(SubScreen):
         if not eligible:
             return bm_value
 
+        fighting_ids = self._fighting_figure_ids()
+        healers = buffs_allies_sources(
+            self._player_figures,
+            has_deficit=self._figure_has_deficit,
+            exclude_ids=fighting_ids,
+        )
+
         max_power = 0
         for fig in eligible:
             base = fig.get_value()
+            healer_bonus = buffs_allies_bonus_for(fig, healers)
             bonus = bm_value if fig.suit == bm_suit else 0
-            total = base + bonus
+            total = base + healer_bonus + bonus
             if total > max_power:
                 max_power = total
         return max_power
+
+    def _figure_power_bonuses(self):
+        fighting_ids = self._fighting_figure_ids()
+        healers = buffs_allies_sources(
+            self._player_figures,
+            has_deficit=self._figure_has_deficit,
+            exclude_ids=fighting_ids,
+        )
+        return {
+            fig.id: buffs_allies_bonus_for(fig, healers)
+            for fig in self._player_figures
+        }
+
+    def _fighting_figure_ids(self):
+        """Return figure IDs currently committed as active battle figures."""
+        fighting_ids = set()
+        for attr in ('advancing_figure_id', 'advancing_figure_id_2',
+                     'defending_figure_id', 'defending_figure_id_2'):
+            fid = getattr(self.game, attr, None)
+            if fid is not None:
+                fighting_ids.add(fid)
+        return fighting_ids
 
     def _return_current_slot_move(self):
         """Return a battle move from the slot."""

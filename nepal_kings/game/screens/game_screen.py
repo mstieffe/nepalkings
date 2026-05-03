@@ -127,6 +127,18 @@ class GameScreen(Screen):
         self._battle_modifier_font = settings.get_font(settings.GAME_BUTTON_FONT_SIZE)
         self._spell_box_title_font = settings.get_font(settings.BATTLE_SPELL_BOX_TITLE_FONT_SIZE, bold=True)
         self._tooltip_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
+
+    def on_enter(self):
+        """Mark this screen as the active game parent for shared subscreens."""
+        self.state.parent_screen = self
+        self._ensure_duel_screen_game()
+
+    def _ensure_duel_screen_game(self):
+        """Route conquer battles to their dedicated parent screen."""
+        if self.state.game and getattr(self.state.game, 'mode', 'duel') == 'conquer':
+            self.state.screen = 'conquer_game'
+            return False
+        return True
     
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
@@ -3183,6 +3195,32 @@ class GameScreen(Screen):
         overflow = len(lines) - max_lines
         return lines[:max_lines] + [f"... and {overflow} more"]
 
+    def _card_images(self, cards, max_images=4):
+        from game.components.cards.card_img import CardImg
+
+        images = []
+        valid_cards = 0
+        for card in cards or []:
+            if not isinstance(card, dict):
+                continue
+            rank = card.get('rank')
+            suit = card.get('suit')
+            if not rank or not suit:
+                continue
+            valid_cards += 1
+            if len(images) >= max_images:
+                continue
+            try:
+                images.append(CardImg(self.window, suit, rank).front_img)
+            except Exception:
+                logger.warning(
+                    "[CONQUER_RESULT] Failed to load loot card image for %s of %s",
+                    rank,
+                    suit,
+                    exc_info=True,
+                )
+        return images, valid_cards
+
     def _auto_loss_reason_text(self, result):
         reason = result.get('auto_loss_reason')
         detail = result.get('auto_loss_detail') or ''
@@ -3263,6 +3301,8 @@ class GameScreen(Screen):
         conquer_result = result.get('conquer_result')
         is_attacker = self._is_current_player_conquer_attacker(result)
         reason_text = self._auto_loss_reason_text(result)
+        images = []
+        after_messages = []
 
         if conquer_result == 'draw':
             title = 'Draw!'
@@ -3280,40 +3320,89 @@ class GameScreen(Screen):
             message = f'You have conquered {land_label}!'
             if gold_rate:
                 message += f'\n\nGold production increased by {gold_rate:.1f} gold/hour.'
-            loot_lines = self._card_lines(result.get('loot_gained_cards') or result.get('loot_lost_cards'))
-            if loot_lines:
-                message += '\n\nLoot gained (pending collection):\n' + '\n'.join(
-                    f'• {line}' for line in loot_lines)
-                message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
+            loot_cards = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []
+            loot_images, loot_count = self._card_images(loot_cards)
+            if loot_images:
+                images.extend(loot_images)
+                message += '\n\nLoot gained (pending collection):'
+                if loot_count > len(loot_images):
+                    after_messages.append(
+                        f'Showing {len(loot_images)} of {loot_count} looted cards.'
+                    )
+                after_messages.append(
+                    'Collect looted cards from the Loot Inbox in your kingdom configuration.'
+                )
+            else:
+                loot_lines = self._card_lines(loot_cards)
+                if loot_lines:
+                    message += '\n\nLoot gained (pending collection):\n' + '\n'.join(
+                        f'• {line}' for line in loot_lines)
+                    message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
         elif attacker_won and not is_attacker:
             title = 'Land Lost!'
             icon = 'defeat'
             message = 'The attacker has conquered your land.'
-            loot_lines = self._card_lines(result.get('loot_lost_cards') or result.get('loot_gained_cards'))
-            if loot_lines:
-                message += '\n\nLoot lost:\n' + '\n'.join(
-                    f'• {line}' for line in loot_lines)
-            message += '\n\nEvery unlooted defence card returned to your collection.'
+            loot_cards = result.get('loot_lost_cards') or result.get('loot_gained_cards') or []
+            loot_images, loot_count = self._card_images(loot_cards)
+            if loot_images:
+                images.extend(loot_images)
+                message += '\n\nLoot lost:'
+                if loot_count > len(loot_images):
+                    after_messages.append(
+                        f'Showing {len(loot_images)} of {loot_count} looted cards.'
+                    )
+                after_messages.append('Every unlooted defence card returned to your collection.')
+            else:
+                loot_lines = self._card_lines(loot_cards)
+                if loot_lines:
+                    message += '\n\nLoot lost:\n' + '\n'.join(
+                        f'• {line}' for line in loot_lines)
+                message += '\n\nEvery unlooted defence card returned to your collection.'
         elif not attacker_won and is_attacker:
             title = 'Attack Failed'
             icon = 'defeat'
             message = 'The defender held their ground.\n\nYou did not conquer this land.'
-            loot_lines = self._card_lines(result.get('loot_lost_cards'))
             is_ai_defender = bool(result.get('is_ai_defender'))
-            if loot_lines:
+            loot_cards = result.get('loot_lost_cards') or []
+            loot_images, loot_count = self._card_images(loot_cards)
+            if loot_images:
+                images.extend(loot_images)
                 loot_title = 'Cards destroyed by AI defence:' if is_ai_defender else 'Cards looted by defending kingdom:'
-                message += f'\n\n{loot_title}\n' + '\n'.join(
-                    f'• {line}' for line in loot_lines)
-            message += '\n\nEvery unlooted attack card returned to your collection.'
+                message += f'\n\n{loot_title}'
+                if loot_count > len(loot_images):
+                    after_messages.append(
+                        f'Showing {len(loot_images)} of {loot_count} looted cards.'
+                    )
+                after_messages.append('Every unlooted attack card returned to your collection.')
+            else:
+                loot_lines = self._card_lines(loot_cards)
+                if loot_lines:
+                    loot_title = 'Cards destroyed by AI defence:' if is_ai_defender else 'Cards looted by defending kingdom:'
+                    message += f'\n\n{loot_title}\n' + '\n'.join(
+                        f'• {line}' for line in loot_lines)
+                message += '\n\nEvery unlooted attack card returned to your collection.'
         else:
             title = 'Defence Successful!'
             icon = 'victory'
             message = 'You defended your land successfully!'
-            loot_lines = self._card_lines(result.get('loot_gained_cards') or result.get('loot_lost_cards'))
-            if loot_lines:
-                message += '\n\nLoot gained (pending collection):\n' + '\n'.join(
-                    f'• {line}' for line in loot_lines)
-                message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
+            loot_cards = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []
+            loot_images, loot_count = self._card_images(loot_cards)
+            if loot_images:
+                images.extend(loot_images)
+                message += '\n\nLoot gained (pending collection):'
+                if loot_count > len(loot_images):
+                    after_messages.append(
+                        f'Showing {len(loot_images)} of {loot_count} looted cards.'
+                    )
+                after_messages.append(
+                    'Collect looted cards from the Loot Inbox in your kingdom configuration.'
+                )
+            else:
+                loot_lines = self._card_lines(loot_cards)
+                if loot_lines:
+                    message += '\n\nLoot gained (pending collection):\n' + '\n'.join(
+                        f'• {line}' for line in loot_lines)
+                    message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
 
         if reason_text:
             message = f'{reason_text}\n\n{message}'
@@ -3321,8 +3410,10 @@ class GameScreen(Screen):
         self.queue_or_show_notification({
             'message': message,
             'actions': ['ok'],
+            'images': images if images else None,
             'icon': icon,
             'title': title,
+            'message_after_images': '\n\n'.join(after_messages) if after_messages else None,
             'type': 'game_over',
         })
         return True
@@ -4718,6 +4809,8 @@ class GameScreen(Screen):
         # Check if game exists (may be None after logout)
         if not self.state.game:
             return
+        if not self._ensure_duel_screen_game():
+            return
 
         for element in self.display_elements:
             element.draw()
@@ -4869,6 +4962,8 @@ class GameScreen(Screen):
 
     def update(self, events):
         """Update the game screen and all relevant components."""
+        if not self._ensure_duel_screen_game():
+            return
         if (self.state.game and
             getattr(self.state.game, 'pending_conquer_prelude_target', False)):
             self.state.subscreen = 'field'
@@ -4921,6 +5016,8 @@ class GameScreen(Screen):
 
     def handle_events(self, events):
         """Handle user input events (e.g., clicks, key presses)."""
+        if not self._ensure_duel_screen_game():
+            return
         # Handle dialogue box first if present
         if self.dialogue_box:
             response = self.dialogue_box.update(events)

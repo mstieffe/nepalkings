@@ -9,6 +9,7 @@ from game.screens._menu_base import MenuScreenMixin
 from config import settings
 from utils import http_compat as requests
 from game.core.game import Game
+from game.core.screen_routing import gameplay_screen_for
 from utils.background_poller import BackgroundPoller
 import logging
 
@@ -513,7 +514,7 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             if game:
                 self.state.game = game
                 self.state.set_msg(f"Loaded game with {game.opponent_name}")
-                self.state.screen = "game"
+                self.state.screen = gameplay_screen_for(self.state.game)
             else:
                 self.state.set_msg("Game not found")
         self.reset_action()
