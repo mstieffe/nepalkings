@@ -7,6 +7,7 @@ import pygame
 from pygame.locals import *
 
 from config import settings
+from game.components.cards.card_img import CardImg
 from game.components.hex_map import _draw_surface_pattern
 from game.components import badge_cosmetics
 from game.components.floating_text import FloatingText, FloatingTextLayer
@@ -38,6 +39,7 @@ HANDLED_KINGDOM_CONFIG_ACTIONS = frozenset({
     'upgrade_skill',
     'collect_kingdom_gold',
     'collect_kingdom_production',
+    'collect_kingdom_production_item',
     'collect_loot',
     'acknowledge_loot',
 })
@@ -107,6 +109,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._floating_text = FloatingTextLayer()
         self._last_render_ms = pygame.time.get_ticks()
         self._last_seen_level = None
+        self._loot_gained_rect = None
+        self._loot_lost_rect = None
 
     def _load_icon(self, rel_path):
         try:
@@ -326,6 +330,27 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                          (row.x + pad,
                           text_y + self._tiny_font.get_height() + 1))
 
+    def _production_item_collectable(self, item):
+        try:
+            pending = float(item.get('pending') or 0)
+        except (TypeError, ValueError):
+            pending = 0.0
+        return int(pending) > 0
+
+    def _draw_production_item_cell(self, item, cell):
+        collectable = self._production_item_collectable(item)
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = bool(collectable and cell.collidepoint(mouse_pos))
+        bg = settings.KINGDOM_CONFIG_CARD_ACTIVE_BG if collectable else settings.KINGDOM_CONFIG_CARD_BG
+        if hovered:
+            bg = tuple(min(255, c + 10) for c in bg)
+        border = settings.KINGDOM_CONFIG_GOOD_CLR if collectable else settings.KINGDOM_CONFIG_DIM_CLR
+        pygame.draw.rect(self.window, bg, cell, border_radius=8)
+        pygame.draw.rect(self.window, border, cell, 2 if hovered else 1, border_radius=8)
+        self._draw_production_item_row(item, cell)
+        if collectable and item.get('key'):
+            self._buttons.append(('collect_kingdom_production_item', item.get('key'), cell))
+
     def _draw_vault_panel(self, rect):
         """General Kingdom Production card: gold vault plus booster packs."""
         self._draw_panel(rect, 'Kingdom Production')
@@ -338,10 +363,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             (int(float(item.get('pending') or 0)) > 0)
             for item in items
         )
-        collect_w = 96
+        collect_w = 118
         collect_rect = pygame.Rect(rect.right - collect_w - 14, rect.y + 10, collect_w, 28)
         self._collect_btn_rect = collect_rect
-        self._draw_button(collect_rect, 'Collect', 'collect_kingdom_production', None,
+        self._draw_button(collect_rect, 'Collect All', 'collect_kingdom_production', None,
                           disabled=not collectable)
 
         content_y = rect.y + 42
@@ -354,10 +379,128 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         x = rect.x + 14
         for item in items:
             cell = pygame.Rect(x, content_y, cell_w, cell_h)
-            bg = settings.KINGDOM_CONFIG_CARD_ACTIVE_BG if item.get('full') else settings.KINGDOM_CONFIG_CARD_BG
-            pygame.draw.rect(self.window, bg, cell, border_radius=8)
-            self._draw_production_item_row(item, cell)
+            self._draw_production_item_cell(item, cell)
             x += cell_w + col_gap
+
+    def _loot_cards_from_events(self, events):
+        cards = []
+        for event in events or []:
+            if not isinstance(event, dict):
+                continue
+            for card in (event.get('cards') or []):
+                if not isinstance(card, dict):
+                    continue
+                suit = card.get('suit')
+                rank = card.get('rank')
+                if suit and rank:
+                    cards.append(card)
+        return cards
+
+    def _loot_stack_layout(self, card_count, card_w, max_width):
+        card_count = max(0, int(card_count or 0))
+        card_w = max(1, int(card_w or 1))
+        max_width = max(card_w, int(max_width or card_w))
+        if card_count <= 1:
+            return {'step': 0.0, 'total_w': float(card_w)}
+        preferred_step = max(8.0, card_w * 0.38)
+        max_step = max(0.0, float(max_width - card_w) / float(card_count - 1))
+        step = min(preferred_step, max_step)
+        total_w = float(card_w) + float(card_count - 1) * step
+        return {'step': step, 'total_w': total_w}
+
+    def _get_loot_card_surface(self, suit, rank, size):
+        suit = str(suit or '')
+        rank = str(rank or '')
+        width = max(1, int(size[0]))
+        height = max(1, int(size[1]))
+        cache = getattr(self, '_loot_card_surface_cache', None)
+        if cache is None:
+            cache = {}
+            self._loot_card_surface_cache = cache
+        key = (suit, rank, width, height)
+        surf = cache.get(key)
+        if surf is not None:
+            return surf
+        try:
+            surf = CardImg(self.window, suit, rank, width=width, height=height).front_img
+        except Exception:
+            return None
+        cache[key] = surf
+        return surf
+
+    def _draw_loot_card_stack(self, rect, cards, accent):
+        if not cards or rect.w <= 0 or rect.h <= 0:
+            return
+        aspect = float(settings.CARD_WIDTH) / float(max(1, settings.CARD_HEIGHT))
+        card_h = min(rect.h, max(38, int(rect.h * 0.95)))
+        card_w = max(24, int(round(card_h * aspect)))
+        if card_w > rect.w:
+            card_w = rect.w
+            card_h = max(1, int(round(float(card_w) / max(0.01, aspect))))
+        layout = self._loot_stack_layout(len(cards), card_w, rect.w)
+        total_w = int(round(layout['total_w']))
+        start_x = rect.x + max(0, (rect.w - total_w) // 2)
+        y = rect.y + max(0, (rect.h - card_h) // 2)
+
+        shadow = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
+        shadow.fill((0, 0, 0, 45))
+        for idx, card in enumerate(cards):
+            surf = self._get_loot_card_surface(card.get('suit'), card.get('rank'), (card_w, card_h))
+            if surf is None:
+                continue
+            x = start_x + int(round(idx * layout['step']))
+            self.window.blit(shadow, (x + 2, y + 2))
+            self.window.blit(surf, (x, y))
+            pygame.draw.rect(self.window, accent, pygame.Rect(x, y, card_w, card_h), 1,
+                             border_radius=4)
+
+    def _draw_loot_compartment(self, rect, *, title, subtitle, cards, card_count,
+                               accent, empty_text, action=None, active=False):
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = bool(active and rect.collidepoint(mouse_pos))
+        bg = settings.KINGDOM_CONFIG_CARD_ACTIVE_BG if active else settings.KINGDOM_CONFIG_CARD_BG
+        if hovered:
+            bg = tuple(min(255, c + 10) for c in bg)
+        frame_clr = accent if active else settings.KINGDOM_CONFIG_DIM_CLR
+        title_clr = settings.KINGDOM_CONFIG_TEXT_CLR if active else settings.KINGDOM_CONFIG_DIM_CLR
+        pygame.draw.rect(self.window, bg, rect, border_radius=8)
+        pygame.draw.rect(self.window, frame_clr, rect, 2 if hovered else 1, border_radius=8)
+
+        pad = 10
+        title_surf = self._small_font.render(title, True, title_clr)
+        self.window.blit(title_surf, (rect.x + pad, rect.y + 8))
+
+        count_label = f'{card_count} card{"s" if card_count != 1 else ""}'
+        count_surf = self._tiny_font.render(count_label, True, frame_clr)
+        count_rect = count_surf.get_rect(topright=(rect.right - pad, rect.y + 11))
+        self.window.blit(count_surf, count_rect)
+
+        stack_y = rect.y + 12 + title_surf.get_height() + 6
+        if rect.h >= 88:
+            subtitle_surf = self._tiny_font.render(
+                self._fit_text(subtitle, self._tiny_font, rect.w - pad * 2),
+                True,
+                settings.KINGDOM_CONFIG_DIM_CLR,
+            )
+            subtitle_y = rect.y + 11 + title_surf.get_height()
+            self.window.blit(subtitle_surf, (rect.x + pad, subtitle_y))
+            stack_y = subtitle_y + subtitle_surf.get_height() + 6
+
+        stack_rect = pygame.Rect(rect.x + pad, stack_y, rect.w - pad * 2,
+                                 max(1, rect.bottom - stack_y - 8))
+        if card_count <= 0 or not cards:
+            lines = self._wrap_text(empty_text, self._tiny_font, stack_rect.w)
+            total_h = len(lines) * self._tiny_font.get_height() + max(0, len(lines) - 1) * 2
+            y = stack_rect.y + max(0, (stack_rect.h - total_h) // 2)
+            for line in lines:
+                surf = self._tiny_font.render(line, True, settings.KINGDOM_CONFIG_DIM_CLR)
+                self.window.blit(surf, surf.get_rect(centerx=stack_rect.centerx, y=y))
+                y += self._tiny_font.get_height() + 2
+        else:
+            self._draw_loot_card_stack(stack_rect, cards, accent if active else frame_clr)
+
+        if active and action:
+            self._buttons.append((action, None, rect))
 
     def _draw_loot_inbox_panel(self, rect):
         """Loot Inbox card: pending gained cards and unseen lost cards."""
@@ -367,63 +510,45 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         lost = inbox.get('lost') or []
         gained_count = int(inbox.get('gained_card_count') or 0)
         lost_count = int(inbox.get('lost_card_count') or 0)
-
-        btn_w = 96
-        btn_h = 26
-        top_btn_y = rect.y + 10
-        collect_rect = pygame.Rect(rect.right - btn_w * 2 - 22, top_btn_y, btn_w, btn_h)
-        noticed_rect = pygame.Rect(rect.right - btn_w - 14, top_btn_y, btn_w, btn_h)
-        self._draw_button(collect_rect, 'Collect', 'collect_loot', None,
-                          disabled=gained_count <= 0)
-        self._draw_button(noticed_rect, 'Noticed', 'acknowledge_loot', None,
-                          disabled=lost_count <= 0)
+        gained_cards = self._loot_cards_from_events(gained)
+        lost_cards = self._loot_cards_from_events(lost)
+        gained_count = max(gained_count, len(gained_cards))
+        lost_count = max(lost_count, len(lost_cards))
 
         body_x = rect.x + 14
         body_y = rect.y + 42
         body_w = rect.w - 28
-        summary = f'Gained {gained_count} • Lost {lost_count}'
-        summary_surf = self._small_font.render(summary, True, settings.KINGDOM_CONFIG_TEXT_CLR)
-        self.window.blit(summary_surf, (body_x, body_y))
+        body_rect = pygame.Rect(body_x, body_y, body_w, max(1, rect.bottom - body_y - 10))
+        gap = 10
+        cell_w = max(1, (body_rect.w - gap) // 2)
+        gained_rect = pygame.Rect(body_rect.x, body_rect.y, cell_w, body_rect.h)
+        lost_rect = pygame.Rect(gained_rect.right + gap, body_rect.y,
+                                body_rect.w - cell_w - gap, body_rect.h)
+        self._loot_gained_rect = gained_rect
+        self._loot_lost_rect = lost_rect
 
-        def card_label(card):
-            if not isinstance(card, dict):
-                return None
-            rank = card.get('rank')
-            suit = card.get('suit')
-            source = card.get('source')
-            if not rank or not suit:
-                return None
-            label = f'{rank} of {suit}'
-            if source:
-                label += f' ({str(source).replace("_", " ")})'
-            return label
-
-        def event_labels(events, prefix):
-            labels = []
-            for event in events:
-                for card in (event.get('cards') or []):
-                    label = card_label(card)
-                    if label:
-                        labels.append(f'{prefix}: {label}')
-            return labels
-
-        labels = event_labels(gained, 'Gain') + event_labels(lost, 'Lost')
-        if not labels:
-            labels = ['No pending loot. Won loot waits here until collected.']
-        max_rows = max(1, (rect.bottom - body_y - summary_surf.get_height() - 8) //
-                       max(1, self._tiny_font.get_height() + 2))
-        y = body_y + summary_surf.get_height() + 6
-        for index, label in enumerate(labels[:max_rows]):
-            color = settings.KINGDOM_CONFIG_GOOD_CLR if label.startswith('Gain') else settings.KINGDOM_CONFIG_DIM_CLR
-            if label.startswith('Lost'):
-                color = settings.KINGDOM_CONFIG_BAD_CLR
-            if index == max_rows - 1 and len(labels) > max_rows:
-                label = f'... and {len(labels) - max_rows + 1} more'
-                color = settings.KINGDOM_CONFIG_DIM_CLR
-            surf = self._tiny_font.render(
-                self._fit_text(label, self._tiny_font, body_w), True, color)
-            self.window.blit(surf, (body_x, y))
-            y += self._tiny_font.get_height() + 2
+        self._draw_loot_compartment(
+            gained_rect,
+            title='Gained',
+            subtitle='Pending collection',
+            cards=gained_cards,
+            card_count=gained_count,
+            accent=settings.KINGDOM_CONFIG_GOOD_CLR,
+            empty_text='No gained cards waiting here.',
+            action='collect_loot',
+            active=gained_count > 0,
+        )
+        self._draw_loot_compartment(
+            lost_rect,
+            title='Lost',
+            subtitle='Unseen losses',
+            cards=lost_cards,
+            card_count=lost_count,
+            accent=settings.KINGDOM_CONFIG_BAD_CLR,
+            empty_text='No lost-card notices right now.',
+            action='acknowledge_loot',
+            active=lost_count > 0,
+        )
 
     def _fetch_config(self):
         self._loading = True
@@ -587,14 +712,17 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._set_msg('Skill upgraded')
             self._fetch_quote(silent=True)
 
-    def _collect_kingdom_production(self):
+    def _collect_kingdom_production(self, item_key=None, origin_rect=None):
         if not self._kingdom:
             return
         kid = self._kingdom['id']
+        payload = {}
+        if item_key:
+            payload['item_key'] = item_key
         try:
             resp = requests.post(
                 f'{settings.SERVER_URL}/kingdom/{kid}/collect_production',
-                json={}, timeout=12,
+                json=payload, timeout=12,
             )
         except Exception as exc:
             self._set_msg(f'Collect failed: {exc}')
@@ -615,6 +743,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         collected = int(data.get('collected_gold', data.get('collected', 0)) or 0)
         collected_main = int(data.get('collected_main_boosters', 0) or 0)
         collected_side = int(data.get('collected_side_boosters', 0) or 0)
+        collected_maps = int(data.get('collected_maps', 0) or 0)
         if collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
             self._suppress_next_gold_floater()
         if 'gold' in data:
@@ -626,6 +755,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 self.state.user_dict['booster_packs'] = int(data.get('booster_packs') or 0)
             if 'booster_packs_side' in data:
                 self.state.user_dict['booster_packs_side'] = int(data.get('booster_packs_side') or 0)
+            if 'maps' in data:
+                self.state.user_dict['maps'] = int(data.get('maps') or 0)
         if self._kingdom is not None:
             if 'pending_gold' in data:
                 self._kingdom['pending_gold'] = float(data.get('pending_gold') or 0.0)
@@ -635,20 +766,39 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 self._kingdom['production'] = data.get('production') or {}
             if 'production_items' in data:
                 self._kingdom['production_items'] = data.get('production_items') or []
-            for key in ('pending_main_boosters', 'pending_side_boosters'):
+            for key in ('pending_main_boosters', 'pending_side_boosters', 'pending_maps'):
                 if key in data:
                     self._kingdom[key] = int(data.get(key) or 0)
         # Refresh shield quote so price reflects current gold / kingdom state.
         self._fetch_quote(silent=True)
-        if collected > 0 and self._collect_btn_rect is not None:
+        anchor_rect = origin_rect or self._collect_btn_rect
+        if item_key:
+            if anchor_rect is not None:
+                if item_key == 'gold' and collected > 0:
+                    self._spawn_collect_floater(collected, anchor_rect.center)
+                elif item_key == 'main_booster' and collected_main > 0:
+                    self._spawn_named_collect_floater('+1 Main Pack' if collected_main == 1 else f'+{collected_main} Main Packs',
+                                                      anchor_rect.center,
+                                                      color=settings.COLLECT_FLOAT_XP_CLR)
+                elif item_key == 'side_booster' and collected_side > 0:
+                    self._spawn_named_collect_floater('+1 Side Pack' if collected_side == 1 else f'+{collected_side} Side Packs',
+                                                      anchor_rect.center,
+                                                      color=settings.COLLECT_FLOAT_XP_CLR)
+                elif item_key == 'map' and collected_maps > 0:
+                    self._spawn_named_collect_floater('+1 Map' if collected_maps == 1 else f'+{collected_maps} Maps',
+                                                      anchor_rect.center,
+                                                      color=settings.COLLECT_FLOAT_XP_CLR)
+        elif collected > 0 and self._collect_btn_rect is not None:
             self._spawn_collect_floater(collected, self._collect_btn_rect.center)
         parts = []
         if collected:
             parts.append(f'+{collected}g')
         if collected_main:
-            parts.append(f'+{collected_main} main booster')
+            parts.append(f'+{collected_main} main booster{"s" if collected_main != 1 else ""}')
         if collected_side:
-            parts.append(f'+{collected_side} side booster')
+            parts.append(f'+{collected_side} side booster{"s" if collected_side != 1 else ""}')
+        if collected_maps:
+            parts.append(f'+{collected_maps} map{"s" if collected_maps != 1 else ""}')
         if parts:
             self._set_msg('Collected ' + ', '.join(parts))
 
@@ -661,6 +811,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         if data:
             count = int(data.get('collected_count') or 0)
             if count:
+                loot_rect = getattr(self, '_loot_gained_rect', None)
+                if loot_rect is not None:
+                    self._spawn_loot_collect_floater(count, loot_rect.center)
                 self._set_msg(f'Collected {count} looted card{"s" if count != 1 else ""}')
             else:
                 self._set_msg('No pending loot to collect')
@@ -679,6 +832,28 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._floating_text.add(FloatingText(
             f'+{int(amount)}g', pos,
             color=settings.COLLECT_FLOAT_GOLD_CLR,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+            delay_ms=delay_ms,
+        ))
+
+    def _spawn_named_collect_floater(self, text, pos, *, color, delay_ms=0):
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            text, pos,
+            color=color,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+            delay_ms=delay_ms,
+        ))
+
+    def _spawn_loot_collect_floater(self, count, pos, *, delay_ms=0):
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            f'+{int(count)} card{"s" if int(count) != 1 else ""}', pos,
+            color=settings.KINGDOM_CONFIG_GOOD_CLR,
             duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
             rise_px=settings.COLLECT_FLOAT_RISE_PX,
             font=font,
@@ -777,6 +952,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     self._upgrade_skill(value)
                 elif action in ('collect_kingdom_gold', 'collect_kingdom_production'):
                     self._collect_kingdom_production()
+                elif action == 'collect_kingdom_production_item':
+                    self._collect_kingdom_production(item_key=value, origin_rect=rect)
                 elif action == 'collect_loot':
                     self._collect_loot()
                 elif action == 'acknowledge_loot':
@@ -1684,6 +1861,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._cosmetic_scroll_areas = {}
         self._collect_btn_rect = None
         self._rename_icon_rect = None
+        self._loot_gained_rect = None
+        self._loot_lost_rect = None
         layout = self._layout_rects()
         _draw_config_frame(self.window, self._box_rect)
         # Unified header pill: pager + name + edit + level/XP in one widget.

@@ -27,7 +27,7 @@ def _screen_base():
         kingdom_config_land_id=12,
         kingdom_config_id=None,
         message_lines=[],
-        user_dict={'gold': 0, 'booster_packs': 0, 'booster_packs_side': 0},
+        user_dict={'gold': 0, 'booster_packs': 0, 'booster_packs_side': 0, 'maps': 0},
         set_msg=MagicMock(),
     )
     screen.window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
@@ -177,7 +177,7 @@ class TestKingdomConfigInteractions:
             kingdom_config_land_id=12,
             kingdom_config_id=None,
             message_lines=[],
-            user_dict={'gold': 0, 'booster_packs': 0, 'booster_packs_side': 0},
+            user_dict={'gold': 0, 'booster_packs': 0, 'booster_packs_side': 0, 'maps': 0},
             set_msg=MagicMock(),
         )
         chrome_calls = []
@@ -491,7 +491,31 @@ class TestKingdomConfigInteractions:
 
         actions = {action for action, _value, _rect in screen._buttons}
         assert 'collect_kingdom_production' in actions
+        assert 'collect_kingdom_production_item' in actions
         assert screen._collect_btn_rect is not None
+
+    def test_production_panel_registers_only_ready_item_compartments(self):
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        kingdom = _kingdom_payload()
+        kingdom['production_items'] = [
+            {'key': 'gold', 'kind': 'gold', 'label': 'Gold Vault', 'pending': 0.4,
+             'capacity': 50, 'progress_ratio': 0.01},
+            {'key': 'main_booster', 'kind': 'booster', 'label': 'Main Booster Pack',
+             'skill_key': 'main_booster_production', 'enabled': True, 'pending': 1,
+             'capacity': 1, 'full': True, 'progress_ratio': 1.0},
+            {'key': 'side_booster', 'kind': 'booster', 'label': 'Side Booster Pack',
+             'skill_key': 'side_booster_production', 'enabled': True, 'pending': 0,
+             'capacity': 1, 'progress_ratio': 0.5},
+        ]
+        screen._kingdom = kingdom
+
+        rect = pygame.Rect(20, 20, settings.KINGDOM_CONFIG_LEFT_W, 230)
+        KingdomConfigScreen._draw_vault_panel(screen, rect)
+
+        item_actions = [(action, value) for action, value, _rect in screen._buttons
+                        if action == 'collect_kingdom_production_item']
+        assert item_actions == [('collect_kingdom_production_item', 'main_booster')]
 
     def test_render_registers_skill_and_shield_actions(self):
         KingdomConfigScreen, screen = _screen_base()
@@ -630,3 +654,198 @@ class TestKingdomConfigInteractions:
         assert 'collect_kingdom_production' in actions
         assert screen._collect_btn_rect is not None
         assert ('20.0 g/hr (+4.5)', tuple(settings.KINGDOM_CONFIG_HIGHLIGHT)) in rendered_tiny
+
+    def test_collect_single_production_item_posts_item_key_and_updates_maps(self, monkeypatch):
+        import game.screens.kingdom_config_screen as module
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._collect_btn_rect = pygame.Rect(10, 10, 80, 30)
+        origin_rect = pygame.Rect(120, 120, 80, 80)
+        quote_calls = []
+
+        calls = []
+
+        def fake_post(url, json=None, timeout=0):
+            calls.append((url, json, timeout))
+            return _Response({
+                'success': True,
+                'collected_gold': 0,
+                'collected_main_boosters': 0,
+                'collected_side_boosters': 0,
+                'collected_maps': 1,
+                'gold': 77,
+                'maps': 4,
+                'pending_gold': 0.0,
+                'pending_main_boosters': 0,
+                'pending_side_boosters': 0,
+                'pending_maps': 0,
+                'production': {},
+                'production_items': [],
+            })
+
+        monkeypatch.setattr(module.requests, 'post', fake_post)
+        monkeypatch.setattr(KingdomConfigScreen, '_fetch_quote',
+                            lambda self, silent=False: quote_calls.append(silent))
+
+        KingdomConfigScreen._collect_kingdom_production(
+            screen, item_key='map', origin_rect=origin_rect)
+
+        assert calls[0][0].endswith('/kingdom/4/collect_production')
+        assert calls[0][1] == {'item_key': 'map'}
+        assert screen.state.user_dict['maps'] == 4
+        assert screen._message == 'Collected +1 map'
+        assert len(screen._floating_text) == 1
+        assert quote_calls == [True]
+
+    def test_loot_cards_from_events_flattens_valid_cards_only(self):
+        KingdomConfigScreen, screen = _screen_base()
+
+        cards = KingdomConfigScreen._loot_cards_from_events(screen, [
+            {
+                'cards': [
+                    {'rank': 'A', 'suit': 'Hearts'},
+                    {'rank': None, 'suit': 'Spades'},
+                    'bad-row',
+                ]
+            },
+            {
+                'cards': [
+                    {'rank': '10', 'suit': 'Clubs', 'source': 'battle_move'},
+                ]
+            },
+            None,
+        ])
+
+        assert [(card['rank'], card['suit']) for card in cards] == [
+            ('A', 'Hearts'),
+            ('10', 'Clubs'),
+        ]
+
+    def test_loot_stack_layout_overlaps_cards_to_fit_width(self):
+        KingdomConfigScreen, screen = _screen_base()
+
+        layout = KingdomConfigScreen._loot_stack_layout(
+            screen, card_count=10, card_w=42, max_width=140)
+
+        assert layout['step'] < 42
+        assert layout['step'] >= 0
+        assert layout['total_w'] <= 140
+
+    def test_draw_loot_inbox_panel_uses_card_images_for_both_compartments(self, monkeypatch):
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._kingdom['loot_inbox'] = {
+            'gained': [{
+                'cards': [
+                    {'rank': 'A', 'suit': 'Hearts'},
+                    {'rank': '10', 'suit': 'Clubs'},
+                ],
+            }],
+            'lost': [{
+                'cards': [
+                    {'rank': '7', 'suit': 'Spades'},
+                ],
+            }],
+            'gained_card_count': 2,
+            'lost_card_count': 1,
+        }
+
+        requested = []
+
+        def fake_surface(self, suit, rank, size):
+            requested.append((suit, rank, size))
+            return pygame.Surface(size, pygame.SRCALPHA)
+
+        monkeypatch.setattr(KingdomConfigScreen, '_get_loot_card_surface', fake_surface)
+
+        rect = pygame.Rect(20, 20, settings.KINGDOM_CONFIG_LEFT_W, 150)
+        KingdomConfigScreen._draw_loot_inbox_panel(screen, rect)
+
+        actions = {action for action, _value, _rect in screen._buttons}
+        assert {'collect_loot', 'acknowledge_loot'} <= actions
+        button_rects = {action: button_rect for action, _value, button_rect in screen._buttons}
+        panel_mid_x = rect.x + 14 + (rect.w - 28) // 2
+        assert button_rects['collect_loot'].centerx < panel_mid_x
+        assert button_rects['acknowledge_loot'].centerx > panel_mid_x
+        assert button_rects['collect_loot'].width > 100
+        assert button_rects['acknowledge_loot'].width > 100
+        assert button_rects['collect_loot'].height > 60
+        assert button_rects['acknowledge_loot'].height > 60
+        assert [(suit, rank) for suit, rank, _size in requested] == [
+            ('Hearts', 'A'),
+            ('Clubs', '10'),
+            ('Spades', '7'),
+        ]
+        assert max(size[0] for _suit, _rank, size in requested) < settings.CARD_WIDTH
+
+    def test_draw_loot_inbox_panel_inactive_compartments_do_not_register_actions(self):
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._kingdom['loot_inbox'] = {
+            'gained': [],
+            'lost': [],
+            'gained_card_count': 0,
+            'lost_card_count': 0,
+        }
+
+        rect = pygame.Rect(20, 20, settings.KINGDOM_CONFIG_LEFT_W, 150)
+        KingdomConfigScreen._draw_loot_inbox_panel(screen, rect)
+
+        actions = {action for action, _value, _rect in screen._buttons}
+        assert 'collect_loot' not in actions
+        assert 'acknowledge_loot' not in actions
+
+    def test_inactive_loot_compartment_uses_grey_frame(self, monkeypatch):
+        import game.screens.kingdom_config_screen as module
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        rect = pygame.Rect(20, 20, 140, 100)
+        draw_calls = []
+        original_draw_rect = module.pygame.draw.rect
+
+        def fake_draw_rect(surface, color, draw_rect, width=0, border_radius=0):
+            draw_calls.append((tuple(color), pygame.Rect(draw_rect), width, border_radius))
+            return original_draw_rect(surface, color, draw_rect, width, border_radius)
+
+        monkeypatch.setattr(module.pygame.draw, 'rect', fake_draw_rect)
+
+        KingdomConfigScreen._draw_loot_compartment(
+            screen,
+            rect,
+            title='Gained',
+            subtitle='Pending collection',
+            cards=[],
+            card_count=0,
+            accent=settings.KINGDOM_CONFIG_GOOD_CLR,
+            empty_text='No gained cards waiting here.',
+            action='collect_loot',
+            active=False,
+        )
+
+        assert any(
+            color == tuple(settings.KINGDOM_CONFIG_DIM_CLR) and
+            width == 1 and
+            call_rect == rect
+            for color, call_rect, width, _border_radius in draw_calls
+        )
+
+    def test_collect_loot_spawns_card_floater(self, monkeypatch):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._loot_gained_rect = pygame.Rect(100, 120, 150, 90)
+
+        monkeypatch.setattr(
+            KingdomConfigScreen,
+            '_post_action',
+            lambda self, path, payload=None: {
+                'success': True,
+                'collected_count': 3,
+            },
+        )
+
+        KingdomConfigScreen._collect_loot(screen)
+
+        assert len(screen._floating_text) == 1
+        assert screen._message == 'Collected 3 looted cards'

@@ -1124,8 +1124,23 @@ def kingdom_production_items(kingdom, *, now=None):
     return [state[key] for key in ('gold', 'main_booster', 'side_booster', 'map') if key in state]
 
 
-def collect_kingdom_production(kingdom, user, *, now=None):
-    """Collect all ready kingdom production into the owning user account."""
+def _normalize_collect_production_keys(item_keys):
+    """Return validated production keys in canonical order.
+
+    ``None`` means "collect every production item". Any unknown keys are
+    ignored so callers can safely pass partially user-driven payloads.
+    """
+    ordered = ('gold', 'main_booster', 'side_booster', 'map')
+    if item_keys is None:
+        return ordered
+    if isinstance(item_keys, str):
+        item_keys = [item_keys]
+    requested = {str(key or '') for key in (item_keys or [])}
+    return tuple(key for key in ordered if key in requested)
+
+
+def collect_kingdom_production(kingdom, user, *, item_keys=None, now=None):
+    """Collect selected ready kingdom production into the owning user account."""
     if not kingdom or not user:
         return {
             'collected_gold': 0,
@@ -1141,10 +1156,14 @@ def collect_kingdom_production(kingdom, user, *, now=None):
             'collected': 0,
             'pending_gold': 0.0,
             'vault_cap': int(config.KINGDOM_VAULT_DEFAULT_CAP),
+            'pending_main_boosters': 0,
+            'pending_side_boosters': 0,
+            'pending_maps': 0,
             'production': {},
             'production_items': [],
         }
     now = now or _utcnow()
+    selected_keys = _normalize_collect_production_keys(item_keys)
 
     _accrue_pending_gold(kingdom, now=now)
     for item_key in ('main_booster', 'side_booster', 'map'):
@@ -1152,18 +1171,18 @@ def collect_kingdom_production(kingdom, user, *, now=None):
 
     cap = kingdom_vault_cap(kingdom)
     pending_gold = float(kingdom.pending_gold or 0.0)
-    collected_gold = int(pending_gold)
+    collected_gold = int(pending_gold) if 'gold' in selected_keys else 0
     if collected_gold > 0:
         user.gold = int(getattr(user, 'gold', 0) or 0) + collected_gold
         kingdom.pending_gold = max(0.0, pending_gold - collected_gold)
-    kingdom.last_gold_collection_at = now
 
     collected_boosters = {}
     for item_key, spec in _BOOSTER_PRODUCTION_ITEMS.items():
         pending = min(_booster_capacity(item_key, kingdom=kingdom),
                       int(getattr(kingdom, spec['pending_attr'], 0) or 0))
-        collected_boosters[item_key] = pending
-        if pending > 0:
+        collected = pending if item_key in selected_keys else 0
+        collected_boosters[item_key] = collected
+        if collected > 0:
             setattr(user, spec['user_attr'], int(getattr(user, spec['user_attr'], 0) or 0) + pending)
             setattr(kingdom, spec['pending_attr'], 0)
             setattr(kingdom, spec['last_attr'], now)
@@ -1194,6 +1213,9 @@ def collect_kingdom_production(kingdom, user, *, now=None):
         'collected': int(collected_gold),
         'pending_gold': float(kingdom.pending_gold or 0.0),
         'vault_cap': int(cap),
+        'pending_main_boosters': int(getattr(kingdom, 'pending_main_boosters', 0) or 0),
+        'pending_side_boosters': int(getattr(kingdom, 'pending_side_boosters', 0) or 0),
+        'pending_maps': int(getattr(kingdom, 'pending_maps', 0) or 0),
         'production': production,
         'production_items': [production[key]
                              for key in ('gold', 'main_booster', 'side_booster', 'map')

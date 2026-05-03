@@ -173,6 +173,55 @@ class TestCollectKingdomProduction:
                              headers=auth_headers_user1)
         assert rv.get_json()['collected_main_boosters'] == 0
 
+    def test_collect_specific_item_leaves_other_production_pending(self, client, db,
+                                                                   two_users,
+                                                                   auth_headers_user1):
+        u1, _ = two_users
+        u1.gold = 100
+        u1.booster_packs = 0
+        db.session.commit()
+        _add_land(db, u1.id, 0, 0, gold_rate=6.0)
+        k = _kingdom_for(u1.id)
+        self._enable_booster_skills(db, k, side_level=0)
+        now = datetime(2026, 4, 17, 12, 0, 0)
+        k.last_gold_collection_at = now - timedelta(hours=1)
+        k.last_main_booster_collection_at = now - timedelta(hours=96)
+        db.session.commit()
+
+        with patch('routes.kingdom._utcnow', return_value=now):
+            rv = client.post(
+                f'/kingdom/{k.id}/collect_production',
+                headers=auth_headers_user1,
+                json={'item_key': 'main_booster'},
+            )
+
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['collected_gold'] == 0
+        assert data['collected_main_boosters'] == 1
+        assert data['gold'] == 100
+        assert data['booster_packs'] == 1
+        assert data['pending_gold'] == 6.0
+        assert data['pending_main_boosters'] == 0
+        db.session.refresh(k)
+        assert k.pending_gold == 6.0
+        assert k.pending_main_boosters == 0
+
+    def test_collect_specific_item_rejects_unknown_key(self, client, db, two_users,
+                                                        auth_headers_user1):
+        u1, _ = two_users
+        _add_land(db, u1.id, 0, 0, gold_rate=0.0)
+        k = _kingdom_for(u1.id)
+
+        rv = client.post(
+            f'/kingdom/{k.id}/collect_production',
+            headers=auth_headers_user1,
+            json={'item_key': 'not_real'},
+        )
+
+        assert rv.status_code == 400
+        assert rv.get_json()['success'] is False
+
     def test_collect_all_aggregates_booster_totals(self, client, db, two_users,
                                                   auth_headers_user1):
         from kingdom_service import reconcile_user_kingdoms

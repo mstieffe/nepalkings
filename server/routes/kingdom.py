@@ -140,6 +140,7 @@ def collect_kingdom_production_route(kingdom_id):
         return jsonify({'error': 'User not found'}), 404
 
     from kingdom_service import (collect_kingdom_production,
+                                 _normalize_collect_production_keys,
                                  reconcile_user_kingdoms,
                                  summarize_user_kingdom)
 
@@ -149,7 +150,21 @@ def collect_kingdom_production_route(kingdom_id):
     if not kingdom_row or kingdom_row.owner_user_id != user.id:
         return jsonify({'error': 'Kingdom not found'}), 404
 
-    result = collect_kingdom_production(kingdom_row, user, now=_utcnow())
+    data = request.json or {}
+    requested_keys = None
+    if 'item_keys' in data and data.get('item_keys') is not None:
+        if not isinstance(data.get('item_keys'), list):
+            return jsonify({'success': False, 'message': 'item_keys must be a list'}), 400
+        requested_keys = data.get('item_keys') or []
+    elif 'item_key' in data and data.get('item_key') is not None:
+        requested_keys = [data.get('item_key')]
+
+    normalized_keys = _normalize_collect_production_keys(requested_keys)
+    if requested_keys is not None and requested_keys and not normalized_keys:
+        return jsonify({'success': False, 'message': 'Unknown production item'}), 400
+
+    result = collect_kingdom_production(
+        kingdom_row, user, item_keys=requested_keys, now=_utcnow())
     db.session.commit()
 
     return jsonify({
