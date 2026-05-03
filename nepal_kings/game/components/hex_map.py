@@ -998,12 +998,19 @@ class HexMap:
                 'owner_username': tile.owner_username,
                 'badge_keys': {},
                 'suit_keys': {},
+                'levels': {},
             })
             group['tiles'].append(tile)
             if not group['name']:
                 name = str(tile.kingdom_name or '').strip()
                 if name:
                     group['name'] = name
+            try:
+                level = int(getattr(tile, 'kingdom_level', 0) or 0)
+            except (TypeError, ValueError):
+                level = 0
+            if level > 0:
+                group['levels'][level] = group['levels'].get(level, 0) + 1
             bk = (self._owner_style_key(tile, 'badge_key')
                   or settings.HEX_BADGE_DEFAULT_KEY)
             group['badge_keys'][bk] = group['badge_keys'].get(bk, 0) + 1
@@ -1032,8 +1039,13 @@ class HexMap:
                          else settings.HEX_BADGE_DEFAULT_KEY)
             suit_key = (max(group['suit_keys'].items(), key=lambda kv: kv[1])[0]
                         if group['suit_keys'] else None)
+            level = (max(group['levels'].items(), key=lambda kv: (kv[1], kv[0]))[0]
+                     if group['levels'] else 0)
+            subtitle = f'Lv {level}' if level > 0 else None
             badges.append({
                 'name': name,
+                'level': level,
+                'subtitle': subtitle,
                 'center_x': center_x,
                 'center_y': center_y,
                 'tile_count': len(tiles),
@@ -1060,10 +1072,13 @@ class HexMap:
 
         vp = self.viewport_rect
         font = self._label_font
+        subtitle_font = settings.get_font(
+            max(8, int(font.get_height() * 0.68)), bold=True)
         offset_y = sz * settings.HEX_GROUP_BADGE_OFFSET_Y
         gap_px = max(1, int(sz * settings.HEX_GROUP_BADGE_GAP_FACTOR))
-        target_h = max(font.get_height() + 6,
-                       int(font.get_height() * 1.6))
+        subtitle_h = subtitle_font.get_height()
+        target_h = max(font.get_height() + subtitle_h + 8,
+                       int((font.get_height() + subtitle_h) * 1.25))
         # Suit cluster icon footprint (matches _draw_suit_cluster_icons).
         cluster_icon_sz = max(20, int(sz * 1.05))
         shimmer_phase = badge_cosmetics.shimmer_phase_for(
@@ -1080,13 +1095,25 @@ class HexMap:
 
             badge_key = (badge_data.get('badge_key')
                          or settings.HEX_BADGE_DEFAULT_KEY)
-            badge_surf = badge_cosmetics.render_badge(
-                badge_key,
-                str(badge_data['name']),
-                font,
-                target_h=target_h,
-                shimmer_phase=shimmer_phase,
-            )
+            subtitle = badge_data.get('subtitle')
+            if subtitle:
+                badge_surf = badge_cosmetics.render_badge_with_subtitle(
+                    badge_key,
+                    str(badge_data['name']),
+                    str(subtitle),
+                    font,
+                    subtitle_font=subtitle_font,
+                    target_h=target_h,
+                    shimmer_phase=shimmer_phase,
+                )
+            else:
+                badge_surf = badge_cosmetics.render_badge(
+                    badge_key,
+                    str(badge_data['name']),
+                    font,
+                    target_h=target_h,
+                    shimmer_phase=shimmer_phase,
+                )
 
             # Anchor the badge below the suit cluster icon.
             label_y = scy + offset_y + cluster_icon_sz * 0.55 + gap_px

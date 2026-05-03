@@ -16,6 +16,31 @@ def test_all_badges_render_long_name_without_clipping():
         assert surf.get_height() >= text_h
 
 
+def test_all_badges_render_level_subtitle_below_name():
+    from config import settings
+    from game.components import badge_cosmetics
+
+    font = settings.get_font(settings.FS_BODY, bold=True)
+    subtitle_font = settings.get_font(settings.FS_TINY, bold=True)
+    title = 'Northern Hills'
+    subtitle = 'Lv 12'
+
+    for badge_key in settings.HEX_BADGE_STYLES:
+        plain = badge_cosmetics.render_badge(
+            badge_key, title, font,
+            target_h=max(font.get_height() + 6, int(font.get_height() * 1.6)),
+            shimmer_phase=4,
+        )
+        stacked = badge_cosmetics.render_badge_with_subtitle(
+            badge_key, title, subtitle, font,
+            subtitle_font=subtitle_font,
+            shimmer_phase=4,
+        )
+
+        assert stacked.get_height() > plain.get_height()
+        assert stacked.get_width() >= plain.get_width()
+
+
 def test_flashy_badges_reserve_more_horizontal_room_for_name():
     from config import settings
     from game.components import badge_cosmetics

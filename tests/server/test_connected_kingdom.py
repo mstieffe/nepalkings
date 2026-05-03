@@ -94,7 +94,7 @@ class TestConnectedKingdomRoutes:
         assert data['my_kingdom']['largest_component_size'] == 2
         lands = data['lands']
         assert lands[0]['kingdom_component_size'] == 2
-        assert lands[0]['kingdom_level'] == 0
+        assert lands[0]['kingdom_level'] == 1
         assert lands[0]['kingdom_bonuses'] == {}
 
     def test_collect_gold_all_uses_raw_rate_without_persistent_skills(self, client, db,

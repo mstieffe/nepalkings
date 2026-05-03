@@ -463,8 +463,8 @@ AI_DEFENCE_FIGURE_CATALOG = {
 AI_DEFENCE_GENERATION_RULES = {
     # Tier 1: still beatable, but already "real" defence pressure.
     1: {
-        'core_roles': ['king', 'farm_large', 'military_basic', 'temple'],
-        'optional_count_range': (1, 2),
+        'core_roles': ['king', 'farm_small', 'military_basic'],
+        'optional_count_range': (0, 1),
         'optional_role_weights': [
             ('farm_small', 2),
             ('healer', 2),
@@ -472,11 +472,11 @@ AI_DEFENCE_GENERATION_RULES = {
             ('archer', 1),
             ('military_basic', 2),
         ],
-        'number_ranks': ['9', '10'],
+        'number_ranks': ['7', '8', '9'],
         'battle_plan': 'sentinel',
-        'core_cross_color_chance': 0.30,
+        'core_cross_color_chance': 0.38,
         'optional_suit_weights': {'primary': 6, 'same_color': 1, 'opposite_color': 3},
-        'black_land_fortress_free_chance': 0.35,
+        'black_land_fortress_free_chance': 0.45,
         # T1: utility-leaning, with a real chance of "no spell".
         'prelude_spell_weights': [
             (None, 6),
@@ -498,12 +498,12 @@ AI_DEFENCE_GENERATION_RULES = {
         ],
         'counter_spell_data': {},
         'auto_gamble': True,
-        'auto_gamble_threshold': 9,
+        'auto_gamble_threshold': 10,
     },
     # Tier 2: full call-based pressure with stronger support synergies.
     2: {
         'core_roles': ['king', 'farm_large', 'military_basic', 'healer', 'material'],
-        'optional_count_range': (2, 3),
+        'optional_count_range': (0, 3),
         'optional_role_weights': [
             ('temple', 2),
             ('archer', 2),
@@ -514,7 +514,7 @@ AI_DEFENCE_GENERATION_RULES = {
         ],
         'number_ranks': ['9', '10'],
         'battle_plan': 'apex',
-        'core_cross_color_chance': 0.30,
+        'core_cross_color_chance': 0.32,
         'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.25,
         # T2: full pool, lower "no spell" chance.

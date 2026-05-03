@@ -87,8 +87,35 @@ def render_badge(badge_key, text, font, *, target_h=None, shimmer_phase=0):
                           int(shimmer_phase) % _SHIMMER_PHASES, font)
 
 
+def render_badge_with_subtitle(badge_key, title, subtitle, font, *,
+                               subtitle_font=None, target_h=None,
+                               shimmer_phase=0):
+    """Return a cached badge surface with a title and smaller subtitle line."""
+    style = badge_style(badge_key)
+    if not style:
+        return _blank_surface()
+    if not subtitle:
+        return render_badge(
+            badge_key, title, font,
+            target_h=target_h, shimmer_phase=shimmer_phase,
+        )
+    if not badge_supports_shimmer(badge_key):
+        shimmer_phase = 0
+    if subtitle_font is None:
+        subtitle_font = font
+    title = str(title or '')
+    subtitle = str(subtitle or '')
+    if target_h is None:
+        target_h = int((font.get_height() + subtitle_font.get_height()) * 1.25)
+    return _cached_render_subtitle(
+        badge_key, title, subtitle, id(font), id(subtitle_font), int(target_h),
+        int(shimmer_phase) % _SHIMMER_PHASES, font, subtitle_font,
+    )
+
+
 def clear_badge_cache():
     _cached_render.cache_clear()
+    _cached_render_subtitle.cache_clear()
 
 
 # ── Cache layer ────────────────────────────────────────────────────
@@ -100,6 +127,36 @@ def _cached_render(badge_key, text, font_id, target_h, shimmer_phase, font):
     style = badge_style(badge_key)
     text_clr = style.get('text', (255, 238, 150))
     text_surf = font.render(text, True, text_clr)
+    th = max(target_h, text_surf.get_height() + 4)
+
+    shape = style.get('shape', 'pill')
+    renderer = _SHAPE_RENDERERS.get(shape, _render_pill)
+    return renderer(style, text_surf, th, shimmer_phase)
+
+
+@functools.lru_cache(maxsize=_BADGE_CACHE_MAX)
+def _cached_render_subtitle(badge_key, title, subtitle, font_id,
+                            subtitle_font_id, target_h, shimmer_phase,
+                            font, subtitle_font):
+    """LRU-cached two-line badge factory."""
+    style = badge_style(badge_key)
+    text_clr = style.get('text', (255, 238, 150))
+    subtitle_clr = tuple(
+        int(channel * 0.86 + 255 * 0.14)
+        for channel in text_clr[:3]
+    )
+    title_surf = font.render(title, True, text_clr)
+    subtitle_surf = subtitle_font.render(subtitle, True, subtitle_clr)
+    gap = max(1, int(subtitle_surf.get_height() * 0.10))
+    text_w = max(title_surf.get_width(), subtitle_surf.get_width())
+    text_h = title_surf.get_height() + gap + subtitle_surf.get_height()
+    text_surf = pygame.Surface((text_w, text_h), pygame.SRCALPHA)
+    text_surf.blit(title_surf, title_surf.get_rect(centerx=text_w // 2, top=0))
+    text_surf.blit(
+        subtitle_surf,
+        subtitle_surf.get_rect(centerx=text_w // 2,
+                               top=title_surf.get_height() + gap),
+    )
     th = max(target_h, text_surf.get_height() + 4)
 
     shape = style.get('shape', 'pill')

@@ -16,7 +16,7 @@ from typing import Tuple
 KINGDOM_LEVEL_MAX = 50
 KINGDOM_SKILL_POINTS_PER_LEVEL = 3
 KINGDOM_LEVEL_XP_BASE = 5         # XP needed to advance from level 1 → 2
-KINGDOM_LEVEL_XP_GROWTH = 1.5     # geometric growth factor per level
+KINGDOM_LEVEL_XP_GROWTH = 1.25    # geometric growth factor per level
 KINGDOM_TIER_XP = {1: 1, 2: 2, 3: 4, 4: 8}
 
 # ── Skills ─────────────────────────────────────────────────────────────────

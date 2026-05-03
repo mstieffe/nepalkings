@@ -131,17 +131,17 @@ DUEL_BOOSTER_REWARD_PROBABILITIES = {       # [DEPRECATED] superseded by DUEL_RE
 }
 
 # ── Maps ──
-STARTER_MAPS = 0                            # Free maps on registration
+STARTER_MAPS = 4                            # Free maps on registration
 
 # ── Duel rewards (pool-based) ──
 # Each duel awards N independent draws from a shared reward pool.
 DUEL_WINNER_REWARD_DRAWS = 3
 DUEL_LOSER_REWARD_DRAWS = 1
-DUEL_REWARD_GOLD_AMOUNT = 25                # Gold awarded per 'gold' draw
+DUEL_REWARD_GOLD_AMOUNT = 80                # Gold awarded per 'gold' draw
 DUEL_REWARD_POOL_PROBABILITIES = {          # Must sum to 1.0
-    'main_booster': 0.30,
-    'side_booster': 0.30,
-    'map':          0.15,
+    'main_booster': 0.25,
+    'side_booster': 0.25,
+    'map':          0.25,
     'gold':         0.25,
 }
 
@@ -233,7 +233,7 @@ LAND_SUIT_BONUS_RANGES = {                  # Suit combat bonus (min, max) per t
     3: (4, 6),
     4: (6, 10),
 }
-CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(10)))#str(6 * 3600)))
+CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(120)))#str(6 * 3600)))
 LAND_CONQUER_PROTECTION_SECONDS = int(
     os.getenv('LAND_CONQUER_PROTECTION_SECONDS', str(5 * 60))
 )

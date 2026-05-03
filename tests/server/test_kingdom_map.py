@@ -211,6 +211,7 @@ class TestKingdomMap:
 
         assert row['is_mine'] is False
         assert row['kingdom_name'] == 'Rival Realm'
+        assert row['kingdom_level'] == 1
         assert row['owner_style']['badge_key'] == 'badge_plain'
         assert row['owner_style']['border_key'] == 'border_simple_gold'
         assert row['owner_style']['surface_key'] == 'surface_plain'

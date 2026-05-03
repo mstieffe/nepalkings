@@ -853,6 +853,10 @@ def get_kingdom_map():
             persistent_kingdom.name or f'Kingdom #{persistent_kingdom.id}'
             if persistent_kingdom else None
         )
+        land_dict['kingdom_level'] = (
+            int(persistent_kingdom.level or 1)
+            if persistent_kingdom else int(land_dict.get('kingdom_level') or 0)
+        )
         land_dict['kingdom_bonuses'] = legacy_bonuses
         land_dict['kingdom_skill_effects'] = describe_kingdom_bonuses(legacy_bonuses)
         land_dict['kingdom_shield_until'] = (

@@ -815,17 +815,23 @@ class TestHexMapVisualSemantics:
         window = pygame.display.get_surface()
         hm = HexMap([
             _make_land(0, 0, land_id=1, owner=owner, is_mine=True,
-                       kingdom_id=101, kingdom_name='North Pass'),
+                       kingdom_id=101, kingdom_name='North Pass',
+                       kingdom_level=2),
             _make_land(1, 0, land_id=2, owner=owner, is_mine=True,
-                       kingdom_id=101, kingdom_name='North Pass'),
+                       kingdom_id=101, kingdom_name='North Pass',
+                       kingdom_level=2),
             _make_land(6, 0, land_id=3, owner=owner, is_mine=True,
-                       kingdom_id=202, kingdom_name='South Reach'),
+                       kingdom_id=202, kingdom_name='South Reach',
+                       kingdom_level=4),
             _make_land(7, 0, land_id=4, owner=owner, is_mine=True,
-                       kingdom_id=202, kingdom_name='South Reach'),
+                       kingdom_id=202, kingdom_name='South Reach',
+                       kingdom_level=4),
             _make_land(9, 2, land_id=5, owner=rival, is_mine=False,
-                       kingdom_id=303, kingdom_name='Iron Vale'),
+                       kingdom_id=303, kingdom_name='Iron Vale',
+                       kingdom_level=3),
             _make_land(10, 2, land_id=6, owner=rival, is_mine=False,
-                       kingdom_id=303, kingdom_name='Iron Vale'),
+                       kingdom_id=303, kingdom_name='Iron Vale',
+                       kingdom_level=3),
             _make_land(12, 2, land_id=7, owner=None, is_mine=False),
         ], window)
 
@@ -834,5 +840,11 @@ class TestHexMapVisualSemantics:
         assert len(badges) == 3
         names = {badge['name'] for badge in badges}
         assert names == {'North Pass', 'South Reach', 'Iron Vale'}
+        subtitles = {badge['name']: badge['subtitle'] for badge in badges}
+        assert subtitles == {
+            'North Pass': 'Lv 2',
+            'South Reach': 'Lv 4',
+            'Iron Vale': 'Lv 3',
+        }
         for badge in badges:
             assert badge['tile_count'] == 2

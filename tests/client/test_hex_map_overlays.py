@@ -9,6 +9,7 @@ def _make_land(col=0, row=0, land_id=1, tier=1, gold_rate=5.0,
                is_mine=False, defence_incomplete=False,
                kingdom_id=None, kingdom_name=None,
                kingdom_component_id=None, kingdom_component_size=0,
+               kingdom_level=0,
                kingdom_is_shielded=False, kingdom_shield_remaining=0):
     return {
         'id': land_id, 'col': col, 'row': row,
@@ -18,6 +19,7 @@ def _make_land(col=0, row=0, land_id=1, tier=1, gold_rate=5.0,
         'is_mine': is_mine,
         'defence_incomplete': defence_incomplete,
         'kingdom_id': kingdom_id, 'kingdom_name': kingdom_name,
+        'kingdom_level': kingdom_level,
         'kingdom_component_id': kingdom_component_id,
         'kingdom_component_size': kingdom_component_size,
         'kingdom_is_shielded': kingdom_is_shielded,
@@ -156,22 +158,22 @@ class TestKingdomBadge:
         owner = {'user_id': 7, 'username': 'rex'}
         lands = [
             _make_land(col=0, row=0, land_id=1, owner=owner, kingdom_id=4,
-                        kingdom_name='Realm'),
+                        kingdom_name='Realm', kingdom_level=2),
             _make_land(col=1, row=0, land_id=2, owner=owner, kingdom_id=4,
-                        kingdom_name='Realm'),
+                        kingdom_name='Realm', kingdom_level=2),
         ]
         from game.components import badge_cosmetics
         from config import settings
         # Zoomed out (below OWNER_NAME_MIN_ZOOM) → cluster badge drawn.
         hm = _new_map(lands, zoom=1.0)
         called = {'n': 0}
-        original = badge_cosmetics.render_badge
+        original = badge_cosmetics.render_badge_with_subtitle
 
         def spy(*a, **kw):
             called['n'] += 1
             return original(*a, **kw)
 
-        monkeypatch.setattr(badge_cosmetics, 'render_badge', spy)
+        monkeypatch.setattr(badge_cosmetics, 'render_badge_with_subtitle', spy)
         hm._draw_kingdom_badges(60)
         assert called['n'] >= 1
 
