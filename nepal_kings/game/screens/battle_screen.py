@@ -1294,12 +1294,23 @@ class BattleScreen(SubScreen):
 
         # Safety: retry loading figures if we're in battle but figures are
         # still missing (can happen when cached_figures_data wasn't ready yet
-        # on the initial load after a reconnect).
+        # on the initial load after a reconnect, or in conquer mode where the
+        # battle screen is first loaded during the prelude before figures are
+        # assigned — in_battle_phase gets cleared as stale while the battle
+        # hasn't started yet, so also trigger on server-confirmed battle).
+        _server_battle_active = (
+            getattr(game, 'battle_confirmed', False) and
+            getattr(game, 'battle_turn_player_id', None) is not None
+        )
         if (self.player_figure is None
                 and current_key[0]
-                and getattr(game, 'in_battle_phase', False)
+                and (getattr(game, 'in_battle_phase', False) or _server_battle_active)
                 and (game.advancing_figure_id or game.defending_figure_id)):
             self._load_battle_figures()
+            # Sync in_battle_phase when the server confirms the battle is active
+            # but the flag was cleared (e.g. cleared as stale during prelude).
+            if _server_battle_active and not getattr(game, 'in_battle_phase', False):
+                game.in_battle_phase = True
             # Also refresh the supporting figure lists / resources
             try:
                 families = self.figure_manager.families
@@ -2737,6 +2748,15 @@ class BattleScreen(SubScreen):
 
         # Switch subscreen
         self.state.subscreen = 'field'
+
+        # Conquer panel state lives on the parent ConquerGameScreen — when a
+        # conquer battle finishes, wipe it so the next conquest doesn't show
+        # stale spell icons / battle figures / events.
+        if parent and hasattr(parent, 'reset_conquer_panel_state'):
+            try:
+                parent.reset_conquer_panel_state()
+            except Exception:
+                pass
 
         # Check for game-over after returning to field
         if self.game and self.game.pending_game_over and not self.game.game_over_shown:

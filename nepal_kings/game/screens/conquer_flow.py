@@ -42,6 +42,72 @@ class ConquerEvent:
     tone: str = 'info'
     spell_names: Tuple[str, ...] = field(default_factory=tuple)
     order: int = 0
+    spell_side: str = ''  # 'own', 'opponent', or '' if not relevant
+    # 'spell_role' helps the panel separate the prelude icon from the counter
+    # icon when the same side cast both during a single conquer cycle.
+    spell_role: str = ''  # 'prelude', 'counter', '' if unknown
+
+
+def event_spells_by_side(events: Iterable[ConquerEvent]) -> dict:
+    """Group spell names by side, preserving first-seen order.
+
+    Returns a mapping ``{'own': [...], 'opponent': [...]}``.  Each side
+    further keeps role hints in a parallel list so callers can render
+    prelude/counter icons distinctly.
+    """
+    buckets = {'own': [], 'opponent': []}
+    seen = {'own': set(), 'opponent': set()}
+    roles = {'own': {}, 'opponent': {}}
+    for event in events:
+        side = event.spell_side
+        if side not in ('own', 'opponent'):
+            continue
+        for name in event.spell_names:
+            if not name:
+                continue
+            if name not in seen[side]:
+                seen[side].add(name)
+                buckets[side].append(name)
+                roles[side][name] = event.spell_role or ''
+            elif event.spell_role and not roles[side].get(name):
+                roles[side][name] = event.spell_role
+    return {'own': list(buckets['own']),
+            'opponent': list(buckets['opponent']),
+            'own_roles': dict(roles['own']),
+            'opponent_roles': dict(roles['opponent'])}
+
+
+def infer_spell_metadata(data: dict) -> Tuple[str, str]:
+    """Infer ``(spell_side, spell_role)`` from a notification payload.
+
+    Reads existing fields; falls back to event_key prefixes and titles so
+    callers don't have to retro-fit every notification site.
+    """
+    side = (data.get('spell_side') or '').lower()
+    role = (data.get('spell_role') or '').lower()
+
+    key = (data.get('event_key') or '').lower()
+    title = (data.get('title') or '').lower()
+
+    if not side:
+        if key.startswith('own_') or key.startswith('caster_') or key.startswith('prelude_target:'):
+            side = 'own'
+        elif key.startswith('opponent_') or key.startswith('defender_counter'):
+            side = 'opponent'
+        elif title.startswith('opponent ') or title.startswith("opponent's "):
+            side = 'opponent'
+        elif 'your prelude' in title or title.startswith('prelude') or title.startswith('your ') or title.startswith('select prelude'):
+            side = 'own'
+
+    if not role:
+        if 'counter' in key or 'counter' in title:
+            role = 'counter'
+        elif 'prelude' in key or 'prelude' in title:
+            role = 'prelude'
+        elif data.get('phase') == 'prelude':
+            role = 'prelude'
+
+    return side, role
 
 
 def _get(obj: Any, name: str, default: Any = None) -> Any:

@@ -1339,6 +1339,8 @@ class GameScreen(Screen):
                         'phase': 'prelude',
                         'tone': 'good',
                         'spell_names': [s['spell_name'] for s in own_spells],
+                        'spell_side': 'own',
+                        'spell_role': 'prelude',
                         'event_key': 'own_prelude:' + ','.join(
                             str(s.get('id') or s.get('spell_name')) for s in own_spells),
                     })
@@ -1370,6 +1372,8 @@ class GameScreen(Screen):
                         'phase': 'prelude',
                         'tone': 'warning',
                         'spell_names': [s['spell_name'] for s in opp_spells],
+                        'spell_side': 'opponent',
+                        'spell_role': 'prelude',
                         'event_key': 'opponent_prelude:' + ','.join(
                             str(s.get('id') or s.get('spell_name')) for s in opp_spells),
                     })
@@ -1388,6 +1392,8 @@ class GameScreen(Screen):
                         'phase': 'prelude',
                         'tone': 'warning',
                         'spell_names': [spell_name],
+                        'spell_side': 'own',
+                        'spell_role': 'prelude',
                         'event_key': f'own_no_target:{spell_name}',
                     })
 
@@ -1404,6 +1410,8 @@ class GameScreen(Screen):
                         'phase': 'prelude',
                         'tone': 'warning',
                         'spell_names': [spell_name],
+                        'spell_side': 'opponent',
+                        'spell_role': 'prelude',
                         'event_key': f'opponent_no_target:{spell_name}',
                     })
 
@@ -1431,6 +1439,8 @@ class GameScreen(Screen):
                         'phase': 'prelude',
                         'tone': 'action',
                         'spell_names': [spell_name],
+                        'spell_side': 'own',
+                        'spell_role': 'prelude',
                         'event_key': f'prelude_target:{pending_prelude_target.get("spell_id") or spell_name}',
                     })
 
@@ -2737,6 +2747,8 @@ class GameScreen(Screen):
                         'phase': 'defender',
                         'tone': 'warning',
                         'spell_names': [s.get('spell_name', '') for s in counter_spells],
+                        'spell_side': 'opponent',
+                        'spell_role': 'counter',
                         'event_key': 'defender_counter:' + ','.join(
                             str(s.get('id') or s.get('spell_name')) for s in counter_spells),
                     })

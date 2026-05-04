@@ -1276,16 +1276,38 @@ class FieldScreen(SubScreen):
                                     title="Civil War - Second Figure"
                                 )
                         else:
-                            # Calculate resources once for efficiency
-                            resources_data = self.game.calculate_resources(self.figure_manager.families)
-                            
-                            self.figure_detail_box = FigureDetailBox(
-                                self.window,
-                                clicked_icon.figure,
-                                self.game,
-                                all_figures=self.figures,  # Pass cached figures to avoid server call
-                                resources_data=resources_data  # Pass pre-calculated resources
-                            )
+                            conquer_parent = self._conquer_parent()
+
+                            # Forced advance in conquer mode: clicking an eligible
+                            # figure directly queues confirmation — no detail box.
+                            if (conquer_parent
+                                    and getattr(self.game, 'pending_forced_advance', False)
+                                    and not getattr(self.game, 'advancing_figure_id', None)
+                                    and getattr(self.game, 'forced_advance_dialogue_shown', False)
+                                    and self._icon_is_selectable_for_current_mode(clicked_icon)):
+                                figure = clicked_icon.figure
+                                self._pending_advance_figure = figure
+                                clicked_icon.show_advance_overlay = False
+                                conquer_parent.request_conquer_figure_confirmation(
+                                    'advance',
+                                    figure,
+                                    icon=clicked_icon,
+                                    message=f"Advance {figure.name} toward battle?",
+                                    title="Advance Figure",
+                                )
+                                clicked_icon.clicked = False
+                            else:
+                                # Calculate resources once for efficiency
+                                resources_data = self.game.calculate_resources(self.figure_manager.families)
+
+                                self.figure_detail_box = FigureDetailBox(
+                                    self.window,
+                                    clicked_icon.figure,
+                                    self.game,
+                                    all_figures=self.figures,
+                                    resources_data=resources_data,
+                                    conquer_view_only=bool(conquer_parent),
+                                )
                     # Close detail box if figure was deselected
                     elif not clicked_icon.clicked:
                         self.figure_detail_box = None
@@ -2604,6 +2626,13 @@ class FieldScreen(SubScreen):
                 icon, icon_x, icon_y = all_hovered
                 icon.draw(icon_x, icon_y)
 
+            # Conquer selection focus: dim non-selectable figures with a
+            # field-wide overlay, then re-blit each selectable icon on top
+            # plus a pulsing ring so the player sees exactly what to click.
+            self._draw_conquer_selection_focus(
+                all_regular + all_selected
+                + ([all_hovered] if all_hovered else []))
+
         # Draw opponent's hand cards if All Seeing Eye is active (use cached status)
         if self.cached_all_seeing_eye_status:
             self._draw_opponent_hand_cards()
@@ -2625,6 +2654,169 @@ class FieldScreen(SubScreen):
         # Draw own-defender selection prompt for Invader Swap
         if self.conquer_own_defender_mode and not conquer_parent:
             self._draw_conquer_own_defender_prompt()
+
+    def _icon_is_selectable_for_current_mode(self, icon):
+        """Return True when ``icon`` is a valid click target right now.
+
+        Rules per active conquer selection mode:
+          * Opponent-defender mode → trust ``icon.defender_selectable``
+            (already computed by ``_update_defender_selectable``).
+          * Own-defender mode → only own figures whose family field is village
+            when Peasant War / Civil War is active, otherwise all own figures
+            that don't have ``cannot_defend`` / ``cannot_be_targeted``.
+          * Forced advance → own figures that are not resting and don't have
+            ``cannot_attack``.
+          * Conquer prelude target → all figures matching the target_scope.
+        """
+        figure = getattr(icon, 'figure', None)
+        if figure is None:
+            return False
+
+        game = self.game
+        is_own = (game is not None and figure.player_id == game.player_id)
+        modifiers = (game.battle_modifier
+                     if game is not None and isinstance(game.battle_modifier, list)
+                     else [])
+        modifier_types = [m.get('type') for m in modifiers]
+        village_only = ('Peasant War' in modifier_types
+                        or 'Civil War' in modifier_types)
+
+        if self.defender_selection_mode:
+            return bool(getattr(icon, 'defender_selectable', True)) and not is_own
+
+        if self.conquer_own_defender_mode:
+            if not is_own:
+                return False
+            if village_only and getattr(figure.family, 'field', None) != 'village':
+                return False
+            if getattr(figure, 'cannot_defend', False):
+                return False
+            if getattr(figure, 'cannot_be_targeted', False):
+                return False
+            return True
+
+        if (game is not None
+                and getattr(game, 'pending_forced_advance', False)
+                and not getattr(game, 'advancing_figure_id', None)):
+            if not is_own:
+                return False
+            resting = (figure.id in (getattr(game, 'resting_figure_ids', None) or []))
+            if resting:
+                return False
+            if getattr(figure, 'cannot_attack', False):
+                return False
+            if village_only and getattr(figure.family, 'field', None) != 'village':
+                return False
+            return True
+
+        scope_target = getattr(self.state, 'pending_conquer_prelude_target', None)
+        if scope_target:
+            target_scope = (scope_target.get('target_scope')
+                            if isinstance(scope_target, dict) else None)
+            if getattr(figure, 'checkmate', False):
+                return False
+            if target_scope == 'own':
+                return is_own
+            if target_scope == 'opponent':
+                return not is_own
+            return True
+
+        return True
+
+    def _is_conquer_selection_active(self):
+        """True when the field is in an active, player-visible selection mode.
+
+        Each branch requires that the server/game has fully committed to the
+        selection step (dialogue shown / mode flag set) to prevent premature
+        dimming during a preceding phase.
+        """
+        if self.defender_selection_mode or self.conquer_own_defender_mode:
+            return True
+        if getattr(self.state, 'pending_conquer_prelude_target', None):
+            return True
+        game = self.game
+        if not game:
+            return False
+        # Forced advance: only dim once the player has been notified that
+        # they must pick their attacker (forced_advance_dialogue_shown guards
+        # against dimming in the preceding step before the prompt appears).
+        if (getattr(game, 'pending_forced_advance', False)
+                and not getattr(game, 'advancing_figure_id', None)
+                and getattr(game, 'forced_advance_dialogue_shown', False)):
+            return True
+        return False
+
+    def _conquer_pending_focus_figure(self):
+        """Return the figure currently pending confirmation, if any.
+
+        The pending figure should keep a strong yellow ring even though it has
+        already been clicked, so the player visually links the field figure
+        with the icon shown in the conquer top panel.
+        """
+        for attr in ('_pending_advance_figure',
+                     'figure_pending_defender_selection',
+                     'figure_pending_own_defender_selection'):
+            fig = getattr(self, attr, None)
+            if fig is not None:
+                return fig
+        return None
+
+    def _draw_conquer_selection_focus(self, drawn_icons):
+        """Dim the whole subscreen, keeping circular windows over selectable figures.
+
+        A single full-screen dark overlay is created with transparent circle
+        cutouts centred on each selectable figure, so the player sees only those
+        figures at full brightness. Pulsing rings are then drawn directly on the
+        window on top of everything.
+        """
+        if not self._is_conquer_selection_active():
+            return
+
+        import math
+        pending_focus = self._conquer_pending_focus_figure()
+        t = pygame.time.get_ticks() / 1000.0
+        pulse = 0.5 + 0.5 * math.sin(t * 3.2)
+
+        frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
+        circle_r = int(frame_h * 0.60)
+
+        # Partition icons into selectable / non-selectable.
+        selectable_entries = []
+        for icon, ix, iy in drawn_icons:
+            if not icon or not getattr(icon, 'figure', None):
+                continue
+            if self._icon_is_selectable_for_current_mode(icon):
+                selectable_entries.append((icon, int(ix), int(iy)))
+
+        # Build a full-screen dim surface and punch out transparent circles.
+        dim = pygame.Surface(
+            (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 155))
+        for _icon, cx, cy in selectable_entries:
+            # Draw a filled circle with alpha=0 to erase the dim at that spot.
+            # pygame.draw on SRCALPHA surfaces replaces pixel values directly,
+            # so drawing (0,0,0,0) punches a fully transparent hole.
+            pygame.draw.circle(dim, (0, 0, 0, 0), (cx, cy), circle_r + 8)
+        self.window.blit(dim, (0, 0))
+
+        # Pulsing yellow rings drawn on the window after the dim layer.
+        alpha = int(130 + 100 * pulse)
+        ring_color = (245, 205, 95, alpha)
+        for icon, cx, cy in selectable_entries:
+            ring_r = circle_r + 6
+            ring_surf = pygame.Surface((ring_r * 2 + 12, ring_r * 2 + 12),
+                                       pygame.SRCALPHA)
+            pygame.draw.circle(
+                ring_surf, ring_color,
+                (ring_r + 6, ring_r + 6), ring_r, 4)
+            self.window.blit(ring_surf, (cx - ring_r - 6, cy - ring_r - 6))
+
+            if (pending_focus is not None
+                    and getattr(icon.figure, 'id', None)
+                        == getattr(pending_focus, 'id', None)):
+                pygame.draw.circle(
+                    self.window, (255, 232, 130),
+                    (cx, cy), circle_r + 4, 5)
 
     def _update_defender_selectable(self):
         """Mark figure icons as selectable/non-selectable for defender selection mode."""

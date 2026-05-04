@@ -18,7 +18,12 @@ from config.screen_settings import _UI_SCALE
 from game.components.conquer_command_layer import ConquerCommandLayer
 from game.components.cards.hand import Hand
 from game.components.figures.figure_manager import FigureManager
-from game.screens.conquer_flow import ConquerEvent, ConquerObjective, derive_conquer_objective
+from game.screens.conquer_flow import (
+    ConquerEvent,
+    ConquerObjective,
+    derive_conquer_objective,
+    infer_spell_metadata,
+)
 from game.screens.battle_screen import BattleScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.field_screen import FieldScreen
@@ -31,8 +36,13 @@ class ConquerGameScreen(GameScreen):
     """Focused conquer battle shell with Field / Battle Shop / Battle tabs."""
 
     CONQUER_SUBSCREENS = ('field', 'battle_shop', 'battle')
-    HEADER_H_FACTOR = 0.13
-    BOTTOM_LOG_H_FACTOR = 0.125
+    # Unified top panel: replaces the old header + bottom-log split.  All
+    # status, spells, battle figures and the action prompt live in this single
+    # panel so the subscreen content can use the rest of the screen.
+    HEADER_H_FACTOR = 0.22
+    # Kept for backwards compatibility with code paths that still read it;
+    # there is no separate bottom log in the new design.
+    BOTTOM_LOG_H_FACTOR = 0.0
 
     def __init__(self, state, progress_callback=None):
         Screen.__init__(self, state)
@@ -49,6 +59,9 @@ class ConquerGameScreen(GameScreen):
         self._conquer_gate_queue = []
         self._withdraw_dialogue_open = False
         self._current_game_key = None
+        # Battle-cycle reset bookkeeping: clear conquer events whenever the
+        # advancing/defending figure pair changes (start of a new conquest).
+        self._last_battle_cycle_key = None
         self._game_poller = None
         self._poller_data_version = 0
         self.update_interval = 2000
@@ -170,9 +183,14 @@ class ConquerGameScreen(GameScreen):
         """
         self.game_buttons = []
 
+        # Tab buttons sit in the left margin, below the unified top panel.
+        # The stone glow extends ~stone_width/2 in each direction from (x, y),
+        # so x must be ≥ stone_radius to avoid clipping the left edge of the
+        # screen, and tab_y must clear the top panel so the first button does
+        # not overlap the panel's bottom border.
         header_h = int(settings.SCREEN_HEIGHT * self.HEADER_H_FACTOR)
-        tab_start_x = int(settings.SCREEN_WIDTH * 0.018)
-        tab_y = header_h + int(settings.SCREEN_HEIGHT * 0.018)
+        tab_start_x = int(settings.SCREEN_WIDTH * 0.040)
+        tab_y = header_h + int(settings.SCREEN_HEIGHT * 0.072)
         tab_gap = settings.FIELD_BUTTON_WIDTH + int(settings.SCREEN_HEIGHT * 0.014)
 
         self.field_button = GameButton(
@@ -274,14 +292,7 @@ class ConquerGameScreen(GameScreen):
     def _reset_game_screen_state(self):
         """Reset shared and conquer-only state when entering a different game."""
         super()._reset_game_screen_state()
-        self._last_conquer_auto_route_key = None
-        self._conquer_events = []
-        self._conquer_event_keys = set()
-        self._conquer_event_seq = 0
-        self._conquer_pending_confirmation = None
-        self._conquer_objective_action_rects = {}
-        self._conquer_pending_gate = None
-        self._conquer_gate_queue = []
+        self.reset_conquer_panel_state()
         self._withdraw_dialogue_open = False
         if self.state.game and getattr(self.state.game, 'state', None) != 'finished':
             self.state.game.game_over = False
@@ -396,7 +407,8 @@ class ConquerGameScreen(GameScreen):
 
     # ----------------------------------------------------------- command events
     def emit_conquer_event(self, key, title, detail='', phase='start',
-                           tone='info', spell_names=None):
+                           tone='info', spell_names=None,
+                           spell_side='', spell_role=''):
         """Append a de-duplicated event to the conquer command log."""
         if not key:
             key = f'event:{self._conquer_event_seq}:{title}:{detail}'
@@ -412,6 +424,8 @@ class ConquerGameScreen(GameScreen):
             tone=tone or 'info',
             spell_names=names,
             order=self._conquer_event_seq,
+            spell_side=spell_side or '',
+            spell_role=spell_role or '',
         )
         self._conquer_events.append(event)
         self._conquer_event_keys.add(event.key)
@@ -420,10 +434,71 @@ class ConquerGameScreen(GameScreen):
             self._conquer_event_keys.discard(dropped.key)
         return event
 
+    def reset_conquer_panel_state(self):
+        """Reset the conquer panel state to a clean slate.
+
+        Called when a new conquest begins, so the spell, battle figure and
+        info compartments don't carry over data from the previous fight.
+        """
+        self._conquer_events = []
+        self._conquer_event_keys = set()
+        self._conquer_event_seq = 0
+        self._conquer_pending_gate = None
+        self._conquer_gate_queue = []
+        self._conquer_pending_confirmation = None
+        self._conquer_objective_action_rects = {}
+        self._last_conquer_auto_route_key = None
+        self._last_battle_cycle_key = None
+
+    def _conquer_battle_cycle_key(self):
+        """Identity tuple for a given conquest cycle (changes between fights).
+
+        Used to detect that a new fight is starting and that the panel state
+        should be wiped to avoid the previous fight's spells/figures bleeding
+        into the new one.
+        """
+        game = self.state.game
+        if not game:
+            return None
+        return (
+            getattr(game, 'game_id', None),
+            getattr(game, 'advancing_player_id', None),
+            getattr(game, 'advancing_figure_id', None),
+            getattr(game, 'defending_figure_id', None),
+            getattr(game, 'current_round', None),
+        )
+
+    def _check_battle_cycle_reset(self):
+        """Detect a new conquer cycle and clear stale panel state.
+
+        A conquest is identified by ``_conquer_battle_cycle_key``. When the
+        previous cycle ended (key transitioned from a populated state back to
+        a "no battle" state) we reset so the next cycle's compartments fill
+        progressively from a clean slate.
+        """
+        new_key = self._conquer_battle_cycle_key()
+        prev_key = self._last_battle_cycle_key
+
+        # Detect end of a battle (previous cycle had advancing/defending
+        # figure ids and now both are cleared).
+        prev_had_figures = bool(prev_key and (prev_key[2] or prev_key[3]))
+        new_no_figures = bool(new_key and not (new_key[2] or new_key[3]))
+        if prev_had_figures and new_no_figures:
+            # Battle ended — clear panel state so the next conquest is fresh.
+            self.reset_conquer_panel_state()
+            self._last_battle_cycle_key = new_key
+            return
+
+        self._last_battle_cycle_key = new_key
+
     def _should_convert_conquer_notification(self, data):
         if not self.state.game or getattr(self.state.game, 'mode', 'duel') != 'conquer':
             return False
         if data.get('force_modal') or data.get('type') == 'game_over':
+            return False
+        # Welcome / battle-intro notifications are shown as dialogue boxes,
+        # mirroring the battle result modal at the end of a conquer fight.
+        if data.get('phase') == 'start':
             return False
         title = (data.get('title') or '').lower()
         if 'failed' in title or title == 'error':
@@ -440,6 +515,7 @@ class ConquerGameScreen(GameScreen):
         detail = ' '.join(str(detail).split())
         title = data.get('title') or 'Conquer event'
         key = data.get('event_key') or f'notification:{title}:{detail}'
+        spell_side, spell_role = infer_spell_metadata(data)
         return self.emit_conquer_event(
             key=key,
             title=title,
@@ -447,18 +523,18 @@ class ConquerGameScreen(GameScreen):
             phase=data.get('phase') or 'start',
             tone=data.get('tone') or 'info',
             spell_names=data.get('spell_names') or (),
+            spell_side=spell_side,
+            spell_role=spell_role,
         )
 
     def _should_gate_conquer_notification(self, data):
-        """Return True when a log event should pause progression for Next."""
-        if data.get('no_gate') or data.get('type') == 'game_over':
-            return False
-        phase = data.get('phase')
-        tone = data.get('tone')
-        if phase in ('start', 'prelude'):
-            return True
-        if phase in ('advance', 'defender', 'moves'):
-            return tone in ('action', 'warning', 'good')
+        """Always returns False — the gate mechanism is no longer used.
+
+        Welcome/intro notifications are now shown as dialogue boxes directly.
+        Selection-step notifications (action tone) activate field modes
+        immediately via ``_sync_conquer_action_modes`` without blocking the
+        player with a Next button.
+        """
         return False
 
     def _queue_conquer_gate(self, event, data):
@@ -692,22 +768,6 @@ class ConquerGameScreen(GameScreen):
         hint = objective.headline
         return title, hint
 
-    def _draw_conquer_shell(self):
-        header_h = int(settings.SCREEN_HEIGHT * self.HEADER_H_FACTOR)
-        panel = pygame.Surface((settings.SCREEN_WIDTH, header_h), pygame.SRCALPHA)
-        panel.fill((24, 22, 18, 230))
-        self.window.blit(panel, (0, 0))
-        pygame.draw.line(
-            self.window, (178, 143, 76),
-            (0, header_h - 1), (settings.SCREEN_WIDTH, header_h - 1), 2)
-
-        title, hint = self._conquer_status_text()
-        title_surf = self._conquer_header_font.render(title, True, (245, 222, 170))
-        hint_surf = self._conquer_hint_font.render(hint, True, (210, 190, 145))
-        self.window.blit(title_surf, (settings.get_x(0.035), settings.get_y(0.014)))
-        self.window.blit(hint_surf, (settings.get_x(0.035),
-                                     settings.get_y(0.014) + title_surf.get_height() + 2))
-
     def _draw_tab_state(self):
         counts = self._conquer_attention_counts()
         active_map = {
@@ -781,6 +841,7 @@ class ConquerGameScreen(GameScreen):
         if current_time - self.last_update_time >= self.update_interval:
             self.last_update_time = current_time
             self.update_game()
+            self._check_battle_cycle_reset()
             self._refresh_conquer_tab_locks()
             if not self._conquer_flow_gate_active():
                 self._sync_conquer_action_modes()

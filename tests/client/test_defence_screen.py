@@ -612,7 +612,9 @@ class TestDefenceScreenLayout:
         assert 'charges instantly into battle' not in fig.description.lower()
         assert 'charges instantly into battle' not in fig.family.description.lower()
 
-    def test_config_manufactories_keep_cannot_attack_flag(self):
+    def test_config_manufactories_do_not_set_cannot_attack(self):
+        """Manufactories produce shields/swords but DO attack — the
+        ``cannot_attack`` flag is intentionally NOT set on them."""
         from game.components.figures.family_configs.village_config import village_dict_list
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()
@@ -640,7 +642,7 @@ class TestDefenceScreenLayout:
                 'description': cfg['description'],
             }, {family_name: family})
 
-            assert fig.cannot_attack is True
+            assert fig.cannot_attack is False
 
     def test_right_panels_stack_without_overlap(self):
         from game.screens.defence_screen import DefenceScreen

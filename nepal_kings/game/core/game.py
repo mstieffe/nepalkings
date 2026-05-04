@@ -1185,20 +1185,28 @@ class Game:
                         if number_card.rank == family_figure.number_card.rank:
                             break
 
-                # Extract combat attributes from matched family figure
-                cannot_attack = matched_family_figure.cannot_attack if matched_family_figure and hasattr(matched_family_figure, 'cannot_attack') else False
-                must_be_attacked = matched_family_figure.must_be_attacked if matched_family_figure and hasattr(matched_family_figure, 'must_be_attacked') else False
-                rest_after_attack = matched_family_figure.rest_after_attack if matched_family_figure and hasattr(matched_family_figure, 'rest_after_attack') else False
-                distance_attack = matched_family_figure.distance_attack if matched_family_figure and hasattr(matched_family_figure, 'distance_attack') else False
-                buffs_allies = matched_family_figure.buffs_allies if matched_family_figure and hasattr(matched_family_figure, 'buffs_allies') else False
-                buffs_allies_defence = matched_family_figure.buffs_allies_defence if matched_family_figure and hasattr(matched_family_figure, 'buffs_allies_defence') else False
-                blocks_bonus = matched_family_figure.blocks_bonus if matched_family_figure and hasattr(matched_family_figure, 'blocks_bonus') else False
-                cannot_defend = matched_family_figure.cannot_defend if matched_family_figure and hasattr(matched_family_figure, 'cannot_defend') else False
-                instant_charge = matched_family_figure.instant_charge if matched_family_figure and hasattr(matched_family_figure, 'instant_charge') else False
-                cannot_be_blocked = matched_family_figure.cannot_be_blocked if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_blocked') else False
-                cannot_be_targeted = matched_family_figure.cannot_be_targeted if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_targeted') else False
-                checkmate = figure_data.get('checkmate', False) or (matched_family_figure.checkmate if matched_family_figure and hasattr(matched_family_figure, 'checkmate') else False)
-                override_base_power = matched_family_figure.override_base_power if matched_family_figure and hasattr(matched_family_figure, 'override_base_power') else None
+                # Extract combat attributes. Attributes persisted on the server Figure model
+                # (cannot_be_blocked, rest_after_attack) are read directly from figure_data so
+                # they remain correct even when the family-figure match is imprecise.
+                # All other attributes are derived from the matched family figure.
+                _mff = matched_family_figure
+                cannot_attack        = getattr(_mff, 'cannot_attack', False)        if _mff else False
+                must_be_attacked     = getattr(_mff, 'must_be_attacked', False)     if _mff else False
+                distance_attack      = getattr(_mff, 'distance_attack', False)      if _mff else False
+                buffs_allies         = getattr(_mff, 'buffs_allies', False)         if _mff else False
+                buffs_allies_defence = getattr(_mff, 'buffs_allies_defence', False) if _mff else False
+                blocks_bonus         = getattr(_mff, 'blocks_bonus', False)         if _mff else False
+                cannot_defend        = getattr(_mff, 'cannot_defend', False)        if _mff else False
+                instant_charge       = getattr(_mff, 'instant_charge', False)       if _mff else False
+                cannot_be_targeted   = getattr(_mff, 'cannot_be_targeted', False)   if _mff else False
+                override_base_power  = getattr(_mff, 'override_base_power', None)   if _mff else None
+                # Prefer server-stored values; fall back to family definition.
+                cannot_be_blocked = figure_data.get(
+                    'cannot_be_blocked', getattr(_mff, 'cannot_be_blocked', False) if _mff else False)
+                rest_after_attack = figure_data.get(
+                    'rest_after_attack', getattr(_mff, 'rest_after_attack', False) if _mff else False)
+                checkmate = figure_data.get('checkmate', False) or (
+                    getattr(_mff, 'checkmate', False) if _mff else False)
 
                 figure = Figure(
                     name=figure_data['name'],

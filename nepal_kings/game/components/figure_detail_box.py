@@ -13,7 +13,8 @@ class FigureDetailBox:
     including stats, cards, and action buttons.
     """
 
-    def __init__(self, window, figure, game, x=None, y=None, all_figures=None, resources_data=None):
+    def __init__(self, window, figure, game, x=None, y=None, all_figures=None,
+                 resources_data=None, conquer_view_only=False):
         """
         Initialize the figure detail box.
 
@@ -24,7 +25,9 @@ class FigureDetailBox:
         :param y: Optional y position (defaults to center of screen)
         :param all_figures: Optional list of all figures (to avoid server call)
         :param resources_data: Optional pre-calculated resources data (to avoid recalculation)
+        :param conquer_view_only: When True, suppress all action buttons (conquer mode)
         """
+        self.conquer_view_only = conquer_view_only
         self.window = window
         self.figure = figure
         self.game = game
@@ -126,6 +129,8 @@ class FigureDetailBox:
 
     def _create_action_buttons(self):
         """Create action buttons based on figure state and type."""
+        if self.conquer_view_only:
+            return []
         buttons = []
         button_y_start = self.rect.bottom - settings.MENU_BUTTON_HEIGHT - settings.SMALL_SPACER_Y
         button_x = self.rect.centerx - settings.MENU_BUTTON_WIDTH // 2

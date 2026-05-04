@@ -4,6 +4,7 @@
 with either a duel Game or a kingdom CollectionCard pool."""
 
 from config import settings
+from game.components.cards.card import Card
 from game.components.figures.figure import Figure
 
 import logging
@@ -100,11 +101,10 @@ class CollectionCardSource(CardSource):
         number_card = None
         upgrade_card = None
         if card_specs:
-            from game.components.cards.card import Card as _Card
             for spec, role in zip(card_specs, card_roles):
                 if not spec:
                     continue
-                card = _Card(rank=spec['rank'], suit=spec['suit'], value=spec['value'])
+                card = Card(rank=spec['rank'], suit=spec['suit'], value=spec['value'])
                 if role == 'key':
                     key_cards.append(card)
                 elif role == 'number':

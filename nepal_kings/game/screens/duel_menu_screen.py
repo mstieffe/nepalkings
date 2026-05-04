@@ -186,7 +186,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
                 username = self.state.user_dict.get('username') if self.state.user_dict else None
                 if username:
                     game_dicts = fetch_user_games(username)
-                    self.state._known_game_ids = {g['id'] for g in game_dicts}
+                    self.state._known_game_ids = {g['id'] for g in game_dicts if g.get('mode', 'duel') == 'duel'}
             except Exception:
                 pass
             self.state.screen = 'load_game'

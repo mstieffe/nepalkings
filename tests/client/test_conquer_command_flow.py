@@ -51,7 +51,12 @@ def test_spell_names_from_events_deduplicates_in_order():
     assert spell_names_from_events(events) == ('Explosion', 'Poison')
 
 
-def test_conquer_screen_converts_info_notification_to_event():
+def test_conquer_screen_converts_info_notification_to_event_without_gating():
+    """Prelude receipts populate the spell compartment without gating the flow.
+
+    Reduces log fragmentation: routine receipts (info / good tone) flow into
+    the panel without forcing the player to click Next.
+    """
     from game.screens.conquer_game_screen import ConquerGameScreen
 
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
@@ -59,6 +64,8 @@ def test_conquer_screen_converts_info_notification_to_event():
     screen._conquer_events = []
     screen._conquer_event_keys = set()
     screen._conquer_event_seq = 0
+    screen._conquer_pending_gate = None
+    screen._conquer_gate_queue = []
     screen.dialogue_box = None
     screen.pending_notifications = []
 
@@ -67,23 +74,71 @@ def test_conquer_screen_converts_info_notification_to_event():
         'message': 'Your spell resolved.',
         'actions': ['ok'],
         'phase': 'prelude',
+        'tone': 'good',
         'spell_names': ['Poison'],
+        'event_key': 'own_prelude:1',
     })
 
     assert screen.dialogue_box is None
     assert len(screen._conquer_events) == 1
-    assert screen._conquer_events[0].spell_names == ('Poison',)
-    assert screen._conquer_pending_gate is not None
-    assert screen.get_conquer_objective().primary_action == 'next_gate'
+    event = screen._conquer_events[0]
+    assert event.spell_names == ('Poison',)
+    assert event.spell_side == 'own'
+    assert event.spell_role == 'prelude'
+    # Gate is NOT armed for routine receipts under the new flow.
+    assert screen._conquer_pending_gate is None
 
 
-def test_conquer_next_gate_blocks_until_acknowledged():
+def test_conquer_action_notification_does_not_gate():
+    """Action-tone notifications route to the event log without blocking flow.
+
+    Selection modes are activated immediately by _sync_conquer_action_modes
+    from game state, so the player never has to click a 'Next' button for
+    figure-selection steps.
+    """
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(mode='conquer'))
+    screen._conquer_events = []
+    screen._conquer_event_keys = set()
+    screen._conquer_event_seq = 0
+    screen._conquer_pending_gate = None
+    screen._conquer_gate_queue = []
+    screen.dialogue_box = None
+    screen.pending_notifications = []
+    screen.subscreens = {'field': SimpleNamespace(
+        defender_selection_mode=False,
+        conquer_own_defender_mode=False,
+        _reset_defender_selectable=lambda: None,
+    )}
+
+    ConquerGameScreen.queue_or_show_notification(screen, {
+        'title': "Choose Defender",
+        'message': 'Pick a defender.',
+        'actions': ['got it!'],
+        'phase': 'defender',
+        'tone': 'action',
+    })
+
+    assert screen.dialogue_box is None
+    assert screen._conquer_pending_gate is None  # no gate armed
+    assert len(screen._conquer_events) == 1      # event still recorded in panel
+
+
+def test_conquer_selection_mode_activates_without_next_click():
+    """Defender selection mode activates immediately — no Next gate needed.
+
+    With the gate removed, _sync_conquer_action_modes can enable
+    defender_selection_mode as soon as the game state reflects the
+    pending selection, without waiting for a player acknowledgement.
+    """
     from game.screens.conquer_game_screen import ConquerGameScreen
 
     field = SimpleNamespace(
-        defender_selection_mode=True,
+        defender_selection_mode=False,
         conquer_own_defender_mode=False,
-        _reset_defender_selectable=lambda: setattr(field, 'reset_called', True),
+        _reset_defender_selectable=lambda: None,
         _update_defender_selectable=lambda: setattr(field, 'update_called', True),
     )
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
@@ -103,29 +158,11 @@ def test_conquer_next_gate_blocks_until_acknowledged():
     screen._conquer_event_seq = 0
     screen._conquer_pending_gate = None
     screen._conquer_gate_queue = []
-    screen.dialogue_box = None
-    screen.pending_notifications = []
-    screen.CONQUER_SUBSCREENS = ('field', 'battle_shop', 'battle')
-    screen._last_conquer_auto_route_key = None
 
-    ConquerGameScreen.queue_or_show_notification(screen, {
-        'title': "Select Opponent's Defender",
-        'message': 'Choose the figure that will defend.',
-        'actions': ['got it!'],
-        'phase': 'defender',
-        'tone': 'action',
-    })
-
-    assert screen._conquer_flow_gate_active() is True
-    assert field.defender_selection_mode is False
-
-    ConquerGameScreen._sync_conquer_action_modes(screen)
-    assert field.defender_selection_mode is False
-
-    ConquerGameScreen._handle_conquer_objective_action(screen, 'next_gate')
-
+    # No gate is active, so _sync_conquer_action_modes runs freely.
     assert screen._conquer_flow_gate_active() is False
-    assert screen.state.subscreen == 'field'
+    ConquerGameScreen._sync_conquer_action_modes(screen)
+
     assert field.defender_selection_mode is True
 
 
@@ -155,6 +192,7 @@ def test_conquer_reset_clears_stale_withdraw_result(monkeypatch):
     screen._conquer_pending_gate = {'key': 'old'}
     screen._conquer_gate_queue = [{'key': 'queued'}]
     screen._withdraw_dialogue_open = True
+    screen._last_battle_cycle_key = ('something',)
 
     ConquerGameScreen._reset_game_screen_state(screen)
 
@@ -166,6 +204,83 @@ def test_conquer_reset_clears_stale_withdraw_result(monkeypatch):
     assert screen._conquer_pending_gate is None
     assert screen._conquer_gate_queue == []
     assert screen._withdraw_dialogue_open is False
+    assert screen._last_battle_cycle_key is None
+
+
+def test_battle_cycle_reset_clears_panel_state_after_battle_resolves():
+    """Once the previous fight's figures clear, conquer events get wiped."""
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=11,
+        advancing_player_id=1,
+        advancing_figure_id=42,
+        defending_figure_id=7,
+        current_round=3,
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_events = [object()]
+    screen._conquer_event_keys = {'old'}
+    screen._conquer_event_seq = 5
+    screen._conquer_pending_confirmation = None
+    screen._conquer_objective_action_rects = {}
+    screen._conquer_pending_gate = None
+    screen._conquer_gate_queue = []
+    screen._last_conquer_auto_route_key = ('battle',)
+    screen._last_battle_cycle_key = None
+
+    # First update: registers the cycle key.
+    ConquerGameScreen._check_battle_cycle_reset(screen)
+    assert screen._conquer_events  # not yet reset
+
+    # Battle ends: figures cleared.
+    game.advancing_figure_id = None
+    game.defending_figure_id = None
+    ConquerGameScreen._check_battle_cycle_reset(screen)
+
+    assert screen._conquer_events == []
+    assert screen._last_conquer_auto_route_key is None
+
+
+def test_event_spells_by_side_groups_correctly():
+    from game.screens.conquer_flow import ConquerEvent, event_spells_by_side
+
+    events = [
+        ConquerEvent('a', 'prelude', 'A', spell_names=('Explosion',),
+                     spell_side='own', spell_role='prelude'),
+        ConquerEvent('b', 'defender', 'B', spell_names=('Mirror',),
+                     spell_side='opponent', spell_role='counter'),
+        ConquerEvent('c', 'prelude', 'C', spell_names=('Poison',),
+                     spell_side='opponent', spell_role='prelude'),
+    ]
+
+    grouped = event_spells_by_side(events)
+
+    assert grouped['own'] == ['Explosion']
+    # Opponent side preserves the order events arrived in.
+    assert grouped['opponent'] == ['Mirror', 'Poison']
+    assert grouped['own_roles'] == {'Explosion': 'prelude'}
+    assert grouped['opponent_roles'] == {'Mirror': 'counter', 'Poison': 'prelude'}
+
+
+def test_infer_spell_metadata_from_event_key_prefix():
+    from game.screens.conquer_flow import infer_spell_metadata
+
+    side, role = infer_spell_metadata({
+        'event_key': 'own_prelude:42',
+        'phase': 'prelude',
+    })
+    assert side == 'own'
+    assert role == 'prelude'
+
+    side, role = infer_spell_metadata({
+        'event_key': 'opponent_counter:9',
+        'title': 'Opponent Counter Spell',
+    })
+    assert side == 'opponent'
+    assert role == 'counter'
 
 
 def test_conquer_screen_keeps_result_notification_modal():
