@@ -93,7 +93,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Focused server/AI regression passed: 40 passed.
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
-- DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 134 passed.
+- DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 135 passed.
 - DONE: AI summary/planner/worker regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 80 passed.
 - DONE: AI worker tactics-hand routing regression passed: `tests/server/test_ai_worker.py` passed: 36 passed.
 - DONE: Tactics math/card-fate regression passed: `tests/server/test_conquer_tactics_math.py` passed: 6 passed.
@@ -142,8 +142,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - TODO: Confirm no stale battle-shop tab target appears during tactics-hand polling edge cases.
 
 - PARTIAL: Phase 11 tests started but are not comprehensive.
-  - TODO: Add server tests for tactic initialization from AI templates.
-  - TODO: Add server tests for legacy `battle_move` rollback with `CONQUER_TACTICS_HAND_ENABLED=False`.
+  - DONE: Added server tests for tactic initialization from AI templates.
+  - DONE: Added server tests for legacy `battle_move` rollback with `CONQUER_TACTICS_HAND_ENABLED=False`.
   - TODO: Add duel/battle-shop regression tests after legacy route gating changes.
   - TODO: Add client tests for tactics visibility and action dispatch against conquer endpoints.
   - TODO: Add render/screenshot smoke tests for populated tactics rail and round ledger.

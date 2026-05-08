@@ -321,8 +321,8 @@ class TestConquerStartBattle:
             assert len(atk_figs) >= 1
             assert len(def_figs) >= 1
 
-    def test_start_battle_creates_battle_moves(self, app, db):
-        """Battle moves from both configs are created."""
+    def test_start_battle_creates_conquer_tactics_from_ai_template(self, app, db):
+        """Tactics-hand games create ConquerTactic rows from configs/templates."""
         with app.app_context():
             user = _make_user(db)
             land = _make_land(db, tier=1)
@@ -343,6 +343,50 @@ class TestConquerStartBattle:
             moves = _conquer_move_entries(game)
             # 3 attacker + 3 defender (from AI template tier 1)
             assert len(moves) == 6
+            assert game.conquer_move_model == 'tactics_hand'
+            assert ConquerTactic.query.filter_by(game_id=game.id).count() == 6
+            assert BattleMove.query.filter_by(game_id=game.id).count() == 0
+
+            atk_player = Player.query.filter_by(
+                game_id=game.id,
+                user_id=user.id,
+            ).first()
+            defender_tactics = ConquerTactic.query.filter(
+                ConquerTactic.game_id == game.id,
+                ConquerTactic.player_id != atk_player.id,
+            ).order_by(ConquerTactic.sort_order).all()
+            assert len(defender_tactics) == 3
+            assert {tactic.source for tactic in defender_tactics} == {'template'}
+            assert {tactic.status for tactic in defender_tactics} == {'available'}
+            assert [tactic.sort_order for tactic in defender_tactics] == [0, 1, 2]
+            assert [tactic.family_name for tactic in defender_tactics] == [
+                'Dagger', 'Dagger', 'Dagger',
+            ]
+            assert all(db.session.get(MainCard, tactic.card_id).part_of_battle_move
+                       for tactic in defender_tactics)
+
+    def test_start_battle_legacy_flag_creates_battle_moves(self, app, db, monkeypatch):
+        """Rollback flag keeps new games on the legacy battle_move model."""
+        with app.app_context():
+            monkeypatch.setattr(config, 'CONQUER_TACTICS_HAND_ENABLED', False)
+            user = _make_user(db)
+            land = _make_land(db, tier=1)
+            _make_conquer_config(db, user, land)
+            template = _scripted_ai_template()
+
+            client = app.test_client()
+            headers = _auth_headers(app, user)
+
+            with patch('routes.kingdom.get_ai_defence_template_for_land', return_value=template), \
+                    patch('routes.games.get_ai_defence_template_for_land', return_value=template):
+                resp = client.post('/kingdom/conquer/start_battle',
+                                   json={'land_id': land.id}, headers=headers)
+            data = resp.get_json()
+            game = db.session.get(Game, data['game_id'])
+
+            assert game.conquer_move_model == 'battle_move'
+            assert BattleMove.query.filter_by(game_id=game.id).count() == 6
+            assert ConquerTactic.query.filter_by(game_id=game.id).count() == 0
 
     @pytest.mark.parametrize('spell_name, expected_attacker_moves, expected_defender_moves', [
         ('Forced Deal', 3, 3),
