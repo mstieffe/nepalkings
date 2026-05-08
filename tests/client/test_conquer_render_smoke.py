@@ -239,6 +239,48 @@ def test_round_ledger_hover_completed_round_draws_recap(monkeypatch):
     assert _rect_has_non_background_pixel(window, ledger._hover_popover_rect)
 
 
+def test_round_ledger_animates_newly_completed_round_reveal(monkeypatch):
+    from config import settings
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=2,
+        battle_turn_player_id=2,
+        last_battle_result=None,
+    )
+    moves = [
+        _move(11, family='Dagger', suit='Hearts', rank='A', value=5,
+              status='played', played_round=0),
+    ]
+    opp_played = [
+        _move(21, family='Shield', suit='Clubs', rank='9', value=3, played_round=0),
+        None,
+        None,
+    ]
+    parent = _ConquerUiParent(window, game, moves, opp_played=opp_played)
+    ledger = ConquerRoundLedger(parent)
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1000)
+
+    ledger.draw()
+
+    assert 0 in ledger._round_reveal_animations
+    layout = ledger._ensure_layout().round_ledger
+    assert _rect_has_non_background_pixel(window, layout.round_card_rects[0])
+
+    monkeypatch.setattr(
+        pygame.time,
+        'get_ticks',
+        lambda: 1001 + ConquerRoundLedger.REVEAL_REPLAY_MS,
+    )
+    ledger.draw()
+
+    assert 0 not in ledger._round_reveal_animations
+
+
 def test_conquer_duel_lane_draws_current_battle_fighters():
     from config import settings
     from game.components.conquer_layout import compute_conquer_layout

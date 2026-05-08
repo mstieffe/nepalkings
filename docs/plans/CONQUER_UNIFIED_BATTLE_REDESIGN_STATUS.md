@@ -94,6 +94,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Remaining field figures stay inspectable but are visually de-emphasized during battle rounds.
   - Called figures and likely support-source figures get colored rings so their field origins remain locatable.
 
+- DONE: Added first-pass round-card reveal replay animation.
+  - Newly completed ledger rounds now get a short gold sweep/pulse keyed to the revealed tactic pair.
+  - The animation expires without restarting every frame once the completed round identity is already known.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -165,6 +169,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Focused tactic flight regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_render_smoke.py` passed: 53 passed.
 - DONE: Broader tactic flight conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 168 passed.
 - DONE: Focused field context overlay regression passed: `tests/client/test_conquer_game_screen.py` passed: 49 passed.
+- DONE: Focused round reveal replay regression passed: `tests/client/test_conquer_render_smoke.py` passed: 7 passed.
+- DONE: Broader round reveal conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 171 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -210,7 +216,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: First-pass played tactic flight animation is implemented for successful tactics-hand Play actions.
   - TODO: Predictive support-badge pulsing/source highlighting is still missing beyond the first-pass field source rings.
   - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
-  - TODO: Round-card reveal replay animation is missing.
+  - DONE: First-pass round-card reveal replay animation is implemented for newly completed ledger cards.
 
 - PARTIAL: Phase 10 routing is mostly bypassed, but old naming still leaks into code.
   - TODO: Rename/cache aliases such as `_current_conquer_battle_moves` when the UI fully switches to tactics terminology.

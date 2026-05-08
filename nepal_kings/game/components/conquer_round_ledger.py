@@ -52,6 +52,8 @@ class ConquerRoundLedger:
         battle subscreen which holds opponent round plays).
     """
 
+    REVEAL_REPLAY_MS = 620
+
     def __init__(self, parent):
         self._parent = parent
         self.window: pygame.Surface = parent.window
@@ -61,6 +63,8 @@ class ConquerRoundLedger:
         self._total_circle_rect: Optional[pygame.Rect] = None
         self._hover_round_idx: Optional[int] = None
         self._hover_popover_rect: Optional[pygame.Rect] = None
+        self._revealed_round_keys: Dict[int, Tuple[Any, Any]] = {}
+        self._round_reveal_animations: Dict[int, Dict[str, int]] = {}
 
     # ------------------------------------------------------------------ data
     def _game(self):
@@ -116,6 +120,19 @@ class ConquerRoundLedger:
         return str(name)
 
     @staticmethod
+    def _move_identity(move: Optional[Dict[str, Any]]):
+        if move is None:
+            return None
+        return (
+            move.get('id'),
+            move.get('card_id'),
+            move.get('card_id_b'),
+            move.get('family_name'),
+            move.get('value'),
+            move.get('played_round'),
+        )
+
+    @staticmethod
     def _fit_text(text: str, font, max_width: int) -> str:
         text = text or ''
         if max_width <= 0:
@@ -169,6 +186,22 @@ class ConquerRoundLedger:
         if opp is not None:
             return total + self._round_diff(move, opp)
         return total + self._power(move)
+
+    def _update_round_reveal_animations(self, you_per, opp_per):
+        now = pygame.time.get_ticks()
+        for idx, (you, opp) in enumerate(zip(you_per, opp_per)):
+            if you is None or opp is None:
+                self._revealed_round_keys.pop(idx, None)
+                self._round_reveal_animations.pop(idx, None)
+                continue
+            key = (self._move_identity(you), self._move_identity(opp))
+            if self._revealed_round_keys.get(idx) == key:
+                continue
+            self._revealed_round_keys[idx] = key
+            self._round_reveal_animations[idx] = {
+                'started_at': now,
+                'duration': self.REVEAL_REPLAY_MS,
+            }
 
     def _round_card_hover_index(self, mouse_pos, ledger, you_per, opp_per):
         for idx, rect_tuple in enumerate(ledger.round_card_rects):
@@ -227,12 +260,14 @@ class ConquerRoundLedger:
         you_per = self._player_played_per_round()
         opp_per = self._opp_played_per_round()
         ghost_preview = self._ghost_preview(you_per)
+        self._update_round_reveal_animations(you_per, opp_per)
         cur_round = int(getattr(self._game(), 'battle_round', 0) or 0)
 
         for i, rect_tuple in enumerate(ledger.round_card_rects):
             ghost_move = ghost_preview[1] if ghost_preview and ghost_preview[0] == i else None
             self._draw_round_card(pygame.Rect(*rect_tuple), i, you_per[i],
-                                  opp_per[i], cur_round, ghost_move=ghost_move)
+                                  opp_per[i], cur_round, ghost_move=ghost_move,
+                                  reveal_animation=self._round_reveal_animations.get(i))
         self._draw_total_card(pygame.Rect(*ledger.total_card_rect),
                               pygame.Rect(*ledger.total_circle_rect),
                               you_per, opp_per, ghost_preview=ghost_preview)
@@ -240,7 +275,8 @@ class ConquerRoundLedger:
 
     # -- round card
     def _draw_round_card(self, rect: pygame.Rect, idx: int,
-                         you, opp, cur_round: int, ghost_move=None):
+                         you, opp, cur_round: int, ghost_move=None,
+                         reveal_animation=None):
         is_active = (cur_round - 1) == idx if cur_round in (1, 2, 3) else False
         bg = pygame.Surface(rect.size, pygame.SRCALPHA)
         bg.fill(_CARD_BG_RGBA)
@@ -269,6 +305,35 @@ class ConquerRoundLedger:
         self._draw_diff_pill(diff_rect, you, opp,
                              played=(you is not None and opp is not None),
                              ghost_move=ghost_move)
+        self._draw_round_reveal_animation(rect, idx, reveal_animation)
+
+    def _draw_round_reveal_animation(self, rect: pygame.Rect, idx: int,
+                                     animation):
+        if not animation:
+            return
+        now = pygame.time.get_ticks()
+        started_at = int(animation.get('started_at') or now)
+        duration = max(1, int(animation.get('duration') or self.REVEAL_REPLAY_MS))
+        elapsed = now - started_at
+        if elapsed > duration:
+            self._round_reveal_animations.pop(idx, None)
+            return
+        progress = max(0.0, min(1.0, elapsed / duration))
+        eased = 1 - (1 - progress) * (1 - progress)
+        alpha = max(0, int(160 * (1.0 - progress)))
+        if alpha <= 0:
+            return
+
+        flash = pygame.Surface(rect.size, pygame.SRCALPHA)
+        flash.fill((238, 204, 116, max(18, alpha // 5)))
+        self.window.blit(flash, rect.topleft)
+
+        sweep_w = max(10, rect.width // 7)
+        sweep_x = int(rect.left - sweep_w + (rect.width + sweep_w * 2) * eased)
+        sweep = pygame.Surface((sweep_w, rect.height), pygame.SRCALPHA)
+        sweep.fill((250, 226, 150, alpha))
+        self.window.blit(sweep, (sweep_x, rect.top))
+        pygame.draw.rect(self.window, (238, 204, 116, alpha), rect, 3, border_radius=6)
 
     def _draw_player_chip(self, rect: pygame.Rect, move, is_player_self: bool,
                           *, ghost: bool = False):
