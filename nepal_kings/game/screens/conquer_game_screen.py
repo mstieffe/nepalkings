@@ -52,6 +52,7 @@ class ConquerGameScreen(GameScreen):
     HEADER_H_FACTOR = 0.22
     CONQUER_BATTLE_MOVE_PANEL_MAX_MOVES = 10
     TIMELINE_OVERLAY_MS = 3500
+    TACTIC_FLIGHT_MS = 320
     # When in moves phase and the user navigates away from the battle shop,
     # snap them back after this many ms.
     BATTLE_SHOP_SNAPBACK_MS = 2000
@@ -182,6 +183,7 @@ class ConquerGameScreen(GameScreen):
         # ``battle_move`` games they remain inert.
         self._tactics_rail = ConquerTacticsRail(self)
         self._round_ledger = ConquerRoundLedger(self)
+        self._tactic_flight_animation = None
 
         if getattr(self.state, 'subscreen', None) not in self.subscreens:
             self.state.subscreen = 'field'
@@ -567,6 +569,85 @@ class ConquerGameScreen(GameScreen):
                     return True
         return False
 
+    def _active_round_player_slot_rect(self):
+        game = self.state.game
+        round_idx = int(getattr(game, 'battle_round', 0) or 0) - 1 if game else -1
+        if round_idx not in (0, 1, 2):
+            return None
+        layout = compute_conquer_layout(
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            mode=self._conquer_layout_mode(),
+        )
+        card = pygame.Rect(*layout.round_ledger.round_card_rects[round_idx])
+        title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
+        chip_w = int(card.width * 0.34)
+        chip_y = card.top + 4 + title_font.get_height() + 4
+        chip_h = card.bottom - chip_y - 6
+        return pygame.Rect(card.left + 4, chip_y, chip_w - 8, chip_h)
+
+    def _start_tactic_flight_animation(self, move):
+        if not (self._is_tactics_hand_game() and move):
+            return
+        target_rect = self._active_round_player_slot_rect()
+        if target_rect is None:
+            return
+        move_id = move.get('id')
+        source_rect = None
+        rail = getattr(self, '_tactics_rail', None)
+        cell_rect = getattr(rail, 'move_cell_rect', None)
+        if callable(cell_rect) and move_id is not None:
+            source_rect = cell_rect(int(move_id))
+        if source_rect is None and rail is not None and hasattr(rail, 'rect'):
+            try:
+                source_rect = rail.rect()
+            except Exception:
+                source_rect = None
+        if source_rect is None:
+            source_rect = target_rect
+        self._tactic_flight_animation = {
+            'move': dict(move),
+            'source': pygame.Rect(source_rect),
+            'target': pygame.Rect(target_rect),
+            'started_at': pygame.time.get_ticks(),
+            'duration': self.TACTIC_FLIGHT_MS,
+        }
+
+    def _draw_tactic_flight_animation(self):
+        animation = getattr(self, '_tactic_flight_animation', None)
+        if not animation:
+            return
+        now = pygame.time.get_ticks()
+        duration = max(1, int(animation.get('duration') or self.TACTIC_FLIGHT_MS))
+        elapsed = now - int(animation.get('started_at') or now)
+        if elapsed > duration:
+            self._tactic_flight_animation = None
+            return
+
+        progress = max(0.0, min(1.0, elapsed / duration))
+        eased = 1 - (1 - progress) * (1 - progress)
+        source = pygame.Rect(animation['source'])
+        target = pygame.Rect(animation['target'])
+        cx = int(source.centerx + (target.centerx - source.centerx) * eased)
+        cy = int(source.centery + (target.centery - source.centery) * eased)
+
+        move = animation.get('move') or {}
+        name = move.get('family_name') or 'Tactic'
+        if name == 'Dagger' and (move.get('card_id_b') or move.get('secondary_card_id')):
+            name = '2x Dagger'
+        power = 0 if name == 'Block' else int(move.get('value') or 0)
+        font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        label = self._fit_text(f'{name} {power}', font, max(72, target.width))
+        label_surf = font.render(label, True, (218, 246, 244))
+        pill = label_surf.get_rect()
+        pill.inflate_ip(18, 10)
+        pill.center = (cx, cy)
+        panel = pygame.Surface(pill.size, pygame.SRCALPHA)
+        panel.fill((38, 70, 72, 218))
+        self.window.blit(panel, pill.topleft)
+        pygame.draw.rect(self.window, (120, 205, 220), pill, 2, border_radius=pill.height // 2)
+        self.window.blit(label_surf, label_surf.get_rect(center=pill.center))
+
     def _dispatch_tactics_rail_action(self, action_payload):
         """Apply a tactics-rail action by calling the appropriate API."""
         if not action_payload:
@@ -583,7 +664,9 @@ class ConquerGameScreen(GameScreen):
         mid = move.get('id')
         try:
             if self._is_tactics_hand_game() and action == ACTION_PLAY and mid is not None:
-                game_service.play_conquer_tactic(gid, pid, mid)
+                result = game_service.play_conquer_tactic(gid, pid, mid)
+                if not isinstance(result, dict) or result.get('success', True):
+                    self._start_tactic_flight_animation(move)
             elif action == ACTION_PLAY and mid is not None:
                 game_service.play_battle_move(gid, pid, mid)
             elif action == ACTION_SKIP:
@@ -615,6 +698,7 @@ class ConquerGameScreen(GameScreen):
         """Reset shared and conquer-only state when entering a different game."""
         super()._reset_game_screen_state()
         self.reset_conquer_panel_state()
+        self._tactic_flight_animation = None
         self._withdraw_dialogue_open = False
         if self.state.game and getattr(self.state.game, 'state', None) != 'finished':
             self.state.game.game_over = False
@@ -1873,6 +1957,7 @@ class ConquerGameScreen(GameScreen):
         if self._is_tactics_hand_game():
             self._tactics_rail.draw()
             self._round_ledger.draw()
+            self._draw_tactic_flight_animation()
         else:
             self._draw_conquer_battle_moves_panel()
 

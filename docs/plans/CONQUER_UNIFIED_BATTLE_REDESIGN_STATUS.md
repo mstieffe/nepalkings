@@ -85,6 +85,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Hovering a completed round card now opens a compact recap above the card.
   - The recap shows each side's tactic power and the color/glyph-safe round diff.
 
+- DONE: Added first-pass played tactic flight animation.
+  - Successful tactics-hand Play actions start a fixed-duration, non-blocking overlay animation.
+  - The animation travels from the selected rail cell toward the active round card slot and then expires.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -153,6 +157,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader predictive conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 165 passed.
 - DONE: Focused round recap ledger regression passed: `tests/client/test_conquer_render_smoke.py` passed: 5 passed.
 - DONE: Broader round recap conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 166 passed.
+- DONE: Focused tactic flight regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_render_smoke.py` passed: 53 passed.
+- DONE: Broader tactic flight conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 168 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -194,7 +200,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: First-pass duel lane fighter-only rendering is implemented for tactics-hand battle rounds.
   - DONE: Round tactic badge strips, leader lines, and power receipt rows are implemented in the duel lane.
   - DONE: First-pass ghost predictive math is implemented for rail-hovered tactics in the active ledger round and total circle.
-  - TODO: Played tactic flight animation is missing.
+  - DONE: First-pass played tactic flight animation is implemented for successful tactics-hand Play actions.
   - TODO: Predictive support-badge pulsing/source highlighting is still missing.
   - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
   - TODO: Round-card reveal replay animation is missing.

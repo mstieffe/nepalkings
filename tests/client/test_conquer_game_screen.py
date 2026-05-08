@@ -789,6 +789,45 @@ class TestTacticsHandRouting:
 
         assert called == [(1, 42, 7)]
 
+    def test_tactics_hand_play_starts_flight_animation(self, monkeypatch):
+        from game.components.conquer_tactics_rail import ACTION_PLAY
+
+        ConquerGameScreen, screen = self._make_screen(
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+        source_rect = pygame.Rect(20, 30, 80, 40)
+        screen._tactics_rail = SimpleNamespace(
+            reset_after_action=lambda: None,
+            move_cell_rect=lambda _move_id: source_rect,
+        )
+        called = []
+
+        def fake_play(game_id, player_id, tactic_id):
+            called.append((game_id, player_id, tactic_id))
+            return {'success': True}
+
+        monkeypatch.setattr(
+            'utils.game_service.play_conquer_tactic',
+            fake_play,
+        )
+        monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1234)
+
+        ConquerGameScreen._dispatch_tactics_rail_action(
+            screen,
+            {
+                'action': ACTION_PLAY,
+                'move': {'id': 7, 'family_name': 'Sword', 'value': 9},
+            },
+        )
+
+        assert called == [(1, 42, 7)]
+        animation = screen._tactic_flight_animation
+        assert animation['move']['id'] == 7
+        assert animation['source'] == source_rect
+        assert animation['target'].width > 0
+        assert animation['started_at'] == 1234
+
     def test_tactics_hand_dismantle_uses_conquer_tactic_endpoint(self, monkeypatch):
         from game.components.conquer_tactics_rail import ACTION_DISMANTLE
 

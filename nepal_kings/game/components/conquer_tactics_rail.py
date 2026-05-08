@@ -200,6 +200,12 @@ class ConquerTacticsRail:
                 return move
         return None
 
+    def move_cell_rect(self, move_id: int) -> Optional[pygame.Rect]:
+        for rect, mid in zip(self._cell_rects, self._cell_move_ids):
+            if mid == move_id:
+                return pygame.Rect(rect)
+        return None
+
     def reset_after_action(self):
         """Clear ephemeral state after a server action completed."""
         self.reset_selection()

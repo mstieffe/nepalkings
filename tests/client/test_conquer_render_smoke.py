@@ -100,6 +100,7 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
     assert _rect_has_non_background_pixel(window, rail.rect())
     assert len(rail._cell_rects) == layout.cells_visible
     assert rail._scroll_down_rect is not None
+    assert rail.move_cell_rect(1) == rail._cell_rects[0]
     rail._hovered_id = 1
     assert rail.preview_move()['id'] == 1
     game.battle_turn_player_id = 2
@@ -291,3 +292,31 @@ def test_conquer_duel_lane_draws_current_battle_fighters():
     assert _rect_has_non_background_pixel(window, lane.you_support_badge_rail)
     assert _rect_has_non_background_pixel(window, lane.opp_support_badge_rail)
     assert _rect_has_non_background_pixel(window, lane.diff_band)
+
+
+def test_tactic_flight_overlay_draws_nonblank_pill(monkeypatch):
+    from config import settings
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = window
+    screen._tactic_flight_animation = {
+        'move': {'id': 7, 'family_name': 'Sword', 'value': 9},
+        'source': pygame.Rect(40, 80, 120, 50),
+        'target': pygame.Rect(800, 880, 160, 70),
+        'started_at': 1000,
+        'duration': ConquerGameScreen.TACTIC_FLIGHT_MS,
+    }
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1120)
+
+    ConquerGameScreen._draw_tactic_flight_animation(screen)
+
+    assert screen._tactic_flight_animation is not None
+    assert _rect_has_non_background_pixel(window, pygame.Rect(520, 560, 140, 90))
+
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1400)
+    ConquerGameScreen._draw_tactic_flight_animation(screen)
+
+    assert screen._tactic_flight_animation is None
