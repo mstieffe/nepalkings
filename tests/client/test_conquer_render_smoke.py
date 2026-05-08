@@ -100,6 +100,10 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
     assert _rect_has_non_background_pixel(window, rail.rect())
     assert len(rail._cell_rects) == layout.cells_visible
     assert rail._scroll_down_rect is not None
+    rail._hovered_id = 1
+    assert rail.preview_move()['id'] == 1
+    game.battle_turn_player_id = 2
+    assert rail.preview_move() is None
 
     font = settings.get_font(settings.FS_SMALL, bold=True)
     fitted = ConquerTacticsRail._fit_text(
@@ -155,6 +159,48 @@ def test_round_ledger_draws_filled_rounds_and_result_click_target():
         button=1,
         pos=ledger._total_circle_rect.center,
     )) == 'open_result'
+
+
+def test_round_ledger_draws_hover_preview_ghost_math():
+    from config import settings
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=2,
+        battle_turn_player_id=1,
+        last_battle_result=None,
+    )
+    preview = _move(14, family='Sword', suit='Hearts', rank='Q', value=9)
+    moves = [
+        _move(11, family='Dagger', suit='Hearts', rank='A', value=5,
+              status='played', played_round=0),
+        preview,
+    ]
+    opp_played = [
+        _move(21, family='Shield', suit='Clubs', rank='9', value=3, played_round=0),
+        _move(22, family='Lance', suit='Diamonds', rank='8', value=4, played_round=1),
+        None,
+    ]
+    parent = _ConquerUiParent(window, game, moves, opp_played=opp_played)
+    parent._tactics_rail = SimpleNamespace(preview_move=lambda: preview)
+    ledger = ConquerRoundLedger(parent)
+
+    you_per = ledger._player_played_per_round()
+    opp_per = ledger._opp_played_per_round()
+    ghost = ledger._ghost_preview(you_per)
+
+    assert ghost == (1, preview)
+    assert ledger._ghost_total_diff(you_per, opp_per, ghost) == 7
+
+    ledger.draw()
+
+    layout = ledger._ensure_layout().round_ledger
+    assert _rect_has_non_background_pixel(window, layout.round_card_rects[1])
+    assert _rect_has_non_background_pixel(window, layout.total_circle_rect)
 
 
 def test_conquer_duel_lane_draws_current_battle_fighters():

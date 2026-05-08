@@ -75,6 +75,7 @@ class ConquerTacticsRail:
         # Rect caches updated on draw().
         self._cell_rects: List[pygame.Rect] = []
         self._cell_move_ids: List[int] = []
+        self._hovered_id: Optional[int] = None
         self._action_button_rects: Dict[str, pygame.Rect] = {}
         self._scroll_up_rect: Optional[pygame.Rect] = None
         self._scroll_down_rect: Optional[pygame.Rect] = None
@@ -186,9 +187,18 @@ class ConquerTacticsRail:
 
     def reset_selection(self):
         self._selected_id = None
+        self._hovered_id = None
         self._combine_partner_id = None
         self._combine_pending = False
         self._pending_action = None
+
+    def preview_move(self) -> Optional[Dict[str, Any]]:
+        if not self._is_my_battle_turn() or self._hovered_id is None:
+            return None
+        for move in self._hand_moves():
+            if move.get('id') == self._hovered_id:
+                return move
+        return None
 
     def reset_after_action(self):
         """Clear ephemeral state after a server action completed."""
@@ -330,6 +340,7 @@ class ConquerTacticsRail:
         self._clamp_scroll()
         self._cell_rects = []
         self._cell_move_ids = []
+        self._hovered_id = None
         if not moves:
             empty_font = settings.get_font(max(11, int(settings.FS_SMALL * 0.9)))
             t = empty_font.render('— hand empty —', True, _TEXT_MUTED)
@@ -356,21 +367,26 @@ class ConquerTacticsRail:
 
         font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
         chip_font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        mouse_pos = pygame.mouse.get_pos()
         for i, move in enumerate(visible):
             cy = rect.top + i * cell_h
             cell_rect = pygame.Rect(rect.left, cy, rect.width, cell_h - 2)
-            self._draw_hand_cell(cell_rect, move, font, chip_font)
+            hovered = cell_rect.collidepoint(mouse_pos)
+            if hovered:
+                self._hovered_id = int(move.get('id') or 0)
+            self._draw_hand_cell(cell_rect, move, font, chip_font, hovered=hovered)
             self._cell_rects.append(cell_rect)
             self._cell_move_ids.append(int(move.get('id') or 0))
 
-    def _draw_hand_cell(self, rect: pygame.Rect, move: Dict[str, Any], font, chip_font):
+    def _draw_hand_cell(self, rect: pygame.Rect, move: Dict[str, Any], font, chip_font,
+                        *, hovered: bool = False):
         is_selected = move.get('id') == self._selected_id
         is_partner = move.get('id') == self._combine_partner_id and self._combine_pending
-        bg_col = (52, 40, 30, 240) if is_selected else (32, 24, 18, 200)
+        bg_col = (52, 40, 30, 240) if is_selected else (38, 32, 25, 224) if hovered else (32, 24, 18, 200)
         bg = pygame.Surface(rect.size, pygame.SRCALPHA)
         bg.fill(bg_col)
         self.window.blit(bg, rect.topleft)
-        border_col = _SELECTED_RGBA if is_selected else (_BORDER_RGBA if not is_partner else (130, 200, 250))
+        border_col = _SELECTED_RGBA if is_selected else (190, 178, 120) if hovered else (_BORDER_RGBA if not is_partner else (130, 200, 250))
         pygame.draw.rect(self.window, border_col, rect, 2, border_radius=4)
 
         # Icon (left)
