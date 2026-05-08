@@ -144,11 +144,18 @@ def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
         if game_dict.get('battle_decisions'):
             lines.append(f"Battle decisions: {game_dict['battle_decisions']}")
     
-    # Battle moves if in battle
+    # Battle tactics/moves if in battle
     if game_dict.get('battle_confirmed'):
-        ai_moves = [m for m in game_dict.get('battle_moves', []) if m.get('player_id') == ai_player_id]
-        if ai_moves:
-            lines.append(f"\nYour battle moves: {_summarize_battle_moves(ai_moves)}")
+        if _is_tactics_hand_conquer(game_dict):
+            ai_tactics = [t for t in game_dict.get('conquer_tactics', [])
+                          if t.get('player_id') == ai_player_id]
+            if ai_tactics:
+                lines.append(f"\nYour conquer tactics: {_summarize_battle_moves(ai_tactics)}")
+        else:
+            ai_moves = [m for m in game_dict.get('battle_moves', [])
+                        if m.get('player_id') == ai_player_id]
+            if ai_moves:
+                lines.append(f"\nYour battle moves: {_summarize_battle_moves(ai_moves)}")
     
     # Active spells
     if game_dict.get('battle_modifier'):
@@ -158,6 +165,13 @@ def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
             lines.append(f"\nActive battle modifiers: {', '.join(mod_names)}")
     
     return '\n'.join(lines)
+
+
+def _is_tactics_hand_conquer(game_dict: dict) -> bool:
+    return bool(
+        game_dict.get('mode') == 'conquer'
+        and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'
+    )
 
 
 def _find_figure(game_dict: dict, figure_id: int) -> dict | None:
@@ -287,7 +301,7 @@ def _summarize_battle_moves(moves: list) -> str:
         return "(none)"
     parts = []
     for m in moves:
-        name = m.get('name', '?')
+        name = m.get('name') or m.get('family_name') or '?'
         value = m.get('value', '?')
         played_round = m.get('played_round')
         status = f" (played R{played_round})" if played_round is not None else ""

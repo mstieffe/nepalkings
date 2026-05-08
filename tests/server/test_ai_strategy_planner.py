@@ -101,6 +101,61 @@ def test_generate_strategy_plans_emits_turn_steps_for_remaining_horizon():
     assert len(plans[0]['turn_steps']) == 3
 
 
+def test_generate_strategy_plans_uses_conquer_tactics_for_tactics_hand():
+    game = _planner_game_dict()
+    game['mode'] = 'conquer'
+    game['conquer_move_model'] = 'tactics_hand'
+    game['conquer_tactics'] = [
+        {
+            'id': 41,
+            'player_id': 1,
+            'family_name': 'Dagger',
+            'rank': '7',
+            'suit': 'Hearts',
+            'value': 7,
+            'source': 'config',
+            'status': 'available',
+            'sort_order': 2,
+        },
+        {
+            'id': 42,
+            'player_id': 1,
+            'family_name': 'Dagger',
+            'rank': '10',
+            'suit': 'Spades',
+            'value': 10,
+            'source': 'spell',
+            'status': 'available',
+            'sort_order': 1,
+        },
+        {
+            'id': 43,
+            'player_id': 1,
+            'family_name': 'Block',
+            'rank': 'Q',
+            'suit': 'Clubs',
+            'value': 2,
+            'source': 'config',
+            'status': 'played',
+            'sort_order': 3,
+        },
+    ]
+    actions = [
+        {'id': 2, 'type': 'advance_figure', 'description': 'advance king', 'params': {'figure_id': 101}},
+    ]
+
+    plans = generate_strategy_plans(game, ai_player_id=1, phase='normal_turn', actions=actions, max_plans=1)
+
+    assert len(plans) == 1
+    assert [t['id'] for t in plans[0]['planned_conquer_tactics']] == [42, 41]
+    assert plans[0]['planned_battle_moves'] == plans[0]['planned_conquer_tactics']
+    assert plans[0]['expected_tactic_power'] == 17.0
+
+    prompt_text = format_strategy_plans_for_prompt(plans)
+    assert 'planned_conquer_tactics:' in prompt_text
+    assert 'planned_moves:' not in prompt_text
+
+
 def test_format_strategy_plans_for_prompt_includes_plan_and_turn_markers():
     plans = [
         {

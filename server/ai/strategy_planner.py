@@ -40,9 +40,11 @@ class StrategyPlan:
     planned_battle_figure: dict[str, Any] | None
     likely_opponent_figure: dict[str, Any] | None
     planned_battle_moves: list[dict[str, Any]]
+    planned_conquer_tactics: list[dict[str, Any]]
     feasibility_probability: float
     expected_power_diff: float
     expected_battle_move_power: float
+    expected_tactic_power: float
     total_score: float
     score_breakdown: dict[str, float]
     notes: list[str]
@@ -58,9 +60,11 @@ class StrategyPlan:
             'planned_battle_figure': self.planned_battle_figure,
             'likely_opponent_figure': self.likely_opponent_figure,
             'planned_battle_moves': list(self.planned_battle_moves),
+            'planned_conquer_tactics': list(self.planned_conquer_tactics),
             'feasibility_probability': round(self.feasibility_probability, 4),
             'expected_power_diff': round(self.expected_power_diff, 3),
             'expected_battle_move_power': round(self.expected_battle_move_power, 3),
+            'expected_tactic_power': round(self.expected_tactic_power, 3),
             'total_score': round(self.total_score, 4),
             'score_breakdown': {
                 k: round(v, 4)
@@ -119,6 +123,38 @@ def _planned_battle_moves(player: dict[str, Any], count: int = 3) -> list[dict[s
                 'rank': c.get('rank'),
                 'suit': c.get('suit'),
                 'value': int(c.get('value') or 0),
+            }
+        )
+    return out
+
+
+def _is_tactics_hand_conquer(game_dict: dict[str, Any]) -> bool:
+    return bool(
+        game_dict.get('mode') == 'conquer'
+        and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'
+    )
+
+
+def _planned_conquer_tactics(
+    game_dict: dict[str, Any],
+    ai_player_id: int,
+    count: int = 3,
+) -> list[dict[str, Any]]:
+    tactics = [
+        t for t in game_dict.get('conquer_tactics', [])
+        if t.get('player_id') == ai_player_id and t.get('status') == 'available'
+    ]
+    tactics.sort(key=lambda t: (int(t.get('sort_order') or 0), int(t.get('id') or 0)))
+    out = []
+    for tactic in tactics[: max(1, int(count))]:
+        out.append(
+            {
+                'id': tactic.get('id'),
+                'family_name': tactic.get('family_name'),
+                'rank': tactic.get('rank'),
+                'suit': tactic.get('suit'),
+                'value': int(tactic.get('value') or 0),
+                'source': tactic.get('source'),
             }
         )
     return out
@@ -476,6 +512,12 @@ def _build_turn_steps(
                 steps.append('exploit modifier window with restricted-opponent lines')
             else:
                 steps.append(f"convert modifier advantage into battle against {opp_name}")
+        elif action.get('type') in ('play_conquer_tactic', 'gamble_conquer_tactic', 'combine_conquer_tactics'):
+            if turn_idx == 2:
+                tactic_text = ', '.join(str(m.get('rank')) for m in battle_moves[:3])
+                steps.append(f"target final 3-tactic line using tactics {tactic_text}")
+            else:
+                steps.append('sequence conquer tactics for highest differential')
         elif action.get('type') in ('buy_battle_move', 'gamble_battle_move', 'combine_battle_moves'):
             if turn_idx == 2:
                 bm_text = ', '.join(str(m.get('rank')) for m in battle_moves[:3])
@@ -540,7 +582,12 @@ def generate_strategy_plans(
     opponent_snapshot = build_opponent_belief_snapshot(game_dict, ai_player_id)
     likely_opp = (opponent_snapshot.get('likely_battle_figures') or [None])[0]
 
-    battle_moves = _planned_battle_moves(ai_player, count=3)
+    if _is_tactics_hand_conquer(game_dict):
+        conquer_tactics = _planned_conquer_tactics(game_dict, ai_player_id, count=3)
+        battle_moves = list(conquer_tactics)
+    else:
+        conquer_tactics = []
+        battle_moves = _planned_battle_moves(ai_player, count=3)
     expected_bm_power = float(sum(int(m.get('value') or 0) for m in battle_moves))
 
     plans: list[StrategyPlan] = []
@@ -595,9 +642,11 @@ def generate_strategy_plans(
                 planned_battle_figure=target,
                 likely_opponent_figure=likely_opp,
                 planned_battle_moves=battle_moves,
+                planned_conquer_tactics=conquer_tactics,
                 feasibility_probability=max(0.0, min(1.0, feasibility)),
                 expected_power_diff=expected_power_diff,
                 expected_battle_move_power=expected_bm_power,
+                expected_tactic_power=expected_bm_power if conquer_tactics else 0.0,
                 total_score=total_score,
                 score_breakdown=score_breakdown,
                 notes=notes,
@@ -660,13 +709,21 @@ def format_strategy_plans_for_prompt(plans: list[dict[str, Any]]) -> str:
                 f"(power~{opp.get('power_estimate')}, p={opp.get('probability')})"
             )
 
-        moves = p.get('planned_battle_moves') or []
-        if moves:
-            move_str = ', '.join(
-                f"{m.get('rank')}{str(m.get('suit') or '')[:1]}({m.get('value')})"
-                for m in moves
+        tactics = p.get('planned_conquer_tactics') or []
+        if tactics:
+            tactic_str = ', '.join(
+                f"{m.get('family_name') or 'Tactic'} {m.get('rank')}{str(m.get('suit') or '')[:1]}({m.get('value')})"
+                for m in tactics
             )
-            lines.append(f"  planned_moves: {move_str}")
+            lines.append(f"  planned_conquer_tactics: {tactic_str}")
+        else:
+            moves = p.get('planned_battle_moves') or []
+            if moves:
+                move_str = ', '.join(
+                    f"{m.get('rank')}{str(m.get('suit') or '')[:1]}({m.get('value')})"
+                    for m in moves
+                )
+                lines.append(f"  planned_moves: {move_str}")
 
         for turn_idx, step in enumerate(p.get('turn_steps') or [], start=1):
             lines.append(f"  turn_{turn_idx}: {step}")

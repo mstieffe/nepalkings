@@ -53,6 +53,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Auto-gamble, auto-combine, play, and skip fallback route through conquer tactic endpoints when appropriate.
   - `server/ai/action_enum.py` can enumerate `play_conquer_tactic` / `gamble_conquer_tactic` for tactics-hand battle rounds.
 
+- DONE: Updated AI game-state and strategy-planner summaries for tactics-hand games.
+  - `server/ai/game_state.py` now labels live rows as `conquer_tactics` for tactics-hand conquer games instead of showing stale `battle_moves` wording.
+  - `server/ai/strategy_planner.py` now emits `planned_conquer_tactics` and scores tactics-hand plans from available `ConquerTactic` rows while preserving compatibility `planned_battle_moves` data.
+  - Planner prompt formatting now prefers `planned_conquer_tactics` when present.
+
 - DONE: Added focused server tests in `tests/server/test_conquer_tactics_hand.py`.
   - Initialization creates `ConquerTactic` rows and no `BattleMove` rows for tactics-hand conquer games.
   - Opponent unplayed tactics are hidden in `/games/get_battle_state`.
@@ -89,6 +94,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
 - DONE: Focused server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 127 passed.
+- DONE: AI summary/planner regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 77 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -112,8 +118,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Added spell mutation tests proving stale tactics are purged/replenished without deleting persistent collection cards.
   - TODO: Add more spell coverage for combined tactics, defender fallback edge cases, and non-greed spell interactions if Phase 7 needs exhaustive coverage.
 
-- PARTIAL: Phase 8 AI reads and plays tactics, but state summaries still use old names in places.
-  - TODO: Update `server/ai/game_state.py` and `server/ai/strategy_planner.py` to summarize `conquer_tactics` explicitly.
+- PARTIAL: Phase 8 AI reads, summarizes, and plays tactics; remaining work is deeper scenario coverage.
+  - DONE: `server/ai/game_state.py` and `server/ai/strategy_planner.py` summarize `conquer_tactics` explicitly for tactics-hand games.
   - TODO: Add AI tests for tactics-hand attacker/defender play, Invader Swap, auto-gamble, and auto-combine.
   - TODO: Check generic LLM action paths for `combine_conquer_tactics` enumeration if needed beyond deterministic conquer flow.
 
@@ -146,6 +152,6 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 ## Suggested Next Session Start
 
 1. Expand Phase 6 card-fate and battle-math tests before polishing UI visuals.
-2. Update AI state summaries/planner naming to use `conquer_tactics` explicitly.
-3. Add production migration/table setup for `conquer_tactic`.
-4. Continue Phase 9 UI polish once server behavior is covered.
+2. Add production migration/table setup for `conquer_tactic`.
+3. Continue Phase 9 UI polish once server behavior is covered.
+4. Add deeper AI scenario tests for Invader Swap, auto-gamble, and auto-combine.
