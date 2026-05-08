@@ -680,3 +680,164 @@ class TestSpellPurgesBattleMoves:
             db.session.refresh(reserved)
             assert reserved.in_deck is True
             assert reserved.part_of_battle_move is False
+
+
+class TestSpellMutatesConquerTactics:
+    """Tactics-hand conquer games must keep ConquerTactic rows in sync when
+    spells move or recycle their backing runtime cards."""
+
+    @staticmethod
+    def _card_rank(card):
+        return str(card.rank.value if hasattr(card.rank, 'value') else card.rank)
+
+    def _eligible_cards(self, cards):
+        return [card for card in cards if self._card_rank(card) in {
+            '7', '8', '9', '10', 'J', 'Q', 'K', 'A'}]
+
+    def _make_tactic_for_card(self, db, game, player, card, family_name='Dagger'):
+        from models import ConquerTactic
+
+        tactic = ConquerTactic(
+            game_id=game.id,
+            player_id=player.id,
+            family_name=family_name,
+            card_id=card.id,
+            card_type='main',
+            suit=str(card.suit.value if hasattr(card.suit, 'value') else card.suit),
+            rank=self._card_rank(card),
+            value=card.value,
+            source='config',
+            status='available',
+        )
+        db.session.add(tactic)
+        card.part_of_battle_move = True
+        db.session.commit()
+        return tactic
+
+    def _mark_tactics_hand_conquer(self, db, game):
+        game.mode = 'conquer'
+        game.conquer_move_model = 'tactics_hand'
+        db.session.commit()
+
+    def test_forced_deal_purges_and_replenishes_conquer_tactics(
+        self, app, db, spell_game, monkeypatch
+    ):
+        from models import ActiveSpell, ConquerTactic, MainCard
+        from routes.spells import _execute_spell
+        import random as _random
+
+        with app.app_context():
+            game, p1, p2, _, _ = spell_game
+            self._mark_tactics_hand_conquer(db, game)
+
+            caster_cards = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all())
+            reserved = caster_cards[0]
+            other_caster = caster_cards[1]
+            self._make_tactic_for_card(db, game, p1, reserved)
+
+            opponent_cards = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p2.id, in_deck=False, part_of_figure=False
+            ).all())
+            opponent_pick = opponent_cards[:2]
+
+            def _fake_sample(seq, _count):
+                if any(card.player_id == p1.id for card in seq):
+                    return [reserved, other_caster]
+                return opponent_pick
+
+            monkeypatch.setattr(_random, 'sample', _fake_sample)
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Forced Deal',
+                spell_type='greed',
+                spell_family_name='Forced Deal',
+                suit='Hearts',
+                cast_round=1,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            effect = _execute_spell(spell, game, p1)
+            db.session.commit()
+
+            assert ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=p1.id,
+                card_id=reserved.id,
+                source='config',
+            ).count() == 0
+            db.session.refresh(reserved)
+            assert reserved.player_id == p2.id
+            assert reserved.part_of_battle_move is True
+
+            received_reserved = ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=p2.id,
+                card_id=reserved.id,
+                source='spell',
+            ).first()
+            assert received_reserved is not None
+
+            received_ids = {card.id for card in opponent_pick}
+            new_tactics = ConquerTactic.query.filter(
+                ConquerTactic.game_id == game.id,
+                ConquerTactic.player_id == p1.id,
+                ConquerTactic.card_id.in_(received_ids),
+            ).all()
+            assert len(new_tactics) == len(received_ids)
+            assert {t.source for t in new_tactics} == {'spell'}
+            assert effect['conquer_tactics_added']['added'] == len(received_ids)
+
+    def test_dump_cards_purges_and_replenishes_conquer_tactics(
+        self, app, db, spell_game
+    ):
+        from models import ActiveSpell, ConquerTactic, MainCard
+        from routes.spells import _execute_spell
+
+        with app.app_context():
+            game, p1, p2, _, _ = spell_game
+            self._mark_tactics_hand_conquer(db, game)
+
+            caster_cards = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all())
+            reserved = caster_cards[0]
+            self._make_tactic_for_card(db, game, p1, reserved)
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Dump Cards',
+                spell_type='greed',
+                spell_family_name='Dump Cards',
+                suit='Hearts',
+                cast_round=1,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            effect = _execute_spell(spell, game, p1)
+            db.session.commit()
+
+            assert ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=p1.id,
+                card_id=reserved.id,
+                source='config',
+            ).count() == 0
+            db.session.refresh(reserved)
+            assert reserved.in_deck is True
+            assert reserved.part_of_battle_move is False
+
+            caster_spell_tactics = ConquerTactic.query.filter_by(
+                game_id=game.id, player_id=p1.id, source='spell').all()
+            opponent_spell_tactics = ConquerTactic.query.filter_by(
+                game_id=game.id, player_id=p2.id, source='spell').all()
+            assert caster_spell_tactics
+            assert opponent_spell_tactics
+            assert effect['conquer_tactics_added']['added'] == len(caster_spell_tactics)
+            assert effect['opponent_conquer_tactics_added']['added'] == len(opponent_spell_tactics)

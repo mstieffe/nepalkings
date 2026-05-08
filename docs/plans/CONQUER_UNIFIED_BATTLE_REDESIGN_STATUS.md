@@ -63,12 +63,31 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Tactics-hand skip rejects while tactics are available and advances when no tactics remain.
   - Call-figure validation rejects wrong-field targets and accepts legal targets.
 
+- DONE: Added tactics-hand spell mutation service in `server/game_service/conquer_tactics_service.py`.
+  - Purges `ConquerTactic` rows that reference cards moved or recycled by spells.
+  - Restores surviving source tactics when a combined tactic is dismantled by card mutation.
+  - Auto-converts eligible newly received runtime cards into spell-sourced tactics up to the tactics cap.
+  - Replenishes automated defenders back to the standard tactics count after spell mutation.
+
+- DONE: Updated spell and counter-spell mutation flows for tactics-hand conquer games.
+  - `Forced Deal` and `Dump Cards` branch between legacy `BattleMove` purge/replenish and new `ConquerTactic` purge/replenish by `Game.conquer_move_model`.
+  - `Forced Deal` purges stale move/tactic state before card ownership changes.
+  - Battle-start prelude replenishment now uses `ConquerTactic` rows for tactics-hand games.
+  - Counter-spell defender replenishment now uses `ConquerTactic` rows for tactics-hand games while preserving compatibility response keys.
+
+- DONE: Updated broader land-battle tests to read the active conquer move model.
+  - Tactics-hand conquer games assert against `ConquerTactic` rows.
+  - Legacy rollback games still assert against `BattleMove` rows.
+  - Figure creation coverage now uses a deterministic no-prelude AI template so it is not affected by generated spell preludes.
+
 ## Verified In This Pass
 
 - DONE: Diagnostics reported no errors for edited Python/client files.
 - DONE: `python -m pytest tests/server/test_conquer_tactics_hand.py` passed: 8 passed.
 - DONE: Focused server/AI regression passed: 40 passed.
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
+- DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
+- DONE: Focused server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 125 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -86,10 +105,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - TODO: Verify unplayed tactic runtime cards are cleaned without deleting persistent `CollectionCard` rows.
   - TODO: Verify `_resolve_conquer_battle` remains the single idempotent conquer resolver.
 
-- PARTIAL: Phase 7 spell mutation is not migrated yet.
-  - TODO: Add a `conquer_tactics_service` or equivalent helper.
-  - TODO: Replace tactics-hand spell purge/replenish logic for Forced Deal and Dump Cards.
-  - TODO: Add spell mutation tests proving no dangling tactics and no unexpected collection-card deletion.
+- DONE: Phase 7 spell mutation has a first tactics-hand implementation.
+  - DONE: Added `conquer_tactics_service` helper.
+  - DONE: Replaced tactics-hand spell purge/replenish logic for Forced Deal and Dump Cards.
+  - DONE: Added spell mutation tests proving stale tactics are purged/replenished without deleting persistent collection cards.
+  - TODO: Add more spell coverage for combined tactics, defender fallback edge cases, and non-greed spell interactions if Phase 7 needs exhaustive coverage.
 
 - PARTIAL: Phase 8 AI reads and plays tactics, but state summaries still use old names in places.
   - TODO: Update `server/ai/game_state.py` and `server/ai/strategy_planner.py` to summarize `conquer_tactics` explicitly.
@@ -118,14 +138,14 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 ## Known Risks
 
 - RISK: `Game.serialize()` currently includes full `conquer_tactics`, matching the old `battle_moves` serialization style. Player-safe hiding is implemented in `/games/get_battle_state`; any client path that consumes raw `game.conquer_tactics` should avoid displaying opponent unplayed details.
-- RISK: Spell mutation still operates on BattleMove purge/replenish helpers. Tactics-hand games need dedicated spell mutation before Phase 7 is considered done.
+- RISK: Spell mutation now has tactics-hand coverage for Forced Deal and Dump Cards, but more edge-case spell coverage is still useful before production rollout.
 - RISK: Finish-battle cleanup has been made tactic-aware, but conquer card-fate behavior must be covered with tests before this is production-safe.
 - RISK: Existing UI/AI names still say battle move in several places. That is compatibility glue for now, not the final terminology.
 
 ## Suggested Next Session Start
 
-1. Run `python -m pytest tests/server/test_conquer_tactics_hand.py`.
-2. Add explicit family/rank consistency validation tests for tactic play.
-3. Run `python -m pytest tests/server/test_battle_shop.py tests/server/test_game_flow_end_to_end.py` to catch legacy route regressions from the new gating.
-4. Implement Phase 7 `conquer_tactics_service` for Forced Deal / Dump Cards.
-5. Expand Phase 6 card-fate tests before polishing UI visuals.
+1. Add explicit family/rank consistency validation tests for tactic play.
+2. Expand Phase 6 card-fate and battle-math tests before polishing UI visuals.
+3. Update AI state summaries/planner naming to use `conquer_tactics` explicitly.
+4. Add production migration/table setup for `conquer_tactic`.
+5. Continue Phase 9 UI polish once server behavior is covered.

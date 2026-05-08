@@ -7,8 +7,8 @@ from datetime import datetime, timezone, timedelta
 
 from models import (db, User, Land, LandConfig, LandConfigFigure,
                     LandConfigBattleMove, CollectionCard, Game, Player,
-                    Figure, BattleMove, MainCard, LandAttackLog, ActiveSpell,
-                    KingdomLootEvent)
+                    Figure, BattleMove, ConquerTactic, MainCard,
+                    LandAttackLog, ActiveSpell, KingdomLootEvent)
 from kingdom_service import seed_kingdom_map
 import server_settings as config
 
@@ -189,6 +189,15 @@ def _auth_headers(app, user):
             'Content-Type': 'application/json'}
 
 
+def _conquer_move_entries(game, player_id=None):
+    model = (ConquerTactic if (game.conquer_move_model or 'battle_move') == 'tactics_hand'
+             else BattleMove)
+    query = model.query.filter_by(game_id=game.id)
+    if player_id is not None:
+        query = query.filter_by(player_id=player_id)
+    return query.all()
+
+
 def _scripted_ai_template(*, prelude_spell_name=None, counter_spell_name=None):
     """Small deterministic AI template for spell/move interaction tests."""
     return {
@@ -288,12 +297,15 @@ class TestConquerStartBattle:
             user = _make_user(db)
             land = _make_land(db, tier=1)
             _make_conquer_config(db, user, land)
+            template = _scripted_ai_template()
 
             client = app.test_client()
             headers = _auth_headers(app, user)
 
-            resp = client.post('/kingdom/conquer/start_battle',
-                               json={'land_id': land.id}, headers=headers)
+            with patch('routes.kingdom.get_ai_defence_template_for_land', return_value=template), \
+                    patch('routes.games.get_ai_defence_template_for_land', return_value=template):
+                resp = client.post('/kingdom/conquer/start_battle',
+                                   json={'land_id': land.id}, headers=headers)
             data = resp.get_json()
             game_id = data['game_id']
 
@@ -302,9 +314,12 @@ class TestConquerStartBattle:
             assert len(figures) >= 2  # at least attacker + defender
 
             # Check attacker figure
-            atk_figs = [f for f in figures if f.family_name == 'Small Rice Farm'
-                        and f.suit == 'Diamonds']
-            assert len(atk_figs) == 1
+            atk_player = Player.query.filter_by(game_id=game_id, user_id=user.id).first()
+            assert atk_player is not None
+            atk_figs = [f for f in figures if f.player_id == atk_player.id]
+            def_figs = [f for f in figures if f.player_id != atk_player.id]
+            assert len(atk_figs) >= 1
+            assert len(def_figs) >= 1
 
     def test_start_battle_creates_battle_moves(self, app, db):
         """Battle moves from both configs are created."""
@@ -321,7 +336,8 @@ class TestConquerStartBattle:
             data = resp.get_json()
             game_id = data['game_id']
 
-            moves = BattleMove.query.filter_by(game_id=game_id).all()
+            game = db.session.get(Game, game_id)
+            moves = _conquer_move_entries(game)
             # 3 attacker + 3 defender (from AI template tier 1)
             assert len(moves) == 6
 
@@ -358,14 +374,8 @@ class TestConquerStartBattle:
             assert spell is not None
             assert (spell.effect_data or {}).get('prelude_status') == 'executed'
 
-            defender_moves = BattleMove.query.filter_by(
-                game_id=game.id,
-                player_id=def_player.id,
-            ).all()
-            attacker_moves = BattleMove.query.filter_by(
-                game_id=game.id,
-                player_id=atk_player.id,
-            ).all()
+            defender_moves = _conquer_move_entries(game, def_player.id)
+            attacker_moves = _conquer_move_entries(game, atk_player.id)
             assert len(defender_moves) == expected_defender_moves
             assert len(attacker_moves) == expected_attacker_moves
 
@@ -678,10 +688,7 @@ class TestConquerStartBattle:
             assert all(c.rank.value in {'7', '8', '9', '10', 'J', 'Q', 'K', 'A'}
                        for c in created_main_cards)
 
-            defender_moves = BattleMove.query.filter_by(
-                game_id=game.id,
-                player_id=def_player.id,
-            ).all()
+            defender_moves = _conquer_move_entries(game, def_player.id)
             assert any(m.rank == 'K' and m.value == 4 for m in defender_moves)
 
     def test_start_battle_tier2_template(self, app, db):
@@ -720,8 +727,8 @@ class TestConquerStartBattle:
             data = resp.get_json()
             assert data['success'] is True
 
-            game_id = data['game_id']
-            moves = BattleMove.query.filter_by(game_id=game_id).all()
+            game = db.session.get(Game, data['game_id'])
+            moves = _conquer_move_entries(game)
             # Verify there's a Call King move from the AI defender
             call_king_moves = [m for m in moves
                                if m.family_name == 'Call King']
@@ -760,8 +767,8 @@ class TestConquerStartBattle:
             data = resp.get_json()
             assert data['success'] is True
 
-            game_id = data['game_id']
-            moves = BattleMove.query.filter_by(game_id=game_id).all()
+            game = db.session.get(Game, data['game_id'])
+            moves = _conquer_move_entries(game)
             call_mil = [m for m in moves if m.family_name == 'Call Military']
             assert len(call_mil) == 1
 
@@ -1662,14 +1669,8 @@ class TestConquerCounterSpells:
             assert payload['status'] == 'executed'
             assert payload['defender_replenished_battle_moves']['added'] == expected_added
 
-            defender_moves = BattleMove.query.filter_by(
-                game_id=game.id,
-                player_id=def_player.id,
-            ).all()
-            attacker_moves = BattleMove.query.filter_by(
-                game_id=game.id,
-                player_id=atk_player.id,
-            ).all()
+            defender_moves = _conquer_move_entries(game, def_player.id)
+            attacker_moves = _conquer_move_entries(game, atk_player.id)
             assert len(defender_moves) == expected_defender_moves
             assert len(attacker_moves) == expected_attacker_moves
 

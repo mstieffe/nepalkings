@@ -2508,16 +2508,32 @@ def conquer_defender_counter_spell():
                     post_data[key] = result[key]
         spell.effect_data = post_data
 
-        from game_service.battle_move_replenisher import replenish_automated_conquer_defender_moves
-        replenish_info = result.get('battle_moves_added') or {}
-        if not replenish_info.get('added'):
-            replenish_info = replenish_automated_conquer_defender_moves(
-                game,
-                defender_player,
-                reason='conquer_counter_spell',
+        if _is_tactics_hand_conquer(game):
+            from game_service.conquer_tactics_service import replenish_automated_conquer_defender_tactics
+            replenish_info = (
+                result.get('conquer_tactics_added')
+                or result.get('battle_moves_added')
+                or {}
             )
+            if not replenish_info.get('added'):
+                replenish_info = replenish_automated_conquer_defender_tactics(
+                    game,
+                    defender_player,
+                    reason='conquer_counter_spell',
+                )
+        else:
+            from game_service.battle_move_replenisher import replenish_automated_conquer_defender_moves
+            replenish_info = result.get('battle_moves_added') or {}
+            if not replenish_info.get('added'):
+                replenish_info = replenish_automated_conquer_defender_moves(
+                    game,
+                    defender_player,
+                    reason='conquer_counter_spell',
+                )
         if replenish_info.get('added'):
             post_data = dict(spell.effect_data or {})
+            if _is_tactics_hand_conquer(game):
+                post_data['defender_replenished_conquer_tactics'] = replenish_info
             post_data['defender_replenished_battle_moves'] = replenish_info
             spell.effect_data = post_data
 

@@ -4767,12 +4767,20 @@ def conquer_start_battle():
     # conquerer can manually select replacements, but the configured/AI
     # defender is automated; rebuild its missing moves from any new runtime
     # hand cards after *both* players' preludes have resolved.
-    from game_service.battle_move_replenisher import replenish_automated_conquer_defender_moves
-    replenish_automated_conquer_defender_moves(
-        game,
-        def_player,
-        reason='conquer_prelude',
-    )
+    if _move_model == 'tactics_hand':
+        from game_service.conquer_tactics_service import replenish_automated_conquer_defender_tactics
+        replenish_automated_conquer_defender_tactics(
+            game,
+            def_player,
+            reason='conquer_prelude',
+        )
+    else:
+        from game_service.battle_move_replenisher import replenish_automated_conquer_defender_moves
+        replenish_automated_conquer_defender_moves(
+            game,
+            def_player,
+            reason='conquer_prelude',
+        )
 
     if game.defending_figure_id:
         selected_defender = db.session.get(Figure, game.defending_figure_id)

@@ -10,6 +10,11 @@ from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, 
 from datetime import datetime, timezone
 from game_service.deck_manager import DeckManager
 from game_service.battle_move_replenisher import auto_convert_conquer_battle_move_cards
+from game_service.conquer_tactics_service import (
+    auto_convert_conquer_tactic_cards,
+    is_tactics_hand_conquer,
+    purge_conquer_tactics_referencing_card,
+)
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
@@ -765,6 +770,16 @@ def _purge_battle_moves_referencing_card(game_id, card_id, card_type):
     return len(affected)
 
 
+def _purge_spell_move_state_referencing_card(game, card_id, card_type):
+    if is_tactics_hand_conquer(game):
+        return purge_conquer_tactics_referencing_card(
+            game.id,
+            card_id,
+            card_type,
+        ).get('deleted', 0)
+    return _purge_battle_moves_referencing_card(game.id, card_id, card_type)
+
+
 def _auto_convert_spell_battle_moves(
     spell_effect,
     key,
@@ -774,6 +789,19 @@ def _auto_convert_spell_battle_moves(
     *,
     reason,
 ):
+    if is_tactics_hand_conquer(game):
+        info = auto_convert_conquer_tactic_cards(
+            game,
+            player,
+            cards,
+            reason=reason,
+        )
+        if info.get('added'):
+            tactic_key = key.replace('battle_moves', 'conquer_tactics')
+            spell_effect[tactic_key] = info
+            spell_effect[key] = info
+        return info
+
     info = auto_convert_conquer_battle_move_cards(
         game,
         player,
@@ -954,9 +982,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                             if not getattr(card, 'part_of_battle_move', False):
                                 continue
                             ct = 'side' if isinstance(card, SideCard) else 'main'
-                            _purge_battle_moves_referencing_card(
-                                game.id, card.id, ct
-                            )
+                            _purge_spell_move_state_referencing_card(game, card.id, ct)
                             card.part_of_battle_move = False
                         DeckManager.return_cards_to_deck(all_cards_to_dump)
                     
@@ -1066,23 +1092,19 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         logger.debug(f"[FORCED DEAL] Caster gives: {[f'{c.rank}{c.suit}' for c in caster_cards_to_swap]}")
                         logger.debug(f"[FORCED DEAL] Opponent gives: {[f'{c.rank}{c.suit}' for c in opponent_cards_to_swap]}")
                         
+                        # Any pre-bought BattleMove that referenced a swapped
+                        # card is now stale — drop it before ownership changes.
+                        for card in caster_cards_to_swap + opponent_cards_to_swap:
+                            if getattr(card, 'part_of_battle_move', False):
+                                _purge_spell_move_state_referencing_card(game, card.id, 'main')
+                                card.part_of_battle_move = False
+
                         # Swap ownership
                         for card in caster_cards_to_swap:
                             card.player_id = opponent.id
                         
                         for card in opponent_cards_to_swap:
                             card.player_id = caster.id
-
-                        # Any pre-bought BattleMove that referenced a swapped
-                        # card is now stale (the card has changed owner) — drop
-                        # the move so the battle shop doesn't show a dangling
-                        # entry whose underlying card belongs to the opponent.
-                        for card in caster_cards_to_swap + opponent_cards_to_swap:
-                            if getattr(card, 'part_of_battle_move', False):
-                                _purge_battle_moves_referencing_card(
-                                    game.id, card.id, 'main'
-                                )
-                                card.part_of_battle_move = False
 
                         _auto_convert_spell_battle_moves(
                             spell_effect,
