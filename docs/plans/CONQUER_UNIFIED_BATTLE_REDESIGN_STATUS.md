@@ -94,7 +94,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
 - DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 134 passed.
-- DONE: AI summary/planner regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 77 passed.
+- DONE: AI summary/planner/worker regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 80 passed.
+- DONE: AI worker tactics-hand routing regression passed: `tests/server/test_ai_worker.py` passed: 36 passed.
 - DONE: Tactics math/card-fate regression passed: `tests/server/test_conquer_tactics_math.py` passed: 6 passed.
 - DONE: Production schema guard regression passed: `tests/server/test_schema_guards.py` passed: 1 passed.
 
@@ -124,7 +125,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
 - PARTIAL: Phase 8 AI reads, summarizes, and plays tactics; remaining work is deeper scenario coverage.
   - DONE: `server/ai/game_state.py` and `server/ai/strategy_planner.py` summarize `conquer_tactics` explicitly for tactics-hand games.
-  - TODO: Add AI tests for tactics-hand attacker/defender play, Invader Swap, auto-gamble, and auto-combine.
+  - DONE: Added AI worker tests proving tactics-hand play, auto-gamble, and auto-combine route to conquer tactic endpoints.
+  - TODO: Add AI tests for Invader Swap and richer attacker/defender full-flow scenarios.
   - TODO: Check generic LLM action paths for `combine_conquer_tactics` enumeration if needed beyond deterministic conquer flow.
 
 - PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.

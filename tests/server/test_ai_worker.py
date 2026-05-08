@@ -274,6 +274,117 @@ def test_conquer_play_battle_round_no_auto_gamble_keeps_existing_selector(monkey
     assert captured['battle_move_id'] == 202
 
 
+def test_conquer_play_battle_round_tactics_hand_uses_conquer_tactic_endpoint(monkeypatch):
+    game = SimpleNamespace(id=52, battle_round=1, conquer_move_model='tactics_hand')
+    tactic = SimpleNamespace(id=302, family_name='Call Villager', value=1)
+    move_infos = [
+        {'move': tactic, 'effective_value': 8, 'call_figure_id': 777},
+    ]
+
+    monkeypatch.setattr(ai_worker, '_get_conquer_auto_gamble_settings', lambda *_args, **_kwargs: (False, 10))
+    monkeypatch.setattr(ai_worker, '_conquer_collect_move_infos', lambda *_args, **_kwargs: (move_infos, []))
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_move_value_for_round', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_played_block_for_round', lambda *_args, **_kwargs: False)
+
+    captured = {}
+
+    def _capture_play(_base, _game_id, _player_id, params):
+        captured.update(params)
+        return True
+
+    def _fail_legacy_play(*_args, **_kwargs):
+        raise AssertionError('tactics-hand AI must not call the legacy battle move endpoint')
+
+    monkeypatch.setattr(ai_worker, '_exec_play_conquer_tactic', _capture_play)
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _fail_legacy_play)
+
+    assert ai_worker._conquer_play_battle_round(
+        'http://example.invalid', game, ai_player_id=999) is True
+    assert captured == {'battle_move_id': 302, 'call_figure_id': 777}
+
+
+def test_conquer_play_battle_round_tactics_hand_auto_gambles_conquer_tactic(monkeypatch):
+    game = SimpleNamespace(id=53, battle_round=1, conquer_move_model='tactics_hand')
+    weak_tactic = SimpleNamespace(id=401, family_name='Dagger', value=7, suit='Hearts')
+    playable_tactic = SimpleNamespace(id=402, family_name='Dagger', value=10, suit='Clubs')
+    collect_results = iter([
+        ([{'move': weak_tactic, 'effective_value': 7, 'call_figure_id': None}], []),
+        ([{'move': playable_tactic, 'effective_value': 10, 'call_figure_id': None}], []),
+    ])
+
+    monkeypatch.setattr(ai_worker, '_get_conquer_auto_gamble_settings', lambda *_args, **_kwargs: (True, 10))
+    monkeypatch.setattr(ai_worker, '_conquer_collect_move_infos', lambda *_args, **_kwargs: next(collect_results))
+    monkeypatch.setattr(ai_worker, '_reload_conquer_game', lambda _game_id: game)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_move_value_for_round', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_played_block_for_round', lambda *_args, **_kwargs: False)
+
+    captured = {'gambled': None, 'played': None}
+
+    def _capture_gamble(_base, _game_id, _player_id, params):
+        captured['gambled'] = params
+        return True
+
+    def _capture_play(_base, _game_id, _player_id, params):
+        captured['played'] = params
+        return True
+
+    def _fail_legacy(*_args, **_kwargs):
+        raise AssertionError('tactics-hand AI must use conquer tactic endpoints')
+
+    monkeypatch.setattr(ai_worker, '_exec_gamble_conquer_tactic', _capture_gamble)
+    monkeypatch.setattr(ai_worker, '_exec_play_conquer_tactic', _capture_play)
+    monkeypatch.setattr(ai_worker, '_exec_gamble_battle_move', _fail_legacy)
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _fail_legacy)
+
+    assert ai_worker._conquer_play_battle_round(
+        'http://example.invalid', game, ai_player_id=999) is True
+    assert captured['gambled'] == {'battle_move_id': 401, 'tactic_id': 401}
+    assert captured['played'] == {'battle_move_id': 402}
+
+
+def test_conquer_play_battle_round_tactics_hand_auto_combines_conquer_tactics(monkeypatch):
+    game = SimpleNamespace(id=54, battle_round=1, conquer_move_model='tactics_hand')
+    dagger_a = SimpleNamespace(id=501, family_name='Dagger', value=7, suit='Spades')
+    dagger_b = SimpleNamespace(id=502, family_name='Dagger', value=8, suit='Clubs')
+    combined = SimpleNamespace(id=599, family_name='Double Dagger', value=15, suit='Spades')
+    collect_results = iter([
+        ([
+            {'move': dagger_a, 'effective_value': 7, 'call_figure_id': None},
+            {'move': dagger_b, 'effective_value': 8, 'call_figure_id': None},
+        ], []),
+        ([{'move': combined, 'effective_value': 15, 'call_figure_id': None}], []),
+    ])
+
+    monkeypatch.setattr(ai_worker, '_get_conquer_auto_gamble_settings', lambda *_args, **_kwargs: (True, 1))
+    monkeypatch.setattr(ai_worker, '_conquer_collect_move_infos', lambda *_args, **_kwargs: next(collect_results))
+    monkeypatch.setattr(ai_worker, '_reload_conquer_game', lambda _game_id: game)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_move_value_for_round', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_played_block_for_round', lambda *_args, **_kwargs: False)
+
+    captured = {'combined': None, 'played': None}
+
+    def _capture_combine(_base, _game_id, _player_id, params):
+        captured['combined'] = params
+        return True
+
+    def _capture_play(_base, _game_id, _player_id, params):
+        captured['played'] = params
+        return True
+
+    def _fail_legacy(*_args, **_kwargs):
+        raise AssertionError('tactics-hand AI must use conquer tactic endpoints')
+
+    monkeypatch.setattr(ai_worker, '_exec_combine_conquer_tactics', _capture_combine)
+    monkeypatch.setattr(ai_worker, '_exec_play_conquer_tactic', _capture_play)
+    monkeypatch.setattr(ai_worker, '_exec_combine_battle_moves', _fail_legacy)
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _fail_legacy)
+
+    assert ai_worker._conquer_play_battle_round(
+        'http://example.invalid', game, ai_player_id=999) is True
+    assert captured['combined'] == {'move_id_a': 501, 'move_id_b': 502}
+    assert captured['played'] == {'battle_move_id': 599}
+
+
 def test_conquer_skip_battle_turn_with_fallback_plays_move_when_skip_rejected(monkeypatch):
     move = SimpleNamespace(id=404, family_name='Dagger', value=9)
     game = SimpleNamespace(id=71, battle_round=2)
