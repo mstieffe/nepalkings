@@ -557,6 +557,86 @@ class TestConquerSubscreenLayout:
             layout.battlefield.columns.opp_castle)
         assert layout.tactics_rail.rect[0] + layout.tactics_rail.rect[2] <= layout.battlefield.rect[0]
 
+    def test_tactics_hand_battle_field_identifies_fighters_and_sources(self):
+        from game.screens.field_screen import FieldScreen
+
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_confirmed=True,
+            battle_turn_player_id=1,
+            battle_round=1,
+            player_id=1,
+            advancing_figure_id=10,
+            advancing_figure_id_2=None,
+            defending_figure_id=20,
+            defending_figure_id_2=None,
+            last_battle_result=None,
+            conquer_tactics=[{
+                'status': 'played',
+                'played_round': 0,
+                'call_figure_id': 30,
+            }],
+        )
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = game
+        field.state = SimpleNamespace(parent_screen=None)
+
+        attacker = SimpleNamespace(id=10, player_id=1)
+        defender = SimpleNamespace(id=20, player_id=2)
+        called = SimpleNamespace(id=30, player_id=1)
+        support = SimpleNamespace(id=40, player_id=1, buffs_allies=True)
+        plain = SimpleNamespace(id=50, player_id=1)
+
+        assert FieldScreen._is_tactics_hand_battle_fighter(field, attacker) is True
+        assert FieldScreen._is_tactics_hand_battle_fighter(field, defender) is True
+        assert FieldScreen._conquer_battle_context_kind(field, called) == 'called'
+        assert FieldScreen._conquer_battle_context_kind(field, support) == 'support'
+        assert FieldScreen._conquer_battle_context_kind(field, plain) is None
+
+    def test_tactics_hand_battle_context_overlay_draws_rings(self):
+        from config import settings
+        from game.screens.field_screen import FieldScreen
+
+        window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        window.fill((0, 0, 0))
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_confirmed=True,
+            battle_turn_player_id=1,
+            battle_round=1,
+            player_id=1,
+            advancing_figure_id=10,
+            defending_figure_id=20,
+            last_battle_result=None,
+            conquer_tactics=[],
+        )
+        field = FieldScreen.__new__(FieldScreen)
+        field.window = window
+        field.game = game
+        field.state = SimpleNamespace(parent_screen=None)
+        support = SimpleNamespace(id=40, player_id=1, buffs_allies=True)
+        icon = SimpleNamespace(figure=support)
+
+        FieldScreen._draw_tactics_hand_battle_context_overlays(
+            field,
+            [(icon, 400, 400)],
+        )
+
+        radius = int(settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT * 0.56)
+        sample = pygame.Rect(400 - radius - 16, 400 - radius - 16,
+                             (radius + 16) * 2, (radius + 16) * 2)
+        has_ring_pixel = False
+        for x in range(sample.left, sample.right, 4):
+            for y in range(sample.top, sample.bottom, 4):
+                if window.get_at((x, y))[:3] != (0, 0, 0):
+                    has_ring_pixel = True
+                    break
+            if has_ring_pixel:
+                break
+        assert has_ring_pixel is True
+
     def test_field_compartments_keep_duel_coordinates_at_default_origin(self):
         from config import settings
         from game.screens.field_screen import FieldScreen

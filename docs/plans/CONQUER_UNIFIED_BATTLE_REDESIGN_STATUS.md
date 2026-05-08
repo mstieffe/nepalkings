@@ -89,6 +89,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Successful tactics-hand Play actions start a fixed-duration, non-blocking overlay animation.
   - The animation travels from the selected rail cell toward the active round card slot and then expires.
 
+- DONE: Added first-pass tactics-hand battle field context overlays.
+  - Battle fighters are suppressed from their home field columns while the duel lane is active.
+  - Remaining field figures stay inspectable but are visually de-emphasized during battle rounds.
+  - Called figures and likely support-source figures get colored rings so their field origins remain locatable.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -159,6 +164,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader round recap conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 166 passed.
 - DONE: Focused tactic flight regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_render_smoke.py` passed: 53 passed.
 - DONE: Broader tactic flight conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 168 passed.
+- DONE: Focused field context overlay regression passed: `tests/client/test_conquer_game_screen.py` passed: 49 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -197,11 +203,12 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Tactics rail text fitting and public-only top-strip intent labels are implemented.
   - DONE: Tactics-hand pre-battle and battle now share one field-first canvas with the rail, ledger, and field columns using the same layout helper.
   - DONE: Field inert-but-inspectable battle behavior is implemented for tactics-hand battle rounds.
+  - DONE: First-pass battlefield context overlays dim non-fighters, hide fighters from home columns, and ring called/support-source figures.
   - DONE: First-pass duel lane fighter-only rendering is implemented for tactics-hand battle rounds.
   - DONE: Round tactic badge strips, leader lines, and power receipt rows are implemented in the duel lane.
   - DONE: First-pass ghost predictive math is implemented for rail-hovered tactics in the active ledger round and total circle.
   - DONE: First-pass played tactic flight animation is implemented for successful tactics-hand Play actions.
-  - TODO: Predictive support-badge pulsing/source highlighting is still missing.
+  - TODO: Predictive support-badge pulsing/source highlighting is still missing beyond the first-pass field source rings.
   - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
   - TODO: Round-card reveal replay animation is missing.
 

@@ -1412,6 +1412,118 @@ class FieldScreen(SubScreen):
             or bool(getattr(game, 'last_battle_result', None))
         )
 
+    def _tactics_hand_battle_figure_ids(self):
+        game = self.game
+        if not game:
+            return set()
+        ids = set()
+        for attr in (
+                'advancing_figure_id', 'advancing_figure_id_2',
+                'defending_figure_id', 'defending_figure_id_2'):
+            fig_id = getattr(game, attr, None)
+            if fig_id is not None:
+                ids.add(fig_id)
+        return ids
+
+    def _is_tactics_hand_battle_fighter(self, figure):
+        return getattr(figure, 'id', None) in self._tactics_hand_battle_figure_ids()
+
+    @staticmethod
+    def _entry_get(entry, key, default=None):
+        if isinstance(entry, dict):
+            return entry.get(key, default)
+        return getattr(entry, key, default)
+
+    def _conquer_played_tactic_entries(self):
+        game = self.game
+        entries = []
+        entries.extend(list(getattr(game, 'conquer_tactics', []) or []))
+        parent = self._conquer_parent()
+        if parent and hasattr(parent, '_current_conquer_battle_moves'):
+            try:
+                entries.extend(list(parent._current_conquer_battle_moves() or []))
+            except Exception:
+                pass
+        battle = getattr(parent, 'subscreens', {}).get('battle') if parent else None
+        if battle is not None:
+            entries.extend(list(getattr(battle, 'player_moves', []) or []))
+            entries.extend(list(getattr(battle, 'opponent_moves', []) or []))
+            entries.extend([m for m in (getattr(battle, 'opp_played', []) or []) if m])
+        played = []
+        for entry in entries:
+            status = self._entry_get(entry, 'status')
+            played_round = self._entry_get(entry, 'played_round')
+            if status == 'played' or played_round is not None:
+                played.append(entry)
+        return played
+
+    def _conquer_called_figure_ids(self):
+        ids = set()
+        for tactic in self._conquer_played_tactic_entries():
+            fig_id = self._entry_get(tactic, 'call_figure_id')
+            if fig_id is not None:
+                ids.add(fig_id)
+        return ids
+
+    @staticmethod
+    def _figure_active_skill_keys(figure):
+        getter = getattr(figure, 'get_active_skill_keys', None)
+        if callable(getter):
+            try:
+                return set(getter() or [])
+            except Exception:
+                return set()
+        return {
+            key for key in (
+                'buffs_allies', 'buffs_allies_defence', 'blocks_bonus',
+                'distance_attack')
+            if getattr(figure, key, False)
+        }
+
+    def _conquer_battle_context_kind(self, figure):
+        if not self._is_tactics_hand_battle_field_view_only() or figure is None:
+            return None
+        if self._is_tactics_hand_battle_fighter(figure):
+            return None
+        if getattr(figure, 'id', None) in self._conquer_called_figure_ids():
+            return 'called'
+        skills = self._figure_active_skill_keys(figure)
+        family = getattr(figure, 'family', None)
+        family_name = str(getattr(family, 'name', '') or getattr(figure, 'family_name', ''))
+        if skills.intersection({'buffs_allies', 'buffs_allies_defence', 'blocks_bonus', 'distance_attack'}):
+            return 'support'
+        if family_name.lower().startswith('wall'):
+            return 'support'
+        return None
+
+    def _draw_tactics_hand_battle_context_overlays(self, drawn_icons):
+        if not self._is_tactics_hand_battle_field_view_only():
+            return
+        frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
+        radius = int(frame_h * 0.56)
+        game = self.game
+        for icon, ix, iy in drawn_icons:
+            figure = getattr(icon, 'figure', None)
+            if figure is None or self._is_tactics_hand_battle_fighter(figure):
+                continue
+            cx, cy = int(ix), int(iy)
+            dim_surf = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(dim_surf, (0, 0, 0, 82), (radius + 4, radius + 4), radius)
+            self.window.blit(dim_surf, (cx - radius - 4, cy - radius - 4))
+
+            context_kind = self._conquer_battle_context_kind(figure)
+            if not context_kind:
+                continue
+            is_own = getattr(figure, 'player_id', None) == getattr(game, 'player_id', None)
+            if context_kind == 'called':
+                color = (118, 192, 245, 220)
+            else:
+                color = (112, 220, 150, 220) if is_own else (232, 118, 110, 220)
+            ring_r = radius + 5
+            ring_surf = pygame.Surface((ring_r * 2 + 12, ring_r * 2 + 12), pygame.SRCALPHA)
+            pygame.draw.circle(ring_surf, color, (ring_r + 6, ring_r + 6), ring_r, 4)
+            self.window.blit(ring_surf, (cx - ring_r - 6, cy - ring_r - 6))
+
     def _open_tactics_hand_battle_detail(self, clicked_icon):
         resources_data = {}
         if hasattr(self.game, 'calculate_resources'):
@@ -2780,6 +2892,9 @@ class FieldScreen(SubScreen):
 
                         # Calculate positions and separate into layers: regular, selected, hovered
                         for i, figure in enumerate(figures):
+                            if (self._is_tactics_hand_battle_field_view_only()
+                                    and self._is_tactics_hand_battle_fighter(figure)):
+                                continue
                             if figure.id not in self.icon_cache:
                                 continue
                             icon = self.icon_cache[figure.id]
@@ -2805,6 +2920,10 @@ class FieldScreen(SubScreen):
             if all_hovered:
                 icon, icon_x, icon_y = all_hovered
                 icon.draw(icon_x, icon_y)
+
+            self._draw_tactics_hand_battle_context_overlays(
+                all_regular + all_selected
+                + ([all_hovered] if all_hovered else []))
 
             # Conquer selection focus: dim non-selectable figures with a
             # field-wide overlay, then re-blit each selectable icon on top
