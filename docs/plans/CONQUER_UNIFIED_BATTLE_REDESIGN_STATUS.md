@@ -53,6 +53,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - The strip keeps phase/turn/stake/land-bonus chips visible, clears stale hidden timeline command rects, and exposes the existing Withdraw command for attackers.
   - Clicking the collapsed header temporarily expands the full timeline as an overlay.
 
+- DONE: Tightened tactics rail text and render coverage.
+  - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
+  - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
+  - Added client render smoke coverage for a scrollable populated rail and a filled round ledger/result click target.
+
 - DONE: Updated automated conquer battle-round execution enough for tactics-hand rows.
   - `server/ai/ai_worker.py` reads `ConquerTactic` rows for tactics-hand games.
   - Auto-gamble, auto-combine, play, and skip fallback route through conquer tactic endpoints when appropriate.
@@ -99,6 +104,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 - DONE: Focused client header/layout regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py` passed: 98 passed.
 - DONE: Broader conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py` passed: 152 passed.
+- DONE: Broader conquer client render regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 154 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
 - DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 135 passed.
 - DONE: AI summary/planner/worker regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 80 passed.
@@ -138,6 +144,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
 - PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.
   - DONE: Header collapsed status strip, narration log, transient timeline overlay, and battle-strip Withdraw command are implemented for tactics-hand battle/result modes.
+  - DONE: Tactics rail text fitting and public-only top-strip intent labels are implemented.
   - TODO: Duel lane fighter-only rendering is not complete.
   - TODO: Support badge strips, source leader lines, and power receipt rows are missing.
   - TODO: Ghost predictive math and played tactic flight animation are missing.
@@ -152,8 +159,9 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Added server tests for tactic initialization from AI templates.
   - DONE: Added server tests for legacy `battle_move` rollback with `CONQUER_TACTICS_HAND_ENABLED=False`.
   - DONE: Added client tests for tactics-hand header mode switching, overlay expansion, hidden action rect clearing, and gamble/dismantle dispatch to conquer endpoints.
+  - DONE: Added initial client render smoke tests for populated tactics rail scrolling and filled round ledger/result control behavior.
   - TODO: Add duel/battle-shop regression tests after legacy route gating changes.
-  - TODO: Add render/screenshot smoke tests for populated tactics rail and round ledger.
+  - TODO: Add broader screenshot/manual smoke checks for support badges, called figures, and long receipt rows once those visuals exist.
 
 ## Known Risks
 

@@ -128,6 +128,18 @@ class ConquerTacticsRail:
         return int(move.get('value') or 0)
 
     @staticmethod
+    def _fit_text(text: str, font, max_width: int) -> str:
+        text = text or ''
+        if max_width <= 0:
+            return ''
+        if font.size(text)[0] <= max_width:
+            return text
+        clipped = text
+        while clipped and font.size(clipped + '...')[0] > max_width:
+            clipped = clipped[:-1]
+        return clipped + '...' if clipped else '...'
+
+    @staticmethod
     def _can_combine(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
         """Two single Daggers of the same colour can combine into a Double Dagger."""
         if a.get('id') == b.get('id'):
@@ -293,24 +305,24 @@ class ConquerTacticsRail:
         rd = getattr(game, 'battle_round', 0) if game else 0
         my_turn = self._is_my_battle_turn()
         if game is None or getattr(game, 'battle_turn_player_id', None) is None:
-            line1 = 'Pre-battle hand'
-            line2 = 'Use Gamble / Combine to shape your tactics'
+            line1 = 'Tactics hand'
+            line2 = f'{len(self._hand_moves())} available'
         else:
             who = 'Your turn' if my_turn else "Opponent's turn"
             line1 = f'Round {rd}/3 — {who}'
             line2 = self._opponent_intent_hint(game)
         font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
         sub = settings.get_font(max(10, int(settings.FS_TINY * 0.95)))
-        s1 = font.render(line1, True, _TEXT_PRIMARY)
-        s2 = sub.render(line2, True, _TEXT_SECONDARY)
+        s1 = font.render(self._fit_text(line1, font, rect.width - 16), True, _TEXT_PRIMARY)
+        s2 = sub.render(self._fit_text(line2, sub, rect.width - 16), True, _TEXT_SECONDARY)
         self.window.blit(s1, (rect.x + 8, rect.y + 4))
         self.window.blit(s2, (rect.x + 8, rect.y + 4 + s1.get_height() + 2))
 
     def _opponent_intent_hint(self, game) -> str:
         opp_id = getattr(game, 'battle_turn_player_id', None)
         if opp_id is None or opp_id == getattr(game, 'player_id', None):
-            return 'Pick a tactic'
-        return 'Awaiting opponent...'
+            return 'Action pending'
+        return 'Opponent action hidden'
 
     # -- hand list
     def _draw_hand_list(self, rect: pygame.Rect, cell_h: int, cells_visible: int):
@@ -389,16 +401,20 @@ class ConquerTacticsRail:
         name = move.get('family_name', '?')
         if self._is_double_dagger(move):
             name = 'Double Dagger'
-        name_surf = font.render(name, True, _TEXT_PRIMARY)
-        self.window.blit(name_surf, (text_x, rect.top + 6))
-
-        chip_text = f"{move.get('suit', '?')[:1]} {move.get('rank', '?')}"
-        chip_surf = chip_font.render(chip_text, True, _TEXT_SECONDARY)
-        self.window.blit(chip_surf, (text_x, rect.top + 6 + name_surf.get_height() + 1))
 
         # Power (right edge)
         pwr_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.05)), bold=True)
         pwr_surf = pwr_font.render(str(self._power(move)), True, _TEXT_PRIMARY)
+        max_text_w = max(24, rect.right - text_x - pwr_surf.get_width() - 18)
+
+        name_surf = font.render(self._fit_text(name, font, max_text_w), True, _TEXT_PRIMARY)
+        self.window.blit(name_surf, (text_x, rect.top + 6))
+
+        chip_text = f"{move.get('suit', '?')[:1]} {move.get('rank', '?')}"
+        chip_surf = chip_font.render(
+            self._fit_text(chip_text, chip_font, max_text_w), True, _TEXT_SECONDARY)
+        self.window.blit(chip_surf, (text_x, rect.top + 6 + name_surf.get_height() + 1))
+
         self.window.blit(pwr_surf, (rect.right - pwr_surf.get_width() - 8, rect.centery - pwr_surf.get_height() // 2))
 
     # -- selected detail
@@ -415,18 +431,21 @@ class ConquerTacticsRail:
         name = sel.get('family_name', '?')
         if self._is_double_dagger(sel):
             name = 'Double Dagger'
-        ts = title_font.render(name, True, _TEXT_PRIMARY)
+        ts = title_font.render(
+            self._fit_text(name, title_font, rect.width - 16), True, _TEXT_PRIMARY)
         self.window.blit(ts, (rect.left + 8, rect.top + 6))
         # Suit • rank • power line
         suit_a = sel.get('suit', '?')
         suit_b = sel.get('suit_b')
         rank = sel.get('rank', '?')
         line = f"{suit_a}{('+' + suit_b) if suit_b else ''} • {rank} • Power {self._power(sel)}"
-        bs = body_font.render(line, True, _TEXT_SECONDARY)
+        bs = body_font.render(
+            self._fit_text(line, body_font, rect.width - 16), True, _TEXT_SECONDARY)
         self.window.blit(bs, (rect.left + 8, rect.top + 6 + ts.get_height() + 2))
         # Source
-        src = body_font.render(f"Source: card #{sel.get('card_id', '?')}",
-                               True, _TEXT_MUTED)
+        source_line = f"Source: card #{sel.get('card_id', '?')}"
+        src = body_font.render(
+            self._fit_text(source_line, body_font, rect.width - 16), True, _TEXT_MUTED)
         self.window.blit(src, (rect.left + 8, rect.top + 6 + ts.get_height() + 2 + bs.get_height() + 2))
 
     # -- action tray
@@ -470,6 +489,6 @@ class ConquerTacticsRail:
             text_col = _TEXT_PRIMARY if enabled else _DISABLED_RGBA
             pygame.draw.rect(self.window, colour, br, 0, border_radius=4)
             pygame.draw.rect(self.window, border, br, 1, border_radius=4)
-            ts = font.render(label, True, text_col)
+            ts = font.render(self._fit_text(label, font, br.width - 6), True, text_col)
             self.window.blit(ts, ts.get_rect(center=br.center))
             self._action_button_rects[key] = br
