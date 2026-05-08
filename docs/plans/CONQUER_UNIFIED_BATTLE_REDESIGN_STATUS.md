@@ -111,6 +111,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: AI worker tactics-hand routing regression passed: `tests/server/test_ai_worker.py` passed: 36 passed.
 - DONE: Tactics math/card-fate regression passed: `tests/server/test_conquer_tactics_math.py` passed: 6 passed.
 - DONE: Production schema guard regression passed: `tests/server/test_schema_guards.py` passed: 1 passed.
+- DONE: Invader Swap tactics-hand regression passed: `tests/server/test_conquer_invader_swap.py` passed: 20 passed.
+- DONE: Broader Invader Swap/tactics/AI worker regression passed: `tests/server/test_conquer_invader_swap.py tests/server/test_conquer_tactics_hand.py tests/server/test_ai_worker.py` passed: 66 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -139,7 +141,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - PARTIAL: Phase 8 AI reads, summarizes, and plays tactics; remaining work is deeper scenario coverage.
   - DONE: `server/ai/game_state.py` and `server/ai/strategy_planner.py` summarize `conquer_tactics` explicitly for tactics-hand games.
   - DONE: Added AI worker tests proving tactics-hand play, auto-gamble, and auto-combine route to conquer tactic endpoints.
-  - TODO: Add AI tests for Invader Swap and richer attacker/defender full-flow scenarios.
+  - DONE: Added Invader Swap regression proving a swapped AI invader keeps tactics-hand rows and player-safe tactic serialization.
+  - TODO: Add richer attacker/defender full-flow AI scenarios.
   - TODO: Check generic LLM action paths for `combine_conquer_tactics` enumeration if needed beyond deterministic conquer flow.
 
 - PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.

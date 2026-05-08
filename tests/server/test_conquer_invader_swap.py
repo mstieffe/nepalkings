@@ -2,10 +2,11 @@
 # See LICENSE file in the project root for full license information.
 """Tests for Invader Swap as a conquer prelude spell."""
 import pytest
+from unittest.mock import patch
 
 from models import (db, User, Land, LandConfig, LandConfigFigure,
                     LandConfigBattleMove, CollectionCard, Game, Player,
-                    Figure, ActiveSpell)
+                    Figure, ActiveSpell, BattleMove, ConquerTactic)
 from tests.server.test_land_battle import (
     _auth_headers, _make_user, _make_land,
     _make_conquer_config, _make_defence_config,
@@ -686,6 +687,58 @@ class TestConquerOwnDefenderEndpoint:
 
 class TestConquerInvaderSwapGameFlow:
     """Integration: full game flow after Invader Swap."""
+
+    def test_invader_swap_ai_defender_stays_on_tactics_hand_rows(self, app, db):
+        """Swapped AI invaders still use ConquerTactic rows and safe state data."""
+        with app.app_context():
+            attacker = _make_user(db, username='atk')
+            land = _make_land(db, tier=1)
+            cfg = _make_conquer_config(db, attacker, land)
+            _set_prelude_invader_swap(db, cfg)
+            template = _scripted_ai_template()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            with patch('routes.kingdom.get_ai_defence_template_for_land', return_value=template), \
+                    patch('routes.games.get_ai_defence_template_for_land', return_value=template):
+                data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+            attacker_player = Player.query.filter_by(
+                game_id=game.id,
+                user_id=attacker.id,
+            ).first()
+
+            assert attacker_player is not None
+            assert game.conquer_move_model == 'tactics_hand'
+            assert game.invader_player_id != attacker_player.id
+            assert BattleMove.query.filter_by(game_id=game.id).count() == 0
+
+            attacker_tactics = ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=attacker_player.id,
+            ).all()
+            new_invader_tactics = ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=game.invader_player_id,
+            ).all()
+            assert len(attacker_tactics) == 3
+            assert len(new_invader_tactics) == 3
+            assert {t.source for t in attacker_tactics} == {'config'}
+            assert {t.source for t in new_invader_tactics} == {'template'}
+
+            resp = client.get(
+                '/games/get_battle_state',
+                query_string={'game_id': game.id, 'player_id': attacker_player.id},
+                headers=headers,
+            )
+            assert resp.status_code == 200, resp.get_json()
+            payload = resp.get_json()
+            assert len(payload['player_tactics']) == 3
+            assert len(payload['opponent_tactics']) == 3
+            assert payload['player_tactics'][0]['family_name'] == 'Dagger'
+            assert 'family_name' not in payload['opponent_tactics'][0]
+            assert payload['player_moves'] == payload['player_tactics']
+            assert payload['opponent_moves'] == payload['opponent_tactics']
 
     def test_invader_swap_not_in_battle_modifier(self, app, db):
         """Invader Swap must NOT appear in game.battle_modifier."""
