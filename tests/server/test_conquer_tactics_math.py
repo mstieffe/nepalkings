@@ -5,8 +5,8 @@
 from werkzeug.security import generate_password_hash
 
 from models import (ActiveSpell, CardRole, CardToFigure, ConquerTactic,
-                    Figure, Game, Land, MainCard, MainRank, Player,
-                    SideCard, SideRank, Suit, User)
+                    Figure, Game, Land, LandAttackLog, MainCard, MainRank,
+                    Player, SideCard, SideRank, Suit, User)
 from routes.games import (_collect_battle_move_cards,
                           _compute_server_total_diff,
                           _delete_all_battle_moves,
@@ -60,6 +60,11 @@ _SIDE_RANK_BY_VALUE = {
     5: SideRank.FIVE,
     6: SideRank.SIX,
 }
+
+
+def _auth_headers(user_id):
+    from routes.auth import generate_token
+    return {'Authorization': f'Bearer {generate_token(user_id)}'}
 
 
 def _add_player(db_session, game, username):
@@ -453,3 +458,87 @@ def test_conquer_tactics_cleanup_returns_only_unplayed_runtime_cards(db):
     _delete_all_battle_moves(game.id)
     db.session.flush()
     assert ConquerTactic.query.filter_by(game_id=game.id).count() == 0
+
+
+def test_finish_battle_pick_card_handles_played_conquer_tactic_card_fate(app, db):
+    client = app.test_client()
+    game, attacker, defender, _attacker_fig, _defender_fig = _setup_tactics_battle(
+        db.session,
+        land_bonus=True,
+    )
+    _attacker_tactic, picked_card, _picked_b = _add_tactic(
+        db.session,
+        game,
+        attacker,
+        family_name='Dagger',
+        rank='10',
+        value=10,
+        played_round=0,
+        status='played',
+    )
+    _defender_tactic, returned_card, _returned_b = _add_tactic(
+        db.session,
+        game,
+        defender,
+        family_name='Dagger',
+        rank='7',
+        value=7,
+        played_round=0,
+        status='played',
+    )
+    db.session.commit()
+
+    finish_resp = client.post(
+        '/games/finish_battle',
+        json={'game_id': game.id, 'player_id': attacker.id, 'total_diff': 0},
+        headers=_auth_headers(attacker.user_id),
+    )
+
+    assert finish_resp.status_code == 200, finish_resp.get_json()
+    finish_data = finish_resp.get_json()
+    assert finish_data['outcome'] == 'win'
+    assert finish_data['conquer_result'] == 'attacker_won'
+    returnable_ids = {card['id'] for card in finish_data['returnable_cards']}
+    assert {picked_card.id, returned_card.id}.issubset(returnable_ids)
+    assert LandAttackLog.query.filter_by(land_id=game.land_id).count() == 1
+
+    pick_resp = client.post(
+        '/games/finish_battle_pick_card',
+        json={
+            'game_id': game.id,
+            'player_id': attacker.id,
+            'picked_card_id': picked_card.id,
+            'picked_card_type': 'main',
+        },
+        headers=_auth_headers(attacker.user_id),
+    )
+
+    assert pick_resp.status_code == 200, pick_resp.get_json()
+    pick_data = pick_resp.get_json()
+    assert pick_data['conquer_result'] == 'attacker_won'
+    assert LandAttackLog.query.filter_by(land_id=game.land_id).count() == 1
+    assert ConquerTactic.query.filter_by(game_id=game.id).count() == 0
+
+    db.session.refresh(picked_card)
+    db.session.refresh(returned_card)
+    assert picked_card.player_id == attacker.id
+    assert picked_card.in_deck is False
+    assert picked_card.part_of_battle_move is False
+    assert returned_card.player_id is None
+    assert returned_card.in_deck is True
+    assert returned_card.part_of_battle_move is False
+
+    second_pick_resp = client.post(
+        '/games/finish_battle_pick_card',
+        json={
+            'game_id': game.id,
+            'player_id': attacker.id,
+            'picked_card_id': picked_card.id,
+            'picked_card_type': 'main',
+        },
+        headers=_auth_headers(attacker.user_id),
+    )
+
+    assert second_pick_resp.status_code == 200, second_pick_resp.get_json()
+    assert second_pick_resp.get_json()['conquer_result'] == 'attacker_won'
+    assert LandAttackLog.query.filter_by(land_id=game.land_id).count() == 1
