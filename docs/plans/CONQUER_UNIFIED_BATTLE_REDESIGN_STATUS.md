@@ -105,7 +105,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Focused client header/layout regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py` passed: 98 passed.
 - DONE: Broader conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py` passed: 152 passed.
 - DONE: Broader conquer client render regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 154 passed.
-- DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
+- DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 6 passed.
 - DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 135 passed.
 - DONE: AI summary/planner/worker regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 80 passed.
 - DONE: AI worker tactics-hand routing regression passed: `tests/server/test_ai_worker.py` passed: 36 passed.
@@ -134,7 +134,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Added `conquer_tactics_service` helper.
   - DONE: Replaced tactics-hand spell purge/replenish logic for Forced Deal and Dump Cards.
   - DONE: Added spell mutation tests proving stale tactics are purged/replenished without deleting persistent collection cards.
-  - TODO: Add more spell coverage for combined tactics, defender fallback edge cases, and non-greed spell interactions if Phase 7 needs exhaustive coverage.
+  - DONE: Added Forced Deal coverage for combined tactics: moving one Double Dagger source deletes the combined row, drops the moved source, restores the partner source, and recreates a spell-sourced tactic for the new owner when eligible.
+  - TODO: Add more spell coverage for defender fallback edge cases and non-greed spell interactions if Phase 7 needs exhaustive coverage.
 
 - DONE: Production startup explicitly ensures the `conquer_tactic` table and index exist for persistent deployments.
 

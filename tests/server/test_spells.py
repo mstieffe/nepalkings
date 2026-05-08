@@ -714,6 +714,36 @@ class TestSpellMutatesConquerTactics:
         db.session.commit()
         return tactic
 
+    def _make_combined_tactic_for_cards(self, db, game, player, card_a, card_b):
+        from models import ConquerTactic
+
+        source_a = self._make_tactic_for_card(db, game, player, card_a)
+        source_b = self._make_tactic_for_card(db, game, player, card_b)
+        source_a.status = 'discarded'
+        source_b.status = 'discarded'
+        combined = ConquerTactic(
+            game_id=game.id,
+            player_id=player.id,
+            family_name='Double Dagger',
+            card_id=card_a.id,
+            card_type='main',
+            card_id_b=card_b.id,
+            card_type_b='main',
+            suit=str(card_a.suit.value if hasattr(card_a.suit, 'value') else card_a.suit),
+            suit_b=str(card_b.suit.value if hasattr(card_b.suit, 'value') else card_b.suit),
+            rank=f'{self._card_rank(card_a)}+{self._card_rank(card_b)}',
+            value=(card_a.value or 0) + (card_b.value or 0),
+            value_a=card_a.value,
+            value_b=card_b.value,
+            source='combine',
+            status='available',
+            source_tactic_id_a=source_a.id,
+            source_tactic_id_b=source_b.id,
+        )
+        db.session.add(combined)
+        db.session.commit()
+        return source_a, source_b, combined
+
     def _mark_tactics_hand_conquer(self, db, game):
         game.mode = 'conquer'
         game.conquer_move_model = 'tactics_hand'
@@ -791,6 +821,85 @@ class TestSpellMutatesConquerTactics:
             assert len(new_tactics) == len(received_ids)
             assert {t.source for t in new_tactics} == {'spell'}
             assert effect['conquer_tactics_added']['added'] == len(received_ids)
+
+    def test_forced_deal_restores_combined_tactic_partner_source(
+        self, app, db, spell_game, monkeypatch
+    ):
+        from models import ActiveSpell, ConquerTactic, MainCard
+        from routes.spells import _execute_spell
+        import random as _random
+
+        with app.app_context():
+            game, p1, p2, _, _ = spell_game
+            self._mark_tactics_hand_conquer(db, game)
+
+            caster_cards = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all())
+            moved_card = caster_cards[0]
+            partner_card = caster_cards[1]
+            other_caster = caster_cards[2]
+            _source_moved, source_partner, _combined = self._make_combined_tactic_for_cards(
+                db, game, p1, moved_card, partner_card)
+            moved_card_id = moved_card.id
+            partner_card_id = partner_card.id
+            source_partner_id = source_partner.id
+
+            opponent_cards = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p2.id, in_deck=False, part_of_figure=False
+            ).all())
+            opponent_pick = opponent_cards[:2]
+
+            def _fake_sample(seq, _count):
+                if any(card.player_id == p1.id for card in seq):
+                    return [moved_card, other_caster]
+                return opponent_pick
+
+            monkeypatch.setattr(_random, 'sample', _fake_sample)
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Forced Deal',
+                spell_type='greed',
+                spell_family_name='Forced Deal',
+                suit='Hearts',
+                cast_round=1,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            _execute_spell(spell, game, p1)
+            db.session.commit()
+            db.session.expire_all()
+
+            assert ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=p1.id,
+                source='combine',
+            ).count() == 0
+            assert ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=p1.id,
+                card_id=moved_card_id,
+                source='config',
+            ).count() == 0
+            source_partner = db.session.get(ConquerTactic, source_partner_id)
+            partner_card = db.session.get(MainCard, partner_card_id)
+            assert source_partner.status == 'available'
+            assert source_partner.played_round is None
+            assert partner_card.player_id == p1.id
+            assert partner_card.part_of_battle_move is True
+
+            moved_card = db.session.get(MainCard, moved_card_id)
+            assert moved_card.player_id == p2.id
+            moved_replacement = ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=p2.id,
+                card_id=moved_card.id,
+                source='spell',
+            ).first()
+            assert moved_replacement is not None
 
     def test_dump_cards_purges_and_replenishes_conquer_tactics(
         self, app, db, spell_game
