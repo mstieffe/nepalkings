@@ -102,6 +102,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - The hovered available rail tactic now appears as a cyan ghost badge in the active duel-lane support rail when the player has not committed that round.
   - The duel-lane receipt/diff preview uses the hovered tactic power, matching the ledger hover-preview behavior.
 
+- DONE: Added first-pass field predictive source highlighting.
+  - Hovering an available tactic that calls a figure now pulses that field figure as a cyan preview source.
+  - Played called figures and support-source rings remain distinct from hovered preview rings.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -177,6 +181,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader round reveal conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 171 passed.
 - DONE: Focused duel-lane predictive highlight regression passed: `tests/client/test_conquer_render_smoke.py` passed: 8 passed.
 - DONE: Broader duel-lane predictive highlight conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 172 passed.
+- DONE: Focused field predictive source highlight regression passed: `tests/client/test_conquer_game_screen.py` passed: 50 passed.
+- DONE: Broader field predictive source highlight conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 173 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -221,7 +227,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: First-pass ghost predictive math is implemented for rail-hovered tactics in the active ledger round and total circle.
   - DONE: First-pass played tactic flight animation is implemented for successful tactics-hand Play actions.
   - DONE: First-pass predictive support-badge pulsing is implemented in the duel lane for rail-hovered tactics.
-  - TODO: Predictive source highlighting is still only first-pass field source rings.
+  - DONE: First-pass predictive source highlighting pulses hovered tactic call-figure sources in the field.
   - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
   - DONE: First-pass round-card reveal replay animation is implemented for newly completed ledger cards.
 

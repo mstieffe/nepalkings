@@ -1465,6 +1465,26 @@ class FieldScreen(SubScreen):
                 ids.add(fig_id)
         return ids
 
+    def _conquer_preview_tactic(self):
+        parent = self._conquer_parent()
+        rail = getattr(parent, '_tactics_rail', None) if parent else None
+        preview = getattr(rail, 'preview_move', None)
+        if not callable(preview):
+            return None
+        move = preview()
+        if not isinstance(move, dict):
+            return None
+        if move.get('played_round') is not None:
+            return None
+        if move.get('status', 'available') != 'available':
+            return None
+        return move
+
+    def _conquer_preview_called_figure_ids(self):
+        move = self._conquer_preview_tactic()
+        fig_id = self._entry_get(move, 'call_figure_id') if move else None
+        return {fig_id} if fig_id is not None else set()
+
     @staticmethod
     def _figure_active_skill_keys(figure):
         getter = getattr(figure, 'get_active_skill_keys', None)
@@ -1485,6 +1505,8 @@ class FieldScreen(SubScreen):
             return None
         if self._is_tactics_hand_battle_fighter(figure):
             return None
+        if getattr(figure, 'id', None) in self._conquer_preview_called_figure_ids():
+            return 'preview'
         if getattr(figure, 'id', None) in self._conquer_called_figure_ids():
             return 'called'
         skills = self._figure_active_skill_keys(figure)
@@ -1515,7 +1537,11 @@ class FieldScreen(SubScreen):
             if not context_kind:
                 continue
             is_own = getattr(figure, 'player_id', None) == getattr(game, 'player_id', None)
-            if context_kind == 'called':
+            if context_kind == 'preview':
+                phase = (pygame.time.get_ticks() % 900) / 900.0
+                pulse = 1.0 - abs(0.5 - phase) * 2.0
+                color = (120, 205, 220, int(150 + 70 * pulse))
+            elif context_kind == 'called':
                 color = (118, 192, 245, 220)
             else:
                 color = (112, 220, 150, 220) if is_own else (232, 118, 110, 220)

@@ -594,6 +594,38 @@ class TestConquerSubscreenLayout:
         assert FieldScreen._conquer_battle_context_kind(field, support) == 'support'
         assert FieldScreen._conquer_battle_context_kind(field, plain) is None
 
+    def test_tactics_hand_battle_field_identifies_preview_called_source(self):
+        from game.screens.field_screen import FieldScreen
+
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_confirmed=True,
+            battle_turn_player_id=1,
+            battle_round=1,
+            player_id=1,
+            advancing_figure_id=10,
+            defending_figure_id=20,
+            last_battle_result=None,
+            conquer_tactics=[],
+        )
+        preview = {
+            'status': 'available',
+            'played_round': None,
+            'call_figure_id': 60,
+        }
+        parent = SimpleNamespace(
+            request_conquer_figure_confirmation=lambda *_args, **_kwargs: None,
+            _tactics_rail=SimpleNamespace(preview_move=lambda: preview),
+        )
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = game
+        field.state = SimpleNamespace(parent_screen=parent)
+
+        source = SimpleNamespace(id=60, player_id=1)
+
+        assert FieldScreen._conquer_battle_context_kind(field, source) == 'preview'
+
     def test_tactics_hand_battle_context_overlay_draws_rings(self):
         from config import settings
         from game.screens.field_screen import FieldScreen
