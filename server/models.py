@@ -189,6 +189,13 @@ class Game(db.Model):
     # Battle shop gamble tracking — {str(player_id): count}
     battle_gamble_counts = db.Column(db.JSON, nullable=True)
 
+    # Conquer move model: 'battle_move' (legacy: pre-battle buy phase via battle_shop)
+    # or 'tactics_hand' (unified screen, configured moves are the starting hand,
+    # no battle_shop buy/return phase). Duel games and legacy open conquer games
+    # keep 'battle_move'. New conquer games default to 'tactics_hand'.
+    conquer_move_model = db.Column(db.String(20), nullable=False, default='battle_move',
+                                   server_default='battle_move')
+
     land = db.relationship('Land', foreign_keys=[land_id], lazy=True)
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
@@ -236,6 +243,7 @@ class Game(db.Model):
             'last_battle_result': self.last_battle_result,
             'resting_figure_ids': self.resting_figure_ids or [],
             'battle_gamble_counts': self.battle_gamble_counts or {},
+            'conquer_move_model': self.conquer_move_model or 'battle_move',
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],

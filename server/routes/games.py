@@ -3844,6 +3844,22 @@ def battle_decision():
                 if auto_fill_defender:
                     logger.info(f"[BATTLE_DECISION] Auto-filled defender {defender_player.id}: {auto_fill_defender}")
 
+                # Conquer tactics-hand: configured battle moves ARE the starting
+                # tactics hand; skip the legacy battle_shop buy/confirm phase
+                # and enter the 3-round battle directly.
+                if (game.mode == 'conquer'
+                        and (game.conquer_move_model or 'battle_move') == 'tactics_hand'):
+                    game.battle_moves_confirmed = {
+                        str(invader_player.id): True,
+                        str(defender_player.id): True,
+                    }
+                    game.battle_turn_player_id = game.invader_player_id
+                    # Defensive: ensure existing tactics rows start as "in hand".
+                    moves = BattleMove.query.filter_by(game_id=game_id).all()
+                    for m in moves:
+                        m.played_round = None
+                        m.call_figure_id = None
+
                 log_entry = LogEntry(
                     game_id=game_id,
                     player_id=None,

@@ -399,6 +399,14 @@ def enumerate_actions(game_dict: dict, ai_player_id: int, phase: str) -> list:
     elif phase == 'battle_decision':
         return _enum_battle_decision(game_dict, ai_player, opponent)
     elif phase == 'battle_shop':
+        # Conquer tactics-hand games skip the legacy battle_shop buy/confirm
+        # phase: the configured battle moves are already the player's
+        # starting hand, and the server transitions directly to battle_round.
+        # Returning [] here means the AI worker yields/sleeps until the
+        # battle_round phase is enumerable.
+        if (game_dict.get('mode') == 'conquer'
+                and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'):
+            return []
         return _enum_battle_shop(game_dict, ai_player, opponent)
     elif phase == 'battle_round':
         return _enum_battle_round(game_dict, ai_player, opponent)

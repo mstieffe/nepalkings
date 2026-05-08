@@ -92,6 +92,32 @@ def _is_battle_move_selection_phase(game):
     return bool(game and game.battle_confirmed and game.battle_turn_player_id is None)
 
 
+def _is_tactics_hand_conquer(game):
+    """Return True for conquer games using the unified tactics-hand model.
+
+    These games skip the legacy battle_shop buy/return/confirm phase: the
+    configured battle moves are already the player's starting hand at
+    battle-decision time, and the player interacts with them directly via
+    play/combine/dismantle/gamble.
+    """
+    return bool(
+        game
+        and game.mode == 'conquer'
+        and (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
+    )
+
+
+def _block_legacy_battle_shop_mutation(game):
+    """Reject buy/return/confirm requests for tactics-hand conquer games."""
+    if _is_tactics_hand_conquer(game):
+        return jsonify({
+            'success': False,
+            'message': 'Battle shop is disabled for this conquer game (tactics-hand model).',
+            'reason': 'tactics_hand_no_shop',
+        }), 400
+    return None
+
+
 def _guard_confirmed_selection_locked(game, player_id):
     """Block editing pre-battle moves after this player pressed Ready."""
     if not _is_battle_move_selection_phase(game):
@@ -138,6 +164,10 @@ def buy_battle_move():
     game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
 
     player = db.session.get(Player, player_id)
     if not player or player.game_id != game_id:
@@ -243,6 +273,10 @@ def return_battle_move():
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
     if game.battle_confirmed and game.battle_turn_player_id is not None:
         return jsonify({
             'success': False,
@@ -316,6 +350,10 @@ def confirm_battle_moves():
     game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
 
     if not game.battle_confirmed:
         return jsonify({

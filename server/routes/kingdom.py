@@ -4467,6 +4467,13 @@ def conquer_start_battle():
             defender_strategy_mode = 'battle_figure'
         elif has_counter_spell and not has_battle_fig:
             defender_strategy_mode = 'counter_spell'
+        elif has_counter_spell and has_battle_fig and battle_cfg_fig_valid:
+            # Both-selected: the counter spell fires on the response window
+            # and the configured battle figure is the counter-advance fallback
+            # if the spell can't (or shouldn't) be cast.  Pick the
+            # counter-spell branch so the response window opens; the AI worker
+            # falls back to the battle figure via cfg.battle_figure_id.
+            defender_strategy_mode = 'counter_spell'
         else:
             defender_strategy_mode = 'none'
             logger.info(
@@ -4479,6 +4486,13 @@ def conquer_start_battle():
             )
 
     # ── Create the Game ──
+    # New conquer games default to the unified "tactics_hand" model:
+    # configured battle moves become the starting tactics hand, no battle_shop
+    # buy/confirm phase. The legacy 'battle_move' model can be re-enabled via
+    # CONQUER_TACTICS_HAND_ENABLED=False for rollback.
+    _move_model = 'tactics_hand' if getattr(config,
+                                            'CONQUER_TACTICS_HAND_ENABLED',
+                                            True) else 'battle_move'
     game = Game(
         mode='conquer',
         land_id=land_id,
@@ -4489,6 +4503,7 @@ def conquer_start_battle():
         current_round=1,
         ceasefire_active=False,
         battle_confirmed=False,
+        conquer_move_model=_move_model,
     )
     db.session.add(game)
     db.session.flush()
@@ -4572,16 +4587,12 @@ def conquer_start_battle():
             def_config_moves, def_player, game,
             config_figure_map=def_cfg_fig_map)
 
-        # Set defender battle figure from config (only when the strategy is valid)
-        defer_config_defender = _has_must_be_attacked_figure(def_game_figures)
-        if defender_strategy_mode == 'battle_figure' and def_cfg.battle_figure_id:
-            mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id)
-            if mapped_id and not defer_config_defender:
-                game.defending_figure_id = mapped_id
-        if defender_strategy_mode == 'battle_figure' and def_cfg.battle_figure_id_2:
-            mapped_id = def_cfg_fig_map.get(def_cfg.battle_figure_id_2)
-            if mapped_id and not defer_config_defender:
-                game.defending_figure_id_2 = mapped_id
+        # NOTE: We intentionally do NOT pre-set ``game.defending_figure_id``
+        # for ``'battle_figure'`` mode any more.  The AI defender response
+        # loop counter-advances with the configured battle figure when the
+        # invader advances, so the player visibly sees the response instead
+        # of being dropped straight into ``battle_decision`` against an
+        # already-locked defender.
 
         planned_modifiers = _planned_conquer_modifiers(def_cfg, atk_cfg)
 

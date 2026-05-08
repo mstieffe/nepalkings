@@ -76,6 +76,15 @@ SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
 SMTP_FROM = os.getenv('SMTP_FROM', 'noreply@nepalkings.local')
 SERVER_BASE_URL = os.getenv('SERVER_BASE_URL', SERVER_URL)
 
+# Conquer move model rollout flag.
+# When True (default), new conquer games are created with conquer_move_model='tactics_hand':
+#   - configured battle moves become the player's starting tactics hand
+#   - the legacy battle_shop "buy/confirm" phase is skipped
+#   - /battle_shop/buy_battle_move and /battle_shop/return_battle_move are gated
+# Set CONQUER_TACTICS_HAND_ENABLED=False to roll back to the legacy battle_shop flow.
+# Existing open games keep whatever value they were created with.
+CONQUER_TACTICS_HAND_ENABLED = os.getenv('CONQUER_TACTICS_HAND_ENABLED', 'True').lower() == 'true'
+
 # AI Opponent settings
 AI_USERNAMES = ['[AI] Strategos']  # AI player usernames created at startup
 AI_INITIAL_GOLD = 999999  # AI starts with effectively infinite gold
