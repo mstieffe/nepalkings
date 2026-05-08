@@ -13,7 +13,8 @@ from models import (db, User, Land, LandAttackLog, KingdomMessage,
                     KingdomSkillAllocation,
                     CollectionCard,
                     LandConfig, LandConfigFigure, LandConfigBattleMove,
-                    Game, Player, Figure, BattleMove, CardToFigure, ActiveSpell,
+                    Game, Player, Figure, BattleMove, ConquerTactic,
+                    CardToFigure, ActiveSpell,
                     MainCard, SideCard, Suit, MainRank, CardRole)
 from routes.auth import require_token
 from game_service.deck_manager import DeckManager
@@ -3922,6 +3923,55 @@ def _build_battle_moves_from_config(cfg_moves, player, game, config_figure_map=N
         db.session.add(move)
 
 
+def _build_conquer_tactics_from_config(cfg_moves, player, game,
+                                       config_figure_map=None, source='config'):
+    """Create ConquerTactic records from configured conquer/defence moves."""
+    for sort_order, cfg_move in enumerate(cfg_moves):
+        call_fig_id = None
+        if cfg_move.call_figure_id and config_figure_map:
+            call_fig_id = config_figure_map.get(cfg_move.call_figure_id)
+
+        context = f'cfg_move={cfg_move.id} family={cfg_move.family_name}'
+        rank = _normalize_main_rank(
+            cfg_move.rank,
+            fallback_rank='10',
+            value=cfg_move.value,
+            context=context,
+        )
+        suit = _normalize_suit(cfg_move.suit, fallback='Hearts', context=context)
+        value = _normalize_main_value(rank, cfg_move.value, context=context)
+
+        mc = MainCard(
+            rank=rank,
+            suit=suit,
+            value=value,
+            game_id=game.id,
+            player_id=player.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=True,
+        )
+        db.session.add(mc)
+        db.session.flush()
+
+        tactic = ConquerTactic(
+            game_id=game.id,
+            player_id=player.id,
+            family_name=cfg_move.family_name,
+            card_id=mc.id,
+            card_type='main',
+            suit=suit,
+            rank=rank,
+            value=value,
+            source=source,
+            status='available',
+            call_figure_id=call_fig_id,
+            sort_order=getattr(cfg_move, 'round_index', None)
+            if getattr(cfg_move, 'round_index', None) is not None else sort_order,
+        )
+        db.session.add(tactic)
+
+
 def _build_battle_moves_from_template(template_moves, player, game,
                                       template_figures=None, game_figures=None):
     """Create BattleMove records from AI template move dicts.
@@ -3985,6 +4035,68 @@ def _build_battle_moves_from_template(template_moves, player, game,
             call_figure_id=call_fig_id,
         )
         db.session.add(move)
+
+
+def _build_conquer_tactics_from_template(template_moves, player, game,
+                                         template_figures=None, game_figures=None):
+    """Create ConquerTactic records from AI template move dicts."""
+    for sort_order, tpl_move in enumerate(template_moves):
+        call_fig_id = None
+        if tpl_move['family_name'] in ('Call Villager', 'Call Military', 'Call King'):
+            field_map = {
+                'Call Villager': 'village',
+                'Call Military': 'military',
+                'Call King': 'castle',
+            }
+            target_field = field_map[tpl_move['family_name']]
+            if game_figures:
+                for gf in game_figures:
+                    if gf.field == target_field:
+                        call_fig_id = gf.id
+                        break
+
+        context = f"tpl_move={tpl_move.get('family_name', 'unknown')}"
+        rank = _normalize_main_rank(
+            tpl_move.get('rank'),
+            fallback_rank='10',
+            value=tpl_move.get('value'),
+            context=context,
+        )
+        suit = _normalize_suit(
+            tpl_move.get('suit'),
+            fallback='Hearts',
+            context=context,
+        )
+        value = _normalize_main_value(rank, tpl_move.get('value'), context=context)
+
+        mc = MainCard(
+            rank=rank,
+            suit=suit,
+            value=value,
+            game_id=game.id,
+            player_id=player.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=True,
+        )
+        db.session.add(mc)
+        db.session.flush()
+
+        tactic = ConquerTactic(
+            game_id=game.id,
+            player_id=player.id,
+            family_name=tpl_move['family_name'],
+            card_id=mc.id,
+            card_type=tpl_move.get('card_type', 'main'),
+            suit=suit,
+            rank=rank,
+            value=value,
+            source='template',
+            status='available',
+            call_figure_id=call_fig_id,
+            sort_order=sort_order,
+        )
+        db.session.add(tactic)
 
 
 def _get_or_create_ai_user():
@@ -4531,17 +4643,28 @@ def conquer_start_battle():
     for cfg_fig, game_fig in zip(atk_figures, atk_game_figures):
         cfg_fig_map[cfg_fig.id] = game_fig.id
 
-    _build_battle_moves_from_config(atk_moves, atk_player, game,
-                                    config_figure_map=cfg_fig_map)
+    if _move_model == 'tactics_hand':
+        _build_conquer_tactics_from_config(
+            atk_moves, atk_player, game, config_figure_map=cfg_fig_map,
+            source='config')
+    else:
+        _build_battle_moves_from_config(atk_moves, atk_player, game,
+                                        config_figure_map=cfg_fig_map)
 
     # ── Build defender figures & moves ──
     if is_ai_land:
         def_game_figures = _build_figures_from_template(
             template['figures'], def_player, game)
-        _build_battle_moves_from_template(
-            template['battle_moves'], def_player, game,
-            template_figures=template['figures'],
-            game_figures=def_game_figures)
+        if _move_model == 'tactics_hand':
+            _build_conquer_tactics_from_template(
+                template['battle_moves'], def_player, game,
+                template_figures=template['figures'],
+                game_figures=def_game_figures)
+        else:
+            _build_battle_moves_from_template(
+                template['battle_moves'], def_player, game,
+                template_figures=template['figures'],
+                game_figures=def_game_figures)
 
         # Set defender battle figure from template
         battle_fig_idx = template.get('battle_figure_index', 0)
@@ -4583,9 +4706,15 @@ def conquer_start_battle():
         for cfg_fig, game_fig in zip(def_config_figures, def_game_figures):
             def_cfg_fig_map[cfg_fig.id] = game_fig.id
 
-        _build_battle_moves_from_config(
-            def_config_moves, def_player, game,
-            config_figure_map=def_cfg_fig_map)
+        if _move_model == 'tactics_hand':
+            _build_conquer_tactics_from_config(
+                def_config_moves, def_player, game,
+                config_figure_map=def_cfg_fig_map,
+                source='config')
+        else:
+            _build_battle_moves_from_config(
+                def_config_moves, def_player, game,
+                config_figure_map=def_cfg_fig_map)
 
         # NOTE: We intentionally do NOT pre-set ``game.defending_figure_id``
         # for ``'battle_figure'`` mode any more.  The AI defender response

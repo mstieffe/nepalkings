@@ -201,6 +201,8 @@ class Game(db.Model):
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
     battle_moves = db.relationship('BattleMove', backref='game', lazy=True, foreign_keys='BattleMove.game_id')
+    conquer_tactics = db.relationship('ConquerTactic', backref='game', lazy=True,
+                                      foreign_keys='ConquerTactic.game_id')
     def serialize(self):
         return {
             'id': self.id,
@@ -250,6 +252,7 @@ class Game(db.Model):
             'log_entries': [entry.serialize() for entry in self.log_entries],
             'chat_messages': [message.serialize() for message in self.chat_messages],
             'battle_moves': [move.serialize() for move in self.battle_moves],
+            'conquer_tactics': [tactic.serialize() for tactic in self.conquer_tactics],
             'active_spells': [spell.serialize() for spell in self.active_spells],
         }
 
@@ -590,6 +593,72 @@ class BattleMove(db.Model):
             data['played_round'] = self.played_round
         if self.call_figure_id is not None:
             data['call_figure_id'] = self.call_figure_id
+        return data
+
+
+class ConquerTactic(db.Model):
+    """A game-scoped conquer tactic for the unified tactics-hand model."""
+    __tablename__ = 'conquer_tactic'
+
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False, index=True)
+    player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False, index=True)
+    card_id = db.Column(db.Integer, nullable=False)
+    card_type = db.Column(db.String(10), nullable=False, default='main', server_default='main')
+    card_id_b = db.Column(db.Integer, nullable=True)
+    card_type_b = db.Column(db.String(10), nullable=True)
+    family_name = db.Column(db.String(50), nullable=False)
+    suit = db.Column(db.String(20), nullable=False)
+    suit_b = db.Column(db.String(20), nullable=True)
+    rank = db.Column(db.String(12), nullable=False)
+    value = db.Column(db.Integer, nullable=False)
+    value_a = db.Column(db.Integer, nullable=True)
+    value_b = db.Column(db.Integer, nullable=True)
+    source = db.Column(db.String(20), nullable=False, default='config', server_default='config')
+    status = db.Column(db.String(20), nullable=False, default='available', server_default='available')
+    played_round = db.Column(db.Integer, nullable=True)
+    call_figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)
+    source_tactic_id_a = db.Column(db.Integer, nullable=True)
+    source_tactic_id_b = db.Column(db.Integer, nullable=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    created_at = db.Column(db.DateTime, default=_utcnow)
+
+    player = db.relationship('Player', backref='conquer_tactics', foreign_keys=[player_id])
+
+    __table_args__ = (
+        db.Index('ix_conquer_tactic_game_player_status', 'game_id', 'player_id', 'status'),
+    )
+
+    def serialize(self):
+        data = {
+            'id': self.id,
+            'game_id': self.game_id,
+            'player_id': self.player_id,
+            'card_id': self.card_id,
+            'card_type': self.card_type,
+            'family_name': self.family_name,
+            'suit': self.suit,
+            'rank': self.rank,
+            'value': self.value,
+            'source': self.source,
+            'status': self.status,
+            'played_round': self.played_round,
+            'call_figure_id': self.call_figure_id,
+            'sort_order': self.sort_order,
+        }
+        if self.card_id_b is not None:
+            data['card_id_b'] = self.card_id_b
+            data['card_type_b'] = self.card_type_b
+        if self.suit_b is not None:
+            data['suit_b'] = self.suit_b
+        if self.value_a is not None:
+            data['value_a'] = self.value_a
+        if self.value_b is not None:
+            data['value_b'] = self.value_b
+        if self.source_tactic_id_a is not None:
+            data['source_tactic_id_a'] = self.source_tactic_id_a
+        if self.source_tactic_id_b is not None:
+            data['source_tactic_id_b'] = self.source_tactic_id_b
         return data
 
 

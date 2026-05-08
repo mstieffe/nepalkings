@@ -485,6 +485,10 @@ def gamble_battle_move():
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
     lock_err = _guard_confirmed_selection_locked(game, player_id)
     if lock_err:
         return lock_err
@@ -772,6 +776,10 @@ def combine_battle_moves():
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
     lock_err = _guard_confirmed_selection_locked(game, player_id)
     if lock_err:
         return lock_err
@@ -866,6 +874,10 @@ def dismantle_battle_move():
     game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
 
     lock_err = _guard_confirmed_selection_locked(game, player_id)
     if lock_err:

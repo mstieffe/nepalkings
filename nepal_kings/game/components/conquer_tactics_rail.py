@@ -89,7 +89,11 @@ class ConquerTacticsRail:
             return []
 
     def _hand_moves(self) -> List[Dict[str, Any]]:
-        return [m for m in self._moves() if m.get('played_round') is None]
+        return [
+            m for m in self._moves()
+            if m.get('played_round') is None
+            and m.get('status', 'available') == 'available'
+        ]
 
     def _selected_move(self) -> Optional[Dict[str, Any]]:
         if self._selected_id is None:
@@ -138,7 +142,7 @@ class ConquerTacticsRail:
 
     @staticmethod
     def _is_double_dagger(move: Dict[str, Any]) -> bool:
-        return move.get('family_name') == 'Dagger' and bool(move.get('card_id_b'))
+        return move.get('family_name') in ('Dagger', 'Double Dagger') and bool(move.get('card_id_b'))
 
     # ------------------------------------------------------------------ layout
     def _ensure_layout(self):

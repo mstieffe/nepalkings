@@ -338,19 +338,28 @@ class ConquerGameScreen(GameScreen):
         move = action_payload.get('move') or {}
         mid = move.get('id')
         try:
-            if action == ACTION_PLAY and mid is not None:
+            if self._is_tactics_hand_game() and action == ACTION_PLAY and mid is not None:
+                game_service.play_conquer_tactic(gid, pid, mid)
+            elif action == ACTION_PLAY and mid is not None:
                 game_service.play_battle_move(gid, pid, mid)
             elif action == ACTION_SKIP:
                 game_service.skip_battle_turn(gid, pid)
+            elif self._is_tactics_hand_game() and action == ACTION_GAMBLE and mid is not None:
+                game_service.gamble_conquer_tactic(gid, pid, mid)
             elif action == ACTION_GAMBLE and mid is not None:
                 battle_shop_service.gamble_battle_move(gid, pid, mid)
+            elif self._is_tactics_hand_game() and action == ACTION_DISMANTLE and mid is not None:
+                game_service.dismantle_conquer_tactic(gid, pid, mid)
             elif action == ACTION_DISMANTLE and mid is not None:
                 battle_shop_service.dismantle_battle_move(gid, pid, mid)
             elif action == ACTION_COMBINE and mid is not None:
                 partner = action_payload.get('partner') or {}
                 pmid = partner.get('id')
                 if pmid is not None:
-                    battle_shop_service.combine_battle_moves(gid, pid, mid, pmid)
+                    if self._is_tactics_hand_game():
+                        game_service.combine_conquer_tactics(gid, pid, mid, pmid)
+                    else:
+                        battle_shop_service.combine_battle_moves(gid, pid, mid, pmid)
         except Exception:
             # Network errors are rendered via the standard polling cycle —
             # we don't want a transient failure to blow up the input loop.
@@ -979,6 +988,32 @@ class ConquerGameScreen(GameScreen):
         game = self.state.game
         if not game:
             return []
+
+        if self._is_tactics_hand_game():
+            game_id = getattr(game, 'game_id', None)
+            player_id = getattr(game, 'player_id', None)
+            if not game_id or not player_id:
+                return list(getattr(game, 'conquer_tactics', []) or [])
+
+            cache_key = (
+                'tactics',
+                game_id,
+                player_id,
+                getattr(game, '_game_data_version', 0),
+                getattr(game, 'battle_turn_player_id', None),
+                getattr(game, 'battle_round', None),
+            )
+            if cache_key == getattr(self, '_conquer_battle_move_cache_key', None):
+                return list(getattr(self, '_conquer_battle_move_cache', []) or [])
+            try:
+                result = game_service.get_battle_state(game_id, player_id)
+                moves = result.get('player_tactics') or result.get('player_moves') or []
+            except Exception:
+                moves = list(getattr(self, '_conquer_battle_move_cache', []) or [])
+            self._conquer_battle_move_cache_key = cache_key
+            self._conquer_battle_move_cache = [dict(move) for move in moves]
+            self._sync_conquer_battle_move_subscreen_cache(self._conquer_battle_move_cache)
+            return list(self._conquer_battle_move_cache)
 
         battle = self.subscreens.get('battle') if hasattr(self, 'subscreens') else None
         battle_moves = getattr(battle, 'player_moves', None) if battle else None

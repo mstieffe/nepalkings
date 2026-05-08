@@ -1168,10 +1168,18 @@ def _enum_battle_round(game_dict, ai_player, opponent):
     action_id = 1
     
     current_round = game_dict.get('battle_round', 0)
+    tactics_hand = (game_dict.get('mode') == 'conquer'
+                    and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand')
     
     # Get unplayed moves
-    ai_moves = [m for m in game_dict.get('battle_moves', [])
-                if m.get('player_id') == ai_player['id'] and m.get('played_round') is None]
+    if tactics_hand:
+        ai_moves = [m for m in game_dict.get('conquer_tactics', [])
+                    if m.get('player_id') == ai_player['id']
+                    and m.get('status', 'available') == 'available'
+                    and m.get('played_round') is None]
+    else:
+        ai_moves = [m for m in game_dict.get('battle_moves', [])
+                    if m.get('player_id') == ai_player['id'] and m.get('played_round') is None]
     
     for move in ai_moves:
         family = move.get('family_name', '')
@@ -1199,7 +1207,7 @@ def _enum_battle_round(game_dict, ai_player, opponent):
 
         actions.append({
             'id': action_id,
-            'type': 'play_battle_move',
+            'type': 'play_conquer_tactic' if tactics_hand else 'play_battle_move',
             'description': desc,
             'params': params,
         })
@@ -1247,10 +1255,11 @@ def _enum_battle_round(game_dict, ai_player, opponent):
 
             actions.append({
                 'id': action_id,
-                'type': 'gamble_battle_move',
+                'type': 'gamble_conquer_tactic' if tactics_hand else 'gamble_battle_move',
                 'description': desc,
                 'params': {
                     'battle_move_id': move['id'],
+                    'tactic_id': move['id'],
                 },
             })
             action_id += 1

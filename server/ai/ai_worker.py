@@ -697,24 +697,30 @@ def _conquer_move_effective_value(move, call_figure, own_healers):
 
 def _conquer_collect_move_infos(game, ai_player_id):
     """Collect unplayed moves with best call target and effective value."""
-    from models import BattleMove, Figure, db
+    from models import BattleMove, ConquerTactic, Figure, db
     from routes.games import _find_healer_figures
+
+    tactics_hand = (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
+    move_model = ConquerTactic if tactics_hand else BattleMove
 
     all_figures = Figure.query.filter_by(game_id=game.id).all()
     battle_ids = _conquer_battle_ids(game)
 
     called_ids = {
-        cfid for (cfid,) in db.session.query(BattleMove.call_figure_id)
+        cfid for (cfid,) in db.session.query(move_model.call_figure_id)
         .filter_by(game_id=game.id, player_id=ai_player_id)
-        .filter(BattleMove.played_round.isnot(None))
-        .filter(BattleMove.call_figure_id.isnot(None))
+        .filter(move_model.played_round.isnot(None))
+        .filter(move_model.call_figure_id.isnot(None))
         .all()
     }
 
     own_healers = _find_healer_figures(ai_player_id, all_figures, battle_ids, game.id)
-    moves = BattleMove.query.filter_by(
-        game_id=game.id, player_id=ai_player_id
-    ).filter(BattleMove.played_round.is_(None)).order_by(BattleMove.id).all()
+    query = move_model.query.filter_by(game_id=game.id, player_id=ai_player_id)
+    if tactics_hand:
+        query = query.filter_by(status='available')
+    else:
+        query = query.filter(move_model.played_round.is_(None))
+    moves = query.order_by(move_model.id).all()
 
     infos = []
     for move in moves:
@@ -800,18 +806,24 @@ def _conquer_choose_best_dagger_pair(moves):
 
 def _conquer_opponent_move_value_for_round(game, ai_player_id, current_round, all_figures):
     """Return opponent move effective value in the current round, if known."""
-    from models import BattleMove, Figure, db
+    from models import BattleMove, ConquerTactic, Figure, db
     from routes.games import _find_healer_figures
+
+    tactics_hand = (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
+    move_model = ConquerTactic if tactics_hand else BattleMove
 
     opponent = next((p for p in game.players if p.id != ai_player_id), None)
     if not opponent:
         return None
 
-    opp_move = BattleMove.query.filter_by(
+    opp_query = move_model.query.filter_by(
         game_id=game.id,
         player_id=opponent.id,
         played_round=current_round,
-    ).first()
+    )
+    if tactics_hand:
+        opp_query = opp_query.filter_by(status='played')
+    opp_move = opp_query.first()
     if not opp_move:
         return None
 
@@ -828,17 +840,23 @@ def _conquer_opponent_move_value_for_round(game, ai_player_id, current_round, al
 
 def _conquer_opponent_played_block_for_round(game, ai_player_id, current_round):
     """Return True when opponent already played Block this round."""
-    from models import BattleMove
+    from models import BattleMove, ConquerTactic
+
+    tactics_hand = (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
+    move_model = ConquerTactic if tactics_hand else BattleMove
 
     opponent = next((p for p in game.players if p.id != ai_player_id), None)
     if not opponent:
         return False
 
-    opp_move = BattleMove.query.filter_by(
+    opp_query = move_model.query.filter_by(
         game_id=game.id,
         player_id=opponent.id,
         played_round=current_round,
-    ).first()
+    )
+    if tactics_hand:
+        opp_query = opp_query.filter_by(status='played')
+    opp_move = opp_query.first()
     if not opp_move:
         return False
 
@@ -968,7 +986,9 @@ def _conquer_skip_battle_turn_with_fallback(base, game, ai_player_id, auto_enabl
     logger.warning(
         f"[CONQUER-AI] skip rejected; playing fallback move game={game.id} move={move.id}"
     )
-    if _exec_play_battle_move(base, game.id, ai_player_id, params):
+    tactics_hand = (getattr(refreshed, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
+    if ((tactics_hand and _exec_play_conquer_tactic(base, game.id, ai_player_id, params))
+            or (not tactics_hand and _exec_play_battle_move(base, game.id, ai_player_id, params))):
         return True
 
     return _conquer_try_finish_battle_if_ready(base, game.id, ai_player_id)
@@ -1013,6 +1033,7 @@ def _conquer_confirm_battle_moves_with_fallback(app, base, game_id, ai_player_id
 def _conquer_play_battle_round(base, game, ai_player_id):
     """Execute conquer battle-round policy including optional auto-gamble flow."""
     auto_enabled, threshold = _get_conquer_auto_gamble_settings(game, ai_player_id)
+    tactics_hand = (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
     move_infos, all_figures = _conquer_collect_move_infos(game, ai_player_id)
     if not move_infos:
         logger.info(f"[CONQUER-AI] no unplayed move, skipping turn game={game.id}")
@@ -1026,8 +1047,11 @@ def _conquer_play_battle_round(base, game, ai_player_id):
                 f"[CONQUER-AI] auto-gamble game={game.id} move={gamble_move.id} "
                 f"eff={gamble_target['effective_value']} threshold={threshold}"
             )
-            if _exec_gamble_battle_move(base, game.id, ai_player_id,
-                                        {'battle_move_id': gamble_move.id}):
+            gamble_params = {'battle_move_id': gamble_move.id, 'tactic_id': gamble_move.id}
+            if ((tactics_hand and _exec_gamble_conquer_tactic(base, game.id, ai_player_id,
+                                                              gamble_params))
+                    or (not tactics_hand and _exec_gamble_battle_move(base, game.id, ai_player_id,
+                                                                      gamble_params))):
                 refreshed = _reload_conquer_game(game.id)
                 if refreshed:
                     game = refreshed
@@ -1041,12 +1065,11 @@ def _conquer_play_battle_round(base, game, ai_player_id):
             logger.info(
                 f"[CONQUER-AI] auto-combine daggers game={game.id} pair={dagger_pair[0]},{dagger_pair[1]}"
             )
-            if _exec_combine_battle_moves(
-                base,
-                game.id,
-                ai_player_id,
-                {'move_id_a': dagger_pair[0], 'move_id_b': dagger_pair[1]},
-            ):
+            combine_params = {'move_id_a': dagger_pair[0], 'move_id_b': dagger_pair[1]}
+            if ((tactics_hand and _exec_combine_conquer_tactics(
+                    base, game.id, ai_player_id, combine_params))
+                    or (not tactics_hand and _exec_combine_battle_moves(
+                        base, game.id, ai_player_id, combine_params))):
                 refreshed = _reload_conquer_game(game.id)
                 if refreshed:
                     game = refreshed
@@ -1081,7 +1104,8 @@ def _conquer_play_battle_round(base, game, ai_player_id):
         f"call={chosen.get('call_figure_id')} auto={auto_enabled} threshold={threshold} "
         f"opp_block={opponent_played_block}"
     )
-    if _exec_play_battle_move(base, game.id, ai_player_id, params):
+    if ((tactics_hand and _exec_play_conquer_tactic(base, game.id, ai_player_id, params))
+            or (not tactics_hand and _exec_play_battle_move(base, game.id, ai_player_id, params))):
         return True
     return _conquer_try_finish_battle_if_ready(base, game.id, ai_player_id)
 
@@ -2814,10 +2838,16 @@ def _execute_action(app, game_id, ai_player_id, action):
             return _exec_confirm_battle_moves(base, game_id, ai_player_id)
         elif action_type == 'gamble_battle_move':
             return _exec_gamble_battle_move(base, game_id, ai_player_id, params)
+        elif action_type == 'gamble_conquer_tactic':
+            return _exec_gamble_conquer_tactic(base, game_id, ai_player_id, params)
         elif action_type == 'combine_battle_moves':
             return _exec_combine_battle_moves(base, game_id, ai_player_id, params)
+        elif action_type == 'combine_conquer_tactics':
+            return _exec_combine_conquer_tactics(base, game_id, ai_player_id, params)
         elif action_type == 'play_battle_move':
             return _exec_play_battle_move(base, game_id, ai_player_id, params)
+        elif action_type == 'play_conquer_tactic':
+            return _exec_play_conquer_tactic(base, game_id, ai_player_id, params)
         elif action_type == 'skip_battle_turn':
             return _exec_skip_battle_turn(base, game_id, ai_player_id)
         elif action_type == 'allow_spell':
@@ -3217,6 +3247,24 @@ def _exec_gamble_battle_move(base, game_id, ai_player_id, params):
     return False
 
 
+def _exec_gamble_conquer_tactic(base, game_id, ai_player_id, params):
+    """Gamble a conquer tactic via POST /games/gamble_conquer_tactic."""
+    tactic_id = params.get('tactic_id') or params.get('battle_move_id')
+    resp = _ai_post(f'{base}/games/gamble_conquer_tactic', ai_player_id, json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'tactic_id': tactic_id,
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        new_moves = result.get('new_tactics') or result.get('new_moves') or []
+        new_desc = ', '.join(f"{m.get('family_name','?')}({m.get('value','?')})" for m in new_moves)
+        logger.info(f"Gambled conquer tactic {tactic_id} → drew: {new_desc}")
+        return True
+    logger.warning(f"Gamble conquer tactic failed: {result.get('message')}")
+    return False
+
+
 def _exec_combine_battle_moves(base, game_id, ai_player_id, params):
     """Combine 2 Daggers into Double Dagger via POST /battle_shop/combine_battle_moves."""
     resp = _ai_post(f'{base}/battle_shop/combine_battle_moves', ai_player_id, json={
@@ -3231,6 +3279,23 @@ def _exec_combine_battle_moves(base, game_id, ai_player_id, params):
         logger.info(f"Combined into Double Dagger (value={combined.get('value','?')})")
         return True
     logger.warning(f"Combine battle moves failed: {result.get('message')}")
+    return False
+
+
+def _exec_combine_conquer_tactics(base, game_id, ai_player_id, params):
+    """Combine two conquer tactics via POST /games/combine_conquer_tactics."""
+    resp = _ai_post(f'{base}/games/combine_conquer_tactics', ai_player_id, json={
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'tactic_id_a': params['move_id_a'],
+        'tactic_id_b': params['move_id_b'],
+    }, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        combined = result.get('combined_tactic') or result.get('combined_move') or {}
+        logger.info(f"Combined conquer tactics into Double Dagger (value={combined.get('value','?')})")
+        return True
+    logger.warning(f"Combine conquer tactics failed: {result.get('message')}")
     return False
 
 
@@ -3251,6 +3316,26 @@ def _exec_play_battle_move(base, game_id, ai_player_id, params):
                      f" (call_figure_id={call_figure_id})")
         return True
     logger.warning(f"Play battle move failed: {result.get('message')}")
+    return False
+
+
+def _exec_play_conquer_tactic(base, game_id, ai_player_id, params):
+    """Play a conquer tactic via POST /games/play_conquer_tactic."""
+    tactic_id = params.get('tactic_id') or params.get('battle_move_id')
+    payload = {
+        'game_id': game_id,
+        'player_id': ai_player_id,
+        'tactic_id': tactic_id,
+    }
+    call_figure_id = params.get('call_figure_id')
+    if call_figure_id:
+        payload['call_figure_id'] = call_figure_id
+    resp = _ai_post(f'{base}/games/play_conquer_tactic', ai_player_id, json=payload, timeout=15)
+    result = resp.json()
+    if result.get('success'):
+        logger.info(f"Played conquer tactic {tactic_id} (call_figure_id={call_figure_id})")
+        return True
+    logger.warning(f"Play conquer tactic failed: {result.get('message')}")
     return False
 
 

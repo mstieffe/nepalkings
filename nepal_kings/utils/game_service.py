@@ -228,6 +228,70 @@ def play_battle_move(game_id, player_id, battle_move_id, call_figure_id=None):
         return {'success': False, 'message': f"Failed to play battle move: {str(e)}"}
 
 
+def play_conquer_tactic(game_id, player_id, tactic_id, call_figure_id=None):
+    """Play a conquer tactic in the current battle round."""
+    try:
+        payload = {
+            'game_id': game_id,
+            'player_id': player_id,
+            'tactic_id': tactic_id,
+        }
+        if call_figure_id is not None:
+            payload['call_figure_id'] = call_figure_id
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/play_conquer_tactic',
+            json=payload,
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to play conquer tactic: {str(e)}"}
+
+
+def gamble_conquer_tactic(game_id, player_id, tactic_id):
+    """Gamble a conquer tactic for two replacement tactics."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/gamble_conquer_tactic',
+            json={'game_id': game_id, 'player_id': player_id, 'tactic_id': tactic_id},
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to gamble conquer tactic: {str(e)}"}
+
+
+def combine_conquer_tactics(game_id, player_id, tactic_id_a, tactic_id_b):
+    """Combine two same-colour Dagger conquer tactics."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/combine_conquer_tactics',
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'tactic_id_a': tactic_id_a,
+                'tactic_id_b': tactic_id_b,
+            },
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to combine conquer tactics: {str(e)}"}
+
+
+def dismantle_conquer_tactic(game_id, player_id, tactic_id):
+    """Dismantle an unplayed combined conquer tactic."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/dismantle_conquer_tactic',
+            json={'game_id': game_id, 'player_id': player_id, 'tactic_id': tactic_id},
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to dismantle conquer tactic: {str(e)}"}
+
+
 def get_battle_state(game_id, player_id):
     """Poll the current 3-round battle state from the server."""
     try:
