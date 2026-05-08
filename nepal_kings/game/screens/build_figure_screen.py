@@ -485,9 +485,10 @@ class BuildFigureScreen(SubScreen):
                         )
                         return
 
+                    _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                     self.make_dialogue_box(
                         message="Your new figure has been placed on the field.",
-                        actions=['to field'],
+                        actions=_post_build_actions,
                         icon="figure",
                         title="Figure Built"
                     )
@@ -534,9 +535,10 @@ class BuildFigureScreen(SubScreen):
                             color_name = 'red' if civil_war_color == 'offensive' else 'black'
                             self.game.civil_war_awaiting_second = True
                             self.game.civil_war_required_color = civil_war_color
+                            _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                             self.make_dialogue_box(
                                 message=f"{fig_name} has been built and {action_word} toward battle!\n\nCivil War! You may select a second village figure of the same color ({color_name}).",
-                                actions=['to field'],
+                                actions=_post_build_actions,
                                 icon="figure",
                                 title="Instant Charge!"
                             )
@@ -548,18 +550,20 @@ class BuildFigureScreen(SubScreen):
                             # Trigger advance notification
                             self.game.pending_own_advance_notification = True
                             self.game.own_advance_figure_name = fig_name
+                            _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                             self.make_dialogue_box(
                                 message=f"{fig_name} has been built and {action_word} toward battle!",
-                                actions=['to field'],
+                                actions=_post_build_actions,
                                 icon="figure",
                                 title="Instant Charge!"
                             )
                     else:
                         # Advance failed but figure was still built
                         error_msg = charge_result.get('message', 'Advance conditions not met')
+                        _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                         self.make_dialogue_box(
                             message=f"Figure was built successfully, but could not advance:\n\n{error_msg}",
-                            actions=['to field'],
+                            actions=_post_build_actions,
                             icon="error",
                             title="Advance Failed"
                         )
@@ -572,6 +576,8 @@ class BuildFigureScreen(SubScreen):
                             self._on_done()
                     else:
                         self.state.subscreen = "field"
+                elif response == 'build more':
+                    self.dialogue_box = None
                 elif response in ['cancel', 'got it!', 'ok']:
                     self.dialogue_box = None
 

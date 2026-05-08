@@ -1273,6 +1273,23 @@ class GameScreen(Screen):
                 opponent_no_target_spells = summary.get('opponent_prelude_no_target_spells', [])
                 pending_prelude_target = summary.get('pending_prelude_target')
 
+                # Snapshot prelude spells on the game so the conquer
+                # timeline panel can read them later (ActiveSpell rows
+                # do not carry a phase_cast marker).
+                self.state.game.conquer_own_prelude_spells = (
+                    list(own_spells) + list(own_no_target_spells)
+                )
+                self.state.game.conquer_opp_prelude_spells = (
+                    list(opp_spells) + list(opponent_no_target_spells)
+                )
+                # Include any pending target-required prelude (own side) so
+                # the panel shows the icon while the user is still picking
+                # a target.
+                if isinstance(pending_prelude_target, dict):
+                    self.state.game.conquer_own_prelude_spells.append(
+                        dict(pending_prelude_target)
+                    )
+
                 self.state.pending_conquer_prelude_target = None
                 self.state.game.pending_conquer_prelude_target = False
 
@@ -3436,7 +3453,7 @@ class GameScreen(Screen):
         elif not attacker_won and is_attacker:
             title = 'Attack Failed'
             icon = 'defeat'
-            message = 'The defender held their ground.\n\nYou did not conquer this land.'
+            message = 'You did not conquer this land.'
             is_ai_defender = bool(result.get('is_ai_defender'))
             loot_cards = result.get('loot_lost_cards') or []
             loot_images, loot_count = self._card_images(loot_cards)
@@ -3581,7 +3598,7 @@ class GameScreen(Screen):
             elif not is_winner and is_attacker:
                 title = "Attack Failed"
                 icon = 'defeat'
-                message = "The defender held their ground.\n\nYou did not conquer this land."
+                message = "You did not conquer this land."
             else:
                 title = "Land Lost!"
                 icon = 'defeat'
@@ -3668,7 +3685,7 @@ class GameScreen(Screen):
         opp_stats = stats.get(opp_id) or stats.get(str(opp_id)) or {}
         opp_name = loser_name if is_winner else winner_name
 
-        # Booster pack reward info
+        # Reward info (booster packs + maps)
         boosters_key = 'winner_boosters' if is_winner else 'loser_boosters'
         boosters = game_over_info.get(boosters_key)
         if boosters:
@@ -3680,6 +3697,13 @@ class GameScreen(Screen):
                 if boosters.get('side', 0) > 0:
                     parts.append(f"{boosters['side']} side")
                 message_after += f"\nBooster packs: {', '.join(parts)}"
+        rewards_key = 'winner_rewards' if is_winner else 'loser_rewards'
+        rewards = game_over_info.get(rewards_key) or {}
+        maps_reward = int(rewards.get('map', 0))
+        if maps_reward > 0:
+            message_after += f"\nMaps: +{maps_reward}"
+            if self.state.user_dict is not None:
+                self.state.user_dict['maps'] = int(self.state.user_dict.get('maps', 0)) + maps_reward
 
         if my_stats or opp_stats:
             stats_lines = [f"\nRounds played: {rounds_played}"]
@@ -3804,14 +3828,6 @@ class GameScreen(Screen):
             self.state.game.battle_moves_ready = True
             self.state.game.waiting_for_opponent_battle_moves = False
             self.battle_button.locked = False
-            if hasattr(self, 'emit_conquer_event'):
-                self.emit_conquer_event(
-                    key=f"auto_confirm_moves:{getattr(self.state.game, 'game_id', 'local')}",
-                    title='Battle moves locked',
-                    detail='Your committed conquer moves were confirmed automatically.',
-                    phase='moves',
-                    tone='good',
-                )
             return
 
         self.state.game.battle_moves_phase = True

@@ -67,7 +67,8 @@ class BattleShopScreen(SubScreen):
 
         # Bought moves (loaded from server)
         self.bought_moves = []  # List of server dicts
-        self._loaded_game_key = None  # Track (game_id, player_id) for reload detection
+        self._loaded_game_key = None  # Track (game_id, player_id) for identity reloads
+        self._loaded_bought_moves_key = None  # Track server data version for live move reloads
         self._load_bought_moves()
 
         # Slot rendering
@@ -127,6 +128,7 @@ class BattleShopScreen(SubScreen):
         self.selected_moves = []
         self.bought_moves = []
         self._loaded_game_key = None
+        self._loaded_bought_moves_key = None
         self._figures_loaded_game_key = None
         self._player_figures = []
         self._resources_data = None
@@ -273,6 +275,8 @@ class BattleShopScreen(SubScreen):
             # In kingdom mode, moves come from the config
             if self.game:
                 self.bought_moves = self.game._config.get('battle_moves', [])
+                self._loaded_game_key = self._game_identity_key(self.game)
+                self._loaded_bought_moves_key = self._bought_moves_cache_key(self.game)
             return
         if not self.game:
             return
@@ -281,11 +285,24 @@ class BattleShopScreen(SubScreen):
                 self.game.game_id, self.game.player_id
             )
             self.bought_moves = result.get('battle_moves', [])
-            self._loaded_game_key = (getattr(self.game, 'game_id', None),
-                                     getattr(self.game, 'player_id', None))
+            self._loaded_game_key = self._game_identity_key(self.game)
+            self._loaded_bought_moves_key = self._bought_moves_cache_key(self.game)
         except Exception as e:
             logger.error(f"[BattleShop] Failed to load bought moves: {e}")
             self.bought_moves = []
+
+    def _game_identity_key(self, game):
+        return (getattr(game, 'game_id', None), getattr(game, 'player_id', None))
+
+    def _bought_moves_cache_key(self, game):
+        identity = self._game_identity_key(game)
+        if _is_kingdom_config_mode(self.mode):
+            return identity
+        return (*identity, getattr(game, '_game_data_version', 0))
+
+    def _should_reload_bought_moves(self, game):
+        current_key = self._bought_moves_cache_key(game)
+        return bool(current_key[0] and current_key != self._loaded_bought_moves_key)
 
     def _get_bought_card_ids(self):
         """Set of card IDs already reserved for battle moves."""
@@ -320,6 +337,19 @@ class BattleShopScreen(SubScreen):
     def _can_ready_for_battle(self):
         required = self._required_battle_move_count()
         return len(self.bought_moves) >= required
+
+    def has_available_battle_move_changes(self):
+        """Return True when the hand offers a new battle-move card.
+
+        Conquer battles arrive with preconfigured battle moves.  The shop is
+        only useful during the pre-battle window if a newly drawn/unreserved
+        hand card can actually become a move; otherwise the player can only
+        press Ready and the conquer shell may skip the shop entirely.
+        """
+        hand = self._get_hand_cards()
+        bought_ids = self._get_bought_card_ids()
+        available = self.battle_move_manager.get_available_moves(hand, bought_ids)
+        return any(bool(moves) for moves in available.values())
 
     def _rebuild_card_source_kingdom(self):
         """Re-fetch collection and rebuild the card source for kingdom mode."""
@@ -387,11 +417,12 @@ class BattleShopScreen(SubScreen):
             self.card_source.game = game
 
         # Reload bought moves when the game changes (e.g. loading a saved game)
-        current_key = (getattr(game, 'game_id', None),
-                       getattr(game, 'player_id', None))
+        current_key = self._game_identity_key(game)
         if current_key[0] and current_key != self._loaded_game_key:
             self._load_bought_moves()
             self._load_player_figures()
+        elif self._should_reload_bought_moves(game):
+            self._load_bought_moves()
 
         in_phase = getattr(game, 'battle_moves_phase', False)
 

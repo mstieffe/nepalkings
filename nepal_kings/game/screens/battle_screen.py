@@ -1566,16 +1566,6 @@ class BattleScreen(SubScreen):
         self.player_played[skipped_round] = {
             'family_name': 'Skip', 'value': 0, 'suit': '', '_skipped': True
         }
-        parent = getattr(self.state, 'parent_screen', None)
-        if (getattr(self.game, 'mode', 'duel') == 'conquer'
-                and parent and hasattr(parent, 'emit_conquer_event')):
-            parent.emit_conquer_event(
-                key=f'battle_auto_skip:{skipped_round}',
-                title='Round skipped',
-                detail=f'Round {skipped_round + 1}: no unused battle move was available.',
-                phase='battle',
-                tone='warning',
-            )
 
         # Update round and turn from server response
         self.current_round = result.get('battle_round', self.current_round)
@@ -1871,16 +1861,6 @@ class BattleScreen(SubScreen):
 
         # Mark the move as used in the player_moves list too
         self.player_moves[move_idx]['played_round'] = played_round
-        parent = getattr(self.state, 'parent_screen', None)
-        if (getattr(self.game, 'mode', 'duel') == 'conquer'
-                and parent and hasattr(parent, 'emit_conquer_event')):
-            parent.emit_conquer_event(
-                key=f'battle_move_played:{played_round}:{move_idx}',
-                title='Battle move played',
-                detail=f'Round {played_round + 1}: {family_name} committed.',
-                phase='battle',
-                tone='action',
-            )
 
         self._has_played_move_this_turn = True
         self._gambled_this_round = False
@@ -2271,6 +2251,10 @@ class BattleScreen(SubScreen):
     def _handle_conquer_end(self, result):
         """Handle the end of a conquer battle — show result and route to kingdom."""
         from game.components.cards.card_img import CardImg
+        if self.game:
+            if getattr(self.game, '_conquer_result_dialogue_shown', False):
+                return
+            self.game._conquer_result_dialogue_shown = True
         attacker_won = result.get('attacker_won', False)
         conquer_result = result.get('conquer_result', '')
         is_attacker = self._is_current_player_conquer_attacker(result)
@@ -2360,7 +2344,7 @@ class BattleScreen(SubScreen):
             is_ai_defender = bool(result.get('is_ai_defender'))
             loot_lost_cards = result.get('loot_lost_cards') or []
 
-            message = "The defender held their ground.\n\nYou did not conquer this land."
+            message = "You did not conquer this land."
             if loot_lost_cards:
                 loot_title = "Cards destroyed by AI defence:" if is_ai_defender else "Cards looted by defending kingdom:"
                 message = _append_loot_section(message, loot_title, loot_lost_cards)

@@ -253,6 +253,9 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             # Sync gold (and any other user fields) so the display stays current
             if user and self.state.user_dict:
                 self.state.user_dict['gold'] = user.get('gold', self.state.user_dict.get('gold', 0))
+                for _field in ('booster_packs', 'booster_packs_side', 'maps'):
+                    if _field in user:
+                        self.state.user_dict[_field] = user[_field]
 
             current_game_ids = {g['id'] for g in game_dicts if g.get('mode', 'duel') == 'duel'}
             if self.state._known_game_ids is None:

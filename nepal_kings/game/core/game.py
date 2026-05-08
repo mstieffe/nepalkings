@@ -98,6 +98,12 @@ class Game:
 
         # Conquer startup lock: invader must resolve pending prelude target.
         self.pending_conquer_prelude_target = False
+
+        # Conquer prelude spell snapshots captured at game_start (the
+        # ActiveSpell entries don't carry a phase_cast field, so we keep
+        # the summary-provided lists for the timeline panel).
+        self.conquer_own_prelude_spells = []
+        self.conquer_opp_prelude_spells = []
         
         # Ceasefire ended notification (cleared after showing dialogue)
         self.pending_ceasefire_ended = False
@@ -492,6 +498,23 @@ class Game:
             if previous_advancing:
                 self.battle_ready_shown = False
                 self.pending_battle_ready = False
+                # Conquer redesign: a battle just ended (advancing/defending
+                # cleared by the server).  Wipe any client-side latches and
+                # heuristic flags that survived the previous cycle, otherwise
+                # the next conquest would inherit ghost dialogues / modes.
+                if self.mode == 'conquer':
+                    self.pending_forced_advance = False
+                    self.forced_advance_dialogue_shown = False
+                    self.pending_defender_selection = False
+                    self.defender_selection_dialogue_shown = False
+                    self.pending_waiting_for_defender_pick = False
+                    self.waiting_for_defender_pick_shown = False
+                    self.pending_conquer_own_defender_selection = False
+                    self.conquer_own_defender_selection_shown = False
+                    self.civil_war_awaiting_second = False
+                    self.civil_war_defender_second = False
+                    self.civil_war_required_color = None
+                    self.pending_advance_notification = False
         elif not previous_advancing:
             # A brand-new advance appeared (None → set).  Reset battle_ready
             # tracking so the fight/fold dialogue can fire for this new battle.

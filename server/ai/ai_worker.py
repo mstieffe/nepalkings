@@ -1273,6 +1273,17 @@ def _conquer_pick_counter_advance_figure(game, ai_player_id):
         game_id=game.id,
         player_id=ai_player_id,
     ).order_by(Figure.id.asc()).all()
+    # Prefer the configured battle figure (when set on the defence config)
+    # before falling back to the first eligible figure by id ascending.  This
+    # respects the defender's strategy choice for the both-selected case.
+    cfg = _defence_config()
+    preferred_cfg_fig_id = cfg.battle_figure_id if cfg else None
+    if preferred_cfg_fig_id:
+        preferred = _configured_defence_game_figure(preferred_cfg_fig_id)
+        if preferred and _conquer_figure_can_advance(
+            preferred, ai_player_id, game.id, counter=is_counter
+        ):
+            return preferred.id
     for fig in candidates:
         if _conquer_figure_can_advance(fig, ai_player_id, game.id, counter=is_counter):
             return fig.id

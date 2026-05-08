@@ -34,6 +34,7 @@ def _base_conquer_screen(game=None):
         'battle': SimpleNamespace(),
     }
     screen._last_conquer_auto_route_key = None
+    screen._conquer_auto_ready_attempt_key = None
     return ConquerGameScreen, screen
 
 
@@ -98,17 +99,18 @@ class TestConquerGameShell:
         ConquerGameScreen.initialize_buttons(screen)
 
         names = [button.name for button in screen.game_buttons]
+        # Battle-shop is no longer surfaced as a tab — the user is auto-routed
+        # there during the moves phase by the timeline panel.
         assert names == [
             'conquer_view_field',
-            'conquer_view_battle_shop',
             'conquer_view_battle',
         ]
         assert all('build' not in name for name in names)
         assert all('spell' not in name for name in names)
         assert all('log' not in name for name in names)
         assert screen.battle_button.locked is False
-        assert screen.field_button.x == screen.battle_shop_button.x == screen.battle_button.x
-        assert screen.field_button.y < screen.battle_shop_button.y < screen.battle_button.y
+        assert screen.field_button.x == screen.battle_button.x
+        assert screen.field_button.y < screen.battle_button.y
         sub_x, _sub_y = ConquerGameScreen._conquer_subscreen_origin(screen)
         assert screen.field_button.x + settings.FIELD_BUTTON_WIDTH < sub_x
 
@@ -148,16 +150,26 @@ class TestConquerGameShell:
         assert screen.state.subscreen == 'battle'
 
     def test_auto_routes_to_battle_shop_once_for_move_confirmation(self):
+        # The auto_route helper itself does not move the user to the
+        # battle_shop subscreen anymore — that is handled by
+        # ``_enforce_battle_shop_during_moves`` so the user is forced there
+        # during the moves phase.
         game = SimpleNamespace(
             mode='conquer',
             battle_moves_phase=True,
             battle_moves_ready=False,
             waiting_for_opponent_battle_moves=False,
+            battle_confirmed=False,
         )
         ConquerGameScreen, screen = _base_conquer_screen(game)
+        screen.battle_button = SimpleNamespace(locked=False)
         screen.state.subscreen = 'field'
+        screen._conquer_left_battle_shop_at = 0
+        screen.BATTLE_SHOP_SNAPBACK_MS = 0  # snap immediately for the test.
 
-        ConquerGameScreen._auto_route_conquer_once(screen)
+        ConquerGameScreen._enforce_battle_shop_during_moves(screen)
+        # First call records the timestamp.  Second call snaps back.
+        ConquerGameScreen._enforce_battle_shop_during_moves(screen)
 
         assert screen.state.subscreen == 'battle_shop'
 
@@ -180,9 +192,6 @@ class TestConquerGameShell:
             mode='conquer',
             pending_forced_advance=True,
             advancing_figure_id=None,
-            battle_moves_phase=True,
-            battle_moves_ready=False,
-            waiting_for_opponent_battle_moves=False,
             battle_confirmed=True,
             battle_turn_player_id=20,
             pending_conquer_prelude_target=False,
@@ -195,7 +204,249 @@ class TestConquerGameShell:
 
         counts = ConquerGameScreen._conquer_attention_counts(screen)
 
-        assert counts == {'field': 1, 'battle_shop': 1, 'battle': 1}
+        # battle_shop no longer has a dedicated tab — its attention is
+        # surfaced via the timeline panel + auto-routing instead.
+        assert counts == {'field': 1, 'battle': 1}
+
+    def test_confirming_figure_selection_acknowledges_selection_step(self):
+        ConquerGameScreen, screen = _base_conquer_screen()
+        screen._conquer_pending_confirmation = {'kind': 'advance'}
+        screen._conquer_acknowledged_step_kinds = set()
+        screen._conquer_timeline_step_started_at = {}
+        screen.subscreens['field'] = SimpleNamespace(
+            confirm_pending_advance=lambda: True)
+
+        handled = ConquerGameScreen._handle_conquer_objective_action(
+            screen, 'confirm')
+
+        assert handled is True
+        assert 'attacker' in screen._conquer_acknowledged_step_kinds
+
+    def test_auto_confirms_conquer_moves_when_shop_has_no_changes(self, monkeypatch):
+        game = SimpleNamespace(
+            mode='conquer',
+            game_id=12,
+            player_id=3,
+            battle_confirmed=True,
+            battle_turn_player_id=None,
+            battle_moves_phase=True,
+            battle_moves_ready=False,
+            waiting_for_opponent_battle_moves=False,
+            both_battle_moves_ready=False,
+            _game_data_version=1,
+        )
+        ConquerGameScreen, screen = _base_conquer_screen(game)
+        screen.state.subscreen = 'field'
+        screen.subscreens['battle_shop'] = SimpleNamespace(
+            bought_moves=[{'id': 1}, {'id': 2}, {'id': 3}],
+            card_source=None,
+            game=game,
+            _load_bought_moves=lambda: None,
+            _can_ready_for_battle=lambda: True,
+            has_available_battle_move_changes=lambda: False,
+        )
+
+        monkeypatch.setattr(
+            'utils.battle_shop_service.confirm_battle_moves',
+            lambda game_id, player_id: {'success': True, 'both_ready': True},
+        )
+
+        handled = ConquerGameScreen._auto_confirm_conquer_battle_moves_if_no_changes(screen)
+
+        assert handled is True
+        assert screen.state.subscreen == 'battle'
+        assert game.battle_moves_phase is False
+        assert game.both_battle_moves_ready is True
+
+    def test_keeps_conquer_shop_when_move_changes_exist(self, monkeypatch):
+        game = SimpleNamespace(
+            mode='conquer',
+            game_id=12,
+            player_id=3,
+            battle_confirmed=True,
+            battle_turn_player_id=None,
+            battle_moves_phase=True,
+            battle_moves_ready=False,
+            waiting_for_opponent_battle_moves=False,
+            both_battle_moves_ready=False,
+            _game_data_version=1,
+        )
+        ConquerGameScreen, screen = _base_conquer_screen(game)
+        screen.battle_button = SimpleNamespace(locked=False)
+        screen.subscreens['battle_shop'] = SimpleNamespace(
+            bought_moves=[{'id': 1}, {'id': 2}, {'id': 3}],
+            card_source=None,
+            game=game,
+            _load_bought_moves=lambda: None,
+            _can_ready_for_battle=lambda: True,
+            has_available_battle_move_changes=lambda: True,
+        )
+        called = []
+        monkeypatch.setattr(
+            'utils.battle_shop_service.confirm_battle_moves',
+            lambda game_id, player_id: called.append((game_id, player_id)),
+        )
+
+        handled = ConquerGameScreen._auto_confirm_conquer_battle_moves_if_no_changes(screen)
+
+        assert handled is False
+        assert called == []
+
+    def test_battle_shop_reloads_moves_when_game_data_version_changes(self):
+        from game.screens.battle_shop_screen import BattleShopScreen
+
+        game = SimpleNamespace(
+            game_id=12,
+            player_id=3,
+            _game_data_version=2,
+            battle_moves_phase=True,
+            battle_confirmed=True,
+        )
+        screen = BattleShopScreen.__new__(BattleShopScreen)
+        screen.game = game
+        screen.mode = 'duel'
+        screen.card_source = SimpleNamespace(game=game)
+        screen.buttons = []
+        screen.scroll_text_list_shifter = None
+        screen._loaded_game_key = (12, 3)
+        screen._loaded_bought_moves_key = (12, 3, 1)
+        screen.bought_moves = [{'id': 1}, {'id': 2}, {'id': 3}]
+        screen._battle_moves_confirmed = False
+        screen._waiting_for_opponent = False
+        screen.confirm_button = SimpleNamespace(disabled=True, update=lambda: None)
+        screen.ready_button = SimpleNamespace(disabled=True, update=lambda: None)
+        screen.move_family_buttons = []
+        screen._can_ready_for_battle = lambda: True
+        screen._update_icon_states = lambda: None
+        figure_loads = []
+        screen._load_player_figures = lambda: figure_loads.append('figures')
+        move_loads = []
+
+        def _reload_moves():
+            move_loads.append('moves')
+            screen.bought_moves = [{'id': 1}, {'id': 2}]
+            screen._loaded_game_key = BattleShopScreen._game_identity_key(screen, game)
+            screen._loaded_bought_moves_key = BattleShopScreen._bought_moves_cache_key(screen, game)
+
+        screen._load_bought_moves = _reload_moves
+
+        BattleShopScreen.update(screen, game)
+
+        assert move_loads == ['moves']
+        assert figure_loads == []
+        assert screen.confirm_button.disabled is False
+
+    def test_invader_swap_own_defender_mode_uses_own_selectable_update(self):
+        game = SimpleNamespace(
+            mode='conquer',
+            player_id=1,
+            invader=True,
+            advancing_player_id=2,
+            pending_defender_selection=False,
+            defender_selection_dialogue_shown=False,
+            pending_conquer_own_defender_selection=False,
+            conquer_own_defender_selection_shown=False,
+            civil_war_defender_second=True,
+            cached_active_spells=[{
+                'spell_name': 'Invader Swap',
+                'effect_data': {
+                    'conquer_invader_swap': True,
+                    'old_invader_id': 1,
+                },
+            }],
+        )
+        ConquerGameScreen, screen = _base_conquer_screen(game)
+        calls = []
+        field = SimpleNamespace(
+            defender_selection_mode=False,
+            conquer_own_defender_mode=False,
+            _update_defender_selectable=lambda: calls.append('opponent'),
+            _update_conquer_own_defender_selectable=lambda: calls.append('own'),
+            _reset_defender_selectable=lambda: calls.append('reset'),
+        )
+        screen.subscreens['field'] = field
+
+        ConquerGameScreen._sync_conquer_action_modes(screen)
+
+        assert field.conquer_own_defender_mode is True
+        assert calls == ['own']
+
+    def test_own_defender_selectability_excludes_first_civil_war_pick(self):
+        from game.screens.field_screen import FieldScreen
+
+        def figure(fig_id, *, player_id=1, color='offensive', field='village'):
+            return SimpleNamespace(
+                id=fig_id,
+                player_id=player_id,
+                name=f'Figure {fig_id}',
+                family=SimpleNamespace(color=color, field=field),
+            )
+
+        first = figure(20)
+        second = figure(21)
+        wrong_color = figure(22, color='defensive')
+        opponent = figure(23, player_id=2)
+        icons = [
+            SimpleNamespace(
+                figure=f,
+                has_deficit=False,
+                defender_selectable=None,
+                in_defender_selection_mode=False,
+            )
+            for f in (first, second, wrong_color, opponent)
+        ]
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = SimpleNamespace(
+            player_id=1,
+            battle_modifier=[{'type': 'Civil War'}],
+            defending_figure_id=20,
+            civil_war_defender_second=True,
+            civil_war_required_color='offensive',
+        )
+        field.figure_icons = icons
+
+        FieldScreen._update_conquer_own_defender_selectable(field)
+
+        assert [icon.defender_selectable for icon in icons] == [False, True, False, False]
+
+    def test_battle_result_attack_failed_is_shown_once(self):
+        from game.screens.battle_screen import BattleScreen
+
+        game = SimpleNamespace(
+            player_id=1,
+            invader=True,
+            cached_active_spells=[],
+            _conquer_result_dialogue_shown=False,
+        )
+        battle = BattleScreen.__new__(BattleScreen)
+        battle.game = game
+        battle.window = pygame.Surface((100, 100))
+        shown = []
+
+        def fake_dialogue(message, actions, icon, title, images=None):
+            shown.append({
+                'message': message,
+                'actions': actions,
+                'icon': icon,
+                'title': title,
+                'images': images,
+            })
+
+        battle.make_dialogue_box = fake_dialogue
+
+        result = {
+            'attacker_won': False,
+            'conquer_result': 'defender_won',
+            'conquer_attacker_player_id': 1,
+        }
+
+        BattleScreen._handle_conquer_end(battle, result)
+        BattleScreen._handle_conquer_end(battle, result)
+
+        assert len(shown) == 1
+        assert shown[0]['title'] == 'Attack Failed'
+        assert 'defender held their ground' not in shown[0]['message'].lower()
+        assert game._conquer_result_dialogue_shown is True
 
 
 class TestConquerSubscreenLayout:

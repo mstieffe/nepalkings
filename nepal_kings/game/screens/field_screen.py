@@ -544,15 +544,6 @@ class FieldScreen(SubScreen):
                             if result.get('success'):
                                 logger.debug(f"[FIELD] Advanced {figure.name} successfully")
                                 self.state.set_msg(f"Advanced {figure.name} toward battle!")
-                                parent = self._conquer_parent()
-                                if parent and hasattr(parent, 'emit_conquer_event'):
-                                    parent.emit_conquer_event(
-                                        key=f'advance_success:{figure.id}',
-                                        title='Figure advanced',
-                                        detail=f'{figure.name} advanced toward battle.',
-                                        phase='advance',
-                                        tone='good',
-                                    )
                                 # Update game state from response
                                 # (update_from_dict -> unlock_actions)
                                 if result.get('game'):
@@ -698,15 +689,6 @@ class FieldScreen(SubScreen):
                                             title='Civil War'
                                         )
                                     self.state.set_msg(f"Selected {selected_name} as opponent's defender.")
-                                    parent = self._conquer_parent()
-                                    if parent and hasattr(parent, 'emit_conquer_event'):
-                                        parent.emit_conquer_event(
-                                            key=f'defender_selected:{target_figure.id}',
-                                            title='Defender selected',
-                                            detail=f'{selected_name} will defend against your advance.',
-                                            phase='defender',
-                                            tone='good',
-                                        )
                                     self.game.pending_defender_selection = False
                                     # Defender was selected manually. Re-arm battle-ready
                                     # transition in case a stale guard flag was left set.
@@ -786,16 +768,6 @@ class FieldScreen(SubScreen):
                                         self.game.pending_battle_ready = True
                                     selected_name = result.get('figure_name', target_figure.name)
                                     self.state.set_msg(f"Selected {selected_name} as your defender.")
-                                    parent = self._conquer_parent()
-                                    if parent and hasattr(parent, 'emit_conquer_event'):
-                                        parent.emit_conquer_event(
-                                            key=f'own_defender_selected:{target_figure.id}',
-                                            title='Own defender selected',
-                                            detail=f'{selected_name} will defend against the Invader Swap advance.',
-                                            phase='defender',
-                                            tone='good',
-                                            spell_names=['Invader Swap'],
-                                        )
                             else:
                                 error_msg = result.get('message', 'Unknown error')
                                 self.make_dialogue_box(
@@ -1218,9 +1190,21 @@ class FieldScreen(SubScreen):
                         if cw_second_pick:
                             figure = clicked_icon.figure
                             cw_icons = self._get_modifier_icon_images('Civil War')
+
+                            if (getattr(self.game, 'civil_war_awaiting_second', False)
+                                    and not self._is_civil_war_second_attacker_selectable(figure, clicked_icon)):
+                                self.make_dialogue_box(
+                                    message="Civil War requires another eligible village figure of the same color.",
+                                    actions=['ok'],
+                                    images=cw_icons if cw_icons else None,
+                                    icon="error" if not cw_icons else None,
+                                    title="Invalid Selection"
+                                )
+                                clicked_icon.clicked = False
+                                continue
                             
                             # Validate: must be a village figure
-                            figure_field = getattr(figure.family, 'field', None) if hasattr(figure, 'family') else None
+                            figure_field = self._figure_field(figure)
                             if figure_field != 'village':
                                 self.make_dialogue_box(
                                     message="Civil War requires village figures only.",
@@ -1232,7 +1216,7 @@ class FieldScreen(SubScreen):
                                 clicked_icon.clicked = False
                             # Validate: must match required color (only reject on mismatch)
                             elif (getattr(self.game, 'civil_war_required_color', None) and
-                                  (getattr(figure.family, 'color', None) if hasattr(figure, 'family') else None) != self.game.civil_war_required_color):
+                                    self._figure_color(figure) != self.game.civil_war_required_color):
                                 color_name = 'red' if self.game.civil_war_required_color == 'offensive' else 'black'
                                 self.make_dialogue_box(
                                     message=f"Civil War requires a second village figure of the same color ({color_name}).",
@@ -1268,13 +1252,23 @@ class FieldScreen(SubScreen):
                                 self._pending_advance_figure = figure
                                 advance_icon = clicked_icon
                                 advance_icon.show_advance_overlay = False
-                                self.make_dialogue_box(
-                                    message=f"Select {figure.name} as your second Civil War figure?",
-                                    actions=['yes', 'cancel'],
-                                    images=[advance_icon] + (cw_icons if cw_icons else []),
-                                    icon=None,
-                                    title="Civil War - Second Figure"
-                                )
+                                conquer_parent = self._conquer_parent()
+                                if conquer_parent:
+                                    conquer_parent.request_conquer_figure_confirmation(
+                                        'advance',
+                                        figure,
+                                        icon=advance_icon,
+                                        message=f"Select {figure.name} as your second Civil War figure?",
+                                        title="Civil War - Second Figure",
+                                    )
+                                else:
+                                    self.make_dialogue_box(
+                                        message=f"Select {figure.name} as your second Civil War figure?",
+                                        actions=['yes', 'cancel'],
+                                        images=[advance_icon] + (cw_icons if cw_icons else []),
+                                        icon=None,
+                                        title="Civil War - Second Figure"
+                                    )
                         else:
                             conquer_parent = self._conquer_parent()
 
@@ -1683,7 +1677,7 @@ class FieldScreen(SubScreen):
                     continue
 
                 # Village-only restriction
-                if village_only and hasattr(target_figure, 'family') and target_figure.family.field != 'village':
+                if village_only and self._figure_field(target_figure) != 'village':
                     active_mod = 'Peasant War' if has_peasant_war else 'Civil War'
                     mod_icons = self._get_modifier_icon_images(active_mod)
                     self.make_dialogue_box(
@@ -1699,7 +1693,7 @@ class FieldScreen(SubScreen):
                 if (getattr(self.game, 'civil_war_defender_second', False)
                         and has_civil_war):
                     required_color = getattr(self.game, 'civil_war_required_color', None)
-                    figure_color = getattr(target_figure, 'color', None)
+                    figure_color = self._figure_color(target_figure)
                     if required_color and figure_color != required_color:
                         color_name = 'red' if required_color == 'offensive' else 'black'
                         mod_icons = self._get_modifier_icon_images('Civil War')
@@ -1723,6 +1717,16 @@ class FieldScreen(SubScreen):
                             auto_close_delay=2000,
                         )
                         continue
+
+                if getattr(clicked_icon, 'has_deficit', False):
+                    self.make_dialogue_box(
+                        message=f"{target_figure.name} has a resource deficit and cannot defend.",
+                        actions=[],
+                        icon="error",
+                        title="Resource Deficit",
+                        auto_close_delay=2000,
+                    )
+                    continue
 
                 if hasattr(target_figure, 'cannot_defend') and target_figure.cannot_defend:
                     self.make_dialogue_box(
@@ -1967,22 +1971,17 @@ class FieldScreen(SubScreen):
             self.game.pending_conquer_prelude_target = False
 
             spell_effect = result.get('spell_effect') or {}
+            self._sync_resolved_conquer_prelude_snapshot(
+                pending, target_figure, figure_name_display, spell_effect)
             effect_text = spell_effect.get('effect')
             success_msg = effect_text or f"{spell_name} was applied to {figure_name_display}."
             title = "Prelude Spell"
             if 'Explosion' in spell_name and 'destroyed' in success_msg.lower():
                 title = "Figure Destroyed"
-            parent = self._conquer_parent()
-            if parent and hasattr(parent, 'emit_conquer_event'):
-                parent.emit_conquer_event(
-                    key=f'prelude_resolved:{spell_id}:{target_figure.id}',
-                    title=title,
-                    detail=success_msg,
-                    phase='prelude',
-                    tone='good' if title != 'Figure Destroyed' else 'warning',
-                    spell_names=[spell_name],
-                )
-            else:
+            # In conquer mode the timeline panel surfaces this beat;
+            # only the duel mode falls back to a modal dialogue.
+            in_conquer = (self.game and getattr(self.game, 'mode', 'duel') == 'conquer')
+            if not in_conquer:
                 self.make_dialogue_box(
                     message=success_msg,
                     actions=['ok'],
@@ -2019,6 +2018,40 @@ class FieldScreen(SubScreen):
             icon="error",
             title="Prelude Failed"
         )
+
+    def _sync_resolved_conquer_prelude_snapshot(self, pending, target_figure,
+                                                figure_name_display,
+                                                spell_effect):
+        spells = getattr(self.game, 'conquer_own_prelude_spells', None)
+        if not isinstance(spells, list) or not isinstance(pending, dict):
+            return
+
+        spell_id = pending.get('spell_id')
+        spell_name = pending.get('spell_name', 'Prelude spell')
+        effect_data = dict(spell_effect or {})
+        effect_data['prelude_origin'] = True
+        effect_data['prelude_status'] = 'executed'
+        effect_data['target_figure_id'] = getattr(target_figure, 'id', None)
+        effect_data['target_figure_name'] = figure_name_display
+
+        resolved = dict(pending)
+        resolved.update({
+            'spell_name': spell_name,
+            'target_figure_id': getattr(target_figure, 'id', None),
+            'target_figure_name': figure_name_display,
+            'target_figure': target_figure,
+            'effect_data': effect_data,
+        })
+
+        for idx, existing in enumerate(spells):
+            if not isinstance(existing, dict):
+                continue
+            if (spell_id is not None and existing.get('spell_id') == spell_id
+                    or existing.get('spell_name') == spell_name
+                    and existing.get('target_figure_id') in (None, getattr(target_figure, 'id', None))):
+                spells[idx] = resolved
+                return
+        spells.append(resolved)
     
     def _apply_enchantment_to_figure(self, figure, spell):
         """
@@ -2655,6 +2688,66 @@ class FieldScreen(SubScreen):
         if self.conquer_own_defender_mode and not conquer_parent:
             self._draw_conquer_own_defender_prompt()
 
+    @staticmethod
+    def _figure_field(figure):
+        family = getattr(figure, 'family', None)
+        return getattr(figure, 'field', None) or getattr(family, 'field', None)
+
+    @staticmethod
+    def _figure_color(figure):
+        family = getattr(figure, 'family', None)
+        return getattr(figure, 'color', None) or getattr(family, 'color', None)
+
+    def _active_modifier_types(self):
+        modifiers = self.game.battle_modifier if self.game and isinstance(self.game.battle_modifier, list) else []
+        return [m.get('type') for m in modifiers if isinstance(m, dict)]
+
+    def _is_civil_war_second_attacker_selectable(self, figure, icon=None):
+        game = self.game
+        if not game or figure is None:
+            return False
+        if figure.player_id != game.player_id:
+            return False
+        if self._figure_field(figure) != 'village':
+            return False
+        if figure.id == getattr(game, 'advancing_figure_id', None):
+            return False
+        required_color = getattr(game, 'civil_war_required_color', None)
+        if required_color and self._figure_color(figure) != required_color:
+            return False
+        if figure.id in (getattr(game, 'resting_figure_ids', None) or []):
+            return False
+        if getattr(figure, 'cannot_attack', False):
+            return False
+        if icon is not None and getattr(icon, 'has_deficit', False):
+            return False
+        return True
+
+    def _is_conquer_own_defender_selectable(self, figure, icon=None):
+        game = self.game
+        if not game or figure is None:
+            return False
+        if figure.player_id != game.player_id:
+            return False
+        modifier_types = self._active_modifier_types()
+        if (('Peasant War' in modifier_types or 'Civil War' in modifier_types)
+                and self._figure_field(figure) != 'village'):
+            return False
+        if (getattr(game, 'civil_war_defender_second', False)
+                and 'Civil War' in modifier_types):
+            if figure.id == getattr(game, 'defending_figure_id', None):
+                return False
+            required_color = getattr(game, 'civil_war_required_color', None)
+            if required_color and self._figure_color(figure) != required_color:
+                return False
+        if getattr(figure, 'cannot_defend', False):
+            return False
+        if getattr(figure, 'cannot_be_targeted', False):
+            return False
+        if icon is not None and getattr(icon, 'has_deficit', False):
+            return False
+        return True
+
     def _icon_is_selectable_for_current_mode(self, icon):
         """Return True when ``icon`` is a valid click target right now.
 
@@ -2674,10 +2767,7 @@ class FieldScreen(SubScreen):
 
         game = self.game
         is_own = (game is not None and figure.player_id == game.player_id)
-        modifiers = (game.battle_modifier
-                     if game is not None and isinstance(game.battle_modifier, list)
-                     else [])
-        modifier_types = [m.get('type') for m in modifiers]
+        modifier_types = self._active_modifier_types()
         village_only = ('Peasant War' in modifier_types
                         or 'Civil War' in modifier_types)
 
@@ -2685,15 +2775,10 @@ class FieldScreen(SubScreen):
             return bool(getattr(icon, 'defender_selectable', True)) and not is_own
 
         if self.conquer_own_defender_mode:
-            if not is_own:
-                return False
-            if village_only and getattr(figure.family, 'field', None) != 'village':
-                return False
-            if getattr(figure, 'cannot_defend', False):
-                return False
-            if getattr(figure, 'cannot_be_targeted', False):
-                return False
-            return True
+            return self._is_conquer_own_defender_selectable(figure, icon)
+
+        if game is not None and getattr(game, 'civil_war_awaiting_second', False):
+            return self._is_civil_war_second_attacker_selectable(figure, icon)
 
         if (game is not None
                 and getattr(game, 'pending_forced_advance', False)
@@ -2705,7 +2790,7 @@ class FieldScreen(SubScreen):
                 return False
             if getattr(figure, 'cannot_attack', False):
                 return False
-            if village_only and getattr(figure.family, 'field', None) != 'village':
+            if village_only and self._figure_field(figure) != 'village':
                 return False
             return True
 
@@ -2730,20 +2815,37 @@ class FieldScreen(SubScreen):
         selection step (dialogue shown / mode flag set) to prevent premature
         dimming during a preceding phase.
         """
+        conquer_parent = self._conquer_parent()
+        active_step = None
+        if conquer_parent and hasattr(conquer_parent, 'active_conquer_timeline_step'):
+            active_step = conquer_parent.active_conquer_timeline_step()
+
+        def timeline_allows(kind):
+            if active_step is None:
+                return True
+            return bool(
+                getattr(active_step, 'kind', None) == kind
+                and getattr(active_step, 'interactive', False)
+            )
+
         if self.defender_selection_mode or self.conquer_own_defender_mode:
-            return True
+            return timeline_allows('defender')
         if getattr(self.state, 'pending_conquer_prelude_target', None):
-            return True
+            return timeline_allows('prelude_own')
         game = self.game
         if not game:
             return False
+        if getattr(game, 'civil_war_awaiting_second', False):
+            return timeline_allows('attacker')
+        if getattr(game, 'civil_war_defender_second', False):
+            return timeline_allows('defender')
         # Forced advance: only dim once the player has been notified that
         # they must pick their attacker (forced_advance_dialogue_shown guards
         # against dimming in the preceding step before the prompt appears).
         if (getattr(game, 'pending_forced_advance', False)
                 and not getattr(game, 'advancing_figure_id', None)
                 and getattr(game, 'forced_advance_dialogue_shown', False)):
-            return True
+            return timeline_allows('attacker')
         return False
 
     def _conquer_pending_focus_figure(self):
@@ -2915,6 +3017,13 @@ class FieldScreen(SubScreen):
             
             icon.defender_selectable = True
             logger.debug(f"[DEFENDER_SELECT] {fig.name} (id={fig.id}) IS selectable")
+
+    def _update_conquer_own_defender_selectable(self):
+        """Mark figure icons for Invader Swap own-defender selection."""
+        for icon in self.figure_icons:
+            icon.in_defender_selection_mode = True
+            icon.defender_selectable = self._is_conquer_own_defender_selectable(
+                getattr(icon, 'figure', None), icon)
     
     def _reset_defender_selectable(self):
         """Reset all figure icons to selectable (normal state)."""

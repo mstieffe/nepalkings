@@ -333,6 +333,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
             self.state.user_dict['gold'] = self._gold
             self.state.user_dict['booster_packs'] = self._boosters
             self.state.user_dict['booster_packs_side'] = self._boosters_side
+            self.state.user_dict['maps'] = int(data.get('maps', 0))
 
     # ── grid layout helpers ─────────────────────────────────────────
 
