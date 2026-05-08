@@ -71,6 +71,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - `FieldScreen` now uses the shared conquer layout helper for tactics-hand field columns, so figure hitboxes align with the battlefield area instead of sitting underneath the rail.
   - The rail was narrowed to reduce empty horizontal padding and give more room back to the battlefield.
 
+- DONE: Added richer tactics-hand duel lane round readouts.
+  - The lane now shows the focused round's tactic badge for each side.
+  - Tactic badges have leader lines back to their fighter bands.
+  - The center diff band now shows a compact receipt row: figure power + tactic power = side total.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -134,6 +139,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader Invader Swap/tactics/AI worker regression passed: `tests/server/test_conquer_invader_swap.py tests/server/test_conquer_tactics_hand.py tests/server/test_ai_worker.py` passed: 66 passed.
 - DONE: Unified pre-battle layout/routing regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_timeline.py tests/client/test_conquer_layout.py` passed: 145 passed.
 - DONE: Broader unified conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 164 passed.
+- DONE: Focused duel-lane readout regression passed: `tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py` passed: 107 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -173,7 +179,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Tactics-hand pre-battle and battle now share one field-first canvas with the rail, ledger, and field columns using the same layout helper.
   - DONE: Field inert-but-inspectable battle behavior is implemented for tactics-hand battle rounds.
   - DONE: First-pass duel lane fighter-only rendering is implemented for tactics-hand battle rounds.
-  - TODO: Support badge strips, source leader lines, and power receipt rows are missing.
+  - DONE: Round tactic badge strips, leader lines, and power receipt rows are implemented in the duel lane.
   - TODO: Ghost predictive math and played tactic flight animation are missing.
   - TODO: Round-card replay/recap popovers are missing.
 

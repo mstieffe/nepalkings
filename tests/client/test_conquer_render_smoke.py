@@ -179,23 +179,34 @@ def test_conquer_duel_lane_draws_current_battle_fighters():
         battle_round=1,
         last_battle_result=None,
         opponent_name='Bhaktapur',
+        conquer_tactics=[
+            _move(11, family='Sword', suit='Hearts', rank='Q', value=8,
+                  status='played', played_round=0),
+        ],
     )
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.window = window
     screen.state = SimpleNamespace(game=game)
     screen.subscreens = {
         'field': SimpleNamespace(figures=[attacker, defender]),
+        'battle': SimpleNamespace(opp_played=[
+            _move(21, family='Shield', suit='Clubs', rank='9', value=3,
+                  status='played', played_round=0),
+        ]),
     }
 
     ConquerGameScreen._draw_conquer_duel_lane(screen)
 
-    lane_rect = compute_conquer_layout(
+    lane = compute_conquer_layout(
         settings.SCREEN_WIDTH,
         settings.SCREEN_HEIGHT,
         mode='battle',
-    ).battlefield.duel_lane.rect
+    ).battlefield.duel_lane
     player_figures, opponent_figures = ConquerGameScreen._conquer_lane_figures(screen)
 
     assert player_figures == [attacker]
     assert opponent_figures == [defender]
-    assert _rect_has_non_background_pixel(window, lane_rect)
+    assert _rect_has_non_background_pixel(window, lane.rect)
+    assert _rect_has_non_background_pixel(window, lane.you_support_badge_rail)
+    assert _rect_has_non_background_pixel(window, lane.opp_support_badge_rail)
+    assert _rect_has_non_background_pixel(window, lane.diff_band)

@@ -1595,6 +1595,55 @@ class ConquerGameScreen(GameScreen):
         return int(getattr(figure, 'value', 0) or 0)
 
     @staticmethod
+    def _conquer_lane_move_power(move):
+        if not move or move.get('_skipped') or move.get('family_name') == 'Skip':
+            return 0
+        if move.get('family_name') == 'Block':
+            return 0
+        return int(move.get('value') or 0)
+
+    @staticmethod
+    def _conquer_lane_move_name(move):
+        if not move:
+            return 'Pending'
+        name = move.get('family_name') or move.get('family') or 'Tactic'
+        if name == 'Dagger' and (move.get('card_id_b') or move.get('secondary_card_id')):
+            return '2x Dagger'
+        return str(name)
+
+    def _conquer_lane_played_tactics(self):
+        player_slots = [None, None, None]
+        opponent_slots = [None, None, None]
+
+        try:
+            player_moves = self._current_conquer_battle_moves() or []
+        except Exception:
+            player_moves = []
+        for move in player_moves:
+            played_round = move.get('played_round') if isinstance(move, dict) else None
+            if played_round in (0, 1, 2):
+                player_slots[played_round] = move
+
+        battle = self.subscreens.get('battle') if hasattr(self, 'subscreens') else None
+        opp_played = getattr(battle, 'opp_played', None) if battle is not None else None
+        if isinstance(opp_played, list):
+            for idx, move in enumerate(opp_played[:3]):
+                if move:
+                    opponent_slots[idx] = move
+
+        return player_slots, opponent_slots
+
+    def _conquer_lane_focus_round(self, player_slots, opponent_slots):
+        game = self.state.game
+        current = int(getattr(game, 'battle_round', 0) or 0) - 1 if game else -1
+        if current in (0, 1, 2):
+            return current
+        for idx in (2, 1, 0):
+            if player_slots[idx] or opponent_slots[idx]:
+                return idx
+        return 0
+
+    @staticmethod
     def _conquer_lane_surface(asset, size):
         if not isinstance(asset, pygame.Surface):
             return None
@@ -1659,7 +1708,45 @@ class ConquerGameScreen(GameScreen):
             pygame.draw.rect(self.window, (238, 206, 111), chip, border_radius=chip.height // 2)
             self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
 
-    def _draw_conquer_lane_diff(self, rect, player_figures, opponent_figures):
+    def _draw_conquer_lane_tactic_badge(self, rect, move, round_idx, *, is_player):
+        rail = pygame.Rect(rect).inflate(-5, -10)
+        if rail.width <= 0 or rail.height <= 0:
+            return
+        center_y = rail.centery
+        badge_h = min(max(54, rail.width + 18), max(1, rail.height - 8))
+        badge = pygame.Rect(0, 0, rail.width, badge_h)
+        badge.center = (rail.centerx, center_y)
+        fill = (36, 55, 58, 232) if is_player else (60, 42, 44, 232)
+        border = (126, 198, 190) if is_player else (212, 145, 130)
+        pygame.draw.rect(self.window, fill, badge, border_radius=6)
+        pygame.draw.rect(self.window, border, badge, 2, border_radius=6)
+
+        tiny = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        name_font = settings.get_font(max(8, int(settings.FS_TINY * 0.68)), bold=True)
+        value_font = settings.get_font(max(11, int(settings.FS_TINY * 0.88)), bold=True)
+        round_surf = tiny.render(f'R{round_idx + 1}', True, (232, 220, 180))
+        self.window.blit(round_surf, round_surf.get_rect(center=(badge.centerx, badge.top + 9)))
+
+        if move:
+            name = self._fit_text(self._conquer_lane_move_name(move), name_font, badge.width - 6)
+            name_surf = name_font.render(name, True, (246, 239, 214))
+            value_surf = value_font.render(str(self._conquer_lane_move_power(move)), True, (245, 214, 122))
+            self.window.blit(name_surf, name_surf.get_rect(center=(badge.centerx, badge.centery)))
+            self.window.blit(value_surf, value_surf.get_rect(center=(badge.centerx, badge.bottom - 11)))
+        else:
+            wait = tiny.render('...', True, (156, 140, 102))
+            self.window.blit(wait, wait.get_rect(center=(badge.centerx, badge.centery + 8)))
+
+    def _draw_conquer_lane_leader_line(self, from_rect, to_rect, *, is_player):
+        start = pygame.Rect(from_rect).center
+        end_rect = pygame.Rect(to_rect).inflate(-16, -12)
+        end = (end_rect.left, end_rect.centery) if is_player else (end_rect.right, end_rect.centery)
+        color = (126, 198, 190) if is_player else (212, 145, 130)
+        pygame.draw.line(self.window, color, start, end, 2)
+        pygame.draw.circle(self.window, color, start, 3)
+
+    def _draw_conquer_lane_diff(self, rect, player_figures, opponent_figures,
+                                player_move=None, opponent_move=None, round_idx=0):
         band = pygame.Rect(rect).inflate(-12, -4)
         if band.width <= 0 or band.height <= 0:
             return
@@ -1667,12 +1754,30 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.rect(self.window, (226, 196, 112), band, 1, border_radius=8)
         player_power = sum(self._conquer_lane_figure_power(fig) for fig in player_figures)
         opponent_power = sum(self._conquer_lane_figure_power(fig) for fig in opponent_figures)
-        diff = player_power - opponent_power
+        player_total = player_power + self._conquer_lane_move_power(player_move)
+        opponent_total = opponent_power + self._conquer_lane_move_power(opponent_move)
+        diff = player_total - opponent_total
         diff_text = 'VS' if not player_figures or not opponent_figures else f'{diff:+d}'
         font = settings.get_font(max(14, int(settings.FS_SMALL * 1.05)), bold=True)
         color = (130, 220, 190) if diff > 0 else (226, 145, 130) if diff < 0 else (232, 220, 180)
         surf = font.render(diff_text, True, color)
-        self.window.blit(surf, surf.get_rect(center=band.center))
+        self.window.blit(surf, surf.get_rect(center=(band.centerx, band.centery - 5)))
+
+        receipt_font = settings.get_font(max(9, int(settings.FS_TINY * 0.72)), bold=True)
+        you_name = self._fit_text(self._conquer_lane_move_name(player_move), receipt_font, band.width // 2 - 10)
+        opp_name = self._fit_text(self._conquer_lane_move_name(opponent_move), receipt_font, band.width // 2 - 10)
+        you_line = f'R{round_idx + 1}  {player_power}+{self._conquer_lane_move_power(player_move)}={player_total}'
+        opp_line = f'{opponent_power}+{self._conquer_lane_move_power(opponent_move)}={opponent_total}  R{round_idx + 1}'
+        label_y = band.top + 7
+        value_y = band.bottom - receipt_font.get_height() - 6
+        you_label = receipt_font.render(you_name, True, (154, 218, 206))
+        opp_label = receipt_font.render(opp_name, True, (226, 168, 152))
+        you_value = receipt_font.render(you_line, True, (232, 220, 180))
+        opp_value = receipt_font.render(opp_line, True, (232, 220, 180))
+        self.window.blit(you_label, (band.left + 8, label_y))
+        self.window.blit(opp_label, (band.right - opp_label.get_width() - 8, label_y))
+        self.window.blit(you_value, (band.left + 8, value_y))
+        self.window.blit(opp_value, (band.right - opp_value.get_width() - 8, value_y))
 
     def _draw_conquer_duel_lane(self):
         if not (self._is_tactics_hand_game() and self._is_battle_phase_active()):
@@ -1692,14 +1797,48 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.rect(backdrop, (226, 196, 112, 145), backdrop.get_rect(), 2, border_radius=8)
         self.window.blit(backdrop, lane_rect.topleft)
 
+        player_slots, opponent_slots = self._conquer_lane_played_tactics()
+        round_idx = self._conquer_lane_focus_round(player_slots, opponent_slots)
+        player_move = player_slots[round_idx]
+        opponent_move = opponent_slots[round_idx]
+
         self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
-        self._draw_conquer_lane_diff(lane.diff_band, player_figures, opponent_figures)
+        self._draw_conquer_lane_diff(
+            lane.diff_band,
+            player_figures,
+            opponent_figures,
+            player_move=player_move,
+            opponent_move=opponent_move,
+            round_idx=round_idx,
+        )
         opponent = getattr(self.state.game, 'opponent_name', None) or 'OPPONENT'
         opponent_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
         self._draw_conquer_lane_band(
             lane.opp_fighter_band,
             self._fit_text(opponent.upper(), opponent_font, 86),
             opponent_figures,
+            is_player=False,
+        )
+        self._draw_conquer_lane_leader_line(
+            lane.you_support_badge_rail,
+            lane.you_fighter_band,
+            is_player=True,
+        )
+        self._draw_conquer_lane_leader_line(
+            lane.opp_support_badge_rail,
+            lane.opp_fighter_band,
+            is_player=False,
+        )
+        self._draw_conquer_lane_tactic_badge(
+            lane.you_support_badge_rail,
+            player_move,
+            round_idx,
+            is_player=True,
+        )
+        self._draw_conquer_lane_tactic_badge(
+            lane.opp_support_badge_rail,
+            opponent_move,
+            round_idx,
             is_player=False,
         )
 
