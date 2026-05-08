@@ -122,6 +122,16 @@ class TestConquerGameShell:
 
         assert screen.state.subscreen == 'field'
 
+    def test_tactics_hand_always_normalizes_to_unified_field_canvas(self):
+        game = SimpleNamespace(mode='conquer', conquer_move_model='tactics_hand')
+        ConquerGameScreen, screen = _base_conquer_screen(game)
+        screen.state.subscreen = 'battle'
+
+        ConquerGameScreen._normalize_conquer_subscreen(screen)
+
+        assert screen.state.subscreen == 'field'
+        assert ConquerGameScreen._conquer_nav_buttons(screen) == []
+
     def test_conquer_subscreen_origin_is_centered_below_header(self):
         from config import settings
 
@@ -517,6 +527,36 @@ class TestConquerSubscreenLayout:
 
         assert bg_rect.contains(layout_rect)
 
+    def test_tactics_hand_field_uses_unified_battlefield_columns(self):
+        from config import settings
+        from game.components.conquer_layout import compute_conquer_layout
+        from game.screens.field_screen import FieldScreen
+
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_round=0,
+            battle_turn_player_id=None,
+            last_battle_result=None,
+        )
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = game
+        field._layout_offset_x = 0
+        field._layout_offset_y = 0
+
+        FieldScreen.init_field_compartments(field)
+
+        layout = compute_conquer_layout(
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            mode='pre_battle',
+        )
+        assert field.compartments['self']['castle'] == pygame.Rect(
+            layout.battlefield.columns.you_castle)
+        assert field.compartments['opponent']['castle'] == pygame.Rect(
+            layout.battlefield.columns.opp_castle)
+        assert layout.tactics_rail.rect[0] + layout.tactics_rail.rect[2] <= layout.battlefield.rect[0]
+
     def test_field_compartments_keep_duel_coordinates_at_default_origin(self):
         from config import settings
         from game.screens.field_screen import FieldScreen
@@ -670,6 +710,18 @@ class TestTacticsHandRouting:
 
         assert ConquerGameScreen._conquer_layout_mode(screen) == 'result'
         assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is True
+
+    def test_tactics_hand_result_dialogue_opens_without_battle_tab_route(self):
+        result = {'conquer_result': 'attacker_won', 'attacker_won': True}
+        ConquerGameScreen, screen = self._make_screen(last_battle_result=result)
+        screen.state.subscreen = 'field'
+        calls = []
+        screen._handle_conquer_result_response = lambda payload: calls.append(payload)
+
+        ConquerGameScreen._open_tactics_hand_result_dialogue(screen)
+
+        assert calls == [result]
+        assert screen.state.subscreen == 'field'
 
     def test_legacy_games_keep_full_timeline_header_during_battle(self):
         ConquerGameScreen, screen = self._make_screen(

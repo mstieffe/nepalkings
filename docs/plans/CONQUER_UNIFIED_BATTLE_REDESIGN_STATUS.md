@@ -63,6 +63,14 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - The lane handles the primary and optional second Civil War fighters from the player perspective and shows a compact starting power diff.
   - This is fighter-only rendering; support badges, leader lines, receipt rows, and tactic flight/replay remain follow-up work.
 
+- DONE: Unified tactics-hand pre-battle and battle into the same field-first canvas.
+  - Tactics-hand conquer games now normalize every legacy `battle` / `battle_shop` subscreen state back to `field`.
+  - The legacy field/battle tab buttons are hidden and do not capture clicks for tactics-hand games.
+  - The tactics rail and round ledger are visible from pre-battle onward.
+  - Ledger result review now opens the shared conquer result dialogue from the unified field canvas instead of routing to the hidden battle subscreen.
+  - `FieldScreen` now uses the shared conquer layout helper for tactics-hand field columns, so figure hitboxes align with the battlefield area instead of sitting underneath the rail.
+  - The rail was narrowed to reduce empty horizontal padding and give more room back to the battlefield.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -124,6 +132,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Production schema guard regression passed: `tests/server/test_schema_guards.py` passed: 1 passed.
 - DONE: Invader Swap tactics-hand regression passed: `tests/server/test_conquer_invader_swap.py` passed: 20 passed.
 - DONE: Broader Invader Swap/tactics/AI worker regression passed: `tests/server/test_conquer_invader_swap.py tests/server/test_conquer_tactics_hand.py tests/server/test_ai_worker.py` passed: 66 passed.
+- DONE: Unified pre-battle layout/routing regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_timeline.py tests/client/test_conquer_layout.py` passed: 145 passed.
+- DONE: Broader unified conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 164 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -160,6 +170,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.
   - DONE: Header collapsed status strip, narration log, transient timeline overlay, and battle-strip Withdraw command are implemented for tactics-hand battle/result modes.
   - DONE: Tactics rail text fitting and public-only top-strip intent labels are implemented.
+  - DONE: Tactics-hand pre-battle and battle now share one field-first canvas with the rail, ledger, and field columns using the same layout helper.
   - DONE: Field inert-but-inspectable battle behavior is implemented for tactics-hand battle rounds.
   - DONE: First-pass duel lane fighter-only rendering is implemented for tactics-hand battle rounds.
   - TODO: Support badge strips, source leader lines, and power receipt rows are missing.

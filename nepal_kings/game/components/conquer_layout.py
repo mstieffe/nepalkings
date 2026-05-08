@@ -52,10 +52,10 @@ _LEDGER_H_PCT = 0.1685                  # ledger band height (pre+battle modes)
 
 # Tactics rail (LEFT) — battlefield (RIGHT)
 _RAIL_X_PCT = 0.025
-_RAIL_W_PCT = 0.2625
+_RAIL_W_PCT = 0.225
 _RAIL_TO_FIELD_GAP_W_PCT = 0.0125
-_FIELD_X_PCT = _RAIL_X_PCT + _RAIL_W_PCT + _RAIL_TO_FIELD_GAP_W_PCT  # 0.30
-_FIELD_W_PCT = 1.0 - _FIELD_X_PCT - _MARGIN_X_PCT                     # 0.675
+_FIELD_X_PCT = _RAIL_X_PCT + _RAIL_W_PCT + _RAIL_TO_FIELD_GAP_W_PCT
+_FIELD_W_PCT = 1.0 - _FIELD_X_PCT - _MARGIN_X_PCT
 
 # Battlefield inner padding
 _FIELD_INNER_PAD_X_PCT = 0.00833

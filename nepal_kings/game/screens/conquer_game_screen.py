@@ -305,6 +305,9 @@ class ConquerGameScreen(GameScreen):
         return True
 
     def _normalize_conquer_subscreen(self):
+        if self._is_tactics_hand_game():
+            self.state.subscreen = 'field'
+            return
         if getattr(self.state, 'subscreen', None) not in self.CONQUER_SUBSCREENS:
             self.state.subscreen = 'field'
 
@@ -326,6 +329,11 @@ class ConquerGameScreen(GameScreen):
         if getattr(game, 'battle_turn_player_id', None) is not None:
             return True
         return getattr(game, 'battle_round', 0) in (1, 2, 3)
+
+    def _conquer_nav_buttons(self):
+        if self._is_tactics_hand_game():
+            return []
+        return self.game_buttons
 
     def _conquer_layout_mode(self):
         game = self.state.game
@@ -423,6 +431,12 @@ class ConquerGameScreen(GameScreen):
         if turn_pid is not None:
             return f'Round {round_no}: waiting for the opponent tactic.'
         return 'Battle rounds are being prepared.'
+
+    def _open_tactics_hand_result_dialogue(self):
+        game = self.state.game
+        result = getattr(game, 'last_battle_result', None) if game else None
+        if isinstance(result, dict) and result.get('conquer_result'):
+            self._handle_conquer_result_response(result)
 
     def _draw_conquer_status_chip(self, rect, label, border_color):
         pygame.draw.rect(self.window, (44, 36, 28), rect, border_radius=6)
@@ -1200,6 +1214,8 @@ class ConquerGameScreen(GameScreen):
         return title, hint
 
     def _draw_tab_state(self):
+        if self._is_tactics_hand_game():
+            return
         counts = self._conquer_attention_counts()
         active_map = {
             'field': self.field_button,
@@ -1707,9 +1723,9 @@ class ConquerGameScreen(GameScreen):
         else:
             self._conquer_timeline_panel.draw(self)
 
-        for button in self.game_buttons:
+        for button in self._conquer_nav_buttons():
             button.draw()
-        for button in self.game_buttons:
+        for button in self._conquer_nav_buttons():
             if hasattr(button, 'draw_hover_text'):
                 button.draw_hover_text()
         self._draw_tab_state()
@@ -1717,8 +1733,7 @@ class ConquerGameScreen(GameScreen):
         # the small 10-icon HUD panel used by legacy battle_move conquer.
         if self._is_tactics_hand_game():
             self._tactics_rail.draw()
-            if self._is_battle_phase_active():
-                self._round_ledger.draw()
+            self._round_ledger.draw()
         else:
             self._draw_conquer_battle_moves_panel()
 
@@ -1751,7 +1766,7 @@ class ConquerGameScreen(GameScreen):
         self._normalize_conquer_subscreen()
         self._refresh_conquer_tab_locks()
 
-        for button in self.game_buttons:
+        for button in self._conquer_nav_buttons():
             button.update(self.state)
 
         self._normalize_conquer_subscreen()
@@ -1847,11 +1862,7 @@ class ConquerGameScreen(GameScreen):
         if self._is_tactics_hand_game():
             for event in events:
                 if self._round_ledger.handle_event(event) == 'open_result':
-                    # Focus the battle subscreen so its existing result
-                    # rendering takes over.  The standalone modal will be
-                    # added in a follow-up.
-                    if 'battle' in self.subscreens:
-                        self.state.subscreen = 'battle'
+                    self._open_tactics_hand_result_dialogue()
                     return
                 if self._tactics_rail.handle_event(event):
                     pending = self._tactics_rail.consume_pending_action()
@@ -1871,8 +1882,8 @@ class ConquerGameScreen(GameScreen):
                     self._cast_counter_spell(result)
             return
 
-        # Tabs are always accessible; hidden duel controls are not registered.
-        for button in self.game_buttons:
+        # Legacy conquer tabs stay accessible; tactics-hand games use the unified field canvas.
+        for button in self._conquer_nav_buttons():
             button.update(self.state)
         self._normalize_conquer_subscreen()
 

@@ -4,6 +4,7 @@ import pygame
 from pygame.locals import *
 from config import settings
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
+from game.components.conquer_layout import compute_conquer_layout
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.figures.figure_icon import FieldFigureIcon
@@ -151,6 +152,7 @@ class FieldScreen(SubScreen):
 
     def update_hover_state(self):
         """Update hover state for figure icons. Called only on mouse motion."""
+        self._sync_field_compartments_layout()
         # Update hover state: only one figure can be hovered at a time
         # Check in reverse order (topmost figures get priority)
         hovered_icon = None
@@ -207,6 +209,48 @@ class FieldScreen(SubScreen):
         Set transparency of the field to settings.FIELD_TRANSPARENCY.
         Margin in x direction is settings.FIELD_ICON_PADDING
         """
+        self._sync_field_compartments_layout(force=True)
+
+    def _uses_unified_conquer_layout(self):
+        game = getattr(self, 'game', None)
+        return bool(
+            game
+            and getattr(game, 'mode', 'duel') == 'conquer'
+            and getattr(game, 'conquer_move_model', 'battle_move') == 'tactics_hand'
+        )
+
+    def _conquer_layout_mode(self):
+        game = getattr(self, 'game', None)
+        if not game:
+            return 'pre_battle'
+        if getattr(game, 'last_battle_result', None):
+            return 'result'
+        if (getattr(game, 'battle_turn_player_id', None) is not None
+                or getattr(game, 'battle_round', 0) in (1, 2, 3)):
+            return 'battle'
+        return 'pre_battle'
+
+    def _unified_conquer_compartments(self):
+        layout = compute_conquer_layout(
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            mode=self._conquer_layout_mode(),
+        )
+        columns = layout.battlefield.columns
+        return {
+            'self': {
+                'castle': pygame.Rect(columns.you_castle),
+                'village': pygame.Rect(columns.you_village),
+                'military': pygame.Rect(columns.you_military),
+            },
+            'opponent': {
+                'military': pygame.Rect(columns.opp_military),
+                'village': pygame.Rect(columns.opp_village),
+                'castle': pygame.Rect(columns.opp_castle),
+            },
+        }
+
+    def _legacy_field_compartments(self):
         compartments = {'self': {}, 'opponent': {}}
 
         self_x = self._sx(settings.FIELD_SELF_X)
@@ -221,8 +265,30 @@ class FieldScreen(SubScreen):
         compartments['opponent']['military'] = pygame.Rect(opponent_x, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
         compartments['opponent']['village'] = pygame.Rect(opponent_x + field_step, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
         compartments['opponent']['castle'] = pygame.Rect(opponent_x + 2 * field_step, field_y, settings.FIELD_ICON_WIDTH, settings.FIELD_HEIGHT)
+        return compartments
 
-        self.compartments = compartments
+    def _sync_field_compartments_layout(self, *, force=False):
+        if self._uses_unified_conquer_layout():
+            layout_key = ('unified_conquer', self._conquer_layout_mode())
+            compartments = self._unified_conquer_compartments()
+        else:
+            layout_key = ('legacy', getattr(self, '_layout_offset_x', 0), getattr(self, '_layout_offset_y', 0))
+            compartments = self._legacy_field_compartments()
+        if force or layout_key != getattr(self, '_field_compartment_layout_key', None):
+            self.compartments = compartments
+            self._field_compartment_layout_key = layout_key
+
+    def _draw_unified_conquer_battlefield_backdrop(self):
+        layout = compute_conquer_layout(
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            mode=self._conquer_layout_mode(),
+        )
+        rect = pygame.Rect(layout.battlefield.rect)
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(panel, (35, 28, 20, 176), panel.get_rect(), border_radius=8)
+        pygame.draw.rect(panel, (116, 91, 55, 220), panel.get_rect(), 2, border_radius=8)
+        self.window.blit(panel, rect.topleft)
 
     def _get_opponent_hand_cards(self):
         """Get opponent's hand cards (not in deck, not part of figure)."""
@@ -2494,7 +2560,11 @@ class FieldScreen(SubScreen):
 
     def draw(self):
         """Draw the screen, including the field background and figure icons."""
-        super().draw()
+        self._sync_field_compartments_layout()
+        if self._uses_unified_conquer_layout():
+            self._draw_unified_conquer_battlefield_backdrop()
+        else:
+            super().draw()
 
         # Safety check: ensure categorized_figures exists
         if not hasattr(self, 'categorized_figures') or not self.categorized_figures:
@@ -2713,7 +2783,7 @@ class FieldScreen(SubScreen):
                             if figure.id not in self.icon_cache:
                                 continue
                             icon = self.icon_cache[figure.id]
-                            icon_x = compartment.left + 0.5*settings.FIELD_ICON_WIDTH 
+                            icon_x = compartment.centerx
                             icon_y = icon_y_start + i * icon_spacing
                             
                             if icon.hovered:

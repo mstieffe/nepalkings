@@ -537,6 +537,52 @@ def test_conquer_screen_draws_timeline_hover_after_buttons():
     ]
 
 
+def test_tactics_hand_prebattle_draws_single_canvas_without_tabs():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    draw_order = []
+
+    class FakePanel:
+        def draw(self, _screen):
+            draw_order.append('timeline')
+
+        def draw_hover_tooltips(self, _screen):
+            draw_order.append('timeline-hover')
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((1200, 800))
+    screen.state = SimpleNamespace(
+        game=SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_round=0,
+            battle_turn_player_id=None,
+            last_battle_result=None,
+        ),
+        subscreen='field',
+    )
+    screen.subscreens = {
+        'field': SimpleNamespace(draw=lambda: draw_order.append('field')),
+    }
+    screen._conquer_timeline_panel = FakePanel()
+    screen.game_buttons = [SimpleNamespace(
+        draw=lambda: draw_order.append('button'),
+        draw_hover_text=lambda: draw_order.append('button-hover'),
+    )]
+    screen._tactics_rail = SimpleNamespace(draw=lambda: draw_order.append('rail'))
+    screen._round_ledger = SimpleNamespace(draw=lambda: draw_order.append('ledger'))
+    screen.waiting_for_counter_response = False
+    screen.counter_spell_selector = None
+    screen.dialogue_box = None
+    screen._ensure_conquer_screen_game = lambda: True
+
+    ConquerGameScreen.render(screen)
+
+    assert draw_order == [
+        'field', 'timeline', 'rail', 'ledger', 'timeline-hover',
+    ]
+
+
 def test_conquer_battle_move_panel_layout_fits_left_gutter_for_ten_moves():
     from config import settings
     from game.screens.conquer_game_screen import ConquerGameScreen
