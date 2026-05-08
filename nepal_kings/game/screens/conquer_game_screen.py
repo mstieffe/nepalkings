@@ -8,6 +8,7 @@ underlying field/shop/battle components are still shared with duel mode, but
 the parent navigation, HUD, routing, and input policy are conquer-specific.
 """
 
+import math
 import sys
 
 import pygame
@@ -15,20 +16,21 @@ from pygame.locals import *
 
 from config import settings
 from config.screen_settings import _UI_SCALE
-from game.components.conquer_command_layer import ConquerCommandLayer
+from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
+from game.components.battle_moves.battle_move_manager import BattleMoveManager
+from game.components.conquer_timeline_panel import ConquerTimelinePanel, AUTO_ADVANCE_MS
 from game.components.cards.hand import Hand
 from game.components.figures.figure_manager import FigureManager
 from game.screens.conquer_flow import (
-    ConquerEvent,
     ConquerObjective,
     derive_conquer_objective,
-    infer_spell_metadata,
 )
 from game.screens.battle_screen import BattleScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.field_screen import FieldScreen
 from game.screens.game_screen import GameScreen
 from game.screens.screen import Screen
+from utils import battle_shop_service
 from utils.utils import GameButton
 
 
@@ -36,13 +38,12 @@ class ConquerGameScreen(GameScreen):
     """Focused conquer battle shell with Field / Battle Shop / Battle tabs."""
 
     CONQUER_SUBSCREENS = ('field', 'battle_shop', 'battle')
-    # Unified top panel: replaces the old header + bottom-log split.  All
-    # status, spells, battle figures and the action prompt live in this single
-    # panel so the subscreen content can use the rest of the screen.
+    # Unified top panel timeline + active info box.
     HEADER_H_FACTOR = 0.22
-    # Kept for backwards compatibility with code paths that still read it;
-    # there is no separate bottom log in the new design.
-    BOTTOM_LOG_H_FACTOR = 0.0
+    CONQUER_BATTLE_MOVE_PANEL_MAX_MOVES = 10
+    # When in moves phase and the user navigates away from the battle shop,
+    # snap them back after this many ms.
+    BATTLE_SHOP_SNAPBACK_MS = 2000
 
     def __init__(self, state, progress_callback=None):
         Screen.__init__(self, state)
@@ -50,13 +51,18 @@ class ConquerGameScreen(GameScreen):
         self.state.parent_screen = self
 
         self._last_conquer_auto_route_key = None
-        self._conquer_events = []
-        self._conquer_event_keys = set()
-        self._conquer_event_seq = 0
         self._conquer_pending_confirmation = None
         self._conquer_objective_action_rects = {}
-        self._conquer_pending_gate = None
-        self._conquer_gate_queue = []
+        self._conquer_auto_ready_attempt_key = None
+        # Per-step countdown timers for non-interactive timeline steps.
+        # Maps step.kind -> ms timestamp when it became active.
+        self._conquer_timeline_step_started_at = {}
+        # UI-only acknowledgements: kinds the user has already "Next"-ed
+        # past, used to suppress info-box display for completed non-
+        # interactive steps that game state still reports as completed.
+        self._conquer_acknowledged_step_kinds = set()
+        # Battle-shop snap-back bookkeeping (moves phase only).
+        self._conquer_left_battle_shop_at = 0
         self._withdraw_dialogue_open = False
         self._current_game_key = None
         # Battle-cycle reset bookkeeping: clear conquer events whenever the
@@ -147,7 +153,15 @@ class ConquerGameScreen(GameScreen):
         self._conquer_hint_font = settings.get_font(settings.FS_SMALL)
         self._conquer_badge_font = settings.get_font(
             int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE), bold=True)
-        self._conquer_command_layer = ConquerCommandLayer(self.window)
+        self._conquer_timeline_panel = ConquerTimelinePanel(self.window)
+        self._conquer_battle_move_cache_key = None
+        self._conquer_battle_move_cache = []
+        self._conquer_battle_move_icon_caches = {}
+        self._conquer_battle_move_manager = None
+        self._conquer_move_panel_title_font = settings.get_font(
+            max(10, int(settings.FS_TINY * 0.80)), bold=True)
+        self._conquer_move_panel_empty_font = settings.get_font(
+            max(12, int(settings.FS_TINY * 0.95)), bold=True)
 
         if getattr(self.state, 'subscreen', None) not in self.subscreens:
             self.state.subscreen = 'field'
@@ -210,29 +224,12 @@ class ConquerGameScreen(GameScreen):
             track_turn=False,
             tooltip_anchor='top-left',
         )
-        self.battle_shop_button = GameButton(
-            self.window,
-            'conquer_view_battle_shop',
-            'battleshop',
-            'plain',
-            tab_start_x, tab_y + tab_gap,
-            settings.BATTLE_SHOP_BUTTON_WIDTH,
-            settings.BATTLE_SHOP_BUTTON_WIDTH,
-            glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
-            symbol_width_big=settings.BATTLE_SHOP_BUTTON_WIDTH_BIG,
-            glow_width_big=settings.FIELD_BUTTON_GLOW_WIDTH_BIG,
-            state=self.state,
-            hover_text='battle shop',
-            subscreen='battle_shop',
-            track_turn=False,
-            tooltip_anchor='top-left',
-        )
         self.battle_button = GameButton(
             self.window,
             'conquer_view_battle',
             'battle',
             'plain',
-            tab_start_x, tab_y + tab_gap * 2,
+            tab_start_x, tab_y + tab_gap,
             settings.BATTLE_BUTTON_WIDTH,
             settings.BATTLE_BUTTON_WIDTH,
             glow_width=settings.FIELD_BUTTON_GLOW_WIDTH,
@@ -246,9 +243,11 @@ class ConquerGameScreen(GameScreen):
             tooltip_anchor='top-left',
         )
 
+        # Note: battle_shop is still a valid subscreen (used during the
+        # move-selection phase via auto-routing), but no tab button is
+        # exposed because the user should never navigate there manually.
         self.game_buttons.extend([
             self.field_button,
-            self.battle_shop_button,
             self.battle_button,
         ])
 
@@ -302,27 +301,26 @@ class ConquerGameScreen(GameScreen):
                 self.state.game._conquer_result_dialogue_shown = False
 
     def _refresh_conquer_tab_locks(self):
-        for button in (self.field_button, self.battle_shop_button, self.battle_button):
+        for button in (self.field_button, self.battle_button):
             button.locked = False
             button.locked_clicked = False
         self._lock_battle_tab_if_premature()
 
     def _lock_battle_tab_if_premature(self):
-        """Lock the battle tab until both sides have confirmed the battle.
+        """Lock the battle tab until the battle has officially started.
 
-        The opponent's advancing figure is known from game state as soon as
-        figure selection is complete, but it must not be visible until the
-        battle actually begins — locking the button prevents early navigation
-        to the BattleScreen where the figure would be loaded and displayed.
-        Auto-routing (which sets state.subscreen directly) still works because
-        it bypasses the button entirely.
+        The battle screen would happily render an opponent's advancing or
+        defending figure as soon as their ids are populated, but the redesign
+        requires those figures to remain hidden until the duel begins.  We
+        therefore lock the tab until both ``battle_confirmed`` is set and a
+        battle turn has been assigned, i.e. the move-resolution phase begins.
         """
         game = self.state.game
         if not game:
             return
         battle_accessible = (
-            getattr(game, 'battle_confirmed', False)
-            or getattr(game, 'both_battle_moves_ready', False)
+            bool(getattr(game, 'battle_confirmed', False))
+            and getattr(game, 'battle_turn_player_id', None) is not None
         )
         if not battle_accessible:
             self.battle_button.locked = True
@@ -367,8 +365,45 @@ class ConquerGameScreen(GameScreen):
         return None, None
 
     def _auto_route_conquer_once(self):
-        if self._conquer_flow_gate_active():
+        if self._auto_confirm_conquer_battle_moves_if_no_changes():
             return
+
+        # Prefer the objective's target_tab so the auto-routed tab always
+        # matches what the info panel says — this prevents drift between
+        # "act here" instructions and the actually-selected subscreen.
+        try:
+            objective = self.get_conquer_objective()
+        except AttributeError:
+            objective = None
+        objective_tab = getattr(objective, 'target_tab', None) if objective else None
+        # Safety guard: never auto-flip to ``battle_shop`` (or ``battle``)
+        # before the battle is actually confirmed by the server.  Otherwise
+        # transient client-side states (e.g. ``pending_battle_ready`` between
+        # polls) can yank the user away from the field while figures are
+        # still being chosen.
+        game = self.state.game
+        battle_confirmed = bool(getattr(game, 'battle_confirmed', False)) if game else False
+        hold_step = self._active_timeline_hold_step()
+        if hold_step is not None:
+            hold_key = ('timeline_hold', getattr(hold_step, 'kind', ''))
+            if hold_key != self._last_conquer_auto_route_key:
+                self.state.subscreen = 'field'
+                self._last_conquer_auto_route_key = hold_key
+            return
+        if objective_tab in ('battle_shop', 'battle') and not battle_confirmed:
+            objective_tab = 'field'
+        if objective_tab and objective_tab in self.CONQUER_SUBSCREENS:
+            obj_key = ('objective',
+                       getattr(objective, 'phase', ''),
+                       getattr(objective, 'headline', ''),
+                       getattr(objective, 'primary_action', ''),
+                       objective_tab)
+            if obj_key != self._last_conquer_auto_route_key:
+                self.state.subscreen = objective_tab
+                self._last_conquer_auto_route_key = obj_key
+            return
+        # Fall back to the legacy required-tab path for states the objective
+        # doesn't cover (battle round, post-battle, etc.).
         desired, key = self._conquer_required_tab()
         if desired and key != self._last_conquer_auto_route_key:
             self.state.subscreen = desired
@@ -378,7 +413,7 @@ class ConquerGameScreen(GameScreen):
         """Return badge counts for conquer tabs."""
         game = self.state.game
         if not game:
-            return {'field': 0, 'battle_shop': 0, 'battle': 0}
+            return {'field': 0, 'battle': 0}
 
         field = 0
         if (getattr(game, 'pending_conquer_prelude_target', False)
@@ -392,63 +427,138 @@ class ConquerGameScreen(GameScreen):
                 or getattr(game, 'civil_war_defender_second', False)):
             field = 1
 
-        shop = 0
-        if (getattr(game, 'battle_moves_phase', False)
-                and not getattr(game, 'battle_moves_ready', False)
-                and not getattr(game, 'waiting_for_opponent_battle_moves', False)):
-            shop = 1
-
         battle = 0
         if (getattr(game, 'battle_confirmed', False)
                 and getattr(game, 'battle_turn_player_id', None) is not None):
             battle = 1
 
-        return {'field': field, 'battle_shop': shop, 'battle': battle}
+        return {'field': field, 'battle': battle}
 
-    # ----------------------------------------------------------- command events
-    def emit_conquer_event(self, key, title, detail='', phase='start',
-                           tone='info', spell_names=None,
-                           spell_side='', spell_role=''):
-        """Append a de-duplicated event to the conquer command log."""
-        if not key:
-            key = f'event:{self._conquer_event_seq}:{title}:{detail}'
-        if key in self._conquer_event_keys:
-            return None
-        self._conquer_event_seq += 1
-        names = tuple(n for n in (spell_names or []) if n)
-        event = ConquerEvent(
-            key=str(key),
-            phase=phase or 'start',
-            title=title or 'Conquer event',
-            detail=detail or '',
-            tone=tone or 'info',
-            spell_names=names,
-            order=self._conquer_event_seq,
-            spell_side=spell_side or '',
-            spell_role=spell_role or '',
+    # -------------------------------------------------- battle-shop guard
+    def _enforce_battle_shop_during_moves(self):
+        """During the battle moves-selection phase, force the user onto the
+        battle_shop subscreen.
+
+        The user has no business on the field while picking battle moves.
+        We allow a brief 2-second peek at the field (e.g. to check the
+        figures lined up for the duel) before snapping them back.
+        """
+        game = self.state.game
+        if not game or getattr(game, 'mode', 'duel') != 'conquer':
+            return
+        in_moves = bool(getattr(game, 'battle_moves_phase', False))
+        if not in_moves:
+            self._conquer_left_battle_shop_at = 0
+            return
+        if self._auto_confirm_conquer_battle_moves_if_no_changes():
+            self._conquer_left_battle_shop_at = 0
+            return
+        if getattr(game, 'battle_confirmed', False):
+            return
+        if self._active_timeline_hold_step() is not None:
+            self._conquer_left_battle_shop_at = 0
+            return
+        if self.state.subscreen == 'battle_shop':
+            self._conquer_left_battle_shop_at = 0
+            return
+        # Only manage the field<->battle_shop transition.  If the player is
+        # already on the (locked) battle tab, leave them there.
+        if self.state.subscreen != 'field':
+            self.state.subscreen = 'battle_shop'
+            self._conquer_left_battle_shop_at = 0
+            return
+        now = pygame.time.get_ticks()
+        if not self._conquer_left_battle_shop_at:
+            self._conquer_left_battle_shop_at = now
+            return
+        if now - self._conquer_left_battle_shop_at >= self.BATTLE_SHOP_SNAPBACK_MS:
+            self.state.subscreen = 'battle_shop'
+            self._conquer_left_battle_shop_at = 0
+
+    def _enter_battle_moves_phase(self):
+        game = self.state.game
+        if (game and getattr(game, 'mode', 'duel') == 'conquer'
+                and self._auto_confirm_conquer_battle_moves_if_no_changes(force=True)):
+            return
+        super()._enter_battle_moves_phase()
+
+    def _auto_confirm_conquer_battle_moves_if_no_changes(self, *, force=False):
+        """Ready conquer battle moves without visiting the shop when it has no choices."""
+        game = self.state.game
+        if not game or getattr(game, 'mode', 'duel') != 'conquer':
+            return False
+        if not getattr(game, 'battle_confirmed', False):
+            return False
+        if getattr(game, 'battle_turn_player_id', None) is not None:
+            self.state.subscreen = 'battle'
+            return True
+        if (getattr(game, 'battle_moves_ready', False)
+                or getattr(game, 'waiting_for_opponent_battle_moves', False)):
+            return False
+        if not force and not getattr(game, 'battle_moves_phase', False):
+            return False
+
+        shop = self.subscreens.get('battle_shop') if hasattr(self, 'subscreens') else None
+        if shop is None:
+            return False
+
+        attempt_key = (
+            getattr(game, 'game_id', None),
+            getattr(game, 'player_id', None),
+            getattr(game, '_game_data_version', 0),
+            len(getattr(shop, 'bought_moves', []) or []),
         )
-        self._conquer_events.append(event)
-        self._conquer_event_keys.add(event.key)
-        if len(self._conquer_events) > 24:
-            dropped = self._conquer_events.pop(0)
-            self._conquer_event_keys.discard(dropped.key)
-        return event
+        if not force and attempt_key == self._conquer_auto_ready_attempt_key:
+            return False
 
+        shop.game = game
+        if getattr(shop, 'card_source', None) is not None and hasattr(shop.card_source, 'game'):
+            shop.card_source.game = game
+        if hasattr(shop, '_load_bought_moves'):
+            shop._load_bought_moves()
+
+        can_ready = bool(getattr(shop, '_can_ready_for_battle', lambda: False)())
+        has_changes = bool(getattr(shop, 'has_available_battle_move_changes', lambda: True)())
+        if not can_ready or has_changes:
+            return False
+
+        self._conquer_auto_ready_attempt_key = attempt_key
+        from utils.battle_shop_service import confirm_battle_moves
+        try:
+            result = confirm_battle_moves(game.game_id, game.player_id)
+        except Exception:
+            return False
+        if not result.get('success'):
+            return False
+
+        if result.get('game') and hasattr(game, 'update_from_dict'):
+            game.update_from_dict(result['game'])
+
+        both_ready = bool(result.get('both_ready') or getattr(game, 'battle_turn_player_id', None) is not None)
+        game.battle_moves_phase = False
+        game.battle_moves_ready = not both_ready
+        game.waiting_for_opponent_battle_moves = not both_ready
+        game.both_battle_moves_ready = both_ready
+        if hasattr(self, 'battle_button'):
+            self.battle_button.locked = False
+        self.state.subscreen = 'battle' if both_ready else 'field'
+        return True
+
+    # ----------------------------------------------------------- panel state
     def reset_conquer_panel_state(self):
         """Reset the conquer panel state to a clean slate.
 
-        Called when a new conquest begins, so the spell, battle figure and
-        info compartments don't carry over data from the previous fight.
+        Called when a new conquest begins, so step countdowns and pending
+        confirmations don't carry over from the previous fight.
         """
-        self._conquer_events = []
-        self._conquer_event_keys = set()
-        self._conquer_event_seq = 0
-        self._conquer_pending_gate = None
-        self._conquer_gate_queue = []
         self._conquer_pending_confirmation = None
         self._conquer_objective_action_rects = {}
+        self._conquer_timeline_step_started_at = {}
+        self._conquer_acknowledged_step_kinds = set()
+        self._conquer_auto_ready_attempt_key = None
         self._last_conquer_auto_route_key = None
         self._last_battle_cycle_key = None
+        self._conquer_left_battle_shop_at = 0
 
     def _conquer_battle_cycle_key(self):
         """Identity tuple for a given conquest cycle (changes between fights).
@@ -491,133 +601,45 @@ class ConquerGameScreen(GameScreen):
 
         self._last_battle_cycle_key = new_key
 
-    def _should_convert_conquer_notification(self, data):
+    # -------------------------------------------------- notification routing
+
+    def _should_drop_conquer_notification(self, data):
+        """In conquer mode, suppress modal notifications redundant with the
+        timeline panel.
+
+        Modal dialogues are still used for: errors, ``force_modal``, the
+        battle result (``type == 'game_over'``), and the withdraw confirmation.
+        """
         if not self.state.game or getattr(self.state.game, 'mode', 'duel') != 'conquer':
             return False
         if data.get('force_modal') or data.get('type') == 'game_over':
             return False
-        # Welcome / battle-intro notifications are shown as dialogue boxes,
-        # mirroring the battle result modal at the end of a conquer fight.
-        if data.get('phase') == 'start':
-            return False
         title = (data.get('title') or '').lower()
         if 'failed' in title or title == 'error':
             return False
+        # Drop informational welcome / prelude / opponent-spell receipts —
+        # the timeline already shows them.
         actions = [str(a).lower() for a in data.get('actions', ['ok'])]
         return set(actions).issubset({'ok', 'got it!'})
-
-    def _notification_to_event(self, data):
-        message = data.get('message') or ''
-        after = data.get('message_after_images') or ''
-        detail = message
-        if after:
-            detail = f'{detail} {after}' if detail else after
-        detail = ' '.join(str(detail).split())
-        title = data.get('title') or 'Conquer event'
-        key = data.get('event_key') or f'notification:{title}:{detail}'
-        spell_side, spell_role = infer_spell_metadata(data)
-        return self.emit_conquer_event(
-            key=key,
-            title=title,
-            detail=detail,
-            phase=data.get('phase') or 'start',
-            tone=data.get('tone') or 'info',
-            spell_names=data.get('spell_names') or (),
-            spell_side=spell_side,
-            spell_role=spell_role,
-        )
-
-    def _should_gate_conquer_notification(self, data):
-        """Always returns False — the gate mechanism is no longer used.
-
-        Welcome/intro notifications are now shown as dialogue boxes directly.
-        Selection-step notifications (action tone) activate field modes
-        immediately via ``_sync_conquer_action_modes`` without blocking the
-        player with a Next button.
-        """
-        return False
-
-    def _queue_conquer_gate(self, event, data):
-        if not event:
-            return
-        gate = {
-            'key': event.key,
-            'phase': event.phase,
-            'title': event.title,
-            'detail': event.detail,
-            'tone': event.tone,
-            'spell_names': event.spell_names,
-            'target_tab': data.get('target_tab'),
-        }
-        if not hasattr(self, '_conquer_gate_queue'):
-            self._conquer_gate_queue = []
-        if not hasattr(self, '_conquer_pending_gate'):
-            self._conquer_pending_gate = None
-        queued_keys = {g.get('key') for g in self._conquer_gate_queue}
-        active_key = (self._conquer_pending_gate or {}).get('key')
-        if gate['key'] == active_key or gate['key'] in queued_keys:
-            return
-        if self._conquer_pending_gate:
-            self._conquer_gate_queue.append(gate)
-        else:
-            self._conquer_pending_gate = gate
-            self._suspend_conquer_selection_modes()
-
-    def _advance_conquer_gate(self):
-        current = self._conquer_pending_gate or {}
-        self._conquer_pending_gate = (
-            self._conquer_gate_queue.pop(0) if self._conquer_gate_queue else None
-        )
-        if self._conquer_pending_gate:
-            self._suspend_conquer_selection_modes()
-            return True
-        target_tab = current.get('target_tab')
-        if not target_tab:
-            target_tab = derive_conquer_objective(
-                self.state.game, self.state,
-                self.subscreens.get('field') if hasattr(self, 'subscreens') else None,
-                self.subscreens.get('battle_shop') if hasattr(self, 'subscreens') else None,
-            ).target_tab
-        if target_tab in self.CONQUER_SUBSCREENS:
-            self.state.subscreen = target_tab
-        self._sync_conquer_action_modes()
-        self._auto_route_conquer_once()
-        return True
-
-    def _conquer_flow_gate_active(self):
-        return getattr(self, '_conquer_pending_gate', None) is not None
-
-    def _suspend_conquer_selection_modes(self):
-        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
-        if not field:
-            return
-        if getattr(field, 'defender_selection_mode', False):
-            field.defender_selection_mode = False
-            field._reset_defender_selectable()
-        if getattr(field, 'conquer_own_defender_mode', False):
-            field.conquer_own_defender_mode = False
-            field._reset_defender_selectable()
 
     def _strip_conquer_notification_meta(self, data):
         stripped = dict(data)
         for key in ('event_key', 'phase', 'tone', 'spell_names', 'force_modal',
-                    'target_tab', 'no_gate'):
+                    'target_tab', 'no_gate', 'spell_side', 'spell_role',
+                    'message_after_images'):
             stripped.pop(key, None)
         return stripped
 
     def queue_or_show_notification(self, notification_data):
-        """In conquer mode, route informational receipts to the command log."""
+        """In conquer mode, route informational receipts away from modals."""
         data = dict(notification_data)
-        if self._should_convert_conquer_notification(data):
-            event = self._notification_to_event(data)
-            if self._should_gate_conquer_notification(data):
-                self._queue_conquer_gate(event, data)
+        if self._should_drop_conquer_notification(data):
             return
         super().queue_or_show_notification(self._strip_conquer_notification_meta(data))
 
     def request_conquer_figure_confirmation(self, kind, figure, icon=None,
                                             message='', title='Confirm'):
-        """Ask the command panel to confirm a pending field action."""
+        """Ask the timeline panel to confirm a pending field action."""
         self._conquer_pending_confirmation = {
             'kind': kind,
             'figure': figure,
@@ -629,9 +651,31 @@ class ConquerGameScreen(GameScreen):
     def clear_conquer_figure_confirmation(self):
         self._conquer_pending_confirmation = None
 
+    def _sync_pending_confirmation_state(self):
+        """Drop a stale pending-confirmation if the underlying field state went
+        away (e.g. server pre-empted us with an Invader Swap), so the panel
+        never shows a Confirm button that no longer maps to a real action.
+        """
+        pending = self._conquer_pending_confirmation
+        if not pending:
+            return
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        if field is None:
+            return
+        kind = pending.get('kind')
+        target = None
+        if kind == 'advance':
+            target = getattr(field, '_pending_advance_figure', None)
+        elif kind == 'opponent_defender':
+            target = getattr(field, 'figure_pending_defender_selection', None)
+        elif kind == 'own_defender':
+            target = getattr(field, 'figure_pending_own_defender_selection', None)
+        if target is None:
+            self._conquer_pending_confirmation = None
+
     def _handle_conquer_objective_action(self, action):
-        if action == 'next_gate':
-            return self._advance_conquer_gate()
+        if action == 'next':
+            return self._advance_active_timeline_step()
         if action == 'withdraw':
             self._open_withdraw_dialogue()
             return True
@@ -654,6 +698,25 @@ class ConquerGameScreen(GameScreen):
                 elif kind == 'own_defender' and hasattr(field, 'confirm_pending_own_defender_selection'):
                     handled = field.confirm_pending_own_defender_selection()
             self.clear_conquer_figure_confirmation()
+            if handled:
+                acknowledged = {
+                    'advance': 'attacker',
+                    'opponent_defender': 'defender',
+                    'own_defender': 'defender',
+                }.get(kind)
+                if acknowledged:
+                    acked = getattr(self, '_conquer_acknowledged_step_kinds', None)
+                    if acked is None:
+                        acked = set()
+                        self._conquer_acknowledged_step_kinds = acked
+                    timers = getattr(self, '_conquer_timeline_step_started_at', None)
+                    if timers is None:
+                        timers = {}
+                        self._conquer_timeline_step_started_at = timers
+                    acked.add(acknowledged)
+                    timers[acknowledged] = (
+                        pygame.time.get_ticks() - AUTO_ADVANCE_MS - 1
+                    )
             return handled
         return False
 
@@ -690,13 +753,6 @@ class ConquerGameScreen(GameScreen):
         from utils.game_service import conquer_withdraw
         result = conquer_withdraw(self.state.game.game_id, self.state.game.player_id)
         if result.get('success') and result.get('conquer_result'):
-            self.emit_conquer_event(
-                key='withdraw:confirmed',
-                title='Conquest withdrawn',
-                detail='You withdrew. The defender wins this conquer battle.',
-                phase='result',
-                tone='bad',
-            )
             self._handle_conquer_result_response(result)
             return
         self.make_dialogue_box(
@@ -708,51 +764,90 @@ class ConquerGameScreen(GameScreen):
 
     def _sync_conquer_action_modes(self):
         """Enable field modes that used to wait for informational modal clicks."""
-        if self._conquer_flow_gate_active():
-            return
-        if not self.state.game:
+        game = self.state.game
+        if not game:
             return
         field = self.subscreens.get('field')
         if not field:
             return
 
-        if (getattr(self.state.game, 'pending_defender_selection', False)
-                and getattr(self.state.game, 'defender_selection_dialogue_shown', False)
-                and getattr(self.state.game, 'turn', False)):
+        civil_war_second_defender = bool(getattr(game, 'civil_war_defender_second', False))
+        try:
+            own_civil_war_second_defender = bool(
+                civil_war_second_defender
+                and getattr(game, 'advancing_player_id', None) != getattr(game, 'player_id', None)
+                and self._is_current_player_conquer_attacker()
+            )
+        except Exception:
+            own_civil_war_second_defender = False
+
+        if (getattr(game, 'pending_defender_selection', False)
+                and getattr(game, 'defender_selection_dialogue_shown', False)
+                and getattr(game, 'turn', False)):
             if not getattr(field, 'defender_selection_mode', False):
                 field.defender_selection_mode = True
                 field._update_defender_selectable()
+        elif (getattr(field, 'defender_selection_mode', False)
+              and civil_war_second_defender
+              and not own_civil_war_second_defender):
+            field._update_defender_selectable()
         elif getattr(field, 'defender_selection_mode', False) and not getattr(
-                self.state.game, 'pending_defender_selection', False):
+                game, 'pending_defender_selection', False):
             field.defender_selection_mode = False
             field._reset_defender_selectable()
 
-        if (getattr(self.state.game, 'pending_conquer_own_defender_selection', False)
-                and getattr(self.state.game, 'conquer_own_defender_selection_shown', False)):
+        if ((getattr(game, 'pending_conquer_own_defender_selection', False)
+                and getattr(game, 'conquer_own_defender_selection_shown', False))
+                or own_civil_war_second_defender):
             field.conquer_own_defender_mode = True
-            field._update_defender_selectable()
+            if hasattr(field, '_update_conquer_own_defender_selectable'):
+                field._update_conquer_own_defender_selectable()
+            else:
+                field._reset_defender_selectable()
         elif getattr(field, 'conquer_own_defender_mode', False) and not getattr(
-                self.state.game, 'pending_conquer_own_defender_selection', False):
+                game, 'pending_conquer_own_defender_selection', False):
             field.conquer_own_defender_mode = False
+            field._reset_defender_selectable()
 
     def get_conquer_objective(self):
-        gate = self._conquer_pending_gate
-        if gate:
-            detail = gate.get('detail') or 'Review the latest conquer event.'
-            return ConquerObjective(
-                phase=gate.get('phase') or 'start',
-                headline=gate.get('title') or 'Conquer update',
-                instruction=f'{detail} Press Next to continue.',
-                target_tab=gate.get('target_tab'),
-                primary_action='next_gate',
-                waiting=True,
-                tone=gate.get('tone') or 'action',
-            )
         return derive_conquer_objective(
             self.state.game, self.state,
             self.subscreens.get('field') if hasattr(self, 'subscreens') else None,
             self.subscreens.get('battle_shop') if hasattr(self, 'subscreens') else None,
         )
+
+    def _advance_active_timeline_step(self):
+        """Expire the countdown of the currently active non-interactive step.
+
+        Triggered by the timeline panel's Next button.  We mark the active
+        step's countdown as expired so the next draw promotes the next
+        timeline step to active.
+        """
+        steps = self._conquer_timeline_panel.derive_display_steps(self)
+        for step in steps:
+            if step.active and not step.interactive:
+                self._conquer_acknowledged_step_kinds.add(step.kind)
+                # Expire its countdown so the next draw treats it complete.
+                self._conquer_timeline_step_started_at[step.kind] = (
+                    pygame.time.get_ticks() - AUTO_ADVANCE_MS - 1
+                )
+                return True
+        return False
+
+    def _active_timeline_hold_step(self):
+        step = self.active_conquer_timeline_step()
+        if step is not None and not step.interactive:
+            return step
+        return None
+
+    def active_conquer_timeline_step(self):
+        if not hasattr(self, '_conquer_timeline_panel'):
+            return None
+        steps = self._conquer_timeline_panel.derive_display_steps(self)
+        for step in steps:
+            if step.active:
+                return step
+        return None
 
     # ------------------------------------------------------------------- draw
     def _conquer_status_text(self):
@@ -772,7 +867,6 @@ class ConquerGameScreen(GameScreen):
         counts = self._conquer_attention_counts()
         active_map = {
             'field': self.field_button,
-            'battle_shop': self.battle_shop_button,
             'battle': self.battle_button,
         }
         for name, button in active_map.items():
@@ -782,6 +876,296 @@ class ConquerGameScreen(GameScreen):
                 pygame.draw.rect(self.window, (245, 205, 95), rect, 2, border_radius=6)
             if counts.get(name, 0):
                 self._draw_button_badge(button, counts[name])
+
+    # ------------------------------------------------------ battle move HUD
+
+    def _conquer_move_title_font(self):
+        font = getattr(self, '_conquer_move_panel_title_font', None)
+        if font is None:
+            font = settings.get_font(max(10, int(settings.FS_TINY * 0.80)), bold=True)
+            self._conquer_move_panel_title_font = font
+        return font
+
+    def _conquer_move_empty_font(self):
+        font = getattr(self, '_conquer_move_panel_empty_font', None)
+        if font is None:
+            font = settings.get_font(max(12, int(settings.FS_TINY * 0.95)), bold=True)
+            self._conquer_move_panel_empty_font = font
+        return font
+
+    def _current_conquer_battle_moves(self):
+        game = self.state.game
+        if not game:
+            return []
+
+        battle = self.subscreens.get('battle') if hasattr(self, 'subscreens') else None
+        battle_moves = getattr(battle, 'player_moves', None) if battle else None
+        if (battle_moves and getattr(game, 'battle_turn_player_id', None) is not None):
+            return [dict(move) for move in battle_moves]
+
+        game_id = getattr(game, 'game_id', None)
+        player_id = getattr(game, 'player_id', None)
+        if not game_id or not player_id:
+            return list(getattr(game, 'battle_moves', []) or [])
+
+        cache_key = (
+            game_id,
+            player_id,
+            getattr(game, '_game_data_version', 0),
+            getattr(game, 'battle_turn_player_id', None),
+            getattr(game, 'battle_round', None),
+        )
+        if cache_key == getattr(self, '_conquer_battle_move_cache_key', None):
+            return list(getattr(self, '_conquer_battle_move_cache', []) or [])
+
+        try:
+            result = battle_shop_service.get_battle_moves(game_id, player_id)
+            moves = result.get('battle_moves', []) if result.get('success') else []
+        except Exception:
+            moves = list(getattr(self, '_conquer_battle_move_cache', []) or [])
+
+        self._conquer_battle_move_cache_key = cache_key
+        self._conquer_battle_move_cache = [dict(move) for move in moves]
+        self._sync_conquer_battle_move_subscreen_cache(self._conquer_battle_move_cache)
+        return list(self._conquer_battle_move_cache)
+
+    def _sync_conquer_battle_move_subscreen_cache(self, moves):
+        shop = self.subscreens.get('battle_shop') if hasattr(self, 'subscreens') else None
+        game = self.state.game
+        if shop is not None and hasattr(shop, 'bought_moves'):
+            shop.bought_moves = [dict(move) for move in moves]
+            if hasattr(shop, '_game_identity_key'):
+                shop._loaded_game_key = shop._game_identity_key(game)
+            if hasattr(shop, '_bought_moves_cache_key'):
+                shop._loaded_bought_moves_key = shop._bought_moves_cache_key(game)
+
+    def _conquer_battle_moves_panel_bounds(self):
+        button_rects = []
+        for button in (getattr(self, 'field_button', None), getattr(self, 'battle_button', None)):
+            if button is None:
+                continue
+            rect = getattr(button, 'rect_glow', None) or getattr(button, 'rect_symbol', None)
+            if isinstance(rect, pygame.Rect):
+                button_rects.append(rect)
+        if not button_rects:
+            return None
+
+        sub_x, _sub_y = self._conquer_subscreen_origin()
+        margin = max(6, int(settings.SCREEN_WIDTH * 0.008))
+        max_w = max(0, sub_x - margin * 2)
+        if max_w < 52:
+            return None
+
+        button_center_x = sum(rect.centerx for rect in button_rects) // len(button_rects)
+        preferred_w = max(settings.FIELD_BUTTON_WIDTH + margin * 2,
+                          int(settings.SCREEN_WIDTH * 0.075))
+        panel_w = min(max_w, preferred_w)
+        panel_x = button_center_x - panel_w // 2
+        panel_x = max(margin, min(panel_x, sub_x - margin - panel_w))
+
+        gap_y = max(8, int(settings.SCREEN_HEIGHT * 0.012))
+        panel_y = max(rect.bottom for rect in button_rects) + gap_y
+        max_h = settings.SCREEN_HEIGHT - margin - panel_y
+        if max_h < 70:
+            return None
+        return pygame.Rect(panel_x, panel_y, panel_w, max_h)
+
+    def _conquer_battle_moves_panel_layout(self, move_count):
+        bounds = self._conquer_battle_moves_panel_bounds()
+        if bounds is None:
+            return None
+
+        display_count = max(0, min(int(move_count or 0), self.CONQUER_BATTLE_MOVE_PANEL_MAX_MOVES))
+        layout_count = max(1, display_count)
+        columns = 1 if layout_count <= 3 else 2
+        rows = int(math.ceil(layout_count / columns))
+
+        pad = max(6, int(bounds.width * 0.055))
+        gap = max(5, int(settings.SCREEN_HEIGHT * 0.006))
+        title_h = self._conquer_move_title_font().get_height()
+        inner_w = max(1, bounds.width - pad * 2)
+        icon_h_available = bounds.height - pad * 2 - title_h - gap
+        max_icon = max(30, min(68, int(settings.SCREEN_WIDTH * 0.036)))
+        icon_size = min(
+            max_icon,
+            (inner_w - gap * (columns - 1)) // columns,
+            (icon_h_available - gap * (rows - 1)) // rows,
+        )
+        if icon_size < 18:
+            return None
+
+        panel_h = pad * 2 + title_h + gap + rows * icon_size + (rows - 1) * gap
+        rect = pygame.Rect(bounds.left, bounds.top, bounds.width, min(panel_h, bounds.height))
+        grid_w = columns * icon_size + (columns - 1) * gap
+        start_x = rect.centerx - grid_w // 2
+        start_y = rect.top + pad + title_h + gap
+        icon_rects = []
+        for idx in range(display_count):
+            row = idx // columns
+            col = idx % columns
+            icon_rects.append(pygame.Rect(
+                start_x + col * (icon_size + gap),
+                start_y + row * (icon_size + gap),
+                icon_size,
+                icon_size,
+            ))
+
+        return {
+            'rect': rect,
+            'icon_rects': icon_rects,
+            'icon_size': icon_size,
+            'columns': columns,
+            'rows': rows,
+            'pad': pad,
+        }
+
+    def _conquer_battle_move_manager_for_panel(self):
+        manager = getattr(self, '_conquer_battle_move_manager', None)
+        if manager is None:
+            shop = self.subscreens.get('battle_shop') if hasattr(self, 'subscreens') else None
+            manager = getattr(shop, 'battle_move_manager', None) if shop is not None else None
+        if manager is None:
+            manager = BattleMoveManager()
+        self._conquer_battle_move_manager = manager
+        return manager
+
+    @staticmethod
+    def _scaled_or_blank(surface, size):
+        if surface is None:
+            return pygame.Surface(size, pygame.SRCALPHA)
+        return pygame.transform.smoothscale(surface, size)
+
+    @staticmethod
+    def _load_panel_image(path, size):
+        try:
+            raw = pygame.image.load(path).convert_alpha()
+            return pygame.transform.smoothscale(raw, size)
+        except Exception:
+            return pygame.Surface(size, pygame.SRCALPHA)
+
+    def _conquer_battle_move_icon_assets(self, icon_size):
+        caches = getattr(self, '_conquer_battle_move_icon_caches', None)
+        if caches is None:
+            caches = {}
+            self._conquer_battle_move_icon_caches = caches
+        if icon_size in caches:
+            return caches[icon_size]
+
+        big_scale = 1.20
+        glow_size = max(icon_size + 10, int(icon_size * 1.45))
+        glow_big = int(glow_size * big_scale)
+        icon_inner = max(1, icon_size - 6)
+        icon_big = int(icon_inner * big_scale)
+        frame_size = int(icon_size * 1.30)
+        frame_big = int(frame_size * big_scale)
+        suit_size = max(8, int(icon_size * 0.24))
+        suit_big = int(suit_size * big_scale)
+
+        glow_cache = {
+            'green': self._load_panel_image('img/game_button/glow/green.png', (glow_size, glow_size)),
+            'blue': self._load_panel_image('img/game_button/glow/blue.png', (glow_size, glow_size)),
+            'yellow': self._load_panel_image('img/game_button/glow/yellow.png', (glow_size, glow_size)),
+            'green_big': self._load_panel_image('img/game_button/glow/green.png', (glow_big, glow_big)),
+            'blue_big': self._load_panel_image('img/game_button/glow/blue.png', (glow_big, glow_big)),
+            'yellow_big': self._load_panel_image('img/game_button/glow/yellow.png', (glow_big, glow_big)),
+        }
+        suit_icon_cache = {}
+        for suit_name in ('hearts', 'diamonds', 'spades', 'clubs'):
+            path = settings.SUIT_ICON_IMG_PATH + suit_name + '.png'
+            suit_icon_cache[suit_name] = self._load_panel_image(path, (suit_size, suit_size))
+            suit_icon_cache[suit_name + '_big'] = self._load_panel_image(path, (suit_big, suit_big))
+
+        manager = self._conquer_battle_move_manager_for_panel()
+        icon_cache = {}
+        frame_cache = {}
+        for name, family in manager.families_by_name.items():
+            icon_cache[name] = self._scaled_or_blank(getattr(family, 'icon_img', None), (icon_inner, icon_inner))
+            icon_cache[name + '_big'] = self._scaled_or_blank(getattr(family, 'icon_img', None), (icon_big, icon_big))
+            frame_cache[name] = self._scaled_or_blank(getattr(family, 'frame_img', None), (frame_size, frame_size))
+            frame_cache[name + '_big'] = self._scaled_or_blank(getattr(family, 'frame_img', None), (frame_big, frame_big))
+
+        font = settings.get_font(max(10, int(icon_size * 0.28)), bold=True)
+        caches[icon_size] = (glow_cache, icon_cache, frame_cache, suit_icon_cache, font)
+        return caches[icon_size]
+
+    @staticmethod
+    def _conquer_battle_move_display_power(move):
+        if move.get('family_name') == 'Block':
+            return 0
+        return move.get('value', 0)
+
+    def _draw_conquer_battle_moves_panel(self):
+        game = self.state.game
+        if not game or getattr(game, 'mode', 'duel') != 'conquer':
+            return
+
+        moves = self._current_conquer_battle_moves()
+        layout = self._conquer_battle_moves_panel_layout(len(moves))
+        if not layout:
+            return
+
+        rect = layout['rect']
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        panel.fill((38, 29, 22, 218))
+        self.window.blit(panel, rect.topleft)
+        pygame.draw.rect(
+            self.window,
+            settings.BATTLE_SCREEN_PANEL_BORDER_COLOR,
+            rect,
+            settings.BATTLE_SCREEN_PANEL_BORDER_WIDTH,
+            border_radius=6,
+        )
+
+        title_font = self._conquer_move_title_font()
+        count_text = f'Moves {len(moves)}/{self.CONQUER_BATTLE_MOVE_PANEL_MAX_MOVES}'
+        title = title_font.render(
+            self._fit_text(count_text, title_font, rect.width - layout['pad'] * 2),
+            True,
+            (238, 218, 170),
+        )
+        self.window.blit(title, (rect.centerx - title.get_width() // 2, rect.top + layout['pad']))
+
+        if not moves:
+            empty_font = self._conquer_move_empty_font()
+            dash = empty_font.render('-', True, (150, 132, 96))
+            self.window.blit(dash, dash.get_rect(center=(rect.centerx, rect.centery + 8)))
+            return
+
+        icon_size = layout['icon_size']
+        glow_cache, icon_cache, frame_cache, suit_icon_cache, font = (
+            self._conquer_battle_move_icon_assets(icon_size)
+        )
+        mouse_pos = pygame.mouse.get_pos()
+        display_moves = moves[:self.CONQUER_BATTLE_MOVE_PANEL_MAX_MOVES]
+        for move, icon_rect in zip(display_moves, layout['icon_rects']):
+            hovered = icon_rect.collidepoint(mouse_pos)
+            draw_battle_move_icon(
+                self.window,
+                icon_rect.centerx,
+                icon_rect.centery,
+                move.get('family_name', ''),
+                move.get('suit', ''),
+                self._conquer_battle_move_display_power(move),
+                glow_cache,
+                icon_cache,
+                frame_cache,
+                suit_icon_cache,
+                font,
+                icon_size,
+                hovered=hovered,
+                is_used=move.get('played_round') is not None,
+                suit_b=move.get('suit_b'),
+            )
+
+    @staticmethod
+    def _fit_text(text, font, max_width):
+        text = text or ''
+        if font.size(text)[0] <= max_width:
+            return text
+        clipped = text
+        while clipped and font.size(clipped + '...')[0] > max_width:
+            clipped = clipped[:-1]
+        return clipped + '...' if clipped else '...'
 
     def render(self):
         self.window.fill(settings.BACKGROUND_COLOR)
@@ -794,7 +1178,7 @@ class ConquerGameScreen(GameScreen):
         if subscreen:
             subscreen.draw()
 
-        self._conquer_command_layer.draw(self)
+        self._conquer_timeline_panel.draw(self)
 
         for button in self.game_buttons:
             button.draw()
@@ -802,6 +1186,7 @@ class ConquerGameScreen(GameScreen):
             if hasattr(button, 'draw_hover_text'):
                 button.draw_hover_text()
         self._draw_tab_state()
+        self._draw_conquer_battle_moves_panel()
 
         # Shared top-level overlays used by the conquer flow.
         if (self.state.subscreen in ('field', 'battle') and subscreen and
@@ -821,6 +1206,8 @@ class ConquerGameScreen(GameScreen):
 
         if self.dialogue_box:
             self.dialogue_box.draw()
+
+        self._conquer_timeline_panel.draw_hover_tooltips(self)
 
     # ----------------------------------------------------------------- update
     def update(self, events):
@@ -843,15 +1230,15 @@ class ConquerGameScreen(GameScreen):
             self.update_game()
             self._check_battle_cycle_reset()
             self._refresh_conquer_tab_locks()
-            if not self._conquer_flow_gate_active():
-                self._sync_conquer_action_modes()
-                self._auto_route_conquer_once()
+            self._sync_conquer_action_modes()
+            self._auto_route_conquer_once()
 
         subscreen = self.subscreens.get(self.state.subscreen)
         if subscreen:
             subscreen.update(self.state.game)
-        if not self._conquer_flow_gate_active():
-            self._sync_conquer_action_modes()
+        self._sync_conquer_action_modes()
+        self._sync_pending_confirmation_state()
+        self._enforce_battle_shop_during_moves()
 
     # -------------------------------------------------------------- event input
     def handle_events(self, events):
@@ -933,16 +1320,18 @@ class ConquerGameScreen(GameScreen):
             button.update(self.state)
         self._normalize_conquer_subscreen()
 
-        if self._conquer_flow_gate_active():
-            return
-
         if self.waiting_for_counter_response:
             return
+
+        active_step = self.active_conquer_timeline_step()
+        subscreen = self.subscreens.get(self.state.subscreen)
+        if active_step is not None and not active_step.interactive:
+            if not (subscreen and getattr(subscreen, 'dialogue_box', None)):
+                return
 
         # Field-required actions are handled by FieldScreen, but the player may
         # still inspect other tabs manually.  Only the active tab receives game
         # events.
-        subscreen = self.subscreens.get(self.state.subscreen)
         if subscreen:
             subscreen.handle_events(events)
             if self.state.game and self.state.game.pending_battle_ready:

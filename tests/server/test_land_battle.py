@@ -325,14 +325,14 @@ class TestConquerStartBattle:
             # 3 attacker + 3 defender (from AI template tier 1)
             assert len(moves) == 6
 
-    @pytest.mark.parametrize('spell_name, expected_attacker_moves', [
-        ('Forced Deal', 1),
-        ('Dump Cards', 0),
+    @pytest.mark.parametrize('spell_name, expected_attacker_moves, expected_defender_moves', [
+        ('Forced Deal', 3, 3),
+        ('Dump Cards', 5, 5),
     ])
-    def test_move_mutating_ai_prelude_replenishes_defender_only(
-        self, app, db, spell_name, expected_attacker_moves,
+    def test_move_mutating_ai_prelude_auto_converts_new_cards(
+        self, app, db, spell_name, expected_attacker_moves, expected_defender_moves,
     ):
-        """AI prelude disruption stays intact, but defender can rebuild moves."""
+        """Move-mutating preludes reserve newly gained cards for both sides."""
         with app.app_context():
             user = _make_user(db, username=f'atk_prelude_{spell_name.replace(" ", "_")}')
             land = _make_land(db, tier=1)
@@ -366,7 +366,7 @@ class TestConquerStartBattle:
                 game_id=game.id,
                 player_id=atk_player.id,
             ).all()
-            assert len(defender_moves) == 3
+            assert len(defender_moves) == expected_defender_moves
             assert len(attacker_moves) == expected_attacker_moves
 
     def test_start_battle_defers_ai_defender_for_counter_spell(self, app, db):
@@ -543,7 +543,10 @@ class TestConquerStartBattle:
 
             game = db.session.get(Game, data['game_id'])
             assert game.mode == 'conquer'
-            assert game.defending_figure_id is not None
+            # Defender battle figure is no longer pre-set at start_battle:
+            # the AI defender counter-advances with it when the invader
+            # advances, so the human invader sees the visible response.
+            assert game.defending_figure_id is None
 
             # Verify defender figures created
             def_player = [p for p in game.players
@@ -1444,6 +1447,17 @@ class TestConquerPreludeTargeting:
             assert resp.status_code == 200
             game = db.session.get(Game, resp.get_json()['game_id'])
             atk_player = db.session.get(Player, game.invader_player_id)
+            # Defender battle figure is no longer pre-set at start_battle, so
+            # simulate the stale-reference scenario by manually pinning a
+            # defender figure here (e.g. a leftover from a Civil War round
+            # that was not cleared) and verifying the Explosion prelude
+            # resolution wipes it out.
+            def_player = next(p for p in game.players if p.id != atk_player.id)
+            first_def_fig = Figure.query.filter_by(
+                game_id=game.id, player_id=def_player.id).first()
+            assert first_def_fig is not None
+            game.defending_figure_id = first_def_fig.id
+            db.session.commit()
             target_id = game.defending_figure_id
             assert target_id is not None
 
@@ -1595,14 +1609,15 @@ class TestConquerCounterSpells:
             assert game.turn_player_id == atk_player.id
             assert game.defending_figure_id is None
 
-    @pytest.mark.parametrize('spell_name, expected_attacker_moves, expected_added', [
-        ('Forced Deal', 1, 2),
-        ('Dump Cards', 0, 3),
+    @pytest.mark.parametrize('spell_name, expected_attacker_moves, expected_defender_moves, expected_added', [
+        ('Forced Deal', 3, 3, 2),
+        ('Dump Cards', 5, 5, 5),
     ])
-    def test_move_mutating_ai_counter_replenishes_defender_only(
-        self, app, db, spell_name, expected_attacker_moves, expected_added,
+    def test_move_mutating_ai_counter_auto_converts_new_cards(
+        self, app, db, spell_name, expected_attacker_moves,
+        expected_defender_moves, expected_added,
     ):
-        """AI counter spells can disrupt both sides without stranding the AI."""
+        """Move-mutating counter spells reserve newly gained cards as moves."""
         with app.app_context():
             attacker = _make_user(db, username=f'atk_counter_{spell_name.replace(" ", "_")}')
             land = _make_land(db, tier=1)
@@ -1655,17 +1670,128 @@ class TestConquerCounterSpells:
                 game_id=game.id,
                 player_id=atk_player.id,
             ).all()
-            attacker_free_main = MainCard.query.filter_by(
-                game_id=game.id,
-                player_id=atk_player.id,
-                in_deck=False,
-                part_of_figure=False,
-                part_of_battle_move=False,
-            ).count()
-
-            assert len(defender_moves) == 3
+            assert len(defender_moves) == expected_defender_moves
             assert len(attacker_moves) == expected_attacker_moves
-            assert attacker_free_main >= 2
+
+    def test_auto_convert_new_conquer_cards_caps_at_ten(self, app, db):
+        with app.app_context():
+            from game_service.battle_move_replenisher import auto_convert_conquer_battle_move_cards
+
+            user = _make_user(db, username='auto_convert_cap')
+            game = Game(mode='conquer', state='open')
+            db.session.add(game)
+            db.session.flush()
+            player = Player(user_id=user.id, game_id=game.id, turns_left=1)
+            db.session.add(player)
+            db.session.flush()
+
+            for idx in range(8):
+                card = MainCard(
+                    game_id=game.id,
+                    player_id=player.id,
+                    rank='7',
+                    suit='Spades',
+                    value=7,
+                    in_deck=False,
+                    part_of_battle_move=True,
+                )
+                db.session.add(card)
+                db.session.flush()
+                db.session.add(BattleMove(
+                    game_id=game.id,
+                    player_id=player.id,
+                    family_name='Dagger',
+                    card_id=card.id,
+                    card_type='main',
+                    suit='Spades',
+                    rank='7',
+                    value=7,
+                ))
+
+            new_cards = []
+            for rank, suit, value in [('8', 'Hearts', 8), ('K', 'Clubs', 4), ('Q', 'Diamonds', 0)]:
+                card = MainCard(
+                    game_id=game.id,
+                    player_id=player.id,
+                    rank=rank,
+                    suit=suit,
+                    value=value,
+                    in_deck=False,
+                    part_of_figure=False,
+                    part_of_battle_move=False,
+                )
+                db.session.add(card)
+                new_cards.append(card)
+            db.session.flush()
+
+            info = auto_convert_conquer_battle_move_cards(
+                game,
+                player,
+                new_cards,
+                reason='test_cap',
+            )
+
+            assert info['before'] == 8
+            assert info['added'] == 2
+            assert info['after'] == 10
+            assert BattleMove.query.filter_by(game_id=game.id, player_id=player.id).count() == 10
+            assert [card.part_of_battle_move for card in new_cards] == [True, True, False]
+
+    def test_draw_main_spell_auto_converts_drawn_cards(self, app, db, monkeypatch):
+        with app.app_context():
+            from importlib import import_module
+            from models import MainRank, Suit
+            spell_routes = import_module('routes.spells')
+            _execute_spell = spell_routes._execute_spell
+
+            user = _make_user(db, username='auto_convert_draw')
+            game = Game(mode='conquer', state='open')
+            db.session.add(game)
+            db.session.flush()
+            player = Player(user_id=user.id, game_id=game.id, turns_left=1)
+            db.session.add(player)
+            db.session.flush()
+
+            def fake_draw(_game, _player, _count, card_type, force=False):
+                assert card_type == 'main'
+                drawn = []
+                for rank, suit, value in [
+                    (MainRank.EIGHT, Suit.HEARTS, 8),
+                    (MainRank.JACK, Suit.CLUBS, 1),
+                ]:
+                    card = MainCard(
+                        game_id=game.id,
+                        player_id=player.id,
+                        rank=rank,
+                        suit=suit,
+                        value=value,
+                        in_deck=False,
+                        part_of_figure=False,
+                        part_of_battle_move=False,
+                    )
+                    db.session.add(card)
+                    drawn.append(card)
+                db.session.flush()
+                return drawn
+
+            monkeypatch.setattr(spell_routes.DeckManager, 'draw_cards_from_deck', fake_draw)
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=player.id,
+                spell_name='Draw 2 MainCards',
+                spell_type='greed',
+                spell_family_name='Draw 2 MainCards',
+                suit='Hearts',
+                cast_round=1,
+            )
+            db.session.add(spell)
+            db.session.flush()
+
+            result = _execute_spell(spell, game, player)
+
+            assert result['battle_moves_added']['added'] == 2
+            assert BattleMove.query.filter_by(game_id=game.id, player_id=player.id).count() == 2
+            assert all(card['part_of_battle_move'] for card in result['drawn_cards'])
 
 
 class TestConquerCounterSpellGating:

@@ -261,6 +261,29 @@ def _conquer_defender_counter_advance_disabled(game):
         return False
     if has_counter_spell and defender_player and _defender_already_cast_counter_this_round(game, defender_player.id):
         has_counter_spell = False
+
+    # Battle-figure mode short-circuit: when the defence config has a
+    # configured battle figure (and no usable counter spell) and that
+    # figure's runtime Figure can still counter-advance, the AI defender
+    # response uses it.  This must run BEFORE the generic must_be_attacked
+    # / counter_candidates guards so a Fortress on the defender's side
+    # (or other taunt figures) doesn't veto the configured response.
+    if (cfg and cfg.battle_figure_id and not has_counter_spell
+            and defender_player):
+        battle_runtime_fig = _map_defence_config_figure_to_game(
+            cfg, cfg.battle_figure_id, game, defender_player.id,
+        )
+        if battle_runtime_fig and _figure_can_counter_advance(
+            battle_runtime_fig, defender_player.id, game.id,
+        ):
+            return False
+
+    # Counter-spell-configured short-circuit (covers both spell-only and
+    # both-selected modes): the response window must open so the AI can
+    # cast the spell, regardless of must_be_attacked taunts.
+    if cfg and has_counter_spell and defender_player:
+        return False
+
     if defender_player:
         template_counter_name, _ = _get_ai_template_counter_spell(game)
         if not game.defence_config_id and template_counter_name:
@@ -288,9 +311,18 @@ def _conquer_defender_counter_advance_disabled(game):
     has_battle_fig = (cfg.battle_figure_id is not None)
 
     if has_battle_fig and not has_counter_spell:
-        if not game.defending_figure_id:
-            return True
-        battle_cfg_fig = db.session.get(Figure, game.defending_figure_id)
+        # Battle-figure mode: defender visibly counter-advances with the
+        # configured figure when the invader advances.  Validate the
+        # configured runtime Figure can still counter-advance; if not, the
+        # invader picks the defender directly as a fallback.
+        battle_cfg_fig = None
+        if game.defending_figure_id:
+            battle_cfg_fig = db.session.get(Figure, game.defending_figure_id)
+        else:
+            battle_cfg_fig = _map_defence_config_figure_to_game(
+                cfg, cfg.battle_figure_id, game,
+                defender_player.id if defender_player else None,
+            )
         if battle_cfg_fig:
             return not _figure_can_counter_advance(
                 battle_cfg_fig,
@@ -302,7 +334,15 @@ def _conquer_defender_counter_advance_disabled(game):
     if has_counter_spell and not has_battle_fig:
         return False
 
-    # Both-selected and none-selected strategies fall back to invader pick.
+    if has_battle_fig and has_counter_spell:
+        # Both-selected: the defender plays the counter spell first (or the
+        # configured battle figure counter-advances when the spell is no
+        # longer available).  Only fall back to invader pick when no usable
+        # counter-advance candidate exists — handled by the earlier
+        # ``counter_candidates`` guard.
+        return False
+
+    # None-selected strategies fall back to invader pick.
     return True
 
 
@@ -2436,17 +2476,22 @@ def conquer_defender_counter_spell():
             post_data['counter_status'] = 'executed'
             if target_figure_id:
                 post_data['target_figure_id'] = target_figure_id
-            for key in ('drawn_cards', 'cards_given', 'cards_received', 'caster_dumped', 'opponent_dumped'):
+            for key in (
+                    'drawn_cards', 'cards_given', 'cards_received',
+                    'caster_dumped', 'opponent_dumped',
+                    'battle_moves_added', 'opponent_battle_moves_added'):
                 if key in result:
                     post_data[key] = result[key]
         spell.effect_data = post_data
 
         from game_service.battle_move_replenisher import replenish_automated_conquer_defender_moves
-        replenish_info = replenish_automated_conquer_defender_moves(
-            game,
-            defender_player,
-            reason='conquer_counter_spell',
-        )
+        replenish_info = result.get('battle_moves_added') or {}
+        if not replenish_info.get('added'):
+            replenish_info = replenish_automated_conquer_defender_moves(
+                game,
+                defender_player,
+                reason='conquer_counter_spell',
+            )
         if replenish_info.get('added'):
             post_data = dict(spell.effect_data or {})
             post_data['defender_replenished_battle_moves'] = replenish_info

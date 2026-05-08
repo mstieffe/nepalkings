@@ -9,6 +9,7 @@ from flask import Blueprint, request, jsonify, current_app, g
 from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult, BattleMove
 from datetime import datetime, timezone
 from game_service.deck_manager import DeckManager
+from game_service.battle_move_replenisher import auto_convert_conquer_battle_move_cards
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
@@ -764,6 +765,26 @@ def _purge_battle_moves_referencing_card(game_id, card_id, card_type):
     return len(affected)
 
 
+def _auto_convert_spell_battle_moves(
+    spell_effect,
+    key,
+    game,
+    player,
+    cards,
+    *,
+    reason,
+):
+    info = auto_convert_conquer_battle_move_cards(
+        game,
+        player,
+        cards,
+        reason=reason,
+    )
+    if info.get('added'):
+        spell_effect[key] = info
+    return info
+
+
 def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
     """
     Execute a spell's effect based on its type.
@@ -809,6 +830,14 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 spell_effect['effect'] = f'Drew {len(drawn_cards)} main cards'
                 spell_effect['cards_drawn'] = len(drawn_cards)
                 spell_effect['card_type'] = 'main'
+                _auto_convert_spell_battle_moves(
+                    spell_effect,
+                    'battle_moves_added',
+                    game,
+                    caster,
+                    drawn_cards,
+                    reason='draw_main_spell',
+                )
                 # Add type field to serialized cards
                 spell_effect['drawn_cards'] = []
                 for card in drawn_cards:
@@ -843,6 +872,14 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['card_type'] = 'main'
                     spell_effect['previous_total'] = main_hand_count
                     spell_effect['new_total'] = main_hand_count + len(drawn_cards)
+                    _auto_convert_spell_battle_moves(
+                        spell_effect,
+                        'battle_moves_added',
+                        game,
+                        caster,
+                        drawn_cards,
+                        reason='fill_to_10_spell',
+                    )
                     # Add type field to serialized cards
                     spell_effect['drawn_cards'] = []
                     for card in drawn_cards:
@@ -928,6 +965,22 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     caster_new_side = DeckManager.draw_cards_from_deck(game, caster, 4, 'side')
                     opponent_new_main = DeckManager.draw_cards_from_deck(game, opponent, 5, 'main')
                     opponent_new_side = DeckManager.draw_cards_from_deck(game, opponent, 4, 'side')
+                    _auto_convert_spell_battle_moves(
+                        spell_effect,
+                        'battle_moves_added',
+                        game,
+                        caster,
+                        caster_new_main,
+                        reason='dump_cards_spell',
+                    )
+                    _auto_convert_spell_battle_moves(
+                        spell_effect,
+                        'opponent_battle_moves_added',
+                        game,
+                        opponent,
+                        opponent_new_main,
+                        reason='dump_cards_spell_opponent',
+                    )
                     
                     spell_effect['effect'] = f'Both players dumped all cards and drew 5 main + 4 side cards'
                     spell_effect['caster_dumped'] = caster_dumped
@@ -1030,6 +1083,23 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                                     game.id, card.id, 'main'
                                 )
                                 card.part_of_battle_move = False
+
+                        _auto_convert_spell_battle_moves(
+                            spell_effect,
+                            'battle_moves_added',
+                            game,
+                            caster,
+                            opponent_cards_to_swap,
+                            reason='forced_deal_spell',
+                        )
+                        _auto_convert_spell_battle_moves(
+                            spell_effect,
+                            'opponent_battle_moves_added',
+                            game,
+                            opponent,
+                            caster_cards_to_swap,
+                            reason='forced_deal_spell_opponent',
+                        )
                         
                         logger.debug(f"[FORCED DEAL] Card ownership updated successfully")
                         
@@ -1047,6 +1117,10 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                             'opponent_received': [card.serialize() for card in caster_cards_to_swap],
                             'notification_pending': True  # Flag to show this needs to be shown to opponent
                         }
+                        if spell_effect.get('battle_moves_added'):
+                            spell.effect_data['battle_moves_added'] = spell_effect['battle_moves_added']
+                        if spell_effect.get('opponent_battle_moves_added'):
+                            spell.effect_data['opponent_battle_moves_added'] = spell_effect['opponent_battle_moves_added']
                         
                         # Add opponent notification data (opponent sees opposite perspective)
                         spell_effect['opponent_notification'] = {
