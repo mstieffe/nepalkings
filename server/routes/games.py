@@ -41,7 +41,10 @@ def _get_tactic_card(tactic, *, secondary=False):
 
 def _played_battle_entries(game):
     if _is_tactics_hand_conquer(game):
-        return ConquerTactic.query.filter_by(game_id=game.id).all()
+        return ConquerTactic.query.filter_by(
+            game_id=game.id,
+            status='played',
+        ).all()
     return BattleMove.query.filter_by(game_id=game.id).all()
 
 _CONQUER_PRELUDE_SPELLS = frozenset({
