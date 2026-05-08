@@ -19,6 +19,7 @@ from config.screen_settings import _UI_SCALE
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
 from game.components.conquer_round_ledger import ConquerRoundLedger
+from game.components.conquer_layout import compute_conquer_layout
 from game.components.conquer_tactics_rail import (
     ACTION_COMBINE,
     ACTION_DISMANTLE,
@@ -50,6 +51,7 @@ class ConquerGameScreen(GameScreen):
     # Unified top panel timeline + active info box.
     HEADER_H_FACTOR = 0.22
     CONQUER_BATTLE_MOVE_PANEL_MAX_MOVES = 10
+    TIMELINE_OVERLAY_MS = 3500
     # When in moves phase and the user navigates away from the battle shop,
     # snap them back after this many ms.
     BATTLE_SHOP_SNAPBACK_MS = 2000
@@ -163,6 +165,8 @@ class ConquerGameScreen(GameScreen):
         self._conquer_badge_font = settings.get_font(
             int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE), bold=True)
         self._conquer_timeline_panel = ConquerTimelinePanel(self.window)
+        self._conquer_timeline_overlay_until = 0
+        self._conquer_collapsed_header_rect = None
         self._conquer_battle_move_cache_key = None
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
@@ -322,6 +326,232 @@ class ConquerGameScreen(GameScreen):
         if getattr(game, 'battle_turn_player_id', None) is not None:
             return True
         return getattr(game, 'battle_round', 0) in (1, 2, 3)
+
+    def _conquer_layout_mode(self):
+        game = self.state.game
+        if not game:
+            return 'pre_battle'
+        if getattr(game, 'last_battle_result', None):
+            return 'result'
+        if (getattr(game, 'battle_turn_player_id', None) is not None
+                or getattr(game, 'battle_round', 0) in (1, 2, 3)):
+            return 'battle'
+        return 'pre_battle'
+
+    def _should_use_collapsed_conquer_header(self):
+        return (
+            self._is_tactics_hand_game()
+            and self._conquer_layout_mode() in ('battle', 'result')
+        )
+
+    def _is_conquer_timeline_overlay_open(self):
+        return pygame.time.get_ticks() < getattr(
+            self, '_conquer_timeline_overlay_until', 0)
+
+    def _conquer_header_layout(self):
+        mode = self._conquer_layout_mode()
+        return compute_conquer_layout(
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            mode=mode,
+        ).header
+
+    def _conquer_header_title(self):
+        game = self.state.game
+        if not game:
+            return 'Conquer Battle'
+        tier = getattr(game, 'land_tier', None)
+        opponent = getattr(game, 'opponent_name', None) or 'Defender'
+        land = f'Tier {tier} Land' if tier else 'Conquer Battle'
+        return f'{land} vs {opponent}'
+
+    def _conquer_status_chips(self):
+        game = self.state.game
+        if not game:
+            return []
+
+        round_no = getattr(game, 'battle_round', 0) or 0
+        result = getattr(game, 'last_battle_result', None)
+        if result:
+            phase = 'Result'
+        elif round_no in (1, 2, 3):
+            phase = f'Round {round_no}/3'
+        else:
+            phase = 'Battle'
+
+        turn_pid = getattr(game, 'battle_turn_player_id', None)
+        player_id = getattr(game, 'player_id', None)
+        if result:
+            turn = 'Resolved'
+        elif turn_pid is None:
+            turn = 'Preparing'
+        elif turn_pid == player_id:
+            turn = 'Your turn'
+        else:
+            turn = 'Opponent turn'
+
+        chips = [phase, turn]
+        tier = getattr(game, 'land_tier', None)
+        if tier:
+            chips.append(f'Stake: Tier {tier}')
+        suit = getattr(game, 'land_suit_bonus_suit', None)
+        bonus = getattr(game, 'land_suit_bonus_value', None)
+        if suit and bonus:
+            chips.append(f'{suit} +{bonus}')
+        return chips
+
+    def _conquer_narration_line(self):
+        game = self.state.game
+        if not game:
+            return ''
+        result = getattr(game, 'last_battle_result', None)
+        if isinstance(result, dict) and result:
+            conquer_result = result.get('conquer_result') or result.get('outcome')
+            if conquer_result == 'draw':
+                return 'Battle resolved as a draw. No loot changed hands.'
+            winner = result.get('winner_name')
+            loser = result.get('loser_name')
+            if winner and loser:
+                return f'Battle resolved: {winner} defeated {loser}.'
+            return 'Battle resolved. Open the result to review the final outcome.'
+
+        round_no = getattr(game, 'battle_round', 0) or 0
+        turn_pid = getattr(game, 'battle_turn_player_id', None)
+        player_id = getattr(game, 'player_id', None)
+        if turn_pid == player_id:
+            return f'Round {round_no}: your tactic action is pending.'
+        if turn_pid is not None:
+            return f'Round {round_no}: waiting for the opponent tactic.'
+        return 'Battle rounds are being prepared.'
+
+    def _draw_conquer_status_chip(self, rect, label, border_color):
+        pygame.draw.rect(self.window, (44, 36, 28), rect, border_radius=6)
+        pygame.draw.rect(self.window, border_color, rect, 1, border_radius=6)
+        font = self._conquer_badge_font
+        text = self._fit_text(label, font, rect.width - 12)
+        surf = font.render(text, True, (238, 218, 170))
+        self.window.blit(surf, surf.get_rect(center=rect.center))
+
+    def _conquer_withdraw_available(self):
+        game = self.state.game
+        if not game or getattr(game, 'game_over', False) or getattr(game, 'state', None) == 'finished':
+            return False
+        if getattr(self, '_withdraw_dialogue_open', False):
+            return False
+        try:
+            return bool(self._is_current_player_conquer_attacker())
+        except Exception:
+            return False
+
+    def _draw_conquer_header_button(self, rect, label, color):
+        mouse = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mouse)
+        bg = tuple(min(255, c + 24) for c in color) if hovered else color
+        pygame.draw.rect(self.window, bg, rect, border_radius=6)
+        pygame.draw.rect(self.window, (238, 219, 172), rect, 1, border_radius=6)
+        font = self._conquer_badge_font
+        text = self._fit_text(label, font, rect.width - 12)
+        surf = font.render(text, True, (255, 244, 216))
+        self.window.blit(surf, surf.get_rect(center=rect.center))
+
+    def _draw_conquer_collapsed_header(self):
+        self._conquer_objective_action_rects = {}
+        header = self._conquer_header_layout()
+        if not header.status_strip_rect or not header.log_strip_rect:
+            self._conquer_collapsed_header_rect = None
+            return
+
+        status_rect = pygame.Rect(*header.status_strip_rect)
+        log_rect = pygame.Rect(*header.log_strip_rect)
+        self._conquer_collapsed_header_rect = status_rect.union(log_rect)
+
+        status = pygame.Surface(status_rect.size, pygame.SRCALPHA)
+        status.fill((19, 18, 16, 242))
+        self.window.blit(status, status_rect.topleft)
+        pygame.draw.line(self.window, (189, 149, 75),
+                         (status_rect.left, status_rect.bottom - 1),
+                         (status_rect.right, status_rect.bottom - 1), 2)
+
+        pad_x = max(12, int(settings.SCREEN_WIDTH * 0.018))
+        title_font = self._conquer_header_font
+        title = self._fit_text(
+            self._conquer_header_title(),
+            title_font,
+            max(80, int(settings.SCREEN_WIDTH * 0.42)),
+        )
+        title_surf = title_font.render(title, True, (246, 222, 170))
+        title_y = status_rect.centery - title_surf.get_height() // 2
+        self.window.blit(title_surf, (pad_x, title_y))
+
+        chip_gap = max(6, int(settings.SCREEN_WIDTH * 0.004))
+        right_limit = status_rect.right - pad_x
+        if self._conquer_withdraw_available():
+            button_w = max(86, int(settings.SCREEN_WIDTH * 0.070))
+            button_h = max(24, min(status_rect.height - 12, int(settings.SCREEN_HEIGHT * 0.030)))
+            button_rect = pygame.Rect(
+                right_limit - button_w,
+                status_rect.centery - button_h // 2,
+                button_w,
+                button_h,
+            )
+            self._conquer_objective_action_rects['withdraw'] = button_rect
+            self._draw_conquer_header_button(button_rect, 'Withdraw', (93, 52, 48))
+            right_limit = button_rect.left - chip_gap
+
+        chips = self._conquer_status_chips()
+        chip_h = max(24, min(status_rect.height - 12, int(settings.SCREEN_HEIGHT * 0.030)))
+        x = right_limit
+        border_colors = ((255, 211, 116), (176, 209, 255), (165, 235, 168), (200, 180, 120))
+        for idx, label in enumerate(reversed(chips)):
+            font = self._conquer_badge_font
+            chip_w = min(
+                max(78, font.size(label)[0] + 22),
+                int(settings.SCREEN_WIDTH * 0.16),
+            )
+            x -= chip_w
+            rect = pygame.Rect(x, status_rect.centery - chip_h // 2, chip_w, chip_h)
+            if rect.left <= pad_x + title_surf.get_width() + chip_gap:
+                break
+            color = border_colors[idx % len(border_colors)]
+            self._draw_conquer_status_chip(rect, label, color)
+            x -= chip_gap
+
+        log = pygame.Surface(log_rect.size, pygame.SRCALPHA)
+        log.fill((28, 22, 16, 228))
+        self.window.blit(log, log_rect.topleft)
+        pygame.draw.line(self.window, (92, 72, 46),
+                         (log_rect.left, log_rect.bottom - 1),
+                         (log_rect.right, log_rect.bottom - 1), 1)
+        narration_font = self._conquer_hint_font
+        narration = self._fit_text(
+            self._conquer_narration_line(),
+            narration_font,
+            log_rect.width - 2 * pad_x,
+        )
+        narration_surf = narration_font.render(narration, True, (220, 204, 164))
+        self.window.blit(
+            narration_surf,
+            (pad_x, log_rect.centery - narration_surf.get_height() // 2),
+        )
+
+    def _handle_collapsed_header_events(self, events):
+        if not self._should_use_collapsed_conquer_header():
+            return False
+        rect = self._conquer_collapsed_header_rect
+        if rect is None:
+            header = self._conquer_header_layout()
+            if header.status_strip_rect and header.log_strip_rect:
+                rect = pygame.Rect(*header.status_strip_rect).union(
+                    pygame.Rect(*header.log_strip_rect))
+        if rect is None:
+            return False
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if rect.collidepoint(event.pos):
+                    self._conquer_timeline_overlay_until = (
+                        pygame.time.get_ticks() + self.TIMELINE_OVERLAY_MS)
+                    return True
+        return False
 
     def _dispatch_tactics_rail_action(self, action_payload):
         """Apply a tactics-rail action by calling the appropriate API."""
@@ -1295,7 +1525,13 @@ class ConquerGameScreen(GameScreen):
         if subscreen:
             subscreen.draw()
 
-        self._conquer_timeline_panel.draw(self)
+        use_collapsed_header = self._should_use_collapsed_conquer_header()
+        if use_collapsed_header:
+            self._draw_conquer_collapsed_header()
+            if self._is_conquer_timeline_overlay_open():
+                self._conquer_timeline_panel.draw(self)
+        else:
+            self._conquer_timeline_panel.draw(self)
 
         for button in self.game_buttons:
             button.draw()
@@ -1331,7 +1567,8 @@ class ConquerGameScreen(GameScreen):
         if self.dialogue_box:
             self.dialogue_box.draw()
 
-        self._conquer_timeline_panel.draw_hover_tooltips(self)
+        if (not use_collapsed_header) or self._is_conquer_timeline_overlay_open():
+            self._conquer_timeline_panel.draw_hover_tooltips(self)
 
     # ----------------------------------------------------------------- update
     def update(self, events):
@@ -1425,6 +1662,9 @@ class ConquerGameScreen(GameScreen):
                 return
 
         if self._handle_conquer_command_events(events):
+            return
+
+        if self._handle_collapsed_header_events(events):
             return
 
         # Tactics-hand rail + ledger event capture (Phase 9 redesign).

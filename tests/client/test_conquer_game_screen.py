@@ -561,23 +561,30 @@ class TestTacticsHandRouting:
     """Phase 9-10 redesign: tactics-hand games never visit ``battle_shop``."""
 
     def _make_screen(self, *, conquer_move_model='tactics_hand', battle_confirmed=False,
-                     battle_moves_phase=False):
+                     battle_moves_phase=False, battle_turn_player_id=None,
+                     battle_round=0, last_battle_result=None):
         ConquerGameScreen, screen = _base_conquer_screen(SimpleNamespace(
             mode='conquer',
             conquer_move_model=conquer_move_model,
             battle_confirmed=battle_confirmed,
-            battle_turn_player_id=None,
-            battle_round=0,
+            battle_turn_player_id=battle_turn_player_id,
+            battle_round=battle_round,
             battle_moves_phase=battle_moves_phase,
             battle_moves_ready=False,
             waiting_for_opponent_battle_moves=False,
             both_battle_moves_ready=False,
             pending_battle_ready=False,
-            last_battle_result=None,
+            last_battle_result=last_battle_result,
             game_id=1,
             player_id=42,
+            opponent_name='Defender',
+            land_tier=2,
+            land_suit_bonus_suit='Hearts',
+            land_suit_bonus_value=2,
         ))
         screen._conquer_left_battle_shop_at = 0
+        screen._conquer_timeline_overlay_until = 0
+        screen._conquer_collapsed_header_rect = None
         return ConquerGameScreen, screen
 
     def test_is_tactics_hand_game_true_for_tactics_hand_marker(self):
@@ -605,6 +612,161 @@ class TestTacticsHandRouting:
         ConquerGameScreen._enforce_battle_shop_during_moves(screen)
         # Must NOT yank the user onto the (gone) battle_shop subscreen.
         assert screen.state.subscreen == 'field'
+
+    def test_header_uses_full_timeline_before_battle(self):
+        ConquerGameScreen, screen = self._make_screen()
+
+        assert ConquerGameScreen._conquer_layout_mode(screen) == 'pre_battle'
+        assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is False
+
+    def test_header_collapses_when_battle_turn_starts(self):
+        ConquerGameScreen, screen = self._make_screen(
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+
+        assert ConquerGameScreen._conquer_layout_mode(screen) == 'battle'
+        assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is True
+
+    def test_header_stays_collapsed_for_result_mode(self):
+        ConquerGameScreen, screen = self._make_screen(
+            last_battle_result={'winner_name': 'Attacker', 'loser_name': 'Defender'},
+        )
+
+        assert ConquerGameScreen._conquer_layout_mode(screen) == 'result'
+        assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is True
+
+    def test_legacy_games_keep_full_timeline_header_during_battle(self):
+        ConquerGameScreen, screen = self._make_screen(
+            conquer_move_model='battle_move',
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+
+        assert ConquerGameScreen._conquer_layout_mode(screen) == 'battle'
+        assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is False
+
+    def test_clicking_collapsed_header_expands_timeline_overlay(self):
+        ConquerGameScreen, screen = self._make_screen(
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+
+        handled = ConquerGameScreen._handle_collapsed_header_events(
+            screen,
+            [pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(8, 8))],
+        )
+
+        assert handled is True
+        assert screen._conquer_timeline_overlay_until > pygame.time.get_ticks()
+
+    def test_collapsed_header_clears_stale_actions_and_exposes_withdraw(self):
+        from config import settings
+
+        ConquerGameScreen, screen = self._make_screen(
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+        screen.window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        screen._conquer_header_font = settings.get_font(settings.FS_HEADING, bold=True)
+        screen._conquer_hint_font = settings.get_font(settings.FS_SMALL)
+        screen._conquer_badge_font = settings.get_font(settings.FS_TINY, bold=True)
+        screen._conquer_objective_action_rects = {'next': pygame.Rect(1, 1, 10, 10)}
+        screen._withdraw_dialogue_open = False
+        screen._is_current_player_conquer_attacker = lambda: True
+
+        ConquerGameScreen._draw_conquer_collapsed_header(screen)
+
+        assert 'next' not in screen._conquer_objective_action_rects
+        assert 'withdraw' in screen._conquer_objective_action_rects
+
+    def test_tactics_hand_gamble_uses_conquer_tactic_endpoint(self, monkeypatch):
+        from game.components.conquer_tactics_rail import ACTION_GAMBLE
+
+        ConquerGameScreen, screen = self._make_screen()
+        screen._tactics_rail = SimpleNamespace(reset_after_action=lambda: None)
+        called = []
+        monkeypatch.setattr(
+            'utils.game_service.gamble_conquer_tactic',
+            lambda game_id, player_id, tactic_id: called.append((game_id, player_id, tactic_id)),
+        )
+        monkeypatch.setattr(
+            'utils.battle_shop_service.gamble_battle_move',
+            lambda *_args: called.append(('legacy',)),
+        )
+
+        ConquerGameScreen._dispatch_tactics_rail_action(
+            screen,
+            {'action': ACTION_GAMBLE, 'move': {'id': 7}},
+        )
+
+        assert called == [(1, 42, 7)]
+
+    def test_tactics_hand_dismantle_uses_conquer_tactic_endpoint(self, monkeypatch):
+        from game.components.conquer_tactics_rail import ACTION_DISMANTLE
+
+        ConquerGameScreen, screen = self._make_screen()
+        screen._tactics_rail = SimpleNamespace(reset_after_action=lambda: None)
+        called = []
+        monkeypatch.setattr(
+            'utils.game_service.dismantle_conquer_tactic',
+            lambda game_id, player_id, tactic_id: called.append((game_id, player_id, tactic_id)),
+        )
+        monkeypatch.setattr(
+            'utils.battle_shop_service.dismantle_battle_move',
+            lambda *_args: called.append(('legacy',)),
+        )
+
+        ConquerGameScreen._dispatch_tactics_rail_action(
+            screen,
+            {'action': ACTION_DISMANTLE, 'move': {'id': 8}},
+        )
+
+        assert called == [(1, 42, 8)]
+
+    def test_legacy_gamble_still_uses_battle_shop_endpoint(self, monkeypatch):
+        from game.components.conquer_tactics_rail import ACTION_GAMBLE
+
+        ConquerGameScreen, screen = self._make_screen(conquer_move_model='battle_move')
+        screen._tactics_rail = SimpleNamespace(reset_after_action=lambda: None)
+        called = []
+        monkeypatch.setattr(
+            'utils.game_service.gamble_conquer_tactic',
+            lambda *_args: called.append(('tactics',)),
+        )
+        monkeypatch.setattr(
+            'utils.battle_shop_service.gamble_battle_move',
+            lambda game_id, player_id, move_id: called.append((game_id, player_id, move_id)),
+        )
+
+        ConquerGameScreen._dispatch_tactics_rail_action(
+            screen,
+            {'action': ACTION_GAMBLE, 'move': {'id': 9}},
+        )
+
+        assert called == [(1, 42, 9)]
+
+    def test_legacy_dismantle_still_uses_battle_shop_endpoint(self, monkeypatch):
+        from game.components.conquer_tactics_rail import ACTION_DISMANTLE
+
+        ConquerGameScreen, screen = self._make_screen(conquer_move_model='battle_move')
+        screen._tactics_rail = SimpleNamespace(reset_after_action=lambda: None)
+        called = []
+        monkeypatch.setattr(
+            'utils.game_service.dismantle_conquer_tactic',
+            lambda *_args: called.append(('tactics',)),
+        )
+        monkeypatch.setattr(
+            'utils.battle_shop_service.dismantle_battle_move',
+            lambda game_id, player_id, move_id: called.append((game_id, player_id, move_id)),
+        )
+
+        ConquerGameScreen._dispatch_tactics_rail_action(
+            screen,
+            {'action': ACTION_DISMANTLE, 'move': {'id': 10}},
+        )
+
+        assert called == [(1, 42, 10)]
 
 
 class TestConquerObjectiveTacticsHand:

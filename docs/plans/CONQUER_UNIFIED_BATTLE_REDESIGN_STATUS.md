@@ -48,6 +48,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - `ConquerGameScreen` calls those wrappers for tactics-hand games.
   - Tactics rail now ignores discarded tactics in the playable hand and recognizes combined `Double Dagger` tactics.
 
+- DONE: Added the tactics-hand battle/result collapsed header in `ConquerGameScreen`.
+  - Battle/result mode now draws the layout-helper status strip plus narration log instead of the full timeline header.
+  - The strip keeps phase/turn/stake/land-bonus chips visible, clears stale hidden timeline command rects, and exposes the existing Withdraw command for attackers.
+  - Clicking the collapsed header temporarily expands the full timeline as an overlay.
+
 - DONE: Updated automated conquer battle-round execution enough for tactics-hand rows.
   - `server/ai/ai_worker.py` reads `ConquerTactic` rows for tactics-hand games.
   - Auto-gamble, auto-combine, play, and skip fallback route through conquer tactic endpoints when appropriate.
@@ -92,6 +97,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: `python -m pytest tests/server/test_conquer_tactics_hand.py` passed: 10 passed.
 - DONE: Focused server/AI regression passed: 40 passed.
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
+- DONE: Focused client header/layout regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py` passed: 98 passed.
+- DONE: Broader conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py` passed: 152 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
 - DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 135 passed.
 - DONE: AI summary/planner/worker regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 80 passed.
@@ -130,7 +137,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - TODO: Check generic LLM action paths for `combine_conquer_tactics` enumeration if needed beyond deterministic conquer flow.
 
 - PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.
-  - TODO: Header collapsed status strip and narration log are still missing.
+  - DONE: Header collapsed status strip, narration log, transient timeline overlay, and battle-strip Withdraw command are implemented for tactics-hand battle/result modes.
   - TODO: Duel lane fighter-only rendering is not complete.
   - TODO: Support badge strips, source leader lines, and power receipt rows are missing.
   - TODO: Ghost predictive math and played tactic flight animation are missing.
@@ -144,8 +151,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - PARTIAL: Phase 11 tests started but are not comprehensive.
   - DONE: Added server tests for tactic initialization from AI templates.
   - DONE: Added server tests for legacy `battle_move` rollback with `CONQUER_TACTICS_HAND_ENABLED=False`.
+  - DONE: Added client tests for tactics-hand header mode switching, overlay expansion, hidden action rect clearing, and gamble/dismantle dispatch to conquer endpoints.
   - TODO: Add duel/battle-shop regression tests after legacy route gating changes.
-  - TODO: Add client tests for tactics visibility and action dispatch against conquer endpoints.
   - TODO: Add render/screenshot smoke tests for populated tactics rail and round ledger.
 
 ## Known Risks
