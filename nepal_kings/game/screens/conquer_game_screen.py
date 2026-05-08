@@ -18,6 +18,15 @@ from config import settings
 from config.screen_settings import _UI_SCALE
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
+from game.components.conquer_round_ledger import ConquerRoundLedger
+from game.components.conquer_tactics_rail import (
+    ACTION_COMBINE,
+    ACTION_DISMANTLE,
+    ACTION_GAMBLE,
+    ACTION_PLAY,
+    ACTION_SKIP,
+    ConquerTacticsRail,
+)
 from game.components.conquer_timeline_panel import ConquerTimelinePanel, AUTO_ADVANCE_MS
 from game.components.cards.hand import Hand
 from game.components.figures.figure_manager import FigureManager
@@ -30,7 +39,7 @@ from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.field_screen import FieldScreen
 from game.screens.game_screen import GameScreen
 from game.screens.screen import Screen
-from utils import battle_shop_service
+from utils import battle_shop_service, game_service
 from utils.utils import GameButton
 
 
@@ -163,6 +172,13 @@ class ConquerGameScreen(GameScreen):
         self._conquer_move_panel_empty_font = settings.get_font(
             max(12, int(settings.FS_TINY * 0.95)), bold=True)
 
+        # Unified tactics-hand UI (Phase 9 redesign).  These are lightweight
+        # overlays — when the active game uses ``conquer_move_model='tactics_hand'``
+        # they render on top of the field/battle subscreens; for legacy
+        # ``battle_move`` games they remain inert.
+        self._tactics_rail = ConquerTacticsRail(self)
+        self._round_ledger = ConquerRoundLedger(self)
+
         if getattr(self.state, 'subscreen', None) not in self.subscreens:
             self.state.subscreen = 'field'
 
@@ -288,6 +304,60 @@ class ConquerGameScreen(GameScreen):
         if getattr(self.state, 'subscreen', None) not in self.CONQUER_SUBSCREENS:
             self.state.subscreen = 'field'
 
+    # ----------------------------------------------------- tactics-hand mode
+    def _is_tactics_hand_game(self):
+        """True if the active conquer game uses the unified tactics-hand UI."""
+        game = self.state.game
+        if not game or getattr(game, 'mode', 'duel') != 'conquer':
+            return False
+        return getattr(game, 'conquer_move_model', 'battle_move') == 'tactics_hand'
+
+    def _is_battle_phase_active(self):
+        """True if any battle round (1..3) is in flight or just resolved."""
+        game = self.state.game
+        if not game:
+            return False
+        if getattr(game, 'last_battle_result', None):
+            return True
+        if getattr(game, 'battle_turn_player_id', None) is not None:
+            return True
+        return getattr(game, 'battle_round', 0) in (1, 2, 3)
+
+    def _dispatch_tactics_rail_action(self, action_payload):
+        """Apply a tactics-rail action by calling the appropriate API."""
+        if not action_payload:
+            return
+        game = self.state.game
+        if not game:
+            return
+        gid = getattr(game, 'game_id', None)
+        pid = getattr(game, 'player_id', None)
+        if gid is None or pid is None:
+            return
+        action = action_payload.get('action')
+        move = action_payload.get('move') or {}
+        mid = move.get('id')
+        try:
+            if action == ACTION_PLAY and mid is not None:
+                game_service.play_battle_move(gid, pid, mid)
+            elif action == ACTION_SKIP:
+                game_service.skip_battle_turn(gid, pid)
+            elif action == ACTION_GAMBLE and mid is not None:
+                battle_shop_service.gamble_battle_move(gid, pid, mid)
+            elif action == ACTION_DISMANTLE and mid is not None:
+                battle_shop_service.dismantle_battle_move(gid, pid, mid)
+            elif action == ACTION_COMBINE and mid is not None:
+                partner = action_payload.get('partner') or {}
+                pmid = partner.get('id')
+                if pmid is not None:
+                    battle_shop_service.combine_battle_moves(gid, pid, mid, pmid)
+        except Exception:
+            # Network errors are rendered via the standard polling cycle —
+            # we don't want a transient failure to blow up the input loop.
+            pass
+        self._tactics_rail.reset_after_action()
+        self._conquer_battle_move_cache_key = None  # force refetch
+
     def _reset_game_screen_state(self):
         """Reset shared and conquer-only state when entering a different game."""
         super()._reset_game_screen_state()
@@ -359,6 +429,11 @@ class ConquerGameScreen(GameScreen):
         if (getattr(game, 'battle_moves_phase', False)
                 and not getattr(game, 'battle_moves_ready', False)
                 and not getattr(game, 'waiting_for_opponent_battle_moves', False)):
+            if self._is_tactics_hand_game():
+                # Tactics-hand never enters battle_moves_phase server-side
+                # but if a stale flag lingers in the client snapshot, route
+                # to the field rather than the (gone) battle_shop subscreen.
+                return 'field', ('field', 'tactics_hand_moves_phase')
             return 'battle_shop', ('battle_shop', 'moves_phase',
                                    len(getattr(self.subscreens.get('battle_shop'), 'bought_moves', []) or []))
 
@@ -392,6 +467,8 @@ class ConquerGameScreen(GameScreen):
             return
         if objective_tab in ('battle_shop', 'battle') and not battle_confirmed:
             objective_tab = 'field'
+        if objective_tab == 'battle_shop' and self._is_tactics_hand_game():
+            objective_tab = 'battle' if battle_confirmed else 'field'
         if objective_tab and objective_tab in self.CONQUER_SUBSCREENS:
             obj_key = ('objective',
                        getattr(objective, 'phase', ''),
@@ -445,6 +522,11 @@ class ConquerGameScreen(GameScreen):
         """
         game = self.state.game
         if not game or getattr(game, 'mode', 'duel') != 'conquer':
+            return
+        # Tactics-hand games never visit battle_shop — the unified tactics
+        # rail replaces it entirely.  Skip all of the moves-phase routing.
+        if self._is_tactics_hand_game():
+            self._conquer_left_battle_shop_at = 0
             return
         in_moves = bool(getattr(game, 'battle_moves_phase', False))
         if not in_moves:
@@ -1186,7 +1268,14 @@ class ConquerGameScreen(GameScreen):
             if hasattr(button, 'draw_hover_text'):
                 button.draw_hover_text()
         self._draw_tab_state()
-        self._draw_conquer_battle_moves_panel()
+        # Tactics-hand games show the persistent rail + ledger instead of
+        # the small 10-icon HUD panel used by legacy battle_move conquer.
+        if self._is_tactics_hand_game():
+            self._tactics_rail.draw()
+            if self._is_battle_phase_active():
+                self._round_ledger.draw()
+        else:
+            self._draw_conquer_battle_moves_panel()
 
         # Shared top-level overlays used by the conquer flow.
         if (self.state.subscreen in ('field', 'battle') and subscreen and
@@ -1302,6 +1391,24 @@ class ConquerGameScreen(GameScreen):
 
         if self._handle_conquer_command_events(events):
             return
+
+        # Tactics-hand rail + ledger event capture (Phase 9 redesign).
+        # Runs *before* subscreen event handling so the rail can intercept
+        # clicks that would otherwise hit the field/battle subscreen.
+        if self._is_tactics_hand_game():
+            for event in events:
+                if self._round_ledger.handle_event(event) == 'open_result':
+                    # Focus the battle subscreen so its existing result
+                    # rendering takes over.  The standalone modal will be
+                    # added in a follow-up.
+                    if 'battle' in self.subscreens:
+                        self.state.subscreen = 'battle'
+                    return
+                if self._tactics_rail.handle_event(event):
+                    pending = self._tactics_rail.consume_pending_action()
+                    if pending:
+                        self._dispatch_tactics_rail_action(pending)
+                    return
 
         if self.need_to_respond_to_spell:
             if self.counter_spell_selector:

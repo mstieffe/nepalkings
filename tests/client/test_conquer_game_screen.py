@@ -555,3 +555,125 @@ class TestConquerSubscreenLayout:
             settings.BATTLE_PANEL_X + settings.BATTLE_PANEL_W // 2,
             settings.BATTLE_PANEL_ICON_START_Y + 2 * settings.BATTLE_PANEL_ICON_DELTA_Y,
         )
+
+
+class TestTacticsHandRouting:
+    """Phase 9-10 redesign: tactics-hand games never visit ``battle_shop``."""
+
+    def _make_screen(self, *, conquer_move_model='tactics_hand', battle_confirmed=False,
+                     battle_moves_phase=False):
+        ConquerGameScreen, screen = _base_conquer_screen(SimpleNamespace(
+            mode='conquer',
+            conquer_move_model=conquer_move_model,
+            battle_confirmed=battle_confirmed,
+            battle_turn_player_id=None,
+            battle_round=0,
+            battle_moves_phase=battle_moves_phase,
+            battle_moves_ready=False,
+            waiting_for_opponent_battle_moves=False,
+            both_battle_moves_ready=False,
+            pending_battle_ready=False,
+            last_battle_result=None,
+            game_id=1,
+            player_id=42,
+        ))
+        screen._conquer_left_battle_shop_at = 0
+        return ConquerGameScreen, screen
+
+    def test_is_tactics_hand_game_true_for_tactics_hand_marker(self):
+        ConquerGameScreen, screen = self._make_screen(conquer_move_model='tactics_hand')
+        assert ConquerGameScreen._is_tactics_hand_game(screen) is True
+
+    def test_is_tactics_hand_game_false_for_legacy_battle_move_marker(self):
+        ConquerGameScreen, screen = self._make_screen(conquer_move_model='battle_move')
+        assert ConquerGameScreen._is_tactics_hand_game(screen) is False
+
+    def test_required_tab_never_returns_battle_shop_for_tactics_hand(self):
+        ConquerGameScreen, screen = self._make_screen(battle_moves_phase=True)
+        tab, _key = ConquerGameScreen._conquer_required_tab(screen)
+        assert tab != 'battle_shop'
+
+    def test_required_tab_still_returns_battle_shop_for_legacy_games(self):
+        ConquerGameScreen, screen = self._make_screen(
+            conquer_move_model='battle_move', battle_moves_phase=True)
+        tab, _key = ConquerGameScreen._conquer_required_tab(screen)
+        assert tab == 'battle_shop'
+
+    def test_enforce_battle_shop_during_moves_is_noop_for_tactics_hand(self):
+        ConquerGameScreen, screen = self._make_screen(battle_moves_phase=True)
+        screen.state.subscreen = 'field'
+        ConquerGameScreen._enforce_battle_shop_during_moves(screen)
+        # Must NOT yank the user onto the (gone) battle_shop subscreen.
+        assert screen.state.subscreen == 'field'
+
+
+class TestConquerObjectiveTacticsHand:
+    """Objective derivation never aims at battle_shop for tactics-hand."""
+
+    def test_moves_objective_targets_battle_for_tactics_hand(self):
+        from game.screens.conquer_flow import derive_conquer_objective
+
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_moves_phase=True,
+            battle_moves_ready=False,
+            waiting_for_opponent_battle_moves=False,
+            both_battle_moves_ready=False,
+            battle_confirmed=False,
+            pending_battle_ready=False,
+            advancing_figure_id=None,
+            defending_figure_id=None,
+            pending_defender_selection=False,
+            pending_conquer_own_defender_selection=False,
+            pending_forced_advance=False,
+            pending_conquer_prelude_target=False,
+            pending_spell_id=None,
+            current_round=1,
+            game_over=False,
+            game_state='active',
+            state='active',
+            mode_attribute=None,
+            last_battle_result=None,
+        )
+        objective = derive_conquer_objective(
+            game=game,
+            field_screen=None,
+            battle_shop_screen=None,
+        )
+        assert objective is not None
+        assert objective.target_tab != 'battle_shop'
+
+    def test_moves_objective_targets_battle_shop_for_legacy_games(self):
+        from game.screens.conquer_flow import derive_conquer_objective
+
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='battle_move',
+            battle_moves_phase=True,
+            battle_moves_ready=False,
+            waiting_for_opponent_battle_moves=False,
+            both_battle_moves_ready=False,
+            battle_confirmed=False,
+            pending_battle_ready=False,
+            advancing_figure_id=None,
+            defending_figure_id=None,
+            pending_defender_selection=False,
+            pending_conquer_own_defender_selection=False,
+            pending_forced_advance=False,
+            pending_conquer_prelude_target=False,
+            pending_spell_id=None,
+            current_round=1,
+            game_over=False,
+            game_state='active',
+            state='active',
+            mode_attribute=None,
+            last_battle_result=None,
+        )
+        objective = derive_conquer_objective(
+            game=game,
+            field_screen=None,
+            battle_shop_screen=SimpleNamespace(bought_moves=[]),
+        )
+        assert objective is not None
+        assert objective.target_tab == 'battle_shop'

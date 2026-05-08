@@ -348,6 +348,18 @@ def derive_conquer_objective(game: Any, state: Any = None,
     if (_get(game, 'battle_moves_phase', False)
             and not _get(game, 'battle_moves_ready', False)
             and not _get(game, 'waiting_for_opponent_battle_moves', False)):
+        # Tactics-hand games never sit in moves_phase server-side, but a
+        # stale client snapshot may briefly report it.  Steer the objective
+        # to the unified battle view rather than the (gone) battle shop.
+        if _get(game, 'conquer_move_model', 'battle_move') == 'tactics_hand':
+            return ConquerObjective(
+                phase='moves',
+                headline='Pick your tactic',
+                instruction='Select a card from your tactics hand to play.',
+                target_tab='battle',
+                primary_action='play_tactic',
+                tone='action',
+            )
         count = len(_get(battle_shop_screen, 'bought_moves', []) or [])
         return ConquerObjective(
             phase='moves',
