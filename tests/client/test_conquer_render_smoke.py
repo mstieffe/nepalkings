@@ -203,6 +203,41 @@ def test_round_ledger_draws_hover_preview_ghost_math():
     assert _rect_has_non_background_pixel(window, layout.total_circle_rect)
 
 
+def test_round_ledger_hover_completed_round_draws_recap(monkeypatch):
+    from config import settings
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=2,
+        battle_turn_player_id=2,
+        last_battle_result=None,
+    )
+    moves = [
+        _move(11, family='Dagger', suit='Hearts', rank='A', value=5,
+              status='played', played_round=0),
+    ]
+    opp_played = [
+        _move(21, family='Shield', suit='Clubs', rank='9', value=3, played_round=0),
+        None,
+        None,
+    ]
+    parent = _ConquerUiParent(window, game, moves, opp_played=opp_played)
+    ledger = ConquerRoundLedger(parent)
+    layout = ledger._ensure_layout().round_ledger
+    hover_pos = pygame.Rect(*layout.round_card_rects[0]).center
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: hover_pos)
+
+    ledger.draw()
+
+    assert ledger._hover_round_idx == 0
+    assert ledger._hover_popover_rect is not None
+    assert _rect_has_non_background_pixel(window, ledger._hover_popover_rect)
+
+
 def test_conquer_duel_lane_draws_current_battle_fighters():
     from config import settings
     from game.components.conquer_layout import compute_conquer_layout

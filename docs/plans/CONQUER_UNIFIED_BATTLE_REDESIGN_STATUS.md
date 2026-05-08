@@ -81,6 +81,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - The current round card draws that tactic as a ghost chip without committing it.
   - The round diff and total circle update with a ghost projection while the hover is active.
 
+- DONE: Added first-pass round ledger recap popovers.
+  - Hovering a completed round card now opens a compact recap above the card.
+  - The recap shows each side's tactic power and the color/glyph-safe round diff.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -147,6 +151,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Focused duel-lane readout regression passed: `tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py` passed: 107 passed.
 - DONE: Focused predictive ledger regression passed: `tests/client/test_conquer_render_smoke.py` passed: 4 passed.
 - DONE: Broader predictive conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 165 passed.
+- DONE: Focused round recap ledger regression passed: `tests/client/test_conquer_render_smoke.py` passed: 5 passed.
+- DONE: Broader round recap conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 166 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -190,7 +196,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: First-pass ghost predictive math is implemented for rail-hovered tactics in the active ledger round and total circle.
   - TODO: Played tactic flight animation is missing.
   - TODO: Predictive support-badge pulsing/source highlighting is still missing.
-  - TODO: Round-card replay/recap popovers are missing.
+  - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
+  - TODO: Round-card reveal replay animation is missing.
 
 - PARTIAL: Phase 10 routing is mostly bypassed, but old naming still leaks into code.
   - TODO: Rename/cache aliases such as `_current_conquer_battle_moves` when the UI fully switches to tactics terminology.

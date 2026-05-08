@@ -59,6 +59,8 @@ class ConquerRoundLedger:
         self._cached_screen_size = None
         self._cached_mode = None
         self._total_circle_rect: Optional[pygame.Rect] = None
+        self._hover_round_idx: Optional[int] = None
+        self._hover_popover_rect: Optional[pygame.Rect] = None
 
     # ------------------------------------------------------------------ data
     def _game(self):
@@ -102,6 +104,29 @@ class ConquerRoundLedger:
             return 0
         return int(move.get('value') or 0)
 
+    @staticmethod
+    def _move_label(move: Optional[Dict[str, Any]]) -> str:
+        if move is None:
+            return 'Pending'
+        if move.get('_skipped') or move.get('family_name') == 'Skip':
+            return 'Skip'
+        name = move.get('family_name') or 'Tactic'
+        if name == 'Dagger' and move.get('card_id_b'):
+            return '2x Dagger'
+        return str(name)
+
+    @staticmethod
+    def _fit_text(text: str, font, max_width: int) -> str:
+        text = text or ''
+        if max_width <= 0:
+            return ''
+        if font.size(text)[0] <= max_width:
+            return text
+        clipped = text
+        while clipped and font.size(clipped + '...')[0] > max_width:
+            clipped = clipped[:-1]
+        return clipped + '...' if clipped else '...'
+
     def _round_diff(self, you, opp) -> int:
         return self._power(you) - self._power(opp)
 
@@ -144,6 +169,14 @@ class ConquerRoundLedger:
         if opp is not None:
             return total + self._round_diff(move, opp)
         return total + self._power(move)
+
+    def _round_card_hover_index(self, mouse_pos, ledger, you_per, opp_per):
+        for idx, rect_tuple in enumerate(ledger.round_card_rects):
+            if not (you_per[idx] is not None and opp_per[idx] is not None):
+                continue
+            if pygame.Rect(*rect_tuple).collidepoint(mouse_pos):
+                return idx
+        return None
 
     # ------------------------------------------------------------------ layout
     def _ensure_layout(self):
@@ -203,6 +236,7 @@ class ConquerRoundLedger:
         self._draw_total_card(pygame.Rect(*ledger.total_card_rect),
                               pygame.Rect(*ledger.total_circle_rect),
                               you_per, opp_per, ghost_preview=ghost_preview)
+        self._draw_round_hover_popover(ledger, you_per, opp_per)
 
     # -- round card
     def _draw_round_card(self, rect: pygame.Rect, idx: int,
@@ -258,9 +292,7 @@ class ConquerRoundLedger:
             self.window.blit(ts, ts.get_rect(center=rect.center))
             return
         # Family + power
-        name = move.get('family_name', '?')
-        if name == 'Dagger' and move.get('card_id_b'):
-            name = '2x Dagger'
+        name = self._move_label(move)
         name_font = settings.get_font(max(9, int(settings.FS_TINY * 0.9)), bold=True)
         pwr_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.1)), bold=True)
         text_col = _GHOST_BLUE if ghost else _TEXT_SECONDARY
@@ -372,3 +404,58 @@ class ConquerRoundLedger:
         # Cache for click handling
         self._total_circle_rect = pygame.Rect(cx - radius, cy - radius,
                                               radius * 2, radius * 2)
+
+    def _draw_round_hover_popover(self, ledger, you_per, opp_per, mouse_pos=None):
+        mouse_pos = mouse_pos if mouse_pos is not None else pygame.mouse.get_pos()
+        idx = self._round_card_hover_index(mouse_pos, ledger, you_per, opp_per)
+        self._hover_round_idx = idx
+        self._hover_popover_rect = None
+        if idx is None:
+            return
+
+        card_rect = pygame.Rect(*ledger.round_card_rects[idx])
+        popup_w = min(max(260, int(card_rect.width * 0.86)), settings.SCREEN_WIDTH - 24)
+        popup_h = max(86, int(settings.SCREEN_HEIGHT * 0.095))
+        margin = max(8, int(settings.SCREEN_WIDTH * 0.006))
+        x = max(margin, min(card_rect.centerx - popup_w // 2,
+                           settings.SCREEN_WIDTH - margin - popup_w))
+        y = card_rect.top - popup_h - 8
+        if y < margin:
+            y = min(settings.SCREEN_HEIGHT - margin - popup_h, card_rect.bottom + 8)
+        rect = pygame.Rect(x, y, popup_w, popup_h)
+        self._hover_popover_rect = rect
+
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        panel.fill((28, 22, 16, 244))
+        self.window.blit(panel, rect.topleft)
+        pygame.draw.rect(self.window, (210, 168, 72), rect, 2, border_radius=7)
+
+        you = you_per[idx]
+        opp = opp_per[idx]
+        diff = self._round_diff(you, opp)
+        if diff > 0:
+            glyph, col = '▲', _WIN_GREEN
+        elif diff < 0:
+            glyph, col = '▼', _LOSE_RED
+        else:
+            glyph, col = '=', _TIE_GREY
+
+        title_font = settings.get_font(max(10, int(settings.FS_SMALL * 0.90)), bold=True)
+        body_font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        title = title_font.render(f'Round {idx + 1} recap', True, _TEXT_PRIMARY)
+        self.window.blit(title, (rect.left + 10, rect.top + 7))
+
+        line_w = rect.width - 20
+        you_line = f'You: {self._move_label(you)} {self._power(you)}'
+        opp_line = f'Opp: {self._move_label(opp)} {self._power(opp)}'
+        diff_line = f'Diff: {glyph}{abs(diff)}'
+        lines = [
+            (you_line, (154, 218, 206)),
+            (opp_line, (226, 168, 152)),
+            (diff_line, col),
+        ]
+        y_cursor = rect.top + 10 + title.get_height() + 3
+        for line, color in lines:
+            surf = body_font.render(self._fit_text(line, body_font, line_w), True, color)
+            self.window.blit(surf, (rect.left + 10, y_cursor))
+            y_cursor += surf.get_height() + 2
