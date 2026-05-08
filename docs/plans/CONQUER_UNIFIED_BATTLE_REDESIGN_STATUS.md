@@ -93,9 +93,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Focused server/AI regression passed: 40 passed.
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
-- DONE: Focused server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 127 passed.
+- DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 131 passed.
 - DONE: AI summary/planner regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 77 passed.
 - DONE: Tactics math regression passed: `tests/server/test_conquer_tactics_math.py` passed: 3 passed.
+- DONE: Production schema guard regression passed: `tests/server/test_schema_guards.py` passed: 1 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -119,6 +120,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Replaced tactics-hand spell purge/replenish logic for Forced Deal and Dump Cards.
   - DONE: Added spell mutation tests proving stale tactics are purged/replenished without deleting persistent collection cards.
   - TODO: Add more spell coverage for combined tactics, defender fallback edge cases, and non-greed spell interactions if Phase 7 needs exhaustive coverage.
+
+- DONE: Production startup explicitly ensures the `conquer_tactic` table and index exist for persistent deployments.
 
 - PARTIAL: Phase 8 AI reads, summarizes, and plays tactics; remaining work is deeper scenario coverage.
   - DONE: `server/ai/game_state.py` and `server/ai/strategy_planner.py` summarize `conquer_tactics` explicitly for tactics-hand games.

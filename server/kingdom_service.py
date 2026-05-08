@@ -13,7 +13,7 @@ import server_settings as config
 from models import (db, User, Land, Kingdom, KingdomCosmeticUnlock,
                     KingdomSkillAllocation, KingdomNotification,
                     KingdomLootEvent, CollectionCard, LandConfigFigure,
-                    LandConfig, LandConfigBattleMove)
+                    LandConfig, LandConfigBattleMove, ConquerTactic)
 
 
 def _utcnow():
@@ -123,6 +123,30 @@ def ensure_kingdom_production_columns():
     if added:
         db.session.commit()
     return added
+
+
+def ensure_conquer_tactics_schema():
+    """Idempotently create conquer tactics table/indexes for existing DBs."""
+    inspector = inspect(db.engine)
+    table = ConquerTactic.__table__
+    ensured = []
+
+    if table.name not in inspector.get_table_names():
+        table.create(bind=db.engine, checkfirst=True)
+        ensured.append(table.name)
+        inspector = inspect(db.engine)
+
+    if table.name in inspector.get_table_names():
+        existing_indexes = {
+            index['name'] for index in inspector.get_indexes(table.name)
+        }
+        for index in table.indexes:
+            if index.name in existing_indexes:
+                continue
+            index.create(bind=db.engine, checkfirst=True)
+            ensured.append(index.name)
+
+    return ensured
 
 
 # ── Map Seeding ──────────────────────────────────────────────────────────────
