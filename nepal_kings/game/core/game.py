@@ -20,6 +20,10 @@ class Game:
         self.game_id = game_dict['id']
         self.state = game_dict['state']
         self.mode = game_dict.get('mode', 'duel')  # 'duel' or 'conquer'
+        # Conquer-only: 'battle_move' (legacy pre-bought BattleMove flow) vs
+        # 'tactics_hand' (Phase 9 redesign: persistent tactics rail). Default
+        # is 'battle_move' so duel/legacy games behave unchanged.
+        self.conquer_move_model = game_dict.get('conquer_move_model', 'battle_move')
         self.land_id = game_dict.get('land_id')  # conquer mode only
         self.land_tier = game_dict.get('land_tier')  # conquer mode only (1-3)
         self.land_gold_rate = game_dict.get('land_gold_rate')  # conquer mode only
@@ -366,6 +370,8 @@ class Game:
         self.game_id = game_dict['id']
         self.state = game_dict['state']
         self.mode = game_dict.get('mode', self.mode)
+        self.conquer_move_model = game_dict.get(
+            'conquer_move_model', getattr(self, 'conquer_move_model', 'battle_move'))
         self.land_id = game_dict.get('land_id', self.land_id)
         self.land_tier = game_dict.get('land_tier', self.land_tier)
         self.land_gold_rate = game_dict.get('land_gold_rate', self.land_gold_rate)
@@ -875,6 +881,8 @@ class Game:
         self.game_id = game_dict['id']
         self.state = game_dict['state']
         self.mode = game_dict.get('mode', self.mode)
+        self.conquer_move_model = game_dict.get(
+            'conquer_move_model', getattr(self, 'conquer_move_model', 'battle_move'))
         self.land_id = game_dict.get('land_id', self.land_id)
         self.land_tier = game_dict.get('land_tier', self.land_tier)
         self.land_gold_rate = game_dict.get('land_gold_rate', self.land_gold_rate)
