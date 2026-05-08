@@ -24,6 +24,26 @@ def _move(move_id, *, family='Dagger', suit='Hearts', rank='A', value=5,
     }
 
 
+def _fighter(fig_id, name, value, player_id, color):
+    icon = pygame.Surface((64, 64), pygame.SRCALPHA)
+    icon.fill(color)
+    frame = pygame.Surface((80, 80), pygame.SRCALPHA)
+    pygame.draw.circle(frame, (238, 206, 111), (40, 40), 38, 4)
+    return SimpleNamespace(
+        id=fig_id,
+        name=name,
+        player_id=player_id,
+        value=value,
+        number_card=SimpleNamespace(value=value),
+        get_value=lambda: value,
+        family=SimpleNamespace(
+            icon_img=icon,
+            icon_img_small=icon,
+            frame_img=frame,
+        ),
+    )
+
+
 class _ConquerUiParent:
     def __init__(self, window, game, moves, opp_played=None):
         self.window = window
@@ -135,3 +155,47 @@ def test_round_ledger_draws_filled_rounds_and_result_click_target():
         button=1,
         pos=ledger._total_circle_rect.center,
     )) == 'open_result'
+
+
+def test_conquer_duel_lane_draws_current_battle_fighters():
+    from config import settings
+    from game.components.conquer_layout import compute_conquer_layout
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    attacker = _fighter(10, 'Attacking Guard', 8, 1, (80, 160, 210))
+    defender = _fighter(20, 'Defending Guard', 5, 2, (200, 105, 90))
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        player_id=1,
+        advancing_player_id=1,
+        advancing_figure_id=10,
+        defending_figure_id=20,
+        advancing_figure_id_2=None,
+        defending_figure_id_2=None,
+        battle_turn_player_id=1,
+        battle_round=1,
+        last_battle_result=None,
+        opponent_name='Bhaktapur',
+    )
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = window
+    screen.state = SimpleNamespace(game=game)
+    screen.subscreens = {
+        'field': SimpleNamespace(figures=[attacker, defender]),
+    }
+
+    ConquerGameScreen._draw_conquer_duel_lane(screen)
+
+    lane_rect = compute_conquer_layout(
+        settings.SCREEN_WIDTH,
+        settings.SCREEN_HEIGHT,
+        mode='battle',
+    ).battlefield.duel_lane.rect
+    player_figures, opponent_figures = ConquerGameScreen._conquer_lane_figures(screen)
+
+    assert player_figures == [attacker]
+    assert opponent_figures == [defender]
+    assert _rect_has_non_background_pixel(window, lane_rect)
