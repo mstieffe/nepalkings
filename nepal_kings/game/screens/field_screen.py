@@ -462,6 +462,15 @@ class FieldScreen(SubScreen):
                         self.dialogue_box = None
                         return
 
+                    if self._is_tactics_hand_battle_field_view_only():
+                        self.figure_pending_pickup = None
+                        self.figure_pending_upgrade = None
+                        self.figure_pending_defender_selection = None
+                        self.figure_pending_own_defender_selection = None
+                        self._pending_advance_figure = None
+                        self.dialogue_box = None
+                        return
+
                     # Check if player is waiting for counter spell response
                     if hasattr(self.state, 'parent_screen') and hasattr(self.state.parent_screen, 'waiting_for_counter_response'):
                         if self.state.parent_screen.waiting_for_counter_response:
@@ -938,6 +947,10 @@ class FieldScreen(SubScreen):
             else:
                 # Dialogue is still open, no response yet - block other events
                 return
+
+        if self._is_tactics_hand_battle_field_view_only():
+            self._handle_tactics_hand_battle_inspection(events)
+            return
         
         # If in target selection mode, only allow figure selection
         pending_spell_cast = hasattr(self.state, 'pending_spell_cast') and self.state.pending_spell_cast
@@ -1318,6 +1331,70 @@ class FieldScreen(SubScreen):
                 and hasattr(parent, 'request_conquer_figure_confirmation')):
             return parent
         return None
+
+    def _is_tactics_hand_battle_field_view_only(self):
+        game = self.game
+        if not game or getattr(game, 'mode', 'duel') != 'conquer':
+            return False
+        if getattr(game, 'conquer_move_model', 'battle_move') != 'tactics_hand':
+            return False
+        if not getattr(game, 'battle_confirmed', False):
+            return False
+        return (
+            getattr(game, 'battle_turn_player_id', None) is not None
+            or bool(getattr(game, 'both_battle_moves_ready', False))
+            or bool(getattr(game, 'last_battle_result', None))
+        )
+
+    def _open_tactics_hand_battle_detail(self, clicked_icon):
+        resources_data = {}
+        if hasattr(self.game, 'calculate_resources'):
+            families = getattr(getattr(self, 'figure_manager', None), 'families', None)
+            resources_data = self.game.calculate_resources(families)
+        self.figure_detail_box = FigureDetailBox(
+            self.window,
+            clicked_icon.figure,
+            self.game,
+            all_figures=self.figures,
+            resources_data=resources_data,
+            conquer_view_only=True,
+        )
+
+    def _handle_tactics_hand_battle_inspection(self, events):
+        if self.figure_detail_box:
+            response = self.figure_detail_box.handle_events(events)
+            if response == 'close':
+                self.figure_detail_box = None
+                for icon in self.figure_icons:
+                    icon.clicked = False
+            return
+
+        for event in events:
+            if event.type != MOUSEBUTTONDOWN:
+                continue
+            clicked_icon = None
+            for icon in reversed(self.figure_icons):
+                if icon.hovered:
+                    clicked_icon = icon
+                    break
+
+            if not clicked_icon:
+                continue
+
+            for icon in self.figure_icons:
+                if icon != clicked_icon:
+                    icon.clicked = False
+            was_clicked = clicked_icon.clicked
+            clicked_icon.clicked = not clicked_icon.clicked
+
+            if hasattr(self, '_force_immediate_redraw'):
+                self._force_immediate_redraw()
+
+            if clicked_icon.clicked and not was_clicked and clicked_icon.is_visible:
+                self._open_tactics_hand_battle_detail(clicked_icon)
+            elif not clicked_icon.clicked:
+                self.figure_detail_box = None
+            return
 
     def cancel_conquer_panel_confirmation(self):
         """Cancel a command-panel figure confirmation."""

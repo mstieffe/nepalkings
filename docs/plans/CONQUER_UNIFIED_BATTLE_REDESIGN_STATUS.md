@@ -53,6 +53,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - The strip keeps phase/turn/stake/land-bonus chips visible, clears stale hidden timeline command rects, and exposes the existing Withdraw command for attackers.
   - Clicking the collapsed header temporarily expands the full timeline as an overlay.
 
+- DONE: Kept tactics-hand battle rounds centered on the field shell.
+  - Tactics-hand battle objectives and auto-routing now target `field` instead of the legacy `battle` subscreen.
+  - The legacy battle tab is locked for tactics-hand games, while legacy `battle_move` games still route to `battle`.
+  - `FieldScreen` now treats tactics-hand battle rounds as view-only inspection: figure detail boxes still open, but stale figure-action confirmations/selection flags cannot queue advance or defender actions.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -104,7 +109,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 - DONE: Focused client header/layout regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py` passed: 98 passed.
 - DONE: Broader conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py` passed: 152 passed.
-- DONE: Broader conquer client render regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 154 passed.
+- DONE: Focused field-routing regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_timeline.py` passed: 83 passed.
+- DONE: Broader conquer client render regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 159 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 6 passed.
 - DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 135 passed.
 - DONE: AI summary/planner/worker regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 80 passed.
@@ -149,15 +155,15 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.
   - DONE: Header collapsed status strip, narration log, transient timeline overlay, and battle-strip Withdraw command are implemented for tactics-hand battle/result modes.
   - DONE: Tactics rail text fitting and public-only top-strip intent labels are implemented.
+  - DONE: Field inert-but-inspectable battle behavior is implemented for tactics-hand battle rounds.
   - TODO: Duel lane fighter-only rendering is not complete.
   - TODO: Support badge strips, source leader lines, and power receipt rows are missing.
   - TODO: Ghost predictive math and played tactic flight animation are missing.
   - TODO: Round-card replay/recap popovers are missing.
-  - TODO: Field inert-but-inspectable battle behavior needs a dedicated pass.
 
 - PARTIAL: Phase 10 routing is mostly bypassed, but old naming still leaks into code.
   - TODO: Rename/cache aliases such as `_current_conquer_battle_moves` when the UI fully switches to tactics terminology.
-  - TODO: Confirm no stale battle-shop tab target appears during tactics-hand polling edge cases.
+  - DONE: Confirmed tactics-hand polling edge cases route stale move/battle targets back to `field`, not `battle_shop` or legacy `battle`.
 
 - PARTIAL: Phase 11 tests started but are not comprehensive.
   - DONE: Added server tests for tactic initialization from AI templates.
@@ -177,5 +183,5 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
 1. Add deeper AI scenario tests for Invader Swap and richer attacker/defender full-flow behavior.
 2. Add more Phase 7 spell edge coverage for combined tactics, defender fallback cases, and non-greed interactions.
-3. Continue Phase 9 UI polish for the tactics rail, ledger, receipt rows, and replay details.
-4. Add Phase 11 client/render smoke tests for populated tactics rail and round ledger.
+3. Continue Phase 9 UI polish for duel-lane fighter rendering, support badges, receipt rows, and replay details.
+4. Add Phase 11 screenshot/manual smoke checks once the remaining battle visuals exist.

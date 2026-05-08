@@ -187,6 +187,22 @@ class TestConquerGameShell:
 
         assert screen.state.subscreen == 'battle'
 
+    def test_auto_routes_tactics_hand_battle_to_field(self):
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_confirmed=True,
+            battle_turn_player_id=42,
+            battle_round=1,
+            player_id=42,
+        )
+        ConquerGameScreen, screen = _base_conquer_screen(game)
+        screen.state.subscreen = 'battle'
+
+        ConquerGameScreen._auto_route_conquer_once(screen)
+
+        assert screen.state.subscreen == 'field'
+
     def test_attention_counts_mark_required_tabs(self):
         game = SimpleNamespace(
             mode='conquer',
@@ -207,6 +223,25 @@ class TestConquerGameShell:
         # battle_shop no longer has a dedicated tab — its attention is
         # surfaced via the timeline panel + auto-routing instead.
         assert counts == {'field': 1, 'battle': 1}
+
+    def test_attention_counts_keep_tactics_hand_battle_on_field(self):
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_confirmed=True,
+            battle_turn_player_id=20,
+            pending_conquer_prelude_target=False,
+            pending_forced_advance=False,
+            pending_defender_selection=False,
+            pending_conquer_own_defender_selection=False,
+            civil_war_awaiting_second=False,
+            civil_war_defender_second=False,
+        )
+        ConquerGameScreen, screen = _base_conquer_screen(game)
+
+        counts = ConquerGameScreen._conquer_attention_counts(screen)
+
+        assert counts == {'field': 1, 'battle': 0}
 
     def test_confirming_figure_selection_acknowledges_selection_step(self):
         ConquerGameScreen, screen = _base_conquer_screen()
@@ -772,7 +807,7 @@ class TestTacticsHandRouting:
 class TestConquerObjectiveTacticsHand:
     """Objective derivation never aims at battle_shop for tactics-hand."""
 
-    def test_moves_objective_targets_battle_for_tactics_hand(self):
+    def test_moves_objective_targets_field_for_tactics_hand(self):
         from game.screens.conquer_flow import derive_conquer_objective
 
         game = SimpleNamespace(
@@ -804,7 +839,37 @@ class TestConquerObjectiveTacticsHand:
             battle_shop_screen=None,
         )
         assert objective is not None
-        assert objective.target_tab != 'battle_shop'
+        assert objective.target_tab == 'field'
+        assert objective.primary_action == 'play_tactic'
+
+    def test_battle_objective_targets_field_for_tactics_hand(self):
+        from game.screens.conquer_flow import derive_conquer_objective
+
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            battle_confirmed=True,
+            battle_turn_player_id=42,
+            battle_round=1,
+            player_id=42,
+            both_battle_moves_ready=False,
+            game_over=False,
+            pending_game_over=False,
+            pending_conquer_prelude_target=False,
+            pending_forced_advance=False,
+            pending_defender_selection=False,
+            pending_conquer_own_defender_selection=False,
+            civil_war_awaiting_second=False,
+            civil_war_defender_second=False,
+        )
+        objective = derive_conquer_objective(
+            game=game,
+            field_screen=None,
+            battle_shop_screen=None,
+        )
+
+        assert objective.target_tab == 'field'
+        assert objective.primary_action == 'play_tactic'
 
     def test_moves_objective_targets_battle_shop_for_legacy_games(self):
         from game.screens.conquer_flow import derive_conquer_objective

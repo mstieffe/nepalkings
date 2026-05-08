@@ -356,7 +356,7 @@ def derive_conquer_objective(game: Any, state: Any = None,
                 phase='moves',
                 headline='Pick your tactic',
                 instruction='Select a card from your tactics hand to play.',
-                target_tab='battle',
+                target_tab='field',
                 primary_action='play_tactic',
                 tone='action',
             )
@@ -388,14 +388,25 @@ def derive_conquer_objective(game: Any, state: Any = None,
             or (_get(game, 'battle_confirmed', False)
                 and _get(game, 'battle_turn_player_id') is not None)):
         your_turn = _get(game, 'battle_turn_player_id') == player_id
+        tactics_hand = _get(game, 'conquer_move_model', 'battle_move') == 'tactics_hand'
+        if tactics_hand:
+            headline = 'Play a battle tactic' if your_turn else 'Opponent battle tactic'
+            instruction = ('Choose a tactic and confirm it.' if your_turn else
+                           'Waiting for the opponent to play.')
+            target_tab = 'field'
+            primary_action = 'play_tactic' if your_turn else None
+        else:
+            headline = 'Play a battle move' if your_turn else 'Opponent battle move'
+            instruction = ('Choose a move and confirm it.' if your_turn else
+                           'Waiting for the opponent to play.')
+            target_tab = 'battle'
+            primary_action = 'play_move' if your_turn else None
         return ConquerObjective(
             phase='battle',
-            headline='Play a battle move' if your_turn else 'Opponent battle move',
-            instruction=('Choose a move and confirm it.'
-                         if your_turn else
-                         'Waiting for the opponent to play.'),
-            target_tab='battle',
-            primary_action='play_move' if your_turn else None,
+            headline=headline,
+            instruction=instruction,
+            target_tab=target_tab,
+            primary_action=primary_action,
             waiting=not your_turn,
             tone='action' if your_turn else 'waiting',
         )

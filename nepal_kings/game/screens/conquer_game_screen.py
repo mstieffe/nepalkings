@@ -627,6 +627,9 @@ class ConquerGameScreen(GameScreen):
         game = self.state.game
         if not game:
             return
+        if self._is_tactics_hand_game():
+            self.battle_button.locked = True
+            return
         battle_accessible = (
             bool(getattr(game, 'battle_confirmed', False))
             and getattr(game, 'battle_turn_player_id', None) is not None
@@ -659,10 +662,17 @@ class ConquerGameScreen(GameScreen):
 
         if (getattr(game, 'battle_confirmed', False)
                 and getattr(game, 'battle_turn_player_id', None) is not None):
+            if self._is_tactics_hand_game():
+                return 'field', ('field', 'tactics_hand_battle',
+                                 getattr(game, 'battle_round', 0),
+                                 getattr(game, 'battle_turn_player_id', None))
             return 'battle', ('battle', getattr(game, 'battle_round', 0),
                               getattr(game, 'battle_turn_player_id', None))
 
         if getattr(game, 'both_battle_moves_ready', False):
+            if self._is_tactics_hand_game():
+                return 'field', ('field', 'tactics_hand_battle_ready',
+                                 getattr(game, 'current_round', None))
             return 'battle', ('battle_ready', getattr(game, 'current_round', None))
 
         if (getattr(game, 'battle_moves_phase', False)
@@ -706,8 +716,8 @@ class ConquerGameScreen(GameScreen):
             return
         if objective_tab in ('battle_shop', 'battle') and not battle_confirmed:
             objective_tab = 'field'
-        if objective_tab == 'battle_shop' and self._is_tactics_hand_game():
-            objective_tab = 'battle' if battle_confirmed else 'field'
+        if objective_tab in ('battle_shop', 'battle') and self._is_tactics_hand_game():
+            objective_tab = 'field'
         if objective_tab and objective_tab in self.CONQUER_SUBSCREENS:
             obj_key = ('objective',
                        getattr(objective, 'phase', ''),
@@ -746,7 +756,10 @@ class ConquerGameScreen(GameScreen):
         battle = 0
         if (getattr(game, 'battle_confirmed', False)
                 and getattr(game, 'battle_turn_player_id', None) is not None):
-            battle = 1
+            if self._is_tactics_hand_game():
+                field = 1
+            else:
+                battle = 1
 
         return {'field': field, 'battle': battle}
 
@@ -807,6 +820,8 @@ class ConquerGameScreen(GameScreen):
         """Ready conquer battle moves without visiting the shop when it has no choices."""
         game = self.state.game
         if not game or getattr(game, 'mode', 'duel') != 'conquer':
+            return False
+        if self._is_tactics_hand_game():
             return False
         if not getattr(game, 'battle_confirmed', False):
             return False

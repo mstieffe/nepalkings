@@ -241,6 +241,111 @@ def test_field_selection_focus_activates_for_civil_war_second_attacker():
     assert FieldScreen._is_conquer_selection_active(field) is True
 
 
+def test_tactics_hand_battle_field_click_opens_view_only_detail(monkeypatch):
+    from game.screens.field_screen import FieldScreen
+
+    captured = {}
+
+    class FakeDetailBox:
+        def __init__(self, _window, figure, _game, **kwargs):
+            self.figure = figure
+            captured.update(kwargs)
+
+        def handle_events(self, _events):
+            return None
+
+    monkeypatch.setattr('game.screens.field_screen.FigureDetailBox', FakeDetailBox)
+
+    figure = _make_figure()
+    game = _make_game(
+        conquer_move_model='tactics_hand',
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=1,
+        civil_war_awaiting_second=True,
+    )
+    game.action_in_progress = False
+    game.calculate_resources = lambda _families: {'gold': 1}
+    confirmation_calls = []
+    parent = SimpleNamespace(
+        waiting_for_counter_response=False,
+        request_conquer_figure_confirmation=(
+            lambda *args, **kwargs: confirmation_calls.append((args, kwargs))
+        ),
+    )
+    icon = SimpleNamespace(
+        figure=figure,
+        hovered=True,
+        clicked=False,
+        is_visible=True,
+    )
+    field = FieldScreen.__new__(FieldScreen)
+    field.window = pygame.Surface((1200, 800))
+    field.game = game
+    field.state = SimpleNamespace(
+        parent_screen=parent,
+        pending_spell_cast=None,
+        pending_conquer_prelude_target=None,
+    )
+    field.scroll_text_list_shifter = None
+    field._close_rect = pygame.Rect(0, 0, 0, 0)
+    field._on_done = None
+    field.dialogue_box = None
+    field.figure_detail_box = None
+    field.figure_icons = [icon]
+    field.figures = [figure]
+    field.figure_manager = SimpleNamespace(families={})
+    field.figure_pending_pickup = None
+    field.figure_pending_upgrade = None
+    field.figure_pending_defender_selection = None
+    field.figure_pending_own_defender_selection = None
+    field._pending_advance_figure = None
+    field.defender_selection_mode = False
+    field.conquer_own_defender_mode = False
+    field._force_immediate_redraw = lambda: None
+
+    event = SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1, pos=(10, 10))
+    FieldScreen.handle_events(field, [event])
+
+    assert isinstance(field.figure_detail_box, FakeDetailBox)
+    assert captured['conquer_view_only'] is True
+    assert field._pending_advance_figure is None
+    assert confirmation_calls == []
+
+
+def test_tactics_hand_battle_field_yes_clears_stale_pending_action():
+    from game.screens.field_screen import FieldScreen
+
+    figure = _make_figure()
+    game = _make_game(
+        conquer_move_model='tactics_hand',
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=1,
+    )
+    game.action_in_progress = False
+    field = FieldScreen.__new__(FieldScreen)
+    field.game = game
+    field.state = SimpleNamespace(
+        parent_screen=SimpleNamespace(waiting_for_counter_response=False),
+    )
+    field.scroll_text_list_shifter = None
+    field._close_rect = pygame.Rect(0, 0, 0, 0)
+    field._on_done = None
+    field.dialogue_box = SimpleNamespace(update=lambda _events: 'yes')
+    field.figure_icons = []
+    field.figure_pending_pickup = None
+    field.figure_pending_upgrade = None
+    field.figure_pending_defender_selection = None
+    field.figure_pending_own_defender_selection = None
+    field._pending_advance_figure = figure
+
+    FieldScreen.handle_events(field, [])
+
+    assert field.dialogue_box is None
+    assert field._pending_advance_figure is None
+
+
 def test_target_required_prelude_adds_hidden_opponent_figure_asset():
     from game.screens.conquer_flow import derive_conquer_timeline
 
