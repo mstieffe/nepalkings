@@ -1727,6 +1727,29 @@ class ConquerGameScreen(GameScreen):
                 return idx
         return 0
 
+    def _conquer_lane_preview_move(self, player_slots, round_idx):
+        game = self.state.game
+        if (not game or round_idx not in (0, 1, 2)
+                or getattr(game, 'last_battle_result', None)):
+            return None
+        if player_slots[round_idx] is not None:
+            return None
+        current = int(getattr(game, 'battle_round', 0) or 0) - 1
+        if current != round_idx:
+            return None
+        rail = getattr(self, '_tactics_rail', None)
+        preview = getattr(rail, 'preview_move', None)
+        if not callable(preview):
+            return None
+        move = preview()
+        if not isinstance(move, dict):
+            return None
+        if move.get('played_round') is not None:
+            return None
+        if move.get('status', 'available') != 'available':
+            return None
+        return move
+
     @staticmethod
     def _conquer_lane_surface(asset, size):
         if not isinstance(asset, pygame.Surface):
@@ -1792,7 +1815,8 @@ class ConquerGameScreen(GameScreen):
             pygame.draw.rect(self.window, (238, 206, 111), chip, border_radius=chip.height // 2)
             self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
 
-    def _draw_conquer_lane_tactic_badge(self, rect, move, round_idx, *, is_player):
+    def _draw_conquer_lane_tactic_badge(self, rect, move, round_idx, *, is_player,
+                                        ghost=False):
         rail = pygame.Rect(rect).inflate(-5, -10)
         if rail.width <= 0 or rail.height <= 0:
             return
@@ -1802,8 +1826,24 @@ class ConquerGameScreen(GameScreen):
         badge.center = (rail.centerx, center_y)
         fill = (36, 55, 58, 232) if is_player else (60, 42, 44, 232)
         border = (126, 198, 190) if is_player else (212, 145, 130)
+        if ghost:
+            fill = (34, 64, 70, 228)
+            border = (120, 205, 220)
         pygame.draw.rect(self.window, fill, badge, border_radius=6)
         pygame.draw.rect(self.window, border, badge, 2, border_radius=6)
+        if ghost:
+            phase = (pygame.time.get_ticks() % 900) / 900.0
+            pulse = 1.0 - abs(0.5 - phase) * 2.0
+            alpha = int(80 + 95 * pulse)
+            pulse_surf = pygame.Surface(badge.size, pygame.SRCALPHA)
+            pygame.draw.rect(
+                pulse_surf,
+                (120, 205, 220, alpha),
+                pulse_surf.get_rect().inflate(-2, -2),
+                3,
+                border_radius=6,
+            )
+            self.window.blit(pulse_surf, badge.topleft)
 
         tiny = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
         name_font = settings.get_font(max(8, int(settings.FS_TINY * 0.68)), bold=True)
@@ -1814,20 +1854,26 @@ class ConquerGameScreen(GameScreen):
         if move:
             name = self._fit_text(self._conquer_lane_move_name(move), name_font, badge.width - 6)
             name_surf = name_font.render(name, True, (246, 239, 214))
-            value_surf = value_font.render(str(self._conquer_lane_move_power(move)), True, (245, 214, 122))
+            value_col = (154, 232, 238) if ghost else (245, 214, 122)
+            value_surf = value_font.render(str(self._conquer_lane_move_power(move)), True, value_col)
             self.window.blit(name_surf, name_surf.get_rect(center=(badge.centerx, badge.centery)))
             self.window.blit(value_surf, value_surf.get_rect(center=(badge.centerx, badge.bottom - 11)))
         else:
             wait = tiny.render('...', True, (156, 140, 102))
             self.window.blit(wait, wait.get_rect(center=(badge.centerx, badge.centery + 8)))
 
-    def _draw_conquer_lane_leader_line(self, from_rect, to_rect, *, is_player):
+    def _draw_conquer_lane_leader_line(self, from_rect, to_rect, *, is_player,
+                                       ghost=False):
         start = pygame.Rect(from_rect).center
         end_rect = pygame.Rect(to_rect).inflate(-16, -12)
         end = (end_rect.left, end_rect.centery) if is_player else (end_rect.right, end_rect.centery)
         color = (126, 198, 190) if is_player else (212, 145, 130)
-        pygame.draw.line(self.window, color, start, end, 2)
-        pygame.draw.circle(self.window, color, start, 3)
+        width = 2
+        if ghost:
+            color = (120, 205, 220)
+            width = 3
+        pygame.draw.line(self.window, color, start, end, width)
+        pygame.draw.circle(self.window, color, start, 3 if not ghost else 4)
 
     def _draw_conquer_lane_diff(self, rect, player_figures, opponent_figures,
                                 player_move=None, opponent_move=None, round_idx=0):
@@ -1885,13 +1931,16 @@ class ConquerGameScreen(GameScreen):
         round_idx = self._conquer_lane_focus_round(player_slots, opponent_slots)
         player_move = player_slots[round_idx]
         opponent_move = opponent_slots[round_idx]
+        preview_move = self._conquer_lane_preview_move(player_slots, round_idx)
+        player_display_move = player_move if player_move is not None else preview_move
+        player_move_is_preview = player_move is None and preview_move is not None
 
         self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
         self._draw_conquer_lane_diff(
             lane.diff_band,
             player_figures,
             opponent_figures,
-            player_move=player_move,
+            player_move=player_display_move,
             opponent_move=opponent_move,
             round_idx=round_idx,
         )
@@ -1907,6 +1956,7 @@ class ConquerGameScreen(GameScreen):
             lane.you_support_badge_rail,
             lane.you_fighter_band,
             is_player=True,
+            ghost=player_move_is_preview,
         )
         self._draw_conquer_lane_leader_line(
             lane.opp_support_badge_rail,
@@ -1915,9 +1965,10 @@ class ConquerGameScreen(GameScreen):
         )
         self._draw_conquer_lane_tactic_badge(
             lane.you_support_badge_rail,
-            player_move,
+            player_display_move,
             round_idx,
             is_player=True,
+            ghost=player_move_is_preview,
         )
         self._draw_conquer_lane_tactic_badge(
             lane.opp_support_badge_rail,

@@ -336,6 +336,63 @@ def test_conquer_duel_lane_draws_current_battle_fighters():
     assert _rect_has_non_background_pixel(window, lane.diff_band)
 
 
+def test_conquer_duel_lane_uses_hovered_tactic_as_preview(monkeypatch):
+    from config import settings
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    attacker = _fighter(10, 'Attacking Guard', 8, 1, (80, 160, 210))
+    defender = _fighter(20, 'Defending Guard', 5, 2, (200, 105, 90))
+    preview = _move(11, family='Sword', suit='Hearts', rank='Q', value=9)
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        player_id=1,
+        advancing_player_id=1,
+        advancing_figure_id=10,
+        defending_figure_id=20,
+        advancing_figure_id_2=None,
+        defending_figure_id_2=None,
+        battle_turn_player_id=1,
+        battle_round=1,
+        last_battle_result=None,
+        opponent_name='Bhaktapur',
+        conquer_tactics=[preview],
+    )
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = window
+    screen.state = SimpleNamespace(game=game)
+    screen.subscreens = {
+        'field': SimpleNamespace(figures=[attacker, defender]),
+        'battle': SimpleNamespace(opp_played=[
+            _move(21, family='Shield', suit='Clubs', rank='9', value=3,
+                  status='played', played_round=0),
+        ]),
+    }
+    screen._tactics_rail = SimpleNamespace(preview_move=lambda: preview)
+    captured = {'badge': None, 'diff': None}
+
+    def capture_badge(_self, _rect, move, _round_idx, *, is_player, ghost=False):
+        if is_player:
+            captured['badge'] = (move, ghost)
+
+    def capture_diff(_self, _rect, _player_figures, _opponent_figures,
+                     player_move=None, opponent_move=None, round_idx=0):
+        captured['diff'] = (player_move, opponent_move, round_idx)
+
+    monkeypatch.setattr(ConquerGameScreen, '_draw_conquer_lane_tactic_badge', capture_badge)
+    monkeypatch.setattr(ConquerGameScreen, '_draw_conquer_lane_diff', capture_diff)
+
+    assert ConquerGameScreen._conquer_lane_preview_move(
+        screen, [None, None, None], 0) == preview
+
+    ConquerGameScreen._draw_conquer_duel_lane(screen)
+
+    assert captured['badge'] == (preview, True)
+    assert captured['diff'][0] == preview
+
+
 def test_tactic_flight_overlay_draws_nonblank_pill(monkeypatch):
     from config import settings
     from game.screens.conquer_game_screen import ConquerGameScreen
