@@ -4,8 +4,9 @@
 
 from werkzeug.security import generate_password_hash
 
-from models import (CardRole, CardToFigure, ConquerTactic, Figure, Game,
-                    Land, MainCard, MainRank, Player, Suit, User)
+from models import (ActiveSpell, CardRole, CardToFigure, ConquerTactic,
+                    Figure, Game, Land, MainCard, MainRank, Player,
+                    SideCard, SideRank, Suit, User)
 from routes.games import (_collect_battle_move_cards,
                           _compute_server_total_diff,
                           _delete_all_battle_moves,
@@ -52,6 +53,14 @@ _RANK_ENUM = {
     '10': MainRank.TEN,
 }
 
+_SIDE_RANK_BY_VALUE = {
+    2: SideRank.TWO,
+    3: SideRank.THREE,
+    4: SideRank.FOUR,
+    5: SideRank.FIVE,
+    6: SideRank.SIX,
+}
+
 
 def _add_player(db_session, game, username):
     user = User(
@@ -69,7 +78,8 @@ def _add_player(db_session, game, username):
 
 
 def _add_figure(db_session, player, *, family_name, name=None, field='village',
-                color='offensive', suit='Hearts', card_values=()):
+                color='offensive', suit='Hearts', card_values=(),
+                side_card_values=()):
     fig = Figure(
         game_id=player.game_id,
         player_id=player.id,
@@ -100,6 +110,24 @@ def _add_figure(db_session, player, *, family_name, name=None, field='village',
             figure_id=fig.id,
             card_id=card.id,
             card_type='main',
+            role=role,
+        ))
+    for value, role in side_card_values:
+        card = SideCard(
+            game_id=player.game_id,
+            player_id=player.id,
+            suit=_SUIT_BY_NAME[suit],
+            rank=_SIDE_RANK_BY_VALUE[value],
+            value=value,
+            in_deck=False,
+            part_of_figure=True,
+        )
+        db_session.add(card)
+        db_session.flush()
+        db_session.add(CardToFigure(
+            figure_id=fig.id,
+            card_id=card.id,
+            card_type='side',
             role=role,
         ))
     db_session.flush()
@@ -285,6 +313,100 @@ def test_conquer_tactics_total_diff_counts_call_figure_support_and_land_bonus(db
     assert breakdown['fig_diff'] == 7
     assert breakdown['round_diff'] == 2
     assert total == 9
+
+
+def test_conquer_tactics_total_diff_counts_healer_wall_and_enchantment(db):
+    game, attacker, defender, _attacker_fig, defender_fig = _setup_tactics_battle(db.session)
+    _add_figure(
+        db.session,
+        defender,
+        family_name='Spades Healer',
+        name='Spades Healer',
+        field='village',
+        suit='Spades',
+        card_values=[(1, CardRole.KEY)],
+    )
+    _add_figure(
+        db.session,
+        defender,
+        family_name='Stone Wall',
+        name='Stone Wall',
+        field='village',
+        suit='Hearts',
+        side_card_values=[(5, CardRole.NUMBER)],
+    )
+    db.session.add(ActiveSpell(
+        game_id=game.id,
+        player_id=defender.id,
+        spell_name='Blessing',
+        spell_type='enchantment',
+        spell_family_name='Blessing',
+        suit='Spades',
+        target_figure_id=defender_fig.id,
+        cast_round=0,
+        duration=3,
+        is_active=True,
+        effect_data={'power_modifier': 3},
+    ))
+    _add_tactic(db.session, game, attacker, family_name='Dagger', rank='7', value=7,
+                played_round=0)
+    _add_tactic(db.session, game, defender, family_name='Dagger', rank='7', value=7,
+                played_round=0)
+    db.session.commit()
+
+    total, breakdown = _compute_server_total_diff(game, return_breakdown=True)
+
+    assert breakdown['adv_power'] == 4
+    assert breakdown['def_power'] == 16
+    assert breakdown['def_wall_total'] == 5
+    assert breakdown['fig_diff'] == -12
+    assert breakdown['round_diff'] == 0
+    assert total == -12
+
+
+def test_conquer_tactics_total_diff_counts_distance_attack_on_call_figure(db):
+    game, attacker, defender, _attacker_fig, defender_fig = _setup_tactics_battle(db.session)
+    defender_fig.suit = 'Clubs'
+    call_figure = _add_figure(
+        db.session,
+        defender,
+        family_name='Remote Village',
+        field='village',
+        suit='Spades',
+        card_values=[(8, CardRole.NUMBER)],
+    )
+    _add_figure(
+        db.session,
+        attacker,
+        family_name='Range Archer',
+        name='Range Archer',
+        field='military',
+        suit='Diamonds',
+        side_card_values=[(5, CardRole.NUMBER)],
+    )
+    _add_tactic(db.session, game, attacker, family_name='Dagger', rank='7', value=7,
+                played_round=0)
+    _add_tactic(
+        db.session,
+        game,
+        defender,
+        family_name='Call Villager',
+        rank='J',
+        suit='Spades',
+        value=1,
+        played_round=0,
+        call_figure_id=call_figure.id,
+    )
+    db.session.commit()
+
+    total, breakdown = _compute_server_total_diff(game, return_breakdown=True)
+
+    assert breakdown['adv_power'] == 4
+    assert breakdown['def_power'] == 4
+    assert breakdown['fig_diff'] == 0
+    assert breakdown['round_diff'] == 3
+    assert breakdown['adv_da_applied'] == [('Spades', 5)]
+    assert total == 3
 
 
 def test_conquer_tactics_cleanup_returns_only_unplayed_runtime_cards(db):

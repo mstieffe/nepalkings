@@ -93,9 +93,9 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Focused server/AI regression passed: 40 passed.
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
-- DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 131 passed.
+- DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 133 passed.
 - DONE: AI summary/planner regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 77 passed.
-- DONE: Tactics math regression passed: `tests/server/test_conquer_tactics_math.py` passed: 3 passed.
+- DONE: Tactics math regression passed: `tests/server/test_conquer_tactics_math.py` passed: 5 passed.
 - DONE: Production schema guard regression passed: `tests/server/test_schema_guards.py` passed: 1 passed.
 
 ## Partial / Needs Follow-Up
@@ -109,8 +109,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Tests exist for family/rank consistency validation.
 
 - PARTIAL: Phase 6 battle math and cleanup now read tactics, but card fate needs deeper audit.
-  - DONE: Added total-diff tests for Block, Call figure, Double Dagger, land bonus, and support using `ConquerTactic` rows.
-  - TODO: Add total-diff tests for healer, wall, enchantment, and distance attack using `ConquerTactic` rows.
+  - DONE: Added total-diff tests for Block, Call figure, Double Dagger, land bonus, support, healer, wall, enchantment, and distance attack using `ConquerTactic` rows.
   - TODO: Add finish-battle/card-fate tests proving played tactic cards enter the correct loot/deck fate.
   - DONE: Verified unplayed tactic runtime cards are cleaned while played tactic cards remain collectible.
   - TODO: Verify `_resolve_conquer_battle` remains the single idempotent conquer resolver.
