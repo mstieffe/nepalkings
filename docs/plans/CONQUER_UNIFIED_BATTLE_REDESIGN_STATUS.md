@@ -152,12 +152,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
 - RISK: `Game.serialize()` currently includes full `conquer_tactics`, matching the old `battle_moves` serialization style. Player-safe hiding is implemented in `/games/get_battle_state`; any client path that consumes raw `game.conquer_tactics` should avoid displaying opponent unplayed details.
 - RISK: Spell mutation now has tactics-hand coverage for Forced Deal and Dump Cards, but more edge-case spell coverage is still useful before production rollout.
-- RISK: Finish-battle cleanup has been made tactic-aware, but conquer card-fate behavior must be covered with tests before this is production-safe.
 - RISK: Existing UI/AI names still say battle move in several places. That is compatibility glue for now, not the final terminology.
 
 ## Suggested Next Session Start
 
-1. Expand Phase 6 card-fate and battle-math tests before polishing UI visuals.
-2. Add production migration/table setup for `conquer_tactic`.
-3. Continue Phase 9 UI polish once server behavior is covered.
-4. Add deeper AI scenario tests for Invader Swap, auto-gamble, and auto-combine.
+1. Add deeper AI scenario tests for Invader Swap and richer attacker/defender full-flow behavior.
+2. Add more Phase 7 spell edge coverage for combined tactics, defender fallback cases, and non-greed interactions.
+3. Continue Phase 9 UI polish for the tactics rail, ledger, receipt rows, and replay details.
+4. Add Phase 11 client/render smoke tests for populated tactics rail and round ledger.
