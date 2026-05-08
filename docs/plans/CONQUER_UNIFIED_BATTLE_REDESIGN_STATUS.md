@@ -62,6 +62,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Combining/dismantling restores source tactics.
   - Tactics-hand skip rejects while tactics are available and advances when no tactics remain.
   - Call-figure validation rejects wrong-field targets and accepts legal targets.
+  - Family/rank consistency validation rejects corrupted tactic metadata and mismatched Double Dagger ranks.
 
 - DONE: Added tactics-hand spell mutation service in `server/game_service/conquer_tactics_service.py`.
   - Purges `ConquerTactic` rows that reference cards moved or recycled by spells.
@@ -83,11 +84,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 ## Verified In This Pass
 
 - DONE: Diagnostics reported no errors for edited Python/client files.
-- DONE: `python -m pytest tests/server/test_conquer_tactics_hand.py` passed: 8 passed.
+- DONE: `python -m pytest tests/server/test_conquer_tactics_hand.py` passed: 10 passed.
 - DONE: Focused server/AI regression passed: 40 passed.
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 - DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
-- DONE: Focused server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 125 passed.
+- DONE: Focused server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 127 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -97,7 +98,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Tests exist for `gamble_conquer_tactic` per-round and per-battle limits.
   - DONE: Tests exist for skip being allowed only when no available tactics remain.
   - DONE: Tests exist for legal/illegal call figure validation.
-  - TODO: Add explicit family/rank consistency validation tests.
+  - DONE: Tests exist for family/rank consistency validation.
 
 - PARTIAL: Phase 6 battle math and cleanup now read tactics, but card fate needs deeper audit.
   - TODO: Add total-diff tests for Block, Call figure, Double Dagger, land bonus, support, healer, wall, enchantment, and distance attack using `ConquerTactic` rows.
@@ -144,8 +145,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
 ## Suggested Next Session Start
 
-1. Add explicit family/rank consistency validation tests for tactic play.
-2. Expand Phase 6 card-fate and battle-math tests before polishing UI visuals.
-3. Update AI state summaries/planner naming to use `conquer_tactics` explicitly.
-4. Add production migration/table setup for `conquer_tactic`.
-5. Continue Phase 9 UI polish once server behavior is covered.
+1. Expand Phase 6 card-fate and battle-math tests before polishing UI visuals.
+2. Update AI state summaries/planner naming to use `conquer_tactics` explicitly.
+3. Add production migration/table setup for `conquer_tactic`.
+4. Continue Phase 9 UI polish once server behavior is covered.

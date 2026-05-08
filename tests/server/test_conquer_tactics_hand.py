@@ -317,6 +317,93 @@ def test_skip_battle_turn_uses_available_conquer_tactics(app, db):
     assert 0 in payload['battle_skipped_rounds'][str(attacker_player.id)]
 
 
+def test_play_conquer_tactic_validates_family_rank_consistency(app, db):
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    tactic = ConquerTactic.query.filter_by(
+        game_id=game.id, player_id=attacker_player.id, status='available').first()
+    tactic.family_name = 'Block'
+    db.session.commit()
+
+    wrong_family = client.post(
+        '/games/play_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': tactic.id,
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert wrong_family.status_code == 400
+    assert 'family' in wrong_family.get_json()['message'].lower()
+    db.session.refresh(tactic)
+    assert tactic.status == 'available'
+
+    tactic.family_name = 'Dagger'
+    tactic.rank = 'J'
+    db.session.commit()
+
+    wrong_rank = client.post(
+        '/games/play_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': tactic.id,
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert wrong_rank.status_code == 400
+    assert 'rank' in wrong_rank.get_json()['message'].lower()
+    db.session.refresh(tactic)
+    assert tactic.status == 'available'
+
+
+def test_play_conquer_tactic_validates_double_dagger_rank_consistency(app, db):
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    daggers = ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=attacker_player.id,
+        family_name='Dagger',
+        status='available',
+    ).order_by(ConquerTactic.id).all()
+
+    combined_resp = client.post(
+        '/games/combine_conquer_tactics',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id_a': daggers[0].id,
+            'tactic_id_b': daggers[1].id,
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert combined_resp.status_code == 200, combined_resp.get_json()
+    combined = db.session.get(
+        ConquerTactic, combined_resp.get_json()['combined_tactic']['id'])
+    combined.rank = '7+J'
+    db.session.commit()
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    played = client.post(
+        '/games/play_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': combined.id,
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert played.status_code == 400
+    assert 'double dagger rank' in played.get_json()['message'].lower()
+    db.session.refresh(combined)
+    assert combined.status == 'available'
+
+
 def test_play_conquer_tactic_validates_call_figure_field(app, db):
     client, attacker, _defender, game, attacker_player, defender_player = (
         _start_player_owned_conquer(app, db)
@@ -328,6 +415,9 @@ def test_play_conquer_tactic_validates_call_figure_field(app, db):
     tactic.family_name = 'Call Villager'
     tactic.rank = 'J'
     tactic.value = 1
+    card = db.session.get(MainCard, tactic.card_id)
+    card.rank = 'J'
+    card.value = 1
     village = Figure.query.filter_by(
         game_id=game.id, player_id=attacker_player.id, field='village').first()
     castle = Figure(

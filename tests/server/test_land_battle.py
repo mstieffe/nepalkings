@@ -327,12 +327,15 @@ class TestConquerStartBattle:
             user = _make_user(db)
             land = _make_land(db, tier=1)
             _make_conquer_config(db, user, land)
+            template = _scripted_ai_template()
 
             client = app.test_client()
             headers = _auth_headers(app, user)
 
-            resp = client.post('/kingdom/conquer/start_battle',
-                               json={'land_id': land.id}, headers=headers)
+            with patch('routes.kingdom.get_ai_defence_template_for_land', return_value=template), \
+                    patch('routes.games.get_ai_defence_template_for_land', return_value=template):
+                resp = client.post('/kingdom/conquer/start_battle',
+                                   json={'land_id': land.id}, headers=headers)
             data = resp.get_json()
             game_id = data['game_id']
 

@@ -5003,11 +5003,71 @@ _CONQUER_CALL_FIELD_MAP = {
 
 _CONQUER_RED_SUITS = {'Hearts', 'Diamonds'}
 _CONQUER_BLACK_SUITS = {'Clubs', 'Spades'}
+_CONQUER_TACTIC_FAMILY_BY_RANK = {
+    '7': 'Dagger',
+    '8': 'Dagger',
+    '9': 'Dagger',
+    '10': 'Dagger',
+    'J': 'Call Villager',
+    'Q': 'Block',
+    'K': 'Call King',
+    'A': 'Call Military',
+}
+
+
+def _conquer_tactic_rank(value):
+    if value is None:
+        return ''
+    return str(value.value if hasattr(value, 'value') else value)
 
 
 def _same_conquer_tactic_colour(suit_a, suit_b):
     return ((suit_a in _CONQUER_RED_SUITS and suit_b in _CONQUER_RED_SUITS)
             or (suit_a in _CONQUER_BLACK_SUITS and suit_b in _CONQUER_BLACK_SUITS))
+
+
+def _validate_conquer_tactic_family_rank(tactic):
+    def _validate_card(card):
+        if not card:
+            return 'Tactic card is missing'
+        if card.game_id != tactic.game_id or card.player_id != tactic.player_id:
+            return 'Tactic card does not belong to this player/game'
+        if card.in_deck or card.part_of_figure:
+            return 'Tactic card is not available'
+        return None
+
+    card = _get_tactic_card(tactic)
+    card_err = _validate_card(card)
+    if card_err:
+        return card_err
+
+    if tactic.family_name == 'Double Dagger':
+        card_b = _get_tactic_card(tactic, secondary=True)
+        card_b_err = _validate_card(card_b)
+        if card_b_err:
+            return card_b_err
+
+        rank_a = _conquer_tactic_rank(card.rank)
+        rank_b = _conquer_tactic_rank(card_b.rank)
+        if (_CONQUER_TACTIC_FAMILY_BY_RANK.get(rank_a) != 'Dagger'
+                or _CONQUER_TACTIC_FAMILY_BY_RANK.get(rank_b) != 'Dagger'):
+            return 'Double Dagger requires two Dagger cards'
+        if _conquer_tactic_rank(tactic.rank) != f'{rank_a}+{rank_b}':
+            return 'Double Dagger rank does not match its cards'
+        return None
+
+    if tactic.card_id_b or tactic.card_type_b:
+        return 'Only Double Dagger can use two cards'
+
+    card_rank = _conquer_tactic_rank(card.rank)
+    if _conquer_tactic_rank(tactic.rank) != card_rank:
+        return 'Tactic rank does not match its card'
+    expected_family = _CONQUER_TACTIC_FAMILY_BY_RANK.get(card_rank)
+    if not expected_family:
+        return 'Tactic rank is not playable in conquer'
+    if tactic.family_name != expected_family:
+        return 'Tactic family does not match its rank'
+    return None
 
 
 def _advance_conquer_tactic_turn(game, player_id):
@@ -5083,6 +5143,10 @@ def play_conquer_tactic():
         return jsonify({'success': False, 'message': 'Tactic does not belong to this player/game'}), 400
     if tactic.status != 'available' or tactic.played_round is not None:
         return jsonify({'success': False, 'message': 'Tactic is not available'}), 400
+
+    consistency_err = _validate_conquer_tactic_family_rank(tactic)
+    if consistency_err:
+        return jsonify({'success': False, 'message': consistency_err}), 400
 
     call_err = _validate_conquer_tactic_call_figure(tactic, call_figure_id, player_id, game_id)
     if call_err:
