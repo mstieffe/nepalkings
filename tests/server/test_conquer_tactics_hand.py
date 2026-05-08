@@ -174,6 +174,59 @@ def test_gamble_conquer_tactic_creates_replacements_without_collection_deletion(
     assert game.battle_gamble_counts[str(attacker_player.id)]['count'] == 1
 
 
+def test_gamble_conquer_tactic_enforces_round_and_battle_limits(app, db):
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    tactic = ConquerTactic.query.filter_by(
+        game_id=game.id, player_id=attacker_player.id, status='available').first()
+
+    first = client.post(
+        '/games/gamble_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': tactic.id,
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert first.status_code == 200, first.get_json()
+
+    replacement_ids = [t['id'] for t in first.get_json()['new_tactics']]
+    same_round = client.post(
+        '/games/gamble_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': replacement_ids[0],
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert same_round.status_code == 400
+    assert 'once per battle round' in same_round.get_json()['message'].lower()
+
+    db.session.refresh(game)
+    game.battle_round = 2
+    game.battle_gamble_counts = {
+        str(attacker_player.id): {'count': 3, 'rounds': [0, 1]}
+    }
+    db.session.commit()
+
+    battle_limit = client.post(
+        '/games/gamble_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': replacement_ids[1],
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert battle_limit.status_code == 400
+    assert '3 times per battle' in battle_limit.get_json()['message'].lower()
+
+
 def test_combine_and_dismantle_conquer_tactics_restore_sources(app, db):
     client, attacker, _defender, game, attacker_player, _defender_player = (
         _start_player_owned_conquer(app, db)
@@ -224,3 +277,99 @@ def test_combine_and_dismantle_conquer_tactics_restore_sources(app, db):
     assert db.session.get(ConquerTactic, combined_id) is None
     assert daggers[0].status == 'available'
     assert daggers[1].status == 'available'
+
+
+def test_skip_battle_turn_uses_available_conquer_tactics(app, db):
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    rejected = client.post(
+        '/games/skip_battle_turn',
+        json={'game_id': game.id, 'player_id': attacker_player.id},
+        headers=_auth_headers(app, attacker),
+    )
+    assert rejected.status_code == 400
+    assert 'tactic' in rejected.get_json()['message'].lower()
+
+    attacker_tactics = ConquerTactic.query.filter_by(
+        game_id=game.id, player_id=attacker_player.id).all()
+    for tactic in attacker_tactics:
+        tactic.status = 'discarded'
+
+    defender_tactic = ConquerTactic.query.filter_by(
+        game_id=game.id, player_id=defender_player.id).first()
+    defender_tactic.status = 'played'
+    defender_tactic.played_round = 0
+    db.session.commit()
+
+    skipped = client.post(
+        '/games/skip_battle_turn',
+        json={'game_id': game.id, 'player_id': attacker_player.id},
+        headers=_auth_headers(app, attacker),
+    )
+    assert skipped.status_code == 200, skipped.get_json()
+    payload = skipped.get_json()
+    assert payload['success'] is True
+    assert payload['battle_round'] == 1
+    assert payload['battle_turn_player_id'] == game.invader_player_id
+    assert 0 in payload['battle_skipped_rounds'][str(attacker_player.id)]
+
+
+def test_play_conquer_tactic_validates_call_figure_field(app, db):
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    tactic = ConquerTactic.query.filter_by(
+        game_id=game.id, player_id=attacker_player.id, status='available').first()
+    tactic.family_name = 'Call Villager'
+    tactic.rank = 'J'
+    tactic.value = 1
+    village = Figure.query.filter_by(
+        game_id=game.id, player_id=attacker_player.id, field='village').first()
+    castle = Figure(
+        game_id=game.id,
+        player_id=attacker_player.id,
+        family_name='Test Castle',
+        field='castle',
+        color='offensive',
+        name='Test Castle',
+        suit='Hearts',
+        produces={},
+        requires={},
+    )
+    db.session.add(castle)
+    db.session.commit()
+
+    wrong_field = client.post(
+        '/games/play_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': tactic.id,
+            'call_figure_id': castle.id,
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert wrong_field.status_code == 400
+    assert 'village' in wrong_field.get_json()['message'].lower()
+    db.session.refresh(tactic)
+    assert tactic.status == 'available'
+
+    legal = client.post(
+        '/games/play_conquer_tactic',
+        json={
+            'game_id': game.id,
+            'player_id': attacker_player.id,
+            'tactic_id': tactic.id,
+            'call_figure_id': village.id,
+        },
+        headers=_auth_headers(app, attacker),
+    )
+    assert legal.status_code == 200, legal.get_json()
+    db.session.refresh(tactic)
+    assert tactic.status == 'played'
+    assert tactic.call_figure_id == village.id

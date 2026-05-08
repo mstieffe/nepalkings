@@ -5613,14 +5613,16 @@ def skip_battle_turn():
         unplayed_count = ConquerTactic.query.filter_by(
             game_id=game_id, player_id=player_id, status='available'
         ).count()
+        skip_block_message = 'You must play a tactic — you still have available tactics'
     else:
         unplayed_count = BattleMove.query.filter_by(
             game_id=game_id, player_id=player_id, played_round=None
         ).count()
+        skip_block_message = 'You must play a battle move — you still have unplayed moves'
     if unplayed_count > 0:
         return jsonify({
             'success': False,
-            'message': 'You must play a battle move — you still have unplayed moves'
+            'message': skip_block_message
         }), 400
 
     # Record the skip

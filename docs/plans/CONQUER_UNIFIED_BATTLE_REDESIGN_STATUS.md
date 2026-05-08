@@ -58,13 +58,16 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Opponent unplayed tactics are hidden in `/games/get_battle_state`.
   - Playing two tactics advances battle turn and round.
   - Gambling creates replacement tactics and does not delete persistent collection cards.
+  - Gambling enforces once-per-round and three-per-battle limits.
   - Combining/dismantling restores source tactics.
+  - Tactics-hand skip rejects while tactics are available and advances when no tactics remain.
+  - Call-figure validation rejects wrong-field targets and accepts legal targets.
 
 ## Verified In This Pass
 
 - DONE: Diagnostics reported no errors for edited Python/client files.
-- DONE: `python -m pytest tests/server/test_conquer_tactics_hand.py` passed: 5 passed.
-- DONE: Focused server/AI regression passed: 37 passed.
+- DONE: `python -m pytest tests/server/test_conquer_tactics_hand.py` passed: 8 passed.
+- DONE: Focused server/AI regression passed: 40 passed.
 - DONE: Existing focused client layout/routing tests passed: 65 passed.
 
 ## Partial / Needs Follow-Up
@@ -72,9 +75,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - PARTIAL: Phase 5 tactic APIs exist, but need broader behavior coverage.
   - DONE: Basic tests exist for `gamble_conquer_tactic` replacement source behavior.
   - DONE: Basic tests exist for `combine_conquer_tactics` and `dismantle_conquer_tactic` restoration behavior.
-  - TODO: Add tests for `gamble_conquer_tactic` per-round and per-battle limits.
-  - TODO: Add tests that skip is allowed only when no available tactics remain.
-  - TODO: Add tests for legal/illegal call figure validation.
+  - DONE: Tests exist for `gamble_conquer_tactic` per-round and per-battle limits.
+  - DONE: Tests exist for skip being allowed only when no available tactics remain.
+  - DONE: Tests exist for legal/illegal call figure validation.
+  - TODO: Add explicit family/rank consistency validation tests.
 
 - PARTIAL: Phase 6 battle math and cleanup now read tactics, but card fate needs deeper audit.
   - TODO: Add total-diff tests for Block, Call figure, Double Dagger, land bonus, support, healer, wall, enchantment, and distance attack using `ConquerTactic` rows.
@@ -121,7 +125,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 ## Suggested Next Session Start
 
 1. Run `python -m pytest tests/server/test_conquer_tactics_hand.py`.
-2. Add tests for `skip_battle_turn`, call figure validation, and gamble limits.
+2. Add explicit family/rank consistency validation tests for tactic play.
 3. Run `python -m pytest tests/server/test_battle_shop.py tests/server/test_game_flow_end_to_end.py` to catch legacy route regressions from the new gating.
 4. Implement Phase 7 `conquer_tactics_service` for Forced Deal / Dump Cards.
 5. Expand Phase 6 card-fate tests before polishing UI visuals.
