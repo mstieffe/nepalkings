@@ -114,8 +114,8 @@ def test_desktop_layout_prioritizes_battlefield_over_command_rail(size):
     inner = layout.battlefield.inner_rect
     lane = layout.battlefield.duel_lane.rect
 
-    assert rail[2] <= int(size[0] * 0.205)
-    assert field[2] >= int(size[0] * 0.75)
+    assert rail[2] <= int(size[0] * 0.18)
+    assert field[2] >= int(size[0] * 0.775)
     assert lane[2] >= int(inner[2] * 0.24)
 
 

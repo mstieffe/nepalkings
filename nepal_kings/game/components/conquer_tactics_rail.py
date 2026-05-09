@@ -306,6 +306,8 @@ class ConquerTacticsRail:
         layout = self._ensure_layout()
         rail = layout.tactics_rail
         rail_rect = pygame.Rect(*rail.rect)
+        previous_clip = self.window.get_clip()
+        self.window.set_clip(rail_rect)
 
         bg = pygame.Surface(rail_rect.size, pygame.SRCALPHA)
         bg.fill(_BG_RGBA)
@@ -317,6 +319,7 @@ class ConquerTacticsRail:
                              rail.cells_visible)
         self._draw_selected_detail(pygame.Rect(*rail.selected_detail_rect))
         self._draw_action_tray(pygame.Rect(*rail.action_tray_rect))
+        self.window.set_clip(previous_clip)
 
     # -- top strip
     def _draw_top_strip(self, rect: pygame.Rect):
@@ -345,6 +348,8 @@ class ConquerTacticsRail:
 
     # -- hand list
     def _draw_hand_list(self, rect: pygame.Rect, cell_h: int, cells_visible: int):
+        previous_clip = self.window.get_clip()
+        self.window.set_clip(rect)
         moves = self._hand_moves()
         self._clamp_scroll()
         self._cell_rects = []
@@ -354,6 +359,7 @@ class ConquerTacticsRail:
             empty_font = settings.get_font(max(11, int(settings.FS_SMALL * 0.9)))
             t = empty_font.render('— hand empty —', True, _TEXT_MUTED)
             self.window.blit(t, t.get_rect(center=rect.center))
+            self.window.set_clip(previous_clip)
             return
         visible = moves[self._scroll:self._scroll + cells_visible]
         # Draw scroll indicators if needed.
@@ -386,9 +392,12 @@ class ConquerTacticsRail:
             self._draw_hand_cell(cell_rect, move, font, chip_font, hovered=hovered)
             self._cell_rects.append(cell_rect)
             self._cell_move_ids.append(int(move.get('id') or 0))
+        self.window.set_clip(previous_clip)
 
     def _draw_hand_cell(self, rect: pygame.Rect, move: Dict[str, Any], font, chip_font,
                         *, hovered: bool = False):
+        previous_clip = self.window.get_clip()
+        self.window.set_clip(rect)
         is_selected = move.get('id') == self._selected_id
         is_partner = move.get('id') == self._combine_partner_id and self._combine_pending
         bg_col = (52, 40, 30, 240) if is_selected else (38, 32, 25, 224) if hovered else (32, 24, 18, 200)
@@ -441,6 +450,7 @@ class ConquerTacticsRail:
         self.window.blit(chip_surf, (text_x, rect.top + 6 + name_surf.get_height() + 1))
 
         self.window.blit(pwr_surf, (rect.right - pwr_surf.get_width() - 8, rect.centery - pwr_surf.get_height() // 2))
+        self.window.set_clip(previous_clip)
 
     # -- selected detail
     def _draw_selected_detail(self, rect: pygame.Rect):

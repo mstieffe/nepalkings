@@ -447,6 +447,7 @@ class FieldScreen(SubScreen):
             self.last_all_seeing_eye_check = current_time
         
         player_has_all_seeing_eye = self.cached_all_seeing_eye_status
+        conquer_revealed_support_ids = self._tactics_hand_revealed_support_figure_ids()
 
         for category, compartments in self.categorized_figures.items():
             for field_type, figures in compartments.items():
@@ -462,7 +463,9 @@ class FieldScreen(SubScreen):
                     #   * Current player cast All Seeing Eye (reveals opponent figures)
                     is_visible = (category == 'self' or 
                                   figure.name in ['Himalaya Maharaja', 'Djungle Maharaja'] or
-                                  (category == 'opponent' and player_has_all_seeing_eye))
+                                  (category == 'opponent' and player_has_all_seeing_eye) or
+                                  (category == 'opponent'
+                                   and getattr(figure, 'id', None) in conquer_revealed_support_ids))
                     
                     if figure.id not in self.icon_cache:
                         self.icon_cache[figure.id] = FieldFigureIcon(
@@ -1392,7 +1395,7 @@ class FieldScreen(SubScreen):
         # Add additional functionality for interacting with the figure
 
     def _conquer_parent(self):
-        parent = getattr(self.state, 'parent_screen', None)
+        parent = getattr(getattr(self, 'state', None), 'parent_screen', None)
         if (parent and getattr(self.game, 'mode', 'duel') == 'conquer'
                 and hasattr(parent, 'request_conquer_figure_confirmation')):
             return parent
@@ -1427,6 +1430,37 @@ class FieldScreen(SubScreen):
 
     def _is_tactics_hand_battle_fighter(self, figure):
         return getattr(figure, 'id', None) in self._tactics_hand_battle_figure_ids()
+
+    def _tactics_hand_active_support_figure_ids(self, *, opponent_only=False):
+        if not self._is_tactics_hand_battle_field_view_only():
+            return set()
+        parent = self._conquer_parent()
+        if parent is None:
+            return set()
+        lane_figures = getattr(parent, '_conquer_lane_figures', None)
+        support_entries = getattr(parent, '_conquer_lane_support_entries', None)
+        if not callable(lane_figures) or not callable(support_entries):
+            return set()
+        try:
+            player_figures, opponent_figures = lane_figures()
+            sides = (False,) if opponent_only else (True, False)
+            active_ids = set()
+            for is_player in sides:
+                for entry in support_entries(
+                        player_figures,
+                        opponent_figures,
+                        is_player=is_player,
+                ) or []:
+                    figure = entry.get('figure') if isinstance(entry, dict) else None
+                    fig_id = getattr(figure, 'id', None)
+                    if fig_id is not None:
+                        active_ids.add(fig_id)
+            return active_ids
+        except Exception:
+            return set()
+
+    def _tactics_hand_revealed_support_figure_ids(self):
+        return self._tactics_hand_active_support_figure_ids(opponent_only=True)
 
     @staticmethod
     def _entry_get(entry, key, default=None):
@@ -1520,6 +1554,8 @@ class FieldScreen(SubScreen):
             return 'preview'
         if getattr(figure, 'id', None) in self._conquer_called_figure_ids():
             return 'called'
+        if getattr(figure, 'id', None) in self._tactics_hand_active_support_figure_ids():
+            return 'support'
         skills = self._figure_active_skill_keys(figure)
         family = getattr(figure, 'family', None)
         family_name = str(getattr(family, 'name', '') or getattr(figure, 'family_name', ''))

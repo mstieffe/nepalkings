@@ -117,14 +117,14 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
 - DONE: Added first-pass support badge hover cross-links.
   - Duel-lane support badges now register hit rects and highlight on hover.
-  - Hovered support badges publish their source figure id to the field overlay and draw a cyan leader line to the source figure icon when its rect is available.
+  - Hovered support badges publish their source figure id to the field overlay and draw a direct cyan leader line from the badge edge to the source figure icon when its rect is available.
 
 - DONE: Added first-pass support rail overflow popovers.
   - Overflow chips now register hover hit areas and open compact contributor popovers for hidden support sources.
 
 - DONE: Added first-pass receipt-row hover/source highlighting.
   - Visible receipt rows now register hit areas and brighten under the cursor.
-  - Rows with concrete source figures, such as Called and Range, now feed the same field-source highlight/leader-line system as support badges.
+  - Rows with concrete source figures, such as Called and Range, now feed the same field-source highlight system as support badges without drawing extra receipt-row leader lines.
 
 - DONE: Cleaned up client tactics-hand helper terminology.
   - Added `_current_conquer_tactics()` as the tactics-hand data helper with a tactics-named cache.
@@ -140,6 +140,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Expanded battle timeline overlays now expose a Collapse button and append live round tactic entries once battle rounds start.
   - Always-on duel-lane support guide lines were removed; hover-only support/receipt source cross-links remain.
   - Tactics-hand battle field overlays no longer draw black dim circles over non-fighter figures; only meaningful called/support/preview rings are rendered.
+  - Latest screenshot pass narrows the rail to 16% W and clips all rail/list/cell drawing so long tactic cells cannot paint outside the tactics panel.
+  - Support badges now show an explicit label chip and ordinary support sources are included in field source rings.
+  - Opponent support-source field figures are revealed during tactics-hand battle rounds while unrelated hidden opponent figures stay hidden.
+  - Ambiguous receipt-row leader lines were removed; leader lines now appear only for direct support-badge hover and start at the badge edge.
 
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
@@ -238,6 +242,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader ordinary support contributor conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
 - DONE: Focused screenshot UI/timeline regression passed: `tests/client/test_conquer_layout.py tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py::TestTacticsHandRouting tests/client/test_conquer_timeline.py` passed: 134 passed.
 - DONE: Broader screenshot UI conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 183 passed.
+- DONE: Latest focused screenshot UI regression passed: `tests/client/test_conquer_layout.py tests/client/test_conquer_render_smoke.py` passed: 74 passed.
+- DONE: Latest broader screenshot UI conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 184 passed.
 - DONE: Focused AI tactics-hand loop/fallback regression passed: `tests/server/test_ai_integration_scenarios.py::test_conquer_loop_battle_round_uses_tactics_hand_rows tests/server/test_ai_worker.py::test_conquer_skip_battle_turn_with_fallback_uses_conquer_tactic_endpoint` passed: 2 passed.
 - DONE: Broader AI tactics-hand regression passed: `tests/server/test_ai_worker.py tests/server/test_ai_integration_scenarios.py tests/server/test_ai_action_enum.py tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py` passed: 88 passed.
 - DONE: Focused Phase 7 spell edge regression passed: `tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.

@@ -2217,6 +2217,19 @@ class ConquerGameScreen(GameScreen):
             frame = pygame.transform.smoothscale(frame_raw, (frame_size, frame_size))
             self.window.blit(frame, frame.get_rect(center=art_center))
 
+        label_font = settings.get_font(max(7, int(settings.FS_TINY * 0.50)), bold=True)
+        label = str(entry.get('label') or entry.get('kind') or 'Support')
+        label_surf = label_font.render(
+            self._fit_text(label, label_font, max(1, badge.width - 8)),
+            True,
+            (246, 239, 214),
+        )
+        label_bg = label_surf.get_rect()
+        label_bg.inflate_ip(6, 3)
+        label_bg.midtop = (badge.centerx, badge.top + 3)
+        pygame.draw.rect(self.window, (24, 18, 12), label_bg, border_radius=max(2, label_bg.height // 3))
+        self.window.blit(label_surf, label_surf.get_rect(center=label_bg.center))
+
         skill_size = max(12, int(badge.width * 0.28))
         skill_icon = self._load_conquer_skill_icon(entry['kind'], skill_size)
         skill_rect = pygame.Rect(badge.left + 4, badge.bottom - skill_size - 4,
@@ -2303,7 +2316,7 @@ class ConquerGameScreen(GameScreen):
     def _draw_conquer_lane_source_link(self, badge_rect, source_rect, *, is_player):
         badge_rect = pygame.Rect(badge_rect)
         source_rect = pygame.Rect(source_rect)
-        start = badge_rect.center
+        start = badge_rect.midleft if is_player else badge_rect.midright
         end = source_rect.center
         color = (120, 220, 235, 210)
         pygame.draw.line(self.window, color, start, end, 3)
@@ -2794,18 +2807,6 @@ class ConquerGameScreen(GameScreen):
                     hovered_support.get('rect'),
                     source_rect,
                     is_player=hovered_support.get('is_player', True),
-                )
-        hovered_receipt = getattr(self, '_conquer_hovered_receipt_row', None)
-        if hovered_receipt and not hovered_support:
-            row = hovered_receipt.get('row') or {}
-            source_ids = row.get('source_figure_ids') if isinstance(row, dict) else []
-            source_ids = source_ids or []
-            source_rect = self._conquer_support_source_rect(source_ids[0] if source_ids else None)
-            if source_rect:
-                self._draw_conquer_lane_source_link(
-                    hovered_receipt.get('rect'),
-                    source_rect,
-                    is_player=not hovered_receipt.get('align_right'),
                 )
         self._draw_conquer_lane_tactic_badge(
             lane.you_support_chip_rail,

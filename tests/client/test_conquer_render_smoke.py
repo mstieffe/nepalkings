@@ -115,6 +115,8 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
 
     layout = rail._ensure_layout().tactics_rail
     assert _rect_has_non_background_pixel(window, rail.rect())
+    outside_rail = pygame.Rect(rail.rect().right + 1, rail.rect().top, 8, rail.rect().height)
+    assert not _rect_has_non_background_pixel(window, outside_rail)
     assert len(rail._cell_rects) == layout.cells_visible
     assert rail._scroll_down_rect is not None
     assert rail.move_cell_rect(1) == rail._cell_rects[0]
@@ -293,6 +295,98 @@ def test_tactics_hand_field_overlay_does_not_dim_idle_figures():
     )
 
     assert window.get_at((100, 100)) == before
+
+
+def test_tactics_hand_reveals_opponent_support_sources(monkeypatch):
+    from game.screens import field_screen as field_module
+    from game.screens.field_screen import FieldScreen
+
+    class FakeFieldFigureIcon:
+        def __init__(self, *, figure, is_visible, **_kwargs):
+            self.figure = figure
+            self.is_visible = is_visible
+            self.has_deficit = False
+            self.rect_frame = pygame.Rect(0, 0, 40, 48)
+
+        def _calculate_battle_bonus_received(self, _figures):
+            return 0
+
+        def _check_resource_deficit(self, _resources):
+            return False
+
+    monkeypatch.setattr(field_module, 'FieldFigureIcon', FakeFieldFigureIcon)
+
+    attacker = _fighter(10, 'Attacker', 8, 1, (80, 160, 210), suit='Hearts')
+    defender = _fighter(20, 'Defender', 5, 2, (200, 105, 90), suit='Hearts')
+    opponent_support = _fighter(
+        30,
+        'Hidden Support',
+        4,
+        2,
+        (180, 120, 90),
+        suit='Hearts',
+        field='castle',
+    )
+    hidden_non_support = _fighter(
+        31,
+        'Hidden Idle',
+        4,
+        2,
+        (120, 120, 120),
+        suit='Spades',
+        field='village',
+    )
+
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        player_id=1,
+        calculate_resources=lambda *_args, **_kwargs: None,
+        has_active_all_seeing_eye=lambda: False,
+    )
+
+    class Parent:
+        def request_conquer_figure_confirmation(self):
+            return None
+
+        def _conquer_lane_figures(self):
+            return [attacker], [defender]
+
+        def _conquer_lane_support_entries(self, _player_figures, _opponent_figures, *, is_player):
+            if is_player:
+                return []
+            return [{
+                'kind': 'support_bonus',
+                'label': 'Support',
+                'value': '+4',
+                'figure': opponent_support,
+            }]
+
+    field = FieldScreen.__new__(FieldScreen)
+    field.window = pygame.Surface((200, 200))
+    field.game = game
+    field.state = SimpleNamespace(parent_screen=Parent())
+    field.figure_manager = SimpleNamespace(families={})
+    field.categorized_figures = {
+        'self': {'military': [attacker], 'village': [], 'castle': []},
+        'opponent': {
+            'military': [defender],
+            'village': [hidden_non_support],
+            'castle': [opponent_support],
+        },
+    }
+    field.icon_cache = {}
+    field.cached_all_seeing_eye_status = None
+    field.last_all_seeing_eye_check = 0
+    field.all_seeing_eye_check_interval = 1000
+
+    FieldScreen._generate_figure_icons(field)
+
+    assert field.icon_cache[opponent_support.id].is_visible is True
+    assert field.icon_cache[hidden_non_support.id].is_visible is False
+    assert FieldScreen._conquer_battle_context_kind(field, opponent_support) == 'support'
 
 
 def test_round_ledger_hover_completed_round_draws_recap(monkeypatch):
