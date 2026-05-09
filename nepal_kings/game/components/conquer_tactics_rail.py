@@ -81,6 +81,15 @@ class ConquerTacticsRail:
         self._scroll_down_rect: Optional[pygame.Rect] = None
         # Pending action consumed by the parent each frame.
         self._pending_action: Optional[Dict[str, Any]] = None
+        # Sticky result banner — shown at the top of the rail until next
+        # action or until ttl expires. (#8a)
+        self._result_banner: Optional[Dict[str, Any]] = None
+        # Recently-added move IDs (e.g. from gamble) that should glow.
+        # Maps move_id → expires_at (ms). (#8c)
+        self._new_move_glow_until: Dict[int, int] = {}
+        # Snapshot of move IDs from the previous frame so we can detect
+        # newly-added moves (used to start the new-move glow on gamble).
+        self._prev_move_ids: set = set()
 
     # ------------------------------------------------------------------ data
     def _moves(self) -> List[Dict[str, Any]]:
@@ -224,6 +233,71 @@ class ConquerTacticsRail:
         """Clear ephemeral state after a server action completed."""
         self.reset_selection()
 
+    NEW_MOVE_GLOW_MS = 1500
+    RESULT_BANNER_DEFAULT_MS = 4500
+
+    def set_result_banner(self, text: str,
+                          color=(238, 218, 170),
+                          ttl_ms: Optional[int] = None) -> None:
+        """Show a sticky banner at the top of the rail (#8a).
+
+        ``ttl_ms = None`` keeps the banner until the next call. Pass an
+        explicit value to auto-expire it.
+        """
+        self._result_banner = {
+            'text': str(text or ''),
+            'color': color,
+            'expires_at': (pygame.time.get_ticks() + int(ttl_ms))
+                if ttl_ms else None,
+        }
+
+    def clear_result_banner(self) -> None:
+        self._result_banner = None
+
+    def mark_new_moves(self, move_ids) -> None:
+        """Glow these move IDs for ``NEW_MOVE_GLOW_MS`` (#8c)."""
+        if not move_ids:
+            return
+        expires = pygame.time.get_ticks() + self.NEW_MOVE_GLOW_MS
+        for mid in move_ids:
+            try:
+                self._new_move_glow_until[int(mid)] = expires
+            except Exception:
+                continue
+
+    def _detect_new_moves(self) -> None:
+        """Auto-glow any move that wasn't visible last frame (#8c)."""
+        try:
+            current = {int(m.get('id') or 0) for m in self._hand_moves()}
+        except Exception:
+            current = set()
+        # Skip the very first frame (empty prev set would glow everything).
+        if self._prev_move_ids and current:
+            new_ids = current - self._prev_move_ids
+            if new_ids:
+                self.mark_new_moves(new_ids)
+        self._prev_move_ids = current
+        # Drop stale glow entries.
+        now = pygame.time.get_ticks()
+        self._new_move_glow_until = {
+            mid: exp for mid, exp in self._new_move_glow_until.items()
+            if exp > now
+        }
+
+    def _strongest_move_id(self) -> Optional[int]:
+        """ID of the highest-power move in the hand (#8d badge)."""
+        try:
+            moves = self._hand_moves()
+        except Exception:
+            return None
+        if not moves:
+            return None
+        try:
+            best = max(moves, key=lambda m: self._power(m))
+            return int(best.get('id') or 0) or None
+        except Exception:
+            return None
+
     # ------------------------------------------------------------------ events
     def handle_event(self, event) -> bool:
         """Returns True if the rail consumed the event."""
@@ -243,6 +317,15 @@ class ConquerTacticsRail:
         pos = event.pos
         if not rail_rect.collidepoint(pos):
             return False
+        # Banner — click anywhere inside it to dismiss (#8a).
+        if self._result_banner is not None:
+            try:
+                top_strip = pygame.Rect(*layout.tactics_rail.top_strip_rect)
+            except Exception:
+                top_strip = None
+            if top_strip is not None and top_strip.collidepoint(pos):
+                self._result_banner = None
+                return True
         # Scroll buttons
         if self._scroll_up_rect and self._scroll_up_rect.collidepoint(pos):
             self._scroll = max(0, self._scroll - 1)
@@ -325,6 +408,13 @@ class ConquerTacticsRail:
         previous_clip = self.window.get_clip()
         self.window.set_clip(rail_rect)
 
+        # Detect newly-added moves so we can glow them (#8c) and expire
+        # the banner if its TTL has passed (#8a).
+        self._detect_new_moves()
+        if self._result_banner and self._result_banner.get('expires_at'):
+            if pygame.time.get_ticks() > self._result_banner['expires_at']:
+                self._result_banner = None
+
         bg = pygame.Surface(rail_rect.size, pygame.SRCALPHA)
         bg.fill(_BG_RGBA)
         self.window.blit(bg, rail_rect.topleft)
@@ -339,6 +429,9 @@ class ConquerTacticsRail:
 
     # -- top strip
     def _draw_top_strip(self, rect: pygame.Rect):
+        if self._result_banner:
+            self._draw_result_banner(rect)
+            return
         game = getattr(self._parent.state, 'game', None)
         rd = getattr(game, 'battle_round', 0) if game else 0
         my_turn = self._is_my_battle_turn()
@@ -361,6 +454,22 @@ class ConquerTacticsRail:
         if opp_id is None or opp_id == getattr(game, 'player_id', None):
             return 'Action pending'
         return 'Opponent action hidden'
+
+    def _draw_result_banner(self, rect: pygame.Rect):
+        banner = self._result_banner or {}
+        text = banner.get('text', '')
+        color = banner.get('color', _TEXT_PRIMARY)
+        # Background — slightly brighter than the rail header so it pops.
+        bg = pygame.Surface(rect.size, pygame.SRCALPHA)
+        bg.fill((58, 44, 28, 232))
+        self.window.blit(bg, rect.topleft)
+        pygame.draw.rect(self.window, color, rect, 2, border_radius=4)
+        font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
+        sub = settings.get_font(max(9, int(settings.FS_TINY * 0.8)))
+        s1 = font.render(self._fit_text(text, font, rect.width - 16), True, color)
+        self.window.blit(s1, (rect.x + 8, rect.y + 4))
+        hint = sub.render('(click anywhere to dismiss)', True, _TEXT_MUTED)
+        self.window.blit(hint, (rect.x + 8, rect.y + 4 + s1.get_height() + 1))
 
     # -- hand list
     def _draw_hand_list(self, rect: pygame.Rect, cell_h: int, cells_visible: int):
@@ -424,6 +533,36 @@ class ConquerTacticsRail:
         border_col = _SELECTED_RGBA if is_selected else (190, 178, 120) if hovered else (_BORDER_RGBA if not is_partner else (130, 200, 250))
         pygame.draw.rect(self.window, border_col, rect, 2, border_radius=4)
 
+        # New-move glow (#8c) — short pulse on freshly added moves.
+        mid = int(move.get('id') or 0)
+        glow_until = self._new_move_glow_until.get(mid)
+        now = pygame.time.get_ticks()
+        if glow_until and glow_until > now:
+            phase = (now % 600) / 600.0
+            pulse = 1.0 - abs(0.5 - phase) * 2.0
+            alpha = int(120 + 110 * pulse)
+            glow_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(glow_surf, (250, 226, 130, alpha),
+                             glow_surf.get_rect().inflate(-2, -2), 3,
+                             border_radius=4)
+            self.window.blit(glow_surf, rect.topleft)
+
+        # Combine-pulse (#8b): when a single dagger is selected, all
+        # eligible partner daggers in the rail pulse blue.
+        sel = self._selected_move()
+        if (sel is not None and sel.get('id') != mid
+                and self._is_single_dagger(sel)
+                and self._is_single_dagger(move)
+                and self._can_combine(sel, move)):
+            phase = (now % 800) / 800.0
+            pulse = 1.0 - abs(0.5 - phase) * 2.0
+            alpha = int(80 + 130 * pulse)
+            pulse_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(pulse_surf, (130, 200, 250, alpha),
+                             pulse_surf.get_rect().inflate(-2, -2), 3,
+                             border_radius=4)
+            self.window.blit(pulse_surf, rect.topleft)
+
         # Icon (left)
         icon_size = max(20, int(rect.height * 0.78))
         try:
@@ -467,6 +606,14 @@ class ConquerTacticsRail:
         self.window.blit(chip_surf, (text_x, rect.top + 6 + name_surf.get_height() + 1))
 
         self.window.blit(pwr_surf, (rect.right - pwr_surf.get_width() - 8, rect.centery - pwr_surf.get_height() // 2))
+
+        # Strongest-move badge (#8d) — small star/spark glyph on the
+        # currently highest-power move.
+        if mid == self._strongest_move_id():
+            badge_font = settings.get_font(max(10, int(settings.FS_TINY * 0.9)), bold=True)
+            badge_surf = badge_font.render('★', True, (250, 220, 110))
+            self.window.blit(badge_surf, (rect.left + 4, rect.top + 2))
+
         self.window.set_clip(previous_clip)
 
     # -- selected detail
@@ -502,50 +649,112 @@ class ConquerTacticsRail:
 
     # -- action tray
     def _draw_action_tray(self, rect: pygame.Rect):
+        """Always render Play / Gamble / Combine / Dismantle / Skip with
+        per-button enabled state + reason tooltip when disabled (#8d).
+        """
         sel = self._selected_move()
         my_turn = self._is_my_battle_turn()
         partner = self._combine_partner_move()
-        play_enabled = bool(sel and my_turn)
-        # Gamble/combine/dismantle are pre-battle/hand-shaping actions and
-        # are available regardless of whose battle turn it is.
-        gamble_enabled = bool(sel)
-        dismantle_enabled = bool(sel and self._is_double_dagger(sel))
-        combine_relevant = bool(sel and self._is_single_dagger(sel))
-        combine_enabled = bool(
-            combine_relevant
-            and (partner is None or self._can_combine(sel, partner))
-        )
+        hand_empty = not self._hand_moves()
 
+        # Build (key, label, enabled, reason) for every action.
         buttons = []
-        if sel:
-            if play_enabled:
-                buttons.append((ACTION_PLAY, 'Play', True))
-            if gamble_enabled:
-                buttons.append((ACTION_GAMBLE, 'Gamble', True))
-            if combine_relevant:
-                label = 'Pick 2nd' if self._combine_pending and partner is None else 'Combine'
-                buttons.append((ACTION_COMBINE, label, combine_enabled))
-            if dismantle_enabled:
-                buttons.append((ACTION_DISMANTLE, 'Dismantle', True))
-        elif my_turn and not self._hand_moves():
-            buttons.append((ACTION_SKIP, 'Skip', True))
+        # Play
+        if not sel:
+            buttons.append((ACTION_PLAY, 'Play', False, 'Pick a tactic first'))
+        elif not my_turn:
+            buttons.append((ACTION_PLAY, 'Play', False, 'Not your battle turn'))
+        else:
+            buttons.append((ACTION_PLAY, 'Play', True, ''))
+        # Gamble
+        if not sel:
+            buttons.append((ACTION_GAMBLE, 'Gamble', False, 'Pick a tactic first'))
+        else:
+            buttons.append((ACTION_GAMBLE, 'Gamble', True, ''))
+        # Combine
+        if not sel:
+            combine_label = 'Combine'
+            buttons.append((ACTION_COMBINE, combine_label, False, 'Pick a single Dagger first'))
+        elif not self._is_single_dagger(sel):
+            buttons.append((ACTION_COMBINE, 'Combine', False, 'Only single Daggers can combine'))
+        elif self._combine_pending and partner is None:
+            buttons.append((ACTION_COMBINE, 'Pick 2nd', True, ''))
+        elif partner is not None and not self._can_combine(sel, partner):
+            buttons.append((ACTION_COMBINE, 'Combine', False, 'Need 2 same-colour Daggers'))
+        else:
+            buttons.append((ACTION_COMBINE, 'Combine', True, ''))
+        # Dismantle
+        if not sel:
+            buttons.append((ACTION_DISMANTLE, 'Dismantle', False, 'Pick a Double Dagger first'))
+        elif not self._is_double_dagger(sel):
+            buttons.append((ACTION_DISMANTLE, 'Dismantle', False, 'Only Double Daggers can be dismantled'))
+        else:
+            buttons.append((ACTION_DISMANTLE, 'Dismantle', True, ''))
+        # Skip — only useful when it's your turn and you have nothing to play.
+        if my_turn and hand_empty:
+            buttons.append((ACTION_SKIP, 'Skip', True, ''))
+        elif not my_turn:
+            buttons.append((ACTION_SKIP, 'Skip', False, 'Not your battle turn'))
+        else:
+            buttons.append((ACTION_SKIP, 'Skip', False, 'Use a tactic instead of skipping'))
 
-        if not buttons:
-            buttons = [(ACTION_SKIP, 'Skip', False)]
-        font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
-        gap = 4
+        font = settings.get_font(max(10, int(settings.FS_TINY * 0.9)), bold=True)
+        gap = 3
         n = len(buttons)
         bw = max(1, (rect.width - gap * (n - 1)) // n)
         self._action_button_rects = {}
-        for i, (key, label, enabled) in enumerate(buttons):
+        # Track all rects for hover-tooltip lookup (incl. disabled).
+        self._action_button_meta = []
+        # Pre-compute strongest-move highlight on Play.
+        sel_id = sel.get('id') if sel else None
+        play_glow = bool(sel_id is not None and sel_id == self._strongest_move_id())
+        try:
+            mx, my = pygame.mouse.get_pos()
+        except Exception:
+            mx, my = (-1, -1)
+        hovered_meta = None
+        for i, (key, label, enabled, reason) in enumerate(buttons):
             br = pygame.Rect(rect.left + i * (bw + gap), rect.top, bw,
                              rect.height)
-            colour = (62, 50, 36) if enabled else (36, 30, 24)
+            colour = (62, 50, 36) if enabled else (30, 26, 22)
             border = _BORDER_RGBA if enabled else _DISABLED_RGBA
             text_col = _TEXT_PRIMARY if enabled else _DISABLED_RGBA
             pygame.draw.rect(self.window, colour, br, 0, border_radius=4)
             pygame.draw.rect(self.window, border, br, 1, border_radius=4)
-            ts = font.render(self._fit_text(label, font, br.width - 6), True, text_col)
+            # Strongest-move glow on Play (#8d).
+            if enabled and key == ACTION_PLAY and play_glow:
+                now = pygame.time.get_ticks()
+                phase = (now % 1000) / 1000.0
+                pulse = 1.0 - abs(0.5 - phase) * 2.0
+                alpha = int(110 + 110 * pulse)
+                glow_surf = pygame.Surface(br.size, pygame.SRCALPHA)
+                pygame.draw.rect(glow_surf, (250, 220, 110, alpha),
+                                 glow_surf.get_rect().inflate(-2, -2), 2,
+                                 border_radius=4)
+                self.window.blit(glow_surf, br.topleft)
+            ts = font.render(self._fit_text(label, font, br.width - 4), True, text_col)
             self.window.blit(ts, ts.get_rect(center=br.center))
             if enabled:
                 self._action_button_rects[key] = br
+            self._action_button_meta.append((key, br, enabled, reason))
+            if br.collidepoint(mx, my) and not enabled and reason:
+                hovered_meta = (br, reason)
+        # Tooltip for hovered disabled button.
+        if hovered_meta is not None:
+            br, reason = hovered_meta
+            tip_font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)))
+            tip_surf = tip_font.render(reason, True, _TEXT_PRIMARY)
+            tip_w = tip_surf.get_width() + 10
+            tip_h = tip_surf.get_height() + 6
+            tip_x = max(rect.left, min(br.centerx - tip_w // 2,
+                                       rect.right - tip_w))
+            tip_y = br.top - tip_h - 2
+            if tip_y < rect.top - tip_h - 2:
+                tip_y = br.bottom + 2
+            tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
+            bg = pygame.Surface(tip_rect.size, pygame.SRCALPHA)
+            bg.fill((20, 16, 12, 232))
+            self.window.blit(bg, tip_rect.topleft)
+            pygame.draw.rect(self.window, _BORDER_RGBA, tip_rect, 1,
+                             border_radius=3)
+            self.window.blit(tip_surf, (tip_rect.x + 5, tip_rect.y + 3))

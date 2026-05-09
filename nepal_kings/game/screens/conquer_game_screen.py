@@ -781,6 +781,11 @@ class ConquerGameScreen(GameScreen):
         action = action_payload.get('action')
         move = action_payload.get('move') or {}
         mid = move.get('id')
+        # Friendly label for the banner.
+        family = (move.get('family_name') or move.get('family')
+                  or move.get('name') or 'Tactic')
+        rank = move.get('rank') or ''
+        rail = getattr(self, '_tactics_rail', None)
         try:
             if self._is_tactics_hand_game() and action == ACTION_PLAY and mid is not None:
                 call_figure = self._conquer_best_call_figure_for_tactic(move)
@@ -820,6 +825,22 @@ class ConquerGameScreen(GameScreen):
             # Network errors are rendered via the standard polling cycle —
             # we don't want a transient failure to blow up the input loop.
             pass
+        # Show a banner reflecting the action that was just submitted; the
+        # rail's auto-glow will highlight any newly-arrived moves once the
+        # next poll lands. (#8a / #8c)
+        set_banner = getattr(rail, 'set_result_banner', None) if rail else None
+        if callable(set_banner):
+            label = f"{family} {rank}".strip()
+            if action == ACTION_PLAY:
+                set_banner(f"Played {label}", color=(180, 220, 160), ttl_ms=4500)
+            elif action == ACTION_GAMBLE:
+                set_banner(f"Gambling {label}…", color=(238, 218, 170), ttl_ms=5500)
+            elif action == ACTION_COMBINE:
+                set_banner(f"Combined {label}", color=(170, 200, 240), ttl_ms=4500)
+            elif action == ACTION_DISMANTLE:
+                set_banner(f"Dismantled {label}", color=(220, 170, 170), ttl_ms=4500)
+            elif action == ACTION_SKIP:
+                set_banner("Skipped battle turn", color=(190, 190, 190), ttl_ms=3500)
         self._tactics_rail.reset_after_action()
         self._conquer_tactic_cache_key = None  # force refetch
         self._conquer_battle_move_cache_key = None  # force refetch
