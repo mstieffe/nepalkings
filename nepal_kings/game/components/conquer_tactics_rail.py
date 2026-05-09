@@ -90,6 +90,11 @@ class ConquerTacticsRail:
         # Snapshot of move IDs from the previous frame so we can detect
         # newly-added moves (used to start the new-move glow on gamble).
         self._prev_move_ids: set = set()
+        # Snapshot of full move-data from the previous frame, keyed by id.
+        # Used to render ghost cells for spell-removed moves briefly. (#round4)
+        self._prev_moves_by_id: Dict[int, Dict[str, Any]] = {}
+        # Recently spell-removed move IDs → (move_data_snapshot, expires_at).
+        self._removed_ghosts: Dict[int, Dict[str, Any]] = {}
         # Coin-flip animation state for gambled tactic. (#8c)
         # ``{'move_id': int, 'started_at': ms, 'duration': ms}`` or None.
         self._gamble_anim: Optional[Dict[str, Any]] = None
@@ -272,23 +277,48 @@ class ConquerTacticsRail:
             except Exception:
                 continue
 
+    REMOVED_GHOST_MS = 4000
+
     def _detect_new_moves(self) -> None:
-        """Auto-glow any move that wasn't visible last frame (#8c)."""
+        """Auto-glow any move that wasn't visible last frame (#8c).
+
+        Also captures spell-removed moves as ghost rows so the player can
+        see what disappeared for ``REMOVED_GHOST_MS`` after the change.
+        """
         try:
-            current = {int(m.get('id') or 0) for m in self._hand_moves()}
+            hand = self._hand_moves()
+            current_by_id = {int(m.get('id') or 0): m for m in hand}
+            current = set(current_by_id.keys())
         except Exception:
+            current_by_id = {}
             current = set()
         # Skip the very first frame (empty prev set would glow everything).
-        if self._prev_move_ids and current:
+        if self._prev_move_ids and current is not None:
             new_ids = current - self._prev_move_ids
             if new_ids:
                 self.mark_new_moves(new_ids)
+            removed_ids = self._prev_move_ids - current
+            if removed_ids:
+                expires = pygame.time.get_ticks() + self.REMOVED_GHOST_MS
+                for mid in removed_ids:
+                    snapshot = self._prev_moves_by_id.get(mid)
+                    if snapshot is None:
+                        continue
+                    self._removed_ghosts[mid] = {
+                        'move': snapshot,
+                        'expires_at': expires,
+                    }
         self._prev_move_ids = current
-        # Drop stale glow entries.
+        self._prev_moves_by_id = dict(current_by_id)
+        # Drop stale glow / ghost entries.
         now = pygame.time.get_ticks()
         self._new_move_glow_until = {
             mid: exp for mid, exp in self._new_move_glow_until.items()
             if exp > now
+        }
+        self._removed_ghosts = {
+            mid: data for mid, data in self._removed_ghosts.items()
+            if data.get('expires_at', 0) > now
         }
 
     def _strongest_move_id(self) -> Optional[int]:
@@ -468,8 +498,25 @@ class ConquerTacticsRail:
 
     def _handle_cell_click(self, mid: int):
         if self._combine_pending and self._selected_id is not None and mid != self._selected_id:
-            self._combine_partner_id = mid
-            return
+            # Auto-fire combine on partner click — no second confirm needed.
+            origin = self._selected_move()
+            partner = None
+            for m in self._hand_moves():
+                if m.get('id') == mid:
+                    partner = m
+                    break
+            if origin is not None and partner is not None and self._can_combine(origin, partner):
+                self._pending_action = {
+                    'action': ACTION_COMBINE,
+                    'move': origin,
+                    'partner': partner,
+                }
+                self._combine_pending = False
+                self._combine_partner_id = None
+                self._selected_id = None
+                return
+            # Invalid pair — fall through to plain selection toggle so the
+            # player can pick a different partner without re-arming.
         # Plain selection / toggle.
         self._selected_id = None if self._selected_id == mid else mid
         self._combine_pending = False
@@ -642,6 +689,19 @@ class ConquerTacticsRail:
         mouse_pos = pygame.mouse.get_pos()
         last_group: Optional[str] = None
         y = rect.top
+        # Spell-removed ghost cells (#round4): prepend strike-through rows
+        # for any move that disappeared from the hand within the last
+        # ``REMOVED_GHOST_MS``.  They share the visible budget so the live
+        # hand stays interactable; ghosts auto-expire on their own TTL.
+        now_ms = pygame.time.get_ticks()
+        for mid, ghost in list(self._removed_ghosts.items()):
+            if y + cell_h > rect.bottom + 2:
+                break
+            ghost_move = ghost.get('move') or {}
+            ghost_rect = pygame.Rect(rect.left, y, rect.width, cell_h - 2)
+            self._draw_removed_ghost_cell(ghost_rect, ghost_move, font, chip_font,
+                                          expires_at=ghost.get('expires_at', now_ms))
+            y += cell_h
         for move in visible:
             group = self._family_group(move)
             # Only draw a header at *transitions* between groups; the rail
@@ -695,6 +755,68 @@ class ConquerTacticsRail:
             )
         except Exception:
             pass
+
+    def _draw_removed_ghost_cell(self, rect: pygame.Rect, move: Dict[str, Any],
+                                  font, chip_font, *, expires_at: int) -> None:
+        """Render a strike-through ghost cell for a spell-removed move.
+
+        Fades alpha as the TTL approaches zero so the visual transition is
+        smooth (#round4 spell sync).
+        """
+        previous_clip = self.window.get_clip()
+        self.window.set_clip(rect)
+        now = pygame.time.get_ticks()
+        remaining = max(0, expires_at - now)
+        # Fade ramp over the last 800 ms.
+        ramp_ms = 800
+        if remaining < ramp_ms:
+            alpha_factor = max(0.0, remaining / ramp_ms)
+        else:
+            alpha_factor = 1.0
+        bg_alpha = int(170 * alpha_factor)
+        bg = pygame.Surface(rect.size, pygame.SRCALPHA)
+        bg.fill((58, 22, 22, bg_alpha))
+        self.window.blit(bg, rect.topleft)
+        pygame.draw.rect(self.window, (180, 70, 70, int(220 * alpha_factor)),
+                         rect, 1, border_radius=4)
+        # Move icon (greyscale-ish red tint via low alpha).
+        size = max(20, rect.height - 8)
+        try:
+            (glow_cache, icon_cache, frame_cache, suit_icon_cache,
+             icon_font) = self._parent._conquer_battle_move_icon_assets(size)
+            icon_surf = pygame.Surface((size, size), pygame.SRCALPHA)
+            draw_battle_move_icon(
+                icon_surf, size // 2, size // 2,
+                move.get('family_name', ''),
+                move.get('suit', ''),
+                self._power(move),
+                glow_cache, icon_cache, frame_cache, suit_icon_cache,
+                icon_font, size,
+                hovered=False, is_used=False,
+                suit_b=move.get('suit_b'),
+            )
+            icon_surf.set_alpha(int(180 * alpha_factor))
+            self.window.blit(icon_surf, (rect.left + 6, rect.centery - size // 2))
+        except Exception:
+            pass
+        # Move name with strike-through.
+        name = str(move.get('family_name') or 'Move')
+        name_surf = font.render(name, True, (220, 170, 170))
+        name_surf.set_alpha(int(220 * alpha_factor))
+        text_x = rect.left + 6 + max(20, rect.height - 8) + 8
+        text_y = rect.centery - name_surf.get_height() // 2
+        self.window.blit(name_surf, (text_x, text_y))
+        # Strike-through line.
+        line_y = text_y + name_surf.get_height() // 2
+        pygame.draw.line(self.window, (220, 90, 90, int(255 * alpha_factor)),
+                         (text_x - 2, line_y),
+                         (text_x + name_surf.get_width() + 2, line_y), 2)
+        # Trailing tag "removed".
+        tag = chip_font.render('removed by spell', True, (240, 180, 180))
+        tag.set_alpha(int(220 * alpha_factor))
+        self.window.blit(tag, (rect.right - tag.get_width() - 6,
+                               rect.centery - tag.get_height() // 2))
+        self.window.set_clip(previous_clip)
 
     def _draw_hand_cell(self, rect: pygame.Rect, move: Dict[str, Any], font, chip_font,
                         *, hovered: bool = False):

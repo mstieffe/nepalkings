@@ -2450,23 +2450,69 @@ class ConquerGameScreen(GameScreen):
                 enemy_support_entries=enemy_support,
                 is_player=is_player,
             )
-            # Legacy parity color coding: green when boosted, red when penalised, gold otherwise.
-            if total > base:
-                chip_bg = (40, 110, 60)
-                text_col = (235, 250, 220)
-            elif total < base:
-                chip_bg = (148, 50, 50)
-                text_col = (250, 230, 220)
+            breakdown = self._conquer_lane_figure_power_breakdown(
+                figure,
+                support_entries=own_support,
+                enemy_support_entries=enemy_support,
+                is_player=is_player,
+            )
+            # Segmented colour-coded pill (#2): [base|+buff|+spell|+sup] = total.
+            # Falls back to a single coloured chip when the breakdown only
+            # has the base row (no modifiers in play).
+            seg_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
+            total_color = (235, 250, 220) if total > base else (250, 230, 220) if total < base else (42, 32, 20)
+            total_bg = (40, 110, 60) if total > base else (148, 50, 50) if total < base else (238, 206, 111)
+            if len(breakdown) <= 1:
+                value_surf = value_font.render(str(total), True, total_color)
+                chip = value_surf.get_rect()
+                chip.inflate_ip(14, 7)
+                chip.center = (center[0] + art_size // 2 - 2, center[1] - art_size // 2 + 4)
+                pygame.draw.rect(self.window, total_bg, chip, border_radius=chip.height // 2)
+                pygame.draw.rect(self.window, (24, 18, 12), chip, 1, border_radius=chip.height // 2)
+                self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
             else:
-                chip_bg = (238, 206, 111)
-                text_col = (42, 32, 20)
-            value_surf = value_font.render(str(total), True, text_col)
-            chip = value_surf.get_rect()
-            chip.inflate_ip(14, 7)
-            chip.center = (center[0] + art_size // 2 - 2, center[1] - art_size // 2 + 4)
-            pygame.draw.rect(self.window, chip_bg, chip, border_radius=chip.height // 2)
-            pygame.draw.rect(self.window, (24, 18, 12), chip, 1, border_radius=chip.height // 2)
-            self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
+                # Build segments and lay them out left-to-right with a
+                # final total chip at the right edge.
+                seg_surfaces = []
+                for label, value in breakdown:
+                    colour = self._conquer_receipt_label_color(label)
+                    if label == 'Base':
+                        text = f'{value}'
+                    elif value < 0 or label == 'Range':
+                        text = f'\u2212{abs(value)}'
+                    else:
+                        text = f'+{value}'
+                    seg_surfaces.append((seg_font.render(text, True, (24, 18, 12)), colour))
+                total_surf = seg_font.render(f'={total}', True, total_color)
+                pad_x = 4
+                gap = 2
+                total_w = sum(s.get_width() + 2 * pad_x for s, _ in seg_surfaces) + gap * len(seg_surfaces) + total_surf.get_width() + 2 * pad_x
+                # Anchor near top-right of the figure.
+                pill_h = max(seg_font.get_height(), value_font.get_height()) + 6
+                pill = pygame.Rect(0, 0, total_w + 4, pill_h)
+                pill.midright = (slot.right - 4, center[1] - art_size // 2 + 6)
+                pill.left = max(slot.left + 2, pill.left)
+                # If still too wide, fall back to single total chip.
+                if pill.width > slot.width - 4:
+                    value_surf = value_font.render(str(total), True, total_color)
+                    chip = value_surf.get_rect()
+                    chip.inflate_ip(14, 7)
+                    chip.center = (center[0] + art_size // 2 - 2, center[1] - art_size // 2 + 4)
+                    pygame.draw.rect(self.window, total_bg, chip, border_radius=chip.height // 2)
+                    pygame.draw.rect(self.window, (24, 18, 12), chip, 1, border_radius=chip.height // 2)
+                    self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
+                else:
+                    pygame.draw.rect(self.window, (22, 18, 12), pill, border_radius=pill.height // 2)
+                    pygame.draw.rect(self.window, (24, 18, 12), pill, 1, border_radius=pill.height // 2)
+                    x = pill.left + 2
+                    for surf, colour in seg_surfaces:
+                        seg_rect = pygame.Rect(x, pill.top + 2, surf.get_width() + 2 * pad_x, pill.height - 4)
+                        pygame.draw.rect(self.window, colour, seg_rect, border_radius=seg_rect.height // 2)
+                        self.window.blit(surf, surf.get_rect(center=seg_rect.center))
+                        x = seg_rect.right + gap
+                    total_rect = pygame.Rect(x, pill.top + 2, total_surf.get_width() + 2 * pad_x, pill.height - 4)
+                    pygame.draw.rect(self.window, total_bg, total_rect, border_radius=total_rect.height // 2)
+                    self.window.blit(total_surf, total_surf.get_rect(center=total_rect.center))
 
     def _load_conquer_skill_icon(self, skill_key, size):
         cache = getattr(self, '_conquer_skill_icon_cache', None)
@@ -2688,17 +2734,33 @@ class ConquerGameScreen(GameScreen):
         border = (84, 150, 132) if is_player else (160, 94, 88)
         pygame.draw.rect(self.window, bg, rail, border_radius=7)
         pygame.draw.rect(self.window, border, rail, 1, border_radius=7)
+
+        # Header label so players know what the column represents (#6).
+        header_font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        header_text = self._fit_text('SUPPORT', header_font, rail.width - 4)
+        header_surf = header_font.render(header_text, True, border)
+        header_h = header_surf.get_height() + 4
+        self.window.blit(header_surf, header_surf.get_rect(
+            center=(rail.centerx, rail.top + header_h // 2)))
+        # Register hover tooltip rect for the header.
+        if not hasattr(self, '_conquer_lane_tooltips'):
+            self._conquer_lane_tooltips = []
+        self._conquer_lane_tooltips.append({
+            'rect': pygame.Rect(rail.left, rail.top, rail.width, header_h),
+            'text': 'Figures supporting this side from adjacent fields',
+        })
+        rail_inner = pygame.Rect(rail.left, rail.top + header_h, rail.width, rail.height - header_h)
         if not entries:
             return
 
         visible = entries[:4]
-        gap = max(4, int(rail.height * 0.018))
-        badge_h = min(rail.width, max(24, (rail.height - gap * (len(visible) + 1)) // len(visible)))
-        y = rail.top + gap
+        gap = max(4, int(rail_inner.height * 0.018))
+        badge_h = min(rail_inner.width, max(24, (rail_inner.height - gap * (len(visible) + 1)) // len(visible)))
+        y = rail_inner.top + gap
         mouse = pygame.mouse.get_pos()
         for entry in visible:
-            badge = pygame.Rect(0, 0, max(1, rail.width - 4), badge_h)
-            badge.centerx = rail.centerx
+            badge = pygame.Rect(0, 0, max(1, rail_inner.width - 4), badge_h)
+            badge.centerx = rail_inner.centerx
             badge.top = y
             source_rect = self._conquer_support_source_rect(
                 getattr(entry.get('figure'), 'id', None))
@@ -2717,7 +2779,7 @@ class ConquerGameScreen(GameScreen):
         if overflow > 0:
             font = settings.get_font(max(8, int(settings.FS_TINY * 0.58)), bold=True)
             text = font.render(f'+{overflow}', True, (246, 239, 214))
-            chip = text.get_rect(center=(rail.centerx, rail.bottom - max(8, text.get_height())))
+            chip = text.get_rect(center=(rail_inner.centerx, rail_inner.bottom - max(8, text.get_height())))
             chip.inflate_ip(10, 5)
             overflow_hovered = chip.collidepoint(mouse)
             if not hasattr(self, '_conquer_support_overflow_rects'):
@@ -2740,16 +2802,31 @@ class ConquerGameScreen(GameScreen):
         border = (92, 164, 172) if is_player else (178, 110, 104)
         pygame.draw.rect(self.window, bg, rail, border_radius=7)
         pygame.draw.rect(self.window, border, rail, 1, border_radius=7)
+
+        # Header label so players know what the column represents (#6).
+        header_font = settings.get_font(max(7, int(settings.FS_TINY * 0.55)), bold=True)
+        header_text = self._fit_text('MOD', header_font, rail.width - 2)
+        header_surf = header_font.render(header_text, True, border)
+        header_h = header_surf.get_height() + 3
+        self.window.blit(header_surf, header_surf.get_rect(
+            center=(rail.centerx, rail.top + header_h // 2)))
+        if not hasattr(self, '_conquer_lane_tooltips'):
+            self._conquer_lane_tooltips = []
+        self._conquer_lane_tooltips.append({
+            'rect': pygame.Rect(rail.left, rail.top, rail.width, header_h),
+            'text': 'Modifiers: Call / Land / Spell',
+        })
+        rail_inner = pygame.Rect(rail.left, rail.top + header_h, rail.width, rail.height - header_h)
         if not chips:
             return
         font = settings.get_font(max(7, int(settings.FS_TINY * 0.52)), bold=True)
         max_visible = min(4, len(chips))
-        gap = max(3, int(rail.height * 0.014))
-        chip_h = min(max(20, int(rail.width * 1.10)),
-                     max(12, (rail.height - gap * (max_visible + 1)) // max_visible))
-        y = rail.top + gap
+        gap = max(3, int(rail_inner.height * 0.014))
+        chip_h = min(max(20, int(rail_inner.width * 1.10)),
+                     max(12, (rail_inner.height - gap * (max_visible + 1)) // max_visible))
+        y = rail_inner.top + gap
         for chip_data in chips[:max_visible]:
-            chip = pygame.Rect(rail.left + 1, y, max(1, rail.width - 2), chip_h)
+            chip = pygame.Rect(rail_inner.left + 1, y, max(1, rail_inner.width - 2), chip_h)
             pygame.draw.rect(self.window, (25, 20, 14), chip, border_radius=chip.height // 2)
             pygame.draw.rect(self.window, border, chip, 1, border_radius=chip.height // 2)
             label = str(chip_data.get('label', '?'))[:1]
@@ -3021,6 +3098,77 @@ class ConquerGameScreen(GameScreen):
 
         return base + buffs + support + wall + enchant - da_penalty
 
+    def _conquer_lane_figure_power_breakdown(self, figure, *,
+                                             support_entries=None,
+                                             enemy_support_entries=None,
+                                             is_player=True):
+        """Return ordered ``[(label, value), ...]`` for a fighter chip.
+
+        Mirrors :meth:`_conquer_lane_figure_full_power` but exposes each
+        non-zero component so the band's power chip can render them as a
+        colour-coded segmented pill (#2).
+        """
+        if figure is None:
+            return []
+        if support_entries is None or enemy_support_entries is None:
+            player_figures, opponent_figures = self._conquer_lane_figures()
+            if support_entries is None:
+                support_entries = self._conquer_lane_support_entries(
+                    player_figures, opponent_figures, is_player=is_player)
+            if enemy_support_entries is None:
+                enemy_support_entries = self._conquer_lane_support_entries(
+                    player_figures, opponent_figures, is_player=not is_player)
+        base = self._conquer_lane_figure_power(figure)
+        fig_id = getattr(figure, 'id', None)
+        blocked = any(e.get('kind') == 'blocks_bonus'
+                      for e in enemy_support_entries or [])
+        buffs = support = wall = 0
+        for e in support_entries or []:
+            kind = e.get('kind')
+            targets = e.get('target_figure_ids') or []
+            if fig_id is not None and fig_id not in targets:
+                continue
+            per = e.get('per_target_value')
+            if per is None:
+                per = int(e.get('numeric_value') or 0)
+            if kind == 'buffs_allies':
+                buffs += int(per)
+            elif kind == 'support_bonus' and not blocked:
+                support += int(per)
+            elif kind == 'buffs_allies_defence':
+                if self._conquer_lane_is_defending_side(is_player=is_player):
+                    wall += int(per)
+        enchant = 0
+        getter = getattr(figure, 'get_total_enchantment_modifier', None)
+        if callable(getter):
+            try:
+                enchant = int(getter() or 0)
+            except Exception:
+                enchant = 0
+        da_penalty = 0
+        for e in enemy_support_entries or []:
+            if e.get('kind') != 'distance_attack':
+                continue
+            targets = e.get('target_figure_ids') or []
+            if fig_id is not None and fig_id not in targets:
+                continue
+            per = e.get('per_target_value')
+            if per is None:
+                per = int(e.get('numeric_value') or 0)
+            da_penalty += int(per)
+        rows = [('Base', base)]
+        if buffs:
+            rows.append(('Buffs', buffs))
+        if support:
+            rows.append(('Support', support))
+        if wall:
+            rows.append(('Wall', wall))
+        if enchant:
+            rows.append(('Spell', enchant))
+        if da_penalty:
+            rows.append(('Range', -da_penalty))
+        return rows
+
     def _conquer_lane_figure_diff(self):
         """Player figure total power minus opponent figure total power."""
         player_figures, opponent_figures = self._conquer_lane_figures()
@@ -3078,6 +3226,25 @@ class ConquerGameScreen(GameScreen):
         if isinstance(row, dict):
             return row.get('label', ''), row.get('value')
         return row[0], row[1]
+
+    _CONQUER_RECEIPT_LABEL_COLORS = {
+        'Base':   (238, 206, 111),
+        'Called': (240, 178, 96),
+        'Support':(146, 222, 220),
+        'Buffs':  (146, 230, 160),
+        'Wall':   (140, 200, 230),
+        'Land':   (216, 196, 138),
+        'Spell':  (200, 168, 240),
+        'Tactic': (245, 214, 122),
+        'Range':  (236, 130, 120),
+        'Block':  (200, 200, 200),
+        'Blocked':(200, 200, 200),
+        'Total':  (250, 240, 200),
+    }
+
+    @classmethod
+    def _conquer_receipt_label_color(cls, label):
+        return cls._CONQUER_RECEIPT_LABEL_COLORS.get(label, (220, 210, 180))
 
     @staticmethod
     def _conquer_support_entry_ids(entries, kind):
@@ -3235,6 +3402,67 @@ class ConquerGameScreen(GameScreen):
             return f'= {total_text}'
         return ' '.join(parts) + f' = {total_text}'
 
+    def _draw_conquer_lane_verbose_math(self, area, rows, *, prefix='YOU',
+                                        prefix_color=(154, 218, 206),
+                                        align_right=False):
+        """Render a verbose, colour-coded math row inside ``area``.
+
+        Format: ``YOU  15 base +4 buff +2 spell +14 tactic = 33`` with each
+        segment painted in its receipt-row colour (#5).  If the line does
+        not fit, falls back to the compact one-liner so the math is still
+        readable.
+        """
+        area = pygame.Rect(area)
+        if area.width <= 0 or area.height <= 0:
+            return
+        font = settings.get_font(max(9, int(settings.FS_TINY * 0.72)), bold=True)
+        # Build segments: (text, color)
+        segments = []
+        # Side prefix.
+        segments.append((f'{prefix} ', prefix_color))
+        total_text = '0'
+        first_value = True
+        for row in rows or []:
+            label, value = self._conquer_receipt_row_parts(row)
+            if label == 'Total':
+                total_text = str(value)
+                continue
+            if isinstance(value, str):
+                continue
+            value = int(value or 0)
+            if label != 'Base' and value == 0:
+                continue
+            colour = self._conquer_receipt_label_color(label)
+            if label == 'Base':
+                segments.append((f'{value} {label.lower()}', colour))
+                first_value = False
+            else:
+                if value < 0 or label == 'Range':
+                    magnitude = abs(value)
+                    sign = '\u2212'
+                else:
+                    magnitude = value
+                    sign = '+'
+                prefix_space = ' ' if not first_value else ''
+                segments.append((f'{prefix_space}{sign}{magnitude} {label.lower()}', colour))
+                first_value = False
+        segments.append((f'  =  {total_text}', self._conquer_receipt_label_color('Total')))
+
+        # Pre-render and measure.
+        rendered = [(font.render(text, True, colour), text, colour) for text, colour in segments]
+        total_w = sum(s.get_width() for s, _, _ in rendered)
+        if total_w > area.width:
+            # Fall back to compact one-liner so it still fits.
+            compact = self._fit_text(self._conquer_lane_compact_receipt(rows), font, area.width)
+            surf = font.render(compact, True, prefix_color)
+            x = area.right - surf.get_width() if align_right else area.left
+            self.window.blit(surf, (x, area.top))
+            return
+        x = area.right - total_w if align_right else area.left
+        for surf, _, _ in rendered:
+            self.window.blit(surf, (x, area.top))
+            x += surf.get_width()
+
     def _register_conquer_receipt_row_hitrects(self, area, rows, *, align_right,
                                                 top_offset=0):
         """Populate ``_conquer_receipt_row_rects`` with hit-rects for each row.
@@ -3322,47 +3550,37 @@ class ConquerGameScreen(GameScreen):
 
         receipt_area_top = band.top + int(band.height * 0.42)
         receipt_h = max(1, band.bottom - receipt_area_top - 4)
-        col_gap = max(8, band.width // 20)
-        col_w = (band.width - col_gap - 16) // 2
-        left_area = pygame.Rect(band.left + 8, receipt_area_top, col_w, receipt_h)
-        right_area = pygame.Rect(band.right - 8 - col_w, receipt_area_top, col_w, receipt_h)
-        # Compact single-line summary per side (hover full lane band for details).
-        compact_font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
-        left_text = self._fit_text(
-            self._conquer_lane_compact_receipt(player_rows),
-            compact_font, left_area.width)
-        right_text = self._fit_text(
-            self._conquer_lane_compact_receipt(opponent_rows),
-            compact_font, right_area.width)
-        left_surf = compact_font.render(left_text, True, (154, 218, 206))
-        right_surf = compact_font.render(right_text, True, (226, 168, 152))
-        self.window.blit(left_surf, (left_area.left, left_area.top))
-        self.window.blit(right_surf, (right_area.right - right_surf.get_width(),
-                                      right_area.top))
+        # Stack the two sides vertically so each gets the full diff_inner
+        # width — verbose math fits comfortably even when the lane is
+        # narrow (#5).  YOU on top, OPPONENT below.
+        line_h = max(12, receipt_h // 2)
+        you_area = pygame.Rect(band.left + 8, receipt_area_top,
+                               band.width - 16, line_h)
+        opp_area = pygame.Rect(band.left + 8, receipt_area_top + line_h,
+                               band.width - 16, line_h)
+        self._draw_conquer_lane_verbose_math(
+            you_area, player_rows, prefix='YOU',
+            prefix_color=(154, 218, 206), align_right=False)
+        opp_label = 'OPP'
+        self._draw_conquer_lane_verbose_math(
+            opp_area, opponent_rows, prefix=opp_label,
+            prefix_color=(226, 168, 152), align_right=True)
         # Always register row hit-rects (off-screen) so hover-based UX (e.g. tooltips
         # in tests) keeps working without requiring the expanded panel to be visible.
         self._register_conquer_receipt_row_hitrects(
-            left_area, player_rows, align_right=False, top_offset=left_surf.get_height() + 2)
+            you_area, player_rows, align_right=False, top_offset=line_h + 2)
         self._register_conquer_receipt_row_hitrects(
-            right_area, opponent_rows, align_right=True, top_offset=right_surf.get_height() + 2)
+            opp_area, opponent_rows, align_right=True, top_offset=line_h + 2)
         # Hover-to-expand: when mouse is over either compact line, show the full row breakdown.
         mouse = pygame.mouse.get_pos()
-        left_hit = pygame.Rect(left_area.left, left_area.top,
-                               left_surf.get_width(), left_surf.get_height())
-        right_hit = pygame.Rect(right_area.right - right_surf.get_width(),
-                                right_area.top,
-                                right_surf.get_width(), right_surf.get_height())
-        if left_hit.collidepoint(mouse):
-            expand = pygame.Rect(left_area.left, left_area.top + left_surf.get_height() + 2,
-                                 left_area.width,
-                                 max(0, left_area.bottom - (left_area.top + left_surf.get_height() + 2)))
+        if you_area.collidepoint(mouse):
+            expand = pygame.Rect(you_area.left, you_area.bottom + 2,
+                                 you_area.width, max(0, opp_area.bottom - you_area.bottom - 2))
             self._draw_conquer_lane_receipt_rows(
                 expand, player_rows, align_right=False, color=(154, 218, 206))
-        elif right_hit.collidepoint(mouse):
-            expand = pygame.Rect(right_area.left,
-                                 right_area.top + right_surf.get_height() + 2,
-                                 right_area.width,
-                                 max(0, right_area.bottom - (right_area.top + right_surf.get_height() + 2)))
+        elif opp_area.collidepoint(mouse):
+            expand = pygame.Rect(opp_area.left, opp_area.top - line_h,
+                                 opp_area.width, line_h)
             self._draw_conquer_lane_receipt_rows(
                 expand, opponent_rows, align_right=True, color=(226, 168, 152))
 
@@ -3379,8 +3597,13 @@ class ConquerGameScreen(GameScreen):
         )
         lane = layout.battlefield.duel_lane
         lane_rect = pygame.Rect(lane.rect)
+        # Solid card so the busy battlefield/figure tiles can't bleed
+        # through the duel panel (#1).  Two-tone backdrop with a thin gold
+        # border reads as a parchment card sitting on top of the field.
         backdrop = pygame.Surface(lane_rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(backdrop, (18, 20, 24, 118), backdrop.get_rect(), border_radius=8)
+        pygame.draw.rect(backdrop, (22, 19, 16, 240), backdrop.get_rect(), border_radius=10)
+        pygame.draw.rect(backdrop, (38, 32, 24, 240), backdrop.get_rect().inflate(-6, -6), border_radius=8)
+        pygame.draw.rect(backdrop, (188, 152, 84, 220), backdrop.get_rect(), 2, border_radius=10)
         self.window.blit(backdrop, lane_rect.topleft)
 
         player_slots, opponent_slots = self._conquer_lane_played_tactics()
@@ -3400,6 +3623,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_support_overflow_rects = []
         self._conquer_receipt_row_rects = []
         self._conquer_lane_figure_rects = []
+        self._conquer_lane_tooltips = []
 
         # Side rails first (subpanel frames in background) so the figure
         # bands and diff band can paint their content on top — otherwise
@@ -3478,6 +3702,33 @@ class ConquerGameScreen(GameScreen):
             is_player=False,
         )
         self._draw_conquer_support_overflow_popover()
+        self._draw_conquer_lane_tooltips()
+
+    def _draw_conquer_lane_tooltips(self):
+        tooltips = getattr(self, '_conquer_lane_tooltips', None)
+        if not tooltips:
+            return
+        mouse = pygame.mouse.get_pos()
+        for tip in tooltips:
+            rect = tip.get('rect')
+            if not rect or not rect.collidepoint(mouse):
+                continue
+            text = str(tip.get('text', ''))
+            if not text:
+                continue
+            font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=False)
+            surf = font.render(text, True, (244, 230, 188))
+            box = surf.get_rect()
+            box.inflate_ip(12, 8)
+            box.midbottom = (rect.centerx, rect.top - 4)
+            box.left = max(4, min(box.left, settings.SCREEN_WIDTH - box.width - 4))
+            box.top = max(4, box.top)
+            bg = pygame.Surface(box.size, pygame.SRCALPHA)
+            pygame.draw.rect(bg, (24, 20, 16, 240), bg.get_rect(), border_radius=6)
+            pygame.draw.rect(bg, (188, 152, 84), bg.get_rect(), 1, border_radius=6)
+            self.window.blit(bg, box.topleft)
+            self.window.blit(surf, surf.get_rect(center=box.center))
+            return
 
     def render(self):
         self.window.fill(settings.BACKGROUND_COLOR)
