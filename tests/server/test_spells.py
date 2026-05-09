@@ -799,7 +799,7 @@ class TestSpellMutatesConquerTactics:
                 player_id=p1.id,
                 card_id=reserved.id,
                 source='config',
-            ).count() == 0
+            ).filter(ConquerTactic.status != 'spell_purged').count() == 0
             db.session.refresh(reserved)
             assert reserved.player_id == p2.id
             assert reserved.part_of_battle_move is True
@@ -877,13 +877,13 @@ class TestSpellMutatesConquerTactics:
                 game_id=game.id,
                 player_id=p1.id,
                 source='combine',
-            ).count() == 0
+            ).filter(ConquerTactic.status != 'spell_purged').count() == 0
             assert ConquerTactic.query.filter_by(
                 game_id=game.id,
                 player_id=p1.id,
                 card_id=moved_card_id,
                 source='config',
-            ).count() == 0
+            ).filter(ConquerTactic.status != 'spell_purged').count() == 0
             source_partner = db.session.get(ConquerTactic, source_partner_id)
             partner_card = db.session.get(MainCard, partner_card_id)
             assert source_partner.status == 'available'
@@ -937,7 +937,7 @@ class TestSpellMutatesConquerTactics:
                 player_id=p1.id,
                 card_id=reserved.id,
                 source='config',
-            ).count() == 0
+            ).filter(ConquerTactic.status != 'spell_purged').count() == 0
             db.session.refresh(reserved)
             assert reserved.in_deck is True
             assert reserved.part_of_battle_move is False
@@ -1038,3 +1038,68 @@ class TestSpellMutatesConquerTactics:
             ).count() == 0
             db.session.refresh(card)
             assert card.part_of_battle_move is False
+
+    def test_purge_soft_deletes_with_step_index(self, app, db, spell_game):
+        """Spell-driven purges leave the row in place with status='spell_purged'
+        and stamp ``discarded_step_index`` so the client can replay."""
+        from models import ConquerTactic, MainCard
+        from game_service.conquer_tactics_service import (
+            purge_conquer_tactics_referencing_card,
+        )
+
+        with app.app_context():
+            game, p1, _p2, _, _ = spell_game
+            self._mark_tactics_hand_conquer(db, game)
+            card = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all())[0]
+            tactic = self._make_tactic_for_card(db, game, p1, card)
+            game = db.session.get(type(game), game.id)
+            initial_step = int(getattr(game, 'conquer_resolution_step', 0) or 0)
+
+            purge_conquer_tactics_referencing_card(game.id, card.id, 'main')
+            db.session.commit()
+
+            db.session.refresh(tactic)
+            game = db.session.get(type(game), game.id)
+            assert tactic.status == 'spell_purged'
+            assert tactic.discarded_step_index is not None
+            assert tactic.discarded_step_index > initial_step
+            assert game.conquer_resolution_step == tactic.discarded_step_index
+
+    def test_auto_convert_stamps_revealed_step(self, app, db, spell_game):
+        """Spell-driven additions stamp revealed_step_index and bump the step."""
+        from models import ConquerTactic, MainCard
+        from game_service.conquer_tactics_service import (
+            auto_convert_conquer_tactic_cards,
+        )
+
+        with app.app_context():
+            game, p1, _p2, _, _ = spell_game
+            self._mark_tactics_hand_conquer(db, game)
+            game = db.session.get(type(game), game.id)
+            initial_step = int(getattr(game, 'conquer_resolution_step', 0) or 0)
+            cards = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all())[:2]
+            for c in cards:
+                c.part_of_battle_move = False
+            db.session.commit()
+
+            result = auto_convert_conquer_tactic_cards(
+                game, p1, cards, reason='test_spell',
+            )
+            db.session.commit()
+            game = db.session.get(type(game), game.id)
+            assert result['added'] == len(cards)
+            new_tactics = ConquerTactic.query.filter(
+                ConquerTactic.game_id == game.id,
+                ConquerTactic.player_id == p1.id,
+                ConquerTactic.source == 'spell',
+            ).all()
+            assert new_tactics, 'expected new spell tactics'
+            stamps = {t.revealed_step_index for t in new_tactics}
+            assert None not in stamps
+            # All in the batch share the same revealed step.
+            assert len(stamps) == 1
+            assert game.conquer_resolution_step > initial_step

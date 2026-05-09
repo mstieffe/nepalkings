@@ -5626,6 +5626,7 @@ def get_battle_state():
             'player_tactics': player_tactics,
             'opponent_tactics': opponent_tactics,
             'battle_skipped_rounds': game.battle_skipped_rounds or {},
+            'conquer_resolution_step': int(getattr(game, 'conquer_resolution_step', 0) or 0),
         })
 
     # Get all battle moves for this game

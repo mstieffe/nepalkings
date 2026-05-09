@@ -196,6 +196,12 @@ class Game(db.Model):
     conquer_move_model = db.Column(db.String(20), nullable=False, default='battle_move',
                                    server_default='battle_move')
 
+    # Monotonic counter bumped on every spell-driven ConquerTactic mutation.
+    # Each new tactic / soft-purge is stamped with the current value so the
+    # client can replay the visible state at any point on the spell timeline.
+    conquer_resolution_step = db.Column(db.Integer, nullable=False, default=0,
+                                        server_default='0')
+
     land = db.relationship('Land', foreign_keys=[land_id], lazy=True)
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
@@ -246,6 +252,7 @@ class Game(db.Model):
             'resting_figure_ids': self.resting_figure_ids or [],
             'battle_gamble_counts': self.battle_gamble_counts or {},
             'conquer_move_model': self.conquer_move_model or 'battle_move',
+            'conquer_resolution_step': int(getattr(self, 'conquer_resolution_step', 0) or 0),
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],
@@ -622,6 +629,12 @@ class ConquerTactic(db.Model):
     source_tactic_id_b = db.Column(db.Integer, nullable=True)
     sort_order = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     created_at = db.Column(db.DateTime, default=_utcnow)
+    # Spell-timeline replay support: the resolution step at which this tactic
+    # became visible (NULL = present from battle start) and at which it was
+    # spell-purged (NULL = still alive). Status 'spell_purged' is treated as
+    # alive on the client until ``discarded_step_index`` is reached.
+    revealed_step_index = db.Column(db.Integer, nullable=True)
+    discarded_step_index = db.Column(db.Integer, nullable=True)
 
     player = db.relationship('Player', backref='conquer_tactics', foreign_keys=[player_id])
 
@@ -645,6 +658,8 @@ class ConquerTactic(db.Model):
             'played_round': self.played_round,
             'call_figure_id': self.call_figure_id,
             'sort_order': self.sort_order,
+            'revealed_step_index': self.revealed_step_index,
+            'discarded_step_index': self.discarded_step_index,
         }
         if self.card_id_b is not None:
             data['card_id_b'] = self.card_id_b

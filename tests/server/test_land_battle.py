@@ -195,6 +195,9 @@ def _conquer_move_entries(game, player_id=None):
     query = model.query.filter_by(game_id=game.id)
     if player_id is not None:
         query = query.filter_by(player_id=player_id)
+    if model is ConquerTactic:
+        # Exclude soft-purged rows so test counts mirror the live tactics hand.
+        query = query.filter(ConquerTactic.status != 'spell_purged')
     return query.all()
 
 

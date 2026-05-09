@@ -944,3 +944,64 @@ def test_round_ledger_total_includes_figure_diff():
     total = ledger._total_diff(you_per, opp_per)
     # round1 diff (5-3=2) + figure diff (6) = 8
     assert total == 8
+
+
+def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):
+    """Spell-driven tactics with revealed_step_index ahead of the displayed
+    step are hidden, and spell_purged tactics whose discarded_step_index is
+    still in the future are replayed as available."""
+    from game.screens.conquer_game_screen import ConquerGameScreen
+    from utils import game_service
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(
+        game_id=42, player_id=7, conquer_tactics=[],
+        battle_turn_player_id=None, battle_round=0,
+        _game_data_version=0, conquer_resolution_step=3,
+    ))
+    screen._is_tactics_hand_game = lambda: True
+    screen._conquer_timeline_panel = SimpleNamespace(
+        currently_resolved_step_index=lambda *a, **kw: 1,
+    )
+
+    fake_state = {
+        'player_tactics': [
+            {'id': 1, 'status': 'available', 'revealed_step_index': None,
+             'discarded_step_index': None, 'family_name': 'Dagger'},
+            # Newer than displayed_step (=1) → hidden.
+            {'id': 2, 'status': 'available', 'revealed_step_index': 2,
+             'discarded_step_index': None, 'family_name': 'Sword'},
+            # Purged at step 5 — still alive at displayed_step=1 → replayed.
+            {'id': 3, 'status': 'spell_purged', 'revealed_step_index': None,
+             'discarded_step_index': 5, 'family_name': 'Bow'},
+            # Purged at step 1 (≤ displayed) → hidden.
+            {'id': 4, 'status': 'spell_purged', 'revealed_step_index': None,
+             'discarded_step_index': 1, 'family_name': 'Staff'},
+        ],
+        'opponent_tactics': [],
+        'conquer_resolution_step': 3,
+    }
+    monkeypatch.setattr(game_service, 'get_battle_state',
+                        lambda *a, **kw: fake_state)
+
+    visible = screen._current_conquer_tactics()
+    visible_ids = {t['id'] for t in visible}
+    assert visible_ids == {1, 3}
+    replayed = next(t for t in visible if t['id'] == 3)
+    assert replayed['status'] == 'available'
+
+
+def test_timeline_panel_currently_resolved_step_index():
+    """Timeline panel mirrors the server step minus the in-flight offset."""
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((10, 10)))
+    screen = SimpleNamespace(
+        _conquer_resolution_step_server=4,
+        state=SimpleNamespace(game=SimpleNamespace(conquer_resolution_step=4)),
+    )
+    assert panel.currently_resolved_step_index(screen) == 4
+    panel._displayed_step_offset = 1
+    assert panel.currently_resolved_step_index(screen) == 3
+    panel._displayed_step_offset = 99
+    assert panel.currently_resolved_step_index(screen) == 0  # clamped

@@ -2,6 +2,35 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased — Conquer v2 spell-replay refactor
+
+### Added
+
+- ConquerTactic spell-timeline replay: `ConquerTactic.revealed_step_index` and
+  `ConquerTactic.discarded_step_index` columns + `Game.conquer_resolution_step`
+  monotonic counter. Server stamps these when spells add or purge tactics; the
+  client filters tactics against `ConquerTimelinePanel.currently_resolved_step_index`
+  so spell-driven changes appear in sync with the spell animation.
+- Tests: `test_purge_soft_deletes_with_step_index`,
+  `test_auto_convert_stamps_revealed_step`,
+  `test_current_conquer_tactics_filters_by_displayed_step`,
+  `test_timeline_panel_currently_resolved_step_index`.
+
+### Changed
+
+- `purge_conquer_tactics_referencing_card` no longer hard-deletes rows. They
+  are flagged with `status='spell_purged'` and stamped with
+  `discarded_step_index` so the pre-purge state can be reconstructed during
+  replay. Test helpers (`_conquer_move_entries`) now exclude `spell_purged`
+  from active counts.
+
+### Migration note
+
+- New columns on `conquer_tactic` and `game`. Repository uses `db.create_all()`
+  with no Alembic; **production must reset the conquer-game tables** (or run
+  manual `ALTER TABLE` against `conquer_tactic`/`game`) before deploy. See
+  `server/RESET_DATABASE.sh`.
+
 ## 2026-04-16
 
 ### Added

@@ -4,7 +4,7 @@ import logging
 
 from sqlalchemy import or_
 
-from models import db, ConquerTactic, Figure, MainCard, SideCard
+from models import db, ConquerTactic, Figure, MainCard, SideCard, Game
 
 
 logger = logging.getLogger('nepalkings.game_service.conquer_tactics_service')
@@ -97,12 +97,19 @@ def _call_figure_id_for_family(game_id, player_id, family_name):
     return figure.id if figure else None
 
 
+def _bump_resolution_step(game):
+    """Increment ``game.conquer_resolution_step`` and return the new value."""
+    current = int(getattr(game, 'conquer_resolution_step', 0) or 0)
+    game.conquer_resolution_step = current + 1
+    return game.conquer_resolution_step
+
+
 def _tactic_count(game_id, player_id):
     return ConquerTactic.query.filter_by(
         game_id=game_id,
         player_id=player_id,
     ).filter(
-        ConquerTactic.status != 'discarded'
+        ConquerTactic.status.notin_(['discarded', 'spell_purged'])
     ).count()
 
 
@@ -138,7 +145,12 @@ def _restore_source_tactic_if_valid(source_tactic_id, game_id, player_id):
 
 
 def purge_conquer_tactics_referencing_card(game_id, card_id, card_type):
-    """Delete ConquerTactic rows tied to a card being moved/recycled."""
+    """Soft-delete ConquerTactic rows tied to a card being moved/recycled.
+
+    Tactics are not removed from the database — they are flagged with
+    ``status='spell_purged'`` and stamped with ``discarded_step_index``
+    so the client can replay the pre-purge state along the spell timeline.
+    """
     if not card_id:
         return {'deleted': 0, 'restored': []}
 
@@ -155,8 +167,17 @@ def purge_conquer_tactics_referencing_card(game_id, card_id, card_type):
     affected = {tactic.id: tactic for tactic in primary}
     affected.update({tactic.id: tactic for tactic in secondary})
     restored = []
+    if not affected:
+        return {'deleted': 0, 'restored': []}
+
+    game = db.session.get(Game, game_id) if affected else None
+    step = _bump_resolution_step(game) if game is not None else None
 
     for tactic in affected.values():
+        # Skip already-purged tactics — keep first-seen step stable.
+        if tactic.status == 'spell_purged':
+            continue
+
         triggered_primary = tactic.card_id == card_id and tactic.card_type == card_type
         triggered_secondary = tactic.card_id_b == card_id and tactic.card_type_b == card_type
 
@@ -180,15 +201,18 @@ def purge_conquer_tactics_referencing_card(game_id, card_id, card_type):
                 restored.append(restored_source)
 
         logger.info(
-            '[CONQUER_TACTIC_PURGE] game=%s tactic=%s family=%s player=%s trigger=%s#%s',
+            '[CONQUER_TACTIC_PURGE] game=%s tactic=%s family=%s player=%s trigger=%s#%s step=%s',
             game_id,
             tactic.id,
             tactic.family_name,
             tactic.player_id,
             card_type,
             card_id,
+            step,
         )
-        db.session.delete(tactic)
+        tactic.status = 'spell_purged'
+        if step is not None:
+            tactic.discarded_step_index = step
 
     return {'deleted': len(affected), 'restored': restored}
 
@@ -217,6 +241,9 @@ def auto_convert_conquer_tactic_cards(
     seen_card_ids = set()
     next_order = (db.session.query(db.func.max(ConquerTactic.sort_order))
                   .filter_by(game_id=game.id, player_id=player.id).scalar() or 0) + 1
+    # Stamp the entire batch with the same step so client replay can treat
+    # them as appearing simultaneously when the spell resolves.
+    new_step = None
     for card in cards or []:
         if remaining <= 0:
             break
@@ -241,13 +268,15 @@ def auto_convert_conquer_tactic_cards(
             card_id=card.id,
             card_type='main',
         ).filter(
-            ConquerTactic.status != 'discarded'
+            ConquerTactic.status.notin_(['discarded', 'spell_purged'])
         ).first()
         if existing:
             card.part_of_battle_move = True
             continue
 
         card.part_of_battle_move = True
+        if new_step is None:
+            new_step = _bump_resolution_step(game)
         tactic = ConquerTactic(
             game_id=game.id,
             player_id=player.id,
@@ -265,6 +294,7 @@ def auto_convert_conquer_tactic_cards(
                 family_name,
             ),
             sort_order=next_order,
+            revealed_step_index=new_step,
         )
         db.session.add(tactic)
         db.session.flush()

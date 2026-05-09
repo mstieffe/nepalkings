@@ -91,6 +91,35 @@ class ConquerTimelinePanel:
         self._spell_hover = None
         self._figure_hover = None
         self._card_back_cache = {}
+        # Spell-replay coupling: lags the server's ``conquer_resolution_step`` by
+        # one when a spell-driven step is currently being animated/active so the
+        # tactics rail keeps showing the pre-mutation state until the spell
+        # resolves on screen.
+        self._displayed_step_offset = 0
+        self._last_seen_server_step = 0
+
+    def currently_resolved_step_index(self, screen=None):
+        """Return the resolution step the client should currently mirror.
+
+        Equals the server's authoritative step minus an offset bumped while a
+        spell timeline animation is in flight. Drives ``ConquerTactic`` replay
+        so that spell-driven additions/purges only become visible on the rail
+        once the user has seen the spell resolve.
+        """
+        server_step = 0
+        if screen is not None:
+            cached = getattr(screen, '_conquer_resolution_step_server', None)
+            if cached is not None:
+                server_step = int(cached)
+            else:
+                game = getattr(screen, 'state', None)
+                game = getattr(game, 'game', None) if game else None
+                server_step = int(getattr(game, 'conquer_resolution_step', 0) or 0)
+        else:
+            server_step = int(self._last_seen_server_step or 0)
+        # Track the latest server step we have seen for parity.
+        self._last_seen_server_step = max(self._last_seen_server_step, server_step)
+        return max(0, server_step - int(self._displayed_step_offset or 0))
 
     # ------------------------------------------------------------------ entry
 

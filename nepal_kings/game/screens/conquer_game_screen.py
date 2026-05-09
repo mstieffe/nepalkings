@@ -1469,7 +1469,8 @@ class ConquerGameScreen(GameScreen):
         game_id = getattr(game, 'game_id', None)
         player_id = getattr(game, 'player_id', None)
         if not game_id or not player_id:
-            return list(getattr(game, 'conquer_tactics', []) or [])
+            return self._filter_conquer_tactics_by_displayed_step(
+                list(getattr(game, 'conquer_tactics', []) or []))
 
         cache_key = (
             'tactics',
@@ -1480,11 +1481,14 @@ class ConquerGameScreen(GameScreen):
             getattr(game, 'battle_round', None),
         )
         if cache_key == getattr(self, '_conquer_tactic_cache_key', None):
-            return list(getattr(self, '_conquer_tactic_cache', []) or [])
+            return self._filter_conquer_tactics_by_displayed_step(
+                list(getattr(self, '_conquer_tactic_cache', []) or []))
         try:
             result = game_service.get_battle_state(game_id, player_id)
             tactics = result.get('player_tactics') or result.get('player_moves') or []
             opponent_tactics = result.get('opponent_tactics') or result.get('opponent_moves') or []
+            self._conquer_resolution_step_server = int(
+                result.get('conquer_resolution_step') or 0)
         except Exception:
             tactics = list(getattr(self, '_conquer_tactic_cache', []) or [])
             opponent_tactics = list(getattr(self, '_conquer_opponent_tactic_cache', []) or [])
@@ -1494,7 +1498,71 @@ class ConquerGameScreen(GameScreen):
         self._conquer_opponent_tactic_cache = [
             dict(move) for move in opponent_tactics if isinstance(move, dict)
         ]
-        return list(self._conquer_tactic_cache)
+        return self._filter_conquer_tactics_by_displayed_step(
+            list(self._conquer_tactic_cache))
+
+    def _displayed_conquer_step(self):
+        """Resolution step the client is currently displaying.
+
+        Defaults to the server's authoritative ``conquer_resolution_step`` so
+        without explicit animation handling the latest state is shown. The
+        timeline panel may temporarily report a smaller value during a spell
+        animation to keep pre-mutation tactics visible until the animation
+        completes.
+        """
+        timeline = getattr(self, '_conquer_timeline_panel', None) \
+            or getattr(self, 'conquer_timeline_panel', None)
+        if timeline is not None:
+            getter = getattr(timeline, 'currently_resolved_step_index', None)
+            if callable(getter):
+                try:
+                    result = getter(self)
+                except TypeError:
+                    try:
+                        result = getter()
+                    except Exception:
+                        result = None
+                except Exception:
+                    result = None
+                if result is not None:
+                    return int(result)
+        # Fall back to the server's current step. Use either the cached value
+        # from the most recent get_battle_state call or the snapshot on Game.
+        cached = getattr(self, '_conquer_resolution_step_server', None)
+        if cached is not None:
+            return int(cached)
+        game = self.state.game
+        return int(getattr(game, 'conquer_resolution_step', 0) or 0) if game else 0
+
+    def _filter_conquer_tactics_by_displayed_step(self, tactics):
+        """Apply spell-timeline replay to a serialized tactics list."""
+        if not tactics:
+            return []
+        displayed = self._displayed_conquer_step()
+        out = []
+        for t in tactics:
+            if not isinstance(t, dict):
+                out.append(t)
+                continue
+            revealed = t.get('revealed_step_index')
+            discarded = t.get('discarded_step_index')
+            status = t.get('status')
+            # Hide tactics that haven't been revealed yet.
+            if revealed is not None and int(revealed) > displayed:
+                continue
+            # spell_purged before/at displayed step → hidden;
+            # spell_purged after displayed step → still alive (treat as 'available'
+            # for the purposes of the rail rendering).
+            if status == 'spell_purged':
+                if discarded is None or int(discarded) <= displayed:
+                    continue
+                replay = dict(t)
+                replay['status'] = 'available'
+                replay.pop('discarded_step_index', None)
+                out.append(replay)
+                continue
+            out.append(t)
+        return out
 
     def _current_conquer_opponent_tactics(self):
         game = self.state.game
