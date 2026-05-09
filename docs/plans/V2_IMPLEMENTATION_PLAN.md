@@ -1041,3 +1041,106 @@ All new server endpoints must:
 - `nepal_kings/game/screens/_menu_base.py` — Booster pack display
 - `nepal_kings/config/game_menu_settings.py` — 4-button layout + booster display
 - `nepal_kings/nepal_kings.py` — New screen routing
+
+---
+
+## Feedback Round 2 (Post v2.0-conquer-redesign 85e871a)
+
+User-driven polish + tactics-panel UX rework. Visual fixes #1–#7 are
+self-contained client tweaks; #8 is a UX rework spread across
+`conquer_tactics_rail.py` and the battle move detail box.
+
+### #1 — Support lane lists every effecting figure
+- **What:** Today the support lane only shows figures that actively boost
+  the lane sum. It must also list:
+  - figures that contributed via a *Call* (called villager/healer/etc.),
+  - figures whose skill triggered Distance, Buff, or Block.
+- **Where:** `_conquer_lane_support_entries.add()` callsite — extend the
+  collector to capture any battle move whose target/origin figure has a
+  triggered skill. Source: `battle_round.move_log` or equivalent.
+- **Acceptance:** in a duel where my Carpenter buffed a figure, Carpenter
+  appears on the support lane chip even if its `numeric_value == 0`.
+
+### #2 — Hover-reveal opponent field figure
+- On hover of a support-lane chip whose target is an opponent field
+  figure, force the field figure icon's `back_visible = False` (or
+  equivalent flip-state) for the duration of hover.
+- Restore prior visibility on un-hover.
+- Implement in `_draw_conquer_lane_band` hover handler + a transient
+  `forced_face_up_ids` set passed to the field figure renderer.
+
+### #3 — Connector ends at field-figure ring
+- Replace the `target_rect.center` endpoint with the intersection between
+  the line and the figure's outer ring.
+- Helper: `_ring_edge_point(center, radius, from_point)` — returns
+  `center + (from_point - center).normalize() * radius`.
+
+### #4 — Grey out non-involved figures
+- Player + opponent field figures not referenced by *any* current battle
+  move should render greyed (alpha + saturation drop).
+- Recompute on every battle-move update; reuse the
+  `move_log.involved_figure_ids()` set.
+
+### #5 — Duel panel sub-frame z-order
+- Currently the sub-panel frames blit *after* the math content,
+  occluding numbers.
+- Reorder draw calls in `duel_panel.draw()`: frames first, then content.
+
+### #6 — Battle figure icon
+- Frame is too large vs the figure sprite. Shrink frame to ~`figure_size *
+  1.06` (matches normal field-figure ring).
+- Make hover responsive: scale up identical to normal figure icons (uses
+  shared `_hover_scale_factor`).
+- Number badge must blit last (foreground). Move badge blit to the very
+  end of `BattleFigureIcon.draw()`.
+
+### #7 — Round panel glow z-order
+- In `round_panel._draw_section()` the glow is currently drawn *after*
+  the icon. Reorder: glow → icon → badge → label.
+
+### #8 — Tactics panel UX rework
+
+**Scope:** Full rework. Sub-tasks (a→d).
+
+#### #8a Layout & feedback
+- **Family headers:** group rail items by `family_name` with mini-section
+  headers (Daggers / Buffs / Blocks / Calls). Sticky within the rail.
+- **Add/remove animations:** on tactic added → fade+slide in (200ms);
+  on removed → fade+shrink out (180ms). Track via a small per-tactic
+  `anim_state` dict keyed by `move_id`.
+- **Result banner:** new sticky banner at top of the tactics panel
+  showing the last action's outcome ("Gambled Dagger 7 → won, +14
+  value", "Combined → Double Dagger Red"). Persists until next action.
+
+#### #8b Combine flow
+- Click first dagger → matching daggers (same colour, single) start a
+  pulsing glow (similar to wall-call hint pulse).
+- Click second eligible dagger → combine animation (cards merge to
+  centre, then resolve into Double Dagger).
+- **Drag-and-drop:** also support dragging dagger A onto dagger B in the
+  rail; on drop with valid pair, trigger the same combine animation.
+- Disable other rail interactions during the pulse phase; press Escape
+  or click empty area to cancel.
+
+#### #8c Gamble feedback
+- On Gamble click: tactic icon plays a 1.0–1.4s coin-flip / dice-roll
+  animation (rotating sprite or stack of frames).
+- After result lands:
+  - inline diff line in result banner: "Gambled X → won/lost, value Y".
+  - any *new* battle moves added to the rail by the gamble glow for
+    ~1.5s (use family colour, soft outer glow ramp).
+- No screen shake (descoped).
+
+#### #8d Action tray
+- Disabled buttons remain visible with a tooltip explaining why
+  ("Need 2 same-colour daggers", "Pick a tactic first", etc.).
+- Add a soft glow/badge on the action tied to the *strongest currently
+  available battle move* (highest projected damage / lane value).
+  Compute via existing receipt math — `_strongest_battle_move()`.
+
+### Implementation order
+1. Visual fixes #5, #7, #6, #3 (small, isolated draw-order tweaks).
+2. #4 grey-out (depends on a `involved_figure_ids` set).
+3. #1, #2 (support-lane changes + hover flip).
+4. #8a → #8c → #8b → #8d.
+

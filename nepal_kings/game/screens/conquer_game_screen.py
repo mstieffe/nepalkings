@@ -2228,18 +2228,33 @@ class ConquerGameScreen(GameScreen):
             return None
         return pygame.transform.smoothscale(asset, (size, size))
 
-    def _draw_conquer_lane_figure_art(self, figure, center, size):
+    def _draw_conquer_lane_figure_art(self, figure, center, size, *,
+                                      hovered=False):
+        # When hovered, scale the whole composite up so the icon "responds"
+        # like a normal figure icon.
+        scale = 1.12 if hovered else 1.0
+        size = max(1, int(size * scale))
         family = getattr(figure, 'family', None)
-        frame = self._conquer_lane_surface(getattr(family, 'frame_img', None), size)
-        icon_size = max(1, int(size * 0.58))
+        # Frame image is designed for a figure inset of ~1/FRAME_FIGURE_SCALE
+        # of the outer box. Match that so the frame doesn't visually swallow
+        # the icon (was 0.58 → looked oversized).
+        try:
+            from config.figure_settings import FRAME_FIGURE_SCALE  # noqa: WPS433
+            inset = 1.0 / max(1.05, float(FRAME_FIGURE_SCALE))
+        except Exception:
+            inset = 0.72
+        # Shrink the outer frame slightly so it sits closer to the icon.
+        frame_size = max(1, int(size * 0.86))
+        icon_size = max(1, int(size * inset))
+        frame = self._conquer_lane_surface(getattr(family, 'frame_img', None), frame_size)
         icon = self._conquer_lane_surface(
             getattr(family, 'icon_img', None) or getattr(family, 'icon_img_small', None),
             icon_size,
         )
         fallback_rect = pygame.Rect(0, 0, icon_size, icon_size)
         fallback_rect.center = center
-        pygame.draw.circle(self.window, (43, 37, 30), center, size // 2)
-        pygame.draw.circle(self.window, (203, 176, 104), center, size // 2, 2)
+        pygame.draw.circle(self.window, (43, 37, 30), center, frame_size // 2)
+        pygame.draw.circle(self.window, (203, 176, 104), center, frame_size // 2, 2)
         if icon:
             self.window.blit(icon, icon.get_rect(center=center))
         else:
@@ -2284,7 +2299,13 @@ class ConquerGameScreen(GameScreen):
         for idx, figure in enumerate(figures[:2]):
             slot = pygame.Rect(band.left + idx * slot_w, band.top, slot_w, band.height)
             center = (slot.centerx, band.top + int(band.height * 0.46))
-            self._draw_conquer_lane_figure_art(figure, center, art_size)
+            # Hit rect for hover/click. Sized like the visible figure ring.
+            hit = pygame.Rect(0, 0, art_size + 8, art_size + 8)
+            hit.center = center
+            mouse = pygame.mouse.get_pos()
+            hovered = hit.collidepoint(mouse)
+            self._draw_conquer_lane_figure_art(figure, center, art_size,
+                                               hovered=hovered)
             # Block visualization: red ring + small "BLOCKED" tag.
             if side_blocked:
                 ring = pygame.Rect(0, 0, art_size + 10, art_size + 10)
@@ -2302,8 +2323,6 @@ class ConquerGameScreen(GameScreen):
                                  border_radius=max(2, tag_bg.height // 3))
                 self.window.blit(tag, tag.get_rect(center=tag_bg.center))
             # Hit rect for opening detail box.
-            hit = pygame.Rect(0, 0, art_size + 8, art_size + 8)
-            hit.center = center
             rects.append({'rect': hit, 'figure': figure, 'is_player': is_player})
 
             name = self._fit_text(getattr(figure, 'name', 'Figure'), name_font, slot.width - 14)
@@ -2487,11 +2506,25 @@ class ConquerGameScreen(GameScreen):
         badge_rect = pygame.Rect(badge_rect)
         source_rect = pygame.Rect(source_rect)
         start = badge_rect.midleft if is_player else badge_rect.midright
-        end = source_rect.center
+        target_center = source_rect.center
+        # End the line at the field-figure ring edge instead of its centre.
+        # The figure art is roughly inscribed in source_rect, so we approximate
+        # the ring radius as min(width, height) / 2 and walk back along the
+        # link direction.
+        radius = max(4, min(source_rect.width, source_rect.height) // 2)
+        dx = target_center[0] - start[0]
+        dy = target_center[1] - start[1]
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist > radius:
+            scale = (dist - radius) / dist
+            end = (int(start[0] + dx * scale), int(start[1] + dy * scale))
+        else:
+            end = target_center
         color = (120, 220, 235, 210)
         pygame.draw.line(self.window, color, start, end, 3)
         pygame.draw.circle(self.window, color, start, 4)
-        pygame.draw.circle(self.window, color, end, 6, 2)
+        pygame.draw.circle(self.window, color, target_center,
+                           radius, 2)
 
     def _draw_conquer_support_overflow_popover(self):
         info = self._current_conquer_support_overflow_entry()
@@ -3256,14 +3289,6 @@ class ConquerGameScreen(GameScreen):
         self._conquer_lane_figure_rects = []
 
         self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
-        self._draw_conquer_lane_diff(
-            lane.diff_band,
-            player_figures,
-            opponent_figures,
-            player_move=player_display_move,
-            opponent_move=opponent_move,
-            round_idx=round_idx,
-        )
         opponent = getattr(self.state.game, 'opponent_name', None) or 'OPPONENT'
         opponent_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
         self._draw_conquer_lane_band(
@@ -3292,6 +3317,16 @@ class ConquerGameScreen(GameScreen):
             lane.opp_support_chip_rail,
             opponent_chips,
             is_player=False,
+        )
+        # Diff/math band drawn AFTER the side rails so the surrounding rail
+        # frames cannot occlude the math numbers (#5).
+        self._draw_conquer_lane_diff(
+            lane.diff_band,
+            player_figures,
+            opponent_figures,
+            player_move=player_display_move,
+            opponent_move=opponent_move,
+            round_idx=round_idx,
         )
         hovered_support = self._update_conquer_support_hover_state()
         if hovered_support:

@@ -79,13 +79,22 @@ def draw_battle_move_icon(
     eff_icon_s = icon_img_check.get_width() if icon_img_check else icon_size
 
     # ── 1. Glow ──
+    # NOTE: Glow is drawn first so the icon + frame composite on top of it.
+    # When the move is "used" (ghost / spent), dim the glow alpha to match
+    # the icon alpha — otherwise the full-strength glow visually overwhelms
+    # the faded icon and reads as if the glow were drawn on top.
     glow_key = 'green' if suit in ('Hearts', 'Diamonds') else 'blue'
     if is_used:
         glow_key = 'yellow'
     glow_img = glow_cache.get(glow_key + suffix)
     if glow_img:
         gr = glow_img.get_rect(center=(cx, cy))
-        window.blit(glow_img, gr.topleft)
+        if is_used:
+            faded = glow_img.copy()
+            faded.set_alpha(alpha)
+            window.blit(faded, gr.topleft)
+        else:
+            window.blit(glow_img, gr.topleft)
 
     # ── 2. Family icon ──
     icon_img = icon_cache.get(family_name + suffix)
