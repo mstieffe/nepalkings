@@ -86,9 +86,10 @@ _LANE_FIGHTER_BAND_H_FRAC = 0.42
 _LANE_DIFF_BAND_H_FRAC = 0.13
 _LANE_BAND_GAP_H_FRAC = 0.015
 
-# Support strip widths (inside the duel lane)
-_SUPPORT_BADGE_RAIL_W_PCT = 0.050
-_SUPPORT_CHIP_RAIL_W_PCT = 0.025
+# Support strip widths (inside the duel lane). The chip rail is now
+# retired; round/tactic details live in the bottom round ledger.
+_SUPPORT_BADGE_RAIL_W_PCT = 0.040
+_SUPPORT_CHIP_RAIL_W_PCT = 0.000
 
 # Narrow / mobile breakpoint (W/H aspect ratio)
 _NARROW_ASPECT_RATIO = 1.30

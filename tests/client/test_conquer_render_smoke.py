@@ -609,17 +609,12 @@ def test_conquer_duel_lane_uses_hovered_tactic_as_preview(monkeypatch):
         ]),
     }
     screen._tactics_rail = SimpleNamespace(preview_move=lambda: preview)
-    captured = {'badge': None, 'diff': None}
-
-    def capture_badge(_self, _rect, move, _round_idx, *, is_player, ghost=False):
-        if is_player:
-            captured['badge'] = (move, ghost)
+    captured = {'diff': None}
 
     def capture_diff(_self, _rect, _player_figures, _opponent_figures,
                      player_move=None, opponent_move=None, round_idx=0):
         captured['diff'] = (player_move, opponent_move, round_idx)
 
-    monkeypatch.setattr(ConquerGameScreen, '_draw_conquer_lane_tactic_badge', capture_badge)
     monkeypatch.setattr(ConquerGameScreen, '_draw_conquer_lane_diff', capture_diff)
 
     assert ConquerGameScreen._conquer_lane_preview_move(
@@ -627,7 +622,6 @@ def test_conquer_duel_lane_uses_hovered_tactic_as_preview(monkeypatch):
 
     ConquerGameScreen._draw_conquer_duel_lane(screen)
 
-    assert captured['badge'] == (preview, True)
     assert captured['diff'][0] == preview
 
 
@@ -698,8 +692,8 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     # tactic with call_figure_id (#1 — show called figures in the lane).
     kinds = [entry['kind'] for entry in player_support]
     assert kinds[:3] == ['support_bonus', 'buffs_allies', 'distance_attack']
-    assert set(kinds) - {'support_bonus', 'buffs_allies', 'distance_attack', 'called'} == set()
-    assert [entry['kind'] for entry in opponent_support] == ['buffs_allies_defence']
+    assert set(kinds) - {'support_bonus', 'buffs_allies', 'distance_attack', 'land_bonus', 'called'} == set()
+    assert [entry['kind'] for entry in opponent_support] == ['buffs_allies_defence', 'land_bonus']
     player_rows, player_total = ConquerGameScreen._conquer_lane_receipt_components(
         screen,
         [attacker],
@@ -742,7 +736,7 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     ).battlefield.duel_lane
     assert _rect_has_non_background_pixel(window, lane.you_support_badge_rail)
     assert _rect_has_non_background_pixel(window, lane.opp_support_badge_rail)
-    assert _rect_has_non_background_pixel(window, lane.you_support_chip_rail)
+    assert lane.you_support_chip_rail[2] == 0
 
     first_badge = screen._conquer_support_badge_rects[0]
     monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: first_badge['rect'].center)
@@ -750,14 +744,6 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     assert hovered['figure_id'] == castle_support.id
     assert screen.subscreens['field']._conquer_hover_source_figure_id == castle_support.id
     assert ConquerGameScreen._conquer_support_source_rect(screen, castle_support.id) == pygame.Rect(230, 200, 44, 56)
-    called_receipt = next(
-        info for info in screen._conquer_receipt_row_rects
-        if info['row']['label'] == 'Called'
-    )
-    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: called_receipt['rect'].center)
-    ConquerGameScreen._update_conquer_support_hover_state(screen)
-    assert screen._conquer_hovered_receipt_row == called_receipt
-    assert screen.subscreens['field']._conquer_hover_source_figure_id is None
 
     monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: pygame.Rect(230, 200, 44, 56).center)
     hovered = ConquerGameScreen._update_conquer_support_hover_state(screen)
@@ -775,16 +761,20 @@ def test_conquer_support_rail_overflow_registers_hover_popover(monkeypatch):
     screen.window = window
     screen._conquer_support_badge_rects = []
     screen._conquer_support_overflow_rects = []
-    entries = []
-    for idx in range(6):
-        figure = _fighter(100 + idx, f'Supporter {idx}', 4, 1, (90, 150, 120),
-                          suit='Hearts', field='village', buffs_allies=True)
-        entries.append({
-            'kind': 'buffs_allies',
-            'label': 'Buff',
-            'value': '+4',
-            'figure': figure,
-        })
+    entries = [
+        {'kind': 'support_bonus', 'label': 'Support', 'value': '+4', 'numeric_value': 4,
+         'suit': 'Hearts', 'figure': _fighter(100, 'Supporter 0', 4, 1, (90, 150, 120), suit='Hearts')},
+        {'kind': 'land_bonus', 'label': 'Land', 'value': '+2', 'numeric_value': 2,
+         'suit': 'Hearts', 'figure': None, 'source_figure_ids': [100]},
+        {'kind': 'buffs_allies', 'label': 'Buff', 'value': '+4', 'numeric_value': 4,
+         'figure': _fighter(101, 'Supporter 1', 4, 1, (90, 150, 120), suit='Hearts')},
+        {'kind': 'buffs_allies_defence', 'label': 'Wall', 'value': '+5', 'numeric_value': 5,
+         'figure': _fighter(102, 'Supporter 2', 5, 1, (90, 150, 120), suit='Clubs')},
+        {'kind': 'blocks_bonus', 'label': 'Block', 'value': 'Block', 'numeric_value': 0,
+         'figure': _fighter(103, 'Supporter 3', 4, 1, (90, 150, 120), suit='Spades')},
+        {'kind': 'distance_attack', 'label': 'Range', 'value': '-3', 'numeric_value': 3,
+         'figure': _fighter(104, 'Supporter 4', 3, 1, (90, 150, 120), suit='Spades')},
+    ]
     monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: (0, 0))
 
     ConquerGameScreen._draw_conquer_lane_support_rail(
@@ -794,10 +784,10 @@ def test_conquer_support_rail_overflow_registers_hover_popover(monkeypatch):
         is_player=True,
     )
 
-    assert len(screen._conquer_support_badge_rects) == 4
+    assert len(screen._conquer_support_badge_rects) == 1
     assert len(screen._conquer_support_overflow_rects) == 1
     overflow = screen._conquer_support_overflow_rects[0]
-    assert len(overflow['entries']) == 2
+    assert len(overflow['entries']) == len(entries) - 1
     monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: overflow['rect'].center)
     assert ConquerGameScreen._current_conquer_support_overflow_entry(screen) == overflow
     ConquerGameScreen._draw_conquer_support_overflow_popover(screen)
