@@ -950,3 +950,91 @@ class TestSpellMutatesConquerTactics:
             assert opponent_spell_tactics
             assert effect['conquer_tactics_added']['added'] == len(caster_spell_tactics)
             assert effect['opponent_conquer_tactics_added']['added'] == len(opponent_spell_tactics)
+
+    def test_targeted_enchantment_preserves_conquer_tactics(
+        self, app, db, spell_game
+    ):
+        from models import ActiveSpell, ConquerTactic, Figure, MainCard
+        from routes.spells import _execute_spell
+
+        with app.app_context():
+            game, p1, p2, _, _ = spell_game
+            self._mark_tactics_hand_conquer(db, game)
+
+            reserved = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all())[0]
+            tactic = self._make_tactic_for_card(db, game, p1, reserved)
+            target = Figure(
+                game_id=game.id,
+                player_id=p2.id,
+                family_name='Target Guard',
+                field='military',
+                color='grey',
+                name='Target Guard',
+                suit='Clubs',
+                produces={},
+                requires={},
+            )
+            db.session.add(target)
+            db.session.commit()
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Poison',
+                spell_type='enchantment',
+                spell_family_name='Poison',
+                suit='Hearts',
+                cast_round=1,
+                target_figure_id=target.id,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            effect = _execute_spell(spell, game, p1)
+            db.session.commit()
+            db.session.expire_all()
+
+            preserved = db.session.get(ConquerTactic, tactic.id)
+            reserved = db.session.get(MainCard, reserved.id)
+            assert effect['power_modifier'] == -6
+            assert 'conquer_tactics_added' not in effect
+            assert preserved is not None
+            assert preserved.status == 'available'
+            assert preserved.card_id == reserved.id
+            assert reserved.part_of_battle_move is True
+
+    def test_auto_convert_conquer_tactics_skips_active_battle_round(
+        self, app, db, spell_game
+    ):
+        from game_service.conquer_tactics_service import auto_convert_conquer_tactic_cards
+        from models import ConquerTactic, MainCard
+
+        with app.app_context():
+            game, p1, _p2, _, _ = spell_game
+            self._mark_tactics_hand_conquer(db, game)
+            game.battle_confirmed = True
+            game.battle_turn_player_id = p1.id
+            card = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all())[0]
+            card.part_of_battle_move = False
+            db.session.commit()
+
+            result = auto_convert_conquer_tactic_cards(
+                game,
+                p1,
+                [card],
+                reason='active_battle_guard',
+            )
+            db.session.commit()
+
+            assert result['added'] == 0
+            assert ConquerTactic.query.filter_by(
+                game_id=game.id,
+                player_id=p1.id,
+                card_id=card.id,
+            ).count() == 0
+            db.session.refresh(card)
+            assert card.part_of_battle_move is False

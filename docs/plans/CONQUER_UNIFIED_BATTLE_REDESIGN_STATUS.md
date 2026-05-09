@@ -180,6 +180,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - `Forced Deal` purges stale move/tactic state before card ownership changes.
   - Battle-start prelude replenishment now uses `ConquerTactic` rows for tactics-hand games.
   - Counter-spell defender replenishment now uses `ConquerTactic` rows for tactics-hand games while preserving compatibility response keys.
+  - Added Phase 7 edge coverage proving targeted non-greed enchantments leave existing tactics intact.
+  - Added Phase 7 guard coverage proving spell auto-conversion does not reserve new tactics after battle rounds are active.
 
 - DONE: Updated broader land-battle tests to read the active conquer move model.
   - Tactics-hand conquer games assert against `ConquerTactic` rows.
@@ -238,6 +240,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader screenshot UI conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 183 passed.
 - DONE: Focused AI tactics-hand loop/fallback regression passed: `tests/server/test_ai_integration_scenarios.py::test_conquer_loop_battle_round_uses_tactics_hand_rows tests/server/test_ai_worker.py::test_conquer_skip_battle_turn_with_fallback_uses_conquer_tactic_endpoint` passed: 2 passed.
 - DONE: Broader AI tactics-hand regression passed: `tests/server/test_ai_worker.py tests/server/test_ai_integration_scenarios.py tests/server/test_ai_action_enum.py tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py` passed: 88 passed.
+- DONE: Focused Phase 7 spell edge regression passed: `tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
+- DONE: Broader spell/tactics-hand server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_conquer_tactics_math.py` passed: 38 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -260,7 +264,9 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Replaced tactics-hand spell purge/replenish logic for Forced Deal and Dump Cards.
   - DONE: Added spell mutation tests proving stale tactics are purged/replenished without deleting persistent collection cards.
   - DONE: Added Forced Deal coverage for combined tactics: moving one Double Dagger source deletes the combined row, drops the moved source, restores the partner source, and recreates a spell-sourced tactic for the new owner when eligible.
-  - TODO: Add more spell coverage for defender fallback edge cases and non-greed spell interactions if Phase 7 needs exhaustive coverage.
+  - DONE: Added non-greed enchantment coverage proving Poison leaves existing `ConquerTactic` rows and reserved cards intact.
+  - DONE: Added active-battle guard coverage proving spell auto-conversion does not create tactics after battle rounds start.
+  - TODO: Add more spell coverage for defender fallback edge cases if Phase 7 needs exhaustive coverage.
 
 - DONE: Production startup explicitly ensures the `conquer_tactic` table and index exist for persistent deployments.
 
