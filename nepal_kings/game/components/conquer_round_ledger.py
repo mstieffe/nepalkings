@@ -196,8 +196,18 @@ class ConquerRoundLedger:
             return None
         return round_idx, move
 
+    def _figure_diff(self) -> int:
+        """Player - opponent total figure power (mirrors legacy ``_get_figure_diff``)."""
+        getter = getattr(self._parent, '_conquer_lane_figure_diff', None)
+        if callable(getter):
+            try:
+                return int(getter() or 0)
+            except Exception:
+                return 0
+        return 0
+
     def _total_diff(self, you_per, opp_per) -> int:
-        return sum(
+        return self._figure_diff() + sum(
             (self._round_diff(y, o) if y and o else 0)
             for y, o in zip(you_per, opp_per)
         )
@@ -308,6 +318,8 @@ class ConquerRoundLedger:
         bg = pygame.Surface(rect.size, pygame.SRCALPHA)
         bg.fill(_CARD_BG_RGBA)
         self.window.blit(bg, rect.topleft)
+        # Reveal glow drawn behind chips so the move icons stay legible.
+        self._draw_round_reveal_animation(rect, idx, reveal_animation)
         border = (210, 168, 72) if is_active else _BORDER_RGBA
         pygame.draw.rect(self.window, border, rect, 2, border_radius=6)
 
@@ -332,7 +344,6 @@ class ConquerRoundLedger:
         self._draw_diff_pill(diff_rect, you, opp,
                              played=(you is not None and opp is not None),
                              ghost_move=ghost_move)
-        self._draw_round_reveal_animation(rect, idx, reveal_animation)
 
     def _draw_round_reveal_animation(self, rect: pygame.Rect, idx: int,
                                      animation):
@@ -389,7 +400,7 @@ class ConquerRoundLedger:
         pwr_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.1)), bold=True)
         text_col = _GHOST_BLUE if ghost else _TEXT_SECONDARY
         power_col = _GHOST_BLUE if ghost else _TEXT_PRIMARY
-        icon_size = max(18, min(rect.height - 8, int(rect.width * 0.34)))
+        icon_size = max(28, min(rect.height - 4, int(rect.width * 0.58)))
         icon_x = rect.left + 4 + icon_size // 2
         icon_y = rect.centery
         icon_drawn = self._draw_move_icon(icon_x, icon_y, icon_size, move, ghost=ghost)

@@ -82,9 +82,9 @@ _LEDGER_TOTAL_CARD_W_PCT = 0.146
 _LEDGER_CARD_GAP_W_PCT = 0.005
 
 # Duel lane bands (fractions of lane height, with gaps absorbed)
-_LANE_FIGHTER_BAND_H_FRAC = 0.36
-_LANE_DIFF_BAND_H_FRAC = 0.24
-_LANE_BAND_GAP_H_FRAC = 0.04
+_LANE_FIGHTER_BAND_H_FRAC = 0.42
+_LANE_DIFF_BAND_H_FRAC = 0.13
+_LANE_BAND_GAP_H_FRAC = 0.015
 
 # Support strip widths (inside the duel lane)
 _SUPPORT_BADGE_RAIL_W_PCT = 0.035

@@ -296,6 +296,7 @@ class ConquerTacticsRail:
                 self._pending_action = {'action': ACTION_PLAY, 'move': sel}
             return
         if key == ACTION_GAMBLE:
+            # Gambling is a tactics-hand mutation, not a battle-turn action.
             self._pending_action = {'action': ACTION_GAMBLE, 'move': sel}
             return
         if key == ACTION_DISMANTLE:
@@ -505,7 +506,9 @@ class ConquerTacticsRail:
         my_turn = self._is_my_battle_turn()
         partner = self._combine_partner_move()
         play_enabled = bool(sel and my_turn)
-        gamble_enabled = bool(sel and my_turn)
+        # Gamble/combine/dismantle are pre-battle/hand-shaping actions and
+        # are available regardless of whose battle turn it is.
+        gamble_enabled = bool(sel)
         dismantle_enabled = bool(sel and self._is_double_dagger(sel))
         combine_relevant = bool(sel and self._is_single_dagger(sel))
         combine_enabled = bool(

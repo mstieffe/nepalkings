@@ -743,6 +743,30 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.rect(self.window, (120, 205, 220), pill, 2, border_radius=pill.height // 2)
         self.window.blit(label_surf, label_surf.get_rect(center=pill.center))
 
+    def _handle_conquer_lane_figure_click(self, pos):
+        """Open the figure detail box when a duel-lane figure icon is clicked."""
+        rects = getattr(self, '_conquer_lane_figure_rects', None) or []
+        for info in rects:
+            rect = info.get('rect')
+            if rect and pygame.Rect(rect).collidepoint(pos):
+                figure = info.get('figure')
+                field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+                if field is None or figure is None:
+                    return False
+                icon = getattr(field, 'icon_cache', {}).get(getattr(figure, 'id', None))
+                if icon is None:
+                    for candidate in getattr(field, 'figure_icons', []) or []:
+                        if getattr(candidate, 'figure', None) is figure:
+                            icon = candidate
+                            break
+                if icon is None:
+                    return False
+                opener = getattr(field, '_open_tactics_hand_battle_detail', None)
+                if callable(opener):
+                    opener(icon)
+                    return True
+        return False
+
     def _dispatch_tactics_rail_action(self, action_payload):
         """Apply a tactics-rail action by calling the appropriate API."""
         if not action_payload:
@@ -2137,44 +2161,75 @@ class ConquerGameScreen(GameScreen):
             self.window.blit(frame, frame.get_rect(center=center))
 
     def _draw_conquer_lane_band(self, rect, label, figures, *, is_player):
-        band = pygame.Rect(rect).inflate(-8, -6)
+        band = pygame.Rect(rect).inflate(-6, -4)
         if band.width <= 0 or band.height <= 0:
             return
-        bg = (34, 44, 50, 175) if is_player else (52, 40, 43, 175)
-        border = (138, 190, 196) if is_player else (196, 145, 132)
+        bg = (34, 44, 50, 165) if is_player else (52, 40, 43, 165)
         pygame.draw.rect(self.window, bg, band, border_radius=7)
-        accent = pygame.Rect(band.left + 2, band.top + 6, 3, max(1, band.height - 12))
-        pygame.draw.rect(self.window, border, accent, border_radius=2)
 
         label_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
         text = label_font.render(label, True, (230, 222, 190))
-        self.window.blit(text, (band.left + 8, band.top + 5))
+        self.window.blit(text, (band.left + 8, band.top + 4))
 
         if not figures:
             dash = label_font.render('-', True, (150, 132, 96))
             self.window.blit(dash, dash.get_rect(center=band.center))
             return
 
-        name_font = settings.get_font(max(11, int(settings.FS_TINY * 0.90)), bold=True)
-        value_font = settings.get_font(max(10, int(settings.FS_TINY * 0.82)), bold=True)
+        # Compute full-power for each figure on this side.
+        player_figures, opponent_figures = self._conquer_lane_figures()
+        own_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=is_player)
+        enemy_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=not is_player)
+
+        name_font = settings.get_font(max(11, int(settings.FS_TINY * 0.92)), bold=True)
+        value_font = settings.get_font(max(12, int(settings.FS_TINY * 0.95)), bold=True)
         count = min(2, len(figures))
         slot_w = max(1, band.width // count)
-        art_size = max(26, min(int(band.height * 0.48), int(slot_w * 0.44)))
+        # Larger figure art.
+        art_size = max(38, min(int(band.height * 0.70), int(slot_w * 0.62)))
+        rects = getattr(self, '_conquer_lane_figure_rects', None)
+        if rects is None:
+            rects = []
+            self._conquer_lane_figure_rects = rects
         for idx, figure in enumerate(figures[:2]):
             slot = pygame.Rect(band.left + idx * slot_w, band.top, slot_w, band.height)
-            center = (slot.centerx, band.top + int(band.height * 0.48))
+            center = (slot.centerx, band.top + int(band.height * 0.46))
             self._draw_conquer_lane_figure_art(figure, center, art_size)
+            # Hit rect for opening detail box.
+            hit = pygame.Rect(0, 0, art_size + 8, art_size + 8)
+            hit.center = center
+            rects.append({'rect': hit, 'figure': figure, 'is_player': is_player})
+
             name = self._fit_text(getattr(figure, 'name', 'Figure'), name_font, slot.width - 14)
             name_surf = name_font.render(name, True, (246, 239, 214))
             self.window.blit(name_surf, name_surf.get_rect(
-                center=(slot.centerx, band.bottom - int(band.height * 0.18))))
+                center=(slot.centerx, band.bottom - int(band.height * 0.14))))
 
-            value = str(self._conquer_lane_figure_power(figure))
-            value_surf = value_font.render(value, True, (42, 32, 20))
+            base = self._conquer_lane_figure_power(figure)
+            total = self._conquer_lane_figure_full_power(
+                figure,
+                support_entries=own_support,
+                enemy_support_entries=enemy_support,
+                is_player=is_player,
+            )
+            # Legacy parity color coding: green when boosted, red when penalised, gold otherwise.
+            if total > base:
+                chip_bg = (40, 110, 60)
+                text_col = (235, 250, 220)
+            elif total < base:
+                chip_bg = (148, 50, 50)
+                text_col = (250, 230, 220)
+            else:
+                chip_bg = (238, 206, 111)
+                text_col = (42, 32, 20)
+            value_surf = value_font.render(str(total), True, text_col)
             chip = value_surf.get_rect()
-            chip.inflate_ip(12, 6)
-            chip.center = (center[0] + art_size // 2 - 3, center[1] - art_size // 2 + 4)
-            pygame.draw.rect(self.window, (238, 206, 111), chip, border_radius=chip.height // 2)
+            chip.inflate_ip(14, 7)
+            chip.center = (center[0] + art_size // 2 - 2, center[1] - art_size // 2 + 4)
+            pygame.draw.rect(self.window, chip_bg, chip, border_radius=chip.height // 2)
+            pygame.draw.rect(self.window, (24, 18, 12), chip, 1, border_radius=chip.height // 2)
             self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
 
     def _load_conquer_skill_icon(self, skill_key, size):
@@ -2575,6 +2630,20 @@ class ConquerGameScreen(GameScreen):
                 opponent_figures,
                 is_player=is_player,
             )
+            # For unbound Call tactics, mirror legacy ``_get_panel_display_power``:
+            # show the maximum potential combined power across eligible figures.
+            family_to_field = {
+                'Call Villager': 'village',
+                'Call Military': 'military',
+                'Call King': 'castle',
+            }
+            if (is_player
+                    and not move.get('call_figure_id')
+                    and move.get('family_name') in family_to_field):
+                best = self._conquer_best_call_figure_for_tactic(move)
+                if best is not None:
+                    return self._conquer_lane_call_effective_power(
+                        move, best, support_entries)
             return self._conquer_lane_move_effective_power(move, support_entries)
         except Exception:
             return self._conquer_lane_move_power(move)
@@ -2631,6 +2700,97 @@ class ConquerGameScreen(GameScreen):
                 support_entries,
             ),
         )
+
+    def _conquer_lane_figure_full_power(self, figure, *, support_entries=None,
+                                        enemy_support_entries=None,
+                                        is_player=True):
+        """Per-figure total power matching legacy ``_get_figure_total_power``.
+
+        Components: base + buffs_allies (village, suit-matched) + support
+        (castle/village, suit-matched, blocked by enemy ``blocks_bonus``)
+        + wall (when defending) + enchant - distance_attack penalty
+        (suit-advantage from enemy archers).
+        """
+        if figure is None:
+            return 0
+        base = self._conquer_lane_figure_power(figure)
+        if support_entries is None:
+            player_figures, opponent_figures = self._conquer_lane_figures()
+            support_entries = self._conquer_lane_support_entries(
+                player_figures, opponent_figures, is_player=is_player)
+        if enemy_support_entries is None:
+            player_figures, opponent_figures = self._conquer_lane_figures()
+            enemy_support_entries = self._conquer_lane_support_entries(
+                player_figures, opponent_figures, is_player=not is_player)
+
+        suit = getattr(figure, 'suit', None)
+        field = self._conquer_lane_family_field(figure)
+        blocked = any(e.get('kind') == 'blocks_bonus'
+                      for e in enemy_support_entries or [])
+
+        buffs = 0
+        support = 0
+        wall = 0
+        for e in support_entries or []:
+            kind = e.get('kind')
+            src = e.get('figure')
+            src_field = self._conquer_lane_family_field(src) if src else ''
+            src_suit = getattr(src, 'suit', None) if src else None
+            if kind == 'buffs_allies':
+                if field == 'village' and src_suit == suit:
+                    buffs += int(e.get('numeric_value') or 0) // max(
+                        1,
+                        sum(1 for f in self._conquer_lane_figures()[0 if is_player else 1]
+                            if self._conquer_lane_family_field(f) == 'village'
+                            and getattr(f, 'suit', None) == src_suit)
+                    )
+            elif kind == 'support_bonus' and not blocked:
+                if src_suit == suit and src_field in self._conquer_lane_valid_support_fields(figure):
+                    support += self._conquer_lane_regular_support_value(src)
+            elif kind == 'buffs_allies_defence':
+                if self._conquer_lane_is_defending_side(is_player=is_player):
+                    wall += int(e.get('numeric_value') or 0) // max(
+                        1,
+                        len(self._conquer_lane_figures()[0 if is_player else 1])
+                    )
+
+        enchant = 0
+        getter = getattr(figure, 'get_total_enchantment_modifier', None)
+        if callable(getter):
+            try:
+                enchant = int(getter() or 0)
+            except Exception:
+                enchant = 0
+
+        # Distance-attack penalty if any enemy archer's adv-suit matches
+        da_penalty = 0
+        for e in enemy_support_entries or []:
+            if e.get('kind') != 'distance_attack':
+                continue
+            src = e.get('figure')
+            src_suit = getattr(src, 'suit', None) if src else None
+            adv = get_advantage_suit(src_suit) if src_suit else None
+            if adv == suit:
+                da_penalty += int(e.get('numeric_value') or 0)
+
+        return base + buffs + support + wall + enchant - da_penalty
+
+    def _conquer_lane_figure_diff(self):
+        """Player figure total power minus opponent figure total power."""
+        player_figures, opponent_figures = self._conquer_lane_figures()
+        if not player_figures and not opponent_figures:
+            return 0
+        p_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=True)
+        o_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=False)
+        p_total = sum(self._conquer_lane_figure_full_power(
+            f, support_entries=p_support, enemy_support_entries=o_support,
+            is_player=True) for f in player_figures)
+        o_total = sum(self._conquer_lane_figure_full_power(
+            f, support_entries=o_support, enemy_support_entries=p_support,
+            is_player=False) for f in opponent_figures)
+        return p_total - o_total
 
     @staticmethod
     def _conquer_lane_support_value(entry):
@@ -2869,7 +3029,6 @@ class ConquerGameScreen(GameScreen):
         lane_rect = pygame.Rect(lane.rect)
         backdrop = pygame.Surface(lane_rect.size, pygame.SRCALPHA)
         pygame.draw.rect(backdrop, (18, 20, 24, 118), backdrop.get_rect(), border_radius=8)
-        pygame.draw.rect(backdrop, (226, 196, 112, 145), backdrop.get_rect(), 2, border_radius=8)
         self.window.blit(backdrop, lane_rect.topleft)
 
         player_slots, opponent_slots = self._conquer_lane_played_tactics()
@@ -2888,6 +3047,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_support_badge_rects = []
         self._conquer_support_overflow_rects = []
         self._conquer_receipt_row_rects = []
+        self._conquer_lane_figure_rects = []
 
         self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
         self._draw_conquer_lane_diff(
@@ -3113,6 +3273,9 @@ class ConquerGameScreen(GameScreen):
         # clicks that would otherwise hit the field/battle subscreen.
         if self._is_tactics_hand_game():
             for event in events:
+                if (event.type == MOUSEBUTTONDOWN and event.button == 1
+                        and self._handle_conquer_lane_figure_click(event.pos)):
+                    return
                 if self._round_ledger.handle_event(event) == 'open_result':
                     self._open_tactics_hand_result_dialogue()
                     return
