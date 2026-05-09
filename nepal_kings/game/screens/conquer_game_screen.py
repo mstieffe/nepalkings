@@ -2174,6 +2174,99 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.line(self.window, color, start, end, width)
         pygame.draw.circle(self.window, color, start, 3 if not ghost else 4)
 
+    def _conquer_lane_call_power(self, move):
+        call_figure = self._conquer_lane_find_figure(
+            move.get('call_figure_id') if isinstance(move, dict) else None)
+        return self._conquer_lane_figure_power(call_figure) if call_figure is not None else 0
+
+    @staticmethod
+    def _conquer_lane_support_value(entry):
+        kind = entry.get('kind')
+        figure = entry.get('figure')
+        if kind == 'buffs_allies':
+            return 4
+        if kind == 'buffs_allies_defence':
+            return ConquerGameScreen._conquer_lane_number_value(figure)
+        if kind == 'distance_attack':
+            return ConquerGameScreen._conquer_lane_number_value(figure)
+        return 0
+
+    def _conquer_lane_land_bonus_for(self, figures):
+        game = self.state.game
+        land_suit = getattr(game, 'land_suit_bonus_suit', None) if game else None
+        land_bonus = getattr(game, 'land_suit_bonus_value', None) if game else None
+        if not land_suit or not land_bonus:
+            return 0
+        if any(getattr(fig, 'suit', None) == land_suit for fig in figures or []):
+            return int(land_bonus)
+        return 0
+
+    def _conquer_lane_receipt_components(self, figures, move, support_entries,
+                                         enemy_support_entries):
+        base = sum(self._conquer_lane_figure_power(fig) for fig in figures)
+        tactic = self._conquer_lane_move_power(move)
+        call = self._conquer_lane_call_power(move)
+        buffs = sum(
+            self._conquer_lane_support_value(entry)
+            for entry in support_entries
+            if entry.get('kind') == 'buffs_allies'
+        )
+        wall = sum(
+            self._conquer_lane_support_value(entry)
+            for entry in support_entries
+            if entry.get('kind') == 'buffs_allies_defence'
+        )
+        land = self._conquer_lane_land_bonus_for(figures)
+        enchant = self._conquer_lane_enchantment_total(figures)
+        distance_penalty = sum(
+            self._conquer_lane_support_value(entry)
+            for entry in enemy_support_entries
+            if entry.get('kind') == 'distance_attack'
+        )
+        own_block = any(entry.get('kind') == 'blocks_bonus' for entry in support_entries)
+        total = base + call + buffs + wall + land + enchant + tactic - distance_penalty
+        rows = [('Base', base)]
+        if call:
+            rows.append(('Called', call))
+        if buffs:
+            rows.append(('Buffs', buffs))
+        if wall:
+            rows.append(('Wall', wall))
+        if land:
+            rows.append(('Land', land))
+        if enchant:
+            rows.append(('Spell', enchant))
+        if tactic:
+            rows.append(('Tactic', tactic))
+        if distance_penalty:
+            rows.append(('Range', -distance_penalty))
+        if own_block:
+            rows.append(('Block', 'on'))
+        rows.append(('Total', total))
+        return rows, total
+
+    def _draw_conquer_lane_receipt_rows(self, area, rows, *, align_right, color):
+        area = pygame.Rect(area)
+        font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        if area.width <= 0 or area.height <= 0:
+            return
+        line_h = font.get_height() + 1
+        max_lines = max(1, area.height // line_h)
+        if len(rows) > max_lines:
+            rows = rows[:max(0, max_lines - 1)] + [rows[-1]]
+        y = area.top
+        for label, value in rows:
+            if isinstance(value, str):
+                value_text = value
+            else:
+                sign = '+' if isinstance(value, (int, float)) and value > 0 and label != 'Base' else ''
+                value_text = f'{sign}{value}'
+            text = self._fit_text(f'{label} {value_text}', font, area.width)
+            surf = font.render(text, True, color if label != 'Total' else (246, 226, 150))
+            x = area.right - surf.get_width() if align_right else area.left
+            self.window.blit(surf, (x, y))
+            y += line_h
+
     def _draw_conquer_lane_diff(self, rect, player_figures, opponent_figures,
                                 player_move=None, opponent_move=None, round_idx=0):
         band = pygame.Rect(rect).inflate(-12, -4)
@@ -2181,32 +2274,39 @@ class ConquerGameScreen(GameScreen):
             return
         pygame.draw.rect(self.window, (26, 25, 28, 190), band, border_radius=8)
         pygame.draw.rect(self.window, (226, 196, 112), band, 1, border_radius=8)
-        player_power = sum(self._conquer_lane_figure_power(fig) for fig in player_figures)
-        opponent_power = sum(self._conquer_lane_figure_power(fig) for fig in opponent_figures)
-        player_total = player_power + self._conquer_lane_move_power(player_move)
-        opponent_total = opponent_power + self._conquer_lane_move_power(opponent_move)
+        player_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=True)
+        opponent_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=False)
+        player_rows, player_total = self._conquer_lane_receipt_components(
+            player_figures, player_move, player_support, opponent_support)
+        opponent_rows, opponent_total = self._conquer_lane_receipt_components(
+            opponent_figures, opponent_move, opponent_support, player_support)
         diff = player_total - opponent_total
         diff_text = 'VS' if not player_figures or not opponent_figures else f'{diff:+d}'
         font = settings.get_font(max(14, int(settings.FS_SMALL * 1.05)), bold=True)
         color = (130, 220, 190) if diff > 0 else (226, 145, 130) if diff < 0 else (232, 220, 180)
         surf = font.render(diff_text, True, color)
-        self.window.blit(surf, surf.get_rect(center=(band.centerx, band.centery - 5)))
+        self.window.blit(surf, surf.get_rect(center=(band.centerx, band.top + int(band.height * 0.24))))
 
-        receipt_font = settings.get_font(max(9, int(settings.FS_TINY * 0.72)), bold=True)
-        you_name = self._fit_text(self._conquer_lane_move_name(player_move), receipt_font, band.width // 2 - 10)
-        opp_name = self._fit_text(self._conquer_lane_move_name(opponent_move), receipt_font, band.width // 2 - 10)
-        you_line = f'R{round_idx + 1}  {player_power}+{self._conquer_lane_move_power(player_move)}={player_total}'
-        opp_line = f'{opponent_power}+{self._conquer_lane_move_power(opponent_move)}={opponent_total}  R{round_idx + 1}'
-        label_y = band.top + 7
-        value_y = band.bottom - receipt_font.get_height() - 6
-        you_label = receipt_font.render(you_name, True, (154, 218, 206))
-        opp_label = receipt_font.render(opp_name, True, (226, 168, 152))
-        you_value = receipt_font.render(you_line, True, (232, 220, 180))
-        opp_value = receipt_font.render(opp_line, True, (232, 220, 180))
-        self.window.blit(you_label, (band.left + 8, label_y))
-        self.window.blit(opp_label, (band.right - opp_label.get_width() - 8, label_y))
-        self.window.blit(you_value, (band.left + 8, value_y))
-        self.window.blit(opp_value, (band.right - opp_value.get_width() - 8, value_y))
+        receipt_area_top = band.top + int(band.height * 0.42)
+        receipt_h = max(1, band.bottom - receipt_area_top - 4)
+        col_gap = max(8, band.width // 20)
+        col_w = (band.width - col_gap - 16) // 2
+        left_area = pygame.Rect(band.left + 8, receipt_area_top, col_w, receipt_h)
+        right_area = pygame.Rect(band.right - 8 - col_w, receipt_area_top, col_w, receipt_h)
+        self._draw_conquer_lane_receipt_rows(
+            left_area,
+            player_rows,
+            align_right=False,
+            color=(154, 218, 206),
+        )
+        self._draw_conquer_lane_receipt_rows(
+            right_area,
+            opponent_rows,
+            align_right=True,
+            color=(226, 168, 152),
+        )
 
     def _draw_conquer_duel_lane(self):
         if not (self._is_tactics_hand_game() and self._is_battle_phase_active()):

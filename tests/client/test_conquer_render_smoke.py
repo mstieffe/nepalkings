@@ -460,6 +460,29 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips():
 
     assert [entry['kind'] for entry in player_support] == ['buffs_allies', 'distance_attack']
     assert [entry['kind'] for entry in opponent_support] == ['buffs_allies_defence']
+    player_rows, player_total = ConquerGameScreen._conquer_lane_receipt_components(
+        screen,
+        [attacker],
+        game.conquer_tactics[0],
+        player_support,
+        opponent_support,
+    )
+    opponent_rows, opponent_total = ConquerGameScreen._conquer_lane_receipt_components(
+        screen,
+        [defender],
+        screen.subscreens['battle'].opp_played[0],
+        opponent_support,
+        player_support,
+    )
+
+    assert ('Called', 4) in player_rows
+    assert ('Buffs', 4) in player_rows
+    assert ('Land', 2) in player_rows
+    assert ('Wall', 6) in opponent_rows
+    assert ('Land', 2) in opponent_rows
+    assert ('Range', -3) in opponent_rows
+    assert player_total == 26
+    assert opponent_total == 13
 
     ConquerGameScreen._draw_conquer_duel_lane(screen)
 
