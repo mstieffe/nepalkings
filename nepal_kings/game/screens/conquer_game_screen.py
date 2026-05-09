@@ -2085,13 +2085,29 @@ class ConquerGameScreen(GameScreen):
                 return info
         return None
 
+    def _current_conquer_receipt_hover_entry(self):
+        mouse = pygame.mouse.get_pos()
+        for info in reversed(getattr(self, '_conquer_receipt_row_rects', []) or []):
+            rect = info.get('rect')
+            if rect and pygame.Rect(rect).collidepoint(mouse):
+                return info
+        return None
+
     def _update_conquer_support_hover_state(self):
-        info = self._current_conquer_support_hover_entry()
-        self._conquer_hovered_support_badge = info
+        support_info = self._current_conquer_support_hover_entry()
+        receipt_info = self._current_conquer_receipt_hover_entry()
+        self._conquer_hovered_support_badge = support_info
+        self._conquer_hovered_receipt_row = receipt_info
+        source_id = support_info.get('figure_id') if support_info else None
+        if source_id is None and receipt_info:
+            row = receipt_info.get('row') or {}
+            source_ids = row.get('source_figure_ids') if isinstance(row, dict) else []
+            source_ids = source_ids or []
+            source_id = source_ids[0] if source_ids else None
         field = getattr(self, 'subscreens', {}).get('field') if hasattr(self, 'subscreens') else None
         if field is not None:
-            field._conquer_hover_source_figure_id = info.get('figure_id') if info else None
-        return info
+            field._conquer_hover_source_figure_id = source_id
+        return support_info
 
     def _conquer_support_source_rect(self, figure_id):
         if figure_id is None:
@@ -2318,6 +2334,29 @@ class ConquerGameScreen(GameScreen):
             return int(land_bonus)
         return 0
 
+    @staticmethod
+    def _conquer_receipt_row(label, value, *, source_figure_ids=None, kind=None):
+        return {
+            'label': label,
+            'value': value,
+            'source_figure_ids': list(source_figure_ids or []),
+            'kind': kind or label.lower(),
+        }
+
+    @staticmethod
+    def _conquer_receipt_row_parts(row):
+        if isinstance(row, dict):
+            return row.get('label', ''), row.get('value')
+        return row[0], row[1]
+
+    @staticmethod
+    def _conquer_support_entry_ids(entries, kind):
+        return [
+            getattr(entry.get('figure'), 'id', None)
+            for entry in entries
+            if entry.get('kind') == kind and getattr(entry.get('figure'), 'id', None) is not None
+        ]
+
     def _conquer_lane_receipt_components(self, figures, move, support_entries,
                                          enemy_support_entries):
         base = sum(self._conquer_lane_figure_power(fig) for fig in figures)
@@ -2342,24 +2381,54 @@ class ConquerGameScreen(GameScreen):
         )
         own_block = any(entry.get('kind') == 'blocks_bonus' for entry in support_entries)
         total = base + call + buffs + wall + land + enchant + tactic - distance_penalty
-        rows = [('Base', base)]
+        base_ids = [getattr(fig, 'id', None) for fig in figures if getattr(fig, 'id', None) is not None]
+        rows = [self._conquer_receipt_row('Base', base, source_figure_ids=base_ids)]
         if call:
-            rows.append(('Called', call))
+            rows.append(self._conquer_receipt_row(
+                'Called',
+                call,
+                source_figure_ids=[move.get('call_figure_id')] if isinstance(move, dict) else [],
+                kind='called',
+            ))
         if buffs:
-            rows.append(('Buffs', buffs))
+            rows.append(self._conquer_receipt_row(
+                'Buffs',
+                buffs,
+                source_figure_ids=self._conquer_support_entry_ids(support_entries, 'buffs_allies'),
+            ))
         if wall:
-            rows.append(('Wall', wall))
+            rows.append(self._conquer_receipt_row(
+                'Wall',
+                wall,
+                source_figure_ids=self._conquer_support_entry_ids(support_entries, 'buffs_allies_defence'),
+            ))
         if land:
-            rows.append(('Land', land))
+            land_suit = getattr(self.state.game, 'land_suit_bonus_suit', None)
+            rows.append(self._conquer_receipt_row(
+                'Land',
+                land,
+                source_figure_ids=[
+                    getattr(fig, 'id', None) for fig in figures
+                    if getattr(fig, 'suit', None) == land_suit and getattr(fig, 'id', None) is not None
+                ],
+            ))
         if enchant:
-            rows.append(('Spell', enchant))
+            rows.append(self._conquer_receipt_row('Spell', enchant, source_figure_ids=base_ids))
         if tactic:
-            rows.append(('Tactic', tactic))
+            rows.append(self._conquer_receipt_row('Tactic', tactic))
         if distance_penalty:
-            rows.append(('Range', -distance_penalty))
+            rows.append(self._conquer_receipt_row(
+                'Range',
+                -distance_penalty,
+                source_figure_ids=self._conquer_support_entry_ids(enemy_support_entries, 'distance_attack'),
+            ))
         if own_block:
-            rows.append(('Block', 'on'))
-        rows.append(('Total', total))
+            rows.append(self._conquer_receipt_row(
+                'Block',
+                'on',
+                source_figure_ids=self._conquer_support_entry_ids(support_entries, 'blocks_bonus'),
+            ))
+        rows.append(self._conquer_receipt_row('Total', total, source_figure_ids=base_ids))
         return rows, total
 
     def _draw_conquer_lane_receipt_rows(self, area, rows, *, align_right, color):
@@ -2372,7 +2441,13 @@ class ConquerGameScreen(GameScreen):
         if len(rows) > max_lines:
             rows = rows[:max(0, max_lines - 1)] + [rows[-1]]
         y = area.top
-        for label, value in rows:
+        mouse = pygame.mouse.get_pos()
+        rects = getattr(self, '_conquer_receipt_row_rects', None)
+        if rects is None:
+            rects = []
+            self._conquer_receipt_row_rects = rects
+        for row in rows:
+            label, value = self._conquer_receipt_row_parts(row)
             if isinstance(value, str):
                 value_text = value
             else:
@@ -2381,6 +2456,12 @@ class ConquerGameScreen(GameScreen):
             text = self._fit_text(f'{label} {value_text}', font, area.width)
             surf = font.render(text, True, color if label != 'Total' else (246, 226, 150))
             x = area.right - surf.get_width() if align_right else area.left
+            row_rect = pygame.Rect(x - 2, y - 1, surf.get_width() + 4, line_h)
+            rects.append({'rect': row_rect, 'row': row, 'align_right': align_right})
+            if row_rect.collidepoint(mouse):
+                highlight = pygame.Surface(row_rect.size, pygame.SRCALPHA)
+                pygame.draw.rect(highlight, (120, 220, 235, 72), highlight.get_rect(), border_radius=4)
+                self.window.blit(highlight, row_rect.topleft)
             self.window.blit(surf, (x, y))
             y += line_h
 
@@ -2458,6 +2539,7 @@ class ConquerGameScreen(GameScreen):
         opponent_chips = self._conquer_lane_modifier_chips(opponent_move, opponent_figures)
         self._conquer_support_badge_rects = []
         self._conquer_support_overflow_rects = []
+        self._conquer_receipt_row_rects = []
 
         self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
         self._draw_conquer_lane_diff(
@@ -2505,6 +2587,18 @@ class ConquerGameScreen(GameScreen):
                     hovered_support.get('rect'),
                     source_rect,
                     is_player=hovered_support.get('is_player', True),
+                )
+        hovered_receipt = getattr(self, '_conquer_hovered_receipt_row', None)
+        if hovered_receipt and not hovered_support:
+            row = hovered_receipt.get('row') or {}
+            source_ids = row.get('source_figure_ids') if isinstance(row, dict) else []
+            source_ids = source_ids or []
+            source_rect = self._conquer_support_source_rect(source_ids[0] if source_ids else None)
+            if source_rect:
+                self._draw_conquer_lane_source_link(
+                    hovered_receipt.get('rect'),
+                    source_rect,
+                    is_player=not hovered_receipt.get('align_right'),
                 )
         self._draw_conquer_lane_leader_line(
             lane.you_support_badge_rail,

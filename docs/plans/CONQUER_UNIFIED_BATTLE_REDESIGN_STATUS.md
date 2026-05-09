@@ -122,6 +122,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Added first-pass support rail overflow popovers.
   - Overflow chips now register hover hit areas and open compact contributor popovers for hidden support sources.
 
+- DONE: Added first-pass receipt-row hover/source highlighting.
+  - Visible receipt rows now register hit areas and brighten under the cursor.
+  - Rows with concrete source figures, such as Called and Range, now feed the same field-source highlight/leader-line system as support badges.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -207,6 +211,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader support badge hover-link conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 174 passed.
 - DONE: Focused support overflow popover regression passed: `tests/client/test_conquer_render_smoke.py` passed: 10 passed.
 - DONE: Broader support overflow popover conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
+- DONE: Focused receipt-row hover/source regression passed: `tests/client/test_conquer_render_smoke.py` passed: 10 passed.
+- DONE: Broader receipt-row hover/source conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -256,7 +262,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: First-pass receipt rows now explain the duel-lane diff from visible contributors.
   - DONE: First-pass support badge hover cross-links now highlight the badge/source and draw source leader lines.
   - DONE: First-pass support rail overflow popovers are implemented.
-  - TODO: Receipt-row highlighting is still missing.
+  - DONE: First-pass receipt-row highlighting and source cross-linking are implemented.
   - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
   - DONE: First-pass round-card reveal replay animation is implemented for newly completed ledger cards.
 

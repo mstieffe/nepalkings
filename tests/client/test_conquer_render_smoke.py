@@ -479,12 +479,18 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
         player_support,
     )
 
-    assert ('Called', 4) in player_rows
-    assert ('Buffs', 4) in player_rows
-    assert ('Land', 2) in player_rows
-    assert ('Wall', 6) in opponent_rows
-    assert ('Land', 2) in opponent_rows
-    assert ('Range', -3) in opponent_rows
+    player_row_values = {(row['label'], row['value']) for row in player_rows}
+    opponent_row_values = {(row['label'], row['value']) for row in opponent_rows}
+    assert ('Called', 4) in player_row_values
+    assert ('Buffs', 4) in player_row_values
+    assert ('Land', 2) in player_row_values
+    assert ('Wall', 6) in opponent_row_values
+    assert ('Land', 2) in opponent_row_values
+    assert ('Range', -3) in opponent_row_values
+    called_row = next(row for row in player_rows if row['label'] == 'Called')
+    range_row = next(row for row in opponent_rows if row['label'] == 'Range')
+    assert called_row['source_figure_ids'] == [healer.id]
+    assert range_row['source_figure_ids'] == [archer.id]
     assert player_total == 26
     assert opponent_total == 13
 
@@ -505,6 +511,14 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     assert hovered['figure_id'] == healer.id
     assert screen.subscreens['field']._conquer_hover_source_figure_id == healer.id
     assert ConquerGameScreen._conquer_support_source_rect(screen, healer.id) == pygame.Rect(180, 200, 44, 56)
+    called_receipt = next(
+        info for info in screen._conquer_receipt_row_rects
+        if info['row']['label'] == 'Called'
+    )
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: called_receipt['rect'].center)
+    ConquerGameScreen._update_conquer_support_hover_state(screen)
+    assert screen._conquer_hovered_receipt_row == called_receipt
+    assert screen.subscreens['field']._conquer_hover_source_figure_id == healer.id
 
 
 def test_conquer_support_rail_overflow_registers_hover_popover(monkeypatch):
