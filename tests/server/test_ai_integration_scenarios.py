@@ -223,6 +223,57 @@ def test_trigger_post_battle_pick_phase_invokes_pick_handler(app, db, monkeypatc
     assert picked == [(game.id, ai_player.id)]
 
 
+def test_conquer_loop_battle_round_uses_tactics_hand_rows(app, db, monkeypatch):
+    from models import ConquerTactic
+    from tests.server.test_conquer_tactics_hand import (
+        _force_active_battle,
+        _start_player_owned_conquer,
+    )
+
+    _reset_worker_state()
+    _client, _attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+    game.battle_round = 1
+    game.battle_turn_player_id = defender_player.id
+    db.session.commit()
+    _patch_common_loop_controls(monkeypatch)
+
+    monkeypatch.setattr(
+        ai_worker,
+        'detect_phase',
+        _sequence(['battle_round', None, None]),
+    )
+    captured = {}
+
+    def _capture_play(_base, game_id, player_id, params):
+        captured['game_id'] = game_id
+        captured['player_id'] = player_id
+        captured['params'] = params
+        return True
+
+    def _fail_legacy(*_args, **_kwargs):
+        raise AssertionError('tactics-hand conquer loop must use conquer tactic endpoint')
+
+    monkeypatch.setattr(ai_worker, '_exec_play_conquer_tactic', _capture_play)
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _fail_legacy)
+
+    ai_worker._conquer_ai_loop(app, game.id, defender_player.id)
+
+    defender_tactic_ids = {
+        tactic.id
+        for tactic in ConquerTactic.query.filter_by(
+            game_id=game.id,
+            player_id=defender_player.id,
+            status='available',
+        )
+    }
+    assert captured['game_id'] == game.id
+    assert captured['player_id'] == defender_player.id
+    assert captured['params']['battle_move_id'] in defender_tactic_ids
+
+
 def test_loop_failure_schedules_watchdog_retry_when_ai_still_owns_turn(app, db, monkeypatch):
     _reset_worker_state()
     game, ai_player = _create_game_with_ai(db)

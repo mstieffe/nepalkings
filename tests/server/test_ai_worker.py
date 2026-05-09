@@ -420,6 +420,46 @@ def test_conquer_skip_battle_turn_with_fallback_plays_move_when_skip_rejected(mo
     assert captured['battle_move_id'] == 404
 
 
+def test_conquer_skip_battle_turn_with_fallback_uses_conquer_tactic_endpoint(monkeypatch):
+    move = SimpleNamespace(id=405, family_name='Dagger', value=9)
+    game = SimpleNamespace(id=73, battle_round=2, conquer_move_model='tactics_hand')
+    refreshed = SimpleNamespace(
+        id=73,
+        battle_round=2,
+        conquer_move_model='tactics_hand',
+        serialize=lambda: {'id': 73},
+    )
+
+    monkeypatch.setattr(ai_worker, '_exec_skip_battle_turn', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(ai_worker, '_reload_conquer_game', lambda _game_id: refreshed)
+    monkeypatch.setattr(ai_worker, 'detect_phase', lambda *_args, **_kwargs: 'battle_round')
+    monkeypatch.setattr(
+        ai_worker,
+        '_conquer_collect_move_infos',
+        lambda *_args, **_kwargs: ([{'move': move, 'effective_value': 9, 'call_figure_id': None}], []),
+    )
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_move_value_for_round', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(ai_worker, '_conquer_opponent_played_block_for_round', lambda *_args, **_kwargs: False)
+
+    captured = {}
+
+    def _capture_play(_base, _game_id, _player_id, params):
+        captured['battle_move_id'] = params.get('battle_move_id')
+        return True
+
+    def _fail_legacy_play(*_args, **_kwargs):
+        raise AssertionError('tactics-hand fallback must not call legacy battle move endpoint')
+
+    monkeypatch.setattr(ai_worker, '_exec_play_conquer_tactic', _capture_play)
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _fail_legacy_play)
+
+    result = ai_worker._conquer_skip_battle_turn_with_fallback(
+        'http://example.invalid', game, ai_player_id=999, auto_enabled=False)
+
+    assert result is True
+    assert captured['battle_move_id'] == 405
+
+
 def test_conquer_confirm_battle_moves_with_fallback_executes_buy_action(monkeypatch):
     refreshed = SimpleNamespace(
         serialize=lambda: {'id': 72},

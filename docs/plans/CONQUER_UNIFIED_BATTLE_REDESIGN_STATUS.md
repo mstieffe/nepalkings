@@ -150,6 +150,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - `server/ai/ai_worker.py` reads `ConquerTactic` rows for tactics-hand games.
   - Auto-gamble, auto-combine, play, and skip fallback route through conquer tactic endpoints when appropriate.
   - `server/ai/action_enum.py` can enumerate `play_conquer_tactic` / `gamble_conquer_tactic` for tactics-hand battle rounds.
+  - Added integration-style AI coverage proving the conquer loop plays a real tactics-hand DB battle round through the conquer tactic endpoint.
+  - Added skip-fallback coverage proving tactics-hand skip recovery plays a conquer tactic instead of a legacy battle move.
 
 - DONE: Updated AI game-state and strategy-planner summaries for tactics-hand games.
   - `server/ai/game_state.py` now labels live rows as `conquer_tactics` for tactics-hand conquer games instead of showing stale `battle_moves` wording.
@@ -234,6 +236,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader ordinary support contributor conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
 - DONE: Focused screenshot UI/timeline regression passed: `tests/client/test_conquer_layout.py tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py::TestTacticsHandRouting tests/client/test_conquer_timeline.py` passed: 134 passed.
 - DONE: Broader screenshot UI conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 183 passed.
+- DONE: Focused AI tactics-hand loop/fallback regression passed: `tests/server/test_ai_integration_scenarios.py::test_conquer_loop_battle_round_uses_tactics_hand_rows tests/server/test_ai_worker.py::test_conquer_skip_battle_turn_with_fallback_uses_conquer_tactic_endpoint` passed: 2 passed.
+- DONE: Broader AI tactics-hand regression passed: `tests/server/test_ai_worker.py tests/server/test_ai_integration_scenarios.py tests/server/test_ai_action_enum.py tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py` passed: 88 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -263,6 +267,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - PARTIAL: Phase 8 AI reads, summarizes, and plays tactics; remaining work is deeper scenario coverage.
   - DONE: `server/ai/game_state.py` and `server/ai/strategy_planner.py` summarize `conquer_tactics` explicitly for tactics-hand games.
   - DONE: Added AI worker tests proving tactics-hand play, auto-gamble, and auto-combine route to conquer tactic endpoints.
+  - DONE: Added AI integration coverage proving a tactics-hand battle-round loop reads real `ConquerTactic` rows and plays through the conquer tactic endpoint.
+  - DONE: Added AI skip-fallback coverage proving stale skip recovery stays on the conquer tactic endpoint for tactics-hand games.
   - DONE: Added Invader Swap regression proving a swapped AI invader keeps tactics-hand rows and player-safe tactic serialization.
   - TODO: Add richer attacker/defender full-flow AI scenarios.
   - TODO: Check generic LLM action paths for `combine_conquer_tactics` enumeration if needed beyond deterministic conquer flow.
