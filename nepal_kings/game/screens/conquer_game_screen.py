@@ -2077,6 +2077,14 @@ class ConquerGameScreen(GameScreen):
                 return info
         return None
 
+    def _current_conquer_support_overflow_entry(self):
+        mouse = pygame.mouse.get_pos()
+        for info in reversed(getattr(self, '_conquer_support_overflow_rects', []) or []):
+            rect = info.get('rect')
+            if rect and pygame.Rect(rect).collidepoint(mouse):
+                return info
+        return None
+
     def _update_conquer_support_hover_state(self):
         info = self._current_conquer_support_hover_entry()
         self._conquer_hovered_support_badge = info
@@ -2102,6 +2110,47 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.line(self.window, color, start, end, 3)
         pygame.draw.circle(self.window, color, start, 4)
         pygame.draw.circle(self.window, color, end, 6, 2)
+
+    def _draw_conquer_support_overflow_popover(self):
+        info = self._current_conquer_support_overflow_entry()
+        if not info:
+            return
+        entries = info.get('entries') or []
+        if not entries:
+            return
+        anchor = pygame.Rect(info.get('rect'))
+        is_player = info.get('is_player', True)
+        font = settings.get_font(max(8, int(settings.FS_TINY * 0.58)), bold=True)
+        title_font = settings.get_font(max(9, int(settings.FS_TINY * 0.66)), bold=True)
+        width = 178
+        line_h = font.get_height() + 3
+        visible = entries[:5]
+        height = 12 + title_font.get_height() + len(visible) * line_h
+        panel = pygame.Rect(0, 0, width, height)
+        panel.centery = anchor.centery
+        if is_player:
+            panel.left = anchor.right + 8
+        else:
+            panel.right = anchor.left - 8
+        panel.clamp_ip(pygame.Rect(0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+        bg = pygame.Surface(panel.size, pygame.SRCALPHA)
+        pygame.draw.rect(bg, (22, 20, 18, 238), bg.get_rect(), border_radius=7)
+        border = (120, 220, 235)
+        pygame.draw.rect(bg, border, bg.get_rect(), 1, border_radius=7)
+        self.window.blit(bg, panel.topleft)
+
+        title = title_font.render(f'+{len(entries)} support', True, (246, 226, 150))
+        self.window.blit(title, (panel.left + 8, panel.top + 6))
+        y = panel.top + 8 + title_font.get_height()
+        for entry in visible:
+            figure = entry.get('figure')
+            name = getattr(figure, 'name', 'Figure')
+            label = entry.get('label') or entry.get('kind') or 'Support'
+            value = entry.get('value') or ''
+            text = self._fit_text(f'{label} {value} · {name}', font, panel.width - 16)
+            surf = font.render(text, True, (232, 220, 180))
+            self.window.blit(surf, (panel.left + 8, y))
+            y += line_h
 
     def _draw_conquer_lane_support_rail(self, rect, entries, *, is_player, pulse=False):
         rail = pygame.Rect(rect).inflate(-3, -8)
@@ -2139,8 +2188,17 @@ class ConquerGameScreen(GameScreen):
             text = font.render(f'+{overflow}', True, (246, 239, 214))
             chip = text.get_rect(center=(rail.centerx, rail.bottom - max(8, text.get_height())))
             chip.inflate_ip(10, 5)
+            overflow_hovered = chip.collidepoint(mouse)
+            if not hasattr(self, '_conquer_support_overflow_rects'):
+                self._conquer_support_overflow_rects = []
+            self._conquer_support_overflow_rects.append({
+                'rect': pygame.Rect(chip),
+                'entries': entries[len(visible):],
+                'is_player': is_player,
+            })
             pygame.draw.rect(self.window, (26, 20, 14), chip, border_radius=chip.height // 2)
-            pygame.draw.rect(self.window, border, chip, 1, border_radius=chip.height // 2)
+            pygame.draw.rect(self.window, (120, 220, 235) if overflow_hovered else border,
+                             chip, 2 if overflow_hovered else 1, border_radius=chip.height // 2)
             self.window.blit(text, text.get_rect(center=chip.center))
 
     def _draw_conquer_lane_chip_rail(self, rect, chips, *, is_player):
@@ -2399,6 +2457,7 @@ class ConquerGameScreen(GameScreen):
         player_chips = self._conquer_lane_modifier_chips(player_display_move, player_figures)
         opponent_chips = self._conquer_lane_modifier_chips(opponent_move, opponent_figures)
         self._conquer_support_badge_rects = []
+        self._conquer_support_overflow_rects = []
 
         self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
         self._draw_conquer_lane_diff(
@@ -2471,6 +2530,7 @@ class ConquerGameScreen(GameScreen):
             round_idx,
             is_player=False,
         )
+        self._draw_conquer_support_overflow_popover()
 
     def render(self):
         self.window.fill(settings.BACKGROUND_COLOR)

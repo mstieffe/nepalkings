@@ -507,6 +507,44 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     assert ConquerGameScreen._conquer_support_source_rect(screen, healer.id) == pygame.Rect(180, 200, 44, 56)
 
 
+def test_conquer_support_rail_overflow_registers_hover_popover(monkeypatch):
+    from config import settings
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = window
+    screen._conquer_support_badge_rects = []
+    screen._conquer_support_overflow_rects = []
+    entries = []
+    for idx in range(6):
+        figure = _fighter(100 + idx, f'Supporter {idx}', 4, 1, (90, 150, 120),
+                          suit='Hearts', field='village', buffs_allies=True)
+        entries.append({
+            'kind': 'buffs_allies',
+            'label': 'Buff',
+            'value': '+4',
+            'figure': figure,
+        })
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: (0, 0))
+
+    ConquerGameScreen._draw_conquer_lane_support_rail(
+        screen,
+        pygame.Rect(300, 160, 56, 240),
+        entries,
+        is_player=True,
+    )
+
+    assert len(screen._conquer_support_badge_rects) == 4
+    assert len(screen._conquer_support_overflow_rects) == 1
+    overflow = screen._conquer_support_overflow_rects[0]
+    assert len(overflow['entries']) == 2
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: overflow['rect'].center)
+    assert ConquerGameScreen._current_conquer_support_overflow_entry(screen) == overflow
+    ConquerGameScreen._draw_conquer_support_overflow_popover(screen)
+
+
 def test_tactic_flight_overlay_draws_nonblank_pill(monkeypatch):
     from config import settings
     from game.screens.conquer_game_screen import ConquerGameScreen
