@@ -2440,8 +2440,10 @@ class ConquerGameScreen(GameScreen):
 
             name = self._fit_text(getattr(figure, 'name', 'Figure'), name_font, slot.width - 14)
             name_surf = name_font.render(name, True, (246, 239, 214))
+            # Name positioned a hair lower so the segmented power pill fits
+            # between figure art and name without overlapping either.
             self.window.blit(name_surf, name_surf.get_rect(
-                center=(slot.centerx, band.bottom - int(band.height * 0.14))))
+                center=(slot.centerx, band.bottom - int(band.height * 0.10))))
 
             base = self._conquer_lane_figure_power(figure)
             total = self._conquer_lane_figure_full_power(
@@ -2457,16 +2459,17 @@ class ConquerGameScreen(GameScreen):
                 is_player=is_player,
             )
             # Segmented colour-coded pill (#2): [base|+buff|+spell|+sup] = total.
-            # Falls back to a single coloured chip when the breakdown only
-            # has the base row (no modifiers in play).
+            # Anchored bottom-center between art and name so it does not
+            # cover the figure frame's gold corners (#round5).
             seg_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
             total_color = (235, 250, 220) if total > base else (250, 230, 220) if total < base else (42, 32, 20)
             total_bg = (40, 110, 60) if total > base else (148, 50, 50) if total < base else (238, 206, 111)
+            pill_anchor_y = center[1] + art_size // 2 + 4
             if len(breakdown) <= 1:
                 value_surf = value_font.render(str(total), True, total_color)
                 chip = value_surf.get_rect()
                 chip.inflate_ip(14, 7)
-                chip.center = (center[0] + art_size // 2 - 2, center[1] - art_size // 2 + 4)
+                chip.midtop = (slot.centerx, pill_anchor_y)
                 pygame.draw.rect(self.window, total_bg, chip, border_radius=chip.height // 2)
                 pygame.draw.rect(self.window, (24, 18, 12), chip, 1, border_radius=chip.height // 2)
                 self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
@@ -2487,17 +2490,19 @@ class ConquerGameScreen(GameScreen):
                 pad_x = 4
                 gap = 2
                 total_w = sum(s.get_width() + 2 * pad_x for s, _ in seg_surfaces) + gap * len(seg_surfaces) + total_surf.get_width() + 2 * pad_x
-                # Anchor near top-right of the figure.
+                # Anchor bottom-center between figure art and name so the
+                # frame's gold corners stay visible.
                 pill_h = max(seg_font.get_height(), value_font.get_height()) + 6
                 pill = pygame.Rect(0, 0, total_w + 4, pill_h)
-                pill.midright = (slot.right - 4, center[1] - art_size // 2 + 6)
-                pill.left = max(slot.left + 2, pill.left)
+                pill.midtop = (slot.centerx, pill_anchor_y)
+                # Clamp horizontally inside the slot.
+                pill.left = max(slot.left + 2, min(pill.left, slot.right - pill.width - 2))
                 # If still too wide, fall back to single total chip.
                 if pill.width > slot.width - 4:
                     value_surf = value_font.render(str(total), True, total_color)
                     chip = value_surf.get_rect()
                     chip.inflate_ip(14, 7)
-                    chip.center = (center[0] + art_size // 2 - 2, center[1] - art_size // 2 + 4)
+                    chip.midtop = (slot.centerx, pill_anchor_y)
                     pygame.draw.rect(self.window, total_bg, chip, border_radius=chip.height // 2)
                     pygame.draw.rect(self.window, (24, 18, 12), chip, 1, border_radius=chip.height // 2)
                     self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
@@ -3407,10 +3412,12 @@ class ConquerGameScreen(GameScreen):
                                         align_right=False):
         """Render a verbose, colour-coded math row inside ``area``.
 
-        Format: ``YOU  15 base +4 buff +2 spell +14 tactic = 33`` with each
-        segment painted in its receipt-row colour (#5).  If the line does
-        not fit, falls back to the compact one-liner so the math is still
-        readable.
+        Format: ``15 base +4 buff +2 spell +14 tactic = 33`` with each
+        segment painted in its receipt-row colour (#5).  The ``prefix``
+        argument is retained for backwards-compat but no longer rendered
+        — the side is identified by the ``prefix_color`` total chip and
+        the row's vertical position (#round5).  If the line does not fit,
+        falls back to short codes so the math is still readable.
         """
         area = pygame.Rect(area)
         if area.width <= 0 or area.height <= 0:
@@ -3418,8 +3425,6 @@ class ConquerGameScreen(GameScreen):
         font = settings.get_font(max(9, int(settings.FS_TINY * 0.72)), bold=True)
         # Build segments: (text, color)
         segments = []
-        # Side prefix.
-        segments.append((f'{prefix} ', prefix_color))
         total_text = '0'
         first_value = True
         for row in rows or []:
@@ -3446,13 +3451,13 @@ class ConquerGameScreen(GameScreen):
                 prefix_space = ' ' if not first_value else ''
                 segments.append((f'{prefix_space}{sign}{magnitude} {label.lower()}', colour))
                 first_value = False
-        segments.append((f'  =  {total_text}', self._conquer_receipt_label_color('Total')))
+        segments.append((f'  =  {total_text}', prefix_color))
 
         # Pre-render and measure.
         rendered = [(font.render(text, True, colour), text, colour) for text, colour in segments]
         total_w = sum(s.get_width() for s, _, _ in rendered)
         if total_w > area.width:
-            # Fall back to compact one-liner so it still fits.
+            # Fall back to compact one-liner (no side prefix).
             compact = self._fit_text(self._conquer_lane_compact_receipt(rows), font, area.width)
             surf = font.render(compact, True, prefix_color)
             x = area.right - surf.get_width() if align_right else area.left

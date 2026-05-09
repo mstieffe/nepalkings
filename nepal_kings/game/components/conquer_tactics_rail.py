@@ -146,6 +146,57 @@ class ConquerTacticsRail:
             return False
         return getattr(game, 'battle_turn_player_id', None) == getattr(game, 'player_id', None)
 
+    GAMBLE_PER_BATTLE_LIMIT = 3
+
+    def _gamble_block_reason(self) -> str:
+        """Return human-readable reason gambling is blocked, '' if allowed.
+
+        Mirrors server-side gating in
+        ``server/routes/battle_shop.py::battle_shop_gamble`` so the
+        rail's Gamble button shows the right tooltip without a round-trip.
+        """
+        game = getattr(self._parent.state, 'game', None)
+        if game is None:
+            return 'No active game'
+        # Battle must be confirmed (i.e. an active battle round).
+        if not getattr(game, 'battle_confirmed', False):
+            return 'Gamble only during active battle rounds'
+        # Must be your turn.
+        my_id = getattr(game, 'player_id', None)
+        turn_id = getattr(game, 'battle_turn_player_id', None)
+        if turn_id is None or turn_id != my_id:
+            return 'Not your battle turn'
+        # Per-round + per-battle gamble caps.
+        counts = getattr(game, 'battle_gamble_counts', None) or {}
+        pid_str = str(my_id)
+        state = counts.get(pid_str, 0)
+        used_count = 0
+        used_rounds: list = []
+        if isinstance(state, dict):
+            try:
+                used_count = int(state.get('count', 0) or 0)
+            except (TypeError, ValueError):
+                used_count = 0
+            for r in state.get('rounds', []) or []:
+                try:
+                    used_rounds.append(int(r))
+                except (TypeError, ValueError):
+                    continue
+        else:
+            try:
+                used_count = int(state or 0)
+            except (TypeError, ValueError):
+                used_count = 0
+        try:
+            current_round = int(getattr(game, 'battle_round', 0) or 0)
+        except (TypeError, ValueError):
+            current_round = 0
+        if current_round in used_rounds:
+            return 'Already gambled this round'
+        if used_count >= self.GAMBLE_PER_BATTLE_LIMIT:
+            return f'Gamble limit reached ({used_count}/{self.GAMBLE_PER_BATTLE_LIMIT})'
+        return ''
+
     def _power(self, move: Dict[str, Any]) -> int:
         display_power = getattr(self._parent, '_conquer_tactic_display_power', None)
         if callable(display_power):
@@ -245,7 +296,7 @@ class ConquerTacticsRail:
         """Clear ephemeral state after a server action completed."""
         self.reset_selection()
 
-    NEW_MOVE_GLOW_MS = 1500
+    NEW_MOVE_GLOW_MS = 3500
     RESULT_BANNER_DEFAULT_MS = 4500
 
     def set_result_banner(self, text: str,
@@ -831,19 +882,41 @@ class ConquerTacticsRail:
         border_col = _SELECTED_RGBA if is_selected else (190, 178, 120) if hovered else (_BORDER_RGBA if not is_partner else (130, 200, 250))
         pygame.draw.rect(self.window, border_col, rect, 2, border_radius=4)
 
-        # New-move glow (#8c) — short pulse on freshly added moves.
+        # New-move glow (#round5) — stronger pulse + outer halo + corner
+        # NEW ribbon for ``NEW_MOVE_GLOW_MS`` after a new move appears.
         mid = int(move.get('id') or 0)
         glow_until = self._new_move_glow_until.get(mid)
         now = pygame.time.get_ticks()
         if glow_until and glow_until > now:
-            phase = (now % 600) / 600.0
+            phase = (now % 700) / 700.0
             pulse = 1.0 - abs(0.5 - phase) * 2.0
-            alpha = int(120 + 110 * pulse)
+            # Last 600 ms fade ramp so the glow gracefully exits.
+            remaining = max(0, glow_until - now)
+            ramp = max(0.25, min(1.0, remaining / 600.0)) if remaining < 600 else 1.0
+            alpha = int((140 + 115 * pulse) * ramp)
+            # Outer halo — drawn larger for a more eye-catching effect.
+            halo = pygame.Surface((rect.width + 8, rect.height + 8), pygame.SRCALPHA)
+            pygame.draw.rect(halo, (250, 226, 130, max(0, alpha // 2)),
+                             halo.get_rect(), 4, border_radius=6)
+            self.window.blit(halo, (rect.left - 4, rect.top - 4))
+            # Inner thick border pulse.
             glow_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
             pygame.draw.rect(glow_surf, (250, 226, 130, alpha),
-                             glow_surf.get_rect().inflate(-2, -2), 3,
+                             glow_surf.get_rect().inflate(-2, -2), 4,
                              border_radius=4)
             self.window.blit(glow_surf, rect.topleft)
+            # NEW ribbon top-right.
+            ribbon_font = settings.get_font(max(8, int(settings.FS_TINY * 0.7)), bold=True)
+            ribbon_surf = ribbon_font.render('NEW', True, (24, 18, 12))
+            ribbon_rect = ribbon_surf.get_rect()
+            ribbon_rect.inflate_ip(8, 4)
+            ribbon_rect.topright = (rect.right - 4, rect.top + 2)
+            ribbon_bg = pygame.Surface(ribbon_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(ribbon_bg, (250, 226, 130, int(245 * ramp)),
+                             ribbon_bg.get_rect(),
+                             border_radius=ribbon_rect.height // 2)
+            self.window.blit(ribbon_bg, ribbon_rect.topleft)
+            self.window.blit(ribbon_surf, ribbon_surf.get_rect(center=ribbon_rect.center))
 
         # Combine-pulse (#8b): when a single dagger is selected, all
         # eligible partner daggers in the rail pulse blue.
@@ -925,10 +998,10 @@ class ConquerTacticsRail:
         if self._is_double_dagger(move):
             name = 'Double Dagger'
 
-        # Power (right edge)
-        pwr_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.05)), bold=True)
-        pwr_surf = pwr_font.render(str(self._power(move)), True, _TEXT_PRIMARY)
-        max_text_w = max(24, rect.right - text_x - pwr_surf.get_width() - 18)
+        # Power is already rendered inside the battle-move icon itself, so
+        # we omit the duplicate right-edge number to free horizontal
+        # space for the move name + suit chip (#round5).
+        max_text_w = max(24, rect.right - text_x - 18)
 
         name_surf = font.render(self._fit_text(name, font, max_text_w), True, _TEXT_PRIMARY)
         self.window.blit(name_surf, (text_x, rect.top + 6))
@@ -937,8 +1010,6 @@ class ConquerTacticsRail:
         chip_surf = chip_font.render(
             self._fit_text(chip_text, chip_font, max_text_w), True, _TEXT_SECONDARY)
         self.window.blit(chip_surf, (text_x, rect.top + 6 + name_surf.get_height() + 1))
-
-        self.window.blit(pwr_surf, (rect.right - pwr_surf.get_width() - 8, rect.centery - pwr_surf.get_height() // 2))
 
         # Strongest-move badge (#8d) — small star/spark glyph on the
         # currently highest-power move.
@@ -1003,7 +1074,11 @@ class ConquerTacticsRail:
         if not sel:
             buttons.append((ACTION_GAMBLE, 'Gamble', False, 'Pick a tactic first'))
         else:
-            buttons.append((ACTION_GAMBLE, 'Gamble', True, ''))
+            block_reason = self._gamble_block_reason()
+            if block_reason:
+                buttons.append((ACTION_GAMBLE, 'Gamble', False, block_reason))
+            else:
+                buttons.append((ACTION_GAMBLE, 'Gamble', True, ''))
         # Combine
         if not sel:
             combine_label = 'Combine'

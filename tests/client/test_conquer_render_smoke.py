@@ -159,6 +159,8 @@ def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
         player_id=1,
         battle_round=1,
         battle_turn_player_id=1,
+        battle_confirmed=True,
+        battle_gamble_counts={},
         last_battle_result=None,
     )
     moves = [

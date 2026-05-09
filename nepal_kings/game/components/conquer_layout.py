@@ -52,7 +52,7 @@ _LEDGER_H_PCT = 0.1685                  # ledger band height (pre+battle modes)
 
 # Tactics rail (LEFT) — battlefield (RIGHT)
 _RAIL_X_PCT = 0.025
-_RAIL_W_PCT = 0.160
+_RAIL_W_PCT = 0.135
 _RAIL_TO_FIELD_GAP_W_PCT = 0.0125
 _FIELD_X_PCT = _RAIL_X_PCT + _RAIL_W_PCT + _RAIL_TO_FIELD_GAP_W_PCT
 _FIELD_W_PCT = 1.0 - _FIELD_X_PCT - _MARGIN_X_PCT
@@ -63,7 +63,7 @@ _FIELD_INNER_PAD_Y_PCT = 0.024
 
 # Battlefield columns + duel lane (fractions of the battlefield inner width)
 _FIELD_COL_W_FRAC = 0.115
-_FIELD_LANE_W_FRAC = 0.255
+_FIELD_LANE_W_FRAC = 0.295
 
 # Tactics rail inner layout
 _RAIL_INNER_PAD_X_PCT = 0.00833
@@ -87,8 +87,8 @@ _LANE_DIFF_BAND_H_FRAC = 0.13
 _LANE_BAND_GAP_H_FRAC = 0.015
 
 # Support strip widths (inside the duel lane)
-_SUPPORT_BADGE_RAIL_W_PCT = 0.035
-_SUPPORT_CHIP_RAIL_W_PCT = 0.015
+_SUPPORT_BADGE_RAIL_W_PCT = 0.050
+_SUPPORT_CHIP_RAIL_W_PCT = 0.025
 
 # Narrow / mobile breakpoint (W/H aspect ratio)
 _NARROW_ASPECT_RATIO = 1.30
