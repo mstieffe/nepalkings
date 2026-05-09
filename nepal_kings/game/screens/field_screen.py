@@ -1537,7 +1537,14 @@ class FieldScreen(SubScreen):
             if not context_kind:
                 continue
             is_own = getattr(figure, 'player_id', None) == getattr(game, 'player_id', None)
-            if context_kind == 'preview':
+            is_hover_source = (
+                getattr(figure, 'id', None)
+                == getattr(self, '_conquer_hover_source_figure_id', None)
+            )
+            ring_width = 5 if is_hover_source else 4
+            if is_hover_source:
+                color = (120, 220, 235, 245)
+            elif context_kind == 'preview':
                 phase = (pygame.time.get_ticks() % 900) / 900.0
                 pulse = 1.0 - abs(0.5 - phase) * 2.0
                 color = (120, 205, 220, int(150 + 70 * pulse))
@@ -1547,7 +1554,7 @@ class FieldScreen(SubScreen):
                 color = (112, 220, 150, 220) if is_own else (232, 118, 110, 220)
             ring_r = radius + 5
             ring_surf = pygame.Surface((ring_r * 2 + 12, ring_r * 2 + 12), pygame.SRCALPHA)
-            pygame.draw.circle(ring_surf, color, (ring_r + 6, ring_r + 6), ring_r, 4)
+            pygame.draw.circle(ring_surf, color, (ring_r + 6, ring_r + 6), ring_r, ring_width)
             self.window.blit(ring_surf, (cx - ring_r - 6, cy - ring_r - 6))
 
     def _open_tactics_hand_battle_detail(self, clicked_icon):

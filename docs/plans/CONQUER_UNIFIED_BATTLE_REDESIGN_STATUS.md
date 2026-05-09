@@ -115,6 +115,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - The center diff band now stacks compact rows for base, called figure, buffs, wall, land, enchantment, tactic, range penalty, block marker, and total when those inputs are present.
   - Receipt totals now use the same visible contributor sources as the support/chip rails instead of only showing base+tactic.
 
+- DONE: Added first-pass support badge hover cross-links.
+  - Duel-lane support badges now register hit rects and highlight on hover.
+  - Hovered support badges publish their source figure id to the field overlay and draw a cyan leader line to the source figure icon when its rect is available.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -196,6 +200,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader duel-lane support contributor conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 174 passed.
 - DONE: Focused duel-lane receipt-row regression passed: `tests/client/test_conquer_render_smoke.py` passed: 9 passed.
 - DONE: Broader duel-lane receipt-row conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 174 passed.
+- DONE: Focused support badge hover-link regression passed: `tests/client/test_conquer_render_smoke.py` passed: 9 passed.
+- DONE: Broader support badge hover-link conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 174 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -243,7 +249,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: First-pass predictive source highlighting pulses hovered tactic call-figure sources in the field.
   - DONE: Real first-pass support contributor badge rails are implemented for buffs, walls, blockers, and distance attackers.
   - DONE: First-pass receipt rows now explain the duel-lane diff from visible contributors.
-  - TODO: Support badge hover cross-links and receipt-row highlighting are still missing.
+  - DONE: First-pass support badge hover cross-links now highlight the badge/source and draw source leader lines.
+  - TODO: Receipt-row highlighting is still missing.
   - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
   - DONE: First-pass round-card reveal replay animation is implemented for newly completed ledger cards.
 

@@ -2000,14 +2000,17 @@ class ConquerGameScreen(GameScreen):
         cache[key] = surf
         return surf
 
-    def _draw_conquer_lane_support_badge(self, badge, entry, *, is_player, pulse=False):
+    def _draw_conquer_lane_support_badge(self, badge, entry, *, is_player,
+                                         pulse=False, hovered=False):
         figure = entry['figure']
         badge = pygame.Rect(badge)
         fill = (28, 56, 50, 232) if is_player else (62, 40, 42, 232)
         border = (112, 220, 150) if is_player else (232, 118, 110)
+        if hovered:
+            border = (120, 220, 235)
         pygame.draw.rect(self.window, fill, badge, border_radius=6)
-        pygame.draw.rect(self.window, border, badge, 2, border_radius=6)
-        if pulse:
+        pygame.draw.rect(self.window, border, badge, 3 if hovered else 2, border_radius=6)
+        if pulse or hovered:
             phase = (pygame.time.get_ticks() % 900) / 900.0
             pulse_alpha = int(70 + 90 * (1.0 - abs(0.5 - phase) * 2.0))
             glow = pygame.Surface(badge.size, pygame.SRCALPHA)
@@ -2053,6 +2056,53 @@ class ConquerGameScreen(GameScreen):
         pygame.draw.rect(self.window, border, value_chip, 1, border_radius=value_chip.height // 2)
         self.window.blit(value_surf, value_surf.get_rect(center=value_chip.center))
 
+    def _register_conquer_support_badge_rect(self, badge, entry, *, is_player):
+        rects = getattr(self, '_conquer_support_badge_rects', None)
+        if rects is None:
+            rects = []
+            self._conquer_support_badge_rects = rects
+        figure = entry.get('figure') if isinstance(entry, dict) else None
+        rects.append({
+            'rect': pygame.Rect(badge),
+            'entry': entry,
+            'figure_id': getattr(figure, 'id', None),
+            'is_player': is_player,
+        })
+
+    def _current_conquer_support_hover_entry(self):
+        mouse = pygame.mouse.get_pos()
+        for info in reversed(getattr(self, '_conquer_support_badge_rects', []) or []):
+            rect = info.get('rect')
+            if rect and pygame.Rect(rect).collidepoint(mouse):
+                return info
+        return None
+
+    def _update_conquer_support_hover_state(self):
+        info = self._current_conquer_support_hover_entry()
+        self._conquer_hovered_support_badge = info
+        field = getattr(self, 'subscreens', {}).get('field') if hasattr(self, 'subscreens') else None
+        if field is not None:
+            field._conquer_hover_source_figure_id = info.get('figure_id') if info else None
+        return info
+
+    def _conquer_support_source_rect(self, figure_id):
+        if figure_id is None:
+            return None
+        field = getattr(self, 'subscreens', {}).get('field') if hasattr(self, 'subscreens') else None
+        icon = getattr(field, 'icon_cache', {}).get(figure_id) if field is not None else None
+        rect = getattr(icon, 'rect_frame', None) or getattr(icon, 'rect_frame_big', None)
+        return pygame.Rect(rect) if rect else None
+
+    def _draw_conquer_lane_source_link(self, badge_rect, source_rect, *, is_player):
+        badge_rect = pygame.Rect(badge_rect)
+        source_rect = pygame.Rect(source_rect)
+        start = badge_rect.center
+        end = source_rect.center
+        color = (120, 220, 235, 210)
+        pygame.draw.line(self.window, color, start, end, 3)
+        pygame.draw.circle(self.window, color, start, 4)
+        pygame.draw.circle(self.window, color, end, 6, 2)
+
     def _draw_conquer_lane_support_rail(self, rect, entries, *, is_player, pulse=False):
         rail = pygame.Rect(rect).inflate(-3, -8)
         if rail.width <= 0 or rail.height <= 0:
@@ -2068,11 +2118,20 @@ class ConquerGameScreen(GameScreen):
         gap = max(4, int(rail.height * 0.018))
         badge_h = min(rail.width, max(24, (rail.height - gap * (len(visible) + 1)) // len(visible)))
         y = rail.top + gap
+        mouse = pygame.mouse.get_pos()
         for entry in visible:
             badge = pygame.Rect(0, 0, max(1, rail.width - 4), badge_h)
             badge.centerx = rail.centerx
             badge.top = y
-            self._draw_conquer_lane_support_badge(badge, entry, is_player=is_player, pulse=pulse)
+            hovered = badge.collidepoint(mouse)
+            self._register_conquer_support_badge_rect(badge, entry, is_player=is_player)
+            self._draw_conquer_lane_support_badge(
+                badge,
+                entry,
+                is_player=is_player,
+                pulse=pulse,
+                hovered=hovered,
+            )
             y += badge_h + gap
         overflow = len(entries) - len(visible)
         if overflow > 0:
@@ -2339,6 +2398,7 @@ class ConquerGameScreen(GameScreen):
             player_figures, opponent_figures, is_player=False)
         player_chips = self._conquer_lane_modifier_chips(player_display_move, player_figures)
         opponent_chips = self._conquer_lane_modifier_chips(opponent_move, opponent_figures)
+        self._conquer_support_badge_rects = []
 
         self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
         self._draw_conquer_lane_diff(
@@ -2378,6 +2438,15 @@ class ConquerGameScreen(GameScreen):
             opponent_chips,
             is_player=False,
         )
+        hovered_support = self._update_conquer_support_hover_state()
+        if hovered_support:
+            source_rect = self._conquer_support_source_rect(hovered_support.get('figure_id'))
+            if source_rect:
+                self._draw_conquer_lane_source_link(
+                    hovered_support.get('rect'),
+                    source_rect,
+                    is_player=hovered_support.get('is_player', True),
+                )
         self._draw_conquer_lane_leader_line(
             lane.you_support_badge_rail,
             lane.you_fighter_band,
@@ -2409,6 +2478,8 @@ class ConquerGameScreen(GameScreen):
             return
 
         self._normalize_conquer_subscreen()
+        if self._is_tactics_hand_game():
+            self._update_conquer_support_hover_state()
 
         subscreen = self.subscreens.get(self.state.subscreen)
         if subscreen:

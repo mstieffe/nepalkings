@@ -404,7 +404,7 @@ def test_conquer_duel_lane_uses_hovered_tactic_as_preview(monkeypatch):
     assert captured['diff'][0] == preview
 
 
-def test_conquer_duel_lane_draws_real_support_badges_and_chips():
+def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     from config import settings
     from game.components.conquer_layout import compute_conquer_layout
     from game.screens.conquer_game_screen import ConquerGameScreen
@@ -446,7 +446,11 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips():
     screen.window = window
     screen.state = SimpleNamespace(game=game)
     screen.subscreens = {
-        'field': SimpleNamespace(figures=[attacker, defender, healer, archer, wall]),
+        'field': SimpleNamespace(
+            figures=[attacker, defender, healer, archer, wall],
+            icon_cache={30: SimpleNamespace(rect_frame=pygame.Rect(180, 200, 44, 56))},
+            _conquer_hover_source_figure_id=None,
+        ),
         'battle': SimpleNamespace(opp_played=[
             _move(21, family='Shield', suit='Clubs', rank='9', value=3,
                   status='played', played_round=0),
@@ -494,6 +498,13 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips():
     assert _rect_has_non_background_pixel(window, lane.you_support_badge_rail)
     assert _rect_has_non_background_pixel(window, lane.opp_support_badge_rail)
     assert _rect_has_non_background_pixel(window, lane.you_support_chip_rail)
+
+    first_badge = screen._conquer_support_badge_rects[0]
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: first_badge['rect'].center)
+    hovered = ConquerGameScreen._update_conquer_support_hover_state(screen)
+    assert hovered['figure_id'] == healer.id
+    assert screen.subscreens['field']._conquer_hover_source_figure_id == healer.id
+    assert ConquerGameScreen._conquer_support_source_rect(screen, healer.id) == pygame.Rect(180, 200, 44, 56)
 
 
 def test_tactic_flight_overlay_draws_nonblank_pill(monkeypatch):
