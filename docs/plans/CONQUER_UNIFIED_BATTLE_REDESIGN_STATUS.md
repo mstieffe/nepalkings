@@ -246,6 +246,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Latest broader screenshot UI conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 184 passed.
 - DONE: Focused AI tactics-hand loop/fallback regression passed: `tests/server/test_ai_integration_scenarios.py::test_conquer_loop_battle_round_uses_tactics_hand_rows tests/server/test_ai_worker.py::test_conquer_skip_battle_turn_with_fallback_uses_conquer_tactic_endpoint` passed: 2 passed.
 - DONE: Broader AI tactics-hand regression passed: `tests/server/test_ai_worker.py tests/server/test_ai_integration_scenarios.py tests/server/test_ai_action_enum.py tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py` passed: 88 passed.
+- DONE: Richer AI first-round full-flow regression passed: `tests/server/test_ai_integration_scenarios.py::test_conquer_loop_first_round_posts_real_tactics_for_both_sides` passed: 1 passed.
+- DONE: Broader AI tactics-hand regression passed after full-flow coverage: `tests/server/test_ai_worker.py tests/server/test_ai_integration_scenarios.py tests/server/test_ai_action_enum.py tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py` passed: 89 passed.
 - DONE: Focused Phase 7 spell edge regression passed: `tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
 - DONE: Broader spell/tactics-hand server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_conquer_tactics_math.py` passed: 38 passed.
 - DONE: Focused battle-shop route-gating regression passed: `tests/server/test_battle_shop.py::TestTacticsHandBattleShopGating` passed: 2 passed.
@@ -284,7 +286,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Added AI integration coverage proving a tactics-hand battle-round loop reads real `ConquerTactic` rows and plays through the conquer tactic endpoint.
   - DONE: Added AI skip-fallback coverage proving stale skip recovery stays on the conquer tactic endpoint for tactics-hand games.
   - DONE: Added Invader Swap regression proving a swapped AI invader keeps tactics-hand rows and player-safe tactic serialization.
-  - TODO: Add richer attacker/defender full-flow AI scenarios.
+  - DONE: Added first-round attacker/defender full-flow AI coverage that posts through the real `play_conquer_tactic` endpoint for both sides and verifies round advancement.
+  - TODO: Add additional later-round/result AI full-flow scenarios if Phase 8 needs exhaustive coverage.
   - TODO: Check generic LLM action paths for `combine_conquer_tactics` enumeration if needed beyond deterministic conquer flow.
 
 - PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.

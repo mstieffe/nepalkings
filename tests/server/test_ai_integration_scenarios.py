@@ -274,6 +274,82 @@ def test_conquer_loop_battle_round_uses_tactics_hand_rows(app, db, monkeypatch):
     assert captured['params']['battle_move_id'] in defender_tactic_ids
 
 
+def test_conquer_loop_first_round_posts_real_tactics_for_both_sides(app, db, monkeypatch):
+    from models import ConquerTactic, Player, User
+    from tests.server.test_conquer_tactics_hand import (
+        _force_active_battle,
+        _start_player_owned_conquer,
+    )
+    from tests.server.test_land_battle import _auth_headers
+
+    _reset_worker_state()
+    client, _attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+    monkeypatch.setattr(ai_worker.settings, 'AI_ENABLED', True)
+    monkeypatch.setattr(ai_worker.settings, 'AI_OPENAI_API_KEY', 'test-key')
+    monkeypatch.setattr(ai_worker.settings, 'AI_THINK_DELAY', 0)
+    monkeypatch.setattr(ai_worker.time, 'sleep', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ai_worker, '_maybe_send_ai_chat', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ai_worker, 'trigger_ai_if_needed', lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(
+        ai_worker,
+        'detect_phase',
+        _sequence(['battle_round', None, None, 'battle_round', None, None]),
+    )
+
+    posted = []
+
+    def _post_conquer_tactic(_base, game_id, player_id, params):
+        player = db.session.get(Player, player_id)
+        user = db.session.get(User, player.user_id)
+        payload = {
+            'game_id': game_id,
+            'player_id': player_id,
+            'tactic_id': params.get('tactic_id') or params.get('battle_move_id'),
+        }
+        if params.get('call_figure_id'):
+            payload['call_figure_id'] = params['call_figure_id']
+        resp = client.post(
+            '/games/play_conquer_tactic',
+            json=payload,
+            headers=_auth_headers(app, user),
+        )
+        data = resp.get_json()
+        posted.append((player_id, resp.status_code, data))
+        return resp.status_code == 200 and data.get('success') is True
+
+    def _fail_legacy(*_args, **_kwargs):
+        raise AssertionError('tactics-hand conquer loop must not post legacy battle moves')
+
+    monkeypatch.setattr(ai_worker, '_exec_play_conquer_tactic', _post_conquer_tactic)
+    monkeypatch.setattr(ai_worker, '_exec_play_battle_move', _fail_legacy)
+
+    ai_worker._conquer_ai_loop(app, game.id, attacker_player.id)
+    db.session.refresh(game)
+    assert game.battle_turn_player_id == defender_player.id
+    assert ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=attacker_player.id,
+        status='played',
+        played_round=0,
+    ).count() == 1
+
+    ai_worker._conquer_ai_loop(app, game.id, defender_player.id)
+    db.session.refresh(game)
+    assert game.battle_round == 1
+    assert game.battle_turn_player_id == game.invader_player_id
+    assert ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=defender_player.id,
+        status='played',
+        played_round=0,
+    ).count() == 1
+    assert [item[0] for item in posted] == [attacker_player.id, defender_player.id]
+
+
 def test_loop_failure_schedules_watchdog_retry_when_ai_still_owns_turn(app, db, monkeypatch):
     _reset_worker_state()
     game, ai_player = _create_game_with_ai(db)
