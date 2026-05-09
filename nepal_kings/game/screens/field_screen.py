@@ -1439,9 +1439,14 @@ class FieldScreen(SubScreen):
         entries = []
         entries.extend(list(getattr(game, 'conquer_tactics', []) or []))
         parent = self._conquer_parent()
-        if parent and hasattr(parent, '_current_conquer_battle_moves'):
+        getter = None
+        if parent:
+            getter = getattr(parent, '_current_conquer_tactics', None)
+            if getter is None:
+                getter = getattr(parent, '_current_conquer_battle_moves', None)
+        if getter:
             try:
-                entries.extend(list(parent._current_conquer_battle_moves() or []))
+                entries.extend(list(getter() or []))
             except Exception:
                 pass
         battle = getattr(parent, 'subscreens', {}).get('battle') if parent else None

@@ -74,7 +74,10 @@ class ConquerRoundLedger:
         """3-slot array of this player's played moves indexed by round."""
         moves = []
         try:
-            moves = list(self._parent._current_conquer_battle_moves() or [])
+            getter = getattr(self._parent, '_current_conquer_tactics', None)
+            if getter is None:
+                getter = getattr(self._parent, '_current_conquer_battle_moves', None)
+            moves = list(getter() or []) if getter is not None else []
         except Exception:
             moves = []
         slots: List[Optional[Dict[str, Any]]] = [None, None, None]

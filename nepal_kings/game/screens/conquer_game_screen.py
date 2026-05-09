@@ -172,6 +172,8 @@ class ConquerGameScreen(GameScreen):
         self._conquer_timeline_panel = ConquerTimelinePanel(self.window)
         self._conquer_timeline_overlay_until = 0
         self._conquer_collapsed_header_rect = None
+        self._conquer_tactic_cache_key = None
+        self._conquer_tactic_cache = []
         self._conquer_battle_move_cache_key = None
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
@@ -696,6 +698,7 @@ class ConquerGameScreen(GameScreen):
             # we don't want a transient failure to blow up the input loop.
             pass
         self._tactics_rail.reset_after_action()
+        self._conquer_tactic_cache_key = None  # force refetch
         self._conquer_battle_move_cache_key = None  # force refetch
 
     def _reset_game_screen_state(self):
@@ -1333,36 +1336,43 @@ class ConquerGameScreen(GameScreen):
             self._conquer_move_panel_empty_font = font
         return font
 
+    def _current_conquer_tactics(self):
+        game = self.state.game
+        if not game:
+            return []
+        if not self._is_tactics_hand_game():
+            return []
+
+        game_id = getattr(game, 'game_id', None)
+        player_id = getattr(game, 'player_id', None)
+        if not game_id or not player_id:
+            return list(getattr(game, 'conquer_tactics', []) or [])
+
+        cache_key = (
+            'tactics',
+            game_id,
+            player_id,
+            getattr(game, '_game_data_version', 0),
+            getattr(game, 'battle_turn_player_id', None),
+            getattr(game, 'battle_round', None),
+        )
+        if cache_key == getattr(self, '_conquer_tactic_cache_key', None):
+            return list(getattr(self, '_conquer_tactic_cache', []) or [])
+        try:
+            result = game_service.get_battle_state(game_id, player_id)
+            tactics = result.get('player_tactics') or result.get('player_moves') or []
+        except Exception:
+            tactics = list(getattr(self, '_conquer_tactic_cache', []) or [])
+        self._conquer_tactic_cache_key = cache_key
+        self._conquer_tactic_cache = [dict(move) for move in tactics]
+        return list(self._conquer_tactic_cache)
+
     def _current_conquer_battle_moves(self):
         game = self.state.game
         if not game:
             return []
-
         if self._is_tactics_hand_game():
-            game_id = getattr(game, 'game_id', None)
-            player_id = getattr(game, 'player_id', None)
-            if not game_id or not player_id:
-                return list(getattr(game, 'conquer_tactics', []) or [])
-
-            cache_key = (
-                'tactics',
-                game_id,
-                player_id,
-                getattr(game, '_game_data_version', 0),
-                getattr(game, 'battle_turn_player_id', None),
-                getattr(game, 'battle_round', None),
-            )
-            if cache_key == getattr(self, '_conquer_battle_move_cache_key', None):
-                return list(getattr(self, '_conquer_battle_move_cache', []) or [])
-            try:
-                result = game_service.get_battle_state(game_id, player_id)
-                moves = result.get('player_tactics') or result.get('player_moves') or []
-            except Exception:
-                moves = list(getattr(self, '_conquer_battle_move_cache', []) or [])
-            self._conquer_battle_move_cache_key = cache_key
-            self._conquer_battle_move_cache = [dict(move) for move in moves]
-            self._sync_conquer_battle_move_subscreen_cache(self._conquer_battle_move_cache)
-            return list(self._conquer_battle_move_cache)
+            return self._current_conquer_tactics()
 
         battle = self.subscreens.get('battle') if hasattr(self, 'subscreens') else None
         battle_moves = getattr(battle, 'player_moves', None) if battle else None
@@ -1704,7 +1714,7 @@ class ConquerGameScreen(GameScreen):
         opponent_slots = [None, None, None]
 
         try:
-            player_moves = self._current_conquer_battle_moves() or []
+            player_moves = self._current_conquer_tactics() or []
         except Exception:
             player_moves = []
         for move in player_moves:

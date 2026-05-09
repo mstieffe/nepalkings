@@ -85,7 +85,10 @@ class ConquerTacticsRail:
     # ------------------------------------------------------------------ data
     def _moves(self) -> List[Dict[str, Any]]:
         try:
-            return list(self._parent._current_conquer_battle_moves() or [])
+                getter = getattr(self._parent, '_current_conquer_tactics', None)
+                if getter is None:
+                    getter = getattr(self._parent, '_current_conquer_battle_moves', None)
+                return list(getter() or []) if getter is not None else []
         except Exception:
             return []
 
