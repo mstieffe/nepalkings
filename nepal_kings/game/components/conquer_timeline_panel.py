@@ -17,6 +17,7 @@ import math
 import pygame
 
 from config import settings
+from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.screens.conquer_flow import derive_conquer_timeline
 
 
@@ -125,9 +126,15 @@ class ConquerTimelinePanel:
         avail_w = settings.SCREEN_WIDTH - 2 * pad_x
         info_w = max(_INFO_MIN_W, int(avail_w * 0.35)) if info_visible else 0
         timeline_w = avail_w - info_w - (_BUBBLE_GAP if info_visible else 0)
-        bubble_w = max(_BUBBLE_MIN_W,
-                       min(_BUBBLE_MAX_W,
-                           (timeline_w - _BUBBLE_GAP * (max(1, n_visible) - 1)) // max(1, n_visible)))
+        bubble_room = (
+            timeline_w - _BUBBLE_GAP * (max(1, n_visible) - 1)
+        ) // max(1, n_visible)
+        compact_min_w = 68 if n_visible >= 8 else _BUBBLE_MIN_W
+        bubble_w = max(54, min(_BUBBLE_MAX_W, bubble_room))
+        if bubble_w < compact_min_w:
+            needed = compact_min_w * n_visible + _BUBBLE_GAP * max(0, n_visible - 1)
+            if needed <= timeline_w:
+                bubble_w = compact_min_w
 
         line_y = body_top + body_h // 2
 
@@ -217,7 +224,11 @@ class ConquerTimelinePanel:
 
     def derive_display_steps(self, screen):
         steps = self._derive_steps(screen)
-        return self._apply_sequence_gates(screen, steps)
+        steps = self._apply_sequence_gates(screen, steps)
+        battle_steps = getattr(screen, '_conquer_battle_timeline_steps', None)
+        if callable(battle_steps):
+            steps = battle_steps(steps)
+        return steps
 
     def _apply_sequence_gates(self, screen, steps):
         """Hold resolved sequence beats on screen before later beats appear.
@@ -237,13 +248,13 @@ class ConquerTimelinePanel:
             timers = {}
             screen._conquer_timeline_step_started_at = timers
 
-            game = getattr(getattr(screen, 'state', None), 'game', None)
-            if game and (
-                getattr(game, 'state', None) == 'finished'
-                or getattr(game, 'game_over', False)
-                or (getattr(game, 'battle_confirmed', False)
-                    and getattr(game, 'battle_turn_player_id', None) is not None)):
-                return steps
+        game = getattr(getattr(screen, 'state', None), 'game', None)
+        if game and (
+            getattr(game, 'state', None) == 'finished'
+            or getattr(game, 'game_over', False)
+            or getattr(game, 'battle_turn_player_id', None) is not None
+            or getattr(game, 'last_battle_result', None)):
+            return steps
 
         now = pygame.time.get_ticks()
         for idx, step in enumerate(steps):
@@ -409,10 +420,45 @@ class ConquerTimelinePanel:
             self._draw_figure_icon(screen, rect, payload.get('figure'),
                                    payload.get('side', 'opponent'),
                                    bool(payload.get('reveal', False)))
+        elif kind == 'tactic':
+            self._draw_tactic_icon(screen, rect, step.icon_payload)
         elif kind == 'go':
             self._draw_go_icon(rect, step.completed, step.active)
         else:
             self._draw_silhouette(rect)
+
+    def _draw_tactic_icon(self, screen, rect, payload):
+        move = payload.get('move') if isinstance(payload, dict) else payload
+        if not isinstance(move, dict) or not move.get('family_name'):
+            self._draw_silhouette(rect)
+            return
+        icon_size = max(20, min(rect.width, rect.height))
+        try:
+            glow_cache, icon_cache, frame_cache, suit_icon_cache, icon_font = (
+                screen._conquer_battle_move_icon_assets(icon_size))
+            draw_battle_move_icon(
+                self.window,
+                rect.centerx,
+                rect.centery,
+                move.get('family_name', ''),
+                move.get('suit', ''),
+                0 if move.get('family_name') == 'Block' else int(move.get('value') or 0),
+                glow_cache,
+                icon_cache,
+                frame_cache,
+                suit_icon_cache,
+                icon_font,
+                icon_size,
+                hovered=False,
+                is_used=True,
+                suit_b=move.get('suit_b'),
+            )
+        except Exception:
+            pygame.draw.rect(self.window, (64, 57, 47), rect, border_radius=6)
+            letter = self.bubble_title_font.render(
+                (move.get('family_name') or '?')[:1], True, (230, 210, 160))
+            self.window.blit(letter, letter.get_rect(center=rect.center))
+            pygame.draw.rect(self.window, (184, 142, 71), rect, 1, border_radius=6)
 
     def _draw_land_icon(self, rect, payload):
         tier = payload.get('tier')

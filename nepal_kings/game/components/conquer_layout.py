@@ -52,7 +52,7 @@ _LEDGER_H_PCT = 0.1685                  # ledger band height (pre+battle modes)
 
 # Tactics rail (LEFT) — battlefield (RIGHT)
 _RAIL_X_PCT = 0.025
-_RAIL_W_PCT = 0.225
+_RAIL_W_PCT = 0.185
 _RAIL_TO_FIELD_GAP_W_PCT = 0.0125
 _FIELD_X_PCT = _RAIL_X_PCT + _RAIL_W_PCT + _RAIL_TO_FIELD_GAP_W_PCT
 _FIELD_W_PCT = 1.0 - _FIELD_X_PCT - _MARGIN_X_PCT
@@ -61,9 +61,9 @@ _FIELD_W_PCT = 1.0 - _FIELD_X_PCT - _MARGIN_X_PCT
 _FIELD_INNER_PAD_X_PCT = 0.00833
 _FIELD_INNER_PAD_Y_PCT = 0.024
 
-# Battlefield columns + duel lane
-_FIELD_COL_W_PCT = 0.0813
-_FIELD_LANE_W_PCT = 0.1458
+# Battlefield columns + duel lane (fractions of the battlefield inner width)
+_FIELD_COL_W_FRAC = 0.115
+_FIELD_LANE_W_FRAC = 0.255
 
 # Tactics rail inner layout
 _RAIL_INNER_PAD_X_PCT = 0.00833
@@ -248,9 +248,15 @@ def _compute_battlefield(W: int, H: int,
     inner = _r(x_px + pad_x, y_px + pad_y,
                w_px - 2 * pad_x, h_px - 2 * pad_y)
 
-    col_w = int(round(_FIELD_COL_W_PCT * W))
-    lane_w = int(round(_FIELD_LANE_W_PCT * W))
     inner_x, inner_y, inner_w, inner_h = inner
+
+    col_w = int(round(_FIELD_COL_W_FRAC * inner_w))
+    lane_w = int(round(_FIELD_LANE_W_FRAC * inner_w))
+    total = 2 * (3 * col_w) + lane_w
+    if total > inner_w and total > 0:
+        scale = inner_w / total
+        col_w = max(1, int(col_w * scale))
+        lane_w = max(1, int(lane_w * scale))
 
     # Lane is centred between the two 3-column blocks, sharing inner_w.
     # Layout: [c][v][m]  [lane]  [m][v][c]

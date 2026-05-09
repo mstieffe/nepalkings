@@ -104,6 +104,22 @@ def test_field_columns_mirror_around_duel_lane(size):
 
 
 @pytest.mark.parametrize('size', _STANDARD_SIZES)
+def test_desktop_layout_prioritizes_battlefield_over_command_rail(size):
+    layout = compute_conquer_layout(size[0], size[1], mode='battle')
+    if layout.narrow:
+        pytest.skip("narrow layout stacks; rail width priority does not apply")
+
+    rail = layout.tactics_rail.rect
+    field = layout.battlefield.rect
+    inner = layout.battlefield.inner_rect
+    lane = layout.battlefield.duel_lane.rect
+
+    assert rail[2] <= int(size[0] * 0.205)
+    assert field[2] >= int(size[0] * 0.75)
+    assert lane[2] >= int(inner[2] * 0.24)
+
+
+@pytest.mark.parametrize('size', _STANDARD_SIZES)
 def test_duel_lane_bands_stack_without_overlap(size):
     layout = compute_conquer_layout(size[0], size[1], mode='battle')
     lane = layout.battlefield.duel_lane

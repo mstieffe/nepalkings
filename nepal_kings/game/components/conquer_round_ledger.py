@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pygame
 
 from config import settings
+from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.conquer_layout import compute_conquer_layout
 
 
@@ -90,15 +91,33 @@ class ConquerRoundLedger:
     def _opp_played_per_round(self) -> List[Optional[Dict[str, Any]]]:
         """Opponent's played moves indexed by round (best-effort)."""
         slots: List[Optional[Dict[str, Any]]] = [None, None, None]
+
+        try:
+            getter = getattr(self._parent, '_current_conquer_opponent_tactics', None)
+            opponent_tactics = list(getter() or []) if getter is not None else []
+        except Exception:
+            opponent_tactics = []
+        for move in opponent_tactics:
+            if not isinstance(move, dict):
+                continue
+            played_round = move.get('played_round')
+            if played_round in (0, 1, 2):
+                slots[played_round] = move
+
         battle = None
         try:
             battle = self._parent.subscreens.get('battle')
         except Exception:
             return slots
         opp_played = getattr(battle, 'opp_played', None) if battle else None
-        if isinstance(opp_played, list) and len(opp_played) >= 3:
-            for i in range(3):
-                slots[i] = opp_played[i]
+        if isinstance(opp_played, list):
+            for i, move in enumerate(opp_played[:3]):
+                if not move:
+                    continue
+                if isinstance(move, dict) and move.get('played_round') in (0, 1, 2):
+                    slots[move['played_round']] = move
+                elif slots[i] is None:
+                    slots[i] = move
         return slots
 
     @staticmethod
@@ -365,11 +384,48 @@ class ConquerRoundLedger:
         pwr_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.1)), bold=True)
         text_col = _GHOST_BLUE if ghost else _TEXT_SECONDARY
         power_col = _GHOST_BLUE if ghost else _TEXT_PRIMARY
-        ns = name_font.render(name[:14], True, text_col)
+        icon_size = max(18, min(rect.height - 8, int(rect.width * 0.34)))
+        icon_x = rect.left + 4 + icon_size // 2
+        icon_y = rect.centery
+        icon_drawn = self._draw_move_icon(icon_x, icon_y, icon_size, move, ghost=ghost)
+        text_x = rect.left + (icon_size + 9 if icon_drawn else 4)
+        max_text_w = max(14, rect.right - text_x - 4)
+        ns = name_font.render(self._fit_text(name, name_font, max_text_w), True, text_col)
         ps = pwr_font.render(str(self._power(move)), True, power_col)
-        self.window.blit(ns, (rect.left + 4, rect.top + 2))
+        self.window.blit(ns, (text_x, rect.top + 2))
         self.window.blit(ps, (rect.right - ps.get_width() - 4,
                               rect.bottom - ps.get_height() - 2))
+
+    def _draw_move_icon(self, cx: int, cy: int, icon_size: int, move,
+                        *, ghost: bool = False) -> bool:
+        try:
+            glow_cache, icon_cache, frame_cache, suit_icon_cache, icon_font = (
+                self._parent._conquer_battle_move_icon_assets(icon_size))
+            draw_battle_move_icon(
+                self.window,
+                cx,
+                cy,
+                move.get('family_name', ''),
+                move.get('suit', ''),
+                self._power(move),
+                glow_cache,
+                icon_cache,
+                frame_cache,
+                suit_icon_cache,
+                icon_font,
+                icon_size,
+                hovered=False,
+                is_used=not ghost,
+                suit_b=move.get('suit_b'),
+            )
+            return True
+        except Exception:
+            fallback = pygame.Rect(0, 0, icon_size, icon_size)
+            fallback.center = (cx, cy)
+            pygame.draw.rect(self.window, (70, 58, 44), fallback, border_radius=4)
+            pygame.draw.rect(self.window, _GHOST_BLUE if ghost else _BORDER_RGBA,
+                             fallback, 1, border_radius=4)
+            return True
 
     def _draw_diff_pill(self, rect: pygame.Rect, you, opp, played: bool,
                         ghost_move=None):

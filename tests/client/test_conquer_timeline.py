@@ -810,6 +810,39 @@ def test_blitzkrieg_counter_step_stays_hidden_until_attacker_step_reached():
     assert by_kind['counter'].active is False
 
 
+def test_battle_started_timeline_shows_round_steps_without_overview_hold():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    game = _make_game(
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=1,
+        advancing_figure_id=10,
+        advancing_player_id=1,
+        defending_figure_id=20,
+    )
+    screen = SimpleNamespace(
+        state=_make_state(game),
+        subscreens={},
+        _conquer_acknowledged_step_kinds=set(),
+        _conquer_timeline_step_started_at={},
+    )
+    screen._conquer_battle_timeline_steps = lambda steps: steps + [TimelineStep(
+        kind='battle_round_1',
+        title='Round 1',
+        icon_kind='tactic',
+        active=True,
+    )]
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+
+    steps = panel.derive_display_steps(screen)
+    by_kind = {step.kind: step for step in steps}
+
+    assert by_kind['battle_round_1'].active is True
+    assert by_kind['overview'].active is False
+
+
 def test_civil_war_second_attacker_is_active_and_shows_pending_figure():
     from game.screens.conquer_flow import derive_conquer_timeline
 

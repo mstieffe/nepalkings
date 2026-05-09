@@ -1449,6 +1449,12 @@ class FieldScreen(SubScreen):
                 entries.extend(list(getter() or []))
             except Exception:
                 pass
+        opponent_getter = getattr(parent, '_current_conquer_opponent_tactics', None) if parent else None
+        if opponent_getter:
+            try:
+                entries.extend(list(opponent_getter() or []))
+            except Exception:
+                pass
         battle = getattr(parent, 'subscreens', {}).get('battle') if parent else None
         if battle is not None:
             entries.extend(list(getattr(battle, 'player_moves', []) or []))
@@ -1534,10 +1540,6 @@ class FieldScreen(SubScreen):
             if figure is None or self._is_tactics_hand_battle_fighter(figure):
                 continue
             cx, cy = int(ix), int(iy)
-            dim_surf = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
-            pygame.draw.circle(dim_surf, (0, 0, 0, 82), (radius + 4, radius + 4), radius)
-            self.window.blit(dim_surf, (cx - radius - 4, cy - radius - 4))
-
             context_kind = self._conquer_battle_context_kind(figure)
             if not context_kind:
                 continue

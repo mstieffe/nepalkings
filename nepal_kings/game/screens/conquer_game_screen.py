@@ -37,6 +37,7 @@ from game.components.figures.family_configs.skill_config import (
 from game.components.figures.figure_manager import FigureManager
 from game.screens.conquer_flow import (
     ConquerObjective,
+    TimelineStep,
     derive_conquer_objective,
 )
 from game.screens.battle_screen import BattleScreen
@@ -172,8 +173,11 @@ class ConquerGameScreen(GameScreen):
         self._conquer_timeline_panel = ConquerTimelinePanel(self.window)
         self._conquer_timeline_overlay_until = 0
         self._conquer_collapsed_header_rect = None
+        self._conquer_timeline_collapse_rect = None
         self._conquer_tactic_cache_key = None
         self._conquer_tactic_cache = []
+        self._conquer_opponent_tactic_cache_key = None
+        self._conquer_opponent_tactic_cache = []
         self._conquer_battle_move_cache_key = None
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
@@ -364,6 +368,9 @@ class ConquerGameScreen(GameScreen):
         return pygame.time.get_ticks() < getattr(
             self, '_conquer_timeline_overlay_until', 0)
 
+    def _close_conquer_timeline_overlay(self):
+        self._conquer_timeline_overlay_until = 0
+
     def _conquer_header_layout(self):
         mode = self._conquer_layout_mode()
         return compute_conquer_layout(
@@ -439,6 +446,68 @@ class ConquerGameScreen(GameScreen):
         if turn_pid is not None:
             return f'Round {round_no}: waiting for the opponent tactic.'
         return 'Battle rounds are being prepared.'
+
+    def _conquer_battle_timeline_steps(self, base_steps):
+        game = self.state.game
+        if not game:
+            return base_steps
+        battle_started = (
+            getattr(game, 'battle_turn_player_id', None) is not None
+            or getattr(game, 'battle_round', 0) in (1, 2, 3)
+            or bool(getattr(game, 'last_battle_result', None))
+        )
+        if not battle_started:
+            return base_steps
+
+        player_slots, opponent_slots = self._conquer_lane_played_tactics()
+        current_round = int(getattr(game, 'battle_round', 0) or 0) - 1
+        opponent_name = getattr(game, 'opponent_name', None) or 'Opponent'
+        steps = list(base_steps)
+        for idx in range(3):
+            you = player_slots[idx]
+            opp = opponent_slots[idx]
+            has_play = you is not None or opp is not None
+            is_current = idx == current_round and not getattr(game, 'last_battle_result', None)
+            if not has_play and not is_current:
+                continue
+
+            you_label = self._conquer_lane_move_name(you) if you else 'pending'
+            opp_label = self._conquer_lane_move_name(opp) if opp else 'hidden'
+            played = you is not None and opp is not None
+            if played:
+                diff = self._conquer_lane_move_power(you) - self._conquer_lane_move_power(opp)
+                body = f'You played {you_label}; {opponent_name} played {opp_label}. Round diff {diff:+d}.'
+                tone = 'good' if diff >= 0 else 'warning'
+            elif you is not None:
+                body = f'You played {you_label}. Waiting for {opponent_name}.'
+                tone = 'waiting'
+            elif opp is not None:
+                body = f'{opponent_name} played {opp_label}. Choose your reply.'
+                tone = 'action'
+            else:
+                body = 'Choose a tactic from the command rail.'
+                tone = (
+                    'action'
+                    if getattr(game, 'battle_turn_player_id', None) == getattr(game, 'player_id', None)
+                    else 'waiting'
+                )
+
+            icon_move = you or opp
+            steps.append(TimelineStep(
+                kind=f'battle_round_{idx + 1}',
+                title=f'Round {idx + 1}',
+                owner='',
+                icon_kind='tactic',
+                icon_payload={'move': icon_move} if icon_move else None,
+                completed=played,
+                active=is_current and not played,
+                interactive=False,
+                tone=tone,
+                sidenote='tactics',
+                info_headline=f'Round {idx + 1} tactics',
+                info_body=body,
+            ))
+        return steps
 
     def _open_tactics_hand_result_dialogue(self):
         game = self.state.game
@@ -556,6 +625,20 @@ class ConquerGameScreen(GameScreen):
             (pad_x, log_rect.centery - narration_surf.get_height() // 2),
         )
 
+    def _draw_conquer_timeline_collapse_button(self):
+        title_h = int(settings.SCREEN_HEIGHT * 0.040)
+        button_w = max(82, int(settings.SCREEN_WIDTH * 0.064))
+        button_h = max(24, int(settings.SCREEN_HEIGHT * 0.030))
+        pad = max(10, int(settings.SCREEN_WIDTH * 0.012))
+        rect = pygame.Rect(
+            settings.SCREEN_WIDTH - pad - button_w,
+            title_h + 6,
+            button_w,
+            button_h,
+        )
+        self._conquer_timeline_collapse_rect = rect
+        self._draw_conquer_header_button(rect, 'Collapse', (68, 58, 46))
+
     def _handle_collapsed_header_events(self, events):
         if not self._should_use_collapsed_conquer_header():
             return False
@@ -569,6 +652,12 @@ class ConquerGameScreen(GameScreen):
             return False
         for event in events:
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                collapse_rect = getattr(self, '_conquer_timeline_collapse_rect', None)
+                if (self._is_conquer_timeline_overlay_open()
+                        and collapse_rect is not None
+                        and collapse_rect.collidepoint(event.pos)):
+                    self._close_conquer_timeline_overlay()
+                    return True
                 if rect.collidepoint(event.pos):
                     self._conquer_timeline_overlay_until = (
                         pygame.time.get_ticks() + self.TIMELINE_OVERLAY_MS)
@@ -1361,11 +1450,42 @@ class ConquerGameScreen(GameScreen):
         try:
             result = game_service.get_battle_state(game_id, player_id)
             tactics = result.get('player_tactics') or result.get('player_moves') or []
+            opponent_tactics = result.get('opponent_tactics') or result.get('opponent_moves') or []
         except Exception:
             tactics = list(getattr(self, '_conquer_tactic_cache', []) or [])
+            opponent_tactics = list(getattr(self, '_conquer_opponent_tactic_cache', []) or [])
         self._conquer_tactic_cache_key = cache_key
         self._conquer_tactic_cache = [dict(move) for move in tactics]
+        self._conquer_opponent_tactic_cache_key = cache_key
+        self._conquer_opponent_tactic_cache = [
+            dict(move) for move in opponent_tactics if isinstance(move, dict)
+        ]
         return list(self._conquer_tactic_cache)
+
+    def _current_conquer_opponent_tactics(self):
+        game = self.state.game
+        if not game or not self._is_tactics_hand_game():
+            return []
+        game_id = getattr(game, 'game_id', None)
+        player_id = getattr(game, 'player_id', None)
+        if not game_id or not player_id:
+            return [
+                dict(move)
+                for move in (getattr(game, 'conquer_opponent_tactics', []) or [])
+                if isinstance(move, dict)
+            ]
+
+        cache_key = (
+            'tactics',
+            game_id,
+            player_id,
+            getattr(game, '_game_data_version', 0),
+            getattr(game, 'battle_turn_player_id', None),
+            getattr(game, 'battle_round', None),
+        )
+        if cache_key != getattr(self, '_conquer_opponent_tactic_cache_key', None):
+            self._current_conquer_tactics()
+        return list(getattr(self, '_conquer_opponent_tactic_cache', []) or [])
 
     def _current_conquer_battle_moves(self):
         game = self.state.game
@@ -1728,6 +1848,17 @@ class ConquerGameScreen(GameScreen):
             for idx, move in enumerate(opp_played[:3]):
                 if move:
                     opponent_slots[idx] = move
+
+        try:
+            opponent_tactics = self._current_conquer_opponent_tactics() or []
+        except Exception:
+            opponent_tactics = []
+        for move in opponent_tactics:
+            if not isinstance(move, dict):
+                continue
+            played_round = move.get('played_round')
+            if played_round in (0, 1, 2):
+                opponent_slots[played_round] = move
 
         return player_slots, opponent_slots
 
@@ -2676,17 +2807,6 @@ class ConquerGameScreen(GameScreen):
                     source_rect,
                     is_player=not hovered_receipt.get('align_right'),
                 )
-        self._draw_conquer_lane_leader_line(
-            lane.you_support_badge_rail,
-            lane.you_fighter_band,
-            is_player=True,
-            ghost=player_move_is_preview,
-        )
-        self._draw_conquer_lane_leader_line(
-            lane.opp_support_badge_rail,
-            lane.opp_fighter_band,
-            is_player=False,
-        )
         self._draw_conquer_lane_tactic_badge(
             lane.you_support_chip_rail,
             player_display_move,
@@ -2721,6 +2841,7 @@ class ConquerGameScreen(GameScreen):
             self._draw_conquer_collapsed_header()
             if self._is_conquer_timeline_overlay_open():
                 self._conquer_timeline_panel.draw(self)
+                self._draw_conquer_timeline_collapse_button()
         else:
             self._conquer_timeline_panel.draw(self)
 

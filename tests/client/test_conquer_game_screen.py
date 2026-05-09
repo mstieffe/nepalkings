@@ -772,6 +772,7 @@ class TestTacticsHandRouting:
         screen._conquer_left_battle_shop_at = 0
         screen._conquer_timeline_overlay_until = 0
         screen._conquer_collapsed_header_rect = None
+        screen._conquer_timeline_collapse_rect = None
         return ConquerGameScreen, screen
 
     def test_is_tactics_hand_game_true_for_tactics_hand_marker(self):
@@ -858,6 +859,56 @@ class TestTacticsHandRouting:
 
         assert handled is True
         assert screen._conquer_timeline_overlay_until > pygame.time.get_ticks()
+
+    def test_clicking_timeline_collapse_button_closes_overlay(self):
+        ConquerGameScreen, screen = self._make_screen(
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+        screen._conquer_timeline_overlay_until = pygame.time.get_ticks() + 5000
+        screen._conquer_timeline_collapse_rect = pygame.Rect(4, 4, 80, 28)
+
+        handled = ConquerGameScreen._handle_collapsed_header_events(
+            screen,
+            [pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(12, 12))],
+        )
+
+        assert handled is True
+        assert screen._conquer_timeline_overlay_until == 0
+
+    def test_battle_timeline_steps_include_round_tactics(self):
+        ConquerGameScreen, screen = self._make_screen(
+            battle_confirmed=True,
+            battle_turn_player_id=42,
+            battle_round=2,
+        )
+        you = {
+            'id': 11,
+            'family_name': 'Dagger',
+            'suit': 'Hearts',
+            'value': 5,
+            'status': 'played',
+            'played_round': 0,
+        }
+        opponent = {
+            'id': 21,
+            'family_name': 'Shield',
+            'suit': 'Clubs',
+            'value': 3,
+            'status': 'played',
+            'played_round': 0,
+        }
+        screen._current_conquer_tactics = lambda: [you]
+        screen._current_conquer_opponent_tactics = lambda: [opponent]
+
+        steps = ConquerGameScreen._conquer_battle_timeline_steps(screen, [])
+
+        assert [step.kind for step in steps] == ['battle_round_1', 'battle_round_2']
+        assert steps[0].icon_kind == 'tactic'
+        assert steps[0].icon_payload == {'move': you}
+        assert 'You played Dagger' in steps[0].info_body
+        assert 'Defender played Shield' in steps[0].info_body
+        assert steps[1].active is True
 
     def test_collapsed_header_clears_stale_actions_and_exposes_withdraw(self):
         from config import settings

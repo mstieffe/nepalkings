@@ -68,6 +68,11 @@ class _ConquerUiParent:
     def _current_conquer_battle_moves(self):
         return list(self._moves)
 
+    def _conquer_battle_move_icon_assets(self, icon_size):
+        from config import settings
+
+        return ({}, {}, {}, {}, settings.get_font(max(8, icon_size // 3), bold=True))
+
 
 def _rect_has_non_background_pixel(surface, rect, background=(0, 0, 0)):
     bounds = pygame.Rect(rect).clip(surface.get_rect())
@@ -214,6 +219,80 @@ def test_round_ledger_draws_hover_preview_ghost_math():
     layout = ledger._ensure_layout().round_ledger
     assert _rect_has_non_background_pixel(window, layout.round_card_rects[1])
     assert _rect_has_non_background_pixel(window, layout.total_circle_rect)
+
+
+def test_round_ledger_uses_revealed_opponent_tactics_and_icons(monkeypatch):
+    from config import settings
+    from game.components import conquer_round_ledger as ledger_module
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=2,
+        battle_turn_player_id=1,
+        last_battle_result=None,
+    )
+    moves = [
+        _move(11, family='Dagger', suit='Hearts', rank='A', value=5,
+              status='played', played_round=0),
+    ]
+    opponent_move = _move(
+        21,
+        family='Shield',
+        suit='Clubs',
+        rank='9',
+        value=3,
+        status='played',
+        played_round=0,
+    )
+    parent = _ConquerUiParent(window, game, moves, opp_played=[])
+    parent._current_conquer_opponent_tactics = lambda: [opponent_move]
+    calls = []
+
+    def capture_icon(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(ledger_module, 'draw_battle_move_icon', capture_icon)
+    ledger = ConquerRoundLedger(parent)
+
+    assert ledger._opp_played_per_round()[0] == opponent_move
+
+    ledger.draw()
+
+    assert len(calls) >= 2
+
+
+def test_tactics_hand_field_overlay_does_not_dim_idle_figures():
+    from config import settings
+    from game.screens.field_screen import FieldScreen
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((255, 255, 255))
+    before = window.get_at((100, 100))
+    figure = SimpleNamespace(
+        id=99,
+        player_id=2,
+        family=SimpleNamespace(name='Scout'),
+    )
+    field = FieldScreen.__new__(FieldScreen)
+    field.window = window
+    field.game = SimpleNamespace(player_id=1)
+    field._is_tactics_hand_battle_field_view_only = lambda: True
+    field._is_tactics_hand_battle_fighter = lambda _figure: False
+    field._conquer_preview_called_figure_ids = lambda: set()
+    field._conquer_called_figure_ids = lambda: set()
+    field._figure_active_skill_keys = lambda _figure: set()
+    field._conquer_hover_source_figure_id = None
+
+    FieldScreen._draw_tactics_hand_battle_context_overlays(
+        field,
+        [(SimpleNamespace(figure=figure), 100, 100)],
+    )
+
+    assert window.get_at((100, 100)) == before
 
 
 def test_round_ledger_hover_completed_round_draws_recap(monkeypatch):

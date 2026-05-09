@@ -1,6 +1,6 @@
 # Conquer Unified Battle Redesign Status
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 Branch: v2.0-conquer-redesign
 Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
@@ -134,6 +134,13 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Castle/village support sources now appear in the support badge rail when they support same-suit battle figures under the same rules used by field/battle support math.
   - Receipt totals now include ordinary support and zero ordinary support/land when enemy Block support is present.
 
+- DONE: Polished screenshot-driven unified battle UI issues.
+  - Tactics rail width is reduced again and the battlefield columns/duel lane now scale from battlefield inner width, giving the field and support/duel panels the reclaimed space.
+  - Round ledger chips now draw tactic icons and read revealed opponent tactics from the tactics-hand battle-state payload, while still tolerating shorter legacy `opp_played` lists.
+  - Expanded battle timeline overlays now expose a Collapse button and append live round tactic entries once battle rounds start.
+  - Always-on duel-lane support guide lines were removed; hover-only support/receipt source cross-links remain.
+  - Tactics-hand battle field overlays no longer draw black dim circles over non-fighter figures; only meaningful called/support/preview rings are rendered.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -225,6 +232,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader tactics helper terminology conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
 - DONE: Focused ordinary support contributor regression passed: `tests/client/test_conquer_render_smoke.py` passed: 10 passed.
 - DONE: Broader ordinary support contributor conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
+- DONE: Focused screenshot UI/timeline regression passed: `tests/client/test_conquer_layout.py tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py::TestTacticsHandRouting tests/client/test_conquer_timeline.py` passed: 134 passed.
+- DONE: Broader screenshot UI conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 183 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -260,12 +269,15 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
 - PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.
   - DONE: Header collapsed status strip, narration log, transient timeline overlay, and battle-strip Withdraw command are implemented for tactics-hand battle/result modes.
+  - DONE: Expanded battle timeline overlays now include an explicit Collapse button and live round tactic entries.
   - DONE: Tactics rail text fitting and public-only top-strip intent labels are implemented.
+  - DONE: Tactics rail width is reduced and the battlefield/duel lane now use the reclaimed horizontal space.
   - DONE: Tactics-hand pre-battle and battle now share one field-first canvas with the rail, ledger, and field columns using the same layout helper.
   - DONE: Field inert-but-inspectable battle behavior is implemented for tactics-hand battle rounds.
-  - DONE: First-pass battlefield context overlays dim non-fighters, hide fighters from home columns, and ring called/support-source figures.
+  - DONE: First-pass battlefield context overlays hide fighters from home columns and ring called/support-source figures without black dim circles over idle figures.
   - DONE: First-pass duel lane fighter-only rendering is implemented for tactics-hand battle rounds.
-  - DONE: Round tactic badge strips, leader lines, and power receipt rows are implemented in the duel lane.
+  - DONE: Round tactic badge strips and power receipt rows are implemented in the duel lane; source links are hover-driven instead of always-on guide lines.
+  - DONE: Round ledger chips now display tactic icons and revealed opponent tactic data.
   - DONE: First-pass ghost predictive math is implemented for rail-hovered tactics in the active ledger round and total circle.
   - DONE: First-pass played tactic flight animation is implemented for successful tactics-hand Play actions.
   - DONE: First-pass predictive support-badge pulsing is implemented in the duel lane for rail-hovered tactics.
@@ -290,7 +302,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Added client tests for tactics-hand header mode switching, overlay expansion, hidden action rect clearing, and gamble/dismantle dispatch to conquer endpoints.
   - DONE: Added initial client render smoke tests for populated tactics rail scrolling and filled round ledger/result control behavior.
   - TODO: Add duel/battle-shop regression tests after legacy route gating changes.
-  - TODO: Add broader screenshot/manual smoke checks for support badges, called figures, and long receipt rows once those visuals exist.
+  - TODO: Add broader screenshot/manual smoke checks for support badges, called figures, long receipt rows, and responsive battle view framing.
 
 ## Known Risks
 
@@ -302,5 +314,5 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
 1. Add deeper AI scenario tests for Invader Swap and richer attacker/defender full-flow behavior.
 2. Add more Phase 7 spell edge coverage for combined tactics, defender fallback cases, and non-greed interactions.
-3. Continue Phase 9 UI polish for duel-lane fighter rendering, support badges, receipt rows, and replay details.
+3. Continue Phase 9/11 screenshot and manual smoke checks for responsive battle view framing, support badges, called figures, and replay details.
 4. Add Phase 11 screenshot/manual smoke checks once the remaining battle visuals exist.
