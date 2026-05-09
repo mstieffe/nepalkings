@@ -248,6 +248,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader AI tactics-hand regression passed: `tests/server/test_ai_worker.py tests/server/test_ai_integration_scenarios.py tests/server/test_ai_action_enum.py tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py` passed: 88 passed.
 - DONE: Focused Phase 7 spell edge regression passed: `tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
 - DONE: Broader spell/tactics-hand server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_conquer_tactics_math.py` passed: 38 passed.
+- DONE: Focused battle-shop route-gating regression passed: `tests/server/test_battle_shop.py::TestTacticsHandBattleShopGating` passed: 2 passed.
+- DONE: Broader legacy battle-shop/duel flow regression passed: `tests/server/test_battle_shop.py tests/server/test_game_flow_end_to_end.py tests/server/test_finish_battle_draw.py` passed: 25 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -319,7 +321,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: Added server tests for legacy `battle_move` rollback with `CONQUER_TACTICS_HAND_ENABLED=False`.
   - DONE: Added client tests for tactics-hand header mode switching, overlay expansion, hidden action rect clearing, and gamble/dismantle dispatch to conquer endpoints.
   - DONE: Added initial client render smoke tests for populated tactics rail scrolling and filled round ledger/result control behavior.
-  - TODO: Add duel/battle-shop regression tests after legacy route gating changes.
+  - DONE: Added battle-shop route-gating regressions proving tactics-hand conquer rejects legacy shop mutations while legacy `battle_move` conquer still uses buy/return.
   - TODO: Add broader screenshot/manual smoke checks for support badges, called figures, long receipt rows, and responsive battle view framing.
 
 ## Known Risks

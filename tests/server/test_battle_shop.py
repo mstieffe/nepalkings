@@ -118,6 +118,27 @@ def _buy_three_moves(client, db, token, game, player):
     return moves
 
 
+def _create_legacy_battle_move(db, game, player, card, *, family_name='Dagger'):
+    from models import BattleMove
+
+    rank_val = card.rank.value if hasattr(card.rank, 'value') else str(card.rank)
+    suit_val = card.suit.value if hasattr(card.suit, 'value') else str(card.suit)
+    card.part_of_battle_move = True
+    move = BattleMove(
+        game_id=game.id,
+        player_id=player.id,
+        family_name=family_name,
+        card_id=card.id,
+        card_type='main',
+        suit=suit_val,
+        rank=rank_val,
+        value=card.value,
+    )
+    db.session.add(move)
+    db.session.commit()
+    return move
+
+
 class TestBuyBattleMove:
     def test_buy_call_villager_requires_jack_card(self, client, db, app, game_with_player, auth_token_bs):
         game, p1, _, _, _ = game_with_player
@@ -249,6 +270,118 @@ class TestBuyBattleMove:
         data = resp.get_json()
         assert data.get('success') is True
         assert data['combined_move']['family_name'] == 'Double Dagger'
+
+
+class TestTacticsHandBattleShopGating:
+    def test_tactics_hand_conquer_blocks_legacy_shop_mutations(
+        self,
+        client,
+        db,
+        app,
+        game_with_player,
+        auth_token_bs,
+    ):
+        from models import BattleMove
+
+        game, p1, _, _, _ = game_with_player
+        game.mode = 'conquer'
+        game.conquer_move_model = 'tactics_hand'
+        game.battle_confirmed = True
+        game.battle_turn_player_id = None
+        card = _get_hand_card_by_rank(db, game.id, p1.id, '7')
+        assert card is not None
+        legacy_move = _create_legacy_battle_move(db, game, p1, card)
+
+        endpoints = [
+            ('/battle_shop/buy_battle_move', {
+                'game_id': game.id,
+                'player_id': p1.id,
+                'family_name': 'Dagger',
+                'card_id': card.id,
+                'card_type': 'main',
+                'suit': card.suit.value if hasattr(card.suit, 'value') else str(card.suit),
+                'rank': card.rank.value if hasattr(card.rank, 'value') else str(card.rank),
+                'value': card.value,
+            }),
+            ('/battle_shop/return_battle_move', {
+                'game_id': game.id,
+                'player_id': p1.id,
+                'battle_move_id': legacy_move.id,
+            }),
+            ('/battle_shop/confirm_battle_moves', {
+                'game_id': game.id,
+                'player_id': p1.id,
+            }),
+            ('/battle_shop/gamble_battle_move', {
+                'game_id': game.id,
+                'player_id': p1.id,
+                'battle_move_id': legacy_move.id,
+            }),
+            ('/battle_shop/combine_battle_moves', {
+                'game_id': game.id,
+                'player_id': p1.id,
+                'move_id_a': legacy_move.id,
+                'move_id_b': legacy_move.id + 999,
+            }),
+            ('/battle_shop/dismantle_battle_move', {
+                'game_id': game.id,
+                'player_id': p1.id,
+                'battle_move_id': legacy_move.id,
+            }),
+        ]
+
+        for url, payload in endpoints:
+            resp = client.post(
+                url,
+                data=json.dumps(payload),
+                content_type='application/json',
+                headers={'Authorization': f'Bearer {auth_token_bs}'},
+            )
+            data = resp.get_json()
+            assert resp.status_code == 400, (url, data)
+            assert data.get('success') is False, (url, data)
+            assert data.get('reason') == 'tactics_hand_no_shop', (url, data)
+
+        assert BattleMove.query.filter_by(game_id=game.id, player_id=p1.id).count() == 1
+        db.session.refresh(card)
+        assert card.part_of_battle_move is True
+
+    def test_legacy_battle_move_conquer_still_uses_battle_shop(
+        self,
+        client,
+        db,
+        app,
+        game_with_player,
+        auth_token_bs,
+    ):
+        from models import BattleMove
+
+        game, p1, _, _, _ = game_with_player
+        game.mode = 'conquer'
+        game.conquer_move_model = 'battle_move'
+        db.session.commit()
+
+        card = _get_hand_card_by_rank(db, game.id, p1.id, '7')
+        assert card is not None
+        buy_resp = _buy_move(client, auth_token_bs, game, p1, card)
+        buy_data = buy_resp.get_json()
+        assert buy_data.get('success') is True, buy_data
+        move_id = buy_data['battle_move']['id']
+        assert BattleMove.query.filter_by(game_id=game.id, player_id=p1.id).count() == 1
+
+        return_resp = client.post(
+            '/battle_shop/return_battle_move',
+            data=json.dumps({
+                'game_id': game.id,
+                'player_id': p1.id,
+                'battle_move_id': move_id,
+            }),
+            content_type='application/json',
+            headers={'Authorization': f'Bearer {auth_token_bs}'},
+        )
+        return_data = return_resp.get_json()
+        assert return_data.get('success') is True, return_data
+        assert BattleMove.query.filter_by(game_id=game.id, player_id=p1.id).count() == 0
 
 
 class TestReturnBattleMove:
