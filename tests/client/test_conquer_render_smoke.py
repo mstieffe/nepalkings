@@ -28,7 +28,7 @@ def _move(move_id, *, family='Dagger', suit='Hearts', rank='A', value=5,
 
 def _fighter(fig_id, name, value, player_id, color, *, suit='Hearts',
              field='military', buffs_allies=False, buffs_allies_defence=False,
-             blocks_bonus=False, distance_attack=False):
+             blocks_bonus=False, distance_attack=False, battle_bonus=None):
     icon = pygame.Surface((64, 64), pygame.SRCALPHA)
     icon.fill(color)
     frame = pygame.Surface((80, 80), pygame.SRCALPHA)
@@ -42,6 +42,7 @@ def _fighter(fig_id, name, value, player_id, color, *, suit='Hearts',
         value=value,
         number_card=SimpleNamespace(value=value),
         get_value=lambda: value,
+        get_battle_bonus=lambda: value if battle_bonus is None else battle_bonus,
         family=SimpleNamespace(
             icon_img=icon,
             icon_img_small=icon,
@@ -419,6 +420,8 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
                       suit='Hearts', field='village', buffs_allies=True)
     archer = _fighter(31, 'Spades Archer', 3, 1, (90, 120, 200),
                       suit='Spades', field='military', distance_attack=True)
+    castle_support = _fighter(32, 'King Support', 4, 1, (130, 180, 120),
+                              suit='Hearts', field='castle', battle_bonus=4)
     wall = _fighter(40, 'Stone Wall', 6, 2, (180, 140, 110),
                     suit='Clubs', field='military', buffs_allies_defence=True)
     game = SimpleNamespace(
@@ -447,8 +450,11 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     screen.state = SimpleNamespace(game=game)
     screen.subscreens = {
         'field': SimpleNamespace(
-            figures=[attacker, defender, healer, archer, wall],
-            icon_cache={30: SimpleNamespace(rect_frame=pygame.Rect(180, 200, 44, 56))},
+            figures=[attacker, defender, healer, archer, castle_support, wall],
+            icon_cache={
+                30: SimpleNamespace(rect_frame=pygame.Rect(180, 200, 44, 56)),
+                32: SimpleNamespace(rect_frame=pygame.Rect(230, 200, 44, 56)),
+            },
             _conquer_hover_source_figure_id=None,
         ),
         'battle': SimpleNamespace(opp_played=[
@@ -462,7 +468,7 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     opponent_support = ConquerGameScreen._conquer_lane_support_entries(
         screen, [attacker], [defender], is_player=False)
 
-    assert [entry['kind'] for entry in player_support] == ['buffs_allies', 'distance_attack']
+    assert [entry['kind'] for entry in player_support] == ['support_bonus', 'buffs_allies', 'distance_attack']
     assert [entry['kind'] for entry in opponent_support] == ['buffs_allies_defence']
     player_rows, player_total = ConquerGameScreen._conquer_lane_receipt_components(
         screen,
@@ -482,16 +488,19 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     player_row_values = {(row['label'], row['value']) for row in player_rows}
     opponent_row_values = {(row['label'], row['value']) for row in opponent_rows}
     assert ('Called', 4) in player_row_values
+    assert ('Support', 4) in player_row_values
     assert ('Buffs', 4) in player_row_values
     assert ('Land', 2) in player_row_values
     assert ('Wall', 6) in opponent_row_values
     assert ('Land', 2) in opponent_row_values
     assert ('Range', -3) in opponent_row_values
     called_row = next(row for row in player_rows if row['label'] == 'Called')
+    support_row = next(row for row in player_rows if row['label'] == 'Support')
     range_row = next(row for row in opponent_rows if row['label'] == 'Range')
     assert called_row['source_figure_ids'] == [healer.id]
+    assert support_row['source_figure_ids'] == [castle_support.id]
     assert range_row['source_figure_ids'] == [archer.id]
-    assert player_total == 26
+    assert player_total == 30
     assert opponent_total == 13
 
     ConquerGameScreen._draw_conquer_duel_lane(screen)
@@ -508,9 +517,9 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     first_badge = screen._conquer_support_badge_rects[0]
     monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: first_badge['rect'].center)
     hovered = ConquerGameScreen._update_conquer_support_hover_state(screen)
-    assert hovered['figure_id'] == healer.id
-    assert screen.subscreens['field']._conquer_hover_source_figure_id == healer.id
-    assert ConquerGameScreen._conquer_support_source_rect(screen, healer.id) == pygame.Rect(180, 200, 44, 56)
+    assert hovered['figure_id'] == castle_support.id
+    assert screen.subscreens['field']._conquer_hover_source_figure_id == castle_support.id
+    assert ConquerGameScreen._conquer_support_source_rect(screen, castle_support.id) == pygame.Rect(230, 200, 44, 56)
     called_receipt = next(
         info for info in screen._conquer_receipt_row_rects
         if info['row']['label'] == 'Called'

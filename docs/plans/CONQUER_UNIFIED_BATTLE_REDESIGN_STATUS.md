@@ -130,6 +130,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Added `_current_conquer_tactics()` as the tactics-hand data helper with a tactics-named cache.
   - Updated the tactics rail, round ledger, field source detection, and duel lane to prefer the tactics helper while keeping legacy battle-move fallbacks intact.
 
+- DONE: Added ordinary same-suit support contributors to the duel-lane support UI.
+  - Castle/village support sources now appear in the support badge rail when they support same-suit battle figures under the same rules used by field/battle support math.
+  - Receipt totals now include ordinary support and zero ordinary support/land when enemy Block support is present.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -219,6 +223,8 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader receipt-row hover/source conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
 - DONE: Focused tactics helper terminology regression passed: `tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py` passed: 60 passed.
 - DONE: Broader tactics helper terminology conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
+- DONE: Focused ordinary support contributor regression passed: `tests/client/test_conquer_render_smoke.py` passed: 10 passed.
+- DONE: Broader ordinary support contributor conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -265,6 +271,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: First-pass predictive support-badge pulsing is implemented in the duel lane for rail-hovered tactics.
   - DONE: First-pass predictive source highlighting pulses hovered tactic call-figure sources in the field.
   - DONE: Real first-pass support contributor badge rails are implemented for buffs, walls, blockers, and distance attackers.
+  - DONE: Ordinary same-suit castle/village support contributors are included in support rails and receipt totals.
   - DONE: First-pass receipt rows now explain the duel-lane diff from visible contributors.
   - DONE: First-pass support badge hover cross-links now highlight the badge/source and draw source leader lines.
   - DONE: First-pass support rail overflow popovers are implemented.
