@@ -2014,6 +2014,75 @@ class ConquerGameScreen(GameScreen):
                 ids.add(fig_id)
         return ids
 
+    def _conquer_battle_involved_figure_ids(self):
+        """Set of figure ids that contribute to the current battle.
+
+        Includes the advancing/defending pair plus every figure that
+        appears as a support source (call / buff / block / distance /
+        healer) on either side. Used to grey-out non-involved field
+        figures (#4).
+        """
+        ids = set(self._conquer_lane_battle_figure_ids())
+        try:
+            player_figs, opp_figs = self._conquer_lane_figures()
+        except Exception:
+            return ids
+        for is_player in (True, False):
+            try:
+                entries = self._conquer_lane_support_entries(
+                    player_figs, opp_figs, is_player=is_player)
+            except Exception:
+                entries = []
+            for entry in entries or []:
+                fig = entry.get('figure')
+                fig_id = getattr(fig, 'id', None)
+                if fig_id is not None:
+                    ids.add(fig_id)
+        return ids
+
+    def _update_conquer_battle_dim_flags(self):
+        """Mark every field figure not involved in the current battle as
+        ``conquer_battle_dimmed = True`` so FieldFigureIcon renders it
+        greyed out (#4)."""
+        if not self._is_battle_phase_active():
+            field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+            for icon in getattr(field, 'figure_icons', []) or []:
+                if hasattr(icon, 'conquer_battle_dimmed'):
+                    icon.conquer_battle_dimmed = False
+            return
+        involved = self._conquer_battle_involved_figure_ids()
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        for icon in getattr(field, 'figure_icons', []) or []:
+            fig = getattr(icon, 'figure', None)
+            fig_id = getattr(fig, 'id', None)
+            icon.conquer_battle_dimmed = bool(
+                fig_id is not None and fig_id not in involved)
+
+    def _apply_conquer_support_hover_visibility(self):
+        """Force the opponent field figure corresponding to the currently-
+        hovered support badge to be face-up for this frame (#2)."""
+        self._conquer_support_hover_visibility_restore = []
+        hovered = getattr(self, '_conquer_hovered_support_badge', None)
+        if not hovered:
+            return
+        fig_id = hovered.get('figure_id')
+        if fig_id is None:
+            return
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        for icon in getattr(field, 'figure_icons', []) or []:
+            fig = getattr(icon, 'figure', None)
+            if getattr(fig, 'id', None) != fig_id:
+                continue
+            if not getattr(icon, 'is_visible', True):
+                self._conquer_support_hover_visibility_restore.append(icon)
+                icon.is_visible = True
+            break
+
+    def _restore_conquer_support_hover_visibility(self):
+        for icon in getattr(self, '_conquer_support_hover_visibility_restore', []) or []:
+            icon.is_visible = False
+        self._conquer_support_hover_visibility_restore = []
+
     @staticmethod
     def _conquer_lane_family_field(figure):
         family = getattr(figure, 'family', None)
@@ -2171,12 +2240,35 @@ class ConquerGameScreen(GameScreen):
                         value, target_figure_ids=[getattr(t, 'id', None) for t in da_targets],
                         per_target_value=value)
 
+        # Called figures: any figure referenced as call_figure_id on this
+        # side's currently-played tactics (#1 — show called figures in the
+        # support lane even when they are not "boosting" the lane sum).
+        try:
+            player_slots, opponent_slots = self._conquer_lane_played_tactics()
+        except Exception:
+            player_slots, opponent_slots = ([], [])
+        side_slots = player_slots if is_player else opponent_slots
+        for move in side_slots or []:
+            if not isinstance(move, dict):
+                continue
+            cf_id = move.get('call_figure_id')
+            if cf_id is None:
+                continue
+            cf = self._conquer_lane_find_figure(cf_id)
+            if cf is None or getattr(cf, 'id', None) in battle_ids:
+                continue
+            label = self._conquer_lane_move_name(move) or 'Call'
+            add('called', cf, label, '', 0,
+                target_figure_ids=[],
+                per_target_value=0)
+
         order = {
             'support_bonus': 0,
             'buffs_allies': 1,
             'buffs_allies_defence': 2,
             'blocks_bonus': 3,
             'distance_attack': 4,
+            'called': 5,
         }
         return sorted(entries, key=lambda e: (order.get(e['kind'], 99), getattr(e['figure'], 'id', 0)))
 
@@ -3360,10 +3452,15 @@ class ConquerGameScreen(GameScreen):
         self._normalize_conquer_subscreen()
         if self._is_tactics_hand_game():
             self._update_conquer_support_hover_state()
+            self._update_conquer_battle_dim_flags()
+            self._apply_conquer_support_hover_visibility()
 
         subscreen = self.subscreens.get(self.state.subscreen)
         if subscreen:
             subscreen.draw()
+        # Restore any temporarily-flipped opponent icons after the subscreen
+        # render so subsequent code paths see unmodified visibility.
+        self._restore_conquer_support_hover_visibility()
         self._draw_conquer_duel_lane()
 
         use_collapsed_header = self._should_use_collapsed_conquer_header()

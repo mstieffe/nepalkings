@@ -684,7 +684,11 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     opponent_support = ConquerGameScreen._conquer_lane_support_entries(
         screen, [attacker], [defender], is_player=False)
 
-    assert [entry['kind'] for entry in player_support] == ['support_bonus', 'buffs_allies', 'distance_attack']
+    # 'called' may also appear when the test fixture includes a played
+    # tactic with call_figure_id (#1 — show called figures in the lane).
+    kinds = [entry['kind'] for entry in player_support]
+    assert kinds[:3] == ['support_bonus', 'buffs_allies', 'distance_attack']
+    assert set(kinds) - {'support_bonus', 'buffs_allies', 'distance_attack', 'called'} == set()
     assert [entry['kind'] for entry in opponent_support] == ['buffs_allies_defence']
     player_rows, player_total = ConquerGameScreen._conquer_lane_receipt_components(
         screen,
