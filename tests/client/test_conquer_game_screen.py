@@ -591,7 +591,7 @@ class TestConquerSubscreenLayout:
         assert FieldScreen._is_tactics_hand_battle_fighter(field, attacker) is True
         assert FieldScreen._is_tactics_hand_battle_fighter(field, defender) is True
         assert FieldScreen._conquer_battle_context_kind(field, called) == 'called'
-        assert FieldScreen._conquer_battle_context_kind(field, support) == 'support'
+        assert FieldScreen._conquer_battle_context_kind(field, support) is None
         assert FieldScreen._conquer_battle_context_kind(field, plain) is None
 
     def test_tactics_hand_battle_field_identifies_preview_called_source(self):
@@ -647,9 +647,29 @@ class TestConquerSubscreenLayout:
         field = FieldScreen.__new__(FieldScreen)
         field.window = window
         field.game = game
-        field.state = SimpleNamespace(parent_screen=None)
         support = SimpleNamespace(id=40, player_id=1, buffs_allies=True)
+
+        class Parent:
+            def request_conquer_figure_confirmation(self):
+                return None
+
+            def _conquer_lane_figures(self):
+                return [], []
+
+            def _conquer_lane_support_entries(
+                    self, _player_figures, _opponent_figures, *, is_player):
+                if is_player:
+                    return [{
+                        'kind': 'buffs_allies',
+                        'label': 'Buff',
+                        'value': '+4',
+                        'figure': support,
+                    }]
+                return []
+
+        field.state = SimpleNamespace(parent_screen=Parent())
         icon = SimpleNamespace(figure=support)
+        field._conquer_hover_source_figure_id = support.id
 
         FieldScreen._draw_tactics_hand_battle_context_overlays(
             field,

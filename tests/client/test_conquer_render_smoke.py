@@ -119,6 +119,9 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
     assert not _rect_has_non_background_pixel(window, outside_rail)
     assert len(rail._cell_rects) == layout.cells_visible
     assert rail._scroll_down_rect is not None
+    rail._scroll = 99
+    rail._clamp_scroll()
+    assert rail._scroll == len(moves) - layout.cells_visible
     assert rail.move_cell_rect(1) == rail._cell_rects[0]
     rail._hovered_id = 1
     assert rail.preview_move()['id'] == 1
@@ -130,6 +133,45 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
         'Very Long Tactical Dagger Name That Must Clip', font, 80)
     assert font.size(fitted)[0] <= 80
     assert fitted.endswith('...')
+
+
+def test_tactics_rail_action_buttons_adapt_to_selected_tactic():
+    from config import settings
+    from game.components.conquer_tactics_rail import (
+        ACTION_COMBINE,
+        ACTION_DISMANTLE,
+        ACTION_GAMBLE,
+        ACTION_PLAY,
+        ConquerTacticsRail,
+    )
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        battle_round=1,
+        battle_turn_player_id=1,
+        last_battle_result=None,
+    )
+    moves = [
+        _move(1, family='Call King', suit='Hearts', rank='K', value=4),
+        _move(2, family='Dagger', suit='Hearts', rank='9', value=9),
+        _move(3, family='Double Dagger', suit='Hearts', suit_b='Diamonds',
+              rank='8+9', value=17, card_id_b=203),
+    ]
+    rail = ConquerTacticsRail(_ConquerUiParent(window, game, moves))
+
+    rail._selected_id = 1
+    rail.draw()
+    assert set(rail._action_button_rects) == {ACTION_PLAY, ACTION_GAMBLE}
+
+    rail._selected_id = 2
+    rail.draw()
+    assert set(rail._action_button_rects) == {ACTION_PLAY, ACTION_GAMBLE, ACTION_COMBINE}
+
+    rail._selected_id = 3
+    rail.draw()
+    assert set(rail._action_button_rects) == {ACTION_PLAY, ACTION_GAMBLE, ACTION_DISMANTLE}
 
 
 def test_round_ledger_draws_filled_rounds_and_result_click_target():
@@ -386,7 +428,8 @@ def test_tactics_hand_reveals_opponent_support_sources(monkeypatch):
 
     assert field.icon_cache[opponent_support.id].is_visible is True
     assert field.icon_cache[hidden_non_support.id].is_visible is False
-    assert FieldScreen._conquer_battle_context_kind(field, opponent_support) == 'support'
+    assert FieldScreen._conquer_battle_context_kind(field, opponent_support) is None
+    assert FieldScreen._tactics_hand_revealed_support_figure_ids(field) == {opponent_support.id}
 
 
 def test_round_ledger_hover_completed_round_draws_recap(monkeypatch):
@@ -660,7 +703,7 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
 
     player_row_values = {(row['label'], row['value']) for row in player_rows}
     opponent_row_values = {(row['label'], row['value']) for row in opponent_rows}
-    assert ('Called', 4) in player_row_values
+    assert ('Called', 16) in player_row_values
     assert ('Support', 4) in player_row_values
     assert ('Buffs', 4) in player_row_values
     assert ('Land', 2) in player_row_values
@@ -673,7 +716,7 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     assert called_row['source_figure_ids'] == [healer.id]
     assert support_row['source_figure_ids'] == [castle_support.id]
     assert range_row['source_figure_ids'] == [archer.id]
-    assert player_total == 30
+    assert player_total == 34
     assert opponent_total == 13
 
     ConquerGameScreen._draw_conquer_duel_lane(screen)
@@ -700,7 +743,12 @@ def test_conquer_duel_lane_draws_real_support_badges_and_chips(monkeypatch):
     monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: called_receipt['rect'].center)
     ConquerGameScreen._update_conquer_support_hover_state(screen)
     assert screen._conquer_hovered_receipt_row == called_receipt
-    assert screen.subscreens['field']._conquer_hover_source_figure_id == healer.id
+    assert screen.subscreens['field']._conquer_hover_source_figure_id is None
+
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: pygame.Rect(230, 200, 44, 56).center)
+    hovered = ConquerGameScreen._update_conquer_support_hover_state(screen)
+    assert hovered['figure_id'] == castle_support.id
+    assert screen.subscreens['field']._conquer_hover_source_figure_id == castle_support.id
 
 
 def test_conquer_support_rail_overflow_registers_hover_popover(monkeypatch):

@@ -69,9 +69,9 @@ _FIELD_LANE_W_FRAC = 0.255
 _RAIL_INNER_PAD_X_PCT = 0.00833
 _RAIL_INNER_PAD_Y_PCT = 0.015
 _RAIL_TOP_STRIP_H_PCT = 0.059
-_RAIL_DETAIL_H_PCT = 0.107
+_RAIL_DETAIL_H_PCT = 0.065
 _RAIL_ACTION_TRAY_H_PCT = 0.063
-_RAIL_CELL_H_PCT = 0.12
+_RAIL_CELL_H_PCT = 0.085
 _RAIL_CELLS_VISIBLE = 5
 
 # Ledger inner layout
@@ -336,6 +336,8 @@ def _compute_tactics_rail(W: int, H: int,
     list_bottom = iy + ih - action_h
     list_h = max(0, list_bottom - list_y)
 
+    cells_visible = max(1, min(_RAIL_CELLS_VISIBLE, list_h // max(1, cell_h)))
+
     return TacticsRailLayout(
         rect=rect,
         inner_rect=inner,
@@ -344,7 +346,7 @@ def _compute_tactics_rail(W: int, H: int,
         hand_list_rect=_r(ix, list_y, iw, list_h),
         action_tray_rect=_r(ix, list_bottom, iw, action_h),
         cell_height=cell_h,
-        cells_visible=_RAIL_CELLS_VISIBLE,
+        cells_visible=cells_visible,
     )
 
 

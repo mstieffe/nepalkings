@@ -120,10 +120,15 @@ class ConquerRoundLedger:
                     slots[i] = move
         return slots
 
-    @staticmethod
-    def _power(move: Optional[Dict[str, Any]]) -> int:
+    def _power(self, move: Optional[Dict[str, Any]]) -> int:
         if move is None:
             return 0
+        display_power = getattr(self._parent, '_conquer_tactic_display_power', None)
+        if callable(display_power):
+            try:
+                return int(display_power(move) or 0)
+            except Exception:
+                pass
         if move.get('_skipped') or move.get('family_name') == 'Skip':
             return 0
         if move.get('family_name') == 'Block':

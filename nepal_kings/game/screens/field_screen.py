@@ -1554,15 +1554,6 @@ class FieldScreen(SubScreen):
             return 'preview'
         if getattr(figure, 'id', None) in self._conquer_called_figure_ids():
             return 'called'
-        if getattr(figure, 'id', None) in self._tactics_hand_active_support_figure_ids():
-            return 'support'
-        skills = self._figure_active_skill_keys(figure)
-        family = getattr(figure, 'family', None)
-        family_name = str(getattr(family, 'name', '') or getattr(figure, 'family_name', ''))
-        if skills.intersection({'buffs_allies', 'buffs_allies_defence', 'blocks_bonus', 'distance_attack'}):
-            return 'support'
-        if family_name.lower().startswith('wall'):
-            return 'support'
         return None
 
     def _draw_tactics_hand_battle_context_overlays(self, drawn_icons):
@@ -1571,19 +1562,25 @@ class FieldScreen(SubScreen):
         frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
         radius = int(frame_h * 0.56)
         game = self.game
+        active_support_ids = self._tactics_hand_active_support_figure_ids()
         for icon, ix, iy in drawn_icons:
             figure = getattr(icon, 'figure', None)
             if figure is None or self._is_tactics_hand_battle_fighter(figure):
                 continue
             cx, cy = int(ix), int(iy)
-            context_kind = self._conquer_battle_context_kind(figure)
-            if not context_kind:
-                continue
             is_own = getattr(figure, 'player_id', None) == getattr(game, 'player_id', None)
             is_hover_source = (
                 getattr(figure, 'id', None)
                 == getattr(self, '_conquer_hover_source_figure_id', None)
             )
+            is_icon_hovered = bool(getattr(icon, 'hovered', False))
+            context_kind = self._conquer_battle_context_kind(figure)
+            if (not context_kind
+                    and getattr(figure, 'id', None) in active_support_ids
+                    and (is_hover_source or is_icon_hovered)):
+                context_kind = 'support'
+            if not context_kind:
+                continue
             ring_width = 5 if is_hover_source else 4
             if is_hover_source:
                 color = (120, 220, 235, 245)

@@ -759,7 +759,17 @@ class ConquerGameScreen(GameScreen):
         mid = move.get('id')
         try:
             if self._is_tactics_hand_game() and action == ACTION_PLAY and mid is not None:
-                result = game_service.play_conquer_tactic(gid, pid, mid)
+                call_figure = self._conquer_best_call_figure_for_tactic(move)
+                call_figure_id = (
+                    getattr(call_figure, 'id', None)
+                    if call_figure is not None
+                    else move.get('call_figure_id')
+                )
+                if call_figure_id is not None:
+                    result = game_service.play_conquer_tactic(
+                        gid, pid, mid, call_figure_id=call_figure_id)
+                else:
+                    result = game_service.play_conquer_tactic(gid, pid, mid)
                 if not isinstance(result, dict) or result.get('success', True):
                     self._start_tactic_flight_animation(move)
             elif action == ACTION_PLAY and mid is not None:
@@ -2008,15 +2018,14 @@ class ConquerGameScreen(GameScreen):
             if getattr(figure, 'player_id', None) != side_player_id:
                 continue
             fig_id = getattr(figure, 'id', None)
-            if fig_id in battle_ids:
-                continue
+            in_battle = fig_id in battle_ids
             if getattr(figure, 'has_deficit', False):
                 continue
             suit = getattr(figure, 'suit', None)
             adv_suit = get_advantage_suit(suit) if suit else None
             source_field = self._conquer_lane_family_field(figure)
 
-            if source_field in {'castle', 'village'}:
+            if not in_battle and source_field in {'castle', 'village'}:
                 support_targets = [
                     target for target in own_targets
                     if getattr(target, 'id', None) != fig_id
@@ -2028,13 +2037,15 @@ class ConquerGameScreen(GameScreen):
                     if support_value:
                         add('support_bonus', figure, 'Support', f'+{support_value}', support_value)
 
-            if (self._conquer_lane_has_skill(figure, 'buffs_allies')
+            if (not in_battle
+                    and self._conquer_lane_has_skill(figure, 'buffs_allies')
                     and any(self._conquer_lane_family_field(target) == 'village'
                             and getattr(target, 'suit', None) == suit
                             for target in own_targets)):
                 add('buffs_allies', figure, 'Buff', '+4', 4)
 
-            if (self._conquer_lane_has_skill(figure, 'buffs_allies_defence')
+            if (not in_battle
+                    and self._conquer_lane_has_skill(figure, 'buffs_allies_defence')
                     and self._conquer_lane_is_defending_side(is_player=is_player)):
                 value = self._conquer_lane_number_value(figure)
                 add('buffs_allies_defence', figure, 'Wall', f'+{value}', value)
@@ -2043,7 +2054,8 @@ class ConquerGameScreen(GameScreen):
                     and any(getattr(target, 'suit', None) == adv_suit for target in enemy_targets)):
                 add('blocks_bonus', figure, 'Block', 'Block')
 
-            if (self._conquer_lane_has_skill(figure, 'distance_attack') and adv_suit
+            if (not in_battle
+                    and self._conquer_lane_has_skill(figure, 'distance_attack') and adv_suit
                     and any(getattr(target, 'suit', None) == adv_suit for target in enemy_targets)):
                 value = self._conquer_lane_number_value(figure)
                 add('distance_attack', figure, 'Range', f'-{value}', value)
@@ -2131,7 +2143,8 @@ class ConquerGameScreen(GameScreen):
         bg = (34, 44, 50, 175) if is_player else (52, 40, 43, 175)
         border = (138, 190, 196) if is_player else (196, 145, 132)
         pygame.draw.rect(self.window, bg, band, border_radius=7)
-        pygame.draw.rect(self.window, border, band, 1, border_radius=7)
+        accent = pygame.Rect(band.left + 2, band.top + 6, 3, max(1, band.height - 12))
+        pygame.draw.rect(self.window, border, accent, border_radius=2)
 
         label_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
         text = label_font.render(label, True, (230, 222, 190))
@@ -2271,6 +2284,9 @@ class ConquerGameScreen(GameScreen):
             rect = info.get('rect')
             if rect and pygame.Rect(rect).collidepoint(mouse):
                 return info
+            source_rect = self._conquer_support_source_rect(info.get('figure_id'))
+            if source_rect and source_rect.collidepoint(mouse):
+                return info
         return None
 
     def _current_conquer_support_overflow_entry(self):
@@ -2295,11 +2311,6 @@ class ConquerGameScreen(GameScreen):
         self._conquer_hovered_support_badge = support_info
         self._conquer_hovered_receipt_row = receipt_info
         source_id = support_info.get('figure_id') if support_info else None
-        if source_id is None and receipt_info:
-            row = receipt_info.get('row') or {}
-            source_ids = row.get('source_figure_ids') if isinstance(row, dict) else []
-            source_ids = source_ids or []
-            source_id = source_ids[0] if source_ids else None
         field = getattr(self, 'subscreens', {}).get('field') if hasattr(self, 'subscreens') else None
         if field is not None:
             field._conquer_hover_source_figure_id = source_id
@@ -2384,7 +2395,10 @@ class ConquerGameScreen(GameScreen):
             badge = pygame.Rect(0, 0, max(1, rail.width - 4), badge_h)
             badge.centerx = rail.centerx
             badge.top = y
-            hovered = badge.collidepoint(mouse)
+            source_rect = self._conquer_support_source_rect(
+                getattr(entry.get('figure'), 'id', None))
+            hovered = badge.collidepoint(mouse) or bool(
+                source_rect and source_rect.collidepoint(mouse))
             self._register_conquer_support_badge_rect(badge, entry, is_player=is_player)
             self._draw_conquer_lane_support_badge(
                 badge,
@@ -2506,7 +2520,117 @@ class ConquerGameScreen(GameScreen):
     def _conquer_lane_call_power(self, move):
         call_figure = self._conquer_lane_find_figure(
             move.get('call_figure_id') if isinstance(move, dict) else None)
-        return self._conquer_lane_figure_power(call_figure) if call_figure is not None else 0
+        return self._conquer_lane_call_effective_power(move, call_figure)
+
+    def _conquer_lane_healer_bonus_for(self, figure, support_entries):
+        if figure is None or self._conquer_lane_family_field(figure) != 'village':
+            return 0
+        suit = getattr(figure, 'suit', None)
+        return sum(
+            self._conquer_lane_support_value(entry)
+            for entry in support_entries or []
+            if entry.get('kind') == 'buffs_allies'
+            and getattr(entry.get('figure'), 'suit', None) == suit
+        )
+
+    def _conquer_lane_call_effective_power(self, move, call_figure=None,
+                                          support_entries=None):
+        if not isinstance(move, dict):
+            return 0
+        call_figure = call_figure or self._conquer_lane_find_figure(
+            move.get('call_figure_id'))
+        if call_figure is None:
+            return 0
+        total = self._conquer_lane_figure_power(call_figure)
+        total += self._conquer_lane_healer_bonus_for(call_figure, support_entries or [])
+        if (str(getattr(call_figure, 'suit', '') or '').lower()
+                == str(move.get('suit') or '').lower()):
+            total += self._conquer_lane_move_power(move)
+        return total
+
+    def _conquer_lane_move_effective_power(self, move, support_entries=None):
+        if not isinstance(move, dict):
+            return 0
+        if move.get('_skipped') or move.get('family_name') == 'Skip':
+            return 0
+        if move.get('family_name') == 'Block':
+            return 0
+        if move.get('call_figure_id'):
+            return self._conquer_lane_call_effective_power(
+                move,
+                support_entries=support_entries or [],
+            )
+        return self._conquer_lane_move_power(move)
+
+    def _conquer_tactic_display_power(self, move):
+        if not isinstance(move, dict):
+            return 0
+        try:
+            player_figures, opponent_figures = self._conquer_lane_figures()
+            player_id = getattr(self.state.game, 'player_id', None)
+            move_player_id = move.get('player_id')
+            is_player = move_player_id is None or move_player_id == player_id
+            support_entries = self._conquer_lane_support_entries(
+                player_figures,
+                opponent_figures,
+                is_player=is_player,
+            )
+            return self._conquer_lane_move_effective_power(move, support_entries)
+        except Exception:
+            return self._conquer_lane_move_power(move)
+
+    def _conquer_best_call_figure_for_tactic(self, move):
+        if not isinstance(move, dict) or move.get('call_figure_id') is not None:
+            return None
+        family_to_field = {
+            'Call Villager': 'village',
+            'Call Military': 'military',
+            'Call King': 'castle',
+        }
+        target_field = family_to_field.get(move.get('family_name'))
+        if not target_field:
+            return None
+        player_figures, opponent_figures = self._conquer_lane_figures()
+        support_entries = self._conquer_lane_support_entries(
+            player_figures,
+            opponent_figures,
+            is_player=True,
+        )
+        battle_ids = self._conquer_lane_battle_figure_ids()
+        called_ids = {
+            tactic.get('call_figure_id')
+            for tactic in self._current_conquer_tactics() or []
+            if (isinstance(tactic, dict)
+                and tactic.get('call_figure_id') is not None)
+        }
+        move_is_red = move.get('suit') in {'Hearts', 'Diamonds'}
+        candidates = []
+        for figure in self._conquer_lane_all_figures():
+            if (getattr(figure, 'player_id', None)
+                    != getattr(self.state.game, 'player_id', None)):
+                continue
+            if (getattr(figure, 'id', None) in battle_ids
+                    or getattr(figure, 'id', None) in called_ids):
+                continue
+            if self._conquer_lane_family_field(figure) != target_field:
+                continue
+            if (getattr(figure, 'has_deficit', False)
+                    or getattr(figure, 'cannot_be_targeted', False)):
+                continue
+            fig_is_red = getattr(figure, 'suit', None) in {'Hearts', 'Diamonds'}
+            if fig_is_red != move_is_red:
+                continue
+            candidates.append(figure)
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda fig: self._conquer_lane_call_effective_power(
+                move,
+                fig,
+                support_entries,
+            ),
+        )
 
     @staticmethod
     def _conquer_lane_support_value(entry):
@@ -2561,7 +2685,10 @@ class ConquerGameScreen(GameScreen):
                                          enemy_support_entries):
         base = sum(self._conquer_lane_figure_power(fig) for fig in figures)
         tactic = self._conquer_lane_move_power(move)
-        call = self._conquer_lane_call_power(move)
+        call = self._conquer_lane_call_effective_power(
+            move,
+            support_entries=support_entries,
+        )
         raw_support = sum(
             self._conquer_lane_support_value(entry)
             for entry in support_entries
@@ -2577,7 +2704,7 @@ class ConquerGameScreen(GameScreen):
             for entry in support_entries
             if entry.get('kind') == 'buffs_allies_defence'
         )
-        land = self._conquer_lane_land_bonus_for(figures)
+        land = sum(self._conquer_lane_land_bonus_for([fig]) for fig in figures or [])
         enchant = self._conquer_lane_enchantment_total(figures)
         distance_penalty = sum(
             self._conquer_lane_support_value(entry)
@@ -2588,6 +2715,8 @@ class ConquerGameScreen(GameScreen):
         own_block = any(entry.get('kind') == 'blocks_bonus' for entry in support_entries)
         support = 0 if blocked_by_enemy else raw_support
         land = 0 if blocked_by_enemy else land
+        if isinstance(move, dict) and move.get('call_figure_id'):
+            tactic = 0
         total = base + call + support + buffs + wall + land + enchant + tactic - distance_penalty
         base_ids = [getattr(fig, 'id', None) for fig in figures if getattr(fig, 'id', None) is not None]
         rows = [self._conquer_receipt_row('Base', base, source_figure_ids=base_ids)]
@@ -2690,8 +2819,7 @@ class ConquerGameScreen(GameScreen):
         band = pygame.Rect(rect).inflate(-12, -4)
         if band.width <= 0 or band.height <= 0:
             return
-        pygame.draw.rect(self.window, (26, 25, 28, 190), band, border_radius=8)
-        pygame.draw.rect(self.window, (226, 196, 112), band, 1, border_radius=8)
+        pygame.draw.rect(self.window, (26, 25, 28, 176), band, border_radius=8)
         player_support = self._conquer_lane_support_entries(
             player_figures, opponent_figures, is_player=True)
         opponent_support = self._conquer_lane_support_entries(

@@ -125,8 +125,13 @@ class ConquerTacticsRail:
             return False
         return getattr(game, 'battle_turn_player_id', None) == getattr(game, 'player_id', None)
 
-    @staticmethod
-    def _power(move: Dict[str, Any]) -> int:
+    def _power(self, move: Dict[str, Any]) -> int:
+        display_power = getattr(self._parent, '_conquer_tactic_display_power', None)
+        if callable(display_power):
+            try:
+                return int(display_power(move) or 0)
+            except Exception:
+                pass
         if move.get('family_name') == 'Block':
             return 0
         return int(move.get('value') or 0)
@@ -150,6 +155,8 @@ class ConquerTacticsRail:
             return False
         if a.get('family_name') != 'Dagger' or b.get('family_name') != 'Dagger':
             return False
+        if a.get('card_id_b') or b.get('card_id_b'):
+            return False
         # Same colour group: hearts/diamonds (red) vs spades/clubs (black)
         red = {'Hearts', 'Diamonds'}
         black = {'Spades', 'Clubs'}
@@ -159,6 +166,10 @@ class ConquerTacticsRail:
     @staticmethod
     def _is_double_dagger(move: Dict[str, Any]) -> bool:
         return move.get('family_name') in ('Dagger', 'Double Dagger') and bool(move.get('card_id_b'))
+
+    @staticmethod
+    def _is_single_dagger(move: Dict[str, Any]) -> bool:
+        return move.get('family_name') == 'Dagger' and not bool(move.get('card_id_b'))
 
     # ------------------------------------------------------------------ layout
     def _ensure_layout(self):
@@ -256,7 +267,11 @@ class ConquerTacticsRail:
     def _clamp_scroll(self):
         layout = self._ensure_layout()
         total = len(self._hand_moves())
-        visible = max(1, layout.tactics_rail.cells_visible)
+        rail = layout.tactics_rail
+        visible = max(1, min(
+            rail.cells_visible,
+            max(1, rail.hand_list_rect[3] // max(1, rail.cell_height)),
+        ))
         self._scroll = max(0, min(self._scroll, max(0, total - visible)))
 
     def _handle_cell_click(self, mid: int):
@@ -361,7 +376,8 @@ class ConquerTacticsRail:
             self.window.blit(t, t.get_rect(center=rect.center))
             self.window.set_clip(previous_clip)
             return
-        visible = moves[self._scroll:self._scroll + cells_visible]
+        visible_count = max(1, min(cells_visible, rect.height // max(1, cell_h)))
+        visible = moves[self._scroll:self._scroll + visible_count]
         # Draw scroll indicators if needed.
         if self._scroll > 0:
             up = pygame.Rect(rect.right - 18, rect.top + 2, 14, 12)
@@ -371,7 +387,7 @@ class ConquerTacticsRail:
             self._scroll_up_rect = up
         else:
             self._scroll_up_rect = None
-        if self._scroll + cells_visible < len(moves):
+        if self._scroll + visible_count < len(moves):
             dn = pygame.Rect(rect.right - 18, rect.bottom - 14, 14, 12)
             pygame.draw.polygon(self.window, _TEXT_PRIMARY,
                                 [(dn.centerx, dn.bottom), (dn.left, dn.top),
@@ -461,7 +477,7 @@ class ConquerTacticsRail:
         body_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)))
         if sel is None:
             t = body_font.render('Select a tactic', True, _TEXT_MUTED)
-            self.window.blit(t, t.get_rect(center=rect.center))
+            self.window.blit(t, (rect.left + 8, rect.top + 6))
             return
         name = sel.get('family_name', '?')
         if self._is_double_dagger(sel):
@@ -489,28 +505,30 @@ class ConquerTacticsRail:
         my_turn = self._is_my_battle_turn()
         partner = self._combine_partner_move()
         play_enabled = bool(sel and my_turn)
-        skip_enabled = my_turn
-        gamble_enabled = bool(sel)
+        gamble_enabled = bool(sel and my_turn)
         dismantle_enabled = bool(sel and self._is_double_dagger(sel))
-        combine_enabled = (
-            bool(sel) and not self._is_double_dagger(sel)
-            and (self._combine_pending or partner is not None)
+        combine_relevant = bool(sel and self._is_single_dagger(sel))
+        combine_enabled = bool(
+            combine_relevant
+            and (partner is None or self._can_combine(sel, partner))
         )
-        # During battle rounds, disable hand-shaping actions (gamble/combine/dismantle).
-        # The plan keeps these as in-hand tools used in pre-battle.
-        if my_turn or (self._parent.state.game and
-                       getattr(self._parent.state.game, 'battle_turn_player_id', None) is not None):
-            gamble_enabled = False
-            combine_enabled = False
-            dismantle_enabled = False
 
-        buttons = [
-            (ACTION_PLAY, 'Play', play_enabled),
-            (ACTION_GAMBLE, 'Gamble', gamble_enabled),
-            (ACTION_COMBINE, 'Combine' + (' →' if self._combine_pending else ''), combine_enabled),
-            (ACTION_DISMANTLE, 'Dismantle', dismantle_enabled),
-            (ACTION_SKIP, 'Skip', skip_enabled),
-        ]
+        buttons = []
+        if sel:
+            if play_enabled:
+                buttons.append((ACTION_PLAY, 'Play', True))
+            if gamble_enabled:
+                buttons.append((ACTION_GAMBLE, 'Gamble', True))
+            if combine_relevant:
+                label = 'Pick 2nd' if self._combine_pending and partner is None else 'Combine'
+                buttons.append((ACTION_COMBINE, label, combine_enabled))
+            if dismantle_enabled:
+                buttons.append((ACTION_DISMANTLE, 'Dismantle', True))
+        elif my_turn and not self._hand_moves():
+            buttons.append((ACTION_SKIP, 'Skip', True))
+
+        if not buttons:
+            buttons = [(ACTION_SKIP, 'Skip', False)]
         font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
         gap = 4
         n = len(buttons)
@@ -526,4 +544,5 @@ class ConquerTacticsRail:
             pygame.draw.rect(self.window, border, br, 1, border_radius=4)
             ts = font.render(self._fit_text(label, font, br.width - 6), True, text_col)
             self.window.blit(ts, ts.get_rect(center=br.center))
-            self._action_button_rects[key] = br
+            if enabled:
+                self._action_button_rects[key] = br

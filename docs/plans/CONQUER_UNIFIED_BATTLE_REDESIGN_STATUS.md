@@ -145,6 +145,18 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - Opponent support-source field figures are revealed during tactics-hand battle rounds while unrelated hidden opponent figures stay hidden.
   - Ambiguous receipt-row leader lines were removed; leader lines now appear only for direct support-badge hover and start at the badge edge.
 
+- DONE: Completed latest duel-lane/rail precision pass from screenshot review.
+  - Support-source field icons for the opponent still become visible when they appear in the support lane, but support rings are now hover-only: badge hover highlights the source icon and source-icon hover highlights the badge.
+  - Receipt rows still highlight under the cursor, but no longer force field source rings; visual source linking is reserved for direct support badge/source hover.
+  - Duel-lane panel borders were softened so fighter bands, diff, and rails read as one lane instead of stacked subpanels with repeated horizontal rules.
+  - Client receipt math now mirrors the server's effective Call tactic rule: called figure base power plus healer buff, plus tactic value only when tactic suit matches called figure suit.
+  - Call tactic value is counted once in the duel receipt and round ledger instead of showing raw tactic value plus a separate base-only called figure.
+  - Active battle Temples now still block support in the client receipt/support display, matching the server-authoritative battle math.
+  - The tactics rail now derives visible scroll rows from the actual viewport, clamps scrolling to that capacity, and keeps cells clipped to the list area.
+  - The empty selected-detail panel is compacted; action buttons are adaptive to the selected tactic so Call tactics do not show combine/dismantle, single Daggers show combine, and combined Double Daggers show dismantle.
+  - Gamble is available from the rail on the player's battle turn, and combine/dismantle are no longer disabled merely because battle rounds have started.
+  - Unified-rail Play auto-binds the best eligible figure for Call tactics when no call figure is already attached, preserving the legacy effective-power behavior without reopening the old battle screen.
+
 - DONE: Tightened tactics rail text and render coverage.
   - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
   - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
@@ -252,6 +264,9 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - DONE: Broader spell/tactics-hand server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_conquer_tactics_math.py` passed: 38 passed.
 - DONE: Focused battle-shop route-gating regression passed: `tests/server/test_battle_shop.py::TestTacticsHandBattleShopGating` passed: 2 passed.
 - DONE: Broader legacy battle-shop/duel flow regression passed: `tests/server/test_battle_shop.py tests/server/test_game_flow_end_to_end.py tests/server/test_finish_battle_draw.py` passed: 25 passed.
+- DONE: Latest focused UI/layout precision regression passed: `tests/client/test_conquer_render_smoke.py tests/client/test_conquer_layout.py` passed: 75 passed.
+- DONE: Latest broader conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 185 passed.
+- DONE: Latest focused server math regression passed: `tests/server/test_conquer_tactics_math.py` passed: 6 passed.
 
 ## Partial / Needs Follow-Up
 
@@ -290,7 +305,7 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - TODO: Add additional later-round/result AI full-flow scenarios if Phase 8 needs exhaustive coverage.
   - TODO: Check generic LLM action paths for `combine_conquer_tactics` enumeration if needed beyond deterministic conquer flow.
 
-- PARTIAL: Phase 9 UI has a working rail/ledger shell, not the full visual spec.
+- PARTIAL: Phase 9 UI has the unified field-first implementation and latest screenshot fixes; remaining work is manual/responsive polish.
   - DONE: Header collapsed status strip, narration log, transient timeline overlay, and battle-strip Withdraw command are implemented for tactics-hand battle/result modes.
   - DONE: Expanded battle timeline overlays now include an explicit Collapse button and live round tactic entries.
   - DONE: Tactics rail text fitting and public-only top-strip intent labels are implemented.
@@ -313,6 +328,10 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
   - DONE: First-pass receipt-row highlighting and source cross-linking are implemented.
   - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
   - DONE: First-pass round-card reveal replay animation is implemented for newly completed ledger cards.
+  - DONE: Support-source rings are hover-only while opponent support-source figures stay revealed.
+  - DONE: Duel-lane receipt/tactic power display now uses effective Call tactic values instead of base move values.
+  - DONE: Tactics rail actions are adaptive and battle-round shaping actions are reachable from the unified rail.
+  - DONE: Tactics rail scroll capacity now matches the visible list viewport.
 
 - DONE: Phase 10 routing is mostly bypassed and the primary tactics-hand client helper now uses tactics terminology.
   - DONE: Added `_current_conquer_tactics()` and moved tactics-hand cache reads to `_conquer_tactic_cache*`.
@@ -332,10 +351,11 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - RISK: `Game.serialize()` currently includes full `conquer_tactics`, matching the old `battle_moves` serialization style. Player-safe hiding is implemented in `/games/get_battle_state`; any client path that consumes raw `game.conquer_tactics` should avoid displaying opponent unplayed details.
 - RISK: Spell mutation now has tactics-hand coverage for Forced Deal and Dump Cards, but more edge-case spell coverage is still useful before production rollout.
 - RISK: Existing UI/AI names still say battle move in several places. That is compatibility glue for now, not the final terminology.
+- RISK: Client display now mirrors the key server math paths, but it still recomputes a local receipt instead of consuming an authoritative server breakdown payload.
 
 ## Suggested Next Session Start
 
-1. Add deeper AI scenario tests for Invader Swap and richer attacker/defender full-flow behavior.
-2. Add more Phase 7 spell edge coverage for combined tactics, defender fallback cases, and non-greed interactions.
+1. Add later-round/result AI full-flow scenarios if Phase 8 needs exhaustive coverage.
+2. Add more Phase 7 spell edge coverage for defender fallback cases and rare non-greed interactions.
 3. Continue Phase 9/11 screenshot and manual smoke checks for responsive battle view framing, support badges, called figures, and replay details.
-4. Add Phase 11 screenshot/manual smoke checks once the remaining battle visuals exist.
+4. Consider replacing local client receipt recomputation with an authoritative server breakdown payload for zero-drift battle math display.
