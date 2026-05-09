@@ -815,3 +815,132 @@ def test_tactic_flight_overlay_draws_nonblank_pill(monkeypatch):
     ConquerGameScreen._draw_tactic_flight_animation(screen)
 
     assert screen._tactic_flight_animation is None
+
+
+def test_conquer_lane_figure_full_power_includes_modifiers():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    fighter = _fighter(10, 'Hero', 8, 1, (200, 200, 200),
+                       suit='Hearts', field='village')
+    healer = _fighter(20, 'Healer', 4, 1, (90, 190, 120),
+                      suit='Hearts', field='village', buffs_allies=True)
+    enemy = _fighter(30, 'Foe', 5, 2, (200, 90, 90),
+                    suit='Spades', field='military')
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(
+        mode='conquer', conquer_move_model='tactics_hand',
+        player_id=1, opponent_id=2,
+        advancing_player_id=1, advancing_figure_id=10,
+        defending_figure_id=30,
+        advancing_figure_id_2=None, defending_figure_id_2=None,
+        battle_turn_player_id=1, battle_round=1, last_battle_result=None,
+        opponent_name='Foes', land_suit_bonus_suit=None,
+        land_suit_bonus_value=None, conquer_tactics=[],
+    ))
+    screen.subscreens = {
+        'field': SimpleNamespace(figures=[fighter, healer, enemy], icon_cache={}),
+        'battle': SimpleNamespace(opp_played=[]),
+    }
+
+    diff = ConquerGameScreen._conquer_lane_figure_diff(screen)
+    # Player Hero (8) + buffs from healer (+4) - opponent Foe (5) = 7
+    assert diff == 7
+
+    p_support = ConquerGameScreen._conquer_lane_support_entries(
+        screen, [fighter], [enemy], is_player=True)
+    o_support = ConquerGameScreen._conquer_lane_support_entries(
+        screen, [fighter], [enemy], is_player=False)
+    full = ConquerGameScreen._conquer_lane_figure_full_power(
+        screen, fighter, support_entries=p_support,
+        enemy_support_entries=o_support, is_player=True)
+    assert full == 12  # 8 + 4 buff
+
+
+def test_handle_conquer_lane_figure_click_opens_detail_box():
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    fighter = _fighter(10, 'Hero', 8, 1, (200, 200, 200))
+    opened = {'icon': None}
+
+    def opener(icon):
+        opened['icon'] = icon
+
+    icon_obj = SimpleNamespace(figure=fighter)
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace())
+    screen.subscreens = {
+        'field': SimpleNamespace(
+            icon_cache={10: icon_obj},
+            figure_icons=[icon_obj],
+            _open_tactics_hand_battle_detail=opener,
+        ),
+    }
+    screen._conquer_lane_figure_rects = [
+        {'rect': pygame.Rect(100, 100, 50, 50), 'figure': fighter, 'is_player': True},
+    ]
+    handled = ConquerGameScreen._handle_conquer_lane_figure_click(screen, (110, 110))
+    assert handled is True
+    assert opened['icon'] is icon_obj
+
+    # Outside click does nothing.
+    opened['icon'] = None
+    assert ConquerGameScreen._handle_conquer_lane_figure_click(screen, (10, 10)) is False
+    assert opened['icon'] is None
+
+
+def test_tactics_rail_gamble_combine_dismantle_enabled_outside_my_turn():
+    from game.components.conquer_tactics_rail import (
+        ACTION_COMBINE, ACTION_DISMANTLE, ACTION_GAMBLE, ConquerTacticsRail,
+    )
+
+    dagger_a = _move(1, family='Dagger', suit='Hearts', rank='3', value=3)
+    dagger_b = _move(2, family='Dagger', suit='Diamonds', rank='5', value=5)
+    double = _move(3, family='Dagger', suit='Hearts', rank='3', value=8,
+                   card_id_b=99, suit_b='Diamonds')
+    moves = [dagger_a, dagger_b, double]
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=SimpleNamespace(
+            battle_turn_player_id=999,  # not my turn
+            player_id=1, battle_round=2, last_battle_result=None,
+        )),
+        _current_conquer_tactics=lambda: list(moves),
+    )
+    rail = ConquerTacticsRail(parent)
+
+    # Gamble while it's not my turn:
+    rail._selected_id = dagger_a['id']
+    rail._trigger_action(ACTION_GAMBLE)
+    pending = rail.consume_pending_action()
+    assert pending and pending['action'] == ACTION_GAMBLE
+
+    # Dismantle a double dagger while it's not my turn:
+    rail._selected_id = double['id']
+    rail._trigger_action(ACTION_DISMANTLE)
+    pending = rail.consume_pending_action()
+    assert pending and pending['action'] == ACTION_DISMANTLE
+
+    # Combine two single daggers:
+    rail._selected_id = dagger_a['id']
+    rail._combine_partner_id = dagger_b['id']
+    rail._combine_pending = True
+    rail._trigger_action(ACTION_COMBINE)
+    pending = rail.consume_pending_action()
+    assert pending and pending['action'] == ACTION_COMBINE
+    assert pending['partner']['id'] == dagger_b['id']
+
+
+def test_round_ledger_total_includes_figure_diff():
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    parent = SimpleNamespace(
+        window=pygame.Surface((100, 100)),
+        state=SimpleNamespace(game=SimpleNamespace()),
+        _conquer_lane_figure_diff=lambda: 6,
+    )
+    ledger = ConquerRoundLedger(parent)
+    you_per = [_move(1, value=5), None, None]
+    opp_per = [_move(2, value=3), None, None]
+    total = ledger._total_diff(you_per, opp_per)
+    # round1 diff (5-3=2) + figure diff (6) = 8
+    assert total == 8

@@ -2025,7 +2025,8 @@ class ConquerGameScreen(GameScreen):
         entries = []
         seen = set()
 
-        def add(kind, figure, label, value_text, numeric_value=0):
+        def add(kind, figure, label, value_text, numeric_value=0,
+                target_figure_ids=None, per_target_value=None):
             key = (kind, getattr(figure, 'id', None))
             if key in seen:
                 return
@@ -2036,6 +2037,9 @@ class ConquerGameScreen(GameScreen):
                 'label': label,
                 'value': value_text,
                 'numeric_value': int(numeric_value or 0),
+                'target_figure_ids': list(target_figure_ids or []),
+                'per_target_value': int(
+                    numeric_value if per_target_value is None else per_target_value),
             })
 
         for figure in self._conquer_lane_all_figures():
@@ -2057,32 +2061,47 @@ class ConquerGameScreen(GameScreen):
                     and source_field in self._conquer_lane_valid_support_fields(target)
                 ]
                 if support_targets:
-                    support_value = self._conquer_lane_regular_support_value(figure) * len(support_targets)
+                    per_target = self._conquer_lane_regular_support_value(figure)
+                    support_value = per_target * len(support_targets)
                     if support_value:
-                        add('support_bonus', figure, 'Support', f'+{support_value}', support_value)
+                        add('support_bonus', figure, 'Support',
+                            f'+{support_value}', support_value,
+                            target_figure_ids=[getattr(t, 'id', None) for t in support_targets],
+                            per_target_value=per_target)
 
-            if (not in_battle
-                    and self._conquer_lane_has_skill(figure, 'buffs_allies')
-                    and any(self._conquer_lane_family_field(target) == 'village'
-                            and getattr(target, 'suit', None) == suit
-                            for target in own_targets)):
-                add('buffs_allies', figure, 'Buff', '+4', 4)
+            if not in_battle and self._conquer_lane_has_skill(figure, 'buffs_allies'):
+                buff_targets = [
+                    target for target in own_targets
+                    if self._conquer_lane_family_field(target) == 'village'
+                    and getattr(target, 'suit', None) == suit
+                ]
+                if buff_targets:
+                    add('buffs_allies', figure, 'Buff', '+4',
+                        4 * len(buff_targets),
+                        target_figure_ids=[getattr(t, 'id', None) for t in buff_targets],
+                        per_target_value=4)
 
             if (not in_battle
                     and self._conquer_lane_has_skill(figure, 'buffs_allies_defence')
                     and self._conquer_lane_is_defending_side(is_player=is_player)):
                 value = self._conquer_lane_number_value(figure)
-                add('buffs_allies_defence', figure, 'Wall', f'+{value}', value)
+                add('buffs_allies_defence', figure, 'Wall', f'+{value}',
+                    value * len(own_targets),
+                    target_figure_ids=[getattr(t, 'id', None) for t in own_targets],
+                    per_target_value=value)
 
             if (self._conquer_lane_has_skill(figure, 'blocks_bonus') and adv_suit
                     and any(getattr(target, 'suit', None) == adv_suit for target in enemy_targets)):
                 add('blocks_bonus', figure, 'Block', 'Block')
 
             if (not in_battle
-                    and self._conquer_lane_has_skill(figure, 'distance_attack') and adv_suit
-                    and any(getattr(target, 'suit', None) == adv_suit for target in enemy_targets)):
-                value = self._conquer_lane_number_value(figure)
-                add('distance_attack', figure, 'Range', f'-{value}', value)
+                    and self._conquer_lane_has_skill(figure, 'distance_attack') and adv_suit):
+                da_targets = [t for t in enemy_targets if getattr(t, 'suit', None) == adv_suit]
+                if da_targets:
+                    value = self._conquer_lane_number_value(figure)
+                    add('distance_attack', figure, 'Range', f'-{value}',
+                        value, target_figure_ids=[getattr(t, 'id', None) for t in da_targets],
+                        per_target_value=value)
 
         order = {
             'support_bonus': 0,
@@ -2182,6 +2201,7 @@ class ConquerGameScreen(GameScreen):
             player_figures, opponent_figures, is_player=is_player)
         enemy_support = self._conquer_lane_support_entries(
             player_figures, opponent_figures, is_player=not is_player)
+        side_blocked = any(e.get('kind') == 'blocks_bonus' for e in enemy_support)
 
         name_font = settings.get_font(max(11, int(settings.FS_TINY * 0.92)), bold=True)
         value_font = settings.get_font(max(12, int(settings.FS_TINY * 0.95)), bold=True)
@@ -2197,6 +2217,22 @@ class ConquerGameScreen(GameScreen):
             slot = pygame.Rect(band.left + idx * slot_w, band.top, slot_w, band.height)
             center = (slot.centerx, band.top + int(band.height * 0.46))
             self._draw_conquer_lane_figure_art(figure, center, art_size)
+            # Block visualization: red ring + small "BLOCKED" tag.
+            if side_blocked:
+                ring = pygame.Rect(0, 0, art_size + 10, art_size + 10)
+                ring.center = center
+                pygame.draw.rect(self.window, (210, 70, 70), ring, 3,
+                                 border_radius=max(4, ring.height // 6))
+                tag_font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+                tag = tag_font.render('BLOCKED', True, (252, 232, 222))
+                tag_bg = tag.get_rect()
+                tag_bg.inflate_ip(8, 4)
+                tag_bg.midbottom = (center[0], center[1] + art_size // 2 + 2)
+                pygame.draw.rect(self.window, (148, 38, 38), tag_bg,
+                                 border_radius=max(2, tag_bg.height // 3))
+                pygame.draw.rect(self.window, (24, 14, 12), tag_bg, 1,
+                                 border_radius=max(2, tag_bg.height // 3))
+                self.window.blit(tag, tag.get_rect(center=tag_bg.center))
             # Hit rect for opening detail box.
             hit = pygame.Rect(0, 0, art_size + 8, art_size + 8)
             hit.center = center
@@ -2725,6 +2761,7 @@ class ConquerGameScreen(GameScreen):
 
         suit = getattr(figure, 'suit', None)
         field = self._conquer_lane_family_field(figure)
+        fig_id = getattr(figure, 'id', None)
         blocked = any(e.get('kind') == 'blocks_bonus'
                       for e in enemy_support_entries or [])
 
@@ -2733,26 +2770,19 @@ class ConquerGameScreen(GameScreen):
         wall = 0
         for e in support_entries or []:
             kind = e.get('kind')
-            src = e.get('figure')
-            src_field = self._conquer_lane_family_field(src) if src else ''
-            src_suit = getattr(src, 'suit', None) if src else None
+            targets = e.get('target_figure_ids') or []
+            if fig_id is not None and fig_id not in targets:
+                continue
+            per = e.get('per_target_value')
+            if per is None:
+                per = int(e.get('numeric_value') or 0)
             if kind == 'buffs_allies':
-                if field == 'village' and src_suit == suit:
-                    buffs += int(e.get('numeric_value') or 0) // max(
-                        1,
-                        sum(1 for f in self._conquer_lane_figures()[0 if is_player else 1]
-                            if self._conquer_lane_family_field(f) == 'village'
-                            and getattr(f, 'suit', None) == src_suit)
-                    )
+                buffs += int(per)
             elif kind == 'support_bonus' and not blocked:
-                if src_suit == suit and src_field in self._conquer_lane_valid_support_fields(figure):
-                    support += self._conquer_lane_regular_support_value(src)
+                support += int(per)
             elif kind == 'buffs_allies_defence':
                 if self._conquer_lane_is_defending_side(is_player=is_player):
-                    wall += int(e.get('numeric_value') or 0) // max(
-                        1,
-                        len(self._conquer_lane_figures()[0 if is_player else 1])
-                    )
+                    wall += int(per)
 
         enchant = 0
         getter = getattr(figure, 'get_total_enchantment_modifier', None)
@@ -2762,16 +2792,18 @@ class ConquerGameScreen(GameScreen):
             except Exception:
                 enchant = 0
 
-        # Distance-attack penalty if any enemy archer's adv-suit matches
+        # Distance-attack penalty: only if this figure is among targets
         da_penalty = 0
         for e in enemy_support_entries or []:
             if e.get('kind') != 'distance_attack':
                 continue
-            src = e.get('figure')
-            src_suit = getattr(src, 'suit', None) if src else None
-            adv = get_advantage_suit(src_suit) if src_suit else None
-            if adv == suit:
-                da_penalty += int(e.get('numeric_value') or 0)
+            targets = e.get('target_figure_ids') or []
+            if fig_id is not None and fig_id not in targets:
+                continue
+            per = e.get('per_target_value')
+            if per is None:
+                per = int(e.get('numeric_value') or 0)
+            da_penalty += int(per)
 
         return base + buffs + support + wall + enchant - da_penalty
 
@@ -2849,25 +2881,37 @@ class ConquerGameScreen(GameScreen):
             move,
             support_entries=support_entries,
         )
+        figure_ids = {getattr(fig, 'id', None) for fig in figures or []}
+
+        def _value_for_battle_targets(entry):
+            targets = entry.get('target_figure_ids') or []
+            if not targets:
+                return 0
+            count = sum(1 for t in targets if t in figure_ids)
+            per = entry.get('per_target_value')
+            if per is None:
+                per = self._conquer_lane_support_value(entry)
+            return int(per) * count
+
         raw_support = sum(
-            self._conquer_lane_support_value(entry)
+            _value_for_battle_targets(entry)
             for entry in support_entries
             if entry.get('kind') == 'support_bonus'
         )
         buffs = sum(
-            self._conquer_lane_support_value(entry)
+            _value_for_battle_targets(entry)
             for entry in support_entries
             if entry.get('kind') == 'buffs_allies'
         )
         wall = sum(
-            self._conquer_lane_support_value(entry)
+            _value_for_battle_targets(entry)
             for entry in support_entries
             if entry.get('kind') == 'buffs_allies_defence'
         )
         land = sum(self._conquer_lane_land_bonus_for([fig]) for fig in figures or [])
         enchant = self._conquer_lane_enchantment_total(figures)
         distance_penalty = sum(
-            self._conquer_lane_support_value(entry)
+            _value_for_battle_targets(entry)
             for entry in enemy_support_entries
             if entry.get('kind') == 'distance_attack'
         )
@@ -2940,6 +2984,73 @@ class ConquerGameScreen(GameScreen):
         rows.append(self._conquer_receipt_row('Total', total, source_figure_ids=base_ids))
         return rows, total
 
+    def _conquer_lane_compact_receipt(self, rows):
+        """Build a one-line summary string from receipt rows.
+
+        Format: ``Base 10 +Sup 4 +Buff 4 +Spell 2 −Range 3 = 17``.
+        """
+        # Short labels for compact display.
+        short = {
+            'Base': 'B', 'Called': 'Call', 'Support': 'Sup',
+            'Buff': 'Buff', 'Wall': 'Wall', 'Land': 'Land',
+            'Spell': 'Sp', 'Tactic': 'T', 'Range': 'R',
+            'Block': 'Blk',
+        }
+        parts = []
+        total_text = '0'
+        for row in rows or []:
+            label, value = self._conquer_receipt_row_parts(row)
+            if label == 'Total':
+                total_text = str(value if not isinstance(value, str) else value)
+                continue
+            if isinstance(value, str):
+                continue
+            value = int(value or 0)
+            if label != 'Base' and value == 0:
+                continue
+            tag = short.get(label, label)
+            if label == 'Base':
+                parts.append(f'{tag}{value}')
+            elif value < 0 or label == 'Range':
+                # Range values arrive as positive in the receipt but represent a penalty.
+                v = abs(value)
+                parts.append(f'\u2212{tag}{v}')
+            else:
+                parts.append(f'+{tag}{value}')
+        if not parts:
+            return f'= {total_text}'
+        return ' '.join(parts) + f' = {total_text}'
+
+    def _register_conquer_receipt_row_hitrects(self, area, rows, *, align_right,
+                                                top_offset=0):
+        """Populate ``_conquer_receipt_row_rects`` with hit-rects for each row.
+
+        Used so hover-based UX (tooltips, support-source highlighting) works even
+        when the rows themselves are not currently being blitted (e.g. compact
+        summary mode).
+        """
+        area = pygame.Rect(area)
+        font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        line_h = font.get_height() + 1
+        rects = getattr(self, '_conquer_receipt_row_rects', None)
+        if rects is None:
+            rects = []
+            self._conquer_receipt_row_rects = rects
+        y = area.top + top_offset
+        for row in rows:
+            label, value = self._conquer_receipt_row_parts(row)
+            if isinstance(value, str):
+                value_text = value
+            else:
+                sign = '+' if isinstance(value, (int, float)) and value > 0 and label != 'Base' else ''
+                value_text = f'{sign}{value}'
+            text = self._fit_text(f'{label} {value_text}', font, area.width)
+            surf = font.render(text, True, (255, 255, 255))
+            x = area.right - surf.get_width() if align_right else area.left
+            row_rect = pygame.Rect(x - 2, y - 1, surf.get_width() + 4, line_h)
+            rects.append({'rect': row_rect, 'row': row, 'align_right': align_right})
+            y += line_h
+
     def _draw_conquer_lane_receipt_rows(self, area, rows, *, align_right, color):
         area = pygame.Rect(area)
         font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
@@ -3001,18 +3112,45 @@ class ConquerGameScreen(GameScreen):
         col_w = (band.width - col_gap - 16) // 2
         left_area = pygame.Rect(band.left + 8, receipt_area_top, col_w, receipt_h)
         right_area = pygame.Rect(band.right - 8 - col_w, receipt_area_top, col_w, receipt_h)
-        self._draw_conquer_lane_receipt_rows(
-            left_area,
-            player_rows,
-            align_right=False,
-            color=(154, 218, 206),
-        )
-        self._draw_conquer_lane_receipt_rows(
-            right_area,
-            opponent_rows,
-            align_right=True,
-            color=(226, 168, 152),
-        )
+        # Compact single-line summary per side (hover full lane band for details).
+        compact_font = settings.get_font(max(8, int(settings.FS_TINY * 0.62)), bold=True)
+        left_text = self._fit_text(
+            self._conquer_lane_compact_receipt(player_rows),
+            compact_font, left_area.width)
+        right_text = self._fit_text(
+            self._conquer_lane_compact_receipt(opponent_rows),
+            compact_font, right_area.width)
+        left_surf = compact_font.render(left_text, True, (154, 218, 206))
+        right_surf = compact_font.render(right_text, True, (226, 168, 152))
+        self.window.blit(left_surf, (left_area.left, left_area.top))
+        self.window.blit(right_surf, (right_area.right - right_surf.get_width(),
+                                      right_area.top))
+        # Always register row hit-rects (off-screen) so hover-based UX (e.g. tooltips
+        # in tests) keeps working without requiring the expanded panel to be visible.
+        self._register_conquer_receipt_row_hitrects(
+            left_area, player_rows, align_right=False, top_offset=left_surf.get_height() + 2)
+        self._register_conquer_receipt_row_hitrects(
+            right_area, opponent_rows, align_right=True, top_offset=right_surf.get_height() + 2)
+        # Hover-to-expand: when mouse is over either compact line, show the full row breakdown.
+        mouse = pygame.mouse.get_pos()
+        left_hit = pygame.Rect(left_area.left, left_area.top,
+                               left_surf.get_width(), left_surf.get_height())
+        right_hit = pygame.Rect(right_area.right - right_surf.get_width(),
+                                right_area.top,
+                                right_surf.get_width(), right_surf.get_height())
+        if left_hit.collidepoint(mouse):
+            expand = pygame.Rect(left_area.left, left_area.top + left_surf.get_height() + 2,
+                                 left_area.width,
+                                 max(0, left_area.bottom - (left_area.top + left_surf.get_height() + 2)))
+            self._draw_conquer_lane_receipt_rows(
+                expand, player_rows, align_right=False, color=(154, 218, 206))
+        elif right_hit.collidepoint(mouse):
+            expand = pygame.Rect(right_area.left,
+                                 right_area.top + right_surf.get_height() + 2,
+                                 right_area.width,
+                                 max(0, right_area.bottom - (right_area.top + right_surf.get_height() + 2)))
+            self._draw_conquer_lane_receipt_rows(
+                expand, opponent_rows, align_right=True, color=(226, 168, 152))
 
     def _draw_conquer_duel_lane(self):
         if not (self._is_tactics_hand_game() and self._is_battle_phase_active()):
