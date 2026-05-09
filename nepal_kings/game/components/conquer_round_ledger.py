@@ -431,7 +431,7 @@ class ConquerRoundLedger:
                 icon_font,
                 icon_size,
                 hovered=False,
-                is_used=not ghost,
+                is_used=False,
                 suit_b=move.get('suit_b'),
             )
             return True

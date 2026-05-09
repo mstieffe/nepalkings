@@ -1552,8 +1552,9 @@ class FieldScreen(SubScreen):
             return None
         if getattr(figure, 'id', None) in self._conquer_preview_called_figure_ids():
             return 'preview'
-        if getattr(figure, 'id', None) in self._conquer_called_figure_ids():
-            return 'called'
+        # Persistent ring around already-called figures was retired —
+        # the support lane now lists called figures as their own entries
+        # and the field icon dim/grey states already convey involvement.
         return None
 
     def _draw_tactics_hand_battle_context_overlays(self, drawn_icons):

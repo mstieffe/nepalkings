@@ -479,7 +479,7 @@ class ConquerTimelinePanel:
                 icon_font,
                 icon_size,
                 hovered=False,
-                is_used=True,
+                is_used=False,
                 suit_b=move.get('suit_b'),
             )
         except Exception:

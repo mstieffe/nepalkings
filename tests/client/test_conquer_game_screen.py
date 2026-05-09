@@ -590,7 +590,9 @@ class TestConquerSubscreenLayout:
 
         assert FieldScreen._is_tactics_hand_battle_fighter(field, attacker) is True
         assert FieldScreen._is_tactics_hand_battle_fighter(field, defender) is True
-        assert FieldScreen._conquer_battle_context_kind(field, called) == 'called'
+        # Persistent 'called' ring was retired — the support lane already
+        # surfaces called figures, so the field icon no longer rings them.
+        assert FieldScreen._conquer_battle_context_kind(field, called) is None
         assert FieldScreen._conquer_battle_context_kind(field, support) is None
         assert FieldScreen._conquer_battle_context_kind(field, plain) is None
 

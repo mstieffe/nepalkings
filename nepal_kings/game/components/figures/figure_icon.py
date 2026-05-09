@@ -838,7 +838,10 @@ class FieldFigureIcon(FigureIcon):
         else:
             # For hidden figures: white glow for hover, black otherwise
             # Check if greyed out for defender selection
-            greyed_out_hidden = hasattr(self, 'defender_selectable') and not self.defender_selectable
+            greyed_out_hidden = (
+                (hasattr(self, 'defender_selectable') and not self.defender_selectable)
+                or bool(getattr(self, 'conquer_battle_dimmed', False))
+            )
             is_big_state = self.hovered and not is_mouse_pressed
             
             if greyed_out_hidden:

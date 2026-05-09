@@ -1872,7 +1872,7 @@ class ConquerGameScreen(GameScreen):
                 font,
                 icon_size,
                 hovered=hovered,
-                is_used=move.get('played_round') is not None,
+                is_used=False,
                 suit_b=move.get('suit_b'),
             )
 
@@ -3401,15 +3401,9 @@ class ConquerGameScreen(GameScreen):
         self._conquer_receipt_row_rects = []
         self._conquer_lane_figure_rects = []
 
-        self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
-        opponent = getattr(self.state.game, 'opponent_name', None) or 'OPPONENT'
-        opponent_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
-        self._draw_conquer_lane_band(
-            lane.opp_fighter_band,
-            self._fit_text(opponent.upper(), opponent_font, 86),
-            opponent_figures,
-            is_player=False,
-        )
+        # Side rails first (subpanel frames in background) so the figure
+        # bands and diff band can paint their content on top — otherwise
+        # the rail backdrops occlude figure power chips at lane edges (#3).
         self._draw_conquer_lane_support_rail(
             lane.you_support_badge_rail,
             player_support,
@@ -3431,10 +3425,30 @@ class ConquerGameScreen(GameScreen):
             opponent_chips,
             is_player=False,
         )
+        self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
+        opponent = getattr(self.state.game, 'opponent_name', None) or 'OPPONENT'
+        opponent_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
+        self._draw_conquer_lane_band(
+            lane.opp_fighter_band,
+            self._fit_text(opponent.upper(), opponent_font, 86),
+            opponent_figures,
+            is_player=False,
+        )
         # Diff/math band drawn AFTER the side rails so the surrounding rail
-        # frames cannot occlude the math numbers (#5).
+        # frames cannot occlude the math numbers (#5).  Shrink the diff
+        # band's drawn rect so that it stays inside the inner channel
+        # between the badge/chip rails — otherwise its receipt text
+        # collides with the tactic badges drawn on the chip rails.
+        diff_inner = pygame.Rect(lane.diff_band)
+        chip_w = max(0, lane.you_support_chip_rail[2])
+        badge_w = max(0, lane.you_support_badge_rail[2])
+        side_inset = chip_w + badge_w + 4
+        diff_inner = pygame.Rect(
+            diff_inner.left + side_inset, diff_inner.top,
+            max(20, diff_inner.width - 2 * side_inset), diff_inner.height,
+        )
         self._draw_conquer_lane_diff(
-            lane.diff_band,
+            diff_inner,
             player_figures,
             opponent_figures,
             player_move=player_display_move,
