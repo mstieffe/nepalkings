@@ -8,7 +8,8 @@ import pygame
 
 
 def _move(move_id, *, family='Dagger', suit='Hearts', rank='A', value=5,
-          status='available', played_round=None, card_id_b=None, suit_b=None):
+          status='available', played_round=None, card_id_b=None, suit_b=None,
+          call_figure_id=None):
     return {
         'id': move_id,
         'card_id': move_id + 100,
@@ -20,11 +21,14 @@ def _move(move_id, *, family='Dagger', suit='Hearts', rank='A', value=5,
         'value': value,
         'status': status,
         'played_round': played_round,
+        'call_figure_id': call_figure_id,
         'source': 'config',
     }
 
 
-def _fighter(fig_id, name, value, player_id, color):
+def _fighter(fig_id, name, value, player_id, color, *, suit='Hearts',
+             field='military', buffs_allies=False, buffs_allies_defence=False,
+             blocks_bonus=False, distance_attack=False):
     icon = pygame.Surface((64, 64), pygame.SRCALPHA)
     icon.fill(color)
     frame = pygame.Surface((80, 80), pygame.SRCALPHA)
@@ -33,6 +37,8 @@ def _fighter(fig_id, name, value, player_id, color):
         id=fig_id,
         name=name,
         player_id=player_id,
+        suit=suit,
+        field=field,
         value=value,
         number_card=SimpleNamespace(value=value),
         get_value=lambda: value,
@@ -40,7 +46,12 @@ def _fighter(fig_id, name, value, player_id, color):
             icon_img=icon,
             icon_img_small=icon,
             frame_img=frame,
+            field=field,
         ),
+        buffs_allies=buffs_allies,
+        buffs_allies_defence=buffs_allies_defence,
+        blocks_bonus=blocks_bonus,
+        distance_attack=distance_attack,
     )
 
 
@@ -391,6 +402,75 @@ def test_conquer_duel_lane_uses_hovered_tactic_as_preview(monkeypatch):
 
     assert captured['badge'] == (preview, True)
     assert captured['diff'][0] == preview
+
+
+def test_conquer_duel_lane_draws_real_support_badges_and_chips():
+    from config import settings
+    from game.components.conquer_layout import compute_conquer_layout
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    window.fill((0, 0, 0))
+    attacker = _fighter(10, 'Village Guard', 8, 1, (80, 160, 210),
+                        suit='Hearts', field='village')
+    defender = _fighter(20, 'Defending Guard', 5, 2, (200, 105, 90),
+                        suit='Hearts', field='military')
+    healer = _fighter(30, 'Djungle Healer', 4, 1, (90, 190, 120),
+                      suit='Hearts', field='village', buffs_allies=True)
+    archer = _fighter(31, 'Spades Archer', 3, 1, (90, 120, 200),
+                      suit='Spades', field='military', distance_attack=True)
+    wall = _fighter(40, 'Stone Wall', 6, 2, (180, 140, 110),
+                    suit='Clubs', field='military', buffs_allies_defence=True)
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        player_id=1,
+        opponent_id=2,
+        advancing_player_id=1,
+        advancing_figure_id=10,
+        defending_figure_id=20,
+        advancing_figure_id_2=None,
+        defending_figure_id_2=None,
+        battle_turn_player_id=1,
+        battle_round=1,
+        last_battle_result=None,
+        opponent_name='Bhaktapur',
+        land_suit_bonus_suit='Hearts',
+        land_suit_bonus_value=2,
+        conquer_tactics=[
+            _move(11, family='Sword', suit='Hearts', rank='Q', value=8,
+                  status='played', played_round=0, call_figure_id=30),
+        ],
+    )
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = window
+    screen.state = SimpleNamespace(game=game)
+    screen.subscreens = {
+        'field': SimpleNamespace(figures=[attacker, defender, healer, archer, wall]),
+        'battle': SimpleNamespace(opp_played=[
+            _move(21, family='Shield', suit='Clubs', rank='9', value=3,
+                  status='played', played_round=0),
+        ]),
+    }
+
+    player_support = ConquerGameScreen._conquer_lane_support_entries(
+        screen, [attacker], [defender], is_player=True)
+    opponent_support = ConquerGameScreen._conquer_lane_support_entries(
+        screen, [attacker], [defender], is_player=False)
+
+    assert [entry['kind'] for entry in player_support] == ['buffs_allies', 'distance_attack']
+    assert [entry['kind'] for entry in opponent_support] == ['buffs_allies_defence']
+
+    ConquerGameScreen._draw_conquer_duel_lane(screen)
+
+    lane = compute_conquer_layout(
+        settings.SCREEN_WIDTH,
+        settings.SCREEN_HEIGHT,
+        mode='battle',
+    ).battlefield.duel_lane
+    assert _rect_has_non_background_pixel(window, lane.you_support_badge_rail)
+    assert _rect_has_non_background_pixel(window, lane.opp_support_badge_rail)
+    assert _rect_has_non_background_pixel(window, lane.you_support_chip_rail)
 
 
 def test_tactic_flight_overlay_draws_nonblank_pill(monkeypatch):

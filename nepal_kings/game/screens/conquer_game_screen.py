@@ -30,6 +30,10 @@ from game.components.conquer_tactics_rail import (
 )
 from game.components.conquer_timeline_panel import ConquerTimelinePanel, AUTO_ADVANCE_MS
 from game.components.cards.hand import Hand
+from game.components.figures.family_configs.skill_config import (
+    SKILL_DEFINITIONS,
+    get_advantage_suit,
+)
 from game.components.figures.figure_manager import FigureManager
 from game.screens.conquer_flow import (
     ConquerObjective,
@@ -1750,6 +1754,168 @@ class ConquerGameScreen(GameScreen):
             return None
         return move
 
+    def _conquer_lane_all_figures(self):
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        return list(getattr(field, 'figures', []) or [])
+
+    def _conquer_lane_battle_figure_ids(self):
+        game = self.state.game
+        if not game:
+            return set()
+        ids = set()
+        for attr in (
+                'advancing_figure_id', 'advancing_figure_id_2',
+                'defending_figure_id', 'defending_figure_id_2'):
+            fig_id = getattr(game, attr, None)
+            if fig_id is not None:
+                ids.add(fig_id)
+        return ids
+
+    @staticmethod
+    def _conquer_lane_family_field(figure):
+        family = getattr(figure, 'family', None)
+        return str(getattr(family, 'field', None) or getattr(figure, 'field', '') or '').lower()
+
+    @staticmethod
+    def _conquer_lane_has_skill(figure, skill_key):
+        getter = getattr(figure, 'get_active_skill_keys', None)
+        if callable(getter):
+            try:
+                return skill_key in set(getter() or [])
+            except Exception:
+                return False
+        family = getattr(figure, 'family', None)
+        return bool(getattr(figure, skill_key, False) or getattr(family, skill_key, False))
+
+    @staticmethod
+    def _conquer_lane_number_value(figure):
+        number_card = getattr(figure, 'number_card', None)
+        if number_card is not None and getattr(number_card, 'value', None) is not None:
+            return int(getattr(number_card, 'value', 0) or 0)
+        return ConquerGameScreen._conquer_lane_figure_power(figure)
+
+    def _conquer_lane_is_defending_side(self, *, is_player):
+        game = self.state.game
+        if not game:
+            return False
+        player_id = getattr(game, 'player_id', None)
+        advancing_player_id = getattr(game, 'advancing_player_id', None)
+        if player_id is None or advancing_player_id is None:
+            return False
+        if is_player:
+            return advancing_player_id != player_id
+        return advancing_player_id == player_id
+
+    def _conquer_lane_support_entries(self, player_figures, opponent_figures, *, is_player):
+        game = self.state.game
+        if not game:
+            return []
+        player_id = getattr(game, 'player_id', None)
+        side_player_id = player_id if is_player else getattr(game, 'opponent_id', None)
+        if side_player_id is None:
+            battle_figs = player_figures if is_player else opponent_figures
+            if battle_figs:
+                side_player_id = getattr(battle_figs[0], 'player_id', None)
+        if side_player_id is None:
+            return []
+
+        own_targets = player_figures if is_player else opponent_figures
+        enemy_targets = opponent_figures if is_player else player_figures
+        battle_ids = self._conquer_lane_battle_figure_ids()
+        entries = []
+        seen = set()
+
+        def add(kind, figure, label, value_text):
+            key = (kind, getattr(figure, 'id', None))
+            if key in seen:
+                return
+            seen.add(key)
+            entries.append({
+                'kind': kind,
+                'figure': figure,
+                'label': label,
+                'value': value_text,
+            })
+
+        for figure in self._conquer_lane_all_figures():
+            if getattr(figure, 'player_id', None) != side_player_id:
+                continue
+            fig_id = getattr(figure, 'id', None)
+            if fig_id in battle_ids:
+                continue
+            if getattr(figure, 'has_deficit', False):
+                continue
+            suit = getattr(figure, 'suit', None)
+            adv_suit = get_advantage_suit(suit) if suit else None
+
+            if (self._conquer_lane_has_skill(figure, 'buffs_allies')
+                    and any(self._conquer_lane_family_field(target) == 'village'
+                            and getattr(target, 'suit', None) == suit
+                            for target in own_targets)):
+                add('buffs_allies', figure, 'Buff', '+4')
+
+            if (self._conquer_lane_has_skill(figure, 'buffs_allies_defence')
+                    and self._conquer_lane_is_defending_side(is_player=is_player)):
+                add('buffs_allies_defence', figure, 'Wall', f'+{self._conquer_lane_number_value(figure)}')
+
+            if (self._conquer_lane_has_skill(figure, 'blocks_bonus') and adv_suit
+                    and any(getattr(target, 'suit', None) == adv_suit for target in enemy_targets)):
+                add('blocks_bonus', figure, 'Block', 'Block')
+
+            if (self._conquer_lane_has_skill(figure, 'distance_attack') and adv_suit
+                    and any(getattr(target, 'suit', None) == adv_suit for target in enemy_targets)):
+                add('distance_attack', figure, 'Range', f'-{self._conquer_lane_number_value(figure)}')
+
+        order = {
+            'buffs_allies': 0,
+            'buffs_allies_defence': 1,
+            'blocks_bonus': 2,
+            'distance_attack': 3,
+        }
+        return sorted(entries, key=lambda e: (order.get(e['kind'], 99), getattr(e['figure'], 'id', 0)))
+
+    def _conquer_lane_find_figure(self, figure_id):
+        if figure_id is None:
+            return None
+        needle = str(figure_id)
+        for figure in self._conquer_lane_all_figures():
+            if str(getattr(figure, 'id', None)) == needle:
+                return figure
+        return None
+
+    @staticmethod
+    def _conquer_lane_enchantment_total(figures):
+        total = 0
+        for figure in figures or []:
+            getter = getattr(figure, 'get_total_enchantment_modifier', None)
+            if callable(getter):
+                try:
+                    total += int(getter() or 0)
+                    continue
+                except Exception:
+                    pass
+            for enchantment in getattr(figure, 'active_enchantments', []) or []:
+                total += int(enchantment.get('power_modifier', 0) or 0)
+        return total
+
+    def _conquer_lane_modifier_chips(self, move, figures):
+        chips = []
+        call_figure = self._conquer_lane_find_figure(
+            move.get('call_figure_id') if isinstance(move, dict) else None)
+        if call_figure is not None:
+            chips.append({'label': 'Call', 'value': f'+{self._conquer_lane_figure_power(call_figure)}'})
+
+        game = self.state.game
+        land_suit = getattr(game, 'land_suit_bonus_suit', None) if game else None
+        land_bonus = getattr(game, 'land_suit_bonus_value', None) if game else None
+        if land_suit and land_bonus and any(getattr(fig, 'suit', None) == land_suit for fig in figures or []):
+            chips.append({'label': 'Land', 'value': f'+{int(land_bonus)}'})
+
+        enchant_total = self._conquer_lane_enchantment_total(figures)
+        if enchant_total:
+            chips.append({'label': 'Spell', 'value': f'{enchant_total:+d}'})
+        return chips
+
     @staticmethod
     def _conquer_lane_surface(asset, size):
         if not isinstance(asset, pygame.Surface):
@@ -1815,6 +1981,136 @@ class ConquerGameScreen(GameScreen):
             pygame.draw.rect(self.window, (238, 206, 111), chip, border_radius=chip.height // 2)
             self.window.blit(value_surf, value_surf.get_rect(center=chip.center))
 
+    def _load_conquer_skill_icon(self, skill_key, size):
+        cache = getattr(self, '_conquer_skill_icon_cache', None)
+        if cache is None:
+            cache = {}
+            self._conquer_skill_icon_cache = cache
+        key = (skill_key, int(size))
+        if key in cache:
+            return cache[key]
+        icon_path = SKILL_DEFINITIONS.get(skill_key, {}).get('icon')
+        surf = None
+        if icon_path:
+            try:
+                surf = pygame.image.load(icon_path).convert_alpha()
+                surf = pygame.transform.smoothscale(surf, (int(size), int(size)))
+            except Exception:
+                surf = None
+        cache[key] = surf
+        return surf
+
+    def _draw_conquer_lane_support_badge(self, badge, entry, *, is_player, pulse=False):
+        figure = entry['figure']
+        badge = pygame.Rect(badge)
+        fill = (28, 56, 50, 232) if is_player else (62, 40, 42, 232)
+        border = (112, 220, 150) if is_player else (232, 118, 110)
+        pygame.draw.rect(self.window, fill, badge, border_radius=6)
+        pygame.draw.rect(self.window, border, badge, 2, border_radius=6)
+        if pulse:
+            phase = (pygame.time.get_ticks() % 900) / 900.0
+            pulse_alpha = int(70 + 90 * (1.0 - abs(0.5 - phase) * 2.0))
+            glow = pygame.Surface(badge.size, pygame.SRCALPHA)
+            pygame.draw.rect(glow, (*border, pulse_alpha), glow.get_rect().inflate(-2, -2), 3, border_radius=6)
+            self.window.blit(glow, badge.topleft)
+
+        family = getattr(figure, 'family', None)
+        icon_raw = getattr(family, 'icon_img', None) or getattr(family, 'icon_img_small', None)
+        frame_raw = getattr(family, 'frame_img', None)
+        art_size = max(12, int(badge.width * 0.58))
+        art_center = (badge.centerx, badge.top + int(badge.height * 0.38))
+        if isinstance(icon_raw, pygame.Surface):
+            icon = pygame.transform.smoothscale(icon_raw, (art_size, art_size))
+            self.window.blit(icon, icon.get_rect(center=art_center))
+        else:
+            fallback = pygame.Rect(0, 0, art_size, art_size)
+            fallback.center = art_center
+            pygame.draw.rect(self.window, (104, 94, 68), fallback, border_radius=5)
+        if isinstance(frame_raw, pygame.Surface):
+            frame_size = max(art_size + 8, int(badge.width * 0.75))
+            frame = pygame.transform.smoothscale(frame_raw, (frame_size, frame_size))
+            self.window.blit(frame, frame.get_rect(center=art_center))
+
+        skill_size = max(12, int(badge.width * 0.28))
+        skill_icon = self._load_conquer_skill_icon(entry['kind'], skill_size)
+        skill_rect = pygame.Rect(badge.left + 4, badge.bottom - skill_size - 4,
+                                 skill_size, skill_size)
+        if skill_icon:
+            self.window.blit(skill_icon, skill_rect.topleft)
+        else:
+            pygame.draw.rect(self.window, border, skill_rect, border_radius=3)
+            tiny = settings.get_font(max(7, int(settings.FS_TINY * 0.50)), bold=True)
+            letter = tiny.render(entry['label'][:1], True, (20, 16, 10))
+            self.window.blit(letter, letter.get_rect(center=skill_rect.center))
+
+        value_font = settings.get_font(max(7, int(settings.FS_TINY * 0.52)), bold=True)
+        value = str(entry.get('value') or '')
+        value_surf = value_font.render(self._fit_text(value, value_font, badge.width - 8), True, (246, 239, 214))
+        value_chip = value_surf.get_rect()
+        value_chip.inflate_ip(6, 4)
+        value_chip.bottomright = (badge.right - 3, badge.bottom - 3)
+        pygame.draw.rect(self.window, (24, 18, 12), value_chip, border_radius=value_chip.height // 2)
+        pygame.draw.rect(self.window, border, value_chip, 1, border_radius=value_chip.height // 2)
+        self.window.blit(value_surf, value_surf.get_rect(center=value_chip.center))
+
+    def _draw_conquer_lane_support_rail(self, rect, entries, *, is_player, pulse=False):
+        rail = pygame.Rect(rect).inflate(-3, -8)
+        if rail.width <= 0 or rail.height <= 0:
+            return
+        bg = (20, 40, 38, 156) if is_player else (44, 30, 32, 156)
+        border = (84, 150, 132) if is_player else (160, 94, 88)
+        pygame.draw.rect(self.window, bg, rail, border_radius=7)
+        pygame.draw.rect(self.window, border, rail, 1, border_radius=7)
+        if not entries:
+            return
+
+        visible = entries[:4]
+        gap = max(4, int(rail.height * 0.018))
+        badge_h = min(rail.width, max(24, (rail.height - gap * (len(visible) + 1)) // len(visible)))
+        y = rail.top + gap
+        for entry in visible:
+            badge = pygame.Rect(0, 0, max(1, rail.width - 4), badge_h)
+            badge.centerx = rail.centerx
+            badge.top = y
+            self._draw_conquer_lane_support_badge(badge, entry, is_player=is_player, pulse=pulse)
+            y += badge_h + gap
+        overflow = len(entries) - len(visible)
+        if overflow > 0:
+            font = settings.get_font(max(8, int(settings.FS_TINY * 0.58)), bold=True)
+            text = font.render(f'+{overflow}', True, (246, 239, 214))
+            chip = text.get_rect(center=(rail.centerx, rail.bottom - max(8, text.get_height())))
+            chip.inflate_ip(10, 5)
+            pygame.draw.rect(self.window, (26, 20, 14), chip, border_radius=chip.height // 2)
+            pygame.draw.rect(self.window, border, chip, 1, border_radius=chip.height // 2)
+            self.window.blit(text, text.get_rect(center=chip.center))
+
+    def _draw_conquer_lane_chip_rail(self, rect, chips, *, is_player):
+        rail = pygame.Rect(rect).inflate(-2, -8)
+        if rail.width <= 0 or rail.height <= 0:
+            return
+        bg = (18, 34, 36, 144) if is_player else (38, 28, 30, 144)
+        border = (92, 164, 172) if is_player else (178, 110, 104)
+        pygame.draw.rect(self.window, bg, rail, border_radius=7)
+        pygame.draw.rect(self.window, border, rail, 1, border_radius=7)
+        if not chips:
+            return
+        font = settings.get_font(max(7, int(settings.FS_TINY * 0.52)), bold=True)
+        max_visible = min(4, len(chips))
+        gap = max(3, int(rail.height * 0.014))
+        chip_h = min(max(20, int(rail.width * 1.10)),
+                     max(12, (rail.height - gap * (max_visible + 1)) // max_visible))
+        y = rail.top + gap
+        for chip_data in chips[:max_visible]:
+            chip = pygame.Rect(rail.left + 1, y, max(1, rail.width - 2), chip_h)
+            pygame.draw.rect(self.window, (25, 20, 14), chip, border_radius=chip.height // 2)
+            pygame.draw.rect(self.window, border, chip, 1, border_radius=chip.height // 2)
+            label = str(chip_data.get('label', '?'))[:1]
+            value = str(chip_data.get('value', ''))
+            text = label if chip.width < 34 else self._fit_text(f'{label}{value}', font, chip.width - 4)
+            surf = font.render(text, True, (238, 222, 178))
+            self.window.blit(surf, surf.get_rect(center=chip.center))
+            y += chip_h + gap
+
     def _draw_conquer_lane_tactic_badge(self, rect, move, round_idx, *, is_player,
                                         ghost=False):
         rail = pygame.Rect(rect).inflate(-5, -10)
@@ -1856,8 +2152,11 @@ class ConquerGameScreen(GameScreen):
             name_surf = name_font.render(name, True, (246, 239, 214))
             value_col = (154, 232, 238) if ghost else (245, 214, 122)
             value_surf = value_font.render(str(self._conquer_lane_move_power(move)), True, value_col)
-            self.window.blit(name_surf, name_surf.get_rect(center=(badge.centerx, badge.centery)))
-            self.window.blit(value_surf, value_surf.get_rect(center=(badge.centerx, badge.bottom - 11)))
+            if badge.width < 44:
+                self.window.blit(value_surf, value_surf.get_rect(center=(badge.centerx, badge.centery + 4)))
+            else:
+                self.window.blit(name_surf, name_surf.get_rect(center=(badge.centerx, badge.centery)))
+                self.window.blit(value_surf, value_surf.get_rect(center=(badge.centerx, badge.bottom - 11)))
         else:
             wait = tiny.render('...', True, (156, 140, 102))
             self.window.blit(wait, wait.get_rect(center=(badge.centerx, badge.centery + 8)))
@@ -1934,6 +2233,12 @@ class ConquerGameScreen(GameScreen):
         preview_move = self._conquer_lane_preview_move(player_slots, round_idx)
         player_display_move = player_move if player_move is not None else preview_move
         player_move_is_preview = player_move is None and preview_move is not None
+        player_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=True)
+        opponent_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=False)
+        player_chips = self._conquer_lane_modifier_chips(player_display_move, player_figures)
+        opponent_chips = self._conquer_lane_modifier_chips(opponent_move, opponent_figures)
 
         self._draw_conquer_lane_band(lane.you_fighter_band, 'YOU', player_figures, is_player=True)
         self._draw_conquer_lane_diff(
@@ -1952,6 +2257,27 @@ class ConquerGameScreen(GameScreen):
             opponent_figures,
             is_player=False,
         )
+        self._draw_conquer_lane_support_rail(
+            lane.you_support_badge_rail,
+            player_support,
+            is_player=True,
+            pulse=player_move_is_preview,
+        )
+        self._draw_conquer_lane_support_rail(
+            lane.opp_support_badge_rail,
+            opponent_support,
+            is_player=False,
+        )
+        self._draw_conquer_lane_chip_rail(
+            lane.you_support_chip_rail,
+            player_chips,
+            is_player=True,
+        )
+        self._draw_conquer_lane_chip_rail(
+            lane.opp_support_chip_rail,
+            opponent_chips,
+            is_player=False,
+        )
         self._draw_conquer_lane_leader_line(
             lane.you_support_badge_rail,
             lane.you_fighter_band,
@@ -1964,14 +2290,14 @@ class ConquerGameScreen(GameScreen):
             is_player=False,
         )
         self._draw_conquer_lane_tactic_badge(
-            lane.you_support_badge_rail,
+            lane.you_support_chip_rail,
             player_display_move,
             round_idx,
             is_player=True,
             ghost=player_move_is_preview,
         )
         self._draw_conquer_lane_tactic_badge(
-            lane.opp_support_badge_rail,
+            lane.opp_support_chip_rail,
             opponent_move,
             round_idx,
             is_player=False,
