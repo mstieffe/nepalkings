@@ -117,14 +117,22 @@ def test_tactics_rail_draws_scrollable_long_tactics_without_blank_output():
     assert _rect_has_non_background_pixel(window, rail.rect())
     outside_rail = pygame.Rect(rail.rect().right + 1, rail.rect().top, 8, rail.rect().height)
     assert not _rect_has_non_background_pixel(window, outside_rail)
-    assert len(rail._cell_rects) == layout.cells_visible
+    # Family headers between groups consume some vertical space, so the
+    # rail may render slightly fewer cells than ``cells_visible`` —
+    # require at least 1 and no more than the layout slot count.
+    assert 1 <= len(rail._cell_rects) <= layout.cells_visible
     assert rail._scroll_down_rect is not None
     rail._scroll = 99
     rail._clamp_scroll()
     assert rail._scroll == len(moves) - layout.cells_visible
-    assert rail.move_cell_rect(1) == rail._cell_rects[0]
-    rail._hovered_id = 1
-    assert rail.preview_move()['id'] == 1
+    # First cell corresponds to whichever move the rail rendered first
+    # (the rail groups by family, so id=1 is no longer guaranteed first).
+    first_id = rail._cell_move_ids[0]
+    assert rail.move_cell_rect(first_id) == rail._cell_rects[0]
+    rail._scroll = 0
+    rail.draw()
+    rail._hovered_id = rail._cell_move_ids[0]
+    assert rail.preview_move()['id'] == rail._cell_move_ids[0]
     game.battle_turn_player_id = 2
     assert rail.preview_move() is None
 

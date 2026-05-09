@@ -90,6 +90,13 @@ class ConquerTacticsRail:
         # Snapshot of move IDs from the previous frame so we can detect
         # newly-added moves (used to start the new-move glow on gamble).
         self._prev_move_ids: set = set()
+        # Coin-flip animation state for gambled tactic. (#8c)
+        # ``{'move_id': int, 'started_at': ms, 'duration': ms}`` or None.
+        self._gamble_anim: Optional[Dict[str, Any]] = None
+        # Drag-and-drop combine state. (#8b)
+        self._drag_origin_id: Optional[int] = None
+        self._drag_pos: Optional[tuple] = None
+        self._drag_active: bool = False
 
     # ------------------------------------------------------------------ data
     def _moves(self) -> List[Dict[str, Any]]:
@@ -299,9 +306,46 @@ class ConquerTacticsRail:
             return None
 
     # ------------------------------------------------------------------ events
+    DRAG_START_PX = 6
+    FAMILY_GROUP_ORDER = ('Dagger', 'Buff', 'Block', 'Call')
+
+    def _family_group(self, move: Dict[str, Any]) -> str:
+        """Map a move to its display family group (#8a)."""
+        fam = (move.get('family_name') or '').strip()
+        if fam in ('Dagger', 'Double Dagger'):
+            return 'Dagger'
+        if fam == 'Buff':
+            return 'Buff'
+        if fam == 'Block':
+            return 'Block'
+        if fam == 'Call':
+            return 'Call'
+        return fam or 'Other'
+
+    def _hand_moves_grouped(self) -> List[Dict[str, Any]]:
+        """Hand moves sorted by family group, then by descending power."""
+        groups = {g: [] for g in self.FAMILY_GROUP_ORDER}
+        misc: List[Dict[str, Any]] = []
+        for m in self._hand_moves():
+            g = self._family_group(m)
+            if g in groups:
+                groups[g].append(m)
+            else:
+                misc.append(m)
+        out: List[Dict[str, Any]] = []
+        for g in self.FAMILY_GROUP_ORDER:
+            out.extend(sorted(groups[g], key=lambda x: -self._power(x)))
+        out.extend(misc)
+        return out
+
     def handle_event(self, event) -> bool:
         """Returns True if the rail consumed the event."""
-        if event.type not in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEWHEEL):
+        if event.type not in (
+            pygame.MOUSEBUTTONDOWN,
+            pygame.MOUSEBUTTONUP,
+            pygame.MOUSEMOTION,
+            pygame.MOUSEWHEEL,
+        ):
             return False
         layout = self._ensure_layout()
         rail_rect = pygame.Rect(*layout.tactics_rail.rect)
@@ -312,6 +356,52 @@ class ConquerTacticsRail:
                 self._clamp_scroll()
                 return True
             return False
+        # Drag-and-drop combine handling. (#8b)
+        if event.type == pygame.MOUSEMOTION:
+            if self._drag_origin_id is None:
+                return False
+            self._drag_pos = event.pos
+            if not self._drag_active:
+                # Promote to active drag once the cursor moves far enough.
+                origin_rect = self._cell_rect_for(self._drag_origin_id)
+                if origin_rect is not None:
+                    dx = event.pos[0] - origin_rect.centerx
+                    dy = event.pos[1] - origin_rect.centery
+                    if (dx * dx + dy * dy) ** 0.5 >= self.DRAG_START_PX:
+                        self._drag_active = True
+            return self._drag_active
+        if event.type == pygame.MOUSEBUTTONUP:
+            if event.button != 1 or self._drag_origin_id is None:
+                self._cancel_drag()
+                return False
+            origin_id = self._drag_origin_id
+            was_active = self._drag_active
+            self._cancel_drag()
+            if not was_active:
+                return False
+            # Find the cell the cursor is over.
+            target_id = None
+            for rect, mid in zip(self._cell_rects, self._cell_move_ids):
+                if rect.collidepoint(event.pos):
+                    target_id = mid
+                    break
+            if target_id is None or target_id == origin_id:
+                return True
+            origin = next((m for m in self._hand_moves()
+                           if int(m.get('id') or 0) == origin_id), None)
+            target = next((m for m in self._hand_moves()
+                           if int(m.get('id') or 0) == target_id), None)
+            if (origin is not None and target is not None
+                    and self._can_combine(origin, target)):
+                self._pending_action = {
+                    'action': ACTION_COMBINE,
+                    'move': origin,
+                    'partner': target,
+                }
+                self._combine_pending = False
+                self._combine_partner_id = None
+            return True
+        # MOUSEBUTTONDOWN
         if event.button != 1:
             return False
         pos = event.pos
@@ -344,8 +434,27 @@ class ConquerTacticsRail:
         for rect, mid in zip(self._cell_rects, self._cell_move_ids):
             if rect.collidepoint(pos):
                 self._handle_cell_click(mid)
+                # Arm drag-and-drop combine (#8b) — only meaningful for
+                # single Daggers; the actual drag promotes on motion.
+                move = next((m for m in self._hand_moves()
+                             if int(m.get('id') or 0) == mid), None)
+                if move is not None and self._is_single_dagger(move):
+                    self._drag_origin_id = mid
+                    self._drag_pos = pos
+                    self._drag_active = False
                 return True
         return True  # consumed even if hit empty space inside the rail
+
+    def _cell_rect_for(self, move_id: int) -> Optional[pygame.Rect]:
+        for rect, mid in zip(self._cell_rects, self._cell_move_ids):
+            if mid == move_id:
+                return rect
+        return None
+
+    def _cancel_drag(self) -> None:
+        self._drag_origin_id = None
+        self._drag_pos = None
+        self._drag_active = False
 
     def _clamp_scroll(self):
         layout = self._ensure_layout()
@@ -381,6 +490,15 @@ class ConquerTacticsRail:
         if key == ACTION_GAMBLE:
             # Gambling is a tactics-hand mutation, not a battle-turn action.
             self._pending_action = {'action': ACTION_GAMBLE, 'move': sel}
+            # Kick off the coin-flip animation on the source cell. (#8c)
+            try:
+                self._gamble_anim = {
+                    'move_id': int(sel.get('id') or 0),
+                    'started_at': pygame.time.get_ticks(),
+                    'duration': 1100,
+                }
+            except Exception:
+                self._gamble_anim = None
             return
         if key == ACTION_DISMANTLE:
             if self._is_double_dagger(sel):
@@ -472,10 +590,23 @@ class ConquerTacticsRail:
         self.window.blit(hint, (rect.x + 8, rect.y + 4 + s1.get_height() + 1))
 
     # -- hand list
+    HEADER_H = 14
+
+    def _draw_family_header(self, rect: pygame.Rect, label: str) -> None:
+        bg = pygame.Surface(rect.size, pygame.SRCALPHA)
+        bg.fill((26, 22, 18, 210))
+        self.window.blit(bg, rect.topleft)
+        pygame.draw.line(self.window, _BORDER_RGBA,
+                         (rect.left + 2, rect.bottom - 1),
+                         (rect.right - 2, rect.bottom - 1), 1)
+        font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
+        s = font.render(label, True, _TEXT_SECONDARY)
+        self.window.blit(s, (rect.left + 6, rect.top + 1))
+
     def _draw_hand_list(self, rect: pygame.Rect, cell_h: int, cells_visible: int):
         previous_clip = self.window.get_clip()
         self.window.set_clip(rect)
-        moves = self._hand_moves()
+        moves = self._hand_moves_grouped()
         self._clamp_scroll()
         self._cell_rects = []
         self._cell_move_ids = []
@@ -509,16 +640,61 @@ class ConquerTacticsRail:
         font = settings.get_font(max(11, int(settings.FS_SMALL * 0.95)), bold=True)
         chip_font = settings.get_font(max(9, int(settings.FS_TINY * 0.85)), bold=True)
         mouse_pos = pygame.mouse.get_pos()
-        for i, move in enumerate(visible):
-            cy = rect.top + i * cell_h
-            cell_rect = pygame.Rect(rect.left, cy, rect.width, cell_h - 2)
+        last_group: Optional[str] = None
+        y = rect.top
+        for move in visible:
+            group = self._family_group(move)
+            # Only draw a header at *transitions* between groups; the rail
+            # already has a section header above this list, so the first
+            # group does not need an extra mini-header (and skipping it
+            # also keeps cell-fit budgets stable).
+            if (last_group is not None and group != last_group
+                    and y + self.HEADER_H <= rect.bottom):
+                header_rect = pygame.Rect(rect.left, y, rect.width, self.HEADER_H)
+                self._draw_family_header(header_rect, group + 's' if not group.endswith('s') else group)
+                y += self.HEADER_H
+            last_group = group
+            if y + cell_h > rect.bottom + 2:
+                break
+            cell_rect = pygame.Rect(rect.left, y, rect.width, cell_h - 2)
             hovered = cell_rect.collidepoint(mouse_pos)
             if hovered:
                 self._hovered_id = int(move.get('id') or 0)
             self._draw_hand_cell(cell_rect, move, font, chip_font, hovered=hovered)
             self._cell_rects.append(cell_rect)
             self._cell_move_ids.append(int(move.get('id') or 0))
+            y += cell_h
+        # Drag ghost (#8b) — drawn last so it floats over cells.
+        if self._drag_active and self._drag_origin_id is not None and self._drag_pos:
+            origin_move = next((m for m in self._hand_moves()
+                                if int(m.get('id') or 0) == self._drag_origin_id), None)
+            if origin_move is not None:
+                self._draw_drag_ghost(origin_move, self._drag_pos)
         self.window.set_clip(previous_clip)
+
+    def _draw_drag_ghost(self, move: Dict[str, Any], pos: tuple) -> None:
+        size = 28
+        x, y = pos
+        ghost_rect = pygame.Rect(x - size // 2, y - size // 2, size, size)
+        bg = pygame.Surface(ghost_rect.size, pygame.SRCALPHA)
+        bg.fill((52, 40, 30, 210))
+        self.window.blit(bg, ghost_rect.topleft)
+        pygame.draw.rect(self.window, _SELECTED_RGBA, ghost_rect, 2, border_radius=4)
+        try:
+            (glow_cache, icon_cache, frame_cache, suit_icon_cache,
+             icon_font) = self._parent._conquer_battle_move_icon_assets(size - 6)
+            draw_battle_move_icon(
+                self.window, ghost_rect.centerx, ghost_rect.centery,
+                move.get('family_name', ''),
+                move.get('suit', ''),
+                self._power(move),
+                glow_cache, icon_cache, frame_cache, suit_icon_cache,
+                icon_font, size - 6,
+                hovered=False, is_used=False,
+                suit_b=move.get('suit_b'),
+            )
+        except Exception:
+            pass
 
     def _draw_hand_cell(self, rect: pygame.Rect, move: Dict[str, Any], font, chip_font,
                         *, hovered: bool = False):
@@ -565,22 +741,57 @@ class ConquerTacticsRail:
 
         # Icon (left)
         icon_size = max(20, int(rect.height * 0.78))
+        # Compute gamble-flip squash factor (#8c). When the cell matches
+        # the active anim, horizontally squash the icon over the duration.
+        flip_scale_x = 1.0
+        anim = self._gamble_anim
+        if anim and int(anim.get('move_id') or -1) == mid:
+            now_ms = pygame.time.get_ticks()
+            elapsed = now_ms - int(anim.get('started_at', now_ms))
+            duration = max(1, int(anim.get('duration', 1000)))
+            if elapsed >= duration:
+                self._gamble_anim = None
+            else:
+                # Three squash cycles across the duration.
+                import math
+                t = elapsed / duration
+                flip_scale_x = abs(math.cos(t * math.pi * 3.0))
+                flip_scale_x = max(0.08, flip_scale_x)
         try:
             glow_cache, icon_cache, frame_cache, suit_icon_cache, icon_font = (
                 self._parent._conquer_battle_move_icon_assets(icon_size))
             cx = rect.left + icon_size // 2 + 6
             cy = rect.centery
-            draw_battle_move_icon(
-                self.window, cx, cy,
-                move.get('family_name', ''),
-                move.get('suit', ''),
-                self._power(move),
-                glow_cache, icon_cache, frame_cache, suit_icon_cache,
-                icon_font, icon_size,
-                hovered=False,
-                is_used=False,
-                suit_b=move.get('suit_b'),
-            )
+            if flip_scale_x < 0.999:
+                # Render icon onto a scratch surface then scale X for the
+                # flip effect.
+                scratch = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
+                draw_battle_move_icon(
+                    scratch, icon_size // 2, icon_size // 2,
+                    move.get('family_name', ''),
+                    move.get('suit', ''),
+                    self._power(move),
+                    glow_cache, icon_cache, frame_cache, suit_icon_cache,
+                    icon_font, icon_size,
+                    hovered=False, is_used=False,
+                    suit_b=move.get('suit_b'),
+                )
+                new_w = max(1, int(icon_size * flip_scale_x))
+                squashed = pygame.transform.smoothscale(
+                    scratch, (new_w, icon_size))
+                self.window.blit(squashed, squashed.get_rect(center=(cx, cy)))
+            else:
+                draw_battle_move_icon(
+                    self.window, cx, cy,
+                    move.get('family_name', ''),
+                    move.get('suit', ''),
+                    self._power(move),
+                    glow_cache, icon_cache, frame_cache, suit_icon_cache,
+                    icon_font, icon_size,
+                    hovered=False,
+                    is_used=False,
+                    suit_b=move.get('suit_b'),
+                )
         except Exception:
             pygame.draw.rect(self.window, (90, 70, 50),
                              pygame.Rect(rect.left + 4, rect.top + 4,
