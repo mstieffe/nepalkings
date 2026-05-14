@@ -9,7 +9,7 @@ from pygame.locals import *
 from config import settings
 from game.components.cards.card_img import CardImg
 from game.components.hex_map import _draw_surface_pattern
-from game.components import badge_cosmetics
+from game.components import badge_cosmetics, sigil_cosmetics
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.screens._menu_base import MenuScreenMixin
 from game.screens.screen import Screen
@@ -33,6 +33,8 @@ HANDLED_KINGDOM_CONFIG_ACTIONS = frozenset({
     'buy_shield',
     'buy_cosmetic',
     'equip_cosmetic',
+    'cosmetic_sort',
+    'cosmetic_filter',
     'rename_start',
     'rename_confirm',
     'rename_cancel',
@@ -78,8 +80,18 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._buttons = []
         self._box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
         self._btn_close_rect = None
-        self._cosmetic_scroll = {'badge': 0, 'border': 0, 'surface': 0}
+        self._cosmetic_scroll = {'badge': 0, 'border': 0, 'surface': 0,
+                                 'color': 0, 'sigil': 0}
+        self._cosmetic_sort = {key: 'default' for key in self._cosmetic_scroll}
+        self._cosmetic_filter = {key: 'all' for key in self._cosmetic_scroll}
         self._cosmetic_scroll_areas = {}
+        self._cosmetics_panel_scroll = 0
+        self._cosmetics_scroll_area = None
+        self._cosmetics_content_h = 0
+        self._content_scroll = 0
+        self._content_scroll_area = None
+        self._content_content_h = 0
+        self._button_clip_rect = None
         self._skills_scroll = 0
         self._skills_scroll_area = None
         self._skills_content_h = 0
@@ -349,7 +361,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         pygame.draw.rect(self.window, border, cell, 2 if hovered else 1, border_radius=8)
         self._draw_production_item_row(item, cell)
         if collectable and item.get('key'):
-            self._buttons.append(('collect_kingdom_production_item', item.get('key'), cell))
+            self._register_button('collect_kingdom_production_item', item.get('key'), cell)
 
     def _draw_vault_panel(self, rect):
         """General Kingdom Production card: gold vault plus booster packs."""
@@ -499,7 +511,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._draw_loot_card_stack(stack_rect, cards, accent if active else frame_clr)
 
         if active and action:
-            self._buttons.append((action, None, rect))
+            self._register_button(action, None, rect)
 
     def _draw_loot_inbox_panel(self, rect):
         """Loot Inbox card: pending gained cards and unseen lost cards."""
@@ -930,10 +942,11 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
                 for cosmetic_type, area in self._cosmetic_scroll_areas.items():
                     if area.collidepoint(pos):
-                        self._scroll_cosmetic_section(cosmetic_type, getattr(event, 'y', 0))
-                        return
-                if self._skills_scroll_area and self._skills_scroll_area.collidepoint(pos):
-                    self._scroll_skills_panel(getattr(event, 'y', 0))
+                        if self._scroll_cosmetic_section(cosmetic_type, getattr(event, 'y', 0)):
+                            return
+                        break
+                if self._content_scroll_area and self._content_scroll_area.collidepoint(pos):
+                    self._scroll_config_content(getattr(event, 'y', 0))
                     return
                 continue
             if event.type != MOUSEBUTTONUP or event.button != 1:
@@ -959,6 +972,10 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     self._confirm_cosmetic_purchase(value)
                 elif action == 'equip_cosmetic':
                     self._equip_cosmetic(value)
+                elif action == 'cosmetic_sort':
+                    self._cycle_cosmetic_sort(value)
+                elif action == 'cosmetic_filter':
+                    self._cycle_cosmetic_filter(value)
                 elif action == 'rename_start':
                     self._start_rename()
                 elif action == 'upgrade_skill':
@@ -1041,15 +1058,63 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         return False
 
     def _scroll_cosmetic_section(self, cosmetic_type, wheel_y):
-        items = self._catalog_items(cosmetic_type)
+        unlocked = set((self._kingdom or {}).get('unlocked_cosmetics') or [])
+        items = self._catalog_items(cosmetic_type, unlocked=unlocked)
         area = self._cosmetic_scroll_areas.get(cosmetic_type)
         if not area:
-            return
+            return False
         item_h = max(30, min(38, int(0.038 * settings.SCREEN_HEIGHT)))
         max_scroll = max(0, len(items) * item_h - area.h)
+        if max_scroll <= 0:
+            return False
         current = int(self._cosmetic_scroll.get(cosmetic_type, 0) or 0)
-        current -= int(wheel_y or 0) * item_h
-        self._cosmetic_scroll[cosmetic_type] = max(0, min(max_scroll, current))
+        new_scroll = max(0, min(max_scroll, current - int(wheel_y or 0) * item_h))
+        self._cosmetic_scroll[cosmetic_type] = new_scroll
+        return new_scroll != current
+
+    def _scroll_cosmetics_panel(self, wheel_y):
+        area = self._cosmetics_scroll_area
+        if not area:
+            return False
+        max_scroll = max(0, int(self._cosmetics_content_h or 0) - area.h)
+        if max_scroll <= 0:
+            return False
+        step = max(54, int(0.070 * settings.SCREEN_HEIGHT))
+        current = int(getattr(self, '_cosmetics_panel_scroll', 0) or 0)
+        new_scroll = max(0, min(max_scroll, current - int(wheel_y or 0) * step))
+        self._cosmetics_panel_scroll = new_scroll
+        return new_scroll != current
+
+    def _scroll_config_content(self, wheel_y):
+        area = self._content_scroll_area
+        if not area:
+            return False
+        max_scroll = max(0, int(self._content_content_h or 0) - area.h)
+        if max_scroll <= 0:
+            return False
+        step = max(60, int(0.080 * settings.SCREEN_HEIGHT))
+        current = int(getattr(self, '_content_scroll', 0) or 0)
+        new_scroll = max(0, min(max_scroll, current - int(wheel_y or 0) * step))
+        self._content_scroll = new_scroll
+        return new_scroll != current
+
+    def _cycle_cosmetic_sort(self, cosmetic_type):
+        modes = ('default', 'rarity', 'price', 'locked')
+        if not hasattr(self, '_cosmetic_sort'):
+            self._cosmetic_sort = {key: 'default' for key in self._cosmetic_scroll}
+        current = self._cosmetic_sort.get(cosmetic_type, 'default')
+        next_mode = modes[(modes.index(current) + 1) % len(modes)] if current in modes else 'default'
+        self._cosmetic_sort[cosmetic_type] = next_mode
+        self._cosmetic_scroll[cosmetic_type] = 0
+
+    def _cycle_cosmetic_filter(self, cosmetic_type):
+        modes = ('all', 'owned', 'locked')
+        if not hasattr(self, '_cosmetic_filter'):
+            self._cosmetic_filter = {key: 'all' for key in self._cosmetic_scroll}
+        current = self._cosmetic_filter.get(cosmetic_type, 'all')
+        next_mode = modes[(modes.index(current) + 1) % len(modes)] if current in modes else 'all'
+        self._cosmetic_filter[cosmetic_type] = next_mode
+        self._cosmetic_scroll[cosmetic_type] = 0
 
     def _scroll_skills_panel(self, wheel_y):
         area = self._skills_scroll_area
@@ -1076,7 +1141,17 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             surf = self._heading_font.render(title, True, settings.LAND_DETAIL_TITLE_CLR)
             self.window.blit(surf, (rect.x + 14, rect.y + 10))
 
+    def _register_button(self, action, value, rect):
+        clip_rect = getattr(self, '_button_clip_rect', None)
+        if clip_rect is not None and not clip_rect.contains(rect):
+            return False
+        self._buttons.append((action, value, rect))
+        return True
+
     def _draw_button(self, rect, text, action, value=None, disabled=False):
+        clip_rect = getattr(self, '_button_clip_rect', None)
+        clipped = clip_rect is not None and not clip_rect.contains(rect)
+        disabled = disabled or clipped
         mouse = pygame.mouse.get_pos()
         hovered = rect.collidepoint(mouse) and not disabled
         bg = (82, 66, 44) if hovered else (58, 48, 38)
@@ -1088,7 +1163,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         surf = self._small_font.render(text, True, clr)
         self.window.blit(surf, surf.get_rect(center=rect.center))
         if not disabled:
-            self._buttons.append((action, value, rect))
+            self._register_button(action, value, rect)
 
     def _fit_text(self, text, font, max_width):
         text = str(text)
@@ -1153,7 +1228,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             clr = (220, 200, 150) if enabled else settings.KINGDOM_CONFIG_DIM_CLR
             pygame.draw.rect(self.window, clr, rect, 1, border_radius=4)
         if enabled:
-            self._buttons.append(('rename_start', None, rect))
+            self._register_button('rename_start', None, rect)
             self._rename_icon_rect = rect
 
     def _draw_close_x_button(self):
@@ -1172,7 +1247,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         x_font = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
         txt = x_font.render('\u00d7', True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=r.center))
-        self._buttons.append(('back', None, r))
+        self._register_button('back', None, r)
 
     def _draw_pager_arrow(self, rect, action, *, enabled, glyph):
         """Small chevron button used by the unified header pill."""
@@ -1191,7 +1266,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         txt = font.render(glyph, True, clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
         if enabled:
-            self._buttons.append((action, None, rect))
+            self._register_button(action, None, rect)
 
     def _draw_header_pill(self, rect):
         """Unified header: pager + name + edit + level/XP, all in one pill.
@@ -1346,14 +1421,51 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 self.window.blit(text_surf, (nx + pad_x, ny + 3))
                 nx += pill_w + 6
 
-    def _catalog_items(self, cosmetic_type):
+    def _catalog_items(self, cosmetic_type, *, unlocked=None):
+        unlocked = set(unlocked or [])
+        filter_mode = getattr(self, '_cosmetic_filter', {}).get(cosmetic_type, 'all')
+        sort_mode = getattr(self, '_cosmetic_sort', {}).get(cosmetic_type, 'default')
         items = []
         for key, item in sorted(self._catalog.items()):
             if item.get('type') == cosmetic_type:
+                if filter_mode == 'owned' and key not in unlocked:
+                    continue
+                if filter_mode == 'locked' and key in unlocked:
+                    continue
                 row = dict(item)
                 row['key'] = key
                 items.append(row)
+        if sort_mode == 'rarity':
+            items.sort(key=lambda row: (
+                self._rarity_rank(row.get('rarity')),
+                int(row.get('price_gold') or 0) if row.get('price_gold') is not None else 999999,
+                str(row.get('name') or row.get('key')),
+            ))
+        elif sort_mode == 'price':
+            items.sort(key=lambda row: (
+                int(row.get('price_gold') or 0) if row.get('price_gold') is not None else 999999,
+                self._rarity_rank(row.get('rarity')),
+                str(row.get('name') or row.get('key')),
+            ))
+        elif sort_mode == 'locked':
+            items.sort(key=lambda row: (
+                0 if row.get('key') not in unlocked else 1,
+                self._rarity_rank(row.get('rarity')),
+                str(row.get('name') or row.get('key')),
+            ))
         return items
+
+    @staticmethod
+    def _rarity_rank(rarity):
+        order = {
+            'default': 0,
+            'common': 1,
+            'uncommon': 2,
+            'rare': 3,
+            'epic': 4,
+            'legendary': 5,
+        }
+        return order.get(str(rarity or 'default'), 9)
 
     @staticmethod
     def _skill_increment(skill, level):
@@ -1437,10 +1549,28 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                            cy + int(radius * pygame.math.Vector2(1, 0).rotate_rad(angle).y)))
         pygame.draw.polygon(self.window, tier_fill, points)
         self._draw_surface_skin_preview(style.get('surface_key'), points)
+        color_key = style.get('color_key', getattr(settings, 'KINGDOM_COLOR_DEFAULT_KEY', 'color_royal_gold'))
+        palette = getattr(settings, 'KINGDOM_COLOR_PALETTE', {}) or {}
+        color_entry = palette.get(color_key) or {}
+        accent = color_entry.get('accent_rgb', settings.HEX_MINE_BORDER_HIGHLIGHT)
+        overlay = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        local = [(x - rect.x, y - rect.y) for x, y in points]
+        pygame.draw.polygon(overlay, (*accent[:3], 54), local)
+        self.window.blit(overlay, rect.topleft)
         border = settings.HEX_BORDER_SKINS.get(style.get('border_key'),
                                                settings.HEX_BORDER_SKINS['border_simple_gold'])
         pygame.draw.polygon(self.window, border.get('outer', (90, 70, 40)), points, 5)
         pygame.draw.polygon(self.window, border.get('main', (250, 221, 0)), points, 3)
+        pygame.draw.polygon(self.window, accent, points, 1)
+        sigil_key = style.get('sigil_key', getattr(settings, 'KINGDOM_SIGIL_DEFAULT_KEY', 'sigil_none'))
+        sigil_surf = sigil_cosmetics.render_sigil(
+            sigil_key,
+            max(14, min(rect.w, rect.h) // 4),
+            accent,
+        )
+        if sigil_surf is not None:
+            self.window.blit(sigil_surf,
+                             sigil_surf.get_rect(center=(rect.centerx, rect.y + max(16, rect.h // 4))))
         badge_key = style.get('badge_key', settings.HEX_BADGE_DEFAULT_KEY)
         badge_h = max(18, min(rect.h // 3, 30))
         shimmer_phase = badge_cosmetics.shimmer_phase_for(
@@ -1505,6 +1635,30 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self.window.blit(badge_surf, (bx, by))
             return
 
+        if cosmetic_type == 'color':
+            palette = (getattr(settings, 'KINGDOM_COLOR_PALETTE', {}) or {})
+            entry = palette.get(key) or {}
+            accent = entry.get('accent_rgb', (200, 200, 200))
+            glow = entry.get('glow_rgb', accent)
+            inner = rect.inflate(-6, -6)
+            pygame.draw.rect(self.window, accent, inner, border_radius=4)
+            pygame.draw.rect(self.window, glow, inner, 2, border_radius=4)
+            return
+
+        if cosmetic_type == 'sigil':
+            sz = min(rect.w, rect.h) - 4
+            if key == 'sigil_none':
+                txt = self._tiny_font.render('—', True,
+                                             settings.KINGDOM_CONFIG_DIM_CLR)
+                self.window.blit(txt, txt.get_rect(center=rect.center))
+                return
+            sigil_surf = sigil_cosmetics.render_sigil(
+                key, sz, (240, 220, 160))
+            if sigil_surf is not None:
+                self.window.blit(sigil_surf,
+                                 sigil_surf.get_rect(center=rect.center))
+            return
+
         cx, cy = rect.center
         radius = min(rect.w, rect.h) // 3
         points = []
@@ -1529,45 +1683,174 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         pygame.draw.polygon(self.window, border.get('outer', (90, 70, 40)), points, 4)
         pygame.draw.polygon(self.window, border.get('main', (250, 221, 0)), points, 2)
 
-    def _draw_cosmetic_section(self, rect, cosmetic_type, title):
-        self._draw_panel(rect, title)
+    def _draw_cosmetic_card_bg(self, rect, title):
+        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, settings.KINGDOM_CONFIG_CARD_BG, surf.get_rect(),
+                         border_radius=8)
+        self.window.blit(surf, rect.topleft)
+        pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_PANEL_BORDER, rect, 1,
+                         border_radius=8)
+        if title:
+            surf = self._heading_font.render(title, True, settings.LAND_DETAIL_TITLE_CLR)
+            self.window.blit(surf, (rect.x + 14, rect.y + 9))
+
+    def _draw_cosmetic_control_button(self, rect, text, action, value=None,
+                                      *, disabled=False, clip_rect=None):
+        if clip_rect is not None:
+            if not clip_rect.colliderect(rect):
+                return
+            if not clip_rect.contains(rect):
+                self._draw_button(rect, text, action, value, disabled=True)
+                return
+        self._draw_button(rect, text, action, value, disabled=disabled)
+
+    def _cosmetic_sections(self):
+        return [
+            ('badge', 'Kingdom Badge'),
+            ('border', 'Border'),
+            ('surface', 'Surface'),
+            ('color', 'Owner Color'),
+            ('sigil', 'Sigil'),
+        ]
+
+    def _cosmetic_card_gap(self):
+        return max(10, int(0.012 * settings.SCREEN_HEIGHT))
+
+    def _cosmetic_card_h(self):
+        return max(154, min(220, int(0.170 * settings.SCREEN_HEIGHT)))
+
+    def _cosmetics_panel_natural_h(self):
+        sections = self._cosmetic_sections()
+        card_h = self._cosmetic_card_h()
+        gap = self._cosmetic_card_gap()
+        content_h = len(sections) * card_h + max(0, len(sections) - 1) * gap
+        return 42 + content_h + 12
+
+    def _draw_cosmetics_panel(self, rect):
+        self._draw_panel(rect, 'Cosmetics')
+        self._cosmetics_scroll_area = None
+        self._cosmetics_content_h = 0
+        self._cosmetics_panel_scroll = 0
+        if not self._kingdom:
+            return
+
+        sections = self._cosmetic_sections()
+        body_y = rect.y + 42
+        viewport = pygame.Rect(rect.x + 10, body_y, rect.w - 20,
+                               max(80, rect.bottom - body_y - 12))
+        gap = self._cosmetic_card_gap()
+        card_h = self._cosmetic_card_h()
+        content_h = len(sections) * card_h + (len(sections) - 1) * gap
+        self._cosmetics_content_h = content_h
+
+        old_clip = self.window.get_clip()
+        self.window.set_clip(viewport.clip(old_clip))
+        try:
+            for idx, (cosmetic_type, title) in enumerate(sections):
+                card_y = viewport.y + idx * (card_h + gap)
+                card_rect = pygame.Rect(viewport.x, card_y, viewport.w, card_h)
+                if card_rect.bottom < viewport.y or card_rect.y > viewport.bottom:
+                    continue
+                self._draw_cosmetic_section(
+                    card_rect, cosmetic_type, title,
+                    embedded=True, viewport_rect=viewport)
+        finally:
+            self.window.set_clip(old_clip)
+
+    def _draw_cosmetic_section(self, rect, cosmetic_type, title,
+                               *, embedded=False, viewport_rect=None):
+        if embedded:
+            self._draw_cosmetic_card_bg(rect, title)
+        else:
+            self._draw_panel(rect, title)
         if not self._kingdom:
             return
         style = self._kingdom.get('style') or {}
         current_key = style.get(f'{cosmetic_type}_key')
         unlocked = set(self._kingdom.get('unlocked_cosmetics') or [])
-        preview = pygame.Rect(rect.x + 14, rect.y + 44, 92, rect.h - 58)
-        preview_style = dict(style)
-        self._style_preview(preview, preview_style)
-        x = preview.right + 14
-        y = rect.y + 42
-        items = self._catalog_items(cosmetic_type)
+        sort_rect = pygame.Rect(rect.right - 184, rect.y + 8, 84, 24)
+        filter_rect = pygame.Rect(rect.right - 94, rect.y + 8, 78, 24)
+        sort_label = self._fit_text(f"Sort {self._cosmetic_sort_label(cosmetic_type)}",
+                                    self._small_font, sort_rect.w - 8)
+        filter_label = self._fit_text(f"Show {self._cosmetic_filter_label(cosmetic_type)}",
+                                      self._small_font, filter_rect.w - 8)
+        self._draw_cosmetic_control_button(
+            sort_rect, sort_label, 'cosmetic_sort', cosmetic_type,
+            clip_rect=viewport_rect)
+        self._draw_cosmetic_control_button(
+            filter_rect, filter_label, 'cosmetic_filter', cosmetic_type,
+            clip_rect=viewport_rect)
+
+        show_preview = rect.h >= 84
+        y = rect.y + (42 if show_preview else 36)
+        if show_preview:
+            preview_h = max(30, rect.bottom - y - 10)
+            preview_w = min(92, max(58, int(preview_h * 1.35)))
+            preview = pygame.Rect(rect.x + 14, y, preview_w, preview_h)
+            self._style_preview(preview, dict(style))
+            x = preview.right + 14
+        else:
+            x = rect.x + 14
+        items = self._catalog_items(cosmetic_type, unlocked=unlocked)
         item_h = max(30, min(38, int(0.038 * settings.SCREEN_HEIGHT)))
         list_rect = pygame.Rect(x, y, rect.right - x - 18, max(28, rect.bottom - y - 12))
-        self._cosmetic_scroll_areas[cosmetic_type] = list_rect
+        visible_list_rect = list_rect.clip(viewport_rect) if viewport_rect else list_rect
+        list_visible = visible_list_rect.w > 0 and visible_list_rect.h > 0
+        if list_visible:
+            self._cosmetic_scroll_areas[cosmetic_type] = visible_list_rect
         max_scroll = max(0, len(items) * item_h - list_rect.h)
         scroll = max(0, min(max_scroll, int(self._cosmetic_scroll.get(cosmetic_type, 0) or 0)))
         self._cosmetic_scroll[cosmetic_type] = scroll
-        old_clip = self.window.get_clip()
-        self.window.set_clip(list_rect.clip(old_clip))
-        try:
-            for idx, item in enumerate(items):
-                row_y = list_rect.y + idx * item_h - scroll
-                row = pygame.Rect(list_rect.x, row_y, list_rect.w - (8 if max_scroll > 0 else 0), item_h - 5)
-                if row.bottom < list_rect.y or row.y > list_rect.bottom:
-                    continue
-                self._draw_cosmetic_row(row, cosmetic_type, item, current_key, unlocked)
-        finally:
-            self.window.set_clip(old_clip)
-        if max_scroll > 0:
-            track = pygame.Rect(list_rect.right - 5, list_rect.y, 4, list_rect.h)
+        if list_visible:
+            old_clip = self.window.get_clip()
+            self.window.set_clip(visible_list_rect.clip(old_clip))
+            try:
+                for idx, item in enumerate(items):
+                    row_y = list_rect.y + idx * item_h - scroll
+                    row = pygame.Rect(list_rect.x, row_y,
+                                      list_rect.w - (8 if max_scroll > 0 else 0),
+                                      item_h - 5)
+                    if row.bottom < visible_list_rect.y or row.y > visible_list_rect.bottom:
+                        continue
+                    self._draw_cosmetic_row(
+                        row, cosmetic_type, item, current_key, unlocked,
+                        clip_rect=visible_list_rect)
+            finally:
+                self.window.set_clip(old_clip)
+        if not items and list_visible:
+            msg = self._tiny_font.render('No cosmetics match this filter.', True,
+                                         settings.KINGDOM_CONFIG_DIM_CLR)
+            self.window.blit(msg, (visible_list_rect.x + 4, visible_list_rect.y + 6))
+        if max_scroll > 0 and list_visible:
+            track = pygame.Rect(visible_list_rect.right - 5, visible_list_rect.y,
+                                4, visible_list_rect.h)
             pygame.draw.rect(self.window, (52, 45, 42), track, border_radius=2)
-            thumb_h = max(18, int(list_rect.h * list_rect.h / max(list_rect.h, len(items) * item_h)))
+            thumb_h = max(18, int(visible_list_rect.h * visible_list_rect.h / max(visible_list_rect.h, len(items) * item_h)))
             thumb_y = track.y + int((track.h - thumb_h) * (scroll / max_scroll)) if max_scroll else track.y
             pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_HIGHLIGHT,
                              pygame.Rect(track.x, thumb_y, track.w, thumb_h), border_radius=2)
 
-    def _draw_cosmetic_row(self, row, cosmetic_type, item, current_key, unlocked):
+    def _cosmetic_sort_label(self, cosmetic_type):
+        labels = {
+            'default': 'Default',
+            'rarity': 'Rarity',
+            'price': 'Price',
+            'locked': 'Locked',
+        }
+        sort_state = getattr(self, '_cosmetic_sort', {})
+        return labels.get(sort_state.get(cosmetic_type, 'default'), 'Default')
+
+    def _cosmetic_filter_label(self, cosmetic_type):
+        labels = {
+            'all': 'All',
+            'owned': 'Owned',
+            'locked': 'Locked',
+        }
+        filter_state = getattr(self, '_cosmetic_filter', {})
+        return labels.get(filter_state.get(cosmetic_type, 'all'), 'All')
+
+    def _draw_cosmetic_row(self, row, cosmetic_type, item, current_key, unlocked,
+                           *, clip_rect=None):
         key = item['key']
         active = key == current_key
         bg = settings.KINGDOM_CONFIG_CARD_ACTIVE_BG if active else settings.KINGDOM_CONFIG_CARD_BG
@@ -1575,25 +1858,59 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         chip = pygame.Rect(row.x + 6, row.y + 5, 32, row.h - 10)
         self._draw_cosmetic_chip(chip, cosmetic_type, key)
         btn = pygame.Rect(row.right - 76, row.y + 5, 66, row.h - 10)
-        price_rect = pygame.Rect(btn.x - 58, row.y, 52, row.h)
+        price_rect = pygame.Rect(btn.x - 78, row.y, 72, row.h)
         name = item.get('name', key)
         label_w = max(36, price_rect.x - chip.right - 12)
         label_text = self._fit_text(name, self._small_font, label_w)
         label = self._small_font.render(label_text, True, settings.KINGDOM_CONFIG_TEXT_CLR)
         self.window.blit(label, (chip.right + 6, row.y + 5))
-        price = int(item.get('price_gold', 0) or 0)
-        price_text = 'Free' if price <= 0 else f'{price}g'
-        price_surf = self._tiny_font.render(price_text, True, settings.KINGDOM_CONFIG_DIM_CLR)
+
+        is_achievement = item.get('price_gold') is None
+        price = int(item.get('price_gold') or 0)
+        if is_achievement:
+            price_text = self._unlock_requirement_text(item)
+        else:
+            price_text = 'Free' if price <= 0 else f'{price}g'
+        price_surf = self._tiny_font.render(price_text, True,
+                                            settings.KINGDOM_CONFIG_DIM_CLR)
         self.window.blit(price_surf, price_surf.get_rect(center=price_rect.center))
+
         if key in unlocked:
             action_text = 'Equipped' if active else 'Equip'
             disabled = active
             action = 'equip_cosmetic'
+        elif is_achievement:
+            action_text = 'Locked'
+            disabled = True
+            action = 'buy_cosmetic'  # no-op since locked
         else:
             action_text = 'Buy'
             disabled = self._gold < price
             action = 'buy_cosmetic'
-        self._draw_button(btn, action_text, action, key, disabled=disabled)
+        if clip_rect is not None and not clip_rect.contains(btn):
+            self._draw_button(btn, action_text, action, key, disabled=True)
+        else:
+            self._draw_button(btn, action_text, action, key, disabled=disabled)
+
+    def _unlock_requirement_text(self, item):
+        """Format an achievement requirement label for a locked cosmetic."""
+        kind = item.get('unlock_kind')
+        value = int(item.get('unlock_value') or 0)
+        if kind == 'reach_level':
+            return f'Lv {value}'
+        if kind == 'conquer_lands':
+            return f'Conquer x{value}'
+        if kind == 'win_battles':
+            return f'Wins x{value}'
+        if kind == 'win_conquer_battles':
+            return f'Conq.Wins {value}'
+        if kind == 'own_all_suits':
+            return 'All suits'
+        if kind == 'reach_max_tier':
+            return 'Max tier'
+        if kind == 'free':
+            return 'Free'
+        return 'Locked'
 
     def _draw_shield_panel(self, rect):
         self._draw_panel(rect, 'Kingdom Shield')
@@ -1630,10 +1947,20 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._draw_button(buy_rect, 'Buy Shield', 'buy_shield', None,
                           disabled=not quote or self._gold < int(quote.get('price_gold', 0) or 0))
 
+    def _skills_panel_natural_h(self):
+        row_step = max(64, settings.KINGDOM_CONFIG_SKILL_ROW_H)
+        skills = (self._kingdom or {}).get('skills') or {}
+        summary_h = self._body_font.get_height()
+        list_top_offset = 40 + summary_h + 10
+        if not skills:
+            return max(120, list_top_offset + 44)
+        return max(120, list_top_offset + row_step * len(skills) + 12)
+
     def _draw_skills_panel(self, rect):
         self._draw_panel(rect, 'Kingdom Skills')
         self._skills_scroll_area = None
         self._skills_content_h = 0
+        self._skills_scroll = 0
         if not self._kingdom:
             return
 
@@ -1656,29 +1983,23 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         if not skills:
             return
 
-        # Use the configured row height as the natural per-row size and clip
-        # the list inside a scrollable area so tall skill lists never spill
-        # past the bottom of the panel.
+        # Use the configured row height as the natural per-row size. The
+        # whole config body scrolls now, so the skills panel itself does not
+        # need an internal scrollbar.
         row_step = max(64, settings.KINGDOM_CONFIG_SKILL_ROW_H)
         row_h = max(58, row_step - 8)
         list_rect = pygame.Rect(rect.x + 14, list_y,
                                 rect.w - 28,
                                 max(row_h, rect.bottom - list_y - 12))
-        self._skills_scroll_area = list_rect
         content_h = row_step * len(skills)
         self._skills_content_h = content_h
-        max_scroll = max(0, content_h - list_rect.h)
-        scroll = max(0, min(max_scroll, int(getattr(self, '_skills_scroll', 0) or 0)))
-        self._skills_scroll = scroll
-
-        scrollbar_w = 8 if max_scroll > 0 else 0
-        row_w = list_rect.w - (scrollbar_w + 4 if scrollbar_w else 0)
+        row_w = list_rect.w
 
         old_clip = self.window.get_clip()
         self.window.set_clip(list_rect.clip(old_clip))
         try:
             for idx, (key, skill) in enumerate(skills.items()):
-                y = list_rect.y + idx * row_step - scroll
+                y = list_rect.y + idx * row_step
                 if y + row_h < list_rect.y or y > list_rect.bottom:
                     continue
                 row = pygame.Rect(list_rect.x, y, row_w, row_h)
@@ -1752,16 +2073,6 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         finally:
             self.window.set_clip(old_clip)
 
-        if max_scroll > 0:
-            track = pygame.Rect(list_rect.right - scrollbar_w + 2, list_rect.y,
-                                scrollbar_w - 4, list_rect.h)
-            pygame.draw.rect(self.window, (52, 45, 42), track, border_radius=2)
-            thumb_h = max(20, int(list_rect.h * list_rect.h / max(1, content_h)))
-            thumb_y = track.y + int((track.h - thumb_h) * (scroll / max_scroll))
-            pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_HIGHLIGHT,
-                             pygame.Rect(track.x, thumb_y, track.w, thumb_h),
-                             border_radius=2)
-
     def _layout_rects(self):
         self._box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
         xsz = int(0.028 * _SH)
@@ -1780,21 +2091,33 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         content_top = header_y + header_h + max(6, int(0.010 * _SH))
         content_bottom = _BOX_BOTTOM - _BOX_PAD
         gap = max(8, int(0.014 * _SH))
+        scroll_gutter = max(10, int(0.008 * _SW))
+        content_right = _BOX_X + _BOX_W - _BOX_PAD - scroll_gutter
         left_w = min(settings.KINGDOM_CONFIG_LEFT_W, int(_BOX_W * 0.43))
         right_x = content_x + left_w + gap
-        right_w = _BOX_X + _BOX_W - _BOX_PAD - right_x
-        content_h = max(1, content_bottom - content_top)
-        shield_h = min(settings.KINGDOM_CONFIG_SHIELD_H, max(92, int(content_h * 0.24)))
-        card_h = max(82, (content_h - shield_h - gap * 3) // 3)
+        right_w = max(1, content_right - right_x)
+        viewport_h = max(1, content_bottom - content_top)
+        viewport_w = max(1, content_right - content_x)
+        shield_h = settings.KINGDOM_CONFIG_SHIELD_H
+        cosmetics_h = self._cosmetics_panel_natural_h()
         # Right column splits into Kingdom Production, Loot Inbox, and the
         # Skills/Level panel below.
-        vault_h = max(140, int(content_h * 0.22))
-        loot_h = max(128, int(content_h * 0.18))
+        vault_h = max(140, int(viewport_h * 0.22))
+        loot_h = max(128, int(viewport_h * 0.18))
+        skills_h = self._skills_panel_natural_h()
+        left_content_h = cosmetics_h + gap + shield_h
+        right_content_h = vault_h + gap + loot_h + gap + skills_h
+        content_h = max(viewport_h, left_content_h, right_content_h)
         # Header pill spans the content row, leaving clearance for the X.
         header_right = _BOX_X + _BOX_W - _BOX_PAD - xsz - xmargin
         header_rect = pygame.Rect(content_x, header_y,
                                   max(320, header_right - content_x),
                                   header_h)
+        content_viewport = pygame.Rect(content_x, content_top, viewport_w, viewport_h)
+        scrollbar_rect = pygame.Rect(content_right + max(2, scroll_gutter // 3),
+                                     content_top,
+                                     max(4, scroll_gutter // 3),
+                                     viewport_h)
         return {
             'header_y': header_y,
             'content_x': content_x,
@@ -1805,9 +2128,13 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             'right_x': right_x,
             'right_w': right_w,
             'shield_h': shield_h,
-            'card_h': card_h,
+            'cosmetics_h': cosmetics_h,
             'vault_h': vault_h,
             'loot_h': loot_h,
+            'skills_h': skills_h,
+            'content_h': content_h,
+            'content_viewport': content_viewport,
+            'content_scrollbar': scrollbar_rect,
             'header': header_rect,
         }
 
@@ -1872,6 +2199,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._draw_menu_chrome()
         self._buttons = []
         self._cosmetic_scroll_areas = {}
+        self._content_scroll_area = None
+        self._content_content_h = 0
+        self._button_clip_rect = None
         self._collect_btn_rect = None
         self._rename_icon_rect = None
         self._loot_gained_rect = None
@@ -1898,35 +2228,53 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self._draw_menu_overlay()
             return
 
-        left_x = layout['content_x']
-        top = layout['content_top']
-        left_w = layout['left_w']
-        gap = layout['gap']
-        card_h = layout['card_h']
-        self._draw_cosmetic_section(pygame.Rect(left_x, top, left_w, card_h),
-                                    'badge', 'Kingdom Badge')
-        self._draw_cosmetic_section(pygame.Rect(left_x, top + card_h + gap, left_w, card_h),
-                                    'border', 'Border')
-        self._draw_cosmetic_section(pygame.Rect(left_x, top + (card_h + gap) * 2, left_w, card_h),
-                                    'surface', 'Surface')
-        shield_y = top + (card_h + gap) * 3
-        self._draw_shield_panel(pygame.Rect(left_x, shield_y, left_w,
-                                            layout['shield_h']))
+        viewport = layout['content_viewport']
+        self._content_scroll_area = viewport
+        self._content_content_h = layout['content_h']
+        max_scroll = max(0, layout['content_h'] - viewport.h)
+        content_scroll = max(0, min(max_scroll, int(getattr(self, '_content_scroll', 0) or 0)))
+        self._content_scroll = content_scroll
 
-        right_x = layout['right_x']
-        right_w = layout['right_w']
-        right_top = top
-        right_bottom = layout['content_bottom']
-        vault_h = layout['vault_h']
-        gap_v = layout['gap']
-        vault_rect = pygame.Rect(right_x, right_top, right_w, vault_h)
-        self._draw_vault_panel(vault_rect)
-        loot_y = vault_rect.bottom + gap_v
-        loot_rect = pygame.Rect(right_x, loot_y, right_w, layout['loot_h'])
-        self._draw_loot_inbox_panel(loot_rect)
-        skills_y = loot_rect.bottom + gap_v
-        skills_h = max(120, right_bottom - skills_y)
-        self._draw_skills_panel(pygame.Rect(right_x, skills_y, right_w, skills_h))
+        old_clip = self.window.get_clip()
+        old_button_clip = self._button_clip_rect
+        self.window.set_clip(viewport.clip(old_clip))
+        self._button_clip_rect = viewport
+        try:
+            left_x = layout['content_x']
+            top = layout['content_top'] - content_scroll
+            left_w = layout['left_w']
+            gap = layout['gap']
+            cosmetics_h = layout['cosmetics_h']
+            self._draw_cosmetics_panel(pygame.Rect(left_x, top, left_w, cosmetics_h))
+            shield_y = top + cosmetics_h + gap
+            self._draw_shield_panel(pygame.Rect(left_x, shield_y, left_w,
+                                                layout['shield_h']))
+
+            right_x = layout['right_x']
+            right_w = layout['right_w']
+            right_top = top
+            vault_h = layout['vault_h']
+            gap_v = layout['gap']
+            vault_rect = pygame.Rect(right_x, right_top, right_w, vault_h)
+            self._draw_vault_panel(vault_rect)
+            loot_y = vault_rect.bottom + gap_v
+            loot_rect = pygame.Rect(right_x, loot_y, right_w, layout['loot_h'])
+            self._draw_loot_inbox_panel(loot_rect)
+            skills_y = loot_rect.bottom + gap_v
+            self._draw_skills_panel(pygame.Rect(right_x, skills_y, right_w,
+                                                layout['skills_h']))
+        finally:
+            self._button_clip_rect = old_button_clip
+            self.window.set_clip(old_clip)
+
+        if max_scroll > 0:
+            track = layout['content_scrollbar']
+            pygame.draw.rect(self.window, (52, 45, 42), track, border_radius=2)
+            thumb_h = max(28, int(track.h * track.h / max(track.h, layout['content_h'])))
+            thumb_y = track.y + int((track.h - thumb_h) * (content_scroll / max_scroll))
+            pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_HIGHLIGHT,
+                             pygame.Rect(track.x, thumb_y, track.w, thumb_h),
+                             border_radius=2)
 
         if self._message and not getattr(self.state, 'message_lines', None):
             surf = self._small_font.render(self._message, True, settings.KINGDOM_CONFIG_GOOD_CLR)

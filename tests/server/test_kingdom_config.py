@@ -11,7 +11,8 @@ from models import (Game, Land, Kingdom, KingdomCosmeticUnlock, KingdomNotificat
                     KingdomSkillAllocation)
 import server_settings as config
 from kingdom_service import (effective_gold_rate_for_lands, reconcile_user_kingdoms,
-                             serialize_kingdom_config)
+                             serialize_kingdom_config,
+                             transfer_split_off_kingdom_lands)
 
 
 def _add_land(db, col, row, owner_id=None, gold_rate=10.0):
@@ -155,7 +156,7 @@ class TestKingdomConfigRoutes:
 
     @pytest.mark.parametrize('cosmetic_key', [
         'surface_grass', 'surface_marble', 'surface_lava',
-        'border_rope_braid', 'border_thorned',
+        'border_rope_braid', 'border_thorned', 'color_royal_blue',
     ])
     def test_new_cosmetics_can_be_purchased(self, client, db, two_users,
                                             auth_headers_user1, cosmetic_key):
@@ -177,6 +178,57 @@ class TestKingdomConfigRoutes:
         assert data['gold'] == 10
         db.session.refresh(kingdom)
         assert getattr(kingdom, field) == cosmetic_key
+
+    def test_achievement_sigil_cannot_be_purchased_with_gold(self, client, db,
+                                                             two_users,
+                                                             auth_headers_user1):
+        u1, _ = two_users
+        u1.gold = 10_000
+        db.session.commit()
+        _add_land(db, 0, 0, owner_id=u1.id)
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+
+        rv = client.post(f'/kingdom/config/{kingdom.id}/cosmetics/purchase',
+                         headers=auth_headers_user1,
+                         json={'cosmetic_key': 'sigil_mountain'})
+
+        assert rv.status_code == 400
+        assert rv.get_json()['message'] == 'This cosmetic is unlocked via achievements'
+        assert KingdomCosmeticUnlock.query.filter_by(
+            kingdom_id=kingdom.id,
+            cosmetic_key='sigil_mountain',
+        ).one_or_none() is None
+
+    def test_sigil_equip_requires_unlock_but_default_none_is_free(self, client, db,
+                                                                  two_users,
+                                                                  auth_headers_user1):
+        u1, _ = two_users
+        _add_land(db, 0, 0, owner_id=u1.id)
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+        url = f'/kingdom/config/{kingdom.id}/cosmetics/equip'
+
+        rv = client.post(url, headers=auth_headers_user1,
+                         json={'cosmetic_key': 'sigil_mountain'})
+        assert rv.status_code == 403
+
+        db.session.add(KingdomCosmeticUnlock(
+            kingdom_id=kingdom.id,
+            cosmetic_key='sigil_mountain',
+        ))
+        db.session.commit()
+
+        rv = client.post(url, headers=auth_headers_user1,
+                         json={'cosmetic_key': 'sigil_mountain'})
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['kingdom']['style']['sigil_key'] == 'sigil_mountain'
+        db.session.refresh(kingdom)
+        assert kingdom.sigil_key == 'sigil_mountain'
+
+        rv = client.post(url, headers=auth_headers_user1,
+                         json={'cosmetic_key': 'sigil_none'})
+        assert rv.status_code == 200
+        assert rv.get_json()['kingdom']['style']['sigil_key'] == 'sigil_none'
 
     def test_kingdom_rename_rejects_short_long_and_control_chars(self, client, db, two_users,
                                                                  auth_headers_user1):
@@ -308,6 +360,33 @@ class TestKingdomConfigRoutes:
         assert fresh[0].level == 1
         assert fresh[0].experience == 0
         assert fresh[0].skill_points_granted == config.KINGDOM_SKILL_POINTS_PER_LEVEL
+
+    def test_split_transfer_tie_break_keeps_higher_value_component(self, db, two_users):
+        u1, u2 = two_users
+        left = _add_land(db, 0, 0, owner_id=u1.id, gold_rate=5.0)
+        middle = _add_land(db, 1, 0, owner_id=u1.id, gold_rate=5.0)
+        right = _add_land(db, 2, 0, owner_id=u1.id, gold_rate=30.0)
+        right.tier = 3
+        kingdom = reconcile_user_kingdoms(u1.id, commit=True)[0]
+
+        middle.owner_user_id = u2.id
+        middle.kingdom_id = None
+        db.session.commit()
+
+        summary = transfer_split_off_kingdom_lands(
+            old_owner_id=u1.id,
+            new_owner_id=u2.id,
+            source_kingdom_id=kingdom.id,
+            split_land_id=middle.id,
+            commit=True,
+        )
+
+        db.session.refresh(left)
+        db.session.refresh(right)
+        assert summary['transferred_land_ids'] == [left.id]
+        assert summary['kept_land_ids'] == [right.id]
+        assert left.owner_user_id == u2.id
+        assert right.owner_user_id == u1.id
 
     def test_persistent_gold_skill_increases_effective_gold_rate(self, db, two_users):
         u1, _ = two_users

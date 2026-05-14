@@ -98,10 +98,27 @@ def _call_figure_id_for_family(game_id, player_id, family_name):
 
 
 def _bump_resolution_step(game):
-    """Increment ``game.conquer_resolution_step`` and return the new value."""
+    """Increment ``game.conquer_resolution_step`` and return the new value.
+
+    To make a single spell appear as a single timeline transition on the
+    client, callers may wrap a spell-execution scope by setting
+    ``game._spell_step_lock = 'pending'`` before any purge/auto-convert
+    calls.  The first bump within that scope advances the step once and
+    stores the assigned value; subsequent bumps reuse it.  Without the
+    sentinel attribute behaviour is unchanged (each call bumps).
+    """
+    lock = getattr(game, '_spell_step_lock', None)
+    if isinstance(lock, int):
+        return lock
     current = int(getattr(game, 'conquer_resolution_step', 0) or 0)
-    game.conquer_resolution_step = current + 1
-    return game.conquer_resolution_step
+    new_value = current + 1
+    game.conquer_resolution_step = new_value
+    if lock == 'pending':
+        # Pin the step for the remainder of this spell-execution scope so
+        # all purges and additions share one ``revealed_step_index`` /
+        # ``discarded_step_index`` value.
+        game._spell_step_lock = new_value
+    return new_value
 
 
 def _tactic_count(game_id, player_id):

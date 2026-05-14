@@ -36,13 +36,25 @@ def _new_map(lands, zoom=2.5):
     return hm
 
 
+def _point_in_convex_polygon(point, polygon, eps=0.01):
+    x, y = point
+    signs = []
+    for i, (x1, y1) in enumerate(polygon):
+        x2, y2 = polygon[(i + 1) % len(polygon)]
+        cross = (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1)
+        signs.append(cross)
+    return (all(c >= -eps for c in signs)
+            or all(c <= eps for c in signs))
+
+
 # ───────────────────────── tier ribbon ─────────────────────────────
 
 class TestTierRibbon:
 
-    @pytest.mark.parametrize('tier', [1, 2, 3, 4])
+    @pytest.mark.parametrize('tier', [1, 2, 3, 4, 5, 6])
     def test_ribbon_renders_one_star_per_tier(self, tier, monkeypatch):
         import pygame
+        from config import settings
         hm = _new_map([_make_land(tier=tier)])
         polys = []
         real_polygon = pygame.draw.polygon
@@ -53,10 +65,36 @@ class TestTierRibbon:
 
         monkeypatch.setattr(pygame.draw, 'polygon', spy)
         hm._draw_tier_ribbon(hm.tiles[0], 100, 100, 60)
-        # Each star = shadow polygon + fill polygon + border polygon
-        # Lower bound: at least 2 polygons per star (some may have 0-width
-        # border on tiny stars).
-        assert len(polys) >= 2 * tier
+        star_fills = [p for color, p in polys
+                      if color == tuple(settings.HEX_STAR_FILL)]
+        assert len(star_fills) == tier
+
+    @pytest.mark.parametrize('tier', [5, 6])
+    @pytest.mark.parametrize('size', [30, 60])
+    def test_high_tier_ribbon_stays_inside_hex(self, tier, size, monkeypatch):
+        import pygame
+        from config import settings
+        from game.components.hex_map import _hex_corners
+        hm = _new_map([_make_land(tier=tier)])
+        star_points = []
+        star_colors = {
+            (16, 12, 4),
+            tuple(settings.HEX_STAR_FILL),
+            tuple(settings.HEX_STAR_BORDER),
+        }
+        real_polygon = pygame.draw.polygon
+
+        def spy(surf, color, points, width=0):
+            if tuple(color) in star_colors:
+                star_points.extend(tuple(p) for p in points)
+            return real_polygon(surf, color, points, width)
+
+        monkeypatch.setattr(pygame.draw, 'polygon', spy)
+        hm._draw_tier_ribbon(hm.tiles[0], 100, 100, size)
+        hex_points = _hex_corners(100, 100, size)
+        assert star_points
+        assert all(_point_in_convex_polygon(p, hex_points)
+                   for p in star_points)
 
     def test_legacy_top_star_row_not_called_from_details(self, monkeypatch):
         hm = _new_map([_make_land(tier=3, owner=None)])

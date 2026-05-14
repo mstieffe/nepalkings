@@ -11,10 +11,29 @@ from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
-from game.core.card_source import GameCardSource
+from game.core.card_source import CollectionCardSource, GameCardSource
 from utils.utils import ColorTogglePill
-from utils import http_compat as requests
+from utils import collection_service, http_compat as requests
+from game.components.castle_cap_indicator import (
+    castle_cap_for_land, count_castle_figures, draw_castle_cap_indicator,
+)
+from game.components import resource_panel as _resource_panel
 import logging
+
+# Suit filter constants
+_SUITS = ('hearts', 'diamonds', 'clubs', 'spades')
+_SUIT_ICON_PATHS = {
+    'hearts':   'img/suits/hearts.png',
+    'diamonds': 'img/suits/diamonds.png',
+    'clubs':    'img/suits/clubs.png',
+    'spades':   'img/suits/spades.png',
+}
+# Which suits are shown for each color toggle. Djungle (red/offensive) shows
+# hearts + diamonds; Himalaya (black/defensive) shows clubs + spades.
+_COLOR_SUITS = {
+    'Djungle':  ('hearts', 'diamonds'),
+    'Himalaya': ('clubs', 'spades'),
+}
 
 logger = logging.getLogger('nk.screens.build_figure')
 
@@ -65,6 +84,15 @@ class BuildFigureScreen(SubScreen):
             self._sy(settings.BUILD_FIGURE_CONFIRM_BUTTON_Y),
             "create!"
         )
+
+        # Kingdom-mode extras: castle-cap badge, resource strip, suit filter.
+        self._suit_filter = set(_SUITS)
+        self._suit_filter_rects = {}   # suit -> pygame.Rect
+        self._suit_icons = {}
+        self._kingdom_resource_icons = {}
+        self._kingdom_res_font = settings.get_font(settings.FS_TINY)
+        if _is_kingdom_config_mode(self.mode):
+            self._init_kingdom_extras()
 
     def reset_state(self):
         """Reset all game-specific transient state.
@@ -187,10 +215,50 @@ class BuildFigureScreen(SubScreen):
             result = resp.json()
             if result.get('success') and result.get('config'):
                 self.game.set_config(result['config'])
+                self._rebuild_card_source_kingdom()
             return result
         except Exception as e:
             logger.error(f'Kingdom build_figure error: {e}')
             return {'success': False, 'message': 'Connection error'}
+
+    def _rebuild_card_source_kingdom(self):
+        """Re-fetch collection cards and rebuild the kingdom card source."""
+        if not _is_kingdom_config_mode(self.mode):
+            return False
+        try:
+            data = collection_service.fetch_collection_cards()
+        except Exception as e:
+            logger.error(f'Failed to re-fetch collection for figure builder: {e}')
+            return False
+
+        config = getattr(self.game, '_config', None) or {}
+        cards = []
+        for c in data.get('cards', []):
+            qty = c.get('free', c.get('total', 0))
+            for i in range(qty):
+                cards.append(Card(
+                    rank=c['rank'], suit=c['suit'],
+                    value=settings.RANK_TO_VALUE.get(c['rank'], 0),
+                    id=c.get('id', hash((c['suit'], c['rank'], i))),
+                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                ))
+
+        locked_ids = set()
+        for fig in config.get('figures', []):
+            for cid in fig.get('card_ids', []):
+                locked_ids.add(cid)
+        for mv in config.get('battle_moves', []):
+            if mv.get('card_id'):
+                locked_ids.add(mv['card_id'])
+        for key in (
+                'modifier_card_ids', 'spell_card_ids',
+                'prelude_spell_card_ids', 'counter_spell_card_ids'):
+            for cid in config.get(key) or []:
+                locked_ids.add(cid)
+
+        self.card_source = CollectionCardSource(
+            cards, config.get('figures', []), locked_ids)
+        return True
 
     def _can_instant_charge_advance(self, figure):
         """
@@ -387,6 +455,152 @@ class BuildFigureScreen(SubScreen):
             (settings.BUILD_HIERARCHY_WIDTH, settings.BUILD_HIERARCHY_HEIGHT)
         )
 
+    # ── Kingdom-mode extras (cap badge / resource strip / suit filter) ──
+
+    def _init_kingdom_extras(self):
+        """Load assets used only by kingdom config builders."""
+        icon_size = int(0.019 * settings.SCREEN_WIDTH)
+        self._kingdom_resource_icons = _resource_panel.load_resource_icons(icon_size)
+        # Slightly smaller chips than before; positioned at draw time around
+        # the scroll list's chevron arrows.
+        self._suit_chip_size = max(16, int(settings.BUILD_FIGURE_ICON_WIDTH * 0.45))
+        for suit in _SUITS:
+            try:
+                raw = pygame.image.load(_SUIT_ICON_PATHS[suit]).convert_alpha()
+                self._suit_icons[suit] = pygame.transform.smoothscale(
+                    raw, (self._suit_chip_size, self._suit_chip_size))
+            except Exception:
+                self._suit_icons[suit] = None
+        # Chip rects are recomputed each frame in _compute_suit_chip_rects()
+        # because the chevron positions depend on screen state.
+        self._suit_filter_rects = {}
+
+    def _compute_suit_chip_rects(self):
+        """Position the 2 active-color chips left/right of the scroll chevrons."""
+        self._suit_filter_rects = {}
+        shifter = getattr(self, 'scroll_text_list_shifter', None)
+        if shifter is None:
+            return
+        color_suits = _COLOR_SUITS.get(self.color, ())
+        if len(color_suits) < 2:
+            return
+        size = self._suit_chip_size
+        gap = max(8, int(0.008 * settings.SCREEN_WIDTH))
+        left_x = getattr(shifter, '_left_x', None)
+        right_x = getattr(shifter, '_right_x', None)
+        arrow_y = getattr(shifter, '_arrow_y', None)
+        chev_sz = getattr(shifter, '_chevron_sz', size)
+        if left_x is None or right_x is None or arrow_y is None:
+            return
+        cy = arrow_y
+        # Chip 1: left of left chevron.
+        rect_left = pygame.Rect(0, 0, size, size)
+        rect_left.right = left_x - chev_sz - gap
+        rect_left.centery = cy
+        # Chip 2: right of right chevron.
+        rect_right = pygame.Rect(0, 0, size, size)
+        rect_right.left = right_x + chev_sz + gap
+        rect_right.centery = cy
+        self._suit_filter_rects[color_suits[0]] = rect_left
+        self._suit_filter_rects[color_suits[1]] = rect_right
+
+    def _info_box_screen_rect(self):
+        """Return the on-screen rect of the right info/hierarchy sub-box."""
+        return pygame.Rect(
+            self._sx(settings.BUILD_FIGURE_INFO_BOX_X),
+            self._sy(settings.BUILD_FIGURE_INFO_BOX_Y),
+            settings.BUILD_FIGURE_INFO_BOX_WIDTH,
+            settings.BUILD_FIGURE_INFO_BOX_HEIGHT,
+        )
+
+    def _kingdom_land(self):
+        return getattr(self.game, 'land', None) or {}
+
+    def _kingdom_figures(self):
+        cfg = getattr(self.game, '_config', None) or {}
+        return cfg.get('figures', []) or []
+
+    def _draw_castle_cap_badge(self):
+        """Top-right of the hierarchy sub-box: persistent x/N badge.
+
+        Shifted slightly down and left from the corner so it sits inside the
+        sub-box decorations rather than hugging the border.
+        """
+        land = self._kingdom_land()
+        cap = castle_cap_for_land(land)
+        if cap <= 0:
+            return
+        count = count_castle_figures(self._kingdom_figures())
+        box = self._info_box_screen_rect()
+        # Shrinking the right edge moves the badge left; lowering the top
+        # moves it down (the helper anchors the badge to rect.top + 5 and
+        # rect.right - 6).
+        dx = max(12, int(0.012 * settings.SCREEN_WIDTH))
+        dy = max(8, int(0.012 * settings.SCREEN_HEIGHT))
+        adjusted = pygame.Rect(box.x, box.y + dy, max(1, box.w - dx), box.h)
+        draw_castle_cap_indicator(
+            self.window, adjusted, count, cap,
+            font=self._kingdom_res_font, always=True)
+
+    def _resource_strip_rect(self):
+        """Single-row resource strip rect just below the hierarchy sub-box."""
+        box = self._info_box_screen_rect()
+        strip_h = max(28, int(0.04 * settings.SCREEN_HEIGHT))
+        gap = max(6, int(0.008 * settings.SCREEN_HEIGHT))
+        return pygame.Rect(box.x, box.bottom + gap, box.w, strip_h)
+
+    def _draw_resource_strip(self):
+        rect = self._resource_strip_rect()
+        resources_data = self.game.calculate_resources(
+            self.figure_manager.families)
+        _resource_panel.draw_resource_panel(
+            self.window, rect, resources_data,
+            self._kingdom_resource_icons, self._kingdom_res_font,
+            compact=True, show_label=False)
+
+    def _draw_suit_filter(self):
+        self._compute_suit_chip_rects()
+        for suit, rect in self._suit_filter_rects.items():
+            active = suit in self._suit_filter
+            bg_color = (60, 50, 30, 230) if active else (35, 30, 25, 180)
+            border_color = (224, 182, 82) if active else (110, 100, 85)
+            bg = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(bg, bg_color, bg.get_rect(),
+                             border_radius=max(4, rect.h // 4))
+            self.window.blit(bg, rect.topleft)
+            pygame.draw.rect(self.window, border_color, rect, 1,
+                             border_radius=max(4, rect.h // 4))
+            icon = self._suit_icons.get(suit)
+            if icon:
+                ir = icon.get_rect(center=rect.center)
+                if not active:
+                    faded = icon.copy()
+                    faded.set_alpha(110)
+                    self.window.blit(faded, ir.topleft)
+                else:
+                    self.window.blit(icon, ir.topleft)
+
+    def _handle_suit_filter_click(self, pos):
+        """Toggle a suit on click. Returns True if a chip handled the event."""
+        self._compute_suit_chip_rects()
+        color_suits = set(_COLOR_SUITS.get(self.color, ()))
+        for suit, rect in self._suit_filter_rects.items():
+            if rect.collidepoint(pos):
+                if suit in self._suit_filter:
+                    # Toggle off; if no current-color suit remains active,
+                    # restore both for this color to avoid an empty list.
+                    self._suit_filter.discard(suit)
+                    if not (color_suits & self._suit_filter):
+                        self._suit_filter |= color_suits
+                else:
+                    self._suit_filter.add(suit)
+                self._refresh_selected_figure_family()
+                return True
+        return False
+
+    def _reset_suit_filter(self):
+        self._suit_filter = set(_SUITS)
+
     def update(self, game):
         """Update the game state and button components."""
         super().update(game)
@@ -417,7 +631,8 @@ class BuildFigureScreen(SubScreen):
         for color in ['offensive', 'defensive']:
             for button in self.figure_family_buttons[color]:
                 # Check if any figure in this family can be built with current hand
-                buildable_figures = self.get_figures_in_hand(button.family)
+                buildable_figures = self._filter_figures_by_active_suits(
+                    self.get_figures_in_hand(button.family))
                 # Set active state: true if at least one figure can be built
                 button.is_active = len(buildable_figures) > 0
 
@@ -485,6 +700,9 @@ class BuildFigureScreen(SubScreen):
                         )
                         return
 
+                    if _is_kingdom_config_mode(self.mode):
+                        self._refresh_selected_figure_family()
+
                     _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                     self.make_dialogue_box(
                         message="Your new figure has been placed on the field.",
@@ -518,6 +736,9 @@ class BuildFigureScreen(SubScreen):
                             title="Build Failed"
                         )
                         return
+
+                    if _is_kingdom_config_mode(self.mode):
+                        self._refresh_selected_figure_family()
 
                     # Update game state from the combined response
                     if build_result.get('game'):
@@ -577,6 +798,8 @@ class BuildFigureScreen(SubScreen):
                     else:
                         self.state.subscreen = "field"
                 elif response == 'build more':
+                    if _is_kingdom_config_mode(self.mode):
+                        self._refresh_selected_figure_family()
                     self.dialogue_box = None
                 elif response in ['cancel', 'got it!', 'ok']:
                     self.dialogue_box = None
@@ -585,6 +808,12 @@ class BuildFigureScreen(SubScreen):
 
             for event in events:
                 if event.type == MOUSEBUTTONDOWN:
+
+                    # Suit-filter chips (kingdom mode only) — handle before
+                    # other widgets so a chip click doesn't fall through.
+                    if (_is_kingdom_config_mode(self.mode)
+                            and self._handle_suit_filter_click(event.pos)):
+                        continue
 
                     # Handle confirm button only if a figure is selected
                     if selected_figure and self.confirm_button.collide() and not self.confirm_button.disabled:
@@ -702,6 +931,10 @@ class BuildFigureScreen(SubScreen):
             other_button.active = False
         button.active = True
         self.color = button.text
+        # Reset suit filter on color change to avoid empty lists.
+        if _is_kingdom_config_mode(self.mode):
+            self._reset_suit_filter()
+            self._refresh_selected_figure_family()
 
     def update_figure_family_selection(self, button):
         """Update figure family selection."""
@@ -710,8 +943,32 @@ class BuildFigureScreen(SubScreen):
         for other_button in self.figure_family_buttons[internal_color]:
             other_button.clicked = False
         button.clicked = True
-        
-        figures = self.get_figures_in_hand(button.family)
+        self._set_figure_family_scroll_text(button.family)
+
+    def _refresh_selected_figure_family(self):
+        """Refresh the visible figure list for the current card pool."""
+        self.update_family_icon_states()
+        if self.selected_figure_family:
+            self._set_figure_family_scroll_text(self.selected_figure_family)
+
+    def _suit_allowed_by_filter(self, suit):
+        """Return whether a suit should appear under the active suit filter."""
+        if not _is_kingdom_config_mode(self.mode):
+            return True
+        suit_filter = getattr(self, '_suit_filter', None)
+        if not suit_filter or suit_filter == set(_SUITS):
+            return True
+        return str(suit or '').lower() in suit_filter
+
+    def _filter_figures_by_active_suits(self, figures):
+        return [
+            figure for figure in figures
+            if self._suit_allowed_by_filter(getattr(figure, 'suit', None))
+        ]
+
+    def _set_figure_family_scroll_text(self, figure_family):
+        figures = self._filter_figures_by_active_suits(
+            self.get_figures_in_hand(figure_family))
         if figures:
             self.selected_figures = figures
             self.scroll_text_list = [{"title": figure.name,
@@ -723,17 +980,21 @@ class BuildFigureScreen(SubScreen):
                                       "requires": figure.requires if figure.requires else None,
                                       **{k: getattr(figure, k, False) for k in SKILL_KEYS},
                                       "cards": figure.cards,
+                                      "suit": getattr(figure, 'suit', None),
                                       "content": figure}
                                      for figure in figures]
             self.scroll_text_list.sort(key=lambda x: x["power"], reverse=True)
         else:
             # Get figure instances to show their attributes even when cards are missing
+            self.selected_figures = []
             self.scroll_text_list = []
-            for suit in button.family.suits:
-                for figure in button.family.get_figures_by_suit(suit):
+            for suit in figure_family.suits:
+                if not self._suit_allowed_by_filter(suit):
+                    continue
+                for figure in figure_family.get_figures_by_suit(suit):
                     display_figure = self._display_figure_for_mode(figure)
                     self.scroll_text_list.append({
-                        "title": button.family.name,
+                        "title": figure_family.name,
                         "figure_type": f"{display_figure.family.field.capitalize()} Figure",
                         "text": display_figure.family.description,
                         # Don't show power when cards are missing
@@ -780,6 +1041,12 @@ class BuildFigureScreen(SubScreen):
             selected_figure = self.scroll_text_list_shifter.get_current_selected()
             if selected_figure:
                 self.confirm_button.draw()
+
+        # Kingdom-mode overlays (cap badge, resource strip, suit filter).
+        if _is_kingdom_config_mode(self.mode):
+            self._draw_suit_filter()
+            self._draw_castle_cap_badge()
+            self._draw_resource_strip()
 
         super().draw_on_top()
 

@@ -48,7 +48,7 @@ def _has_fortress(template):
 
 class TestAiDefenceGenerator:
     def test_rules_cover_all_kingdom_tiers(self):
-        assert set(AI_DEFENCE_GENERATION_RULES) == {1, 2, 3, 4}
+        assert set(AI_DEFENCE_GENERATION_RULES) == {1, 2, 3, 4, 5, 6}
 
     def test_all_catalog_roles_are_reachable_from_rules(self):
         configured_roles = set(AI_DEFENCE_FIGURE_CATALOG)
@@ -59,7 +59,7 @@ class TestAiDefenceGenerator:
         assert configured_roles <= referenced_roles
 
     def test_generated_templates_are_structurally_valid_for_all_tiers_and_suits(self):
-        for tier in (1, 2, 3, 4):
+        for tier in (1, 2, 3, 4, 5, 6):
             for suit in AI_DEFENCE_SUITS:
                 template = get_ai_defence_template_for_land(_land(tier=tier, suit=suit))
                 assert validate_ai_defence_template(template)
@@ -67,27 +67,36 @@ class TestAiDefenceGenerator:
                 assert template['figures']
 
     def test_high_tier_templates_include_side_card_figures(self):
-        for tier in (2, 3, 4):
-            template = get_ai_defence_template_for_land(_land(tier=tier, suit='Hearts'))
-            has_side_card = any(
-                card.get('card_type') == 'side'
-                for fig in template['figures']
-                for card in fig.get('cards') or []
-            )
-            assert has_side_card
+        # Side-card-producing roles (manufactory/healer/temple/material/archer/
+        # wall_cavalry) are stochastic in optional draws; sample several seeds.
+        for tier in (2, 3, 4, 5, 6):
+            saw_side_card = False
+            for seed in range(30):
+                template = get_ai_defence_template_for_land(
+                    _land(tier=tier, suit='Hearts', seed=seed, land_id=4000 + seed)
+                )
+                has_side_card = any(
+                    card.get('card_type') == 'side'
+                    for fig in template['figures']
+                    for card in fig.get('cards') or []
+                )
+                if has_side_card:
+                    saw_side_card = True
+                    break
+            assert saw_side_card, f'tier={tier} produced no side-card figure in 30 seeds'
 
     def test_generated_templates_include_scripted_spells(self):
         # Spells are now drawn from weighted pools, including a None entry at
-        # low tiers. T4 is configured without a None weight, so prelude and
+        # low tiers. T6 is configured without a None weight, so prelude and
         # counter must always be set there.
-        for tier in (1, 2, 3, 4):
+        for tier in (1, 2, 3, 4, 5, 6):
             template = get_ai_defence_template_for_land(_land(tier=tier, suit='Spades'))
             if template['prelude_spell_name']:
                 assert isinstance(template['prelude_spell_data'], dict)
             if template['counter_spell_name']:
                 assert isinstance(template['counter_spell_data'], dict)
         for suit in AI_DEFENCE_SUITS:
-            template = get_ai_defence_template_for_land(_land(tier=4, suit=suit, seed=7))
+            template = get_ai_defence_template_for_land(_land(tier=6, suit=suit, seed=7))
             assert template['prelude_spell_name']
             assert template['counter_spell_name']
 
@@ -95,7 +104,7 @@ class TestAiDefenceGenerator:
         # Every configured spell (and the None sentinel where present) should
         # appear at least once across a handful of seeds for each tier.
         from ai.defence.config import AI_DEFENCE_GENERATION_RULES
-        for tier in (1, 2, 3, 4):
+        for tier in (1, 2, 3, 4, 5, 6):
             rules = AI_DEFENCE_GENERATION_RULES[tier]
             for key in ('prelude', 'counter'):
                 expected = set()
@@ -116,7 +125,7 @@ class TestAiDefenceGenerator:
                 )
 
     def test_generated_templates_have_no_resource_deficits(self):
-        for tier in (1, 2, 3, 4):
+        for tier in (1, 2, 3, 4, 5, 6):
             for suit in AI_DEFENCE_SUITS:
                 template = get_ai_defence_template_for_land(_land(tier=tier, suit=suit))
                 assert not any(template_resource_deficit_map(template['figures']).values())
@@ -135,7 +144,7 @@ class TestAiDefenceGenerator:
         assert first != second
 
     def test_high_tier_templates_are_tailored_to_land_suit(self):
-        for tier in (3, 4):
+        for tier in (3, 4, 5, 6):
             for suit in AI_DEFENCE_SUITS:
                 template = get_ai_defence_template_for_land(_land(tier=tier, suit=suit))
                 battle_figure = template['figures'][template['battle_figure_index']]
@@ -143,7 +152,11 @@ class TestAiDefenceGenerator:
                 assert any(move['suit'] == suit for move in template['battle_moves'])
 
     def test_templates_keep_land_suit_anchor_while_allowing_cross_color_figures(self):
-        for tier in (1, 2, 3, 4):
+        # Tier 1 caps castle figures at 1 and has no producer for the opposite
+        # color's resources, so cross-color figures are intentionally
+        # infeasible at tier 1.  Cross-color emerges from tier 2 onwards via
+        # extra castle slots and feasible optional draws.
+        for tier in (2, 3, 4, 5, 6):
             for suit in AI_DEFENCE_SUITS:
                 saw_cross_color = False
                 for seed in range(120):
@@ -153,10 +166,13 @@ class TestAiDefenceGenerator:
                     assert any(fig['suit'] == suit for fig in template['figures'])
                     assert any(move['suit'] == suit for move in template['battle_moves'])
                     saw_cross_color = saw_cross_color or _has_opposite_color_figure(template, suit)
-                assert saw_cross_color
+                assert saw_cross_color, f'tier={tier} suit={suit} produced no cross-color figure'
 
     def test_black_suit_templates_can_be_fortress_free_at_every_tier(self):
-        for tier in (1, 2, 3, 4):
+        # Tier 1 cannot host a red-suit military figure (Gorkha) on a black
+        # land because the lone black king cannot pay for red warriors;
+        # fortress-free Gorkha emergence is only feasible from tier 2 up.
+        for tier in (2, 3, 4, 5, 6):
             for suit in AI_DEFENCE_BLACK_SUITS:
                 saw_fortress = False
                 saw_fortress_free = False
@@ -182,7 +198,7 @@ class TestAiDefenceGenerator:
             'Call Military': 'military',
             'Call Villager': 'village',
         }
-        for tier in (1, 2, 3, 4):
+        for tier in (1, 2, 3, 4, 5, 6):
             template = get_ai_defence_template_for_land(_land(tier=tier, suit='Diamonds'))
             fields = {fig['field'] for fig in template['figures']}
             for move in template['battle_moves']:

@@ -143,6 +143,28 @@ def create_figure():
         if not cards:
             return jsonify({'success': False, 'message': 'No cards provided for the figure'}), 400
 
+        # Castle figure cap (per-tier).  Castle figures (Kings/Maharaja)
+        # placed on a tier-N land must not exceed N.  Conquer-mode only;
+        # duel mode (no land_tier) is unrestricted.
+        if (field or '').lower() == 'castle' and getattr(game, 'land_tier', None):
+            limits = getattr(settings, 'CASTLE_FIGURE_LIMIT_BY_TIER', {}) or {}
+            try:
+                tier_i = int(game.land_tier or 1)
+            except (TypeError, ValueError):
+                tier_i = 1
+            cap = int(limits.get(tier_i, max(1, tier_i)))
+            existing = sum(
+                1 for f in Figure.query.filter_by(
+                    game_id=game_id, player_id=player_id).all()
+                if (f.field or '').lower() == 'castle'
+            )
+            if existing + 1 > cap:
+                return jsonify({
+                    'success': False,
+                    'error_code': 'castle_cap_reached',
+                    'message': f'Castle is full for tier {tier_i} (max {cap}).',
+                }), 400
+
         # Create the figure
         figure = Figure(
             player_id=player_id,

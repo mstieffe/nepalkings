@@ -25,7 +25,7 @@ class Game:
         # is 'battle_move' so duel/legacy games behave unchanged.
         self.conquer_move_model = game_dict.get('conquer_move_model', 'battle_move')
         self.land_id = game_dict.get('land_id')  # conquer mode only
-        self.land_tier = game_dict.get('land_tier')  # conquer mode only (1-3)
+        self.land_tier = game_dict.get('land_tier')  # conquer mode only (1..KINGDOM_TIER_COUNT)
         self.land_gold_rate = game_dict.get('land_gold_rate')  # conquer mode only
         self.land_suit_bonus_suit = game_dict.get('land_suit_bonus_suit')  # conquer mode only
         self.land_suit_bonus_value = game_dict.get('land_suit_bonus_value')  # conquer mode only
@@ -199,6 +199,12 @@ class Game:
         # Server-authoritative battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)  # current battle round (0-2)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')  # whose turn in battle
+        self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        # Conquer per-round 60s timer (unix timestamp) — None when no timer.
+        self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
+        self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        # Per-player gamble usage (tactics_hand conquer): {pid: {count, rounds}}.
+        self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
 
         # Suppress next turn notification after battle/fold (result dialogue already shown)
         self.suppress_next_turn_summary = False
@@ -747,6 +753,10 @@ class Game:
         # Update server-authoritative battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
+        self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
+        self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
         self._sync_battle_moves_phase_from_server()
 
         # Reset fold tracking when server clears fold state (new round started)
@@ -961,6 +971,11 @@ class Game:
         # Update battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
+        self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        # Conquer per-round 60s move deadline (unix ts) — None if no timer.
+        self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
+        self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
         self._sync_battle_moves_phase_from_server()
         
         # Check if we're waiting for this player to counter

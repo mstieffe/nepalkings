@@ -217,6 +217,48 @@ class TestActiveSpells:
             assert 'TestSpell1' in active_names
             assert 'TestSpell2' not in active_names
 
+    def test_get_active_spells_includes_resolved_conquer_prelude_replay(
+        self, client, db, app, spell_game, token_sp1,
+    ):
+        from models import ActiveSpell
+        game, p1, _, _, _ = spell_game
+        game.mode = 'conquer'
+        resolved_explosion = ActiveSpell(
+            game_id=game.id, player_id=p1.id,
+            spell_name='Explosion', spell_type='enchantment',
+            spell_family_name='Explosion', suit='Clubs',
+            cast_round=1, is_active=False,
+            effect_data={
+                'prelude_origin': True,
+                'prelude_status': 'executed',
+                'destroyed_figure_id': 77,
+                'destroyed_figure_snapshot': {
+                    'id': 77,
+                    'name': 'Doomed Knight',
+                    'family_name': 'Knight',
+                    'field': 'military',
+                    'suit': 'Hearts',
+                    'cards': [{'rank': '6', 'suit': 'Hearts', 'role': 'number'}],
+                },
+            },
+        )
+        inactive_duel_style = ActiveSpell(
+            game_id=game.id, player_id=p1.id,
+            spell_name='Inactive', spell_type='greed',
+            spell_family_name='Inactive', suit='Hearts',
+            cast_round=1, is_active=False,
+        )
+        db.session.add_all([resolved_explosion, inactive_duel_style])
+        db.session.commit()
+
+        resp = client.get(
+            f'/spells/get_active_spells?game_id={game.id}&player_id={p1.id}')
+        data = resp.get_json()
+        active_names = [s['spell_name'] for s in data['active_spells']]
+
+        assert 'Explosion' in active_names
+        assert 'Inactive' not in active_names
+
     def test_active_spell_serialization(self, db, app):
         """ActiveSpell.serialize() returns the expected fields."""
         from models import ActiveSpell, Game, Player, User
@@ -999,11 +1041,61 @@ class TestSpellMutatesConquerTactics:
             preserved = db.session.get(ConquerTactic, tactic.id)
             reserved = db.session.get(MainCard, reserved.id)
             assert effect['power_modifier'] == -6
+            assert effect['target_figure_id'] == target.id
+            assert effect['target_figure_name'] == 'Target Guard'
+            assert effect['target_figure_snapshot']['id'] == target.id
+            assert (spell.effect_data or {})['target_figure_snapshot']['id'] == target.id
             assert 'conquer_tactics_added' not in effect
             assert preserved is not None
             assert preserved.status == 'available'
             assert preserved.card_id == reserved.id
             assert reserved.part_of_battle_move is True
+
+    def test_health_boost_returns_target_snapshot_for_timeline_replay(
+        self, app, db, spell_game
+    ):
+        from models import ActiveSpell, Figure
+        from routes.spells import _execute_spell
+
+        with app.app_context():
+            game, p1, _p2, _, _ = spell_game
+            target = Figure(
+                game_id=game.id,
+                player_id=p1.id,
+                family_name='Boost Guard',
+                field='village',
+                color='red',
+                name='Boost Guard',
+                suit='Diamonds',
+                produces={},
+                requires={},
+            )
+            db.session.add(target)
+            db.session.commit()
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Health Boost',
+                spell_type='enchantment',
+                spell_family_name='Health Boost',
+                suit='Diamonds',
+                cast_round=1,
+                target_figure_id=target.id,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            effect = _execute_spell(spell, game, p1)
+            db.session.commit()
+
+            assert effect['power_modifier'] == 6
+            assert effect['target_figure_id'] == target.id
+            assert effect['target_figure_name'] == 'Boost Guard'
+            assert effect['target_figure_snapshot']['id'] == target.id
+            assert effect['target_figure_snapshot']['player_id'] == p1.id
+            assert (spell.effect_data or {})['target_figure_id'] == target.id
+            assert (spell.effect_data or {})['target_figure_snapshot']['id'] == target.id
 
     def test_auto_convert_conquer_tactics_skips_active_battle_round(
         self, app, db, spell_game
@@ -1103,3 +1195,67 @@ class TestSpellMutatesConquerTactics:
             # All in the batch share the same revealed step.
             assert len(stamps) == 1
             assert game.conquer_resolution_step > initial_step
+
+    def test_dump_cards_uses_single_resolution_step(self, app, db, spell_game):
+        """Dump Cards purges and re-deals for both players inside one spell.
+
+        Without the spell-step lock each purge + each auto-convert bumped
+        ``conquer_resolution_step`` independently, leaving the client's
+        single Dump Cards prelude bubble unable to reveal the new tactics
+        until a later, unrelated bubble surfaced.  We assert the lock keeps
+        all stamped steps equal so the timeline bubble can reveal the new
+        hand in one transition.
+        """
+        from models import ActiveSpell, ConquerTactic, MainCard
+        from routes.spells import _execute_spell
+
+        with app.app_context():
+            game, p1, p2, _, _ = spell_game
+            self._mark_tactics_hand_conquer(db, game)
+
+            # Reserve at least one caster card as an existing tactic so
+            # Dump Cards has something to purge.
+            caster_cards = self._eligible_cards(MainCard.query.filter_by(
+                player_id=p1.id, in_deck=False, part_of_figure=False
+            ).all())
+            self._make_tactic_for_card(db, game, p1, caster_cards[0])
+            game = db.session.get(type(game), game.id)
+            initial_step = int(getattr(game, 'conquer_resolution_step', 0) or 0)
+
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Dump Cards',
+                spell_type='greed',
+                spell_family_name='Dump Cards',
+                suit='Hearts',
+                cast_round=1,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            _execute_spell(spell, game, p1)
+            db.session.commit()
+            game = db.session.get(type(game), game.id)
+
+            # Exactly one step advance for the entire spell.
+            assert game.conquer_resolution_step == initial_step + 1
+            spell_step = game.conquer_resolution_step
+
+            purged = ConquerTactic.query.filter_by(
+                game_id=game.id, status='spell_purged',
+            ).all()
+            new_tactics = ConquerTactic.query.filter_by(
+                game_id=game.id, source='spell',
+            ).all()
+            # All purges and additions share the same step so the client
+            # can reveal/hide them in one timeline transition.
+            for t in purged:
+                assert t.discarded_step_index == spell_step
+            for t in new_tactics:
+                assert t.revealed_step_index == spell_step
+            # Sanity: both players received new tactics, and at least one
+            # tactic was purged.
+            assert any(t.player_id == p1.id for t in new_tactics)
+            assert any(t.player_id == p2.id for t in new_tactics)
+            assert purged, 'expected at least one pre-existing tactic to be purged'

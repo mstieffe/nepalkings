@@ -117,6 +117,7 @@ class BattleShopScreen(SubScreen):
             self._sy(settings.BATTLE_SHOP_READY_BUTTON_Y),
             "ready!"
         )
+        self._config_ready_pressed = False
         self.phase_banner_font = settings.get_font(settings.BATTLE_SHOP_PHASE_BANNER_FONT_SIZE, bold=True)
 
     def reset_state(self):
@@ -139,6 +140,7 @@ class BattleShopScreen(SubScreen):
         self.dialogue_box = None
         self._battle_moves_confirmed = False
         self._waiting_for_opponent = False
+        self._config_ready_pressed = False
         logger.debug("[BattleShop] State reset for game switch")
 
     @property
@@ -335,6 +337,8 @@ class BattleShopScreen(SubScreen):
         return min(max_moves, len(self.bought_moves) + len(available_card_ids))
 
     def _can_ready_for_battle(self):
+        if _is_kingdom_config_mode(self.mode):
+            return len(self.bought_moves) >= settings.BATTLE_SHOP_MAX_MOVES
         required = self._required_battle_move_count()
         return len(self.bought_moves) >= required
 
@@ -425,6 +429,7 @@ class BattleShopScreen(SubScreen):
             self._load_bought_moves()
 
         in_phase = getattr(game, 'battle_moves_phase', False)
+        in_config = _is_kingdom_config_mode(self.mode)
 
         # Reset confirmed state when no longer in battle at all
         battle_active = getattr(game, 'battle_confirmed', False) or in_phase
@@ -439,9 +444,14 @@ class BattleShopScreen(SubScreen):
 
         # --- Ready button logic (only during mandatory phase) ---
         self.ready_button.disabled = True
-        if in_phase and not self._battle_moves_confirmed:
+        self.ready_button.active = False
+        if in_config:
+            self.ready_button.disabled = not self._can_ready_for_battle()
+            self.ready_button.active = not self.ready_button.disabled
+        elif in_phase and not self._battle_moves_confirmed:
             if self._can_ready_for_battle():
                 self.ready_button.disabled = False
+                self.ready_button.active = True
 
         # Update icon active states based on available cards
         self._update_icon_states()
@@ -454,8 +464,16 @@ class BattleShopScreen(SubScreen):
             if selected:
                 self.confirm_button.update()
 
-        if in_phase:
+        if in_phase or in_config:
             self.ready_button.update()
+            if in_config and not self.ready_button.disabled:
+                self.ready_button.active = not getattr(
+                    self.ready_button, 'hovered', False)
+
+    def _ready_button_hit(self, pos=None):
+        if pos is not None:
+            return self.ready_button.rect.collidepoint(pos)
+        return self.ready_button.collide()
 
     def _update_icon_states(self):
         """Set is_active on each family icon based on whether the player has matching cards."""
@@ -496,6 +514,7 @@ class BattleShopScreen(SubScreen):
         super().handle_events(events)
 
         in_phase = getattr(self.game, 'battle_moves_phase', False)
+        in_config = _is_kingdom_config_mode(self.mode)
         selected_move = None
         if self.scroll_text_list_shifter:
             selected_move = self.scroll_text_list_shifter.get_current_selected()
@@ -547,12 +566,33 @@ class BattleShopScreen(SubScreen):
                 if (in_phase and
                         not self._is_locked and
                         not self.ready_button.disabled and
-                        self.ready_button.collide()):
+                        self._ready_button_hit(event.pos)):
                     self._on_ready_confirm()
+                    continue
+
+                # Ready button for kingdom conquer/defence config shops.
+                # Close on mouse-up below so the release event is still
+                # consumed by this subscreen and cannot open a config action
+                # sitting underneath it.
+                if (in_config and
+                        not self.ready_button.disabled and
+                        self._ready_button_hit(event.pos)):
+                    self._config_ready_pressed = True
+                    continue
 
                 # Slot clicks (open detail box — return blocked if locked)
                 if not self._is_locked:
                     self._handle_slot_click(event)
+
+            elif event.type == MOUSEBUTTONUP and event.button == 1:
+                config_ready_pressed = bool(getattr(self, '_config_ready_pressed', False))
+                self._config_ready_pressed = False
+                if (in_config and
+                        config_ready_pressed and
+                        not self.ready_button.disabled and
+                        self._ready_button_hit(event.pos)):
+                    self._on_config_ready()
+                    continue
 
         # Update glow colors after events so scroll changes take effect immediately
         self._update_glow_colors()
@@ -1015,11 +1055,21 @@ class BattleShopScreen(SubScreen):
                 title="Confirmation Failed",
             )
 
+    def _on_config_ready(self):
+        """Return from kingdom config battle shop once all move slots are full."""
+        if not self._can_ready_for_battle():
+            return False
+        if self._on_done:
+            self._on_done()
+            return True
+        return False
+
     # ------------------------------------------------------------------- draw
     def draw(self):
         super().draw()
 
         in_phase = getattr(self.game, 'battle_moves_phase', False)
+        in_config = _is_kingdom_config_mode(self.mode)
 
         # Family icons
         for btn in self.move_family_buttons:
@@ -1041,6 +1091,9 @@ class BattleShopScreen(SubScreen):
             if not self._is_locked:
                 if self._can_ready_for_battle():
                     self.ready_button.draw()
+
+        if in_config:
+            self.ready_button.draw()
 
         # Detail box on top of everything except dialogue box / msg
         if self.battle_move_detail_box:

@@ -101,25 +101,53 @@ class ConquerTimelinePanel:
     def currently_resolved_step_index(self, screen=None):
         """Return the resolution step the client should currently mirror.
 
-        Equals the server's authoritative step minus an offset bumped while a
-        spell timeline animation is in flight. Drives ``ConquerTactic`` replay
-        so that spell-driven additions/purges only become visible on the rail
-        once the user has seen the spell resolve.
+        At game start the tactics hand must reflect the player's configured
+        battle moves — i.e. resolution step 0.  As each prelude/spell timeline
+        bubble becomes ``active`` or ``completed`` (the user has seen it on
+        screen for the first time), we permit one additional ``conquer_
+        resolution_step`` to be revealed.  This produces the user-requested
+        "transition for each change" while keeping the existing greyed-old /
+        coloured-new visual treatment in the tactics rail.
+
+        We cap at the server's authoritative step so that prelude bubbles
+        that do not mutate tactics (Health Boost, Poison targeting figures,
+        etc.) never overshoot the real number of mutations.
         """
         server_step = 0
+        game = None
         if screen is not None:
             cached = getattr(screen, '_conquer_resolution_step_server', None)
+            state = getattr(screen, 'state', None)
+            game = getattr(state, 'game', None) if state else None
             if cached is not None:
                 server_step = int(cached)
             else:
-                game = getattr(screen, 'state', None)
-                game = getattr(game, 'game', None) if game else None
                 server_step = int(getattr(game, 'conquer_resolution_step', 0) or 0)
         else:
             server_step = int(self._last_seen_server_step or 0)
         # Track the latest server step we have seen for parity.
         self._last_seen_server_step = max(self._last_seen_server_step, server_step)
-        return max(0, server_step - int(self._displayed_step_offset or 0))
+        # Once the battle proper has started, reveal everything — preludes
+        # are by definition all in the past.
+        if game is not None and bool(getattr(game, 'battle_confirmed', False)) \
+                and int(getattr(game, 'battle_round', 0) or 0) >= 1:
+            return max(0, server_step - int(self._displayed_step_offset or 0))
+        # Count completed-or-active prelude bubbles seen so far. Each acts
+        # as a gate that permits one additional resolution step to surface.
+        # ``derive_display_steps`` is cached on a 20Hz cadence, so this loop
+        # is cheap even though it runs many times per frame.
+        prelude_seen = 0
+        if screen is not None:
+            try:
+                steps = self.derive_display_steps(screen)
+            except Exception:
+                steps = []
+            for step in steps:
+                if getattr(step, 'kind', '') in ('prelude_own', 'prelude_opp'):
+                    if getattr(step, 'completed', False) or getattr(step, 'active', False):
+                        prelude_seen += 1
+        gated = min(server_step, prelude_seen)
+        return max(0, gated - int(self._displayed_step_offset or 0))
 
     # ------------------------------------------------------------------ entry
 
@@ -197,6 +225,148 @@ class ConquerTimelinePanel:
                 info_w, body_h)
             self._draw_info_box(screen, info_rect, info_step, active_idx, steps)
 
+    def draw_within(self, screen, rect, right_reserve=0):
+        """Render the full timeline body inside ``rect`` without a title bar.
+
+        Used by the persistent two-row header (pre-battle inline view) and
+        by the hover-expansion overlay that grows the timeline row only.
+        The rect's caller already painted the persistent top row, so this
+        method skips the title bar entirely. ``right_reserve`` keeps timeline
+        content clear of persistent timer/chevron chrome while the panel
+        background and bottom border still span the full rect.
+        """
+        self._step_hover = None
+        self._spell_hover = None
+        self._figure_hover = None
+
+        if rect.width <= 32 or rect.height <= 24:
+            return
+
+        # Solid panel background + bottom border for legibility.
+        panel = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        panel.fill((19, 18, 16, 240))
+        self.window.blit(panel, rect.topleft)
+        pygame.draw.line(self.window, (189, 149, 75),
+                         (rect.left, rect.bottom - 1),
+                         (rect.right, rect.bottom - 1), 2)
+
+        steps = self.derive_display_steps(screen)
+        active_idx = self._active_index(steps)
+
+        pad_x = max(8, int(settings.SCREEN_WIDTH * _PAD_X))
+        pad_y = max(4, int(settings.SCREEN_HEIGHT * _PAD_Y))
+        body_top = rect.top + pad_y
+        body_bottom = rect.bottom - pad_y
+        body_h = max(0, body_bottom - body_top)
+
+        info_step = steps[active_idx] if active_idx is not None else None
+        info_visible = info_step is not None
+
+        visible_indices = [i for i, s in enumerate(steps) if s.completed or s.active]
+        n_visible = len(visible_indices)
+        if n_visible == 0:
+            return
+
+        content_width = max(0, rect.width - max(0, int(right_reserve)))
+        avail_w = max(0, content_width - 2 * pad_x)
+        info_w = max(_INFO_MIN_W, int(avail_w * 0.35)) if info_visible else 0
+        if info_w >= avail_w - 80:
+            # Fall back to a body-only layout when the rect is too narrow
+            # to host the info box without crushing the bubbles.
+            info_w = 0
+            info_visible = False
+        timeline_w = avail_w - info_w - (_BUBBLE_GAP if info_visible else 0)
+        bubble_room = (
+            timeline_w - _BUBBLE_GAP * (max(1, n_visible) - 1)
+        ) // max(1, n_visible)
+        compact_min_w = 68 if n_visible >= 8 else _BUBBLE_MIN_W
+        bubble_w = max(54, min(_BUBBLE_MAX_W, bubble_room))
+        if bubble_w < compact_min_w:
+            needed = compact_min_w * n_visible + _BUBBLE_GAP * max(0, n_visible - 1)
+            if needed <= timeline_w:
+                bubble_w = compact_min_w
+
+        line_y = body_top + body_h // 2
+
+        bubble_rects = []
+        x = rect.left + pad_x
+        for idx in visible_indices:
+            step = steps[idx]
+            bubble_rect = pygame.Rect(x, body_top, bubble_w, body_h)
+            self._draw_bubble(screen, bubble_rect, step, idx == active_idx)
+            bubble_rects.append(bubble_rect)
+            x += bubble_w + _BUBBLE_GAP
+
+        for i in range(len(bubble_rects) - 1):
+            left_rect = bubble_rects[i]
+            right_rect = bubble_rects[i + 1]
+            seg_x1 = left_rect.right + 2
+            seg_x2 = right_rect.left - 2
+            if seg_x2 > seg_x1:
+                pygame.draw.line(self.window, (110, 92, 60),
+                                 (seg_x1, line_y), (seg_x2, line_y), 2)
+
+        if info_visible:
+            info_rect = pygame.Rect(
+                rect.left + pad_x + timeline_w + _BUBBLE_GAP,
+                body_top, info_w, body_h)
+            self._draw_info_box(screen, info_rect, info_step, active_idx, steps)
+
+    def draw_collapsed_strip(self, screen, rect):
+        # Reset hover state every frame so tooltips disappear immediately
+        # when the timeline collapses (or the mouse leaves the strip).
+        self._step_hover = None
+        self._spell_hover = None
+        self._figure_hover = None
+        steps = [
+            step for step in self.derive_display_steps(screen)
+            if step.completed or step.active
+        ]
+        if not steps or rect.width <= 16 or rect.height <= 14:
+            return
+
+        gap = max(5, min(8, rect.height // 9))
+        icon_size = min(42, max(20, rect.height - 10))
+        needed = len(steps) * icon_size + max(0, len(steps) - 1) * gap
+        if needed > rect.width:
+            min_icon_size = 14
+            max_icons = max(1, (rect.width + gap) // (min_icon_size + gap))
+            if len(steps) > max_icons:
+                steps = steps[-max_icons:]
+            icon_size = max(
+                min_icon_size,
+                (rect.width - gap * max(0, len(steps) - 1)) // len(steps),
+            )
+            needed = len(steps) * icon_size + max(0, len(steps) - 1) * gap
+        x = rect.left + max(0, (rect.width - needed) // 2)
+        y = rect.centery - icon_size // 2
+        line_y = rect.centery
+
+        for idx, step in enumerate(steps):
+            icon_rect = pygame.Rect(x, y, icon_size, icon_size)
+            if idx:
+                pygame.draw.line(
+                    self.window,
+                    (100, 82, 54),
+                    (icon_rect.left - gap + 1, line_y),
+                    (icon_rect.left - 1, line_y),
+                    1,
+                )
+            border = (
+                _TONE_COLOR.get(step.tone, _TONE_COLOR['neutral'])
+                if step.active else (145, 116, 66)
+            )
+            pygame.draw.rect(self.window, (24, 22, 18), icon_rect, border_radius=5)
+            pygame.draw.rect(
+                self.window, border, icon_rect,
+                2 if step.active else 1,
+                border_radius=5,
+            )
+            self._draw_step_icon(screen, icon_rect.inflate(-4, -4), step)
+            if icon_rect.collidepoint(pygame.mouse.get_pos()):
+                self._step_hover = (step, icon_rect)
+            x += icon_size + gap
+
     # --------------------------------------------------------------- backgrounds
 
     def _draw_panel_background(self, header_h):
@@ -252,11 +422,33 @@ class ConquerTimelinePanel:
         return derive_conquer_timeline(game, screen.state, field, shop)
 
     def derive_display_steps(self, screen):
+        # Hot path: this function is called many times per frame (tactics
+        # rail, ledger, duel lane, active-step lookups). Each call walks
+        # the entire conquer flow and runs sequence-gate timing, which
+        # was the dominant source of frame lag. Cache by (screen,
+        # game data version, server step, ticks bucket) so repeated
+        # within-frame calls reuse the same result while still allowing
+        # the hold-timer to advance at a smooth 20Hz cadence.
+        game = getattr(getattr(screen, 'state', None), 'game', None)
+        ticks = pygame.time.get_ticks() if game is not None else 0
+        cache_key = (
+            id(screen),
+            getattr(game, '_game_data_version', None) if game else None,
+            getattr(game, 'battle_round', None) if game else None,
+            getattr(game, 'battle_confirmed', None) if game else None,
+            getattr(game, 'battle_turn_player_id', None) if game else None,
+            getattr(screen, '_conquer_resolution_step_server', None),
+            ticks // 50,  # 20Hz cadence for hold-timer progress
+        )
+        cached = getattr(self, '_display_steps_cache', None)
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
         steps = self._derive_steps(screen)
         steps = self._apply_sequence_gates(screen, steps)
         battle_steps = getattr(screen, '_conquer_battle_timeline_steps', None)
         if callable(battle_steps):
             steps = battle_steps(steps)
+        self._display_steps_cache = (cache_key, steps)
         return steps
 
     def _apply_sequence_gates(self, screen, steps):
@@ -287,10 +479,6 @@ class ConquerTimelinePanel:
 
         now = pygame.time.get_ticks()
         for idx, step in enumerate(steps):
-            if step.kind.startswith('prelude') and step.icon_kind != 'spell' and not step.active:
-                step.completed = False
-                step.active = False
-
             if step.active and step.interactive:
                 for later in steps[idx + 1:]:
                     later.active = False
@@ -457,11 +645,41 @@ class ConquerTimelinePanel:
             self._draw_silhouette(rect)
 
     def _draw_tactic_icon(self, screen, rect, payload):
+        if isinstance(payload, dict) and 'moves' in payload:
+            self._draw_paired_tactic_icons(screen, rect, payload.get('moves') or ())
+            return
+
         move = payload.get('move') if isinstance(payload, dict) else payload
         if not isinstance(move, dict) or not move.get('family_name'):
             self._draw_silhouette(rect)
             return
-        icon_size = max(20, min(rect.width, rect.height))
+        self._draw_single_tactic_icon(screen, rect, move)
+
+    def _draw_paired_tactic_icons(self, screen, rect, moves):
+        if not isinstance(moves, (list, tuple)):
+            moves = ()
+        pair = list(moves[:2])
+        while len(pair) < 2:
+            pair.append(None)
+        gap = max(2, rect.width // 12)
+        icon_size = max(10, min(rect.height, (rect.width - gap) // 2))
+        total_w = icon_size * 2 + gap * (len(pair) - 1)
+        x = rect.centerx - total_w // 2
+        y = rect.centery - icon_size // 2
+        colors = ((245, 215, 95), (220, 140, 120))
+        for idx, move in enumerate(pair):
+            icon_rect = pygame.Rect(
+                x + idx * (icon_size + gap), y,
+                icon_size, icon_size,
+            )
+            if isinstance(move, dict) and move.get('family_name'):
+                self._draw_single_tactic_icon(screen, icon_rect, move)
+            else:
+                self._draw_silhouette(icon_rect)
+            pygame.draw.rect(self.window, colors[idx], icon_rect, 1, border_radius=5)
+
+    def _draw_single_tactic_icon(self, screen, rect, move):
+        icon_size = max(8, min(rect.width, rect.height))
         try:
             glow_cache, icon_cache, frame_cache, suit_icon_cache, icon_font = (
                 screen._conquer_battle_move_icon_assets(icon_size))
@@ -757,7 +975,11 @@ class ConquerTimelinePanel:
                     continue
                 if kind == 'card':
                     self._draw_card_asset(screen, asset_rect, asset.get('card'),
-                                          bool(asset.get('reveal', True)))
+                                          bool(asset.get('reveal', True)),
+                                          label=asset.get('label', ''),
+                                          tone=asset.get('tone', 'neutral'),
+                                          dim=bool(asset.get('dim', False)),
+                                          crossed=bool(asset.get('crossed', False)))
                 elif kind == 'spell':
                     self._draw_spell_icon(screen, asset_rect, asset.get('name'), ())
                 elif kind == 'figure':
@@ -767,11 +989,13 @@ class ConquerTimelinePanel:
                         asset.get('side', 'opponent'),
                         bool(asset.get('reveal', False)),
                     )
+                elif kind == 'tactic':
+                    self._draw_tactic_icon(
+                        screen, asset_rect, {'move': asset.get('move')})
         finally:
             self.window.set_clip(previous_clip)
 
-    @classmethod
-    def _layout_info_asset_rects(cls, rect, start_y, bottom_limit, assets):
+    def _layout_info_asset_rects(self, rect, start_y, bottom_limit, assets):
         usable_assets = [a for a in assets[:10] if isinstance(a, dict)]
         if not usable_assets:
             return []
@@ -792,7 +1016,7 @@ class ConquerTimelinePanel:
         for rows in range(1, max_rows + 1):
             row_size = min(max_size, (available_h - gap * (rows - 1)) // rows)
             for size in range(row_size, min_size - 1, -2):
-                layout = cls._pack_info_asset_rects(
+                layout = self._pack_info_asset_rects(
                     usable_assets, left, right, start_y, rows, size, gap)
                 if layout is None:
                     continue
@@ -803,13 +1027,12 @@ class ConquerTimelinePanel:
                 break
         if best_layout is not None:
             return best_layout
-        return cls._pack_info_asset_rects(
+        return self._pack_info_asset_rects(
             usable_assets, left, right, start_y, max_rows, min_size, gap,
             allow_partial=True,
         ) or []
 
-    @classmethod
-    def _pack_info_asset_rects(cls, assets, left, right, start_y, rows, size,
+    def _pack_info_asset_rects(self, assets, left, right, start_y, rows, size,
                                gap, *, allow_partial=False):
         layout = []
         x = left
@@ -818,7 +1041,7 @@ class ConquerTimelinePanel:
         max_w = max(0, right - left)
         for asset in assets:
             kind = asset.get('kind')
-            width = cls._info_asset_width(kind, size, max_w)
+            width = self._info_asset_width(kind, size, max_w, asset)
             height = min(28, size) if kind == 'resource' else size
             if layout and x + width > right:
                 row += 1
@@ -832,15 +1055,21 @@ class ConquerTimelinePanel:
             x += width + gap
         return layout
 
-    @staticmethod
-    def _info_asset_width(kind, size, max_width):
+    def _info_asset_width(self, kind, size, max_width, asset=None):
         if kind == 'resource':
-            return min(max_width, max(64, int(size * 2.55)))
+            label = (asset.get('label', '') if isinstance(asset, dict) else '') or ''
+            value = (asset.get('value', '') if isinstance(asset, dict) else '') or ''
+            text = f'{label}: {value}' if value != '' else str(label)
+            text_w = self.sidenote_font.size(text)[0] if text else 0
+            # Hug content; keep a small floor so empty/very short chips
+            # still feel like chips, and never exceed the row width.
+            return min(max_width, max(64, text_w + 16))
         if kind == 'card':
-            return max(14, int(size * 0.72))
+            return max(18, int(size * 0.82))
         return min(max_width, size)
 
-    def _draw_card_asset(self, screen, rect, card_data, reveal):
+    def _draw_card_asset(self, screen, rect, card_data, reveal, *,
+                         label='', tone='neutral', dim=False, crossed=False):
         if not reveal:
             back = self._get_card_back(min(rect.width, rect.height))
             if back is not None:
@@ -873,9 +1102,33 @@ class ConquerTimelinePanel:
             self.window.blit(img, img.get_rect(center=rect.center))
         except Exception:
             pygame.draw.rect(self.window, (64, 57, 47), rect, border_radius=4)
-            label = str(card_data.get('rank', '?')) if isinstance(card_data, dict) else '?'
-            txt = self.sidenote_font.render(label, True, (230, 210, 160))
+            rank_label = str(card_data.get('rank', '?')) if isinstance(card_data, dict) else '?'
+            txt = self.sidenote_font.render(rank_label, True, (230, 210, 160))
             self.window.blit(txt, txt.get_rect(center=rect.center))
+        if dim:
+            shade = pygame.Surface(rect.size, pygame.SRCALPHA)
+            shade.fill((18, 16, 14, 112))
+            self.window.blit(shade, rect.topleft)
+        if crossed:
+            cross_color = (220, 72, 62)
+            pygame.draw.line(
+                self.window, cross_color,
+                (rect.left + 2, rect.top + 2),
+                (rect.right - 2, rect.bottom - 2), 3)
+            pygame.draw.line(
+                self.window, cross_color,
+                (rect.right - 2, rect.top + 2),
+                (rect.left + 2, rect.bottom - 2), 3)
+        if label:
+            color = _TONE_COLOR.get(tone, _TONE_COLOR['neutral'])
+            label_font = self.sidenote_font
+            label_text = self._fit(str(label), label_font, max(8, rect.width - 4))
+            label_surf = label_font.render(label_text, True, (24, 22, 18))
+            label_rect = label_surf.get_rect()
+            label_rect.inflate_ip(6, 3)
+            label_rect.midbottom = (rect.centerx, rect.bottom - 1)
+            pygame.draw.rect(self.window, color, label_rect, border_radius=5)
+            self.window.blit(label_surf, label_surf.get_rect(center=label_rect.center))
         pygame.draw.rect(self.window, (184, 142, 71), rect, 1, border_radius=4)
 
     def _draw_resource_asset(self, rect, label, value, tone):
@@ -883,10 +1136,13 @@ class ConquerTimelinePanel:
         pygame.draw.rect(self.window, (50, 45, 36), rect, border_radius=6)
         pygame.draw.rect(self.window, color, rect, 1, border_radius=6)
         text = f'{label}: {value}' if value != '' else str(label)
-        surf = self.sidenote_font.render(
-            self._fit(text, self.sidenote_font, rect.width - 8),
-            True, (236, 224, 190),
-        )
+        # Chips are sized to fit the full text in _info_asset_width; only
+        # apply truncation as a last-resort safety when the rect is forced
+        # narrower than the desired width.
+        rendered_text = text
+        if self.sidenote_font.size(text)[0] > rect.width - 8:
+            rendered_text = self._fit(text, self.sidenote_font, rect.width - 8)
+        surf = self.sidenote_font.render(rendered_text, True, (236, 224, 190))
         self.window.blit(surf, surf.get_rect(center=rect.center))
 
     def _step_countdown_ratio(self, screen, step):

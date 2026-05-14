@@ -39,6 +39,12 @@ RANKS_SIDE_CARDS = ['2', '3', '4', '5', '6']
 
 NUMBER_CARDS = ['7', '8', '9', '10']
 
+# Loot bucket classification by rank.  Used by the conquer loot system to
+# bucket every captured card into either "key" or "number" pools.  All ranks
+# are covered, so any card with a rank belongs to exactly one bucket.
+LOOT_NUMBER_RANKS = frozenset({'3', '6', '7', '8', '9', '10'})
+LOOT_KEY_RANKS = frozenset({'2', '4', '5', 'J', 'Q', 'K', 'A'})
+
 RANK_TO_IMG_PATH = {
     'A': '14',
     'K': '13',

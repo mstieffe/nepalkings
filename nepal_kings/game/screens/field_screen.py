@@ -7,8 +7,10 @@ from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.components.conquer_layout import compute_conquer_layout
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
+from game.components.figures.figure import Figure
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
+from game.components.cards.card import Card
 from game.components.cards.card_img import CardImg
 from utils.figure_service import pickup_figure, upgrade_figure, fetch_figures
 import logging
@@ -40,6 +42,14 @@ class FieldScreen(SubScreen):
         self.figures = []  # List to store the player's figures
         self.figure_icons = []  # List to store figure icons for rendering
         self.icon_cache = {}  # Cache to store pre-rendered icons
+        self._conquer_visual_ghost_ids = set()
+        self._last_conquer_visual_ghost_key = ()
+        self._loaded_conquer_visual_ghost_key = ()
+        self._last_conquer_spell_replay_key = ()
+        # Cache of (icon, x, y) tuples for the last full figure draw — used
+        # by the conquer game screen to re-blit figures on top of the duel
+        # lane so figure info boxes stay in the foreground.
+        self._last_drawn_figure_layout = None
         self.last_figure_ids = set()  # Track the last set of figure IDs
         self.last_enchantment_state = {}  # Track enchantment state for each figure
         self.last_player_id = None  # Track the last player ID to detect player changes
@@ -135,6 +145,10 @@ class FieldScreen(SubScreen):
         self.cached_all_seeing_eye_status = None
         self.cached_opponent_all_seeing_eye_status = None
         self._last_all_seeing_eye_status = None
+        self._conquer_visual_ghost_ids = set()
+        self._last_conquer_visual_ghost_key = ()
+        self._loaded_conquer_visual_ghost_key = ()
+        self._last_conquer_spell_replay_key = ()
         self.dialogue_box = None
         self._reset_defender_selectable()
         logger.debug("[FieldScreen] State reset for game switch")
@@ -145,9 +159,17 @@ class FieldScreen(SubScreen):
 
         self.game = game
         # Only rebuild figures when the background poller delivered new data
+        # or when conquer timeline replay changes what field effects/ghosts
+        # are allowed to be visible.
         current_version = getattr(game, '_figures_data_version', 0)
-        if current_version != self._last_figures_version:
+        current_ghost_key = self._conquer_visual_ghost_key()
+        current_spell_replay_key = self._conquer_spell_replay_visibility_key()
+        if (current_version != self._last_figures_version
+                or current_ghost_key != self._last_conquer_visual_ghost_key
+                or current_spell_replay_key != self._last_conquer_spell_replay_key):
             self._last_figures_version = current_version
+            self._last_conquer_visual_ghost_key = current_ghost_key
+            self._last_conquer_spell_replay_key = current_spell_replay_key
             self.load_figures()
 
     def update_hover_state(self):
@@ -220,6 +242,10 @@ class FieldScreen(SubScreen):
         )
 
     def _conquer_layout_mode(self):
+        parent = getattr(getattr(self, 'state', None), 'parent_screen', None)
+        parent_mode = getattr(parent, '_conquer_effective_layout_mode', None)
+        if callable(parent_mode):
+            return parent_mode()
         game = getattr(self, 'game', None)
         if not game:
             return 'pre_battle'
@@ -331,6 +357,19 @@ class FieldScreen(SubScreen):
             
             self_figures = self.game.get_figures(families)
             opponent_figures = self.game.get_figures(families, is_opponent=True)
+            self._filter_conquer_timeline_enchantments(
+                self_figures + opponent_figures)
+            real_figure_ids = {
+                getattr(figure, 'id', None)
+                for figure in (self_figures + opponent_figures)
+            }
+            visual_ghost_key = self._conquer_visual_ghost_key()
+            visual_ghosts = self._conquer_visual_ghost_figures(real_figure_ids)
+            self._conquer_visual_ghost_ids = {
+                getattr(figure, 'id', None)
+                for figure in visual_ghosts
+                if getattr(figure, 'id', None) is not None
+            }
             
             for figure in self_figures:
                 if figure.family.field == 'castle':
@@ -346,16 +385,30 @@ class FieldScreen(SubScreen):
                     categorized_figures['opponent']['village'].append(figure)
                 elif figure.family.field == 'military':
                     categorized_figures['opponent']['military'].append(figure)
+
+            for figure in visual_ghosts:
+                side = 'self' if figure.player_id == self.game.player_id else 'opponent'
+                field = getattr(getattr(figure, 'family', None), 'field', None)
+                if field in categorized_figures[side]:
+                    categorized_figures[side][field].append(figure)
                     
-            self.figures = self_figures + opponent_figures
+            timeline_figures = [
+                figure for figure in visual_ghosts
+                if not self._is_conquer_visual_ghost_figure(figure)
+            ]
+            self.figures = self_figures + opponent_figures + timeline_figures
             self.categorized_figures = categorized_figures
 
             # Get current figure IDs and enchantment states
             current_figure_ids = {figure.id for figure in self.figures}
+            current_figure_ids.update(self._conquer_visual_ghost_ids)
             current_enchantment_state = self._get_enchantment_state()
 
             # Regenerate icons if figure IDs or enchantments have changed
-            figures_changed = current_figure_ids != self.last_figure_ids
+            visual_ghosts_changed = (
+                visual_ghost_key != getattr(self, '_loaded_conquer_visual_ghost_key', ())
+            )
+            figures_changed = current_figure_ids != self.last_figure_ids or visual_ghosts_changed
             enchantments_changed = current_enchantment_state != self.last_enchantment_state
             
             # Check if All Seeing Eye status changed (need to regenerate icons for visibility)
@@ -390,8 +443,217 @@ class FieldScreen(SubScreen):
                 self._generate_figure_icons()
                 self.last_figure_ids = current_figure_ids
                 self.last_enchantment_state = current_enchantment_state
+                self._loaded_conquer_visual_ghost_key = visual_ghost_key
         except Exception as e:
             logger.error(f"Error loading figures: {e}")
+
+    def _conquer_visual_ghost_specs(self):
+        if not self.game or getattr(self.game, 'mode', 'duel') != 'conquer':
+            return []
+        parent = getattr(getattr(self, 'state', None), 'parent_screen', None)
+        provider = getattr(parent, 'conquer_field_visual_ghost_specs', None)
+        if not callable(provider):
+            return []
+        try:
+            specs = provider() or []
+        except Exception:
+            return []
+        return [spec for spec in specs if isinstance(spec, dict)]
+
+    def _conquer_spell_replay_visibility(self):
+        if not self.game or getattr(self.game, 'mode', 'duel') != 'conquer':
+            return None
+        parent = getattr(getattr(self, 'state', None), 'parent_screen', None)
+        provider = getattr(parent, 'conquer_prelude_enchantment_visibility', None)
+        if not callable(provider):
+            return None
+        try:
+            visibility = provider() or {}
+        except Exception:
+            return None
+        if not isinstance(visibility, dict):
+            return None
+        return visibility
+
+    def _conquer_spell_replay_visibility_key(self):
+        visibility = self._conquer_spell_replay_visibility()
+        if not visibility:
+            return ()
+        tracked = tuple(sorted(tuple(row) for row in visibility.get('tracked', set())))
+        revealed = tuple(sorted(tuple(row) for row in visibility.get('revealed', set())))
+        return tracked, revealed
+
+    def _filter_conquer_timeline_enchantments(self, figures):
+        visibility = self._conquer_spell_replay_visibility()
+        if not visibility:
+            return
+        tracked = {tuple(row) for row in visibility.get('tracked', set())}
+        revealed = {tuple(row) for row in visibility.get('revealed', set())}
+        if not tracked:
+            return
+        for figure in figures or []:
+            enchantments = getattr(figure, 'active_enchantments', None)
+            if not enchantments:
+                continue
+            figure_id = getattr(figure, 'id', None)
+            filtered = []
+            for enchantment in enchantments:
+                if not isinstance(enchantment, dict):
+                    filtered.append(enchantment)
+                    continue
+                spell_name = enchantment.get('spell_name')
+                key = (spell_name, figure_id)
+                if key in tracked and key not in revealed:
+                    continue
+                filtered.append(enchantment)
+            figure.active_enchantments = filtered
+
+    def _conquer_visual_ghost_key(self):
+        rows = []
+        for spec in self._conquer_visual_ghost_specs():
+            snapshot = spec.get('snapshot') if isinstance(spec.get('snapshot'), dict) else {}
+            target_id = spec.get('target_id')
+            if target_id is None:
+                continue
+            rows.append((
+                target_id,
+                snapshot.get('player_id'),
+                snapshot.get('field'),
+                snapshot.get('family_name') or snapshot.get('name'),
+                snapshot.get('name'),
+                snapshot.get('suit'),
+                bool(spec.get('visual_only', True)),
+                bool(spec.get('force_visible', True)),
+                spec.get('spell_name'),
+                spec.get('phase'),
+            ))
+        return tuple(sorted(rows))
+
+    def _conquer_visual_ghost_figures(self, existing_ids):
+        existing_ids = set(existing_ids or [])
+        ghosts = []
+        seen = set()
+        for spec in self._conquer_visual_ghost_specs():
+            target_id = spec.get('target_id')
+            if target_id is None or target_id in existing_ids or target_id in seen:
+                continue
+            snapshot = spec.get('snapshot') if isinstance(spec.get('snapshot'), dict) else {}
+            figure = self._build_conquer_visual_ghost_figure(snapshot, target_id, spec)
+            if figure is None:
+                continue
+            ghosts.append(figure)
+            seen.add(target_id)
+        return ghosts
+
+    def _build_conquer_visual_ghost_figure(self, snapshot, target_id, spec=None):
+        spec = spec if isinstance(spec, dict) else {}
+        family_name = snapshot.get('family_name') or snapshot.get('name')
+        family = (getattr(self.figure_manager, 'families', None) or {}).get(family_name)
+        if family is None:
+            return None
+        cards = self._cards_from_conquer_snapshot(snapshot.get('cards') or [])
+        if not any(cards.values()):
+            return None
+        number_card = (cards.get('number') or [None])[0]
+        upgrade_card = (cards.get('upgrade') or [None])[0]
+        key_cards = list(cards.get('key') or [])
+        if not key_cards and number_card is None:
+            return None
+
+        suit = snapshot.get('suit')
+        matched = None
+        for candidate in getattr(family, 'figures', []) or []:
+            if suit and getattr(candidate, 'suit', None) != suit:
+                continue
+            matched = candidate
+            if number_card and getattr(candidate, 'number_card', None):
+                if candidate.number_card.rank == number_card.rank:
+                    break
+
+        def flag(name, default=False):
+            if name in snapshot:
+                return bool(snapshot.get(name))
+            return bool(getattr(matched, name, default)) if matched is not None else default
+
+        figure = Figure(
+            name=snapshot.get('name') or family_name,
+            sub_name=snapshot.get('sub_name', ''),
+            suit=suit,
+            family=family,
+            key_cards=key_cards,
+            number_card=number_card,
+            upgrade_card=upgrade_card,
+            description=snapshot.get('description', ''),
+            upgrade_family_name=snapshot.get('upgrade_family_name'),
+            produces={},
+            requires={},
+            id=target_id,
+            player_id=snapshot.get('player_id'),
+            cannot_attack=flag('cannot_attack'),
+            must_be_attacked=flag('must_be_attacked'),
+            rest_after_attack=flag('rest_after_attack'),
+            distance_attack=flag('distance_attack'),
+            buffs_allies=flag('buffs_allies'),
+            buffs_allies_defence=flag('buffs_allies_defence'),
+            blocks_bonus=flag('blocks_bonus'),
+            cannot_defend=flag('cannot_defend'),
+            instant_charge=flag('instant_charge'),
+            cannot_be_blocked=flag('cannot_be_blocked'),
+            cannot_be_targeted=flag('cannot_be_targeted'),
+            checkmate=flag('checkmate'),
+            override_base_power=getattr(matched, 'override_base_power', None),
+        )
+        figure._conquer_timeline_snapshot = True
+        figure._conquer_visual_only = bool(spec.get('visual_only', True))
+        figure._conquer_force_visible = bool(spec.get('force_visible', True))
+        figure._conquer_snapshot_spell_name = spec.get('spell_name')
+        figure._conquer_snapshot_phase = spec.get('phase')
+        figure._conquer_explosion_ghost = spec.get('spell_name') == 'Explosion'
+        return figure
+
+    @staticmethod
+    def _cards_from_conquer_snapshot(cards_data):
+        cards = {'key': [], 'number': [], 'upgrade': []}
+        number_ranks = {str(rank) for rank in getattr(settings, 'NUMBER_CARDS', [])}
+        for card_data in cards_data or []:
+            if not isinstance(card_data, dict):
+                continue
+            rank = card_data.get('rank')
+            suit = card_data.get('suit')
+            if not rank or not suit:
+                continue
+            value = card_data.get('value')
+            if value is None:
+                value = getattr(settings, 'RANK_TO_VALUE', {}).get(str(rank), 0)
+            card = Card(
+                rank=rank,
+                suit=suit,
+                value=int(value or 0),
+                id=card_data.get('card_id') or card_data.get('id'),
+                game_id=card_data.get('game_id'),
+                player_id=card_data.get('player_id'),
+                in_deck=card_data.get('in_deck'),
+                deck_position=card_data.get('deck_position'),
+                part_of_figure=card_data.get('part_of_figure'),
+                type=card_data.get('card_type') or card_data.get('type'),
+                role=card_data.get('role'),
+            )
+            role = card_data.get('role')
+            if role in cards:
+                cards[role].append(card)
+            elif str(rank) in number_ranks and not cards['number']:
+                cards['number'].append(card)
+            else:
+                cards['key'].append(card)
+        return cards
+
+    @staticmethod
+    def _is_conquer_visual_ghost_figure(figure):
+        return bool(getattr(figure, '_conquer_visual_only', False))
+
+    @staticmethod
+    def _is_conquer_timeline_snapshot_figure(figure):
+        return bool(getattr(figure, '_conquer_timeline_snapshot', False))
 
     def _get_enchantment_state(self):
         """
@@ -421,12 +683,18 @@ class FieldScreen(SubScreen):
         # Collect all player figures for battle bonus calculation
         all_player_figures = []
         for field_type, figures in self.categorized_figures['self'].items():
-            all_player_figures.extend(figures)
+            all_player_figures.extend(
+                figure for figure in figures
+                if not self._is_conquer_visual_ghost_figure(figure)
+            )
         
         # Collect all opponent figures for their battle bonus calculation
         all_opponent_figures = []
         for field_type, figures in self.categorized_figures['opponent'].items():
-            all_opponent_figures.extend(figures)
+            all_opponent_figures.extend(
+                figure for figure in figures
+                if not self._is_conquer_visual_ghost_figure(figure)
+            )
         
         # Calculate resources for both self and opponent
         # Use the cached figure_manager instead of creating a new one
@@ -452,16 +720,23 @@ class FieldScreen(SubScreen):
         for category, compartments in self.categorized_figures.items():
             for field_type, figures in compartments.items():
                 for figure in figures:
+                    figure_is_ghost = self._is_conquer_visual_ghost_figure(figure)
+                    figure_is_snapshot = self._is_conquer_timeline_snapshot_figure(figure)
                     # Determine which figures and resources to use based on category
                     figures_list = all_opponent_figures if category == 'opponent' else all_player_figures
-                    resources = opponent_resources_data if category == 'opponent' else resources_data
+                    resources = None if figure_is_ghost else (
+                        opponent_resources_data if category == 'opponent' else resources_data)
                     
                     # Determine visibility: 
                     # - Own figures (category == 'self') are always visible
                     # - Opponent figures are visible if:
                     #   * They are Maharajas (always visible)
                     #   * Current player cast All Seeing Eye (reveals opponent figures)
-                    is_visible = (category == 'self' or 
+                    force_visible_snapshot = (
+                        figure_is_snapshot
+                        and bool(getattr(figure, '_conquer_force_visible', False))
+                    )
+                    is_visible = (figure_is_ghost or force_visible_snapshot or category == 'self' or 
                                   figure.name in ['Himalaya Maharaja', 'Djungle Maharaja'] or
                                   (category == 'opponent' and player_has_all_seeing_eye) or
                                   (category == 'opponent'
@@ -484,13 +759,23 @@ class FieldScreen(SubScreen):
                         self.icon_cache[figure.id].is_visible = is_visible
                         self.icon_cache[figure.id].battle_bonus_received = self.icon_cache[figure.id]._calculate_battle_bonus_received(figures_list)
                         self.icon_cache[figure.id].has_deficit = self.icon_cache[figure.id]._check_resource_deficit(resources)
+                    if figure_is_ghost:
+                        self.icon_cache[figure.id].defender_selectable = False
+                        self.icon_cache[figure.id].in_defender_selection_mode = False
+                    elif not (getattr(self, 'defender_selection_mode', False)
+                              or getattr(self, 'conquer_own_defender_mode', False)):
+                        self.icon_cache[figure.id].defender_selectable = True
+                        self.icon_cache[figure.id].in_defender_selection_mode = False
                     self.figure_icons.append(self.icon_cache[figure.id])
 
         # ── Apply buffs_allies bonus to village figure icons ──
         for category in ('self', 'opponent'):
             all_figs = []
             for field_type, figures in self.categorized_figures[category].items():
-                all_figs.extend(figures)
+                all_figs.extend(
+                    figure for figure in figures
+                    if not self._is_conquer_visual_ghost_figure(figure)
+                )
             apply_buffs_allies_to_icon_map(
                 all_figs,
                 self.icon_cache,
@@ -1560,8 +1845,10 @@ class FieldScreen(SubScreen):
     def _draw_tactics_hand_battle_context_overlays(self, drawn_icons):
         if not self._is_tactics_hand_battle_field_view_only():
             return
-        frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
-        radius = int(frame_h * 0.56)
+        # Side markers (round 12) replace the previous rounded-square halos
+        # so the highlight no longer overlaps the figure's info chip.
+        # Color-coded: gold = selected/pending, cyan = hover, green/red
+        # = friendly/enemy support, blue = called.
         game = self.game
         active_support_ids = self._tactics_hand_active_support_figure_ids()
         for icon, ix, iy in drawn_icons:
@@ -1570,9 +1857,12 @@ class FieldScreen(SubScreen):
                 continue
             cx, cy = int(ix), int(iy)
             is_own = getattr(figure, 'player_id', None) == getattr(game, 'player_id', None)
+            hover_source_ids = set(getattr(self, '_conquer_hover_source_figure_ids', set()) or [])
             is_hover_source = (
-                getattr(figure, 'id', None)
-                == getattr(self, '_conquer_hover_source_figure_id', None)
+                getattr(figure, 'id', None) in hover_source_ids
+                or (not hover_source_ids
+                    and getattr(figure, 'id', None)
+                    == getattr(self, '_conquer_hover_source_figure_id', None))
             )
             is_icon_hovered = bool(getattr(icon, 'hovered', False))
             context_kind = self._conquer_battle_context_kind(figure)
@@ -1582,8 +1872,7 @@ class FieldScreen(SubScreen):
                 context_kind = 'support'
             if not context_kind:
                 continue
-            ring_width = 5 if is_hover_source else 4
-            if is_hover_source:
+            if is_hover_source or is_icon_hovered:
                 color = (120, 220, 235, 245)
             elif context_kind == 'preview':
                 phase = (pygame.time.get_ticks() % 900) / 900.0
@@ -1593,10 +1882,9 @@ class FieldScreen(SubScreen):
                 color = (118, 192, 245, 220)
             else:
                 color = (112, 220, 150, 220) if is_own else (232, 118, 110, 220)
-            ring_r = radius + 5
-            ring_surf = pygame.Surface((ring_r * 2 + 12, ring_r * 2 + 12), pygame.SRCALPHA)
-            pygame.draw.circle(ring_surf, color, (ring_r + 6, ring_r + 6), ring_r, ring_width)
-            self.window.blit(ring_surf, (cx - ring_r - 6, cy - ring_r - 6))
+            marker = self._conquer_icon_marker_geometry(
+                icon, (cx, cy), is_own=is_own)
+            self._draw_conquer_marker(marker, color)
 
     def _open_tactics_hand_battle_detail(self, clicked_icon):
         resources_data = {}
@@ -2995,13 +3283,22 @@ class FieldScreen(SubScreen):
                 icon, icon_x, icon_y = all_hovered
                 icon.draw(icon_x, icon_y)
 
+            # Cache the last draw layout so the conquer game screen can
+            # redraw these icons as a top-of-z-order overlay above the
+            # duel-lane panel (figures must remain in the foreground so
+            # their small info boxes are never occluded).
+            self._last_drawn_figure_layout = {
+                'regular': list(all_regular),
+                'selected': list(all_selected),
+                'hovered': all_hovered,
+            }
+
             self._draw_tactics_hand_battle_context_overlays(
                 all_regular + all_selected
                 + ([all_hovered] if all_hovered else []))
 
-            # Conquer selection focus: dim non-selectable figures with a
-            # field-wide overlay, then re-blit each selectable icon on top
-            # plus a pulsing ring so the player sees exactly what to click.
+            # Conquer selection focus: dim the field, redraw selectable icons
+            # cleanly above it, then add a compact side marker.
             self._draw_conquer_selection_focus(
                 all_regular + all_selected
                 + ([all_hovered] if all_hovered else []))
@@ -3104,6 +3401,8 @@ class FieldScreen(SubScreen):
         figure = getattr(icon, 'figure', None)
         if figure is None:
             return False
+        if self._is_conquer_visual_ghost_figure(figure):
+            return False
 
         game = self.game
         is_own = (game is not None and figure.player_id == game.player_id)
@@ -3203,13 +3502,142 @@ class FieldScreen(SubScreen):
                 return fig
         return None
 
-    def _draw_conquer_selection_focus(self, drawn_icons):
-        """Dim the whole subscreen, keeping circular windows over selectable figures.
+    @staticmethod
+    def _conquer_icon_halo_rect(icon, center, *, padding=2):
+        use_big = bool(getattr(icon, 'hovered', False) or getattr(icon, 'clicked', False))
+        frame = None
+        if use_big:
+            frame = getattr(icon, 'rect_frame_big', None) or getattr(icon, 'rect_frame', None)
+        else:
+            frame = getattr(icon, 'rect_frame', None) or getattr(icon, 'rect_frame_big', None)
+        if frame is not None:
+            rect = pygame.Rect(frame)
+            rect.center = (int(center[0]), int(center[1]))
+        else:
+            frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
+            rect = pygame.Rect(0, 0, int(frame_h * 0.76), int(frame_h * 0.92))
+            rect.center = (int(center[0]), int(center[1]))
+        pad = max(0, int(padding))
+        if pad:
+            rect.inflate_ip(pad * 2, pad * 2)
+        return rect
 
-        A single full-screen dark overlay is created with transparent circle
-        cutouts centred on each selectable figure, so the player sees only those
-        figures at full brightness. Pulsing rings are then drawn directly on the
-        window on top of everything.
+    @staticmethod
+    def _conquer_halo_radius(rect):
+        rect = pygame.Rect(rect)
+        return max(3, min(7, min(rect.width, rect.height) // 8))
+
+    @staticmethod
+    def _conquer_icon_marker_geometry(icon, center, *, is_own, padding=3):
+        """Return geometry for a side marker (round 12).
+
+        Replaces the previous full rounded-rect halo around selectable
+        figures with a small 3px vertical bar topped by a small inward-
+        pointing triangle, sitting on the side of the figure that faces
+        the opposing line — right for own figures, left for opponent
+        figures. This keeps the marker clear of the figure's info chip
+        on the opposite side.
+        """
+        halo = FieldScreen._conquer_icon_halo_rect(icon, center, padding=0)
+        bar_w = 3
+        bar_h = max(18, int(halo.height * 0.40))
+        if is_own:
+            bar_x = halo.right + padding
+            side = 'right'
+        else:
+            bar_x = halo.left - padding - bar_w
+            side = 'left'
+        bar_rect = pygame.Rect(bar_x, 0, bar_w, bar_h)
+        bar_rect.centery = halo.centery
+        midpoint = (bar_rect.centerx, bar_rect.centery)
+        # A centered, compact arrowhead points inward toward the figure. This
+        # reads cleaner than the old top-pinned triangle and keeps the marker
+        # out of the figure/info-box footprint.
+        tri_w = 6
+        tri_h = 8
+        mid_y = bar_rect.centery
+        if is_own:
+            # bar's inward edge is its left side
+            inner_x = bar_rect.left
+            tip_x = inner_x - tri_w
+        else:
+            inner_x = bar_rect.right
+            tip_x = inner_x + tri_w
+        triangle = [
+            (inner_x, mid_y - tri_h // 2),
+            (inner_x, mid_y + tri_h // 2),
+            (tip_x, mid_y),
+        ]
+        return {
+            'side': side,
+            'bar_rect': bar_rect,
+            'triangle': triangle,
+            'midpoint': midpoint,
+        }
+
+    def _draw_conquer_marker(self, marker, color):
+        """Render a marker (bar + triangle) onto self.window with alpha."""
+        if not marker:
+            return
+        bar_rect = pygame.Rect(marker['bar_rect'])
+        triangle = list(marker['triangle'])
+        xs = [bar_rect.left, bar_rect.right] + [p[0] for p in triangle]
+        ys = [bar_rect.top, bar_rect.bottom] + [p[1] for p in triangle]
+        pad = 3
+        bx = min(xs) - pad
+        by = min(ys) - pad
+        bw = (max(xs) - min(xs)) + pad * 2
+        bh = (max(ys) - min(ys)) + pad * 2
+        surf = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        local_bar = bar_rect.move(-bx, -by)
+        local_tri = [(p[0] - bx, p[1] - by) for p in triangle]
+        pygame.draw.rect(surf, color, local_bar, 0, border_radius=2)
+        pygame.draw.polygon(surf, color, local_tri)
+        self.window.blit(surf, (bx, by))
+
+    def draw_figures_overlay(self):
+        """Redraw the cached figure icons on top of overlay panels.
+
+        The conquer game screen calls this after rendering the duel lane so
+        that figure icons (and their small info boxes) always stay in the
+        foreground, even when an HUD panel would otherwise occlude them.
+        """
+        layout = getattr(self, '_last_drawn_figure_layout', None)
+        if not layout:
+            return
+        # Performance: only redraw figures whose icon rect intersects the
+        # overlay clip (duel lane). Redrawing every figure every frame is
+        # expensive and causes visible lag in the conquer screen.
+        clip = getattr(self, '_figure_overlay_clip_rect', None)
+
+        def _needs_redraw(icon):
+            if clip is None:
+                return True
+            rect = getattr(icon, 'rect_frame_big', None) or getattr(icon, 'rect_frame', None)
+            if rect is None:
+                return True
+            return rect.colliderect(clip)
+
+        for icon, icon_x, icon_y in reversed(layout.get('regular') or []):
+            if _needs_redraw(icon):
+                icon.draw(icon_x, icon_y)
+        for icon, icon_x, icon_y in reversed(layout.get('selected') or []):
+            if _needs_redraw(icon):
+                icon.draw(icon_x, icon_y)
+        hovered = layout.get('hovered')
+        if hovered:
+            icon, icon_x, icon_y = hovered
+            if _needs_redraw(icon):
+                icon.draw(icon_x, icon_y)
+
+    def _draw_conquer_selection_focus(self, drawn_icons):
+        """Dim the field and redraw selectable figure icons above it.
+
+        The earlier implementation punched rounded-square cutouts through the
+        dim layer, which could read as a box around each target. The current
+        version draws one simple dim pass, then re-blits the whole selectable
+        field icon (frame, glow, and info box) above it before adding the
+        compact side marker.
         """
         if not self._is_conquer_selection_active():
             return
@@ -3219,9 +3647,6 @@ class FieldScreen(SubScreen):
         t = pygame.time.get_ticks() / 1000.0
         pulse = 0.5 + 0.5 * math.sin(t * 3.2)
 
-        frame_h = settings.FRAME_FIGURE_SCALE * settings.FIGURE_ICON_HEIGHT
-        circle_r = int(frame_h * 0.60)
-
         # Partition icons into selectable / non-selectable.
         selectable_entries = []
         for icon, ix, iy in drawn_icons:
@@ -3230,35 +3655,48 @@ class FieldScreen(SubScreen):
             if self._icon_is_selectable_for_current_mode(icon):
                 selectable_entries.append((icon, int(ix), int(iy)))
 
-        # Build a full-screen dim surface and punch out transparent circles.
+        # Dim everything first. Selectable icons are redrawn above this layer,
+        # so their frame and info box stay crisp without a visible cutout box.
         dim = pygame.Surface(
             (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), pygame.SRCALPHA)
         dim.fill((0, 0, 0, 155))
-        for _icon, cx, cy in selectable_entries:
-            # Draw a filled circle with alpha=0 to erase the dim at that spot.
-            # pygame.draw on SRCALPHA surfaces replaces pixel values directly,
-            # so drawing (0,0,0,0) punches a fully transparent hole.
-            pygame.draw.circle(dim, (0, 0, 0, 0), (cx, cy), circle_r + 8)
         self.window.blit(dim, (0, 0))
 
-        # Pulsing yellow rings drawn on the window after the dim layer.
-        alpha = int(130 + 100 * pulse)
-        ring_color = (245, 205, 95, alpha)
-        for icon, cx, cy in selectable_entries:
-            ring_r = circle_r + 6
-            ring_surf = pygame.Surface((ring_r * 2 + 12, ring_r * 2 + 12),
-                                       pygame.SRCALPHA)
-            pygame.draw.circle(
-                ring_surf, ring_color,
-                (ring_r + 6, ring_r + 6), ring_r, 4)
-            self.window.blit(ring_surf, (cx - ring_r - 6, cy - ring_r - 6))
+        regular_entries = []
+        selected_entries = []
+        hovered_entries = []
+        for entry in selectable_entries:
+            icon = entry[0]
+            if getattr(icon, 'hovered', False):
+                hovered_entries.append(entry)
+            elif getattr(icon, 'clicked', False):
+                selected_entries.append(entry)
+            else:
+                regular_entries.append(entry)
 
-            if (pending_focus is not None
-                    and getattr(icon.figure, 'id', None)
-                        == getattr(pending_focus, 'id', None)):
-                pygame.draw.circle(
-                    self.window, (255, 232, 130),
-                    (cx, cy), circle_r + 4, 5)
+        for icon, cx, cy in reversed(regular_entries):
+            icon.draw(cx, cy)
+        for icon, cx, cy in reversed(selected_entries):
+            icon.draw(cx, cy)
+        for icon, cx, cy in hovered_entries:
+            icon.draw(cx, cy)
+
+        # Pulsing gold/cyan side markers drawn on the window after the dim
+        # layer and redrawn icons. A small 3px vertical bar with an inward-
+        # pointing arrowhead replaces any full figure border.
+        alpha = int(150 + 90 * pulse)
+        gold = (245, 205, 95, alpha)
+        cyan = (120, 220, 235, min(255, alpha + 40))
+        own_id = getattr(getattr(self, 'game', None), 'player_id', None)
+        for icon, cx, cy in selectable_entries:
+            figure = getattr(icon, 'figure', None)
+            is_own = getattr(figure, 'player_id', None) == own_id
+            is_pending = (pending_focus is not None
+                          and getattr(figure, 'id', None)
+                              == getattr(pending_focus, 'id', None))
+            marker = self._conquer_icon_marker_geometry(
+                icon, (cx, cy), is_own=is_own)
+            self._draw_conquer_marker(marker, cyan if is_pending else gold)
 
     def _update_defender_selectable(self):
         """Mark figure icons as selectable/non-selectable for defender selection mode."""
@@ -3364,6 +3802,48 @@ class FieldScreen(SubScreen):
             icon.in_defender_selection_mode = True
             icon.defender_selectable = self._is_conquer_own_defender_selectable(
                 getattr(icon, 'figure', None), icon)
+
+    def selectable_defender_figure_ids(self):
+        """List figure ids currently selectable as the opponent defender.
+
+        Used by the conquer screen to auto-resolve a defender selection
+        when only one valid target remains.  Returns an empty list when
+        not in defender-selection mode.
+        """
+        if not getattr(self, 'defender_selection_mode', False):
+            return []
+        ids = []
+        for icon in self.figure_icons:
+            fig = getattr(icon, 'figure', None)
+            if fig is None:
+                continue
+            if self._is_conquer_visual_ghost_figure(fig):
+                continue
+            if not getattr(icon, 'defender_selectable', False):
+                continue
+            if getattr(fig, 'player_id', None) == self.game.player_id:
+                continue
+            ids.append(fig.id)
+        return ids
+
+    def selectable_own_defender_figure_ids(self):
+        """List figure ids currently selectable as the conquerer's own
+        defender (Invader Swap second-pick)."""
+        if not getattr(self, 'conquer_own_defender_mode', False):
+            return []
+        ids = []
+        for icon in self.figure_icons:
+            fig = getattr(icon, 'figure', None)
+            if fig is None:
+                continue
+            if self._is_conquer_visual_ghost_figure(fig):
+                continue
+            if not getattr(icon, 'defender_selectable', False):
+                continue
+            if getattr(fig, 'player_id', None) != self.game.player_id:
+                continue
+            ids.append(fig.id)
+        return ids
     
     def _reset_defender_selectable(self):
         """Reset all figure icons to selectable (normal state)."""

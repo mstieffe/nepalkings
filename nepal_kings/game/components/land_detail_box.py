@@ -301,7 +301,7 @@ class LandDetailBox:
         shield_reason = getattr(tile, 'kingdom_shield_reason', None)
         core_protected = shield_reason == 'core_protection' or shield_remaining < 0
         extra_after_conquer = 0
-        if (cooldown > 0 or land_cooldown > 0 or shield_remaining > 0 or core_protected) and not tile.is_mine:
+        if (land_cooldown > 0 or shield_remaining > 0 or core_protected) and not tile.is_mine:
             extra_after_conquer = int(self._body_font.get_height() * 0.8)
 
         text_h = sum(self._line_height(kind) for kind, _ in self._lines)
@@ -338,17 +338,15 @@ class LandDetailBox:
             self._buttons.append(('config', _LandButton(
                 self.window, btn_x, btn_y, 'Configure Kingdom')))
         else:
-            # Player cooldown blocks all conquer starts; land cooldown does not
-            # block opening conquer setup but is shown as guidance.
-            disabled = cooldown > 0 or shield_remaining > 0 or core_protected
+            # Land/player cooldowns are handled by conquer setup/start battle;
+            # kingdom protection still blocks opening conquer setup.
+            disabled = shield_remaining > 0 or core_protected
             btn = _LandButton(self.window, btn_x, btn_y, 'Conquer', disabled=disabled)
             if disabled:
                 if core_protected:
                     btn.sub_text = 'Core Protection active'
                 elif shield_remaining > 0:
                     btn.sub_text = f'Shield: {_format_cooldown_text(shield_remaining)}'
-                else:
-                    btn.sub_text = f'Your cooldown: {_format_cooldown_text(cooldown)}'
             elif land_cooldown > 0:
                 btn.sub_text = (
                     f'Land protection: {_format_cooldown_text(land_cooldown)}')

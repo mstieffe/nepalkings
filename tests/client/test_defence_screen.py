@@ -738,6 +738,31 @@ class TestDefenceScreenLayout:
         assert screen._active_info_key == 'battle_plan'
         mock_open.assert_not_called()
 
+    def test_castle_cap_indicator_skips_until_castle_full(self, monkeypatch):
+        from config import settings
+        from game.screens import defence_screen as module
+        import pygame
+
+        screen = module.DefenceScreen.__new__(module.DefenceScreen)
+        screen.window = pygame.Surface((240, 180))
+        screen._field_rects = {'castle': pygame.Rect(20, 20, 150, 120)}
+        screen._land = {'tier': 3}
+        screen._config = {
+            'figures': [{'field': 'castle'}, {'field': 'castle'}],
+        }
+        screen._res_font = settings.get_font(settings.FS_TINY)
+        calls = []
+        monkeypatch.setattr(
+            module,
+            'draw_castle_cap_indicator',
+            lambda *args, **kwargs: calls.append(args) or pygame.Rect(0, 0, 1, 1),
+        )
+
+        result = module.DefenceScreen._draw_castle_cap_indicator(screen)
+
+        assert result is None
+        assert calls == []
+
 
 class TestRemoveClickPriority:
 

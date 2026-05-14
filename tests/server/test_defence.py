@@ -8,7 +8,7 @@ from models import db as _db, User, Land, CollectionCard, LandConfig, LandConfig
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _add_land(db, owner_id=None, col=0, row=0, tier=1, gold_rate=5.0):
+def _add_land(db, owner_id=None, col=0, row=0, tier=6, gold_rate=5.0):
     land = Land(
         col=col, row=row, tier=tier, gold_rate=gold_rate,
         suit_bonus_suit='Hearts', suit_bonus_value=2,

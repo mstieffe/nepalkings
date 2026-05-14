@@ -44,6 +44,10 @@ _MARGIN_BOTTOM_PCT = 0.0333
 _HEADER_PRE_BATTLE_H_PCT = 0.20
 _STATUS_STRIP_H_PCT = 0.05
 _LOG_STRIP_H_PCT = 0.06
+# Persistent two-row header: a constant top row sits above a mini-timeline
+# row in every mode. Top row height is fixed; the timeline row absorbs the
+# remainder of the existing header band so content positioning is unchanged.
+_TOP_ROW_H_PCT = 0.05
 
 # Vertical layout
 _HEADER_TO_CONTENT_GAP_H_PCT = 0.0185   # gap between header and content
@@ -107,6 +111,13 @@ class HeaderLayout:
     timeline_rect: Optional[Rect]  # full timeline panel (pre-battle only)
     status_strip_rect: Optional[Rect]
     log_strip_rect: Optional[Rect]
+    # Persistent two-row split (always populated). The top row hosts the
+    # combined title / status pill / withdraw button and stays constant
+    # between collapsed and expanded states. The timeline row hosts the
+    # mini timeline strip and is the only row that the hover overlay can
+    # extend.
+    top_row_rect: Rect = (0, 0, 0, 0)
+    timeline_row_rect: Rect = (0, 0, 0, 0)
 
 
 @dataclass(frozen=True)
@@ -201,15 +212,20 @@ def _is_narrow(screen_w: int, screen_h: int, narrow: Optional[bool]) -> bool:
 
 
 def _compute_header(W: int, H: int, mode: str) -> HeaderLayout:
+    top_h = int(round(_TOP_ROW_H_PCT * H))
     if mode == 'pre_battle':
         h = int(round(_HEADER_PRE_BATTLE_H_PCT * H))
         full = _r(0, 0, W, h)
+        top_row = _r(0, 0, W, top_h)
+        timeline_row = _r(0, top_h, W, max(0, h - top_h))
         return HeaderLayout(
             mode=mode,
             full_rect=full,
             timeline_rect=full,
             status_strip_rect=None,
             log_strip_rect=None,
+            top_row_rect=top_row,
+            timeline_row_rect=timeline_row,
         )
     # battle / result share collapsed status + log strips
     status_h = int(round(_STATUS_STRIP_H_PCT * H))
@@ -217,12 +233,18 @@ def _compute_header(W: int, H: int, mode: str) -> HeaderLayout:
     status = _r(0, 0, W, status_h)
     log = _r(0, status_h, W, log_h)
     full = _r(0, 0, W, status_h + log_h)
+    # Persistent split: the top row reuses the existing status strip and
+    # the timeline row reuses the log strip rect.
+    top_row = _r(0, 0, W, top_h)
+    timeline_row = _r(0, top_h, W, max(0, status_h + log_h - top_h))
     return HeaderLayout(
         mode=mode,
         full_rect=full,
         timeline_rect=None,
         status_strip_rect=status,
         log_strip_rect=log,
+        top_row_rect=top_row,
+        timeline_row_rect=timeline_row,
     )
 
 

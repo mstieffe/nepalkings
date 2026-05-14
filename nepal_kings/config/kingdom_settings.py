@@ -17,13 +17,17 @@ HEX_TIER_FILL = {
     1: (110, 140, 90),        # green — common
     2: (140, 130, 80),        # gold-ish — uncommon
     3: (130, 85, 110),        # purple-ish — rare
-    4: (170, 60, 70),         # crimson — apex
+    4: (170, 60, 70),         # crimson — epic
+    5: (150, 48, 60),         # deep red — legendary
+    6: (128, 40, 54),         # burnished red — apex
 }
 HEX_TIER_BORDER = {
     1: (75, 100, 60),
     2: (105, 95, 55),
     3: (95, 55, 80),
     4: (120, 36, 44),
+    5: (108, 30, 42),
+    6: (86, 22, 34),
 }
 HEX_EMPTY_BORDER    = (90, 90, 90)         # unclaimed border
 HEX_MINE_BORDER     = (250, 221, 0)        # gold border for own lands
@@ -39,17 +43,24 @@ HEX_SUIT_TIER_FILL = {
         2: (64, 135, 78),
         3: (28, 88, 46),
         4: (12, 60, 28),
+        5: (14, 54, 28),
+        6: (18, 48, 30),
     },
     'blue': {
         1: (104, 162, 206),
         2: (56, 116, 162),
         3: (24, 72, 116),
         4: (12, 46, 80),
+        5: (14, 40, 72),
+        6: (16, 34, 64),
     },
     'neutral': {
         1: (165, 165, 165),
         2: (130, 130, 130),
         3: (95, 95, 95),
+        4: (70, 70, 70),
+        5: (58, 58, 58),
+        6: (50, 50, 50),
     },
 }
 HEX_SUIT_TIER_BORDER = {
@@ -58,34 +69,138 @@ HEX_SUIT_TIER_BORDER = {
         2: (42, 94, 54),
         3: (18, 58, 32),
         4: (8, 38, 18),
+        5: (8, 34, 18),
+        6: (10, 30, 18),
     },
     'blue': {
         1: (72, 112, 146),
         2: (36, 78, 112),
         3: (16, 46, 78),
         4: (8, 28, 52),
+        5: (8, 24, 46),
+        6: (10, 22, 40),
     },
     'neutral': {
         1: (110, 110, 110),
         2: (85, 85, 85),
         3: (60, 60, 60),
+        4: (40, 40, 40),
+        5: (34, 34, 34),
+        6: (30, 30, 30),
     },
 }
 HEX_STAR_FILL       = (255, 222, 78)
 HEX_STAR_BORDER     = (100, 70, 20)
 HEX_MINE_GLOW_CLR   = (255, 223, 80, 90)
 HEX_MINE_GLOW_SOFT_CLR = (255, 210, 70, 45)
+# Animated breathing pulse for owner glow.  Period (ms) and amplitude
+# (alpha multiplier swing).  Quantized to ``HEX_MINE_GLOW_PULSE_STEPS`` so
+# pre-rendered surfaces can be reused frame-to-frame.
+HEX_MINE_GLOW_PULSE_PERIOD_MS = 2400
+HEX_MINE_GLOW_PULSE_AMPLITUDE = 0.35
+HEX_MINE_GLOW_PULSE_STEPS     = 8
 HEX_MINE_BADGE_BG   = (80, 55, 10, 220)
 HEX_MINE_BADGE_CLR  = (255, 238, 150)
 HEX_MINE_BORDER_OUTER = (112, 78, 20)
 HEX_MINE_BORDER_HIGHLIGHT = (255, 246, 196)
+
+# Castle figure cap per land tier.  Mirrors server/server_settings.py.
+CASTLE_FIGURE_LIMIT_BY_TIER = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
 
 # ── Kingdom cosmetic render presets ───────────────────────────────
 HEX_DEFAULT_OWNER_STYLE = {
     'badge_key': 'badge_plain',
     'border_key': 'border_simple_gold',
     'surface_key': 'surface_plain',
+    'color_key': 'color_royal_gold',
+    'sigil_key': 'sigil_none',
 }
+
+# Owner color palette mirror.  Server source of truth lives in
+# ``server/server_settings.py::KINGDOM_COLOR_PALETTE``; keep the two in sync.
+# ``accent_rgb`` drives borders / chip accents; ``glow_rgb`` drives the
+# breathing pulse around owned hexes.
+KINGDOM_COLOR_PALETTE = {
+    'color_royal_gold': {
+        'name': 'Royal Gold',
+        'accent_rgb': (255, 223, 80),
+        'glow_rgb':   (255, 210, 70),
+    },
+    'color_royal_blue': {
+        'name': 'Royal Blue',
+        'accent_rgb': (84, 150, 255),
+        'glow_rgb':   (54, 110, 220),
+    },
+    'color_crimson': {
+        'name': 'Crimson',
+        'accent_rgb': (224, 60, 80),
+        'glow_rgb':   (200, 40, 60),
+    },
+    'color_emerald': {
+        'name': 'Emerald',
+        'accent_rgb': (60, 200, 130),
+        'glow_rgb':   (40, 170, 105),
+    },
+    'color_amethyst': {
+        'name': 'Amethyst',
+        'accent_rgb': (180, 110, 220),
+        'glow_rgb':   (150, 80, 200),
+    },
+    'color_copper': {
+        'name': 'Copper',
+        'accent_rgb': (212, 130, 64),
+        'glow_rgb':   (180, 100, 40),
+    },
+    'color_jade': {
+        'name': 'Jade',
+        'accent_rgb': (110, 200, 170),
+        'glow_rgb':   (80, 170, 140),
+    },
+    'color_ivory': {
+        'name': 'Ivory',
+        'accent_rgb': (240, 232, 208),
+        'glow_rgb':   (220, 210, 180),
+    },
+    'color_obsidian': {
+        'name': 'Obsidian',
+        'accent_rgb': (110, 110, 130),
+        'glow_rgb':   (70, 70, 90),
+    },
+    'color_sunset': {
+        'name': 'Sunset',
+        'accent_rgb': (255, 130, 80),
+        'glow_rgb':   (230, 90, 60),
+    },
+    'color_ocean': {
+        'name': 'Ocean',
+        'accent_rgb': (70, 180, 220),
+        'glow_rgb':   (40, 140, 200),
+    },
+}
+KINGDOM_COLOR_DEFAULT_KEY = 'color_royal_gold'
+
+# Kingdom sigil cosmetics (achievement-unlocked).  Each entry maps to a
+# procedural glyph renderer in ``game.components.sigil_cosmetics``.  The
+# server is the source of truth for unlock requirements / pricing — the
+# client only needs the keys and human-readable names.  ``shape`` selects
+# the drawing routine.
+KINGDOM_SIGIL_STYLES = {
+    'sigil_none':     {'name': 'No Sigil',     'shape': 'none'},
+    'sigil_mountain': {'name': 'Mountain',     'shape': 'mountain'},
+    'sigil_sword':    {'name': 'Sword',        'shape': 'sword'},
+    'sigil_wolf':     {'name': 'Wolf',         'shape': 'wolf'},
+    'sigil_lotus':    {'name': 'Lotus',        'shape': 'lotus'},
+    'sigil_tower':    {'name': 'Tower',        'shape': 'tower'},
+    'sigil_eagle':    {'name': 'Eagle',        'shape': 'eagle'},
+    'sigil_sun':      {'name': 'Sun',          'shape': 'sun'},
+    'sigil_crescent': {'name': 'Crescent',     'shape': 'crescent'},
+    'sigil_lion':     {'name': 'Lion',         'shape': 'lion'},
+    'sigil_phoenix':  {'name': 'Phoenix',      'shape': 'phoenix'},
+    'sigil_dragon':   {'name': 'Dragon',       'shape': 'dragon'},
+    'sigil_crown':    {'name': 'Crown',        'shape': 'crown'},
+    'sigil_serpent':  {'name': 'Serpent',      'shape': 'serpent'},
+}
+KINGDOM_SIGIL_DEFAULT_KEY = 'sigil_none'
 
 # Kingdom name badge cosmetics.  Each style controls the procedural
 # background (fill colours / gradient), frame, and ornaments drawn behind
@@ -262,8 +377,16 @@ HEX_BORDER_SKINS = {
 # (skin_key, hex_size).  Surfaces at rare+ rarity get a faint center emblem.
 HEX_SURFACE_SKINS = {
     'surface_plain': {
-        'style': None,
+        'style': 'starter',
         'rarity': 'default',
+        # Subtle warm parchment-like wash + faint diagonal cross-hatch so a
+        # newly-claimed hex reads as "yours" even without a premium surface.
+        # Alphas are kept low so the underlying suit-bonus fill stays primary.
+        'base_clr_top':  (236, 220, 184, 95),
+        'base_clr_bot':  (196, 174, 128, 95),
+        'hatch_clr':     (96, 72, 36, 50),
+        'vignette_clr':  (32, 22, 12, 70),
+        'emblem': None,
     },
     'surface_parchment': {
         'style': 'parchment',

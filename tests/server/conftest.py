@@ -40,6 +40,58 @@ def app():
         _db.drop_all()
 
 
+@pytest.fixture(autouse=True)
+def _reset_conquer_idempotency_cache():
+    """Reset the process-level conquer idempotency cache between tests.
+
+    The cache is keyed by ``(game_id, player_id, endpoint, client_action_id)``
+    which can repeat across tests because every test fixture rolls back
+    to fresh ``id=1, 2, 3, …`` rows.  Without this reset, a request in
+    test B can hit a stale entry from test A and return data referring
+    to a now-dropped DB state (figures missing, players gone, etc.).
+    """
+    try:
+        from game_service.conquer_tactics_idempotency import (
+            reset_cache_for_tests,
+        )
+    except Exception:
+        yield
+        return
+    reset_cache_for_tests()
+    yield
+    reset_cache_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _reset_land_coord_counter():
+    """Reset the shared ``_LAND_COORD_COUNTER`` in ``test_land_battle``.
+
+    That module-level counter is read by every test that uses
+    :func:`tests.server.test_land_battle._make_land` (including helpers
+    imported from other suites such as ``test_conquer_tactics_hand``).
+    Without a per-test reset, the land's ``col``/``row`` shift with
+    collection order, which feeds the deterministic
+    :func:`ai.defence.generator._template_seed` and silently changes
+    the AI defender's prelude spell — flipping
+    ``test_conquer_game_finishes_after_battle`` between Forced Deal
+    (harmless) and Explosion (destroys the attacker's only figure).
+    """
+    try:
+        from tests.server import test_land_battle as _land_battle_module
+    except Exception:
+        try:
+            import test_land_battle as _land_battle_module  # type: ignore
+        except Exception:
+            yield
+            return
+    _saved = getattr(_land_battle_module, '_LAND_COORD_COUNTER', 0)
+    _land_battle_module._LAND_COORD_COUNTER = 0
+    try:
+        yield
+    finally:
+        _land_battle_module._LAND_COORD_COUNTER = _saved
+
+
 @pytest.fixture
 def client(app):
     return app.test_client()

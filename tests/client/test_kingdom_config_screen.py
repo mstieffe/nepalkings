@@ -52,8 +52,18 @@ def _screen_base():
     screen._buttons = []
     screen._box_rect = pygame.Rect(0, 0, settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
     screen._btn_close_rect = None
-    screen._cosmetic_scroll = {'badge': 0, 'border': 0, 'surface': 0}
+    screen._cosmetic_scroll = {'badge': 0, 'border': 0, 'surface': 0,
+                               'color': 0, 'sigil': 0}
+    screen._cosmetic_sort = {key: 'default' for key in screen._cosmetic_scroll}
+    screen._cosmetic_filter = {key: 'all' for key in screen._cosmetic_scroll}
     screen._cosmetic_scroll_areas = {}
+    screen._cosmetics_panel_scroll = 0
+    screen._cosmetics_scroll_area = None
+    screen._cosmetics_content_h = 0
+    screen._content_scroll = 0
+    screen._content_scroll_area = None
+    screen._content_content_h = 0
+    screen._button_clip_rect = None
     screen._rename_dialog = None
     screen._rename_input_rect = None
     screen._rename_confirm_rect = None
@@ -84,10 +94,15 @@ def _kingdom_payload():
             'badge_key': 'badge_plain',
             'border_key': 'border_simple_gold',
             'surface_key': 'surface_plain',
+            'color_key': 'color_royal_gold',
+            'sigil_key': 'sigil_none',
         },
         'land_ids': [12, 13],
         'lands_count': 2,
-        'unlocked_cosmetics': ['badge_plain', 'border_simple_gold', 'surface_plain'],
+        'unlocked_cosmetics': [
+            'badge_plain', 'border_simple_gold', 'surface_plain',
+            'color_royal_gold', 'sigil_none',
+        ],
         'shield_remaining': 0,
         'skill_points_total': 2,
         'skill_points_spent': 0,
@@ -302,6 +317,59 @@ class TestKingdomConfigInteractions:
 
         KingdomConfigScreen._scroll_cosmetic_section(screen, 'badge', -1)
         assert screen._cosmetic_scroll['badge'] > 0
+
+    def test_main_config_scrolls_expanded_panels_and_inner_cosmetic_lists(self):
+        from config import settings
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._gold = 5000
+        screen._catalog = {}
+        for cosmetic_type in ('badge', 'border', 'surface', 'color', 'sigil'):
+            for idx in range(8):
+                key = f'{cosmetic_type}_{idx}'
+                screen._catalog[key] = {
+                    'type': cosmetic_type,
+                    'name': f'{cosmetic_type.title()} {idx}',
+                    'price_gold': idx * 100,
+                }
+        screen._catalog.update({
+            'badge_plain': {'type': 'badge', 'name': 'Plain', 'price_gold': 0},
+            'border_simple_gold': {'type': 'border', 'name': 'Gold', 'price_gold': 0},
+            'surface_plain': {'type': 'surface', 'name': 'Plain', 'price_gold': 0},
+            'color_royal_gold': {'type': 'color', 'name': 'Gold', 'price_gold': 0},
+            'sigil_none': {'type': 'sigil', 'name': 'No Sigil', 'price_gold': 0},
+        })
+        screen._kingdom['skills'] = {
+            f'skill_{idx}': {
+                'name': f'Skill {idx}',
+                'description': 'Improves the kingdom configuration.',
+                'level': idx % 3,
+                'max_level': 5,
+                'next_cost': 1,
+            }
+            for idx in range(8)
+        }
+
+        KingdomConfigScreen.render(screen)
+
+        assert screen._content_scroll_area is not None
+        assert screen._content_content_h > screen._content_scroll_area.h
+        assert screen._cosmetics_scroll_area is None
+        assert screen._skills_scroll_area is None
+        assert screen._cosmetics_panel_scroll == 0
+        assert 'badge' in screen._cosmetic_scroll_areas
+        item_h = max(30, min(38, int(0.038 * settings.SCREEN_HEIGHT)))
+        assert screen._cosmetic_scroll_areas['badge'].h >= item_h * 2
+
+        assert KingdomConfigScreen._scroll_cosmetics_panel(screen, -1) is False
+        assert KingdomConfigScreen._scroll_config_content(screen, -1) is True
+        assert screen._content_scroll > 0
+        assert KingdomConfigScreen._scroll_cosmetic_section(screen, 'badge', -1) is True
+        assert screen._cosmetic_scroll['badge'] > 0
+        page_actions = {'back', 'kingdom_prev', 'kingdom_next', 'rename_start'}
+        for action, _value, rect in screen._buttons:
+            if action not in page_actions:
+                assert screen._content_scroll_area.contains(rect)
 
     def test_paid_cosmetic_purchase_requires_confirmation(self, monkeypatch):
         KingdomConfigScreen, screen = _screen_base()
@@ -532,9 +600,18 @@ class TestKingdomConfigInteractions:
         KingdomConfigScreen.render(screen)
 
         actions = {action for action, _value, _rect in screen._buttons}
+        assert 'upgrade_skill' in actions
+        assert 'rename_start' in actions
+        assert 'back' in actions
+
+        screen._content_scroll = (
+            screen._content_content_h - screen._content_scroll_area.h
+        )
+        KingdomConfigScreen.render(screen)
+
+        actions = {action for action, _value, _rect in screen._buttons}
         assert 'buy_shield' in actions
         assert 'select_hours' in actions
-        assert 'upgrade_skill' in actions
         assert 'rename_start' in actions
         assert 'back' in actions
 

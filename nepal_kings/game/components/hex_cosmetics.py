@@ -368,7 +368,53 @@ def _draw_lava(surf, cx, cy, sz, skin):
                            max(1, int(sz * 0.025)))
 
 
+def _draw_starter(surf, cx, cy, sz, skin):
+    """Default 'starter' surface: faint cross-hatch + soft vignette.
+
+    Used for the free ``surface_plain`` so newly-conquered land is visually
+    distinct from neutral terrain without competing with premium surfaces.
+    """
+    base_top = skin.get('base_clr_top', (236, 220, 184, 110))
+    base_bot = skin.get('base_clr_bot', (196, 174, 128, 110))
+    hatch_clr = skin.get('hatch_clr', (96, 72, 36, 55))
+    vignette_clr = skin.get('vignette_clr', (32, 22, 12, 70))
+
+    # Soft warm tinted vertical gradient (low alpha keeps suit fill readable).
+    _draw_vertical_gradient(surf, cx, cy, sz, base_top, base_bot, steps=10)
+
+    # Thin diagonal cross-hatch lines (two directions).
+    step = max(3, int(sz * 0.18))
+    thick = max(1, int(sz * 0.035))
+    bound = int(sz * 1.05)
+    # Diagonal: top-left → bottom-right.
+    for i in range(-bound, bound + 1, step):
+        p0 = (cx - bound, cy + i - bound)
+        p1 = (cx + bound, cy + i + bound)
+        pygame.draw.line(surf, hatch_clr, p0, p1, thick)
+    # Diagonal: top-right → bottom-left.
+    for i in range(-bound, bound + 1, step):
+        p0 = (cx - bound, cy - i + bound)
+        p1 = (cx + bound, cy - i - bound)
+        pygame.draw.line(surf, hatch_clr, p0, p1, thick)
+
+    # Soft rim vignette so the centre stays luminous and edges darken slightly.
+    rim_steps = 6
+    for i in range(rim_steps):
+        t = 1.0 - i / rim_steps
+        r = int(sz * (1.0 - i * 0.08))
+        a = int(vignette_clr[3] * (1.0 - t) * 0.6)
+        if a <= 0 or r <= 0:
+            continue
+        pygame.draw.polygon(
+            surf,
+            (vignette_clr[0], vignette_clr[1], vignette_clr[2], a),
+            _hex_polygon(cx, cy, r),
+            max(1, int(sz * 0.06)),
+        )
+
+
 _SURFACE_DRAWERS = {
+    'starter': _draw_starter,
     'cobblestone': _draw_cobblestones,
     'parchment': _draw_parchment,
     'grass': _draw_grass,

@@ -50,6 +50,7 @@ def _mk_game_dict(player_id=113, opponent_id=114):
         'fold_winner_id': None,
         'battle_round': 0,
         'battle_turn_player_id': None,
+        'battle_skipped_rounds': {},
         'post_battle_drawn_cards': None,
         'last_battle_result': None,
         'winner_player_id': None,
@@ -65,6 +66,27 @@ def _mk_user_dict():
 
 
 class TestGameBattleStateTransitions:
+    def test_battle_skipped_rounds_follow_server_snapshots(self):
+        from game.core.game import Game
+
+        initial = _mk_game_dict()
+        initial['battle_skipped_rounds'] = {'114': [0]}
+        game = Game(initial, _mk_user_dict(), lightweight=True)
+
+        assert game.battle_skipped_rounds == {'114': [0]}
+
+        action_update = _mk_game_dict()
+        action_update['battle_skipped_rounds'] = {'114': [0], '113': [1]}
+        game.update_from_dict(action_update)
+
+        assert game.battle_skipped_rounds == {'114': [0], '113': [1]}
+
+        poll_update = _mk_game_dict()
+        poll_update['battle_skipped_rounds'] = {'114': [0, 2], '113': [1]}
+        game._apply_game_dict(poll_update)
+
+        assert game.battle_skipped_rounds == {'114': [0, 2], '113': [1]}
+
     def test_poll_transition_resets_battle_ready_after_update_from_dict_clear(self):
         """When update_from_dict clears advance first, the next poll must still reset battle-ready guards."""
         from game.core.game import Game

@@ -7,7 +7,7 @@ This module intentionally keeps AI land defence balancing out of
 ``ai/defence/generator.py`` turns them into concrete battle templates.
 """
 
-AI_DEFENCE_GENERATOR_VERSION = 5
+AI_DEFENCE_GENERATOR_VERSION = 6
 
 AI_DEFENCE_SUITS = ('Hearts', 'Diamonds', 'Clubs', 'Spades')
 AI_DEFENCE_RED_SUITS = ('Hearts', 'Diamonds')
@@ -34,6 +34,8 @@ AI_DEFENCE_TIER_NAMES = {
     2: 'Mountain Warden',
     3: 'Suit Bastion',
     4: 'Apex Citadel',
+    5: 'Imperial Bulwark',
+    6: 'Eternal Citadel',
 }
 
 # Figure keys are generated from role + suit-color and mapped to concrete
@@ -461,23 +463,28 @@ AI_DEFENCE_FIGURE_CATALOG = {
 #   battle plans compatible with mixed-suit lineups.
 # - Keep ``number_ranks`` non-empty for every tier.
 AI_DEFENCE_GENERATION_RULES = {
-    # Tier 1: still beatable, but already "real" defence pressure.
+    # Tier 1: lean — 1 castle (king), 1 farm; optional pool light.
+    # Generator appends (tier - castle_count) extra king/maharaja figures.
     1: {
-        'core_roles': ['king', 'farm_small', 'military_basic'],
-        'optional_count_range': (0, 1),
+        'core_roles': ['king', 'farm_small'],
+        'optional_count_range': (0, 2),
         'optional_role_weights': [
             ('farm_small', 2),
+            ('farm_large', 1),
+            ('temple', 1),
+            ('manufactory', 1),
             ('healer', 2),
-            ('material', 1),
-            ('archer', 1),
-            ('military_basic', 2),
+            ('material', 2),
+            ('military_basic', 3),
+            ('military_elite', 1),
+            ('archer', 2),
+            ('wall_cavalry', 1),
         ],
         'number_ranks': ['7', '8', '9'],
         'battle_plan': 'sentinel',
-        'core_cross_color_chance': 0.38,
+        'core_cross_color_chance': 0.30,
         'optional_suit_weights': {'primary': 6, 'same_color': 1, 'opposite_color': 3},
         'black_land_fortress_free_chance': 0.45,
-        # T1: utility-leaning, with a real chance of "no spell".
         'prelude_spell_weights': [
             (None, 6),
             ('Dump Cards', 4),
@@ -500,38 +507,84 @@ AI_DEFENCE_GENERATION_RULES = {
         'auto_gamble': True,
         'auto_gamble_threshold': 10,
     },
-    # Tier 2: full call-based pressure with stronger support synergies.
+    # Tier 2: 2 castle (king + 1 extra), wider optional pool.
     2: {
-        'core_roles': ['king', 'farm_large', 'military_basic', 'healer', 'material'],
-        'optional_count_range': (0, 3),
+        'core_roles': ['king', 'farm_small'],
+        'optional_count_range': (1, 4),
         'optional_role_weights': [
+            ('farm_small', 1),
+            ('farm_large', 2),
             ('temple', 2),
-            ('archer', 2),
             ('manufactory', 2),
+            ('healer', 2),
+            ('material', 2),
+            ('military_basic', 3),
             ('military_elite', 1),
-            ('wall_cavalry', 1),
-            ('farm_large', 1),
+            ('archer', 2),
+            ('wall_cavalry', 2),
         ],
-        'number_ranks': ['9', '10'],
+        'number_ranks': ['8', '9', '10'],
         'battle_plan': 'apex',
         'core_cross_color_chance': 0.32,
         'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
-        'black_land_fortress_free_chance': 0.25,
-        # T2: full pool, lower "no spell" chance.
+        'black_land_fortress_free_chance': 0.30,
         'prelude_spell_weights': [
-            (None, 2),
+            (None, 3),
             ('Dump Cards', 3),
             ('Forced Deal', 3),
-            ('Poison', 4),
-            ('Health Boost', 4),
+            ('Poison', 3),
+            ('Health Boost', 3),
             ('Peasant War', 3),
-            ('Civil War', 3),
+            ('Civil War', 2),
             ('Explosion', 2),
         ],
         'prelude_spell_data': {},
         'counter_spell_weights': [
-            (None, 2),
+            (None, 3),
             ('Dump Cards', 3),
+            ('Forced Deal', 4),
+            ('Poison', 4),
+            ('Health Boost', 4),
+        ],
+        'counter_spell_data': {},
+        'auto_gamble': True,
+        'auto_gamble_threshold': 9,
+    },
+    # Tier 3: 3 castle (maharaja + 2 extra), farm_large core.
+    3: {
+        'core_roles': ['maharaja', 'farm_large'],
+        'optional_count_range': (2, 5),
+        'optional_role_weights': [
+            ('farm_small', 1),
+            ('farm_large', 1),
+            ('temple', 2),
+            ('manufactory', 2),
+            ('healer', 2),
+            ('material', 2),
+            ('military_basic', 3),
+            ('military_elite', 2),
+            ('archer', 3),
+            ('wall_cavalry', 3),
+        ],
+        'number_ranks': ['9', '10'],
+        'battle_plan': 'apex',
+        'core_cross_color_chance': 0.30,
+        'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
+        'black_land_fortress_free_chance': 0.18,
+        'prelude_spell_weights': [
+            (None, 2),
+            ('Dump Cards', 2),
+            ('Forced Deal', 3),
+            ('Poison', 4),
+            ('Health Boost', 4),
+            ('Peasant War', 4),
+            ('Civil War', 3),
+            ('Explosion', 3),
+        ],
+        'prelude_spell_data': {},
+        'counter_spell_weights': [
+            (None, 2),
+            ('Dump Cards', 2),
             ('Forced Deal', 4),
             ('Poison', 5),
             ('Health Boost', 5),
@@ -540,24 +593,27 @@ AI_DEFENCE_GENERATION_RULES = {
         'auto_gamble': True,
         'auto_gamble_threshold': 8,
     },
-    # Tier 3: high-pressure fortress/elite economy with stacked support.
-    3: {
-        'core_roles': ['maharaja', 'farm_large', 'military_elite', 'manufactory', 'healer', 'material'],
-        'optional_count_range': (3, 4),
+    # Tier 4: 4 castle, military-tilted optional pool. (~ legacy tier 3 power.)
+    4: {
+        'core_roles': ['maharaja', 'farm_large'],
+        'optional_count_range': (3, 6),
         'optional_role_weights': [
-            ('archer', 3),
-            ('wall_cavalry', 3),
+            ('farm_small', 1),
+            ('farm_large', 2),
             ('temple', 2),
-            ('military_elite', 2),
-            ('farm_large', 1),
-            ('maharaja', 1),
+            ('manufactory', 3),
+            ('healer', 3),
+            ('material', 2),
+            ('military_basic', 3),
+            ('military_elite', 4),
+            ('archer', 3),
+            ('wall_cavalry', 4),
         ],
-        'number_ranks': ['10'],
-        'battle_plan': 'apex',
+        'number_ranks': ['9', '10'],
+        'battle_plan': 'overlord',
         'core_cross_color_chance': 0.28,
         'optional_suit_weights': {'primary': 5, 'same_color': 2, 'opposite_color': 3},
-        'black_land_fortress_free_chance': 0.15,
-        # T3: heavy pressure, small "no spell" chance for variety.
+        'black_land_fortress_free_chance': 0.12,
         'prelude_spell_weights': [
             (None, 1),
             ('Dump Cards', 2),
@@ -580,45 +636,35 @@ AI_DEFENCE_GENERATION_RULES = {
         'auto_gamble': True,
         'auto_gamble_threshold': 7,
     },
-    # Tier 4: almost unbeatable stack (deny + burst + high synergies).
-    4: {
-        'core_roles': [
-            'maharaja',
-            'farm_large',
-            'military_elite',
-            'wall_cavalry',
-            'archer',
-            'manufactory',
-            'healer',
-            'temple',
-            'material',
-        ],
-        'optional_count_range': (4, 6),
+    # Tier 5: 5 castle, mixed-suit fortress+army common. (~ legacy tier 4 power.)
+    5: {
+        'core_roles': ['maharaja', 'farm_large'],
+        'optional_count_range': (4, 7),
         'optional_role_weights': [
-            ('military_elite', 4),
-            ('wall_cavalry', 4),
-            ('archer', 4),
+            ('farm_small', 1),
+            ('farm_large', 2),
+            ('temple', 2),
             ('manufactory', 3),
             ('healer', 3),
-            ('temple', 3),
-            ('farm_large', 2),
             ('material', 2),
-            ('maharaja', 1),
-            ('king', 1),
+            ('military_basic', 3),
+            ('military_elite', 4),
+            ('archer', 4),
+            ('wall_cavalry', 5),
         ],
         'number_ranks': ['10'],
         'battle_plan': 'overlord',
-        'core_cross_color_chance': 0.25,
-        'optional_suit_weights': {'primary': 6, 'same_color': 2, 'opposite_color': 2},
-        'black_land_fortress_free_chance': 0.08,
-        # T4: always casts; weighted toward devastating choices.
+        'core_cross_color_chance': 0.30,
+        'optional_suit_weights': {'primary': 4, 'same_color': 2, 'opposite_color': 4},
+        'black_land_fortress_free_chance': 0.10,
         'prelude_spell_weights': [
-            ('Dump Cards', 2),
+            (None, 1),
+            ('Dump Cards', 1),
             ('Forced Deal', 2),
             ('Poison', 4),
             ('Health Boost', 4),
             ('Peasant War', 4),
-            ('Civil War', 4),
+            ('Civil War', 5),
             ('Explosion', 5),
         ],
         'prelude_spell_data': {},
@@ -631,6 +677,45 @@ AI_DEFENCE_GENERATION_RULES = {
         'counter_spell_data': {},
         'auto_gamble': True,
         'auto_gamble_threshold': 6,
+    },
+    # Tier 6: 6 castle, top-tier military/fortress dominance, no "no-spell".
+    6: {
+        'core_roles': ['maharaja', 'farm_large'],
+        'optional_count_range': (5, 9),
+        'optional_role_weights': [
+            ('farm_small', 1),
+            ('farm_large', 2),
+            ('temple', 3),
+            ('manufactory', 4),
+            ('healer', 4),
+            ('material', 2),
+            ('military_basic', 3),
+            ('military_elite', 5),
+            ('archer', 4),
+            ('wall_cavalry', 5),
+        ],
+        'number_ranks': ['10'],
+        'battle_plan': 'overlord',
+        'core_cross_color_chance': 0.32,
+        'optional_suit_weights': {'primary': 4, 'same_color': 2, 'opposite_color': 4},
+        'black_land_fortress_free_chance': 0.08,
+        'prelude_spell_weights': [
+            ('Forced Deal', 2),
+            ('Poison', 4),
+            ('Health Boost', 4),
+            ('Peasant War', 5),
+            ('Civil War', 6),
+            ('Explosion', 6),
+        ],
+        'prelude_spell_data': {},
+        'counter_spell_weights': [
+            ('Forced Deal', 3),
+            ('Poison', 7),
+            ('Health Boost', 7),
+        ],
+        'counter_spell_data': {},
+        'auto_gamble': True,
+        'auto_gamble_threshold': 5,
     },
 }
 

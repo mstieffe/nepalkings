@@ -35,7 +35,8 @@ FIELD_TITLE_PADDING = int(0.008 * SCREEN_HEIGHT)
 
 # Board titles ("YOU" / "OPPONENT")
 FIELD_BOARD_TITLE_FONT_SIZE = FS_HEADING if _IS_MOBILE else int(FS_HEADING * 1.08)  # was int(0.028 * _FS)  →  0.026 * 1.08 ≈ 0.028
-FIELD_BOARD_TITLE_COLOR = FIELD_BORDER_COLOR  # Match border color
+# Bright grey for contrast against the dark parchment background.
+FIELD_BOARD_TITLE_COLOR = (210, 200, 188)
 FIELD_BOARD_TITLE_Y_OFFSET = int(0.00 * SCREEN_HEIGHT)  # Offset above the field
 
 # Slot icons for compartment backgrounds

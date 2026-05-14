@@ -8,6 +8,11 @@ import logging
 from datetime import datetime, timezone, timedelta
 from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ConquerTactic, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom, KingdomNotification, KingdomLootEvent
 from game_service.deck_manager import DeckManager
+from game_service.conquer_tactics_idempotency import (
+    game_lock as _conquer_game_lock,
+    get_cached_response as _conquer_idem_get,
+    store_response as _conquer_idem_store,
+)
 from routes.auth import require_token, verify_player_ownership
 from ai.defence.config import AI_DEFENCE_RANK_VALUES
 from ai.defence.generator import get_ai_defence_template_for_land
@@ -27,6 +32,187 @@ def _is_tactics_hand_conquer(game):
         and game.mode == 'conquer'
         and (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
     )
+
+
+# --- Conquer per-round move timer (human players only) ------------------
+# Each human player gets up to ``CONQUER_ROUND_TIMEOUT_SEC`` seconds per
+# battle round to play a tactic. Authoritative server-side deadline is
+# tracked in-memory keyed by game id and battle round. When exceeded we
+# auto-play a random available tactic (or auto-skip if none).
+import time as _time
+CONQUER_ROUND_TIMEOUT_SEC = 60
+_conquer_round_deadlines = {}  # {game_id: (round_idx, deadline_unix_ts)}
+_conquer_timeout_last_check = {}  # {game_id: last_check_unix_ts}
+
+
+def _ensure_conquer_round_deadline(game):
+    """Ensure an active 60s deadline exists for the current battle round.
+
+    Returns the deadline unix timestamp, or ``None`` if no timer applies
+    (e.g. duel, legacy battle_move conquer, pre-battle, or finished).
+    """
+    if not _is_tactics_hand_conquer(game):
+        return None
+    if not getattr(game, 'battle_confirmed', False):
+        return None
+    if getattr(game, 'last_battle_result', None):
+        return None
+    round_idx = int(getattr(game, 'battle_round', 0) or 0)
+    if round_idx not in (0, 1, 2):
+        return None
+    entry = _conquer_round_deadlines.get(game.id)
+    if entry is None or entry[0] != round_idx:
+        deadline = _time.time() + CONQUER_ROUND_TIMEOUT_SEC
+        _conquer_round_deadlines[game.id] = (round_idx, deadline)
+        return deadline
+    return entry[1]
+
+
+def _conquer_round_deadline_for(game):
+    entry = _conquer_round_deadlines.get(getattr(game, 'id', None))
+    if entry is None:
+        return None
+    round_idx = int(getattr(game, 'battle_round', 0) or 0)
+    if entry[0] != round_idx:
+        return None
+    return entry[1]
+
+
+def _human_players_pending_in_current_round(game):
+    """Return list of human Player objects who have not played the active
+    conquer round's tactic yet."""
+    if not _is_tactics_hand_conquer(game):
+        return []
+    round_idx = int(getattr(game, 'battle_round', 0) or 0)
+    if round_idx not in (0, 1, 2):
+        return []
+    pending = []
+    for p in getattr(game, 'players', []) or []:
+        user = db.session.get(User, getattr(p, 'user_id', None))
+        if user is None or getattr(user, 'is_ai', False):
+            continue
+        played = ConquerTactic.query.filter_by(
+            game_id=game.id,
+            player_id=p.id,
+            status='played',
+            played_round=round_idx,
+        ).first()
+        if played is None:
+            pending.append(p)
+    return pending
+
+
+def _all_players_pending_in_current_round(game):
+    """Return every player (human or AI) that has not yet played the active
+    conquer round's tactic. Used by the round-timeout fallback so an AI
+    that fails to act in time is auto-played just like a human would be.
+    """
+    if not _is_tactics_hand_conquer(game):
+        return []
+    round_idx = int(getattr(game, 'battle_round', 0) or 0)
+    if round_idx not in (0, 1, 2):
+        return []
+    pending = []
+    for p in getattr(game, 'players', []) or []:
+        played = ConquerTactic.query.filter_by(
+            game_id=game.id,
+            player_id=p.id,
+            status='played',
+            played_round=round_idx,
+        ).first()
+        if played is None:
+            pending.append(p)
+    return pending
+
+
+def _auto_play_random_tactic_for_player(game, player):
+    """Pick a random available, non-Call tactic and mark it played for the
+    given player. Falls back to recording a skipped round if none exist.
+    """
+    round_idx = int(getattr(game, 'battle_round', 0) or 0)
+    available = ConquerTactic.query.filter_by(
+        game_id=game.id,
+        player_id=player.id,
+        status='available',
+        played_round=None,
+    ).all()
+    # Skip Call-style tactics in random selection — they require a target.
+    pool = [t for t in available if (t.family_name or '').lower() != 'call']
+    if not pool:
+        # Record this round as skipped for the player.
+        skipped = dict(game.battle_skipped_rounds or {})
+        rounds = list(skipped.get(str(player.id)) or [])
+        if round_idx not in rounds:
+            rounds.append(round_idx)
+        skipped[str(player.id)] = rounds
+        game.battle_skipped_rounds = skipped
+        flag_modified(game, 'battle_skipped_rounds')
+        return None
+    chosen = random.choice(pool)
+    chosen.status = 'played'
+    chosen.played_round = round_idx
+    return chosen
+
+
+def _check_conquer_round_timeout(game):
+    """If the active round's deadline has elapsed, auto-finalize any pending
+    human players (random available tactic, or skipped round).
+
+    Throttled to at most once every 2 seconds per game to keep the polling
+    path cheap (was causing visible client lag when invoked on every poll).
+    """
+    deadline = _conquer_round_deadline_for(game)
+    if deadline is None:
+        return
+    now = _time.time()
+    if now < deadline:
+        return
+    last = _conquer_timeout_last_check.get(game.id, 0.0)
+    if now - last < 2.0:
+        return
+    _conquer_timeout_last_check[game.id] = now
+    pending_humans = _human_players_pending_in_current_round(game)
+    pending_all = _all_players_pending_in_current_round(game)
+    if not pending_all:
+        return
+    try:
+        with _conquer_game_lock(game.id):
+            # Re-check after acquiring lock — round may have advanced.
+            still_pending_humans = _human_players_pending_in_current_round(game)
+            previous_round = int(getattr(game, 'battle_round', 0) or 0)
+            for player in still_pending_humans:
+                # Humans that ran out of time get a random available tactic
+                # auto-played and the battle turn pointer advanced.
+                _auto_play_random_tactic_for_player(game, player)
+                try:
+                    _advance_conquer_tactic_turn(game, player.id)
+                except Exception:
+                    logger.exception(
+                        'Failed to advance conquer turn for auto-played tactic')
+            if still_pending_humans:
+                try:
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+                else:
+                    # If the round advanced, start a fresh deadline for the
+                    # next round so the timer visibly resets client-side.
+                    new_round = int(getattr(game, 'battle_round', 0) or 0)
+                    if new_round != previous_round:
+                        _conquer_round_deadlines.pop(game.id, None)
+                        _ensure_conquer_round_deadline(game)
+    except Exception:
+        logger.exception('Conquer round timeout finalization failed')
+        return
+
+    # After humans are unstuck, the round may now need the AI to act
+    # (its turn is up). Trigger the AI worker so the *real* AI policy
+    # (gamble, combine, optimal play) runs — not a random tactic.
+    try:
+        from ai import ai_worker
+        ai_worker.trigger_ai_if_needed(game.id)
+    except Exception:
+        logger.exception('Failed to retrigger AI after conquer round timeout')
 
 
 def _get_tactic_card(tactic, *, secondary=False):
@@ -982,6 +1168,14 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
 
     # Award gold: winner gets 2× stake, loser gets nothing (already bet their stake)
     gold_awarded = stake * 2
+
+    # Sigil achievement check (duel win — best-effort, never fail the game).
+    try:
+        from kingdom_service import apply_sigil_unlocks
+        if winner_player.user_id:
+            apply_sigil_unlocks(winner_player.user_id)
+    except Exception:
+        pass
     winner_user = db.session.get(User, winner_player.user_id)
     loser_user = db.session.get(User, loser_player.user_id)
 
@@ -1399,6 +1593,10 @@ def _get_opponent_turn_summary(game, current_player_id):
                     'effect_data': sp.effect_data,
                     'target_figure_id': sp.target_figure_id,
                     'target_figure_name': target_name,
+                    'target_figure_snapshot': (
+                        effect_data.get('target_figure_snapshot')
+                        or effect_data.get('destroyed_figure_snapshot')
+                    ),
                 }
                 if sp.player_id == current_player_id:
                     own_spells.append(spell_info)
@@ -1777,8 +1975,18 @@ def get_game():
         # Check if Blitzkrieg ceasefire should end (runs on every poll)
         _check_and_update_ceasefire(game)
 
+        # Conquer per-round 60s move timer: ensure deadline + auto-finalize
+        # if expired for any human player that has not played yet.
+        _ensure_conquer_round_deadline(game)
+        _check_conquer_round_timeout(game)
+        deadline = _conquer_round_deadline_for(game)
+
+        serialized = game.serialize()
+        if deadline is not None:
+            serialized['conquer_round_deadline_ts'] = deadline
+            serialized['conquer_round_timeout_sec'] = CONQUER_ROUND_TIMEOUT_SEC
         return jsonify({
-            'game': game.serialize()
+            'game': serialized
         })
     except Exception as e:
         db.session.rollback()
@@ -3175,16 +3383,6 @@ def conquer_select_own_defender():
         if _figure_has_family_skill(figure, 'cannot_be_targeted'):
             return jsonify({'success': False, 'message': f'{figure.name} cannot be targeted'}), 400
 
-        # Enforce must_be_attacked among own figures
-        own_mandatory = _must_be_attacked_defenders(game, player_id)
-        if not game.defending_figure_id and own_mandatory and figure.id not in {f.id for f in own_mandatory}:
-            forced_names = ', '.join(sorted(f.name for f in own_mandatory))
-            return jsonify({
-                'success': False,
-                'message': f'Must attack {forced_names} before selecting another defender',
-                'reason': 'must_be_attacked',
-            }), 400
-
         # Checkmate: can only be selected if no other legal non-checkmate defender exists
         if getattr(figure, 'checkmate', False):
             other_own = Figure.query.filter(
@@ -3373,57 +3571,76 @@ def conquer_withdraw():
         data = request.json
         game_id = data['game_id']
         player_id = data['player_id']
+        client_action_id = data.get('client_action_id')
 
         err = verify_player_ownership(player_id)
         if err:
             return err
 
-        game = db.session.get(Game, game_id)
-        if not game:
-            return jsonify({'success': False, 'message': 'Game not found'}), 404
+        cached = _conquer_idem_get(game_id, player_id,
+                                  'conquer_withdraw', client_action_id)
+        if cached is not None:
+            return jsonify(cached)
 
-        finished_conquer = _serialize_finished_conquer_result(game)
-        if finished_conquer:
-            return jsonify(finished_conquer)
+        with _conquer_game_lock(game_id):
+            cached = _conquer_idem_get(game_id, player_id,
+                                      'conquer_withdraw', client_action_id)
+            if cached is not None:
+                return jsonify(cached)
 
-        if game.mode != 'conquer':
-            return jsonify({
-                'success': False,
-                'message': 'Withdraw is only available in conquer battles',
-            }), 400
+            game = db.session.get(Game, game_id)
+            if not game:
+                return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-        attacker = _conquer_attacker_player(game)
-        if not attacker or attacker.id != player_id:
-            return jsonify({
-                'success': False,
-                'message': 'Only the conquer attacker can withdraw',
-            }), 403
+            finished_conquer = _serialize_finished_conquer_result(game)
+            if finished_conquer:
+                _conquer_idem_store(game_id, player_id,
+                                   'conquer_withdraw', client_action_id,
+                                   finished_conquer)
+                return jsonify(finished_conquer)
 
-        defender = _conquer_original_defender_player(game)
-        if defender is None:
-            return jsonify({
-                'success': False,
-                'message': 'Could not determine defender',
-            }), 400
+            if game.mode != 'conquer':
+                return jsonify({
+                    'success': False,
+                    'message': 'Withdraw is only available in conquer battles',
+                }), 400
 
-        attacker_user = db.session.get(User, attacker.user_id)
-        defender_user = db.session.get(User, defender.user_id)
-        attacker_name = attacker_user.username if attacker_user else f'Player {attacker.id}'
-        defender_name = defender_user.username if defender_user else 'Defender'
+            attacker = _conquer_attacker_player(game)
+            if not attacker or attacker.id != player_id:
+                return jsonify({
+                    'success': False,
+                    'message': 'Only the conquer attacker can withdraw',
+                }), 403
 
-        return jsonify(_resolve_conquer_auto_loss(
-            game,
-            winner_player=defender,
-            loser_player=attacker,
-            requesting_player=attacker,
-            log_message=(
-                f'{attacker_name} withdrew from the conquest. '
-                f'{defender_name} holds the land.'
-            ),
-            log_type='auto_loss',
-            auto_loss_reason='withdraw',
-            auto_loss_detail=attacker_name,
-        ))
+            defender = _conquer_original_defender_player(game)
+            if defender is None:
+                return jsonify({
+                    'success': False,
+                    'message': 'Could not determine defender',
+                }), 400
+
+            attacker_user = db.session.get(User, attacker.user_id)
+            defender_user = db.session.get(User, defender.user_id)
+            attacker_name = attacker_user.username if attacker_user else f'Player {attacker.id}'
+            defender_name = defender_user.username if defender_user else 'Defender'
+
+            result = _resolve_conquer_auto_loss(
+                game,
+                winner_player=defender,
+                loser_player=attacker,
+                requesting_player=attacker,
+                log_message=(
+                    f'{attacker_name} withdrew from the conquest. '
+                    f'{defender_name} holds the land.'
+                ),
+                log_type='auto_loss',
+                auto_loss_reason='withdraw',
+                auto_loss_detail=attacker_name,
+            )
+            _conquer_idem_store(game_id, player_id,
+                               'conquer_withdraw', client_action_id,
+                               result)
+            return jsonify(result)
     except Exception as e:
         db.session.rollback()
         logger.exception(f"[CONQUER_WITHDRAW] Error: {e}")
@@ -4480,6 +4697,13 @@ def _compute_move_effective_value(move, all_figures, game,
             if bm_suit == fig_suit:
                 return fig_power + healer + bm_value
             return fig_power + healer
+        # Called figure was destroyed (or moved off-board) between the play
+        # and resolution.  For tactics-hand conquer games the entire Call
+        # tactic should contribute zero — no base power, no buff, no suit
+        # bonus.  Legacy battle_move games keep the old behaviour (raw value
+        # only) to avoid retroactively changing finished duel/conquer math.
+        if isinstance(move, ConquerTactic):
+            return 0
     return bm_value
 
 
@@ -5073,6 +5297,45 @@ def _validate_conquer_tactic_family_rank(tactic):
     return None
 
 
+def _battle_player_skipped_round(game, player_id, round_idx):
+    skipped = game.battle_skipped_rounds or {}
+    rounds = skipped.get(str(player_id), [])
+    try:
+        round_key = str(int(round_idx))
+    except (TypeError, ValueError):
+        return False
+    return any(str(raw_round) == round_key for raw_round in rounds or [])
+
+
+def _battle_player_completed_round(game, player_id, round_idx):
+    round_idx = int(round_idx or 0)
+    if _battle_player_skipped_round(game, player_id, round_idx):
+        return True
+    if _is_tactics_hand_conquer(game):
+        return ConquerTactic.query.filter_by(
+            game_id=game.id,
+            player_id=player_id,
+            status='played',
+            played_round=round_idx,
+        ).first() is not None
+    return BattleMove.query.filter_by(
+        game_id=game.id,
+        player_id=player_id,
+        played_round=round_idx,
+    ).first() is not None
+
+
+def _battle_round_complete(game, round_idx):
+    players = list(game.players or [])
+    if len(players) < 2:
+        return False
+    return all(_battle_player_completed_round(game, p.id, round_idx) for p in players)
+
+
+def _battle_all_rounds_complete(game):
+    return all(_battle_round_complete(game, idx) for idx in (0, 1, 2))
+
+
 def _advance_conquer_tactic_turn(game, player_id):
     other_player = next((p for p in game.players if p.id != player_id), None)
     if not other_player:
@@ -5092,7 +5355,9 @@ def _advance_conquer_tactic_turn(game, player_id):
     if other_played or other_skipped:
         if current_round < 2:
             game.battle_round = current_round + 1
-        game.battle_turn_player_id = game.invader_player_id
+            game.battle_turn_player_id = game.invader_player_id
+        else:
+            game.battle_turn_player_id = None
     else:
         game.battle_turn_player_id = other_player.id
     return True
@@ -5121,6 +5386,7 @@ def play_conquer_tactic():
     player_id = data.get('player_id')
     tactic_id = data.get('tactic_id') or data.get('battle_move_id')
     call_figure_id = data.get('call_figure_id')
+    client_action_id = data.get('client_action_id')
 
     if not game_id or not player_id or not tactic_id:
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -5129,69 +5395,105 @@ def play_conquer_tactic():
     if err:
         return err
 
-    game = db.session.get(Game, game_id)
-    if not game:
-        return jsonify({'success': False, 'message': 'Game not found'}), 404
-    if not _is_tactics_hand_conquer(game):
-        return jsonify({'success': False, 'message': 'Game is not using conquer tactics'}), 400
-    if not game.battle_confirmed:
-        return jsonify({'success': False, 'message': 'Battle is not active'}), 400
-    if game.battle_turn_player_id != player_id:
-        return jsonify({'success': False, 'message': 'It is not your turn in the battle'}), 400
+    cached = _conquer_idem_get(game_id, player_id,
+                              'play_conquer_tactic', client_action_id)
+    if cached is not None:
+        return jsonify(cached)
 
-    tactic = db.session.get(ConquerTactic, tactic_id)
-    if not tactic:
-        return jsonify({'success': False, 'message': 'Tactic not found'}), 404
-    if tactic.game_id != game_id or tactic.player_id != player_id:
-        return jsonify({'success': False, 'message': 'Tactic does not belong to this player/game'}), 400
-    if tactic.status != 'available' or tactic.played_round is not None:
-        return jsonify({'success': False, 'message': 'Tactic is not available'}), 400
+    with _conquer_game_lock(game_id):
+        cached = _conquer_idem_get(game_id, player_id,
+                                  'play_conquer_tactic', client_action_id)
+        if cached is not None:
+            return jsonify(cached)
 
-    consistency_err = _validate_conquer_tactic_family_rank(tactic)
-    if consistency_err:
-        return jsonify({'success': False, 'message': consistency_err}), 400
+        game = db.session.get(Game, game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+        if not _is_tactics_hand_conquer(game):
+            return jsonify({'success': False, 'message': 'Game is not using conquer tactics'}), 400
+        if not game.battle_confirmed:
+            return jsonify({'success': False, 'message': 'Battle is not active'}), 400
 
-    call_err = _validate_conquer_tactic_call_figure(tactic, call_figure_id, player_id, game_id)
-    if call_err:
-        return jsonify({'success': False, 'message': call_err}), 400
+        tactic = db.session.get(ConquerTactic, tactic_id)
+        if not tactic:
+            return jsonify({'success': False, 'message': 'Tactic not found'}), 404
+        if tactic.game_id != game_id or tactic.player_id != player_id:
+            return jsonify({'success': False, 'message': 'Tactic does not belong to this player/game'}), 400
 
-    tactic.status = 'played'
-    tactic.played_round = int(game.battle_round or 0)
-    if call_figure_id:
-        tactic.call_figure_id = call_figure_id
+        # Idempotent replay path: if a previous request already marked this
+        # tactic as played by this player, treat the retry as a success and
+        # return current battle state instead of "not your turn".
+        if tactic.status == 'played' and tactic.played_round is not None:
+            response_body = {
+                'success': True,
+                'tactic': tactic.serialize(),
+                'battle_round': game.battle_round,
+                'battle_turn_player_id': game.battle_turn_player_id,
+                'battle_complete': _battle_all_rounds_complete(game),
+                'game': game.serialize(),
+                'already_played': True,
+            }
+            _conquer_idem_store(game_id, player_id,
+                               'play_conquer_tactic', client_action_id,
+                               response_body)
+            return jsonify(response_body)
 
-    card = _get_tactic_card(tactic)
-    if card:
-        card.in_deck = True
-    card_b = _get_tactic_card(tactic, secondary=True)
-    if card_b:
-        card_b.in_deck = True
+        if game.battle_turn_player_id != player_id:
+            return jsonify({'success': False, 'message': 'It is not your turn in the battle'}), 400
 
-    if not _advance_conquer_tactic_turn(game, player_id):
-        return jsonify({'success': False, 'message': 'Opponent not found'}), 500
+        if tactic.status != 'available' or tactic.played_round is not None:
+            return jsonify({'success': False, 'message': 'Tactic is not available'}), 400
 
-    player = db.session.get(Player, player_id)
-    user = db.session.get(User, player.user_id) if player else None
-    username = user.username if user else f"Player {player_id}"
-    log_entry = LogEntry(
-        game_id=game_id,
-        player_id=player_id,
-        round_number=game.current_round,
-        turn_number=tactic.played_round + 1,
-        message=f"{username} played {tactic.family_name} (power {tactic.value}) in battle round {tactic.played_round + 1}.",
-        author=username,
-        type='conquer_tactic',
-    )
-    db.session.add(log_entry)
-    db.session.commit()
+        consistency_err = _validate_conquer_tactic_family_rank(tactic)
+        if consistency_err:
+            return jsonify({'success': False, 'message': consistency_err}), 400
 
-    return jsonify({
-        'success': True,
-        'tactic': tactic.serialize(),
-        'battle_round': game.battle_round,
-        'battle_turn_player_id': game.battle_turn_player_id,
-        'game': game.serialize(),
-    })
+        call_err = _validate_conquer_tactic_call_figure(tactic, call_figure_id, player_id, game_id)
+        if call_err:
+            return jsonify({'success': False, 'message': call_err}), 400
+
+        tactic.status = 'played'
+        tactic.played_round = int(game.battle_round or 0)
+        if call_figure_id:
+            tactic.call_figure_id = call_figure_id
+
+        card = _get_tactic_card(tactic)
+        if card:
+            card.in_deck = True
+        card_b = _get_tactic_card(tactic, secondary=True)
+        if card_b:
+            card_b.in_deck = True
+
+        if not _advance_conquer_tactic_turn(game, player_id):
+            return jsonify({'success': False, 'message': 'Opponent not found'}), 500
+
+        player = db.session.get(Player, player_id)
+        user = db.session.get(User, player.user_id) if player else None
+        username = user.username if user else f"Player {player_id}"
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=tactic.played_round + 1,
+            message=f"{username} played {tactic.family_name} (power {tactic.value}) in battle round {tactic.played_round + 1}.",
+            author=username,
+            type='conquer_tactic',
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        response_body = {
+            'success': True,
+            'tactic': tactic.serialize(),
+            'battle_round': game.battle_round,
+            'battle_turn_player_id': game.battle_turn_player_id,
+            'battle_complete': _battle_all_rounds_complete(game),
+            'game': game.serialize(),
+        }
+        _conquer_idem_store(game_id, player_id,
+                           'play_conquer_tactic', client_action_id,
+                           response_body)
+        return jsonify(response_body)
 
 
 @games.route('/gamble_conquer_tactic', methods=['POST'])
@@ -5202,6 +5504,7 @@ def gamble_conquer_tactic():
     game_id = data.get('game_id')
     player_id = data.get('player_id')
     tactic_id = data.get('tactic_id') or data.get('battle_move_id')
+    client_action_id = data.get('client_action_id')
 
     if not all([game_id, player_id, tactic_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -5210,6 +5513,22 @@ def gamble_conquer_tactic():
     if err:
         return err
 
+    cached = _conquer_idem_get(game_id, player_id,
+                              'gamble_conquer_tactic', client_action_id)
+    if cached is not None:
+        return jsonify(cached)
+
+    with _conquer_game_lock(game_id):
+        cached = _conquer_idem_get(game_id, player_id,
+                                  'gamble_conquer_tactic', client_action_id)
+        if cached is not None:
+            return jsonify(cached)
+
+        return _gamble_conquer_tactic_impl(
+            game_id, player_id, tactic_id, client_action_id)
+
+
+def _gamble_conquer_tactic_impl(game_id, player_id, tactic_id, client_action_id):
     game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
@@ -5294,13 +5613,17 @@ def gamble_conquer_tactic():
     flag_modified(game, 'battle_gamble_counts')
     db.session.commit()
 
-    return jsonify({
+    response_body = {
         'success': True,
         'sacrificed': sacrificed_data,
         'new_tactics': new_tactics,
         'new_moves': new_tactics,
         'game': game.serialize(),
-    })
+    }
+    _conquer_idem_store(game_id, player_id,
+                       'gamble_conquer_tactic', client_action_id,
+                       response_body)
+    return jsonify(response_body)
 
 
 @games.route('/combine_conquer_tactics', methods=['POST'])
@@ -5312,6 +5635,7 @@ def combine_conquer_tactics():
     player_id = data.get('player_id')
     tactic_id_a = data.get('tactic_id_a') or data.get('move_id_a')
     tactic_id_b = data.get('tactic_id_b') or data.get('move_id_b')
+    client_action_id = data.get('client_action_id')
 
     if not all([game_id, player_id, tactic_id_a, tactic_id_b]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
@@ -5319,58 +5643,74 @@ def combine_conquer_tactics():
     err = verify_player_ownership(player_id)
     if err:
         return err
-    game = db.session.get(Game, game_id)
-    if not game or not _is_tactics_hand_conquer(game):
-        return jsonify({'success': False, 'message': 'Game is not using conquer tactics'}), 400
 
-    a = db.session.get(ConquerTactic, tactic_id_a)
-    b = db.session.get(ConquerTactic, tactic_id_b)
-    if not a or not b or a.id == b.id:
-        return jsonify({'success': False, 'message': 'Invalid tactics'}), 400
-    for tactic in (a, b):
-        if tactic.game_id != game_id or tactic.player_id != player_id:
-            return jsonify({'success': False, 'message': 'Tactic does not belong to this player'}), 400
-        if tactic.status != 'available' or tactic.played_round is not None:
-            return jsonify({'success': False, 'message': 'Only available tactics can be combined'}), 400
-        if tactic.family_name != 'Dagger':
-            return jsonify({'success': False, 'message': 'Only Dagger tactics can be combined'}), 400
-    if not _same_conquer_tactic_colour(a.suit, b.suit):
-        return jsonify({'success': False, 'message': 'Daggers must be the same colour to combine'}), 400
+    cached = _conquer_idem_get(game_id, player_id,
+                              'combine_conquer_tactics', client_action_id)
+    if cached is not None:
+        return jsonify(cached)
 
-    combined = ConquerTactic(
-        game_id=game_id,
-        player_id=player_id,
-        card_id=a.card_id,
-        card_type=a.card_type,
-        card_id_b=b.card_id,
-        card_type_b=b.card_type,
-        family_name='Double Dagger',
-        suit=a.suit,
-        suit_b=b.suit,
-        rank=f'{a.rank}+{b.rank}',
-        value=(a.value or 0) + (b.value or 0),
-        value_a=a.value,
-        value_b=b.value,
-        source='combine',
-        status='available',
-        source_tactic_id_a=a.id,
-        source_tactic_id_b=b.id,
-        sort_order=min(a.sort_order or 0, b.sort_order or 0),
-    )
-    a.status = 'discarded'
-    b.status = 'discarded'
-    db.session.add(combined)
-    db.session.flush()
-    combined_data = combined.serialize()
-    db.session.commit()
+    with _conquer_game_lock(game_id):
+        cached = _conquer_idem_get(game_id, player_id,
+                                  'combine_conquer_tactics', client_action_id)
+        if cached is not None:
+            return jsonify(cached)
 
-    return jsonify({
-        'success': True,
-        'combined_tactic': combined_data,
-        'combined_move': combined_data,
-        'removed_ids': [a.id, b.id],
-        'game': game.serialize(),
-    })
+        game = db.session.get(Game, game_id)
+        if not game or not _is_tactics_hand_conquer(game):
+            return jsonify({'success': False, 'message': 'Game is not using conquer tactics'}), 400
+
+        a = db.session.get(ConquerTactic, tactic_id_a)
+        b = db.session.get(ConquerTactic, tactic_id_b)
+        if not a or not b or a.id == b.id:
+            return jsonify({'success': False, 'message': 'Invalid tactics'}), 400
+        for tactic in (a, b):
+            if tactic.game_id != game_id or tactic.player_id != player_id:
+                return jsonify({'success': False, 'message': 'Tactic does not belong to this player'}), 400
+            if tactic.status != 'available' or tactic.played_round is not None:
+                return jsonify({'success': False, 'message': 'Only available tactics can be combined'}), 400
+            if tactic.family_name != 'Dagger':
+                return jsonify({'success': False, 'message': 'Only Dagger tactics can be combined'}), 400
+        if not _same_conquer_tactic_colour(a.suit, b.suit):
+            return jsonify({'success': False, 'message': 'Daggers must be the same colour to combine'}), 400
+
+        combined = ConquerTactic(
+            game_id=game_id,
+            player_id=player_id,
+            card_id=a.card_id,
+            card_type=a.card_type,
+            card_id_b=b.card_id,
+            card_type_b=b.card_type,
+            family_name='Double Dagger',
+            suit=a.suit,
+            suit_b=b.suit,
+            rank=f'{a.rank}+{b.rank}',
+            value=(a.value or 0) + (b.value or 0),
+            value_a=a.value,
+            value_b=b.value,
+            source='combine',
+            status='available',
+            source_tactic_id_a=a.id,
+            source_tactic_id_b=b.id,
+            sort_order=min(a.sort_order or 0, b.sort_order or 0),
+        )
+        a.status = 'discarded'
+        b.status = 'discarded'
+        db.session.add(combined)
+        db.session.flush()
+        combined_data = combined.serialize()
+        db.session.commit()
+
+        response_body = {
+            'success': True,
+            'combined_tactic': combined_data,
+            'combined_move': combined_data,
+            'removed_ids': [a.id, b.id],
+            'game': game.serialize(),
+        }
+        _conquer_idem_store(game_id, player_id,
+                           'combine_conquer_tactics', client_action_id,
+                           response_body)
+        return jsonify(response_body)
 
 
 @games.route('/dismantle_conquer_tactic', methods=['POST'])
@@ -5381,44 +5721,91 @@ def dismantle_conquer_tactic():
     game_id = data.get('game_id')
     player_id = data.get('player_id')
     tactic_id = data.get('tactic_id') or data.get('battle_move_id')
+    client_action_id = data.get('client_action_id')
 
     if not all([game_id, player_id, tactic_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
     err = verify_player_ownership(player_id)
     if err:
         return err
-    game = db.session.get(Game, game_id)
-    if not game or not _is_tactics_hand_conquer(game):
-        return jsonify({'success': False, 'message': 'Game is not using conquer tactics'}), 400
 
-    combined = db.session.get(ConquerTactic, tactic_id)
-    if not combined or combined.game_id != game_id or combined.player_id != player_id:
-        return jsonify({'success': False, 'message': 'Tactic not found'}), 404
-    if combined.source != 'combine' or combined.status != 'available' or combined.played_round is not None:
-        return jsonify({'success': False, 'message': 'Only unplayed combined tactics can be dismantled'}), 400
+    cached = _conquer_idem_get(game_id, player_id,
+                              'dismantle_conquer_tactic', client_action_id)
+    if cached is not None:
+        return jsonify(cached)
 
-    restored = []
-    for source_id in (combined.source_tactic_id_a, combined.source_tactic_id_b):
-        source = db.session.get(ConquerTactic, source_id) if source_id else None
-        if source and source.game_id == game_id and source.player_id == player_id:
+    with _conquer_game_lock(game_id):
+        cached = _conquer_idem_get(game_id, player_id,
+                                  'dismantle_conquer_tactic', client_action_id)
+        if cached is not None:
+            return jsonify(cached)
+
+        game = db.session.get(Game, game_id)
+        if not game or not _is_tactics_hand_conquer(game):
+            return jsonify({'success': False, 'message': 'Game is not using conquer tactics'}), 400
+
+        combined = db.session.get(ConquerTactic, tactic_id)
+        if not combined or combined.game_id != game_id or combined.player_id != player_id:
+            return jsonify({'success': False, 'message': 'Tactic not found'}), 404
+        if combined.source != 'combine' or combined.status != 'available' or combined.played_round is not None:
+            return jsonify({'success': False, 'message': 'Only unplayed combined tactics can be dismantled'}), 400
+
+        restored = []
+        for source_id in (combined.source_tactic_id_a, combined.source_tactic_id_b):
+            source = db.session.get(ConquerTactic, source_id) if source_id else None
+            if not source or source.game_id != game_id or source.player_id != player_id:
+                continue
+            # Validate the underlying card(s) are still in a legal hand state
+            # before restoring.  Cards that were spell-purged or moved to a
+            # figure must not be revived as available tactics.
+            card = _get_tactic_card(source)
+            if not card:
+                continue
+            if getattr(card, 'part_of_figure', False):
+                continue
+            if getattr(card, 'player_id', None) != player_id:
+                continue
+            # Secondary cards (Double Dagger sources should be singletons, but
+            # check defensively) must also still belong to the player.
+            card_b = _get_tactic_card(source, secondary=True)
+            if card_b is not None:
+                if getattr(card_b, 'part_of_figure', False):
+                    continue
+                if getattr(card_b, 'player_id', None) != player_id:
+                    continue
             source.status = 'available'
             source.played_round = None
             source.call_figure_id = None
             restored.append(source.serialize())
-    if len(restored) != 2:
-        return jsonify({'success': False, 'message': 'Original tactics are no longer available'}), 400
+        if len(restored) != 2:
+            # Cannot restore both sources cleanly — mark combined as discarded
+            # so the player can re-gamble or skip the round instead of being
+            # silently stuck holding a phantom Double Dagger.
+            combined.status = 'discarded'
+            db.session.commit()
+            return jsonify({
+                'success': False,
+                'message': 'Original tactics are no longer available',
+                'restored_tactics': restored,
+                'restored_moves': restored,
+                'game': game.serialize(),
+            }), 400
 
-    removed_id = combined.id
-    db.session.delete(combined)
-    db.session.commit()
+        removed_id = combined.id
+        db.session.delete(combined)
+        db.session.commit()
 
-    return jsonify({
-        'success': True,
-        'restored_tactics': restored,
-        'restored_moves': restored,
-        'removed_id': removed_id,
-        'game': game.serialize(),
-    })
+        response_body = {
+            'success': True,
+            'restored_tactics': restored,
+            'restored_moves': restored,
+            'removed_id': removed_id,
+            'game': game.serialize(),
+        }
+        _conquer_idem_store(game_id, player_id,
+                           'dismantle_conquer_tactic', client_action_id,
+                           response_body)
+        return jsonify(response_body)
 
 @games.route('/play_battle_move', methods=['POST'])
 @require_token
@@ -5616,7 +6003,7 @@ def get_battle_state():
                         'played_round': None,
                     })
 
-        return jsonify({
+        payload = {
             'success': True,
             'battle_round': game.battle_round,
             'battle_turn_player_id': game.battle_turn_player_id,
@@ -5626,8 +6013,20 @@ def get_battle_state():
             'player_tactics': player_tactics,
             'opponent_tactics': opponent_tactics,
             'battle_skipped_rounds': game.battle_skipped_rounds or {},
+            'battle_complete': _battle_all_rounds_complete(game),
             'conquer_resolution_step': int(getattr(game, 'conquer_resolution_step', 0) or 0),
-        })
+        }
+        # When the conquer game has already finished (e.g. the client
+        # reconnected after the resolve flow completed), surface the
+        # cached result alongside the regular state.  The client uses
+        # this to route directly into the shared result dialogue
+        # without having to wait for another mutating request.
+        finished_conquer = _serialize_finished_conquer_result(game)
+        if finished_conquer:
+            for k, v in finished_conquer.items():
+                if k != 'success':
+                    payload[k] = v
+        return jsonify(payload)
 
     # Get all battle moves for this game
     all_moves = BattleMove.query.filter_by(game_id=game_id).all()
@@ -5658,6 +6057,7 @@ def get_battle_state():
         'player_moves': player_moves,
         'opponent_moves': opponent_moves,
         'battle_skipped_rounds': game.battle_skipped_rounds or {},
+        'battle_complete': _battle_all_rounds_complete(game),
     })
 
 
@@ -5689,13 +6089,30 @@ def skip_battle_turn():
     if not game.battle_confirmed:
         return jsonify({'success': False, 'message': 'Battle is not active'}), 400
 
+    if game.battle_turn_player_id is None and _battle_all_rounds_complete(game):
+        return jsonify({
+            'success': True,
+            'battle_round': game.battle_round,
+            'battle_turn_player_id': None,
+            'battle_skipped_rounds': game.battle_skipped_rounds or {},
+            'battle_complete': True,
+            'already_skipped': True,
+            'game': game.serialize(),
+        })
+
     if game.battle_turn_player_id != player_id:
         return jsonify({'success': False, 'message': 'It is not your turn in the battle'}), 400
 
     # Reject skip if the player still has playable moves/tactics.
     if _is_tactics_hand_conquer(game):
+        # Only count tactics that are both 'available' AND not yet played this
+        # battle. A row whose status is still 'available' but already has
+        # ``played_round`` set should never block the skip path.
         unplayed_count = ConquerTactic.query.filter_by(
-            game_id=game_id, player_id=player_id, status='available'
+            game_id=game_id,
+            player_id=player_id,
+            status='available',
+            played_round=None,
         ).count()
         skip_block_message = 'You must play a tactic — you still have available tactics'
     else:
@@ -5714,8 +6131,11 @@ def skip_battle_turn():
     pid_key = str(player_id)
     if pid_key not in skipped:
         skipped[pid_key] = []
-    if game.battle_round not in skipped[pid_key]:
-        skipped[pid_key].append(game.battle_round)
+    skip_round = int(game.battle_round or 0)
+    already_skipped = any(str(raw_round) == str(skip_round)
+                          for raw_round in skipped[pid_key] or [])
+    if not already_skipped:
+        skipped[pid_key].append(skip_round)
     game.battle_skipped_rounds = skipped
     flag_modified(game, 'battle_skipped_rounds')
 
@@ -5749,7 +6169,9 @@ def skip_battle_turn():
         # Both have played/skipped this round — advance to next round
         if game.battle_round < 2:
             game.battle_round += 1
-        game.battle_turn_player_id = game.invader_player_id
+            game.battle_turn_player_id = game.invader_player_id
+        else:
+            game.battle_turn_player_id = None
     else:
         # Switch turn to the other player
         game.battle_turn_player_id = other_player.id
@@ -5760,20 +6182,20 @@ def skip_battle_turn():
     player_obj = db.session.get(Player, player_id)
     user = db.session.get(User, player_obj.user_id) if player_obj else None
     username = user.username if user else f"Player {player_id}"
-    skip_round = skipped[pid_key][-1]
-    log_entry = LogEntry(
-        game_id=game_id,
-        player_id=player_id,
-        round_number=game.current_round,
-        turn_number=skip_round + 1,
-        message=f"{username} skipped battle round {skip_round + 1} (no moves left).",
-        author=username,
-        type='battle_skip'
-    )
-    db.session.add(log_entry)
-    db.session.commit()
+    if not already_skipped:
+        log_entry = LogEntry(
+            game_id=game_id,
+            player_id=player_id,
+            round_number=game.current_round,
+            turn_number=skip_round + 1,
+            message=f"{username} skipped battle round {skip_round + 1} (no moves left).",
+            author=username,
+            type='battle_skip'
+        )
+        db.session.add(log_entry)
+        db.session.commit()
 
-    logger.info(f"[BATTLE_SKIP] Player {player_id} skipped round {skipped[pid_key][-1]}. "
+    logger.info(f"[BATTLE_SKIP] Player {player_id} skipped round {skip_round}. "
           f"Next turn: {game.battle_turn_player_id}, battle_round: {game.battle_round}")
 
     return jsonify({
@@ -5781,6 +6203,8 @@ def skip_battle_turn():
         'battle_round': game.battle_round,
         'battle_turn_player_id': game.battle_turn_player_id,
         'battle_skipped_rounds': game.battle_skipped_rounds or {},
+        'battle_complete': _battle_all_rounds_complete(game),
+        'already_skipped': already_skipped,
         'game': game.serialize(),
     })
 
@@ -6261,21 +6685,28 @@ def _template_figure_key_cards(template):
 
 
 def _conquer_loot_base_quota(land_tier):
-    """Return ``(key_cards, support_cards)`` base loot quota for a land tier."""
+    """Return ``(key_cards, number_cards)`` base loot quota for a land tier."""
     try:
         tier = max(1, int(land_tier or 1))
     except (TypeError, ValueError):
         tier = 1
     # The rule is intentionally simple and scales linearly: tier 1 loots up to
-    # 1 key + 1 support card, tier 2 up to 2 + 2, etc.  This also handles
-    # future tier-4 maps without another branch.
+    # 1 key + 1 number card, tier 2 up to 2 + 2, ..., tier 6 up to 6 + 6.
     return tier, tier
 
 
-def _loot_role_bucket(role):
-    if hasattr(role, 'value'):
-        role = role.value
-    return 'key' if str(role or '').lower() == 'key' else 'support'
+def _loot_card_bucket(rank):
+    """Return the loot bucket ('key' or 'number') for a card rank.
+
+    Buckets are rank-only: every card belongs to exactly one bucket.  Unknown
+    ranks default to ``'number'`` defensively.
+    """
+    r = str(rank or '').strip()
+    if r in settings.LOOT_KEY_RANKS:
+        return 'key'
+    if r in settings.LOOT_NUMBER_RANKS:
+        return 'number'
+    return 'number'
 
 
 def _normalise_loot_card(card, *, source, role=None, card_id=None):
@@ -6305,7 +6736,7 @@ def _normalise_loot_card(card, *, source, role=None, card_id=None):
         'value': int(value or 0),
         'role': str(getattr(card_role, 'value', card_role) or source or 'card'),
         'source': source,
-        'bucket': _loot_role_bucket(card_role),
+        'bucket': _loot_card_bucket(rank),
     }
 
 
@@ -6391,19 +6822,20 @@ def _random_pick_without_replacement(pool, count, rng):
 def _select_conquer_loot_cards(cards, land_tier, *, extra_chance=0.0, rng=None):
     """Select loot cards from eligible snapshot rows.
 
-    Base selection takes up to the tier quota from key and support buckets.
+    Base selection takes up to the tier quota from key and number buckets
+    (classification is rank-based, see :func:`_loot_card_bucket`).
     ``extra_chance`` then rolls independently for every remaining card; this is
     used only by the defending kingdom's loot skill.
     """
     rng = rng or random
-    key_quota, support_quota = _conquer_loot_base_quota(land_tier)
+    key_quota, number_quota = _conquer_loot_base_quota(land_tier)
     cards = list(cards or [])
     key_cards = [c for c in cards if c.get('bucket') == 'key']
-    support_cards = [c for c in cards if c.get('bucket') != 'key']
+    number_cards = [c for c in cards if c.get('bucket') != 'key']
 
     selected = []
     selected.extend(_random_pick_without_replacement(key_cards, key_quota, rng))
-    selected.extend(_random_pick_without_replacement(support_cards, support_quota, rng))
+    selected.extend(_random_pick_without_replacement(number_cards, number_quota, rng))
     selected_ids = {id(c) for c in selected}
 
     try:
@@ -6473,6 +6905,88 @@ def _create_kingdom_loot_events(*, attack_log_id, land_id, gained_user_id,
             cards=public_cards,
             collected=True,
             seen=False,
+        ))
+
+
+def _clear_split_transfer_defences(old_owner_id, split_summary):
+    """Remove old-owner defence configs from collateral split-transfer lands."""
+    if not old_owner_id or not split_summary:
+        return []
+    cleared_config_ids = []
+    seen_config_ids = set()
+    for land_id in split_summary.get('transferred_land_ids') or []:
+        land = db.session.get(Land, land_id)
+        if not land:
+            continue
+        configs = []
+        active_config = (db.session.get(LandConfig, land.defence_config_id)
+                         if land.defence_config_id else None)
+        if (active_config and active_config.user_id == old_owner_id
+                and active_config.config_type == 'defence'):
+            configs.append(active_config)
+        configs.extend(LandConfig.query.filter_by(
+            user_id=old_owner_id,
+            land_id=land_id,
+            config_type='defence',
+            status='active',
+        ).all())
+        for config_row in configs:
+            if not config_row or config_row.id in seen_config_ids:
+                continue
+            seen_config_ids.add(config_row.id)
+            cleared_config_ids.append(config_row.id)
+            _wipe_land_config(config_row)
+        land.defence_config_id = None
+        _wipe_defence_drafts_for_lost_land(old_owner_id, land_id)
+    return cleared_config_ids
+
+
+def _split_transfer_payload(split_summary, land, attacker_user, defender_user):
+    samples = list((split_summary or {}).get('transferred_lands') or [])[:3]
+    return {
+        'kingdom_id': (split_summary or {}).get('source_kingdom_id'),
+        'kingdom_name': (split_summary or {}).get('source_kingdom_name'),
+        'land_id': land.id if land else (split_summary or {}).get('split_land_id'),
+        'land_col': land.col if land else None,
+        'land_row': land.row if land else None,
+        'split_land_id': (split_summary or {}).get('split_land_id'),
+        'split_land_col': land.col if land else None,
+        'split_land_row': land.row if land else None,
+        'component_count': int((split_summary or {}).get('component_count') or 0),
+        'lost_component_count': int((split_summary or {}).get('lost_component_count') or 0),
+        'kept_land_count': int((split_summary or {}).get('kept_land_count') or 0),
+        'transferred_land_count': int((split_summary or {}).get('transferred_land_count') or 0),
+        'lost_land_count': int((split_summary or {}).get('transferred_land_count') or 0),
+        'gained_land_count': int((split_summary or {}).get('transferred_land_count') or 0),
+        'transferred_land_ids': list((split_summary or {}).get('transferred_land_ids') or []),
+        'land_samples': samples,
+        'conqueror_user_id': attacker_user.id if attacker_user else None,
+        'conqueror_username': attacker_user.username if attacker_user else None,
+        'defender_user_id': defender_user.id if defender_user else None,
+        'defender_username': defender_user.username if defender_user else None,
+    }
+
+
+def _record_split_transfer_notifications(split_summary, land, attacker_user, defender_user):
+    if not split_summary or int(split_summary.get('transferred_land_count') or 0) <= 0:
+        return
+    base_payload = _split_transfer_payload(split_summary, land, attacker_user, defender_user)
+    old_owner_id = split_summary.get('old_owner_id')
+    if old_owner_id:
+        db.session.add(KingdomNotification(
+            user_id=old_owner_id,
+            kingdom_id=split_summary.get('source_kingdom_id'),
+            kind='kingdom_split_lost',
+            payload=base_payload,
+        ))
+    if attacker_user:
+        attacker_payload = dict(base_payload)
+        attacker_payload['gained_kingdom_id'] = land.kingdom_id if land else None
+        db.session.add(KingdomNotification(
+            user_id=attacker_user.id,
+            kingdom_id=land.kingdom_id if land else None,
+            kind='kingdom_split_claimed',
+            payload=attacker_payload,
         ))
 
 
@@ -6594,6 +7108,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             lost_kingdom_name = old_kingdom.name or f'Kingdom #{old_kingdom.id}'
     deleted_kingdom_id = None
     deleted_kingdom_name = None
+    split_transfer_summary = None
 
     saved = game.last_battle_result or {}
 
@@ -6601,6 +7116,15 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     game.state = 'finished'
     game.winner_player_id = winner.id
     game.finished_at = _utcnow()
+
+    # Sigil achievement check (conquer battle finish — covers win_battles
+    # and win_conquer_battles for the winner).  Best-effort.
+    try:
+        from kingdom_service import apply_sigil_unlocks
+        if winner and winner.user_id:
+            apply_sigil_unlocks(winner.user_id)
+    except Exception:
+        pass
 
     # Snapshot all cards committed to this attack before any loot/cleanup.
     attack_loot_pool = []
@@ -6686,8 +7210,24 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             _wipe_defence_drafts_for_lost_land(defender_user.id, game.land_id)
         try:
             from kingdom_service import (reconcile_after_land_transfer,
-                                         award_kingdom_xp)
+                                         award_kingdom_xp,
+                                         transfer_split_off_kingdom_lands)
             from kingdom_progression import xp_for_land_tier
+            split_transfer_summary = transfer_split_off_kingdom_lands(
+                old_owner_id=old_land_owner_id,
+                new_owner_id=attacker_user.id if attacker_user else None,
+                source_kingdom_id=lost_kingdom_id,
+                split_land_id=game.land_id,
+                now=land.owned_since if land else _utcnow(),
+                commit=False,
+            )
+            if split_transfer_summary:
+                cleared_ids = _clear_split_transfer_defences(
+                    old_land_owner_id,
+                    split_transfer_summary,
+                )
+                if cleared_ids:
+                    split_transfer_summary['cleared_defence_config_ids'] = cleared_ids
             reconcile_after_land_transfer(
                 old_owner_id=old_land_owner_id,
                 new_owner_id=attacker_user.id,
@@ -6695,22 +7235,41 @@ def _resolve_conquer_battle(game, winner, requesting_player):
             )
             # Award XP for connecting a new land to an existing kingdom: the
             # land must now belong to a kingdom that already held >= 1 other
-            # land (i.e. the conquered tile is adjacent to attacker's
-            # existing kingdom).  Brand-new isolated kingdoms (one-land)
-            # award no XP.
+            # land before collateral split transfers.  Brand-new kingdoms
+            # created only by this resolution award no immediate XP.
             if land and land.kingdom_id:
                 joined_kingdom = db.session.get(Kingdom, land.kingdom_id)
                 if joined_kingdom and joined_kingdom.owner_user_id == attacker_user.id:
-                    siblings = Land.query.filter(
+                    collateral_ids = set(
+                        (split_transfer_summary or {}).get('transferred_land_ids') or []
+                    )
+                    siblings_query = Land.query.filter(
                         Land.kingdom_id == joined_kingdom.id,
                         Land.id != land.id,
-                    ).count()
+                    )
+                    if collateral_ids:
+                        siblings_query = siblings_query.filter(
+                            ~Land.id.in_(collateral_ids)
+                        )
+                    siblings = siblings_query.count()
                     if siblings >= 1:
                         award_kingdom_xp(
                             joined_kingdom,
                             xp_for_land_tier(int(land.tier or 0)),
                             reason='conquer',
                         )
+                        # Also award XP for every collateral land the split
+                        # transferred to the attacker; they all join the same
+                        # kingdom so the attacker should receive the tier-based
+                        # XP for each one, just like a direct conquer would.
+                        for coll_id in collateral_ids:
+                            coll_land = db.session.get(Land, coll_id)
+                            if coll_land and coll_land.owner_user_id == attacker_user.id:
+                                award_kingdom_xp(
+                                    joined_kingdom,
+                                    xp_for_land_tier(int(coll_land.tier or 0)),
+                                    reason='conquer_split',
+                                )
             if lost_kingdom_id and db.session.get(Kingdom, lost_kingdom_id) is None:
                 deleted_kingdom_id = lost_kingdom_id
                 deleted_kingdom_name = lost_kingdom_name or f'Kingdom #{lost_kingdom_id}'
@@ -6725,6 +7284,13 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                     except Exception as _kn_err:
                         logger.warning('Failed to record kingdom_dissolved notification: %s',
                                        _kn_err)
+            if split_transfer_summary:
+                _record_split_transfer_notifications(
+                    split_transfer_summary,
+                    land,
+                    attacker_user,
+                    defender_user,
+                )
         except Exception as _kingdom_reconcile_err:
             logger.exception('Persistent kingdom reconciliation failed after conquer: %s',
                              _kingdom_reconcile_err)
@@ -6830,6 +7396,8 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_won_rank': card_won_rank,
         'is_ai_defender': bool(is_ai_land),
     })
+    if split_transfer_summary:
+        merged_last_result['kingdom_split_transfer'] = split_transfer_summary
     game.last_battle_result = merged_last_result
 
     return {
@@ -6856,6 +7424,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'consumed_cards': consumed_cards,
         'defence_consumed_cards': defence_consumed_cards,
         'cards_spent': cards_spent,
+        'kingdom_split_transfer': split_transfer_summary,
         'game': game.serialize(),
     }
 
@@ -6929,6 +7498,8 @@ def _serialize_finished_conquer_result(game):
         payload['loot_lost_cards'] = last_result.get('conquer_loot_lost_cards') or []
     if 'conquer_loot_gained_cards' in last_result:
         payload['loot_gained_cards'] = last_result.get('conquer_loot_gained_cards') or []
+    if 'kingdom_split_transfer' in last_result:
+        payload['kingdom_split_transfer'] = last_result.get('kingdom_split_transfer')
     if 'is_ai_defender' in last_result:
         payload['is_ai_defender'] = bool(last_result.get('is_ai_defender'))
     for key in ('conquer_attacker_player_id', 'conquer_defender_player_id',

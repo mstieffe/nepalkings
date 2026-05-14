@@ -6,7 +6,7 @@ import math
 import os
 import pygame
 from config import settings
-from game.components import hex_cosmetics, badge_cosmetics
+from game.components import hex_cosmetics, badge_cosmetics, sigil_cosmetics
 import logging
 
 logger = logging.getLogger('nk.components.hex_map')
@@ -59,6 +59,14 @@ def _owner_color(user_id):
     g = 80 + ((h >> 8) & 0xFF) % 150
     b = 80 + (h & 0xFF) % 150
     return (r, g, b)
+
+
+def _scale_alpha(clr, factor):
+    """Return ``clr`` with its alpha component scaled by ``factor`` (0..1+)."""
+    if len(clr) < 4:
+        return clr
+    a = max(0, min(255, int(clr[3] * factor)))
+    return (clr[0], clr[1], clr[2], a)
 
 
 def _suit_bonus_group(suit):
@@ -686,6 +694,22 @@ class HexMap:
 
     # ── Rendering ───────────────────────────────────────────────────
 
+    def _owner_glow_pulse(self):
+        """Return the current alpha-multiplier for the owner-glow breathing pulse.
+
+        Quantized to ``HEX_MINE_GLOW_PULSE_STEPS`` so callers can rely on a
+        small finite set of values per frame, enabling cheap caching.
+        """
+        period = max(1, int(getattr(settings, 'HEX_MINE_GLOW_PULSE_PERIOD_MS', 2400)))
+        amp = float(getattr(settings, 'HEX_MINE_GLOW_PULSE_AMPLITUDE', 0.35))
+        steps = max(2, int(getattr(settings, 'HEX_MINE_GLOW_PULSE_STEPS', 8)))
+        t = (pygame.time.get_ticks() % period) / period  # 0..1
+        # Cosine ease so the pulse breathes smoothly.
+        wave = 0.5 - 0.5 * math.cos(2 * math.pi * t)     # 0..1
+        # Quantize to ``steps`` discrete levels.
+        wave = round(wave * (steps - 1)) / (steps - 1)
+        return (1.0 - amp) + amp * wave
+
     def render(self):
         """Draw all visible hexes, labels, and minimap."""
         sz = self._size * self.zoom
@@ -713,6 +737,7 @@ class HexMap:
             self._draw_hex_base(tile, corners, scx, scy, sz)
         for tile, corners, scx, scy in visible_hexes:
             self._draw_hex_border(tile, corners)
+        self._draw_cluster_outlines(visible_hexes, sz)
         for tile, corners, scx, scy in visible_hexes:
             self._draw_hex_details(tile, scx, scy, sz)
 
@@ -757,14 +782,46 @@ class HexMap:
                  y - glow_rect.y + (y - scy) * 0.10)
                 for x, y in corners
             ]
-            pygame.draw.polygon(glow_surf, settings.HEX_MINE_GLOW_SOFT_CLR, soft_local)
-            pygame.draw.polygon(glow_surf, settings.HEX_MINE_GLOW_CLR, local_corners)
+        if tile.is_mine:
+            xs = [p[0] for p in corners]
+            ys = [p[1] for p in corners]
+            glow_rect = pygame.Rect(
+                int(min(xs)) - 4,
+                int(min(ys)) - 4,
+                int(max(xs) - min(xs)) + 8,
+                int(max(ys) - min(ys)) + 8,
+            )
+            glow_surf = pygame.Surface((glow_rect.w, glow_rect.h), pygame.SRCALPHA)
+            local_corners = [(x - glow_rect.x, y - glow_rect.y) for x, y in corners]
+            soft_local = [
+                (x - glow_rect.x + (x - scx) * 0.10,
+                 y - glow_rect.y + (y - scy) * 0.10)
+                for x, y in corners
+            ]
+            pulse = self._owner_glow_pulse()
+            # Tint glow in owner color when an owner palette is set.
+            owner_clr = self._tile_owner_color(tile, kind='glow')
+            if owner_clr:
+                base_alpha = settings.HEX_MINE_GLOW_CLR[3] if len(settings.HEX_MINE_GLOW_CLR) >= 4 else 90
+                soft_alpha = settings.HEX_MINE_GLOW_SOFT_CLR[3] if len(settings.HEX_MINE_GLOW_SOFT_CLR) >= 4 else 45
+                soft_clr = _scale_alpha((*owner_clr, soft_alpha), pulse)
+                main_clr = _scale_alpha((*owner_clr, base_alpha), pulse)
+            else:
+                soft_clr = _scale_alpha(settings.HEX_MINE_GLOW_SOFT_CLR, pulse)
+                main_clr = _scale_alpha(settings.HEX_MINE_GLOW_CLR, pulse)
+            pygame.draw.polygon(glow_surf, soft_clr, soft_local)
+            pygame.draw.polygon(glow_surf, main_clr, local_corners)
             self.window.blit(glow_surf, glow_rect.topleft)
 
         pygame.draw.polygon(self.window, fill, corners)
 
         if tile.owner:
             self._draw_surface_skin(tile, corners, scx, scy, sz)
+            # Enemy-claimed wash: subtle diagonal hatch overlay tinted in the
+            # enemy's owner color so enemy land reads distinct from neutral
+            # without competing with the player's own territory.
+            if not tile.is_mine:
+                self._draw_enemy_wash(tile, corners, scx, scy, sz)
 
         # Conquest territory hint: dark overlay for isolated new-kingdom tiles,
         # warm golden tint for tiles adjacent to the player's existing kingdom.
@@ -921,27 +978,34 @@ class HexMap:
         top edge so the stars visually click into the tile silhouette.
         No background pill — just stars + a soft drop shadow for legibility.
         """
-        tier = max(1, min(4, int(getattr(tile, 'tier', 1) or 1)))
-        star_r = max(4, int(sz * settings.HEX_TIER_RIBBON_STAR_SZ_FACTOR))
-        inner_r = max(2, int(star_r * 0.5))
-        gap = max(2, int(star_r * 0.6))
-        total_w = tier * (star_r * 2) + (tier - 1) * gap
+        tier = max(1, min(6, int(getattr(tile, 'tier', 1) or 1)))
+        min_star_r = 3 if sz >= 28 else 2
+        star_r = max(min_star_r,
+                     int(sz * settings.HEX_TIER_RIBBON_STAR_SZ_FACTOR))
+        inner_r = max(1, int(star_r * 0.5))
+        gap = max(1, int(star_r * 0.45))
+        rows = [tier] if tier <= 4 else [3, tier - 3]
+        row_step = star_r * 2 + max(1, int(gap * 0.5))
         # Top flat edge of the flat-top hex sits at y = scy - sz*sqrt(3)/2.
-        # Nudge stars a touch inside the tile so they don't kiss the border.
+        # Nudge stars inside the tile; at tiers 5–6 the row wraps so the
+        # symbols stay legible without spilling beyond the angled shoulders.
         top_edge_y = int(scy - sz * (math.sqrt(3) / 2))
-        edge_inset = max(1, int(sz * 0.14))
-        cy = top_edge_y + edge_inset + int(y_offset)
-        start_x = int(scx - total_w / 2) + star_r
+        edge_inset = max(star_r + 1, int(sz * 0.27))
+        first_cy = top_edge_y + edge_inset + int(y_offset)
         outline_w = 1 if star_r >= 5 else 0
-        for i in range(tier):
-            sx = start_x + i * (star_r * 2 + gap)
-            shadow = _star_points(sx + 1, cy + 2, star_r, inner_r)
-            pts = _star_points(sx, cy, star_r, inner_r)
-            pygame.draw.polygon(self.window, (16, 12, 4), shadow)
-            pygame.draw.polygon(self.window, settings.HEX_STAR_FILL, pts)
-            if outline_w:
-                pygame.draw.polygon(self.window, settings.HEX_STAR_BORDER,
-                                    pts, outline_w)
+        for row_idx, row_count in enumerate(rows):
+            total_w = row_count * (star_r * 2) + (row_count - 1) * gap
+            start_x = int(scx - total_w / 2) + star_r
+            cy = first_cy + row_idx * row_step
+            for i in range(row_count):
+                sx = start_x + i * (star_r * 2 + gap)
+                shadow = _star_points(sx + 1, cy + 2, star_r, inner_r)
+                pts = _star_points(sx, cy, star_r, inner_r)
+                pygame.draw.polygon(self.window, (16, 12, 4), shadow)
+                pygame.draw.polygon(self.window, settings.HEX_STAR_FILL, pts)
+                if outline_w:
+                    pygame.draw.polygon(self.window, settings.HEX_STAR_BORDER,
+                                        pts, outline_w)
 
     def _draw_center_suit(self, tile, scx, scy, sz):
         """Large centred suit icon with the bonus number rendered on top.
@@ -1132,6 +1196,117 @@ class HexMap:
             })
         return clusters
 
+    # ── Cluster perimeter outline ──────────────────────────────────
+
+    def _get_enemy_wash_overlay(self, sz_int):
+        """Return a cached translucent diagonal-hatch hex overlay for enemies."""
+        cache = getattr(self, '_enemy_wash_cache', None)
+        if cache is None:
+            cache = self._enemy_wash_cache = {}
+        if sz_int in cache:
+            return cache[sz_int]
+        surf = pygame.Surface((sz_int * 2, sz_int * 2), pygame.SRCALPHA)
+        cx, cy = sz_int, sz_int
+        # Faint diagonal hatch — white tint, low alpha; the wash sits on top
+        # of the suit fill but stays subtle compared to mine-glow.
+        line_clr = (40, 30, 30, 55)
+        step = max(3, int(sz_int * 0.22))
+        bound = int(sz_int * 1.05)
+        thick = max(1, int(sz_int * 0.04))
+        for i in range(-bound, bound + 1, step):
+            pygame.draw.line(
+                surf, line_clr,
+                (cx - bound, cy + i - bound),
+                (cx + bound, cy + i + bound),
+                thick,
+            )
+        # Mask to hex shape so the wash doesn't bleed into neighbours.
+        mask = pygame.Surface((sz_int * 2, sz_int * 2), pygame.SRCALPHA)
+        pygame.draw.polygon(
+            mask, (255, 255, 255, 255), _hex_corners(cx, cy, sz_int),
+        )
+        surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        cache[sz_int] = surf
+        return surf
+
+    def _draw_enemy_wash(self, tile, corners, scx, scy, sz):
+        """Faint hatch overlay for enemy-claimed (non-mine) tiles."""
+        if sz < 6:
+            return
+        sz_int = max(8, int(sz))
+        ovl = self._get_enemy_wash_overlay(sz_int)
+        self.window.blit(ovl, ovl.get_rect(center=(int(scx), int(scy))))
+    def _tile_owner_color(self, tile, kind='accent'):
+        """Return RGB owner color for ``tile`` (palette + fallback).
+
+        ``kind`` is either ``'accent'`` (used for borders, chip, outline) or
+        ``'glow'`` (used for the mine glow).  Falls back to deterministic
+        per-user color, then to gold for the local player.
+        """
+        if not tile.owner_user_id:
+            return None
+        palette = getattr(settings, 'KINGDOM_COLOR_PALETTE', {})
+        color_key = self._owner_style_key(tile, 'color_key')
+        if color_key and color_key in palette:
+            entry = palette[color_key]
+            if kind == 'glow':
+                return entry.get('glow_rgb') or entry.get('accent_rgb')
+            return entry.get('accent_rgb') or entry.get('glow_rgb')
+        if tile.is_mine:
+            return settings.HEX_MINE_BORDER_HIGHLIGHT
+        return _owner_color(tile.owner_user_id)
+
+    def _draw_cluster_outlines(self, visible_hexes, sz):
+        """Stroke the outer perimeter of each owner's hex cluster.
+
+        For every visible owned tile we draw only the edges that face a
+        differently-owned (or empty) neighbour, in the owner's color.
+        Owned-by-player clusters get a thicker accent stroke; enemy
+        clusters get a thinner muted stroke.
+        """
+        if sz < 8:
+            return
+        # Width scales with zoom but with a clamp so it remains visible at
+        # low zoom and not absurd at very high zoom.
+        bw_own = max(2, int(sz * 0.10))
+        bw_enemy = max(1, int(sz * 0.055))
+        for tile, corners, scx, scy in visible_hexes:
+            if not tile.owner_user_id:
+                continue
+            clr = self._tile_owner_color(tile)
+            if not clr:
+                continue
+            edges = _edge_neighbour_coords(tile.col, tile.row)
+            width = bw_own if tile.is_mine else bw_enemy
+            # Accent alpha: own clusters more prominent.
+            alpha = 230 if tile.is_mine else 150
+            stroke = (clr[0], clr[1], clr[2], alpha)
+            for i, coord in enumerate(edges):
+                if self._same_owner_neighbour(tile, coord):
+                    continue
+                p0 = corners[i]
+                p1 = corners[(i + 1) % 6]
+                # Draw onto a per-edge alpha surface so RGBA respected.
+                xs = (p0[0], p1[0])
+                ys = (p0[1], p1[1])
+                pad = width + 2
+                rect = pygame.Rect(
+                    int(min(xs)) - pad,
+                    int(min(ys)) - pad,
+                    int(max(xs) - min(xs)) + pad * 2,
+                    int(max(ys) - min(ys)) + pad * 2,
+                )
+                if rect.w <= 0 or rect.h <= 0:
+                    continue
+                edge_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+                pygame.draw.line(
+                    edge_surf, stroke,
+                    (p0[0] - rect.x, p0[1] - rect.y),
+                    (p1[0] - rect.x, p1[1] - rect.y),
+                    width,
+                )
+                self.window.blit(edge_surf, rect.topleft)
+
     def _draw_suit_cluster_icons(self, sz):
         """Draw one large suit icon at the centre of every connected
         same-suit region. Only visible when zoomed out (per-tile suit
@@ -1239,6 +1414,9 @@ class HexMap:
             level = (max(group['levels'].items(), key=lambda kv: (kv[1], kv[0]))[0]
                      if group['levels'] else 0)
             subtitle = f'Lv {level}' if level > 0 else None
+            sigil_key = (self._owner_style_key(tiles[0], 'sigil_key')
+                         or getattr(settings, 'KINGDOM_SIGIL_DEFAULT_KEY',
+                                    'sigil_none'))
             badges.append({
                 'name': name,
                 'level': level,
@@ -1248,6 +1426,7 @@ class HexMap:
                 'tile_count': len(tiles),
                 'badge_key': badge_key,
                 'suit_key': suit_key,
+                'sigil_key': sigil_key,
                 'representative_tile': tiles[0],
                 'group_key': gk,
             })
@@ -1337,6 +1516,24 @@ class HexMap:
             self.window.blit(shadow,
                              (br.x + shadow_dx, br.y + shadow_dy))
             self.window.blit(badge_surf, br)
+
+            # Kingdom sigil glyph drawn above the suit cluster icon as the
+            # cluster's identity marker.  Tinted with the kingdom's owner
+            # accent so it reads as part of the same visual identity.
+            sigil_key = badge_data.get('sigil_key')
+            if sigil_key and sigil_key != 'sigil_none':
+                rep_tile = badge_data.get('representative_tile')
+                accent = (self._tile_owner_color(rep_tile, kind='accent')
+                          if rep_tile is not None
+                          else settings.HEX_MINE_BORDER_HIGHLIGHT)
+                sigil_sz = max(14, int(cluster_icon_sz * 0.85))
+                sigil_surf = sigil_cosmetics.render_sigil(
+                    sigil_key, sigil_sz, accent)
+                if sigil_surf is not None:
+                    sigil_y = scy + offset_y - cluster_icon_sz * 0.65
+                    rect = sigil_surf.get_rect(
+                        center=(int(scx), int(sigil_y)))
+                    self.window.blit(sigil_surf, rect)
 
     def _shadow_for(self, size, radius):
         """Return a cached drop-shadow surface for the given pixel size."""
@@ -1722,19 +1919,58 @@ class HexMap:
         off_x = (mm_w - world_w * scale) / 2
         off_y = (mm_h - world_h * scale) / 2
 
-        # Draw hex dots
+        # Draw hex dots.  Owned tiles use the kingdom's owner accent so the
+        # player can quickly locate every kingdom on the minimap; neutral
+        # tiles fall back to the suit/tier fill.
+        mine_centers = []
         for tile in self.tiles:
             tx = off_x + (tile.cx - min_wx) * scale
             ty = off_y + (tile.cy - min_wy) * scale
             dot_r = max(2, int(self._size * scale * 0.5))
-            clr = _tile_fill_color(tile)
-            border = _tile_border_color(tile)
+            if tile.owner_user_id:
+                accent = self._tile_owner_color(tile, kind='accent')
+                clr = accent or _tile_fill_color(tile)
+                border = settings.HEX_MINE_BORDER if tile.is_mine else (40, 40, 40)
+            else:
+                clr = _tile_fill_color(tile)
+                border = _tile_border_color(tile)
             if tile.is_mine:
                 pygame.draw.circle(mm_surf, settings.HEX_MINE_BORDER,
                                    (int(tx), int(ty)), dot_r + 2)
                 border = (255, 245, 190)
+                mine_centers.append((tx, ty))
             pygame.draw.circle(mm_surf, clr, (int(tx), int(ty)), dot_r)
             pygame.draw.circle(mm_surf, border, (int(tx), int(ty)), dot_r, 1)
+
+        # Player sigil marker at the centroid of owned tiles so the player
+        # can locate their kingdom even on a crowded minimap.
+        if mine_centers:
+            cx = sum(p[0] for p in mine_centers) / len(mine_centers)
+            cy = sum(p[1] for p in mine_centers) / len(mine_centers)
+            marker_r = max(3, int(min(mm_w, mm_h) * 0.025))
+            # Try the player's sigil first; fall back to a diamond.
+            mine_tile = next((t for t in self.tiles if t.is_mine), None)
+            sigil_key = (self._owner_style_key(mine_tile, 'sigil_key')
+                         if mine_tile is not None else None)
+            sigil_surf = None
+            if sigil_key and sigil_key != 'sigil_none':
+                sigil_surf = sigil_cosmetics.render_sigil(
+                    sigil_key, marker_r * 4,
+                    settings.HEX_MINE_BORDER_HIGHLIGHT)
+            if sigil_surf is not None:
+                rect = sigil_surf.get_rect(center=(int(cx), int(cy)))
+                mm_surf.blit(sigil_surf, rect)
+            else:
+                pts = [
+                    (cx, cy - marker_r * 1.4),
+                    (cx + marker_r, cy),
+                    (cx, cy + marker_r * 1.4),
+                    (cx - marker_r, cy),
+                ]
+                pygame.draw.polygon(mm_surf, (40, 30, 10), pts)
+                pygame.draw.polygon(mm_surf,
+                                    settings.HEX_MINE_BORDER_HIGHLIGHT,
+                                    pts, 1)
 
         # Draw viewport rectangle
         vp_left = off_x + (self.camera_x - min_wx) * scale

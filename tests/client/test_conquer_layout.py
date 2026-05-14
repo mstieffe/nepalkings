@@ -56,6 +56,10 @@ def test_pre_battle_header_is_full_timeline(size):
     # ~20% H
     assert layout.header.full_rect[3] >= int(0.18 * size[1])
     assert layout.header.full_rect[3] <= int(0.22 * size[1])
+    # Persistent two-row split is always populated.
+    assert layout.header.top_row_rect[3] >= int(0.04 * size[1])
+    assert layout.header.top_row_rect[3] <= int(0.06 * size[1])
+    assert layout.header.timeline_row_rect[3] >= int(0.12 * size[1])
 
 
 @pytest.mark.parametrize('size', _STANDARD_SIZES)
@@ -71,6 +75,9 @@ def test_battle_header_is_collapsed(size):
     assert int(0.05 * size[1]) <= log_h <= int(0.07 * size[1])
     # And combined ~11% H — definitely smaller than the pre-battle 20% H header.
     assert (status_h + log_h) < int(0.18 * size[1])
+    # Persistent split is populated for battle/result too.
+    assert layout.header.top_row_rect[3] > 0
+    assert layout.header.timeline_row_rect[3] > 0
 
 
 @pytest.mark.parametrize('size', _STANDARD_SIZES)

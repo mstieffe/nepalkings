@@ -413,6 +413,33 @@ class TestConquerScreenLayout:
         assert screen._active_info_key == 'prelude_spell'
         mock_open.assert_not_called()
 
+    def test_castle_cap_indicator_draws_when_castle_full(self, monkeypatch):
+        from config import settings
+        from game.screens import conquer_screen as module
+        import pygame
+
+        screen = module.ConquerScreen.__new__(module.ConquerScreen)
+        screen.window = pygame.Surface((240, 180))
+        screen._field_rects = {'castle': pygame.Rect(20, 20, 150, 120)}
+        screen._land = {'tier': 2}
+        screen._config = {
+            'figures': [{'field': 'castle'}, {'field': 'castle'}],
+        }
+        screen._res_font = settings.get_font(settings.FS_TINY)
+        calls = []
+
+        def capture(window, rect, count, cap, font=None):
+            calls.append((window, pygame.Rect(rect), count, cap, font))
+            return pygame.Rect(rect)
+
+        monkeypatch.setattr(module, 'draw_castle_cap_indicator', capture)
+
+        result = module.ConquerScreen._draw_castle_cap_indicator(screen)
+
+        assert result is not None
+        assert calls
+        assert calls[0][2:4] == (2, 2)
+
 
 class TestConquerRemoveClickPriority:
 

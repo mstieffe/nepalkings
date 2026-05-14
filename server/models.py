@@ -660,6 +660,10 @@ class ConquerTactic(db.Model):
             'sort_order': self.sort_order,
             'revealed_step_index': self.revealed_step_index,
             'discarded_step_index': self.discarded_step_index,
+            # Combine lineage is always emitted (even when None) so the client
+            # can distinguish "not a combined tactic" from "field missing".
+            'source_tactic_id_a': self.source_tactic_id_a,
+            'source_tactic_id_b': self.source_tactic_id_b,
         }
         if self.card_id_b is not None:
             data['card_id_b'] = self.card_id_b
@@ -670,10 +674,6 @@ class ConquerTactic(db.Model):
             data['value_a'] = self.value_a
         if self.value_b is not None:
             data['value_b'] = self.value_b
-        if self.source_tactic_id_a is not None:
-            data['source_tactic_id_a'] = self.source_tactic_id_a
-        if self.source_tactic_id_b is not None:
-            data['source_tactic_id_b'] = self.source_tactic_id_b
         return data
 
 
@@ -752,7 +752,7 @@ class Land(db.Model):
     id               = db.Column(db.Integer, primary_key=True)
     col              = db.Column(db.Integer, nullable=False)
     row              = db.Column(db.Integer, nullable=False)
-    tier             = db.Column(db.Integer, nullable=False)   # 1-3
+    tier             = db.Column(db.Integer, nullable=False)   # 1..KINGDOM_TIER_COUNT
     gold_rate        = db.Column(db.Float,   nullable=False)   # gold per hour
     suit_bonus_suit  = db.Column(db.String(10), nullable=False)
     suit_bonus_value = db.Column(db.Integer, nullable=False)
@@ -817,6 +817,16 @@ class Kingdom(db.Model):
     badge_key     = db.Column(db.String(80), nullable=False)
     border_key    = db.Column(db.String(80), nullable=False)
     surface_key   = db.Column(db.String(80), nullable=False)
+    # Owner color (gold-purchasable) and kingdom sigil (achievement-only)
+    # are cosmetic axes added in the kingdom cosmetics polish pass.  They
+    # default to the free entries; nullable + server_default lets existing
+    # rows hydrate without an offline migration.
+    color_key     = db.Column(db.String(80), nullable=False,
+                              default='color_royal_gold',
+                              server_default='color_royal_gold')
+    sigil_key     = db.Column(db.String(80), nullable=False,
+                              default='sigil_none',
+                              server_default='sigil_none')
     shield_until  = db.Column(db.DateTime, nullable=True)
     # Permanent progression: experience is cumulative XP; level is derived
     # from experience and cached for fast reads (kept in sync via
@@ -851,6 +861,8 @@ class Kingdom(db.Model):
             'badge_key': self.badge_key,
             'border_key': self.border_key,
             'surface_key': self.surface_key,
+            'color_key': self.color_key or 'color_royal_gold',
+            'sigil_key': self.sigil_key or 'sigil_none',
         }
 
     def serialize(self):
@@ -861,6 +873,8 @@ class Kingdom(db.Model):
             'badge_key': self.badge_key,
             'border_key': self.border_key,
             'surface_key': self.surface_key,
+            'color_key': self.color_key or 'color_royal_gold',
+            'sigil_key': self.sigil_key or 'sigil_none',
             'shield_until': self.shield_until.isoformat() if self.shield_until else None,
             'level': self.level,
             'experience': self.experience,

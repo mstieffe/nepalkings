@@ -1,6 +1,6 @@
 # Conquer Unified Battle Redesign Status
 
-Last updated: 2026-05-09
+Last updated: 2026-05-10
 Branch: v2.0-conquer-redesign
 Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 
@@ -352,6 +352,33 @@ Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
 - RISK: Spell mutation now has tactics-hand coverage for Forced Deal and Dump Cards, but more edge-case spell coverage is still useful before production rollout.
 - RISK: Existing UI/AI names still say battle move in several places. That is compatibility glue for now, not the final terminology.
 - RISK: Client display now mirrors the key server math paths, but it still recomputes a local receipt instead of consuming an authoritative server breakdown payload.
+
+## Polish & Hardening Pass
+
+- DONE: Phase 1 — Server hardening.
+  - DONE: `Game.serialize_player_view()` is now used for tactics-hand state so opponent unplayed tactic family/suit/rank/value never leaks via raw `conquer_tactics`.
+  - DONE: Added idempotency guard `server/game_service/conquer_tactics_idempotency.py`; `/games/play_conquer_tactic`, `/games/combine_conquer_tactics`, and `/games/dismantle_conquer_tactic` accept an optional `client_op_id` and short-circuit replays with the original response.
+  - DONE: Dismantle endpoint now validates the source tactic is in a dismantleable state (`combined` and unplayed) before mutating, returning a 400 on stale clients instead of corrupting state.
+  - DONE: Server tests cover the player-view masking, replay idempotency on play, and dismantle-state rejection.
+
+- DONE: Phase 2 — Client correctness.
+  - DONE: Added a `ghost` flag on tactics so unplayed combine children render disabled in the rail while their parent is in play.
+  - DONE: Cold-load now primes the tactics cache from `Game.serialize()` so refreshing into an in-progress battle no longer flashes an empty rail.
+  - DONE: Reconnect routing inspects `finished` payload on `/games/get_battle_state` and routes directly to the result dialog instead of `field`.
+  - DONE: Flight-mode actions are gated until the tactics-hand server ack returns to prevent double-fire of `play`/`combine`/`dismantle`.
+
+- DONE: Phase 3 — UX polish.
+  - DONE: Gamble button shows a contextual disabled tooltip explaining the rank requirement when the selected tactic is ineligible.
+  - DONE: Combined tactics now show a small `1/2` / `2/2` indicator badge in the rail to communicate child usage at a glance.
+  - DONE: Top strip now shows accurate counters for tactics in hand, played, and combined.
+  - DONE: `/games/get_battle_state` returns a richer `finished` payload (winner, reward summary) so the result dialog can render without an extra round-trip.
+
+- DONE: Test stability.
+  - DONE: Added autouse `_reset_land_coord_counter` fixture in `tests/server/conftest.py`. The counter lives in `tests/server/test_land_battle.py` and feeds deterministic `Land.col/row`, which seeds `ai/defence/generator._template_seed(land)`. Resetting per-test prevents cross-file order from shifting AI prelude rolls (e.g. Explosion wiping the attacker's only figure in `test_conquer_game_finishes_after_battle`).
+
+- DONE: Final regression.
+  - DONE: `python -m pytest tests/server/ -q` → 727 passed, 4 pre-existing `test_kingdom.py` failures unrelated to the conquer redesign.
+  - DONE: `python -m pytest tests/client/ -q` → 568 passed.
 
 ## Suggested Next Session Start
 

@@ -21,6 +21,10 @@ from game.components.figures.skill_display_filters import (
 )
 from game.components.figures.figure_icon import FieldFigureIcon
 from game.components.figure_detail_box import FigureDetailBox
+from game.components.castle_cap_indicator import (
+    castle_cap_reached,
+    draw_castle_cap_indicator,
+)
 from game.components.dialogue_box import DialogueBox
 from game.components.figures.figure_manager import FigureManager
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
@@ -657,6 +661,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self._config, self._land_id, mode='conquer',
             land_suit_bonus_suit=land.get('suit_bonus_suit'),
             land_suit_bonus_value=land.get('suit_bonus_value'),
+            land=land,
         )
 
         # First pass: build the complete figure list. Support-bonus depends
@@ -1214,6 +1219,21 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 else:
                     cfg_fig['_remove_rect'] = None
 
+        self._draw_castle_cap_indicator()
+
+    def _draw_castle_cap_indicator(self):
+        rect = self._field_rects.get('castle')
+        if not rect:
+            return None
+        reached, count, cap = castle_cap_reached(
+            self._land or {},
+            (self._config or {}).get('figures', []),
+        )
+        if not reached:
+            return None
+        return draw_castle_cap_indicator(
+            self.window, rect, count, cap, font=self._res_font)
+
     def _draw_battle_move_slots(self):
         """Draw 3 battle move slots as diamond icons."""
         moves = self._config.get('battle_moves', [])
@@ -1343,67 +1363,10 @@ class ConquerScreen(MenuScreenMixin, Screen):
         """Draw a combined resource panel below the field compartments."""
         if not self._res_rect:
             return
-
-        resources_data = self._calc_resources()
-        produces = resources_data.get('produces', {})
-        requires = resources_data.get('requires', {})
-
-        icon_s = int(0.019 * _SW)
-        pill_font = self._res_font
-        pill_min_w = pill_font.size("00/00")[0] + 8
-        rect = self._res_rect
-
-        # Subtitle
-        lbl = self._res_font.render('Resources', True, (180, 170, 140))
-        self.window.blit(lbl, (rect.x, rect.y - lbl.get_height() - 2))
-
-        # Panel background
-        surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        pygame.draw.rect(surf, (35, 30, 25, 200), surf.get_rect(), border_radius=4)
-        self.window.blit(surf, rect.topleft)
-        pygame.draw.rect(self.window, (140, 130, 110), rect, 1, border_radius=4)
-
-        # Castle resources on the left, village resources on the right
-        castle_rows = [
-            ('village',  'villager_red_black', [('villager_red', 'villager_black')]),
-            ('military', 'warrior_red_black',  [('warrior_red', 'warrior_black')]),
-        ]
-        village_rows = [
-            ('food',     'rice_meat',          [('food_red', 'food_black')]),
-            ('material', 'wood_stone',         [('material_red', 'material_black')]),
-            ('armor',    'sword_shield',       [('armor_red', 'armor_black')]),
-        ]
-
-        half_w = rect.w // 2
-        for col_offset, rows in [(0, castle_rows), (half_w, village_rows)]:
-            y = rect.y + 8
-            for label, icon_key, res_pairs in rows:
-                ix = rect.x + col_offset + 8
-                icon = self._resource_icons.get(icon_key)
-                if icon:
-                    self.window.blit(icon, (ix, y))
-                    ix += icon_s + 6
-
-                for red_key, black_key in res_pairs:
-                    for res_key, pill_clr in [(red_key, (45, 90, 45)), (black_key, (35, 60, 110))]:
-                        req = requires.get(res_key, 0)
-                        prod = produces.get(res_key, 0)
-                        deficit = req > prod
-                        text = f'{req}/{prod}'
-                        t_surf = pill_font.render(text, True, (255, 255, 255))
-                        pw = max(t_surf.get_width() + 8, pill_min_w)
-                        ph = t_surf.get_height() + 4
-                        pr = pygame.Rect(ix, y + (icon_s - ph) // 2, pw, ph)
-                        pill = pygame.Surface((pw, ph), pygame.SRCALPHA)
-                        pygame.draw.rect(pill, (*pill_clr, 220), pill.get_rect(), border_radius=3)
-                        self.window.blit(pill, pr.topleft)
-                        if deficit:
-                            pygame.draw.rect(self.window, (200, 50, 50), pr, 2, border_radius=3)
-                        tr = t_surf.get_rect(center=pr.center)
-                        self.window.blit(t_surf, tr.topleft)
-                        ix += pw + 4
-
-                y += icon_s + 6
+        from game.components.resource_panel import draw_resource_panel
+        draw_resource_panel(
+            self.window, self._res_rect, self._calc_resources(),
+            self._resource_icons, self._res_font)
 
     def _get_config_fig(self, figure_id):
         """Find config dict for a figure by id."""
@@ -1513,7 +1476,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if not card_source:
             self._error = 'Failed to load collection'
             return
-        self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='conquer')
+        self._game_proxy = KingdomGameProxy(
+            self._config, self._land_id, mode='conquer', land=self._land or {})
         self.state.game = self._game_proxy
         sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = BuildFigureScreen(
@@ -1530,7 +1494,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if not card_source:
             self._error = 'Failed to load collection'
             return
-        self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='conquer')
+        self._game_proxy = KingdomGameProxy(
+            self._config, self._land_id, mode='conquer', land=self._land or {})
         self.state.game = self._game_proxy
         sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = BattleShopScreen(
@@ -1547,7 +1512,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if not card_source:
             self._error = 'Failed to load collection'
             return
-        self._game_proxy = KingdomGameProxy(self._config, self._land_id, mode='conquer')
+        self._game_proxy = KingdomGameProxy(
+            self._config, self._land_id, mode='conquer', land=self._land or {})
         self.state.game = self._game_proxy
         sx, sy = self._config_subscreen_origin()
         self._subscreen_obj = PreludeSpellScreen(

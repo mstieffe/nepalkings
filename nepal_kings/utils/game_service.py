@@ -5,6 +5,18 @@ from utils import http_compat as requests
 from config import settings
 from game.core.game import Game
 
+import uuid
+
+
+def _new_client_action_id():
+    """Return a fresh UUID string used for server-side idempotency keys.
+
+    Each user-initiated mutating conquer tactic action gets a unique id so
+    a network retry replays the cached response instead of failing with
+    "not your turn" or mutating state twice.
+    """
+    return uuid.uuid4().hex
+
 def fetch_user_games(username):
     """Fetch the list of games for the user from the server."""
     response = requests.get(f'{settings.SERVER_URL}/games/get_games', params={'username': username}, timeout=10)
@@ -187,7 +199,11 @@ def conquer_withdraw(game_id, player_id):
     try:
         response = requests.post(
             f'{settings.SERVER_URL}/games/conquer_withdraw',
-            json={'game_id': game_id, 'player_id': player_id},
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'client_action_id': _new_client_action_id(),
+            },
             timeout=10
         )
         return response.json()
@@ -235,6 +251,7 @@ def play_conquer_tactic(game_id, player_id, tactic_id, call_figure_id=None):
             'game_id': game_id,
             'player_id': player_id,
             'tactic_id': tactic_id,
+            'client_action_id': _new_client_action_id(),
         }
         if call_figure_id is not None:
             payload['call_figure_id'] = call_figure_id
@@ -253,7 +270,12 @@ def gamble_conquer_tactic(game_id, player_id, tactic_id):
     try:
         response = requests.post(
             f'{settings.SERVER_URL}/games/gamble_conquer_tactic',
-            json={'game_id': game_id, 'player_id': player_id, 'tactic_id': tactic_id},
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'tactic_id': tactic_id,
+                'client_action_id': _new_client_action_id(),
+            },
             timeout=10,
         )
         return response.json()
@@ -271,6 +293,7 @@ def combine_conquer_tactics(game_id, player_id, tactic_id_a, tactic_id_b):
                 'player_id': player_id,
                 'tactic_id_a': tactic_id_a,
                 'tactic_id_b': tactic_id_b,
+                'client_action_id': _new_client_action_id(),
             },
             timeout=10,
         )
@@ -284,7 +307,12 @@ def dismantle_conquer_tactic(game_id, player_id, tactic_id):
     try:
         response = requests.post(
             f'{settings.SERVER_URL}/games/dismantle_conquer_tactic',
-            json={'game_id': game_id, 'player_id': player_id, 'tactic_id': tactic_id},
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'tactic_id': tactic_id,
+                'client_action_id': _new_client_action_id(),
+            },
             timeout=10,
         )
         return response.json()

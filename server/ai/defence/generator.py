@@ -25,6 +25,17 @@ from ai.defence.config import (
 
 logger = logging.getLogger('nk.ai.defence.generator')
 
+# Maximum re-rolls when an optional draw is rejected for resource
+# infeasibility before we give up on that slot.
+MAX_FEASIBILITY_RETRIES = 12
+
+# Probability that a generator-appended castle slot becomes a Maharaja
+# (else king).  Anchor castle role is left untouched.
+EXTRA_CASTLE_MAHARAJA_CHANCE = 0.30
+
+# Roles considered castle figures by the cap rule.
+_CASTLE_ROLES = frozenset({'king', 'maharaja'})
+
 
 def _suit_color(suit: str) -> str:
     return 'red' if suit in AI_DEFENCE_RED_SUITS else 'black'
@@ -252,6 +263,39 @@ def _resource_totals(figures: list[dict[str, Any]]) -> tuple[dict[str, int], dic
     return total_requires, total_produces
 
 
+def _count_castle_figures(figures: list[dict[str, Any]]) -> int:
+    return sum(1 for fig in figures if (fig.get('field') or '').lower() == 'castle')
+
+
+def _optional_role_is_feasible(role_key: str, suit: str,
+                               current_figures: list[dict[str, Any]],
+                               rng: random.Random,
+                               tier: int) -> bool:
+    """Return True iff appending a fresh ``role_key`` of ``suit`` keeps the
+    template's static resource balance non-negative on every base channel
+    (villager_*, warrior_*, etc.).  Dynamic number-based requires (food,
+    material) are *not* checked here — those are handled downstream by
+    ``_repair_resource_deficits`` which can append farms/material providers
+    without violating the castle cap.
+    """
+    color = _suit_color(suit)
+    base = AI_DEFENCE_FIGURE_CATALOG.get(role_key, {}).get(color)
+    if not base:
+        return False
+    if (base.get('field') or '').lower() == 'castle':
+        # Castle figures (king/maharaja) only PRODUCE; trivially feasible.
+        return True
+    total_req, total_prod = _resource_totals(current_figures)
+    for res, amt in (base.get('requires') or {}).items():
+        total_req[res] = total_req.get(res, 0) + int(amt or 0)
+    for res, amt in (base.get('produces') or {}).items():
+        total_prod[res] = total_prod.get(res, 0) + int(amt or 0)
+    for res, req in total_req.items():
+        if req > total_prod.get(res, 0):
+            return False
+    return True
+
+
 def _resource_shortfalls(figures: list[dict[str, Any]]) -> dict[str, int]:
     total_requires, total_produces = _resource_totals(figures)
     return {
@@ -329,6 +373,7 @@ def validate_ai_defence_template(template: dict[str, Any]) -> bool:
 def _repair_resource_deficits(figures: list[dict[str, Any]], tier: int,
                               primary_suit: str, rng: random.Random) -> list[dict[str, Any]]:
     repaired = list(figures)
+    castle_cap = int(tier)
     for _ in range(20):
         deficit_map = template_resource_deficit_map(repaired)
         if repaired and not any(deficit_map.values()):
@@ -336,13 +381,34 @@ def _repair_resource_deficits(figures: list[dict[str, Any]], tier: int,
         shortfalls = _resource_shortfalls(repaired)
         if not shortfalls:
             break
+        added = False
         for resource in sorted(shortfalls):
             provider = AI_DEFENCE_RESOURCE_PROVIDERS.get(resource)
             if not provider:
                 continue
             role, color = provider
+            # Castle providers (king/maharaja) must not exceed the per-tier
+            # castle cap.  If the cap is full, drop figures whose unmet
+            # requirements bind the shortfall instead.
+            if role in _CASTLE_ROLES and _count_castle_figures(repaired) >= castle_cap:
+                # Remove the first figure that requires this resource (and
+                # is not itself a castle figure) to bring totals back in line.
+                victim_idx = None
+                for idx, fig in enumerate(repaired):
+                    if (fig.get('field') or '').lower() == 'castle':
+                        continue
+                    if int((fig.get('requires') or {}).get(resource, 0) or 0) > 0:
+                        victim_idx = idx
+                        break
+                if victim_idx is not None:
+                    repaired.pop(victim_idx)
+                    added = True
+                continue
             suit = _default_suit_for_color(color, primary_suit, rng)
             repaired.append(_make_figure(role, suit, tier, rng))
+            added = True
+        if not added:
+            break
     return repaired
 
 
@@ -502,16 +568,47 @@ def generate_ai_defence_template_for_land(land: Any) -> dict[str, Any]:
     ]
 
     lo, hi = rules.get('optional_count_range', (0, 0))
-    optional_count = rng.randint(int(lo), int(hi))
-    for _ in range(optional_count):
-        role = _weighted_choice(rules.get('optional_role_weights') or [('farm_small', 1)], rng)
-        if fortress_free_black and role in _FORTRESS_ROLES:
+    optional_target = rng.randint(int(lo), int(hi))
+    optional_weights = rules.get('optional_role_weights') or [('farm_small', 1)]
+
+    # Castle exact-N enforcement BEFORE optional draws.  Appending the extra
+    # king/maharaja figures up front (mixing suits/colors) gives optional
+    # feasibility checks access to the full anchor production base —
+    # otherwise cross-color optional roles would always fail feasibility on
+    # tiers whose core has a single primary-color king.
+    castle_have = _count_castle_figures(figures)
+    castle_need = max(0, int(tier) - castle_have)
+    for _ in range(castle_need):
+        role = 'maharaja' if rng.random() < EXTRA_CASTLE_MAHARAJA_CHANCE else 'king'
+        cross_chance = float(rules.get('core_cross_color_chance', 0) or 0)
+        if cross_chance > 0 and rng.random() < min(1.0, max(0.0, cross_chance)):
             suit = _opposite_color_suit(primary_suit, rng)
         else:
-            suit = _choose_optional_suit(primary_suit, tier, rng)
+            suit = _same_color_alternate(primary_suit, rng)
         figures.append(_make_figure(role, suit, tier, rng))
 
+    for _ in range(optional_target):
+        chosen = None
+        for _attempt in range(MAX_FEASIBILITY_RETRIES):
+            role = _weighted_choice(optional_weights, rng)
+            if fortress_free_black and role in _FORTRESS_ROLES:
+                suit = _opposite_color_suit(primary_suit, rng)
+            else:
+                suit = _choose_optional_suit(primary_suit, tier, rng)
+            if _optional_role_is_feasible(role, suit, figures, rng, tier):
+                chosen = _make_figure(role, suit, tier, rng)
+                break
+        if chosen is not None:
+            figures.append(chosen)
+
     figures = _repair_resource_deficits(figures, tier, primary_suit, rng)
+
+    final_castle = _count_castle_figures(figures)
+    if final_castle != int(tier):
+        logger.warning(
+            'AI defence castle invariant: tier=%s expected %s castle figures, got %s (land=%s)',
+            tier, tier, final_castle, getattr(land, 'id', None),
+        )
     moves = _build_battle_moves(
         figures,
         primary_suit,

@@ -450,6 +450,172 @@ class TestConquerOwnDefenderEndpoint:
             assert data_r.get('outcome') == 'battle'
             assert data_r['game']['battle_confirmed'] is True
 
+    def test_own_defender_can_ignore_own_must_be_attacked_figure(
+        self, app, db
+    ):
+        """Own defender choice after Invader Swap is not forced by own taunts."""
+        with app.app_context():
+            attacker, land, cfg = self._setup_swap_game(app, db)
+            fortress_cfg = _add_conquer_config_figure(
+                db, cfg, attacker,
+                family_name='Wooden Fortress',
+                name='Wooden Fortress',
+                suit='Spades',
+                color='defensive',
+                field='military',
+            )
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+
+            atk_player = next(p for p in game.players if p.user_id == attacker.id)
+            invader_player = db.session.get(Player, game.invader_player_id)
+            adv_fig = next(
+                (f for f in Figure.query.filter_by(
+                    game_id=game.id, player_id=invader_player.id
+                ).all() if not getattr(f, 'cannot_be_blocked', False)),
+                None,
+            )
+            assert adv_fig is not None
+            normal = Figure.query.filter(
+                Figure.game_id == game.id,
+                Figure.player_id == atk_player.id,
+                Figure.source_config_figure_id != fortress_cfg.id,
+            ).first()
+            assert normal is not None
+
+            game.advancing_figure_id = adv_fig.id
+            game.advancing_player_id = invader_player.id
+            game.defending_figure_id = None
+            game.battle_decisions = None
+            game.turn_player_id = atk_player.id
+            db.session.commit()
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': normal.id,
+            }, headers=headers)
+
+            assert resp.status_code == 200, resp.get_json()
+            data_r = resp.get_json()
+            assert data_r['success'] is True
+            assert data_r['game']['defending_figure_id'] == normal.id
+
+    def test_own_defender_can_select_own_must_be_attacked_figure(
+        self, app, db
+    ):
+        """Fortress-style cannot-attack taunts remain legal own defenders."""
+        with app.app_context():
+            attacker, land, cfg = self._setup_swap_game(app, db)
+            fortress_cfg = _add_conquer_config_figure(
+                db, cfg, attacker,
+                family_name='Wooden Fortress',
+                name='Wooden Fortress',
+                suit='Spades',
+                color='defensive',
+                field='military',
+            )
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+
+            atk_player = next(p for p in game.players if p.user_id == attacker.id)
+            invader_player = db.session.get(Player, game.invader_player_id)
+            adv_fig = next(
+                (f for f in Figure.query.filter_by(
+                    game_id=game.id, player_id=invader_player.id
+                ).all() if not getattr(f, 'cannot_be_blocked', False)),
+                None,
+            )
+            assert adv_fig is not None
+            fortress = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=atk_player.id,
+                source_config_figure_id=fortress_cfg.id,
+            ).first()
+            assert fortress is not None
+
+            game.advancing_figure_id = adv_fig.id
+            game.advancing_player_id = invader_player.id
+            game.defending_figure_id = None
+            game.battle_decisions = None
+            game.turn_player_id = atk_player.id
+            db.session.commit()
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': fortress.id,
+            }, headers=headers)
+
+            assert resp.status_code == 200, resp.get_json()
+            data_r = resp.get_json()
+            assert data_r['success'] is True
+            assert data_r['game']['defending_figure_id'] == fortress.id
+
+    def test_own_defender_can_ignore_deficit_own_must_be_attacked_figure(
+        self, app, db
+    ):
+        """A deficit own Fortress must not force selecting it after swap."""
+        with app.app_context():
+            attacker, land, cfg = self._setup_swap_game(app, db)
+            fortress_cfg = _add_conquer_config_figure(
+                db, cfg, attacker,
+                family_name='Stone Fortress',
+                name='Stone Fortress',
+                suit='Spades',
+                color='defensive',
+                field='military',
+            )
+            fortress_cfg.requires = {'food_black': 1}
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            data = _start_battle(client, headers, land.id)
+            game = db.session.get(Game, data['game_id'])
+
+            atk_player = next(p for p in game.players if p.user_id == attacker.id)
+            invader_player = db.session.get(Player, game.invader_player_id)
+            adv_fig = next(
+                (f for f in Figure.query.filter_by(
+                    game_id=game.id, player_id=invader_player.id
+                ).all() if not getattr(f, 'cannot_be_blocked', False)),
+                None,
+            )
+            assert adv_fig is not None
+            normal = Figure.query.filter(
+                Figure.game_id == game.id,
+                Figure.player_id == atk_player.id,
+                Figure.source_config_figure_id != fortress_cfg.id,
+            ).first()
+            assert normal is not None
+
+            game.advancing_figure_id = adv_fig.id
+            game.advancing_player_id = invader_player.id
+            game.defending_figure_id = None
+            game.battle_decisions = None
+            game.turn_player_id = atk_player.id
+            db.session.commit()
+
+            resp = client.post('/games/conquer_select_own_defender', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+                'figure_id': normal.id,
+            }, headers=headers)
+
+            assert resp.status_code == 200, resp.get_json()
+            data_r = resp.get_json()
+            assert data_r['success'] is True
+            assert data_r['game']['defending_figure_id'] == normal.id
+
     def test_own_defender_civil_war_second_pick_completes(self, app, db):
         """Invader Swap + Civil War lets the conquerer pick a second defender."""
         with app.app_context():

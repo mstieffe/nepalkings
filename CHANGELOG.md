@@ -2,6 +2,51 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased — Land tiers 1–6, castle cap, loot rank buckets
+
+### Added
+
+- Land tiers expanded from 4 to **6**. New tier names: *Imperial Bulwark* (5)
+  and *Eternal Citadel* (6). `KINGDOM_TIER_COUNT` and the
+  `LAND_TIER_PROBABILITIES`, `LAND_NEUTRAL_TIER_PROBABILITIES`,
+  `LAND_GOLD_RATE_RANGES`, `LAND_SUIT_BONUS_RANGES`, `KINGDOM_TIER_XP`,
+  `HEX_TIER_FILL/BORDER` and `HEX_SUIT_TIER_FILL/BORDER` tables now cover
+  tiers 5 and 6.
+- **Castle figure cap per tier**: `CASTLE_FIGURE_LIMIT_BY_TIER = {1:1, …, 6:6}`.
+  A land with tier *N* may host at most *N* castle figures (kings/maharajas)
+  in either a conquer-attack or defence config. Enforced in
+  `/kingdom/conquer/build_figure`, `/kingdom/defence/build_figure`, and the
+  in-battle figure-creation path (`server/routes/figures.py`). Violations
+  return `400 { error_code: 'castle_cap_reached' }`.
+- AI defence generator now produces feasibility-checked templates for all
+  six tiers, with rank-based optional rosters and tier-scaled
+  `optional_count_range`. Extra castle slots are placed before optional
+  draws so the resource graph stays solvable when castle cap > 1.
+- Tests: `tests/server/test_castle_cap.py` (conquer + defence routes,
+  tier 1/2/3 boundary cases); `test_hex_map_overlays` parameterised over
+  tiers 1–6.
+
+### Changed
+
+- **Loot reward shape**: post-conquer loot cards are now classified by
+  **rank** rather than by figure role:
+  - `LOOT_KEY_RANKS = {'2','4','5','J','Q','K','A'}` → *key* bucket.
+  - `LOOT_NUMBER_RANKS = {'3','6','7','8','9','10'}` → *number* bucket.
+  The internal `support_quota` field was renamed `number_quota` (and
+  `support_cards` → `number_cards`) in `_select_conquer_loot_cards`.
+- AI defence: `AI_DEFENCE_GENERATOR_VERSION` bumped **5 → 6**, invalidating
+  cached templates so existing AI-defended lands regenerate on next visit.
+- `kingdom_service.py` fallback default tier raised 3 → 6 to match the new
+  upper bound.
+
+### Migration note
+
+- `CASTLE_FIGURE_LIMIT_BY_TIER` is a runtime constant; no schema change is
+  required for the cap itself. However, existing AI-defended templates and
+  any persisted land tiers > 4 should be regenerated: **run
+  `server/RESET_DATABASE.sh`** before redeploy so land tiers, AI templates,
+  and loot history align with the new tier 1–6 schema.
+
 ## Unreleased — Conquer v2 spell-replay refactor
 
 ### Added

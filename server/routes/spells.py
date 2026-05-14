@@ -485,17 +485,40 @@ def get_active_spells():
     if not game_id:
         return jsonify({'success': False, 'message': 'game_id required'}), 400
     
-    query = ActiveSpell.query.filter_by(game_id=game_id, is_active=True)
-    
-    if player_id:
-        query = query.filter_by(player_id=player_id)
-    
-    active_spells = query.all()
+    game = db.session.get(Game, game_id)
+
+    if game and game.mode == 'conquer':
+        query = ActiveSpell.query.filter_by(game_id=game_id)
+        if player_id:
+            query = query.filter_by(player_id=player_id)
+        spells = query.all()
+        active_spells = [
+            spell for spell in spells
+            if spell.is_active or _is_conquer_prelude_replay_spell(spell)
+        ]
+    else:
+        query = ActiveSpell.query.filter_by(game_id=game_id, is_active=True)
+        if player_id:
+            query = query.filter_by(player_id=player_id)
+        active_spells = query.all()
     
     return jsonify({
         'success': True,
         'active_spells': [spell.serialize() for spell in active_spells]
     }), 200
+
+
+def _is_conquer_prelude_replay_spell(spell):
+    """Keep resolved conquer preludes available for client timeline replay."""
+    effect_data = spell.effect_data if isinstance(spell.effect_data, dict) else {}
+    if not effect_data.get('prelude_origin'):
+        return False
+    return bool(
+        effect_data.get('prelude_status')
+        or effect_data.get('prelude_pending_target')
+        or effect_data.get('target_figure_snapshot')
+        or effect_data.get('destroyed_figure_snapshot')
+    )
 
 
 @spells.route('/get_pending_spell', methods=['GET'])
@@ -814,6 +837,25 @@ def _auto_convert_spell_battle_moves(
 
 
 def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
+    """Execute a spell.  Wraps :func:`_execute_spell_impl` with a single
+    spell-resolution-step lock so the timeline transition stays as one
+    bubble even when the spell purges and adds tactics for both players.
+    """
+    # Sentinel; the first ``_bump_resolution_step`` inside the scope pins
+    # the step value here for all subsequent bumps.  ``None`` after exit so
+    # later bumps (e.g. another spell on the same Game in-process) re-enter
+    # the unlocked state.
+    game._spell_step_lock = 'pending'
+    try:
+        return _execute_spell_impl(spell, game, caster)
+    finally:
+        try:
+            game._spell_step_lock = None
+        except Exception:
+            pass
+
+
+def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
     """
     Execute a spell's effect based on its type.
     
@@ -1191,6 +1233,10 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 spell_effect['effect'] = 'Target figure not found'
                 spell_effect['error'] = 'Invalid target'
             else:
+                target_figure_snapshot = target_figure.serialize()
+                spell_effect['target_figure_name'] = target_figure.name
+                spell_effect['target_figure_snapshot'] = target_figure_snapshot
+
                 # Check if target figure has checkmate (immune to all spells)
                 if getattr(target_figure, 'checkmate', False):
                     spell_effect['effect'] = f'{target_figure.name} is immune to spells (Checkmate)'
@@ -1356,7 +1402,10 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         db.session.flush()
                         
                         spell_effect['effect'] = f'Destroyed {destroyed_figure_name} ({card_count} cards returned to deck)'
+                        spell_effect['target_figure_name'] = destroyed_figure_name
                         spell_effect['destroyed_figure_name'] = destroyed_figure_name
+                        spell_effect['target_figure_snapshot'] = target_figure_snapshot
+                        spell_effect['destroyed_figure_snapshot'] = target_figure_snapshot
                         spell_effect['card_count'] = card_count
                         if checkmate_game_over:
                             spell_effect['game_over'] = checkmate_game_over
@@ -1389,12 +1438,17 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell.effect_data = {
                         'spell_icon': spell_icon,
                         'power_modifier': power_modifier,
-                        'target_figure_name': target_figure.name
+                        'target_figure_id': target_figure.id,
+                        'target_figure_name': target_figure.name,
+                        'target_figure_snapshot': target_figure_snapshot,
                     }
                     
                     # Keep spell active so it persists until battle/end of turn
                     spell.is_active = True
                     
+                    spell_effect['target_figure_id'] = target_figure.id
+                    spell_effect['target_figure_name'] = target_figure.name
+                    spell_effect['target_figure_snapshot'] = target_figure_snapshot
                     spell_effect['power_modifier'] = power_modifier
                     spell_effect['spell_icon'] = spell_icon
         else:

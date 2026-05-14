@@ -29,12 +29,39 @@ def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# ── Castle figure cap (per-tier) ────────────────────────────────────────────
+
+def _castle_cap_for_tier(tier):
+    """Return max castle-field figures allowed on a tier-N land."""
+    try:
+        t = int(tier or 1)
+    except (TypeError, ValueError):
+        t = 1
+    limits = getattr(config, 'CASTLE_FIGURE_LIMIT_BY_TIER', {}) or {}
+    if t in limits:
+        return int(limits[t])
+    # Fallback: cap == tier for any unmapped tier.
+    return max(1, t)
+
+
+def _config_castle_count(cfg):
+    """Count figures with field=='castle' in a LandConfig (defence/conquer)."""
+    if cfg is None:
+        return 0
+    return sum(
+        1 for f in (cfg.figures or [])
+        if (getattr(f, 'field', None) or '').lower() == 'castle'
+    )
+
+
 # ── Cosmetic / style helpers ────────────────────────────────────────────────
 
 _COSMETIC_STYLE_FIELDS = {
     'badge': 'badge_key',
     'border': 'border_key',
     'surface': 'surface_key',
+    'color': 'color_key',
+    'sigil': 'sigil_key',
 }
 
 
@@ -47,6 +74,8 @@ def _default_style_dict():
         'badge_key': 'badge_plain',
         'border_key': 'border_simple_gold',
         'surface_key': 'surface_plain',
+        'color_key': 'color_royal_gold',
+        'sigil_key': 'sigil_none',
     })
 
 
@@ -151,7 +180,7 @@ def collect_kingdom_production_route(kingdom_id):
     if not kingdom_row or kingdom_row.owner_user_id != user.id:
         return jsonify({'error': 'Kingdom not found'}), 404
 
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     requested_keys = None
     if 'item_keys' in data and data.get('item_keys') is not None:
         if not isinstance(data.get('item_keys'), list):
@@ -373,7 +402,8 @@ def _kingdom_style_updates_from_payload(data):
             raise ValueError('Invalid cosmetic type')
         updates[style_field] = cosmetic_key
 
-    for style_field in ('badge_key', 'border_key', 'surface_key'):
+    for style_field in ('badge_key', 'border_key', 'surface_key',
+                        'color_key', 'sigil_key'):
         key = data.get(style_field)
         if not key:
             continue
@@ -602,6 +632,10 @@ def kingdom_config_cosmetic_purchase(kingdom_id):
     item = catalog.get(cosmetic_key)
     if not item:
         return jsonify({'success': False, 'message': 'Unknown cosmetic'}), 404
+    # Sigils (and any other achievement-only cosmetics) expose price_gold=None.
+    if item.get('price_gold') is None:
+        return jsonify({'success': False,
+                        'message': 'This cosmetic is unlocked via achievements'}), 400
 
     kingdom_row = _kingdom_config_or_404(kingdom_id)
     user = _lock_user_for_spend(g.user_id)
@@ -1799,6 +1833,17 @@ def conquer_build_figure():
 
     cfg = _get_or_create_conquer_config(g.user_id, land_id)
 
+    # Castle figure cap (per-tier).  Castle figures (Kings/Maharaja) on a
+    # tier-N land are limited to N.
+    if (field or '').lower() == 'castle':
+        cap = _castle_cap_for_tier(land.tier)
+        if _config_castle_count(cfg) + 1 > cap:
+            return jsonify({
+                'success': False,
+                'error_code': 'castle_cap_reached',
+                'message': f'Castle is full for tier {int(land.tier or 1)} (max {cap}).',
+            }), 400
+
     figure = LandConfigFigure(
         config_id=cfg.id,
         family_name=family_name,
@@ -2465,6 +2510,17 @@ def defence_build_figure():
         return jsonify({'success': False, 'message': 'Some cards are already locked'}), 400
 
     cfg = _get_defence_edit_config(g.user_id, land_id)
+
+    # Castle figure cap (per-tier).  Castle figures (Kings/Maharaja) on a
+    # tier-N land are limited to N.
+    if (field or '').lower() == 'castle':
+        cap = _castle_cap_for_tier(land.tier)
+        if _config_castle_count(cfg) + 1 > cap:
+            return jsonify({
+                'success': False,
+                'error_code': 'castle_cap_reached',
+                'message': f'Castle is full for tier {int(land.tier or 1)} (max {cap}).',
+            }), 400
 
     figure = LandConfigFigure(
         config_id=cfg.id,
@@ -4387,7 +4443,9 @@ def _create_prelude_spell(game, player, spell_name, spell_data, game_figures,
             if drawn:
                 extras['drawn_card_ids'] = [c['id'] for c in drawn]
             for key in (
-                'target_figure_id', 'power_modifier', 'spell_icon',
+                'target_figure_id', 'target_figure_name',
+                'target_figure_snapshot', 'destroyed_figure_snapshot',
+                'power_modifier', 'spell_icon',
                 'destroyed_figure_name', 'card_count', 'caster_dumped',
                 'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
                 'drawn_cards', 'opponent_drawn_cards', 'cards_given',
@@ -4928,7 +4986,9 @@ def conquer_resolve_prelude_target():
     if drawn:
         resolved_data['drawn_card_ids'] = [c['id'] for c in drawn]
     for key in (
-        'target_figure_id', 'power_modifier', 'spell_icon',
+        'target_figure_id', 'target_figure_name',
+        'target_figure_snapshot', 'destroyed_figure_snapshot',
+        'power_modifier', 'spell_icon',
         'destroyed_figure_name', 'card_count', 'caster_dumped',
         'opponent_dumped', 'caster_dumped_cards', 'opponent_dumped_cards',
         'drawn_cards', 'opponent_drawn_cards', 'cards_given',
@@ -4998,6 +5058,27 @@ def _activity_card_detail(entry, won=False, lost=False):
         return _activity_card_pair_detail(
             entry, 'card_lost_suit', 'card_lost_rank', 'Loot lost')
     return ''
+
+
+def _land_count_label(count):
+    return 'land' if int(count or 0) == 1 else 'lands'
+
+
+def _split_land_sample_detail(payload):
+    samples = payload.get('land_samples') or []
+    if not samples:
+        return ''
+    first = samples[0] or {}
+    col = first.get('col')
+    row = first.get('row')
+    if col is None or row is None:
+        return ''
+    count = int(payload.get('transferred_land_count')
+                or payload.get('lost_land_count')
+                or payload.get('gained_land_count')
+                or len(samples))
+    suffix = f' + {count - 1} more' if count > 1 else ''
+    return f', including ({col}, {row}){suffix}'
 
 
 def _activity_loot_detail(entry, label):
@@ -5157,6 +5238,33 @@ def _kingdom_event_activity_presentation(entry):
             'activity_title': 'Kingdom dissolved',
             'activity_detail': f'{name} had no lands left.',
             'activity_tone': 'bad',
+        }
+    if kind == 'kingdom_split_lost':
+        name = payload.get('kingdom_name') or 'Your kingdom'
+        conqueror = payload.get('conqueror_username') or 'The conqueror'
+        count = int(payload.get('lost_land_count')
+                    or payload.get('transferred_land_count') or 0)
+        sample = _split_land_sample_detail(payload)
+        return {
+            'activity_title': 'Kingdom split',
+            'activity_detail': (
+                f'{conqueror} severed {name}; {count} '
+                f'{_land_count_label(count)} changed sides{sample}.'
+            ),
+            'activity_tone': 'bad',
+        }
+    if kind == 'kingdom_split_claimed':
+        defender = payload.get('defender_username') or 'the defender'
+        count = int(payload.get('gained_land_count')
+                    or payload.get('transferred_land_count') or 0)
+        sample = _split_land_sample_detail(payload)
+        return {
+            'activity_title': 'Split lands claimed',
+            'activity_detail': (
+                f"{defender}'s split kingdom yielded {count} extra "
+                f'{_land_count_label(count)}{sample}.'
+            ),
+            'activity_tone': 'good',
         }
     if kind == 'skill_downgraded':
         skill = payload.get('skill') or 'A skill'

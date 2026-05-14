@@ -25,6 +25,8 @@ def _default_kingdom_style():
         'badge_key': 'badge_plain',
         'border_key': 'border_simple_gold',
         'surface_key': 'surface_plain',
+        'color_key': 'color_royal_gold',
+        'sigil_key': 'sigil_none',
     })
 
 
@@ -33,8 +35,15 @@ def _cosmetic_catalog():
 
 
 def default_unlocked_cosmetic_keys():
-    return {key for key, item in _cosmetic_catalog().items()
-            if int(item.get('price_gold', 0) or 0) <= 0}
+    keys = set()
+    for key, item in _cosmetic_catalog().items():
+        price = item.get('price_gold', 0)
+        # ``None`` means achievement-only, not free.
+        if price is None:
+            continue
+        if int(price or 0) <= 0:
+            keys.add(key)
+    return keys
 
 
 def create_kingdom(owner_user_id, source_kingdom=None):
@@ -56,6 +65,8 @@ def create_kingdom(owner_user_id, source_kingdom=None):
         badge_key=defaults['badge_key'],
         border_key=defaults['border_key'],
         surface_key=defaults['surface_key'],
+        color_key=defaults.get('color_key', 'color_royal_gold'),
+        sigil_key=defaults.get('sigil_key', 'sigil_none'),
         shield_until=source_kingdom.shield_until if source_kingdom else None,
         level=1,
         experience=0,
@@ -104,6 +115,8 @@ def ensure_kingdom_production_columns():
         ('last_side_booster_collection_at', datetime_type),
         ('pending_maps', 'INTEGER NOT NULL DEFAULT 0'),
         ('last_maps_collection_at', datetime_type),
+        ("color_key", "VARCHAR(80) NOT NULL DEFAULT 'color_royal_gold'"),
+        ("sigil_key", "VARCHAR(80) NOT NULL DEFAULT 'sigil_none'"),
     ]
     added = []
     for name, ddl_type in specs:
@@ -444,7 +457,7 @@ def seed_kingdom_map():
 
     cols = config.KINGDOM_MAP_COLS
     rows = config.KINGDOM_MAP_ROWS
-    tier_count = getattr(config, 'KINGDOM_TIER_COUNT', 3)
+    tier_count = getattr(config, 'KINGDOM_TIER_COUNT', 6)
     clusters_per_suit = max(
         1, int(getattr(config, 'KINGDOM_MAP_CLUSTERS_PER_SUIT', 1)))
     cluster_suits = _build_cluster_suits(clusters_per_suit)
@@ -678,6 +691,98 @@ def _connected_land_components_for_lands(lands):
     return components
 
 
+def _component_survival_sort_key(component):
+    land_count = len(component)
+    tier_total = sum(int(land.tier or 0) for land in component)
+    gold_total = round(sum(float(land.gold_rate or 0.0) for land in component), 3)
+    min_row = min((land.row for land in component), default=0)
+    min_col = min((land.col for land in component), default=0)
+    min_id = min((land.id for land in component), default=0)
+    return (-land_count, -tier_total, -gold_total, min_row, min_col, min_id)
+
+
+def _split_land_summary(land):
+    return {
+        'id': land.id,
+        'col': land.col,
+        'row': land.row,
+        'tier': int(land.tier or 0),
+        'gold_rate': float(land.gold_rate or 0.0),
+    }
+
+
+def transfer_split_off_kingdom_lands(old_owner_id, new_owner_id, source_kingdom_id,
+                                     split_land_id=None, now=None, commit=False):
+    """Transfer non-surviving components after a conquered land splits a kingdom.
+
+    The defender keeps exactly one component: highest land count wins, then
+    highest total tier, then highest total gold rate, then stable coordinates.
+    Every other component from the same source kingdom becomes collateral
+    territory for the conqueror.  Returns a JSON-friendly summary or ``None``
+    when no split collateral was produced.
+    """
+    if not old_owner_id or not new_owner_id or not source_kingdom_id:
+        return None
+    if old_owner_id == new_owner_id:
+        return None
+
+    remaining_lands = Land.query.filter_by(
+        owner_user_id=old_owner_id,
+        kingdom_id=source_kingdom_id,
+    ).all()
+    components = _connected_land_components_for_lands(remaining_lands)
+    if len(components) <= 1:
+        return None
+
+    ranked_components = sorted(components, key=_component_survival_sort_key)
+    kept_component = ranked_components[0]
+    transferred_components = ranked_components[1:]
+    transferred_lands = sorted([
+        land
+        for component in transferred_components
+        for land in component
+    ], key=lambda land: (land.row, land.col, land.id))
+    if not transferred_lands:
+        return None
+
+    now = now or _utcnow()
+    cooldown_until = None
+    protect_seconds = max(
+        int(getattr(config, 'LAND_CONQUER_PROTECTION_SECONDS', 0) or 0),
+        0,
+    )
+    if protect_seconds > 0:
+        cooldown_until = now + timedelta(seconds=protect_seconds)
+
+    source_kingdom = db.session.get(Kingdom, source_kingdom_id)
+    source_name = (source_kingdom.name if source_kingdom and source_kingdom.name
+                   else f'Kingdom #{source_kingdom_id}')
+
+    for land in transferred_lands:
+        land.owner_user_id = new_owner_id
+        land.kingdom_id = None
+        land.owned_since = now
+        land.conquer_cooldown_until = cooldown_until
+
+    summary = {
+        'source_kingdom_id': source_kingdom_id,
+        'source_kingdom_name': source_name,
+        'old_owner_id': old_owner_id,
+        'new_owner_id': new_owner_id,
+        'split_land_id': split_land_id,
+        'component_count': len(components),
+        'lost_component_count': len(transferred_components),
+        'kept_land_count': len(kept_component),
+        'kept_land_ids': [land.id for land in kept_component],
+        'transferred_land_count': len(transferred_lands),
+        'transferred_land_ids': [land.id for land in transferred_lands],
+        'transferred_lands': [_split_land_summary(land) for land in transferred_lands],
+    }
+    if commit:
+        db.session.commit()
+    return summary
+
+
 # ── Skills (data-driven via kingdom_progression.KINGDOM_SKILL_DEFINITIONS) ──
 
 def _skill_keys():
@@ -836,6 +941,11 @@ def award_kingdom_xp(kingdom, amount, *, reason=None):
                 payload={'old_level': old_level, 'new_level': new_level,
                          'sp_gained': sp_gained},
             ))
+    except Exception:
+        pass
+    # Sigil achievement check (best-effort, never fails the awarding flow).
+    try:
+        apply_sigil_unlocks(kingdom.owner_user_id)
     except Exception:
         pass
     return levels_gained, sp_gained
@@ -1348,6 +1458,143 @@ def kingdom_unlocked_cosmetics(kingdom_id):
         .all()
     )
     return keys
+
+
+# ── Kingdom sigils (achievement-unlocked) ────────────────────────────────
+
+def _sigil_catalog():
+    return getattr(config, 'KINGDOM_SIGIL_CATALOG', {}) or {}
+
+
+def _compute_user_sigil_stats(user_id):
+    """Aggregate the counters used by the sigil unlock evaluator.
+
+    Single-pass DB reads so the evaluator can be cheaply called from any
+    progression hook.  Returns a dict::
+
+        {
+          'max_kingdom_level': int,
+          'conquer_lands': int,           # lifetime lands won by attack
+          'win_battles': int,             # lifetime games won
+          'win_conquer_battles': int,     # lifetime conquer-mode games won
+          'owns_all_suits': bool,         # owns >=1 land of every suit
+          'reach_max_tier': bool,         # owns >=1 tier-6 land
+        }
+    """
+    from sqlalchemy import func, distinct
+    from models import LandAttackLog, Game, Player
+
+    max_level = (db.session.query(func.max(Kingdom.level))
+                 .filter(Kingdom.owner_user_id == user_id).scalar() or 0)
+    conquer_lands = (db.session.query(func.count(LandAttackLog.id))
+                     .filter(LandAttackLog.attacker_user_id == user_id,
+                             LandAttackLog.result == 'attacker_won')
+                     .scalar() or 0)
+    # Wins: games where this user's Player is the winner.
+    win_battles = (db.session.query(func.count(Game.id))
+                   .join(Player, Player.id == Game.winner_player_id)
+                   .filter(Player.user_id == user_id,
+                           Game.state == 'finished')
+                   .scalar() or 0)
+    win_conquer = (db.session.query(func.count(Game.id))
+                   .join(Player, Player.id == Game.winner_player_id)
+                   .filter(Player.user_id == user_id,
+                           Game.state == 'finished',
+                           Game.mode == 'conquer')
+                   .scalar() or 0)
+    owned_suits = {s for (s,) in db.session.query(distinct(Land.suit_bonus_suit))
+                   .filter(Land.owner_user_id == user_id).all() if s}
+    owned_suits.discard('Neutral')
+    # Tiers we treat as "max" — pull from CASTLE_FIGURE_LIMIT_BY_TIER keys.
+    tier_limits = getattr(config, 'CASTLE_FIGURE_LIMIT_BY_TIER', {1: 1}) or {1: 1}
+    max_tier_value = max(tier_limits.keys())
+    has_max_tier = bool(db.session.query(Land.id)
+                        .filter(Land.owner_user_id == user_id,
+                                Land.tier >= max_tier_value).first())
+    return {
+        'max_kingdom_level': int(max_level),
+        'conquer_lands': int(conquer_lands),
+        'win_battles': int(win_battles),
+        'win_conquer_battles': int(win_conquer),
+        'owns_all_suits': len(owned_suits) >= 4,
+        'reach_max_tier': has_max_tier,
+    }
+
+
+def evaluate_sigil_unlocks_for_user(user_id):
+    """Return the set of sigil cosmetic keys the user has earned.
+
+    Pure read-only — does not write any DB rows.  Callers should diff this
+    against the existing ``KingdomCosmeticUnlock`` rows (per-kingdom) and
+    insert the missing ones via ``apply_sigil_unlocks``.
+    """
+    stats = _compute_user_sigil_stats(user_id)
+    earned = set()
+    for key, sigil in _sigil_catalog().items():
+        kind = sigil.get('unlock_kind')
+        value = int(sigil.get('unlock_value', 0) or 0)
+        if kind == 'free':
+            earned.add(key)
+        elif kind == 'reach_level' and stats['max_kingdom_level'] >= value:
+            earned.add(key)
+        elif kind == 'conquer_lands' and stats['conquer_lands'] >= value:
+            earned.add(key)
+        elif kind == 'win_battles' and stats['win_battles'] >= value:
+            earned.add(key)
+        elif kind == 'win_conquer_battles' and stats['win_conquer_battles'] >= value:
+            earned.add(key)
+        elif kind == 'own_all_suits' and stats['owns_all_suits']:
+            earned.add(key)
+        elif kind == 'reach_max_tier' and stats['reach_max_tier']:
+            earned.add(key)
+    return earned
+
+
+def apply_sigil_unlocks(user_id):
+    """Persist newly-earned sigil unlocks across every kingdom of ``user_id``.
+
+    Sigils are user-scoped achievements but the cosmetic unlock table is
+    per-kingdom, so we mirror each earned sigil into every owned kingdom.
+    Best-effort: errors are swallowed so this never breaks the calling
+    progression flow.  Emits a ``sigil_unlocked`` ``KingdomNotification``
+    for each newly-unlocked sigil.
+    """
+    try:
+        earned = evaluate_sigil_unlocks_for_user(user_id)
+        if not earned:
+            return []
+        kingdoms = Kingdom.query.filter_by(owner_user_id=user_id).all()
+        if not kingdoms:
+            return []
+        catalog = _sigil_catalog()
+        newly = []
+        for kingdom in kingdoms:
+            existing = {
+                k for (k,) in db.session.query(KingdomCosmeticUnlock.cosmetic_key)
+                .filter_by(kingdom_id=kingdom.id).all()
+            }
+            for key in earned:
+                if key in existing:
+                    continue
+                # Skip the 'sigil_none' default — no notification needed.
+                if catalog.get(key, {}).get('unlock_kind') == 'free':
+                    continue
+                db.session.add(KingdomCosmeticUnlock(
+                    kingdom_id=kingdom.id, cosmetic_key=key))
+                newly.append((kingdom.id, key))
+                try:
+                    db.session.add(KingdomNotification(
+                        user_id=user_id,
+                        kingdom_id=kingdom.id,
+                        kind='sigil_unlocked',
+                        payload={'sigil_key': key,
+                                 'name': catalog.get(key, {}).get('name', key)},
+                    ))
+                except Exception:
+                    pass
+        return newly
+    except Exception:
+        return []
 
 
 def _copy_unlocks_into_kingdom(source_kingdom, target_kingdom):

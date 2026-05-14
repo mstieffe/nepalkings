@@ -43,6 +43,35 @@ _GHOST_BLUE = (120, 205, 220)
 _GHOST_RGBA = (68, 112, 122, 92)
 
 
+def _draw_diff_glyph(surface, center, size, direction, color):
+    """Draw a triangle-up / triangle-down / equals glyph using primitives.
+
+    The default font on some platforms lacks the BMP arrow glyphs (▲/▼) and
+    renders them as box tofus. Drawing primitives sidesteps the font issue.
+
+    Parameters
+    ----------
+    direction : 'up' | 'down' | 'eq'
+    """
+    cx, cy = int(center[0]), int(center[1])
+    s = max(2, int(size))
+    half = s // 2
+    if direction == 'up':
+        points = [(cx, cy - half), (cx - half, cy + half), (cx + half, cy + half)]
+        pygame.draw.polygon(surface, color, points)
+    elif direction == 'down':
+        points = [(cx, cy + half), (cx - half, cy - half), (cx + half, cy - half)]
+        pygame.draw.polygon(surface, color, points)
+    else:
+        thickness = max(2, s // 4)
+        gap = max(2, s // 4)
+        bar_w = s
+        top = pygame.Rect(cx - bar_w // 2, cy - gap // 2 - thickness, bar_w, thickness)
+        bot = pygame.Rect(cx - bar_w // 2, cy + gap // 2, bar_w, thickness)
+        pygame.draw.rect(surface, color, top)
+        pygame.draw.rect(surface, color, bot)
+
+
 class ConquerRoundLedger:
     """Bottom ledger band: 3 round cards + total resolve card.
 
@@ -172,13 +201,21 @@ class ConquerRoundLedger:
         return clipped + '...' if clipped else '...'
 
     def _round_diff(self, you, opp) -> int:
+        # Block nullifies both sides of the round regardless of opponent's
+        # move — both players score 0 for the round.
+        if self._is_block(you) or self._is_block(opp):
+            return 0
         return self._power(you) - self._power(opp)
+
+    @staticmethod
+    def _is_block(move) -> bool:
+        return bool(move) and isinstance(move, dict) and move.get('family_name') == 'Block'
 
     def _ghost_preview(self, you_per) -> Optional[Tuple[int, Dict[str, Any]]]:
         game = self._game()
         if not game or getattr(game, 'last_battle_result', None):
             return None
-        round_idx = int(getattr(game, 'battle_round', 0) or 0) - 1
+        round_idx = int(getattr(game, 'battle_round', 0) or 0)
         if round_idx not in (0, 1, 2):
             return None
         if you_per[round_idx] is not None:
@@ -252,13 +289,19 @@ class ConquerRoundLedger:
     def _ensure_layout(self):
         size = (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
         game = self._game()
-        mode = 'pre_battle'
-        if game is not None:
+        effective_mode = getattr(self._parent, '_conquer_effective_layout_mode', None)
+        if callable(effective_mode):
+            mode = effective_mode()
+        elif game is not None:
             if getattr(game, 'last_battle_result', None):
                 mode = 'result'
             elif (getattr(game, 'battle_turn_player_id', None) is not None
                   or getattr(game, 'battle_round', 0) in (1, 2, 3)):
                 mode = 'battle'
+            else:
+                mode = 'pre_battle'
+        else:
+            mode = 'pre_battle'
         if (self._layout is None
                 or size != self._cached_screen_size
                 or mode != self._cached_mode):
@@ -314,7 +357,7 @@ class ConquerRoundLedger:
     def _draw_round_card(self, rect: pygame.Rect, idx: int,
                          you, opp, cur_round: int, ghost_move=None,
                          reveal_animation=None):
-        is_active = (cur_round - 1) == idx if cur_round in (1, 2, 3) else False
+        is_active = cur_round == idx if cur_round in (0, 1, 2) else False
         bg = pygame.Surface(rect.size, pygame.SRCALPHA)
         bg.fill(_CARD_BG_RGBA)
         self.window.blit(bg, rect.topleft)
@@ -338,9 +381,15 @@ class ConquerRoundLedger:
 
         display_you = you if you is not None else ghost_move
         is_ghost = bool(ghost_move is not None and you is None)
+        # Block nullifies the other side: when one player plays Block, the
+        # opponent's chip is shown with a red strike overlay to communicate
+        # that the tactic was negated.
+        you_blocked = self._is_block(opp) and not self._is_block(display_you) and display_you is not None
+        opp_blocked = self._is_block(display_you) and not self._is_block(opp) and opp is not None
         self._draw_player_chip(you_rect, display_you, is_player_self=True,
-                               ghost=is_ghost)
-        self._draw_player_chip(opp_rect, opp, is_player_self=False)
+                               ghost=is_ghost, blocked=you_blocked)
+        self._draw_player_chip(opp_rect, opp, is_player_self=False,
+                               blocked=opp_blocked)
         self._draw_diff_pill(diff_rect, you, opp,
                              played=(you is not None and opp is not None),
                              ghost_move=ghost_move)
@@ -374,7 +423,7 @@ class ConquerRoundLedger:
         pygame.draw.rect(self.window, (238, 204, 116, alpha), rect, 3, border_radius=6)
 
     def _draw_player_chip(self, rect: pygame.Rect, move, is_player_self: bool,
-                          *, ghost: bool = False):
+                          *, ghost: bool = False, blocked: bool = False):
         if ghost:
             overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
             overlay.fill(_GHOST_RGBA)
@@ -411,6 +460,16 @@ class ConquerRoundLedger:
         self.window.blit(ns, (text_x, rect.top + 2))
         self.window.blit(ps, (rect.right - ps.get_width() - 4,
                               rect.bottom - ps.get_height() - 2))
+        if blocked:
+            # Red translucent tint + diagonal strike to indicate the move
+            # was nullified by the opponent's Block.
+            tint = pygame.Surface(rect.size, pygame.SRCALPHA)
+            tint.fill((180, 40, 40, 70))
+            self.window.blit(tint, rect.topleft)
+            pygame.draw.line(self.window, (220, 70, 60),
+                             rect.topleft, rect.bottomright, 3)
+            pygame.draw.line(self.window, (220, 70, 60),
+                             (rect.left, rect.bottom), (rect.right, rect.top), 3)
 
     def _draw_move_icon(self, cx: int, cy: int, icon_size: int, move,
                         *, ghost: bool = False) -> bool:
@@ -455,45 +514,59 @@ class ConquerRoundLedger:
             return
         diff = self._round_diff(you, opp)
         if diff > 0:
-            glyph, col = '▲', _WIN_GREEN
+            direction, col = 'up', _WIN_GREEN
         elif diff < 0:
-            glyph, col = '▼', _LOSE_RED
+            direction, col = 'down', _LOSE_RED
         else:
-            glyph, col = '=', _TIE_GREY
+            direction, col = 'eq', _TIE_GREY
         pill = rect.inflate(-rect.width // 4, -rect.height // 3)
         pygame.draw.rect(self.window, (10, 8, 6), pill, 0, border_radius=8)
         pygame.draw.rect(self.window, col, pill, 2, border_radius=8)
         font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
-        ts = font.render(f'{glyph}{abs(diff)}', True, col)
-        self.window.blit(ts, ts.get_rect(center=pill.center))
+        num_surf = font.render(f'{abs(diff)}', True, col)
+        glyph_size = max(6, min(pill.height - 6, font.get_height() - 2))
+        gap = 2
+        total_w = glyph_size + gap + num_surf.get_width()
+        glyph_cx = pill.centerx - total_w // 2 + glyph_size // 2
+        _draw_diff_glyph(self.window, (glyph_cx, pill.centery), glyph_size, direction, col)
+        num_rect = num_surf.get_rect(midleft=(glyph_cx + glyph_size // 2 + gap, pill.centery))
+        self.window.blit(num_surf, num_rect)
 
     def _draw_ghost_diff_pill(self, rect: pygame.Rect, move, opp):
         diff = self._round_diff(move, opp) if opp is not None else self._power(move)
         if diff > 0:
-            glyph = '▲'
+            direction = 'up'
         elif diff < 0:
-            glyph = '▼'
+            direction = 'down'
         else:
-            glyph = '='
+            direction = 'eq'
         pill = rect.inflate(-rect.width // 4, -rect.height // 3)
         overlay = pygame.Surface(pill.size, pygame.SRCALPHA)
         overlay.fill(_GHOST_RGBA)
         self.window.blit(overlay, pill.topleft)
         pygame.draw.rect(self.window, _GHOST_BLUE, pill, 2, border_radius=8)
         font = settings.get_font(max(13, int(settings.FS_SMALL * 1.0)), bold=True)
-        ts = font.render(f'{glyph}{abs(diff)}', True, _GHOST_BLUE)
-        self.window.blit(ts, ts.get_rect(center=pill.center))
+        num_surf = font.render(f'{abs(diff)}', True, _GHOST_BLUE)
+        glyph_size = max(6, min(pill.height - 6, font.get_height() - 2))
+        gap = 2
+        total_w = glyph_size + gap + num_surf.get_width()
+        glyph_cx = pill.centerx - total_w // 2 + glyph_size // 2
+        _draw_diff_glyph(self.window, (glyph_cx, pill.centery), glyph_size, direction, _GHOST_BLUE)
+        num_rect = num_surf.get_rect(midleft=(glyph_cx + glyph_size // 2 + gap, pill.centery))
+        self.window.blit(num_surf, num_rect)
 
     # -- total card
     def _draw_total_card(self, rect: pygame.Rect, circle_rect: pygame.Rect,
                          you_per, opp_per, ghost_preview=None):
+        # Subtle gold-tinted background so the "battle total" reads as the
+        # dominant readout in the ledger band.
         bg = pygame.Surface(rect.size, pygame.SRCALPHA)
-        bg.fill(_CARD_BG_RGBA)
+        bg.fill((44, 33, 20, 240))
         self.window.blit(bg, rect.topleft)
-        pygame.draw.rect(self.window, _BORDER_RGBA, rect, 2, border_radius=6)
-        title_font = settings.get_font(max(10, int(settings.FS_TINY * 0.95)), bold=True)
-        ts = title_font.render('Total', True, _TEXT_SECONDARY)
-        self.window.blit(ts, (rect.left + 6, rect.top + 4))
+        pygame.draw.rect(self.window, (210, 168, 72), rect, 2, border_radius=6)
+        title_font = settings.get_font(max(11, int(settings.FS_TINY * 1.05)), bold=True)
+        ts = title_font.render('BATTLE TOTAL', True, (238, 206, 130))
+        self.window.blit(ts, ts.get_rect(midtop=(rect.centerx, rect.top + 3)))
 
         total_diff = self._ghost_total_diff(you_per, opp_per, ghost_preview)
         played_count = sum(1 for y, o in zip(you_per, opp_per) if y and o)
@@ -524,16 +597,32 @@ class ConquerRoundLedger:
                     col = _TIE_GREY
                 label = f'{total_diff:+d}' if played_count else '–'
 
-        # Circle
+        # Circle -- enlarged + gold halo so the battle-total reading
+        # dominates the ledger band. The circle is anchored below the
+        # "BATTLE TOTAL" caption so they don't overlap.
+        title_clearance = title_font.get_height() + 6
+        avail_h = max(8, rect.height - title_clearance - 4)
+        diameter = min(circle_rect.width, avail_h)
+        radius = max(8, diameter // 2 - 2)
         cx = circle_rect.centerx
-        cy = circle_rect.centery
-        radius = min(circle_rect.width, circle_rect.height) // 2 - 4
+        cy = rect.top + title_clearance + (avail_h // 2)
+        # Outer halo glow.
+        halo = pygame.Surface((radius * 2 + 16, radius * 2 + 16), pygame.SRCALPHA)
+        for i, alpha in enumerate((40, 70, 110)):
+            pygame.draw.circle(
+                halo, (*col, alpha),
+                (halo.get_width() // 2, halo.get_height() // 2),
+                radius + 6 - i * 2, 2,
+            )
+        self.window.blit(halo, halo.get_rect(center=(cx, cy)))
         pygame.draw.circle(self.window, (16, 12, 8), (cx, cy), radius)
-        pygame.draw.circle(self.window, col, (cx, cy), radius, 3)
+        pygame.draw.circle(self.window, col, (cx, cy), radius, 4)
         if ghost_preview:
-            pygame.draw.circle(self.window, _GHOST_BLUE, (cx, cy), max(1, radius - 7), 1)
-        font = settings.get_font(max(14, int(settings.FS_SMALL * 1.15)), bold=True)
+            pygame.draw.circle(self.window, _GHOST_BLUE, (cx, cy), max(1, radius - 8), 1)
+        value_size = max(14, min(int(radius * 1.05), int(settings.FS_SMALL * 1.55)))
+        font = settings.get_font(value_size, bold=True)
         ts = font.render(label, True, col)
+        self.window.blit(ts, ts.get_rect(center=(cx, cy)))
         self.window.blit(ts, ts.get_rect(center=(cx, cy)))
         # Hover hint
         if last_result:
@@ -574,9 +663,9 @@ class ConquerRoundLedger:
         opp = opp_per[idx]
         diff = self._round_diff(you, opp)
         if diff > 0:
-            glyph, col = '▲', _WIN_GREEN
+            glyph, col = '^', _WIN_GREEN
         elif diff < 0:
-            glyph, col = '▼', _LOSE_RED
+            glyph, col = 'v', _LOSE_RED
         else:
             glyph, col = '=', _TIE_GREY
 

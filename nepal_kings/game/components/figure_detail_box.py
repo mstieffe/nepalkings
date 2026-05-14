@@ -449,6 +449,31 @@ class FigureDetailBox:
         except Exception as e:
             return {}
 
+    def _figures_for_selected_side(self):
+        selected_player_id = getattr(self.figure, 'player_id', None)
+        if self.all_figures is not None:
+            all_figures = list(self.all_figures)
+            if selected_player_id is None:
+                return all_figures
+            return [
+                fig for fig in all_figures
+                if getattr(fig, 'player_id', None) == selected_player_id
+            ]
+
+        if not self.game:
+            return []
+
+        from game.components.figures.figure_manager import FigureManager
+        figure_manager = FigureManager()
+        families = figure_manager.families
+        current_player_id = getattr(self.game, 'player_id', None)
+        is_opponent = (
+            selected_player_id is not None
+            and current_player_id is not None
+            and selected_player_id != current_player_id
+        )
+        return self.game.get_figures(families, is_opponent=is_opponent)
+
     def _calculate_potential_battle_bonus(self):
         """
         Calculate the potential battle bonus this figure could receive.
@@ -459,19 +484,7 @@ class FigureDetailBox:
         - Military figures provide 0 bonus
         """
         try:
-            # Use cached figures if available, otherwise fetch from server
-            if self.all_figures is not None:
-                all_figures = [fig for fig in self.all_figures if fig.player_id == self.game.player_id]
-            else:
-                # Import here to avoid circular imports
-                from game.components.figures.figure_manager import FigureManager
-                
-                # Get all families
-                figure_manager = FigureManager()
-                families = figure_manager.families
-                
-                # Get all figures for this player
-                all_figures = self.game.get_figures(families, is_opponent=False)
+            all_figures = self._figures_for_selected_side()
             
             # Determine this figure's type
             current_figure_type = self.figure.family.field if hasattr(self.figure.family, 'field') else None
@@ -518,14 +531,7 @@ class FigureDetailBox:
                     self.figure.family.field == 'village'):
                 return 0
 
-            if self.all_figures is not None:
-                all_figures = [fig for fig in self.all_figures
-                               if fig.player_id == self.figure.player_id]
-            else:
-                from game.components.figures.figure_manager import FigureManager
-                figure_manager = FigureManager()
-                families = figure_manager.families
-                all_figures = self.game.get_figures(families, is_opponent=False)
+            all_figures = self._figures_for_selected_side()
 
             total = 0
             for fig in all_figures:
@@ -544,14 +550,7 @@ class FigureDetailBox:
         Only active when defending, but shown as potential in detail box.
         """
         try:
-            if self.all_figures is not None:
-                all_figures = [fig for fig in self.all_figures
-                               if fig.player_id == self.figure.player_id]
-            else:
-                from game.components.figures.figure_manager import FigureManager
-                figure_manager = FigureManager()
-                families = figure_manager.families
-                all_figures = self.game.get_figures(families, is_opponent=False)
+            all_figures = self._figures_for_selected_side()
 
             total = 0
             for fig in all_figures:

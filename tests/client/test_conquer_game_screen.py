@@ -38,6 +38,838 @@ def _base_conquer_screen(game=None):
     return ConquerGameScreen, screen
 
 
+def test_conquer_support_link_targets_halo_edge_not_icon_center():
+    ConquerGameScreen = _conquer_screen_class()
+    source = pygame.Rect(100, 100, 44, 56)
+
+    halo = ConquerGameScreen._conquer_source_halo_rect(source)
+    edge = ConquerGameScreen._conquer_rect_edge_point(halo, (20, halo.centery))
+
+    assert edge == (halo.left, halo.centery)
+    assert edge != source.center
+
+
+def test_conquer_support_link_targets_marker_midpoint():
+    """Round 12: the support/block link line ends at the side-marker midpoint
+    of the source figure (not the figure center / halo edge)."""
+    from game.screens.field_screen import FieldScreen
+
+    ConquerGameScreen = _conquer_screen_class()
+    icon = SimpleNamespace(
+        hovered=False,
+        clicked=False,
+        rect_frame=pygame.Rect(0, 0, 44, 56),
+        rect_frame_big=pygame.Rect(0, 0, 72, 88),
+    )
+    icon.rect_frame.center = (200, 300)
+    icon.rect_frame_big.center = (200, 300)
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.subscreens = {
+        'field': SimpleNamespace(
+            icon_cache={42: icon},
+            _conquer_icon_marker_geometry=FieldScreen._conquer_icon_marker_geometry,
+        ),
+    }
+
+    own_endpoint = screen._conquer_support_source_marker_endpoint(42, is_own=True)
+    opp_endpoint = screen._conquer_support_source_marker_endpoint(42, is_own=False)
+
+    own_marker = FieldScreen._conquer_icon_marker_geometry(
+        icon, (200, 300), is_own=True)
+    opp_marker = FieldScreen._conquer_icon_marker_geometry(
+        icon, (200, 300), is_own=False)
+
+    # Endpoints match the marker midpoints (not the figure center).
+    assert own_endpoint == own_marker['midpoint']
+    assert opp_endpoint == opp_marker['midpoint']
+    assert own_endpoint != (200, 300)
+    # Own marker sits to the right of the figure, opponent marker to the left.
+    assert own_endpoint[0] > 200
+    assert opp_endpoint[0] < 200
+
+
+def test_conquer_explosion_missing_target_gets_ghost_rect_and_animation():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+
+    spell = {
+        'spell_name': 'Explosion',
+        'target_figure_id': 77,
+        'effect_data': {
+            'target_figure_id': 77,
+            'target_figure_snapshot': {
+                'id': 77,
+                'player_id': 20,
+                'name': 'Target Knight',
+                'family_name': 'Knight',
+                'field': 'military',
+                'suit': 'Hearts',
+                'cards': [{'rank': '6', 'suit': 'Hearts', 'role': 'number'}],
+            },
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[spell],
+        conquer_opp_prelude_spells=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_lane_figure_rects = []
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    screen._conquer_collapsed_header_rect = pygame.Rect(0, 0, 160, 48)
+    field = SimpleNamespace(
+        icon_cache={},
+        figure_icons=[],
+        categorized_figures={
+            'self': {'castle': [], 'village': [], 'military': []},
+            'opponent': {'castle': [], 'village': [], 'military': []},
+        },
+        compartments={
+            'self': {'military': pygame.Rect(20, 120, 120, 360)},
+            'opponent': {'military': pygame.Rect(740, 120, 120, 360)},
+        },
+        figure_manager=SimpleNamespace(families={}),
+    )
+    screen.subscreens = {'field': field}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='prelude_own',
+                icon_payload='Explosion',
+                owner='you',
+                active=True,
+                completed=False,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.spawned = []
+            self.cleared = False
+
+        def clear(self):
+            self.cleared = True
+
+        def spawn_explosion(self, anchor, target_id):
+            self.spawned.append(('explosion', pygame.Rect(anchor), target_id))
+
+        def spawn_banner(self, *args, **kwargs):
+            self.spawned.append(('banner', args, kwargs))
+
+    effects = _Effects()
+    screen._conquer_timeline_panel = _Panel()
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert effects.spawned
+    assert effects.spawned[0][0] == 'explosion'
+    assert effects.spawned[0][2] == 77
+    ghost_rect = ConquerGameScreen._lookup_conquer_figure_rect(screen, 77)
+    assert ghost_rect is not None
+    assert ghost_rect.centerx == field.compartments['opponent']['military'].centerx
+
+
+def test_conquer_health_boost_missing_target_uses_snapshot_anchor():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+
+    spell = {
+        'spell_name': 'Health Boost',
+        'target_figure_id': 88,
+        'effect_data': {
+            'target_figure_id': 88,
+            'target_figure_snapshot': {
+                'id': 88,
+                'player_id': 10,
+                'name': 'Boosted Guard',
+                'family_name': 'Guard',
+                'field': 'village',
+                'suit': 'Diamonds',
+                'cards': [{'rank': '7', 'suit': 'Diamonds', 'role': 'number'}],
+            },
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[spell],
+        conquer_opp_prelude_spells=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_lane_figure_rects = []
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    screen._conquer_collapsed_header_rect = pygame.Rect(0, 0, 160, 48)
+    field = SimpleNamespace(
+        icon_cache={},
+        figure_icons=[],
+        categorized_figures={
+            'self': {'castle': [], 'village': [], 'military': []},
+            'opponent': {'castle': [], 'village': [], 'military': []},
+        },
+        compartments={
+            'self': {'village': pygame.Rect(20, 120, 120, 360)},
+            'opponent': {'village': pygame.Rect(740, 120, 120, 360)},
+        },
+        figure_manager=SimpleNamespace(families={}),
+    )
+    screen.subscreens = {'field': field}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='prelude_own',
+                icon_payload='Health Boost',
+                owner='you',
+                active=True,
+                completed=False,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.spawned = []
+
+        def clear(self):
+            pass
+
+        def spawn_spell_cast(self, spell_name, anchor, target_id, **kwargs):
+            self.spawned.append((spell_name, pygame.Rect(anchor), target_id, kwargs))
+
+        def spawn_banner(self, *args, **kwargs):
+            self.spawned.append(('banner', args, kwargs))
+
+    effects = _Effects()
+    screen._conquer_timeline_panel = _Panel()
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert effects.spawned
+    assert effects.spawned[0][0] == 'Health Boost'
+    assert effects.spawned[0][2] == 88
+    assert effects.spawned[0][3]['floating_text'] == '+ Health'
+
+
+def test_conquer_health_boost_refires_when_pending_target_resolves():
+    """When a pending-target Health Boost first becomes active without a
+    resolved target_figure_id, the pump should only emit a banner.  Once
+    the target is resolved on a later frame, the real spell-cast
+    animation must fire — even though the timeline step has already
+    transitioned past ``pending``."""
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+
+    spell = {
+        'spell_name': 'Health Boost',
+        # Target unresolved on the first frame.
+        'target_figure_id': None,
+        'effect_data': {
+            'target_figure_id': None,
+            'target_figure_snapshot': {
+                'id': 99,
+                'player_id': 10,
+                'name': 'Pending Guard',
+                'family_name': 'Guard',
+                'field': 'village',
+                'suit': 'Diamonds',
+                'cards': [{'rank': '7', 'suit': 'Diamonds', 'role': 'number'}],
+            },
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[spell],
+        conquer_opp_prelude_spells=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_lane_figure_rects = []
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    screen._conquer_collapsed_header_rect = pygame.Rect(0, 0, 160, 48)
+    field = SimpleNamespace(
+        icon_cache={},
+        figure_icons=[],
+        categorized_figures={
+            'self': {'castle': [], 'village': [], 'military': []},
+            'opponent': {'castle': [], 'village': [], 'military': []},
+        },
+        compartments={
+            'self': {'village': pygame.Rect(20, 120, 120, 360)},
+            'opponent': {'village': pygame.Rect(740, 120, 120, 360)},
+        },
+        figure_manager=SimpleNamespace(families={}),
+    )
+    screen.subscreens = {'field': field}
+
+    step = SimpleNamespace(
+        kind='prelude_own',
+        icon_payload='Health Boost',
+        owner='you',
+        active=True,
+        completed=False,
+    )
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def derive_display_steps(self, _screen):
+            return [step]
+
+    class _Effects:
+        def __init__(self):
+            self.spawned = []
+
+        def clear(self):
+            pass
+
+        def spawn_spell_cast(self, spell_name, anchor, target_id, **kwargs):
+            self.spawned.append(('spell_cast', spell_name, target_id, kwargs))
+
+        def spawn_banner(self, *args, **kwargs):
+            self.spawned.append(('banner', args, kwargs))
+
+    effects = _Effects()
+    screen._conquer_timeline_panel = _Panel()
+    screen._conquer_effects = effects
+
+    # First-frame seed: pending target → banner only, no spell_cast.
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+    assert effects.spawned, "first pump should still emit a banner"
+    assert all(kind != 'spell_cast' for kind, *_rest in effects.spawned)
+
+    # Server resolves the target.  Step transitions active → completed.
+    spell['target_figure_id'] = 99
+    spell['effect_data']['target_figure_id'] = 99
+    step.active = False
+    step.completed = True
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    spell_casts = [row for row in effects.spawned if row[0] == 'spell_cast']
+    assert spell_casts, "spell_cast must fire after the target resolves"
+    assert spell_casts[-1][1] == 'Health Boost'
+    assert spell_casts[-1][2] == 99
+
+
+def test_conquer_visual_ghost_spec_persists_during_overview():
+    """Bug regression: the Explosion victim must remain visible (and a
+    normal field figure) during the overview / pre-prelude window so the
+    player can see the destroyed-by reveal."""
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+
+    spell = {
+        'spell_name': 'Explosion',
+        'target_figure_id': 77,
+        'effect_data': {
+            'target_figure_id': 77,
+            'target_figure_snapshot': {
+                'id': 77,
+                'player_id': 20,
+                'name': 'Doomed Knight',
+                'family_name': 'Knight',
+                'field': 'military',
+                'suit': 'Hearts',
+                'cards': [{'rank': '6', 'suit': 'Hearts', 'role': 'number'}],
+            },
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[spell],
+        conquer_opp_prelude_spells=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    class _Panel:
+        # Overview holds active.  Sequence gates have demoted prelude_own
+        # to a non-active, non-completed state in real game flow, but in
+        # other timelines the prelude step can still be reported as
+        # completed (auto-resolved) — we cover that case below.
+        def derive_display_steps(self, _screen):
+            return [
+                SimpleNamespace(kind='overview', active=True, completed=False,
+                                icon_payload=None, owner=''),
+                SimpleNamespace(kind='prelude_own', active=False, completed=True,
+                                icon_payload='Explosion', owner='you'),
+            ]
+
+    screen._conquer_timeline_panel = _Panel()
+    screen._field_explosion_ghost_hold_until = {}
+
+    specs = ConquerGameScreen.conquer_field_visual_ghost_specs(screen)
+
+    assert len(specs) == 1
+    spec = specs[0]
+    assert spec['target_id'] == 77
+    assert spec['spell_name'] == 'Explosion'
+    # Snapshot must remain a normal (selectable) field figure during the
+    # pre-battle window, regardless of the underlying step phase.
+    assert spec['visual_only'] is False
+    assert spec['force_visible'] is True
+
+
+def test_conquer_visual_ghost_spec_is_removed_when_explosion_executes():
+    """Explosion victims are replay figures only until their spell executes."""
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+
+    spell = {
+        'spell_name': 'Explosion',
+        'target_figure_id': 77,
+        'effect_data': {
+            'target_figure_id': 77,
+            'target_figure_snapshot': {
+                'id': 77,
+                'player_id': 20,
+                'name': 'Doomed Knight',
+                'family_name': 'Knight',
+                'field': 'military',
+                'suit': 'Hearts',
+                'cards': [{'rank': '6', 'suit': 'Hearts', 'role': 'number'}],
+            },
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[spell],
+        conquer_opp_prelude_spells=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._field_explosion_ghost_hold_until = {}
+
+    phase_steps = {
+        'pending': SimpleNamespace(kind='prelude_own', active=False,
+                                   completed=False, icon_payload='Explosion',
+                                   owner='you'),
+        'active': SimpleNamespace(kind='prelude_own', active=True,
+                                  completed=False, icon_payload='Explosion',
+                                  owner='you'),
+        'completed': SimpleNamespace(kind='prelude_own', active=False,
+                                     completed=True, icon_payload='Explosion',
+                                     owner='you'),
+    }
+
+    class _Panel:
+        def __init__(self, step):
+            self._step = step
+
+        def derive_display_steps(self, _screen):
+            return [self._step]
+
+    captured = {}
+    for label, step in phase_steps.items():
+        screen._conquer_timeline_panel = _Panel(step)
+        specs = ConquerGameScreen.conquer_field_visual_ghost_specs(screen)
+        captured[label] = specs
+
+    assert len(captured['pending']) == 1
+    assert captured['pending'][0]['visual_only'] is False
+    assert captured['pending'][0]['phase'] == 'pending'
+    assert captured['active'] == []
+    assert captured['completed'] == []
+
+
+def test_conquer_explosion_visual_ghost_uses_active_spell_fallback():
+    """The Explosion victim is visible before game_start summary snapshots land."""
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+
+    active_spell = {
+        'id': 500,
+        'player_id': 10,
+        'spell_name': 'Explosion',
+        'spell_type': 'enchantment',
+        'cast_round': 1,
+        'target_figure_id': None,
+        'effect_data': {
+            'prelude_origin': True,
+            'prelude_status': 'executed',
+            'destroyed_figure_id': 77,
+            'destroyed_figure_snapshot': {
+                'id': 77,
+                'player_id': 20,
+                'name': 'Doomed Knight',
+                'family_name': 'Knight',
+                'field': 'military',
+                'suit': 'Hearts',
+                'cards': [{'rank': '6', 'suit': 'Hearts', 'role': 'number'}],
+            },
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[],
+        conquer_opp_prelude_spells=[],
+        cached_active_spells=[active_spell],
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    class _Panel:
+        def derive_display_steps(self, _screen):
+            return [
+                SimpleNamespace(kind='overview', active=True, completed=False,
+                                icon_payload=None, owner=''),
+            ]
+
+    screen._conquer_timeline_panel = _Panel()
+
+    specs = ConquerGameScreen.conquer_field_visual_ghost_specs(screen)
+
+    assert len(specs) == 1
+    assert specs[0]['target_id'] == 77
+    assert specs[0]['spell_name'] == 'Explosion'
+    assert specs[0]['visual_only'] is False
+
+
+def test_conquer_prelude_enchantment_hidden_until_step_active():
+    ConquerGameScreen = _conquer_screen_class()
+    from game.screens.field_screen import FieldScreen
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    spell = {
+        'spell_name': 'Poison',
+        'target_figure_id': 77,
+        'effect_data': {'target_figure_id': 77},
+    }
+    health_spell = {
+        'spell_name': 'Health Boost',
+        'target_figure_id': 88,
+        'effect_data': {'target_figure_id': 88},
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[spell, health_spell],
+        conquer_opp_prelude_spells=[],
+        cached_active_spells=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    class _Panel:
+        def __init__(self, steps):
+            self._steps = steps
+
+        def derive_display_steps(self, _screen):
+            return self._steps
+
+    field = FieldScreen.__new__(FieldScreen)
+    field.game = game
+    field.state = SimpleNamespace(parent_screen=screen)
+
+    figure = SimpleNamespace(id=77, active_enchantments=[{
+        'spell_name': 'Poison',
+        'spell_icon': 'poisson_portion.png',
+        'power_modifier': -6,
+    }])
+    boosted = SimpleNamespace(id=88, active_enchantments=[{
+        'spell_name': 'Health Boost',
+        'spell_icon': 'health_portion.png',
+        'power_modifier': 6,
+    }])
+
+    screen._conquer_timeline_panel = _Panel([
+        SimpleNamespace(kind='overview', active=True, completed=False),
+        # Base game state may already mark the prelude complete; the active
+        # overview still means this effect is not the leading timeline beat.
+        SimpleNamespace(kind='prelude_own', active=False, completed=True),
+    ])
+    FieldScreen._filter_conquer_timeline_enchantments(field, [figure, boosted])
+    assert figure.active_enchantments == []
+    assert boosted.active_enchantments == []
+
+    figure.active_enchantments = [{
+        'spell_name': 'Poison',
+        'spell_icon': 'poisson_portion.png',
+        'power_modifier': -6,
+    }]
+    boosted.active_enchantments = [{
+        'spell_name': 'Health Boost',
+        'spell_icon': 'health_portion.png',
+        'power_modifier': 6,
+    }]
+    screen._conquer_timeline_panel = _Panel([
+        SimpleNamespace(kind='overview', active=False, completed=True),
+        SimpleNamespace(kind='prelude_own', active=True, completed=False),
+    ])
+    FieldScreen._filter_conquer_timeline_enchantments(field, [figure, boosted])
+    assert figure.active_enchantments
+    assert boosted.active_enchantments
+
+
+def test_conquer_explosion_pending_snapshot_is_normal_field_figure(monkeypatch):
+    from game.components.cards.card import Card
+    from game.components.figures.figure import Figure
+    from game.screens.field_screen import FieldScreen
+
+    family = SimpleNamespace(
+        name='Target Knight',
+        field='military',
+        color='offensive',
+        figures=[],
+    )
+    family.figures = [Figure(
+        name='Target Knight',
+        sub_name='Hearts 6',
+        suit='Hearts',
+        family=family,
+        key_cards=[Card('K', 'Hearts', 13)],
+        number_card=Card('6', 'Hearts', 6),
+    )]
+    live_figure = Figure(
+        name='Live Guard',
+        sub_name='Hearts 7',
+        suit='Hearts',
+        family=family,
+        key_cards=[Card('Q', 'Hearts', 12)],
+        number_card=Card('7', 'Hearts', 7),
+        id=21,
+        player_id=20,
+    )
+    snapshot = {
+        'id': 77,
+        'player_id': 20,
+        'name': 'Target Knight',
+        'family_name': 'Target Knight',
+        'field': 'military',
+        'suit': 'Hearts',
+        'cards': [
+            {'rank': 'K', 'suit': 'Hearts', 'value': 13, 'role': 'key'},
+            {'rank': '6', 'suit': 'Hearts', 'value': 6, 'role': 'number'},
+        ],
+    }
+    parent = SimpleNamespace(
+        conquer_field_visual_ghost_specs=lambda: [{
+            'target_id': 77,
+            'snapshot': snapshot,
+            'step_kind': 'prelude_own',
+            'spell_name': 'Explosion',
+            'phase': 'pending',
+            'visual_only': False,
+            'force_visible': True,
+        }]
+    )
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=10,
+        opponent_player={'id': 20},
+        get_figures=lambda _families, is_opponent=False: [live_figure] if is_opponent else [],
+        calculate_resources=lambda *_args, **_kwargs: {'produces': {}, 'requires': {}},
+        has_active_all_seeing_eye=lambda: False,
+    )
+    field = FieldScreen.__new__(FieldScreen)
+    field.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+    field.state = SimpleNamespace(parent_screen=parent)
+    field.game = game
+    field.figure_manager = SimpleNamespace(families={'Target Knight': family})
+    field.icon_cache = {}
+    field.last_figure_ids = set()
+    field.last_enchantment_state = {}
+    field.last_player_id = None
+    field.cached_all_seeing_eye_status = None
+    field._last_all_seeing_eye_status = None
+    field._conquer_visual_ghost_ids = set()
+    monkeypatch.setattr(FieldScreen, '_generate_figure_icons', lambda self: None)
+
+    FieldScreen.load_figures(field)
+
+    military_figures = field.categorized_figures['opponent']['military']
+    assert [figure.id for figure in military_figures] == [21, 77]
+    timeline_figure = military_figures[1]
+    assert getattr(timeline_figure, '_conquer_timeline_snapshot', False) is True
+    assert getattr(timeline_figure, '_conquer_visual_only', False) is False
+    assert timeline_figure in field.figures
+    assert 77 in field.last_figure_ids
+
+
+def test_conquer_explosion_active_snapshot_is_visual_only_hold(monkeypatch):
+    from game.components.cards.card import Card
+    from game.components.figures.figure import Figure
+    from game.screens.field_screen import FieldScreen
+
+    family = SimpleNamespace(
+        name='Target Knight',
+        field='military',
+        color='offensive',
+        figures=[],
+    )
+    family.figures = [Figure(
+        name='Target Knight',
+        sub_name='Hearts 6',
+        suit='Hearts',
+        family=family,
+        key_cards=[Card('K', 'Hearts', 13)],
+        number_card=Card('6', 'Hearts', 6),
+    )]
+    snapshot = {
+        'id': 77,
+        'player_id': 20,
+        'name': 'Target Knight',
+        'family_name': 'Target Knight',
+        'field': 'military',
+        'suit': 'Hearts',
+        'cards': [
+            {'rank': 'K', 'suit': 'Hearts', 'value': 13, 'role': 'key'},
+            {'rank': '6', 'suit': 'Hearts', 'value': 6, 'role': 'number'},
+        ],
+    }
+    parent = SimpleNamespace(
+        conquer_field_visual_ghost_specs=lambda: [{
+            'target_id': 77,
+            'snapshot': snapshot,
+            'step_kind': 'prelude_own',
+            'spell_name': 'Explosion',
+            'phase': 'active',
+            'visual_only': True,
+            'force_visible': True,
+        }]
+    )
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=10,
+        opponent_player={'id': 20},
+        get_figures=lambda _families, is_opponent=False: [],
+        calculate_resources=lambda *_args, **_kwargs: {'produces': {}, 'requires': {}},
+        has_active_all_seeing_eye=lambda: False,
+    )
+    field = FieldScreen.__new__(FieldScreen)
+    field.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+    field.state = SimpleNamespace(parent_screen=parent)
+    field.game = game
+    field.figure_manager = SimpleNamespace(families={'Target Knight': family})
+    field.icon_cache = {}
+    field.last_figure_ids = set()
+    field.last_enchantment_state = {}
+    field.last_player_id = None
+    field.cached_all_seeing_eye_status = None
+    field._last_all_seeing_eye_status = None
+    field._conquer_visual_ghost_ids = set()
+    monkeypatch.setattr(FieldScreen, '_generate_figure_icons', lambda self: None)
+
+    FieldScreen.load_figures(field)
+
+    ghost = field.categorized_figures['opponent']['military'][0]
+    assert getattr(ghost, '_conquer_timeline_snapshot', False) is True
+    assert getattr(ghost, '_conquer_visual_only', False) is True
+    assert ghost not in field.figures
+    assert 77 in field.last_figure_ids
+
+
+def test_conquer_skipped_tactics_fill_lanes_and_enable_finish():
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=10,
+        players=[{'id': 10}, {'id': 20}],
+        battle_round=2,
+        battle_turn_player_id=None,
+        battle_skipped_rounds={'10': [1], '20': [2]},
+        last_battle_result=None,
+        game_over=False,
+    )
+    ConquerGameScreen, screen = _base_conquer_screen(game)
+    screen._current_conquer_tactics = lambda: [
+        {'id': 1, 'player_id': 10, 'family_name': 'Dagger', 'value': 3, 'played_round': 0},
+        {'id': 2, 'player_id': 10, 'family_name': 'Wall', 'value': 4, 'played_round': 2},
+    ]
+    screen._current_conquer_opponent_tactics = lambda: [
+        {'id': 3, 'player_id': 20, 'family_name': 'Block', 'value': 0, 'played_round': 0},
+        {'id': 4, 'player_id': 20, 'family_name': 'Dagger', 'value': 2, 'played_round': 1},
+    ]
+
+    player_slots, opponent_slots = ConquerGameScreen._conquer_lane_played_tactics(screen)
+
+    assert player_slots[1]['_skipped'] is True
+    assert player_slots[1]['played_round'] == 1
+    assert opponent_slots[2]['_skipped'] is True
+    assert opponent_slots[2]['played_round'] == 2
+    assert ConquerGameScreen._conquer_finish_available(screen) is True
+
+
+def test_conquer_support_link_arrow_draws_over_existing_pixels():
+    """Support leader arrows are drawn as a final overlay so the endpoint
+    stays visible even if it crosses an already-rendered field icon."""
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((240, 160))
+    screen.window.fill((32, 28, 24))
+
+    badge_rect = pygame.Rect(150, 70, 24, 20)
+    endpoint = (80, 80)
+    icon_color = (150, 40, 40)
+    pygame.draw.rect(screen.window, icon_color, pygame.Rect(68, 66, 28, 28))
+
+    assert screen.window.get_at(endpoint)[:3] == icon_color
+    screen._draw_conquer_lane_source_link(
+        badge_rect, endpoint, is_player=True)
+
+    assert screen.window.get_at(endpoint)[:3] != icon_color
+    assert screen.window.get_at(endpoint).b > icon_color[2]
+
+
+def test_conquer_support_hover_tracks_all_source_figures(monkeypatch):
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    field = SimpleNamespace()
+    screen.subscreens = {'field': field}
+    screen._conquer_receipt_row_rects = []
+    screen._conquer_support_badge_rects = [{
+        'rect': pygame.Rect(10, 10, 40, 32),
+        'entry': {'kind': 'support_bonus'},
+        'figure_id': None,
+        'source_figure_ids': [101, 102, 103],
+        'is_player': True,
+    }]
+    monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: (20, 20))
+
+    hovered = screen._update_conquer_support_hover_state()
+
+    assert hovered is screen._conquer_support_badge_rects[0]
+    assert field._conquer_hover_source_figure_ids == {101, 102, 103}
+    # The legacy single-id attribute remains as a compatibility fallback,
+    # but field rendering now uses the full set so every source is marked
+    # consistently.
+    assert field._conquer_hover_source_figure_id == 101
+
+
 class TestGameplayScreenRouting:
     def test_conquer_games_route_to_conquer_game_screen(self):
         from game.core.screen_routing import gameplay_screen_for
@@ -381,6 +1213,143 @@ class TestConquerGameShell:
         assert figure_loads == []
         assert screen.confirm_button.disabled is False
 
+    def test_battle_shop_config_ready_requires_three_moves(self):
+        from game.screens.battle_shop_screen import BattleShopScreen
+
+        game = SimpleNamespace(
+            game_id=None,
+            player_id=None,
+            battle_moves_phase=False,
+            battle_confirmed=False,
+        )
+        screen = BattleShopScreen.__new__(BattleShopScreen)
+        screen.game = game
+        screen.mode = 'conquer'
+        screen.card_source = SimpleNamespace(game=game)
+        screen.buttons = []
+        screen.scroll_text_list_shifter = None
+        screen._loaded_game_key = (None, None)
+        screen._loaded_bought_moves_key = (None, None)
+        screen._battle_moves_confirmed = False
+        screen._waiting_for_opponent = False
+        screen.confirm_button = SimpleNamespace(disabled=False, update=lambda: None)
+        screen.ready_button = SimpleNamespace(
+            disabled=False, active=True, update=lambda: None)
+        screen.move_family_buttons = []
+        screen._update_icon_states = lambda: None
+
+        screen.bought_moves = [{'id': 1}, {'id': 2}]
+        BattleShopScreen.update(screen, game)
+
+        assert screen.ready_button.disabled is True
+        assert screen.ready_button.active is False
+
+        screen.bought_moves = [{'id': 1}, {'id': 2}, {'id': 3}]
+        BattleShopScreen.update(screen, game)
+
+        assert screen.ready_button.disabled is False
+        assert screen.ready_button.active is True
+
+    def test_battle_shop_config_ready_hover_changes_glow_state(self):
+        from game.screens.battle_shop_screen import BattleShopScreen
+
+        class HoverButton:
+            def __init__(self):
+                self.disabled = False
+                self.active = True
+                self.hovered = False
+
+            def update(self):
+                self.hovered = True
+
+        game = SimpleNamespace(
+            game_id=None,
+            player_id=None,
+            battle_moves_phase=False,
+            battle_confirmed=False,
+        )
+        screen = BattleShopScreen.__new__(BattleShopScreen)
+        screen.game = game
+        screen.mode = 'conquer'
+        screen.card_source = SimpleNamespace(game=game)
+        screen.buttons = []
+        screen.scroll_text_list_shifter = None
+        screen._loaded_game_key = (None, None)
+        screen._loaded_bought_moves_key = (None, None)
+        screen._battle_moves_confirmed = False
+        screen._waiting_for_opponent = False
+        screen.bought_moves = [{'id': 1}, {'id': 2}, {'id': 3}]
+        screen.confirm_button = SimpleNamespace(disabled=False, update=lambda: None)
+        screen.ready_button = HoverButton()
+        screen.move_family_buttons = []
+        screen._update_icon_states = lambda: None
+
+        BattleShopScreen.update(screen, game)
+
+        assert screen.ready_button.disabled is False
+        assert screen.ready_button.hovered is True
+        assert screen.ready_button.active is False
+
+    def test_battle_shop_config_ready_closes_subscreen_when_full(self):
+        from game.screens.battle_shop_screen import BattleShopScreen
+
+        called = []
+        screen = BattleShopScreen.__new__(BattleShopScreen)
+        screen.mode = 'defence_draft'
+        screen.bought_moves = [{'id': 1}, {'id': 2}, {'id': 3}]
+        screen._on_done = lambda: called.append('closed')
+
+        handled = BattleShopScreen._on_config_ready(screen)
+
+        assert handled is True
+        assert called == ['closed']
+
+        screen.bought_moves = [{'id': 1}, {'id': 2}]
+        called.clear()
+
+        handled = BattleShopScreen._on_config_ready(screen)
+
+        assert handled is False
+        assert called == []
+
+    def test_battle_shop_config_ready_closes_on_mouseup_not_mousedown(self):
+        from game.screens.battle_shop_screen import BattleShopScreen
+
+        called = []
+        slot_clicks = []
+        ready_rect = pygame.Rect(20, 20, 90, 42)
+        screen = BattleShopScreen.__new__(BattleShopScreen)
+        screen.mode = 'conquer'
+        screen.game = SimpleNamespace(
+            game_over=False,
+            battle_moves_phase=False,
+            battle_confirmed=False,
+        )
+        screen.scroll_text_list_shifter = None
+        screen.battle_move_detail_box = None
+        screen.dialogue_box = None
+        screen.move_family_buttons = []
+        screen.confirm_button = SimpleNamespace(collide=lambda: False, disabled=True)
+        screen.ready_button = SimpleNamespace(disabled=False, rect=ready_rect)
+        screen.bought_moves = [{'id': 1}, {'id': 2}, {'id': 3}]
+        screen._config_ready_pressed = False
+        screen._on_done = lambda: called.append('closed')
+        screen._close_rect = pygame.Rect(500, 500, 20, 20)
+        screen._handle_slot_click = lambda event: slot_clicks.append(event.pos)
+
+        BattleShopScreen.handle_events(screen, [pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN, button=1, pos=ready_rect.center)])
+
+        assert called == []
+        assert slot_clicks == []
+        assert screen._config_ready_pressed is True
+
+        BattleShopScreen.handle_events(screen, [pygame.event.Event(
+            pygame.MOUSEBUTTONUP, button=1, pos=ready_rect.center)])
+
+        assert called == ['closed']
+        assert screen._config_ready_pressed is False
+
     def test_invader_swap_own_defender_mode_uses_own_selectable_update(self):
         game = SimpleNamespace(
             mode='conquer',
@@ -453,6 +1422,60 @@ class TestConquerGameShell:
         FieldScreen._update_conquer_own_defender_selectable(field)
 
         assert [icon.defender_selectable for icon in icons] == [False, True, False, False]
+
+    def test_own_defender_selectability_includes_fortress_and_alternates(self):
+        from game.screens.field_screen import FieldScreen
+
+        fortress = SimpleNamespace(
+            id=30,
+            player_id=1,
+            name='Stone Fortress',
+            family=SimpleNamespace(color='defensive', field='military'),
+            cannot_attack=True,
+            must_be_attacked=True,
+        )
+        normal = SimpleNamespace(
+            id=31,
+            player_id=1,
+            name='Himalaya King',
+            family=SimpleNamespace(color='defensive', field='castle'),
+        )
+        deficit_fortress = SimpleNamespace(
+            id=32,
+            player_id=1,
+            name='Deficit Fortress',
+            family=SimpleNamespace(color='defensive', field='military'),
+            cannot_attack=True,
+            must_be_attacked=True,
+        )
+        opponent = SimpleNamespace(
+            id=33,
+            player_id=2,
+            name='Opponent',
+            family=SimpleNamespace(color='offensive', field='village'),
+        )
+        icons = [
+            SimpleNamespace(
+                figure=figure,
+                has_deficit=(figure.id == 32),
+                defender_selectable=None,
+                in_defender_selection_mode=False,
+            )
+            for figure in (fortress, normal, deficit_fortress, opponent)
+        ]
+        field = FieldScreen.__new__(FieldScreen)
+        field.game = SimpleNamespace(
+            player_id=1,
+            battle_modifier=[],
+            defending_figure_id=None,
+            civil_war_defender_second=False,
+            civil_war_required_color=None,
+        )
+        field.figure_icons = icons
+
+        FieldScreen._update_conquer_own_defender_selectable(field)
+
+        assert [icon.defender_selectable for icon in icons] == [True, True, False, False]
 
     def test_battle_result_attack_failed_is_shown_once(self):
         from game.screens.battle_screen import BattleScreen
@@ -792,9 +1815,7 @@ class TestTacticsHandRouting:
             land_suit_bonus_value=2,
         ))
         screen._conquer_left_battle_shop_at = 0
-        screen._conquer_timeline_overlay_until = 0
         screen._conquer_collapsed_header_rect = None
-        screen._conquer_timeline_collapse_rect = None
         return ConquerGameScreen, screen
 
     def test_is_tactics_hand_game_true_for_tactics_hand_marker(self):
@@ -827,7 +1848,9 @@ class TestTacticsHandRouting:
         ConquerGameScreen, screen = self._make_screen()
 
         assert ConquerGameScreen._conquer_layout_mode(screen) == 'pre_battle'
-        assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is False
+        # Tactics-hand games use the persistent two-row header in every
+        # mode (pre-battle included) so the top row stays constant.
+        assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is True
 
     def test_header_collapses_when_battle_turn_starts(self):
         ConquerGameScreen, screen = self._make_screen(
@@ -868,35 +1891,75 @@ class TestTacticsHandRouting:
         assert ConquerGameScreen._conquer_layout_mode(screen) == 'battle'
         assert ConquerGameScreen._should_use_collapsed_conquer_header(screen) is False
 
-    def test_clicking_collapsed_header_expands_timeline_overlay(self):
+    def test_toggle_opens_and_closes_timeline_overlay(self):
         ConquerGameScreen, screen = self._make_screen(
             battle_turn_player_id=42,
             battle_round=1,
         )
+        screen._conquer_collapsed_header_rect = pygame.Rect(0, 0, 240, 64)
 
-        handled = ConquerGameScreen._handle_collapsed_header_events(
-            screen,
-            [pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(8, 8))],
-        )
+        assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is False
+        ConquerGameScreen._toggle_conquer_timeline_overlay(screen)
+        assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is True
+        ConquerGameScreen._toggle_conquer_timeline_overlay(screen)
+        assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is False
+        assert screen._conquer_timeline_expanded_rect is None
 
-        assert handled is True
-        assert screen._conquer_timeline_overlay_until > pygame.time.get_ticks()
-
-    def test_clicking_timeline_collapse_button_closes_overlay(self):
+    def test_open_timeline_overlay_syncs_expanded_rect(self):
         ConquerGameScreen, screen = self._make_screen(
             battle_turn_player_id=42,
             battle_round=1,
         )
-        screen._conquer_timeline_overlay_until = pygame.time.get_ticks() + 5000
-        screen._conquer_timeline_collapse_rect = pygame.Rect(4, 4, 80, 28)
+        ConquerGameScreen._toggle_conquer_timeline_overlay(screen)
 
-        handled = ConquerGameScreen._handle_collapsed_header_events(
-            screen,
-            [pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(12, 12))],
+        ConquerGameScreen._sync_conquer_timeline_hover_state(screen)
+
+        assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is True
+        assert screen._conquer_timeline_expanded_rect == (
+            ConquerGameScreen._conquer_timeline_overlay_rect(screen))
+
+    def test_expanded_timeline_uses_prebattle_content_layout(self):
+        from config import settings
+        from game.components.conquer_layout import compute_conquer_layout
+
+        ConquerGameScreen, screen = self._make_screen(
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+        ConquerGameScreen._toggle_conquer_timeline_overlay(screen)
+        ConquerGameScreen._sync_conquer_timeline_hover_state(screen)
+
+        timeline_row = pygame.Rect(
+            *ConquerGameScreen._conquer_header_layout(screen).timeline_row_rect
+        )
+        expanded = ConquerGameScreen._conquer_timeline_overlay_rect(screen)
+        pre_header = compute_conquer_layout(
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            mode='pre_battle',
+        ).header.full_rect
+        assert ConquerGameScreen._conquer_effective_layout_mode(screen) == 'pre_battle'
+        assert expanded.top == timeline_row.top
+        assert expanded.bottom == pre_header[1] + pre_header[3]
+
+    def test_combined_status_label_tracks_active_timeline_step(self):
+        from game.screens.conquer_flow import TimelineStep
+
+        ConquerGameScreen, screen = self._make_screen()
+        screen._conquer_timeline_panel = SimpleNamespace(
+            derive_display_steps=lambda _screen: [TimelineStep(
+                kind='prelude_own',
+                title='Your Prelude',
+                completed=False,
+                active=True,
+                interactive=False,
+                primary_action='next',
+            )]
         )
 
-        assert handled is True
-        assert screen._conquer_timeline_overlay_until == 0
+        label = ConquerGameScreen._conquer_combined_status_label(screen)
+
+        assert label == 'Next · Your Prelude'
 
     def test_battle_timeline_steps_include_round_tactics(self):
         ConquerGameScreen, screen = self._make_screen(
@@ -925,12 +1988,27 @@ class TestTacticsHandRouting:
 
         steps = ConquerGameScreen._conquer_battle_timeline_steps(screen, [])
 
-        assert [step.kind for step in steps] == ['battle_round_1', 'battle_round_2']
-        assert steps[0].icon_kind == 'tactic'
-        assert steps[0].icon_payload == {'move': you}
-        assert 'You played Dagger' in steps[0].info_body
-        assert 'Defender played Shield' in steps[0].info_body
-        assert steps[1].active is True
+        # Each round splits into a player + opponent step (in that order).
+        kinds = [step.kind for step in steps]
+        assert kinds == [
+            'battle_round_1_player', 'battle_round_1_opponent',
+            'battle_round_2_player', 'battle_round_2_opponent',
+        ]
+        you_step = steps[0]
+        opp_step = steps[1]
+        assert you_step.icon_kind == 'tactic'
+        assert you_step.icon_payload == {'move': you, 'side': 'you'}
+        assert you_step.owner == 'you'
+        assert you_step.completed is True
+        assert opp_step.icon_payload == {'move': opponent, 'side': 'opp'}
+        assert opp_step.owner == 'opp'
+        assert opp_step.completed is True
+        assert 'You played Dagger' in you_step.info_body
+        assert 'Defender played Shield' in opp_step.info_body
+        # Round 2 is the active one; the player's side is awaiting input.
+        round2_player = steps[2]
+        assert round2_player.active is True
+        assert round2_player.completed is False
 
     def test_collapsed_header_clears_stale_actions_and_exposes_withdraw(self):
         from config import settings
@@ -943,6 +2021,7 @@ class TestTacticsHandRouting:
         screen._conquer_header_font = settings.get_font(settings.FS_HEADING, bold=True)
         screen._conquer_hint_font = settings.get_font(settings.FS_SMALL)
         screen._conquer_badge_font = settings.get_font(settings.FS_TINY, bold=True)
+        screen._conquer_status_font = settings.get_font(settings.FS_SMALL, bold=True)
         screen._conquer_objective_action_rects = {'next': pygame.Rect(1, 1, 10, 10)}
         screen._withdraw_dialogue_open = False
         screen._is_current_player_conquer_attacker = lambda: True
@@ -973,6 +2052,59 @@ class TestTacticsHandRouting:
         )
 
         assert called == [(1, 42, 7)]
+
+    def test_tactics_hand_gamble_failure_shows_banner(self, monkeypatch):
+        from game.components.conquer_tactics_rail import ACTION_GAMBLE
+
+        ConquerGameScreen, screen = self._make_screen()
+        banners = []
+        resets = []
+        rail = SimpleNamespace(
+            _gamble_anim={'move_id': 7},
+            reset_after_action=lambda: resets.append(True),
+            set_result_banner=lambda *args, **kwargs: banners.append((args, kwargs)),
+        )
+        screen._tactics_rail = rail
+        monkeypatch.setattr(
+            'utils.game_service.gamble_conquer_tactic',
+            lambda *_args: {
+                'success': False,
+                'message': 'You can only gamble once per battle round',
+            },
+        )
+
+        ConquerGameScreen._dispatch_tactics_rail_action(
+            screen,
+            {'action': ACTION_GAMBLE, 'move': {'id': 7}},
+        )
+
+        assert banners[0][0][0] == 'You can only gamble once per battle round'
+        assert resets == []
+        assert rail._gamble_anim is None
+
+    def test_duel_lane_preview_uses_zero_indexed_round(self):
+        ConquerGameScreen, screen = self._make_screen(
+            battle_confirmed=True,
+            battle_turn_player_id=42,
+            battle_round=1,
+        )
+        preview = {'id': 12, 'status': 'available', 'played_round': None}
+        screen._tactics_rail = SimpleNamespace(preview_move=lambda: preview)
+        player_slots = [
+            {'id': 11, 'status': 'played', 'played_round': 0},
+            None,
+            None,
+        ]
+        opponent_slots = [
+            {'id': 21, 'status': 'played', 'played_round': 0},
+            {'id': 22, 'status': 'played', 'played_round': 1},
+            None,
+        ]
+
+        assert ConquerGameScreen._conquer_lane_focus_round(
+            screen, player_slots, opponent_slots) == 1
+        assert ConquerGameScreen._conquer_lane_preview_move(
+            screen, player_slots, 1) is preview
 
     def test_tactics_hand_play_starts_flight_animation(self, monkeypatch):
         from game.components.conquer_tactics_rail import ACTION_PLAY

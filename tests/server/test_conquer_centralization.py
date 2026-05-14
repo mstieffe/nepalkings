@@ -360,6 +360,158 @@ class TestConquerLootNotifications:
             assert notes == 0
 
 
+class TestConquerSplitCollateral:
+    """Successful connector conquests transfer smaller split-off remnants."""
+
+    def test_attacker_claims_smaller_split_component_and_players_are_notified(self, app, db):
+        from routes.games import _resolve_conquer_battle
+        from kingdom_service import reconcile_user_kingdoms
+        with app.app_context():
+            attacker = _make_user(db, username='att_split')
+            defender = _make_user(db, username='def_split')
+            split_off = _make_land(db, tier=1, owner_user_id=defender.id, col=0, row=0)
+            target = _make_land(db, tier=2, owner_user_id=defender.id, col=1, row=0)
+            kept_a = _make_land(db, tier=1, owner_user_id=defender.id, col=2, row=0)
+            kept_b = _make_land(db, tier=1, owner_user_id=defender.id, col=3, row=0)
+            kingdom = reconcile_user_kingdoms(defender.id, commit=True)[0]
+            kingdom.name = 'Defender Ridge'
+            db.session.commit()
+
+            split_defence = _make_defence_config(db, defender, split_off)
+            split_defence_card_ids = []
+            for figure in split_defence.figures:
+                split_defence_card_ids.extend(figure.card_ids or [])
+            for move in split_defence.battle_moves:
+                split_defence_card_ids.append(move.card_id)
+            _make_defence_config(db, defender, target)
+            _make_conquer_config(db, attacker, target)
+
+            game = _start_conquer_battle(app, db, attacker, target)
+            atk_player = db.session.get(Player, game.invader_player_id)
+
+            result = _resolve_conquer_battle(game, atk_player, atk_player)
+            db.session.commit()
+
+            assert result['conquer_result'] == 'attacker_won'
+            split_summary = result['kingdom_split_transfer']
+            assert split_summary['transferred_land_ids'] == [split_off.id]
+            assert split_summary['kept_land_count'] == 2
+            assert game.last_battle_result['kingdom_split_transfer']['transferred_land_ids'] == [split_off.id]
+
+            for land in (split_off, target, kept_a, kept_b):
+                db.session.refresh(land)
+            assert split_off.owner_user_id == attacker.id
+            assert target.owner_user_id == attacker.id
+            assert kept_a.owner_user_id == defender.id
+            assert kept_b.owner_user_id == defender.id
+            assert split_off.defence_config_id is None
+            assert db.session.get(LandConfig, split_defence.id) is None
+            for card_id in split_defence_card_ids:
+                card = db.session.get(CollectionCard, card_id)
+                assert card is not None
+                assert card.locked is False
+                assert card.lock_type is None
+
+            defender_note = KingdomNotification.query.filter_by(
+                user_id=defender.id,
+                kind='kingdom_split_lost',
+            ).one()
+            attacker_note = KingdomNotification.query.filter_by(
+                user_id=attacker.id,
+                kind='kingdom_split_claimed',
+            ).one()
+            assert defender_note.payload['lost_land_count'] == 1
+            assert defender_note.payload['land_samples'][0]['col'] == 0
+            assert attacker_note.payload['gained_land_count'] == 1
+
+            client = app.test_client()
+            defender_rows = client.get(
+                '/kingdom/notifications',
+                headers=_auth_headers(app, defender),
+            ).get_json()['notifications']
+            split_loss = next(row for row in defender_rows
+                              if row.get('kind') == 'kingdom_split_lost')
+            assert split_loss['activity_title'] == 'Kingdom split'
+            assert '1 land changed sides, including (0, 0).' in split_loss['activity_detail']
+
+            attacker_rows = client.get(
+                '/kingdom/notifications',
+                headers=_auth_headers(app, attacker),
+            ).get_json()['notifications']
+            split_gain = next(row for row in attacker_rows
+                              if row.get('kind') == 'kingdom_split_claimed')
+            assert split_gain['activity_title'] == 'Split lands claimed'
+            assert "def_split's split kingdom yielded 1 extra land, including (0, 0)." \
+                == split_gain['activity_detail']
+
+    def test_attacker_earns_xp_for_collateral_split_lands(self, app, db):
+        """XP is awarded for each collateral land, not only the connector.
+
+        Topology (odd-q hex, linear row=0 chain for defender):
+            split_off(0,0)─target(1,0)─kept_a(2,0)─kept_b(3,0)   [defender]
+                                │
+                         pre_existing(1,1)                          [attacker]
+
+        (1,1) is adjacent to (1,0) so after reconciliation attacker's kingdom
+        = {pre_existing, target, split_off}; siblings (excl. both the direct
+        land and collateral) = 1, which satisfies the XP gate.
+
+        Expected new XP on attacker's kingdom:
+            tier-2 connector   → xp_for_land_tier(2) = 2
+            tier-1 collateral  → xp_for_land_tier(1) = 1
+            total              = 3
+        """
+        from routes.games import _resolve_conquer_battle
+        from kingdom_service import reconcile_user_kingdoms
+        from models import Kingdom
+        from kingdom_progression import xp_for_land_tier
+
+        with app.app_context():
+            attacker = _make_user(db, username='att_xp_split')
+            defender = _make_user(db, username='def_xp_split')
+
+            # Defender's linear chain — target is the connector.
+            split_off   = _make_land(db, tier=1, owner_user_id=defender.id, col=0, row=0)
+            target      = _make_land(db, tier=2, owner_user_id=defender.id, col=1, row=0)
+            kept_a      = _make_land(db, tier=1, owner_user_id=defender.id, col=2, row=0)
+            kept_b      = _make_land(db, tier=1, owner_user_id=defender.id, col=3, row=0)
+            reconcile_user_kingdoms(defender.id, commit=True)
+
+            # Attacker already owns a land adjacent to target (col=1, row=1 is
+            # a neighbour of col=1, row=0 in odd-q hex).  This ensures the
+            # attacker's kingdom already exists and has >= 1 sibling after the
+            # conquest so the XP gate fires.
+            pre_existing = _make_land(db, tier=1, owner_user_id=attacker.id, col=1, row=1)
+            reconcile_user_kingdoms(attacker.id, commit=True)
+
+            _make_defence_config(db, defender, target)
+            _make_defence_config(db, defender, split_off)
+            _make_conquer_config(db, attacker, target)
+
+            game = _start_conquer_battle(app, db, attacker, target)
+            atk_player = db.session.get(Player, game.invader_player_id)
+
+            result = _resolve_conquer_battle(game, atk_player, atk_player)
+            db.session.commit()
+
+            assert result['conquer_result'] == 'attacker_won'
+            assert result['kingdom_split_transfer']['transferred_land_ids'] == [split_off.id]
+
+            # Locate the attacker's kingdom after reconciliation.
+            db.session.refresh(target)
+            att_kingdom = db.session.get(Kingdom, target.kingdom_id)
+            assert att_kingdom is not None
+            assert att_kingdom.owner_user_id == attacker.id
+
+            expected_xp = (
+                xp_for_land_tier(target.tier) +      # connector (tier 2 → 2)
+                xp_for_land_tier(split_off.tier)     # collateral (tier 1 → 1)
+            )
+            assert att_kingdom.experience == expected_xp, (
+                f'Expected {expected_xp} XP, got {att_kingdom.experience}'
+            )
+
+
 class TestConquerReentrySafetyNet:
     """Re-entering a land whose previous conquer game finished without
     running the resolver triggers a lazy resolve and yields a fresh cfg."""

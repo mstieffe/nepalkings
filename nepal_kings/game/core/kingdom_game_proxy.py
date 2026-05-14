@@ -18,9 +18,11 @@ class KingdomGameProxy:
     """
 
     def __init__(self, config=None, land_id=None, mode='conquer',
-                 land_suit_bonus_suit=None, land_suit_bonus_value=None):
+                 land_suit_bonus_suit=None, land_suit_bonus_value=None,
+                 land=None):
         self._config = config or {}
         self.land_id = land_id
+        self.land = land or {}
         self.mode = mode  # 'conquer' or 'defence'
 
         # Land suit bonus (used by FieldFigureIcon for battle bonus calculation)

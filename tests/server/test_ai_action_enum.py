@@ -156,6 +156,23 @@ def test_all_battle_rounds_done_requires_both_players_to_cover_all_rounds():
     assert _all_battle_rounds_done(game_dict, 1) is False
 
 
+def test_tactics_hand_conquer_rounds_done_counts_conquer_tactics():
+    game_dict = _base_game_dict(ai_id=1, opp_id=2)
+    game_dict['mode'] = 'conquer'
+    game_dict['conquer_move_model'] = 'tactics_hand'
+    game_dict['battle_confirmed'] = True
+    game_dict['battle_turn_player_id'] = None
+    game_dict['conquer_tactics'] = [
+        {'player_id': 1, 'played_round': 0},
+        {'player_id': 1, 'played_round': 1},
+        {'player_id': 1, 'played_round': 2},
+    ]
+    game_dict['battle_skipped_rounds'] = {'2': [0, 1, 2]}
+
+    assert _all_battle_rounds_done(game_dict, 2) is True
+    assert detect_phase(game_dict, 2) == 'finish_battle'
+
+
 def test_enumerate_actions_counter_spell_has_real_counter_option_when_cards_exist(app, db):
     _, ai_player, human_player, spell = _create_pending_spell(db, spell_name='Peasant War')
 

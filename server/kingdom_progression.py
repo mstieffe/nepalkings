@@ -17,7 +17,7 @@ KINGDOM_LEVEL_MAX = 50
 KINGDOM_SKILL_POINTS_PER_LEVEL = 3
 KINGDOM_LEVEL_XP_BASE = 5         # XP needed to advance from level 1 → 2
 KINGDOM_LEVEL_XP_GROWTH = 1.25    # geometric growth factor per level
-KINGDOM_TIER_XP = {1: 1, 2: 2, 3: 4, 4: 8}
+KINGDOM_TIER_XP = {1: 1, 2: 2, 3: 4, 4: 8, 5: 16, 6: 32}
 
 # ── Skills ─────────────────────────────────────────────────────────────────
 # Base SP cost to BUY level N (1-indexed), multiplied per-skill by

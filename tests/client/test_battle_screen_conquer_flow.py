@@ -32,6 +32,37 @@ class TestBattleScreenConquerFlow:
         screen.opponent_played = [None, None, None]
         return BattleScreen, screen
 
+    def test_tactics_hand_conquer_does_not_legacy_auto_skip(self, monkeypatch):
+        from game.screens import battle_screen as battle_module
+
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+        screen.game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            game_id=10,
+            player_id=20,
+            game_over=False,
+        )
+        screen.is_player_turn = True
+        screen._auto_skip_pending = False
+        screen._has_played_move_this_turn = False
+        screen.player_moves = []
+        screen.player_played = [None, None, None]
+        screen.opponent_played = [None, None, None]
+
+        calls = []
+
+        def fake_skip(*args):
+            calls.append(args)
+            return {'success': True}
+
+        monkeypatch.setattr(battle_module.game_service, 'skip_battle_turn', fake_skip)
+
+        BattleScreen._check_auto_skip(screen)
+
+        assert calls == []
+
     @staticmethod
     def _figure(base=10, suit='Hearts', field='village'):
         return SimpleNamespace(

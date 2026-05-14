@@ -829,7 +829,7 @@ class TestConquerStartBattle:
             land = _make_land(db, tier=3)
             land.suit_bonus_suit = 'Spades'
             from ai.defence.generator import get_ai_defence_template_for_land
-            fortress_families = {'Wooden Fortress', 'Stone Fortress'}
+            fortress_families = {'Stone Fortress'}
             # Skip Explosion preludes: they destroy the lone attacker figure
             # and break the rest of this test's flow.  Skip battle-modifier
             # preludes too because they constrain advance/select rules in ways
@@ -1484,6 +1484,14 @@ class TestConquerPreludeTargeting:
             assert summary.get('action') == 'game_start'
             opponent_spells = summary.get('opponent_prelude_spells') or []
             assert any(s.get('spell_name') == 'Explosion' for s in opponent_spells)
+            explosion = next(
+                s for s in opponent_spells
+                if s.get('spell_name') == 'Explosion'
+            )
+            snapshot = explosion.get('target_figure_snapshot') or {}
+            assert snapshot.get('name')
+            assert snapshot.get('family_name')
+            assert snapshot.get('cards')
 
     def test_attacker_explosion_prelude_clears_stale_defender_reference(self, app, db):
         with app.app_context():
@@ -1533,9 +1541,15 @@ class TestConquerPreludeTargeting:
             assert resolve_resp.status_code == 200
 
             db.session.refresh(game)
+            db.session.refresh(pending_spell)
             assert db.session.get(Figure, target_id) is None
             assert game.defending_figure_id is None
             assert game.defending_figure_id_2 is None
+            effect_data = pending_spell.effect_data or {}
+            snapshot = effect_data.get('target_figure_snapshot') or {}
+            assert snapshot.get('id') == target_id
+            assert snapshot.get('name') == first_def_fig.name
+            assert snapshot.get('cards')
 
 
 class TestConquerCounterSpells:
@@ -2587,22 +2601,23 @@ class TestAITemplateCardRewards:
 
             loot_cards = result.get('loot_lost_cards') or []
             consumed_cards = result.get('consumed_cards') or []
-            assert len(loot_cards) == 3
+            # Tier 2 loot under rank-based bucketing: 2 keys (J, Q) + 2
+            # numbers (chosen from 8, 7, 9, 10) — all 4 cards lost.
+            assert len(loot_cards) == 4
             assert consumed_cards == []
             assert result.get('cards_spent') == len(loot_cards)
 
-            loot_pair = (loot_cards[0].get('suit'), loot_cards[0].get('rank'))
-            assert loot_pair == ('Diamonds', 'J')
             loot_pairs = {(c.get('suit'), c.get('rank')) for c in loot_cards}
+            assert ('Diamonds', 'J') in loot_pairs
+            assert ('Diamonds', 'Q') in loot_pairs
+            # Prelude card (Diamonds, Q) is always looted in this setup → its
+            # collection card must be removed.
             prelude_after = db.session.get(CollectionCard, prelude_card_id)
-            if ('Diamonds', 'Q') in loot_pairs:
-                assert prelude_after is None
-            else:
-                assert prelude_after is not None
-                assert prelude_after.locked is False
+            assert prelude_after is None
 
             defender_cards = CollectionCard.query.filter_by(user_id=defender.id, locked=False).all()
-            assert not any((c.suit, c.rank) == loot_pair for c in defender_cards)
+            for loot_pair in loot_pairs:
+                assert not any((c.suit, c.rank) == loot_pair for c in defender_cards)
             event = KingdomLootEvent.query.filter_by(
                 user_id=defender.id, direction='gained', collected=False,
             ).first()

@@ -1536,6 +1536,9 @@ class BattleScreen(SubScreen):
             return
         if not self.game or not self.is_player_turn or self._auto_skip_pending:
             return
+        if (getattr(self.game, 'mode', 'duel') == 'conquer'
+                and getattr(self.game, 'conquer_move_model', 'battle_move') == 'tactics_hand'):
+            return
         if self._has_played_move_this_turn:
             return
         # Don't skip if all moves are already played (game is over)

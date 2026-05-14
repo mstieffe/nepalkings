@@ -190,7 +190,20 @@ KINGDOM_MAP_ROWS = 50                        # = 3750 hexes
 # tier count must extend LAND_TIER_PROBABILITIES, LAND_GOLD_RATE_RANGES,
 # LAND_SUIT_BONUS_RANGES and ai.defence.config.AI_DEFENCE_GENERATION_RULES
 # accordingly.
-KINGDOM_TIER_COUNT = 4
+KINGDOM_TIER_COUNT = 6
+
+# Castle figure cap per land tier.  Players: number of figures with
+# ``family.field == 'castle'`` (Kings + Maharaja) must not exceed this on a
+# tier-N land (including the pre-placed starting Maharaja).  AI defenders:
+# generator emits EXACTLY this many castle figures per tier.
+CASTLE_FIGURE_LIMIT_BY_TIER = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
+
+# Conquer loot bucket classification by card rank.  Every captured card is
+# bucketed into either "number" or "key" based on the rank set below; quotas
+# are tier-scaled (see ``_conquer_loot_base_quota``).  Must match the client
+# constants in ``nepal_kings/config/card_settings.py``.
+LOOT_NUMBER_RANKS = frozenset({'3', '6', '7', '8', '9', '10'})
+LOOT_KEY_RANKS = frozenset({'2', '4', '5', 'J', 'Q', 'K', 'A'})
 
 # Voronoi-style suit clustering: each suit receives exactly this many clusters
 # (seed hexes), so all suits always have the same cluster count.
@@ -224,23 +237,35 @@ KINGDOM_MAP_PEAK_PLATEAU_RANGE = (1, 10)
 # Sentinel suit name used for neutral lands (no suit bonus).
 LAND_NEUTRAL_SUIT = 'Neutral'
 
-LAND_TIER_PROBABILITIES = {1: 0.4, 2: 0.30, 3: 0.2, 4: 0.1}
+LAND_TIER_PROBABILITIES = {1: 0.29, 2: 0.23, 3: 0.18, 4: 0.13, 5: 0.10, 6: 0.07}
 
 # Neutral lands never reach the apex tier; weights are the cluster weights
-# minus tier KINGDOM_TIER_COUNT, renormalised to sum to 1.
-LAND_NEUTRAL_TIER_PROBABILITIES = {1: 0.484, 2: 0.323, 3: 0.193}
+# minus tier KINGDOM_TIER_COUNT, renormalised to sum to 1.  Truncated to
+# tiers 1..(KINGDOM_TIER_COUNT-1) = 1..5 and renormalised from
+# LAND_TIER_PROBABILITIES (sum of weights 1..5 = 0.93).
+LAND_NEUTRAL_TIER_PROBABILITIES = {
+    1: 0.312,
+    2: 0.247,
+    3: 0.194,
+    4: 0.140,
+    5: 0.107,
+}
 
 LAND_GOLD_RATE_RANGES = {                   # Gold per hour (min, max) per tier
     1: (1, 3),
     2: (3, 7),
     3: (7, 15),
     4: (15, 28),
+    5: (28, 50),
+    6: (50, 85),
 }
 LAND_SUIT_BONUS_RANGES = {                  # Suit combat bonus (min, max) per tier
     1: (1, 2),
     2: (2, 4),
     3: (4, 6),
     4: (6, 10),
+    5: (10, 14),
+    6: (14, 20),
 }
 CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(120)))#str(6 * 3600)))
 LAND_CONQUER_PROTECTION_SECONDS = int(
@@ -268,6 +293,205 @@ KINGDOM_DEFAULT_STYLE = {
     'badge_key': 'badge_plain',
     'border_key': 'border_simple_gold',
     'surface_key': 'surface_plain',
+    'color_key': 'color_royal_gold',
+    'sigil_key': 'sigil_none',
+}
+
+# Owner color palette: curated, gold-purchasable.  Each entry exposes accent
+# and glow RGB triples that the client mirrors in
+# ``nepal_kings/config/kingdom_settings.py::KINGDOM_COLOR_PALETTE``.
+KINGDOM_COLOR_PALETTE = {
+    'color_royal_gold': {
+        'name': 'Royal Gold',
+        'rarity': 'default',
+        'price_gold': 0,
+        'accent_rgb': (255, 223, 80),
+        'glow_rgb':   (255, 210, 70),
+    },
+    'color_royal_blue': {
+        'name': 'Royal Blue',
+        'rarity': 'common',
+        'price_gold': 300,
+        'accent_rgb': (84, 150, 255),
+        'glow_rgb':   (54, 110, 220),
+    },
+    'color_crimson': {
+        'name': 'Crimson',
+        'rarity': 'common',
+        'price_gold': 300,
+        'accent_rgb': (224, 60, 80),
+        'glow_rgb':   (200, 40, 60),
+    },
+    'color_emerald': {
+        'name': 'Emerald',
+        'rarity': 'common',
+        'price_gold': 350,
+        'accent_rgb': (60, 200, 130),
+        'glow_rgb':   (40, 170, 105),
+    },
+    'color_amethyst': {
+        'name': 'Amethyst',
+        'rarity': 'rare',
+        'price_gold': 800,
+        'accent_rgb': (180, 110, 220),
+        'glow_rgb':   (150, 80, 200),
+    },
+    'color_copper': {
+        'name': 'Copper',
+        'rarity': 'rare',
+        'price_gold': 800,
+        'accent_rgb': (212, 130, 64),
+        'glow_rgb':   (180, 100, 40),
+    },
+    'color_jade': {
+        'name': 'Jade',
+        'rarity': 'rare',
+        'price_gold': 900,
+        'accent_rgb': (110, 200, 170),
+        'glow_rgb':   (80, 170, 140),
+    },
+    'color_ivory': {
+        'name': 'Ivory',
+        'rarity': 'rare',
+        'price_gold': 950,
+        'accent_rgb': (240, 232, 208),
+        'glow_rgb':   (220, 210, 180),
+    },
+    'color_obsidian': {
+        'name': 'Obsidian',
+        'rarity': 'epic',
+        'price_gold': 1500,
+        'accent_rgb': (110, 110, 130),
+        'glow_rgb':   (70, 70, 90),
+    },
+    'color_sunset': {
+        'name': 'Sunset',
+        'rarity': 'epic',
+        'price_gold': 1600,
+        'accent_rgb': (255, 130, 80),
+        'glow_rgb':   (230, 90, 60),
+    },
+    'color_ocean': {
+        'name': 'Ocean',
+        'rarity': 'epic',
+        'price_gold': 1600,
+        'accent_rgb': (70, 180, 220),
+        'glow_rgb':   (40, 140, 200),
+    },
+}
+
+# Kingdom sigils: achievement-unlocked only (no gold purchase).  Each sigil
+# is gated by a single threshold expressed via ``unlock_kind`` +
+# ``unlock_value``.  The client renders procedural glyphs identified by
+# ``asset_glyph``.
+#
+# unlock_kind values:
+#   - 'free'                 (always unlocked; the default no-sigil entry)
+#   - 'reach_level'          (kingdom.level >= value)
+#   - 'conquer_lands'        (lifetime lands conquered >= value)
+#   - 'win_battles'          (lifetime battles won >= value)
+#   - 'win_conquer_battles'  (lifetime conquer-battles won >= value)
+#   - 'own_all_suits'        (player owns at least one land per suit)
+#   - 'reach_max_tier'       (owns at least one tier-6 land)
+KINGDOM_SIGIL_CATALOG = {
+    'sigil_none': {
+        'name': 'No Sigil',
+        'asset_glyph': 'none',
+        'rarity': 'default',
+        'unlock_kind': 'free',
+        'unlock_value': 0,
+    },
+    'sigil_mountain': {
+        'name': 'Mountain',
+        'asset_glyph': 'mountain',
+        'rarity': 'common',
+        'unlock_kind': 'reach_level',
+        'unlock_value': 5,
+    },
+    'sigil_sword': {
+        'name': 'Crossed Swords',
+        'asset_glyph': 'sword',
+        'rarity': 'common',
+        'unlock_kind': 'win_battles',
+        'unlock_value': 10,
+    },
+    'sigil_wolf': {
+        'name': 'Wolf',
+        'asset_glyph': 'wolf',
+        'rarity': 'common',
+        'unlock_kind': 'conquer_lands',
+        'unlock_value': 5,
+    },
+    'sigil_lotus': {
+        'name': 'Lotus',
+        'asset_glyph': 'lotus',
+        'rarity': 'rare',
+        'unlock_kind': 'reach_level',
+        'unlock_value': 10,
+    },
+    'sigil_tower': {
+        'name': 'Tower',
+        'asset_glyph': 'tower',
+        'rarity': 'rare',
+        'unlock_kind': 'conquer_lands',
+        'unlock_value': 10,
+    },
+    'sigil_eagle': {
+        'name': 'Eagle',
+        'asset_glyph': 'eagle',
+        'rarity': 'rare',
+        'unlock_kind': 'win_conquer_battles',
+        'unlock_value': 10,
+    },
+    'sigil_sun': {
+        'name': 'Sun',
+        'asset_glyph': 'sun',
+        'rarity': 'rare',
+        'unlock_kind': 'own_all_suits',
+        'unlock_value': 1,
+    },
+    'sigil_crescent': {
+        'name': 'Crescent',
+        'asset_glyph': 'crescent',
+        'rarity': 'rare',
+        'unlock_kind': 'reach_level',
+        'unlock_value': 20,
+    },
+    'sigil_lion': {
+        'name': 'Lion',
+        'asset_glyph': 'lion',
+        'rarity': 'epic',
+        'unlock_kind': 'win_battles',
+        'unlock_value': 50,
+    },
+    'sigil_phoenix': {
+        'name': 'Phoenix',
+        'asset_glyph': 'phoenix',
+        'rarity': 'epic',
+        'unlock_kind': 'reach_level',
+        'unlock_value': 30,
+    },
+    'sigil_dragon': {
+        'name': 'Dragon',
+        'asset_glyph': 'dragon',
+        'rarity': 'epic',
+        'unlock_kind': 'reach_max_tier',
+        'unlock_value': 1,
+    },
+    'sigil_crown': {
+        'name': 'Crown',
+        'asset_glyph': 'crown',
+        'rarity': 'epic',
+        'unlock_kind': 'reach_level',
+        'unlock_value': 50,
+    },
+    'sigil_serpent': {
+        'name': 'Serpent',
+        'asset_glyph': 'serpent',
+        'rarity': 'epic',
+        'unlock_kind': 'conquer_lands',
+        'unlock_value': 25,
+    },
 }
 
 KINGDOM_COSMETIC_CATALOG = {
@@ -447,6 +671,31 @@ KINGDOM_COSMETIC_CATALOG = {
         'asset_key': 'surface_lava',
     },
 }
+
+# Programmatically extend the cosmetic catalog with owner-color SKUs so the
+# existing buy/equip flow handles them uniformly with badges/borders/surfaces.
+for _color_key, _color in KINGDOM_COLOR_PALETTE.items():
+    KINGDOM_COSMETIC_CATALOG[_color_key] = {
+        'type': 'color',
+        'name': _color['name'],
+        'rarity': _color['rarity'],
+        'price_gold': int(_color['price_gold']),
+        'asset_key': _color_key,
+    }
+
+# Sigils are part of the catalog for shop/listing purposes but cannot be
+# purchased with gold (price_gold is omitted; client-side shop hides the buy
+# button and shows the unlock requirement instead).
+for _sigil_key, _sigil in KINGDOM_SIGIL_CATALOG.items():
+    KINGDOM_COSMETIC_CATALOG[_sigil_key] = {
+        'type': 'sigil',
+        'name': _sigil['name'],
+        'rarity': _sigil['rarity'],
+        'price_gold': 0 if _sigil['unlock_kind'] == 'free' else None,
+        'asset_key': _sigil_key,
+        'unlock_kind': _sigil['unlock_kind'],
+        'unlock_value': _sigil['unlock_value'],
+    }
 
 # ── Persistent kingdom configuration ───────────────────────────────
 KINGDOM_SHIELD_PRICE_PER_HOUR_PER_LAND = int(

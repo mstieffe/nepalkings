@@ -601,6 +601,73 @@ def _card_assets(cards: Any, *, reveal: bool = True) -> Tuple[dict, ...]:
     )
 
 
+def _forced_deal_user_cards(effect_data: dict, *, own: bool) -> Tuple[List[dict], List[dict]]:
+    """Return (lost, gained) cards from the local user's perspective."""
+    if own:
+        lost = effect_data.get('cards_given') or effect_data.get('caster_gave') or []
+        gained = effect_data.get('cards_received') or effect_data.get('caster_received') or []
+    else:
+        lost = effect_data.get('opponent_gave') or effect_data.get('cards_given') or []
+        gained = effect_data.get('opponent_received') or effect_data.get('cards_received') or []
+    lost = lost if isinstance(lost, list) else []
+    gained = gained if isinstance(gained, list) else []
+    return lost, gained
+
+
+def _forced_deal_card_assets(spell_info: dict, *, own: bool) -> Tuple[dict, ...]:
+    lost, gained = _forced_deal_user_cards(_spell_effect_data(spell_info), own=own)
+    assets: List[dict] = []
+    for card in lost:
+        if isinstance(card, dict):
+            assets.append({
+                'kind': 'card', 'card': card, 'reveal': True,
+                'role': 'lost', 'label': 'Lost', 'tone': 'bad',
+                'dim': True, 'crossed': True,
+            })
+    for card in gained:
+        if isinstance(card, dict):
+            assets.append({
+                'kind': 'card', 'card': card, 'reveal': True,
+                'role': 'gained', 'label': 'Gained', 'tone': 'good',
+            })
+    return tuple(assets)
+
+
+def _dump_cards_card_assets(spell_info: dict, *, own: bool) -> Tuple[dict, ...]:
+    """Cards lost (old hand) and gained (new hand) from the user's POV.
+
+    Mirrors Forced Deal so the timeline info box shows what each player
+    discarded vs. redrew. When ``own`` is False, the user is the
+    non-caster: lost cards are revealed (the user is allowed to know what
+    they discarded) and the opponent's new hand stays hidden.
+    """
+    effect_data = _spell_effect_data(spell_info)
+    if own:
+        lost = effect_data.get('caster_dumped_cards') or []
+        gained = effect_data.get('drawn_cards') or []
+        gained_reveal = True
+    else:
+        lost = effect_data.get('opponent_dumped_cards') or []
+        gained = effect_data.get('opponent_drawn_cards') or []
+        gained_reveal = False
+    assets: List[dict] = []
+    for card in lost if isinstance(lost, list) else []:
+        if isinstance(card, dict):
+            assets.append({
+                'kind': 'card', 'card': card, 'reveal': True,
+                'role': 'lost', 'label': 'Lost', 'tone': 'bad',
+                'dim': True, 'crossed': True,
+            })
+    for card in gained if isinstance(gained, list) else []:
+        if isinstance(card, dict):
+            assets.append({
+                'kind': 'card', 'card': card, 'reveal': gained_reveal,
+                'role': 'gained', 'label': 'Gained' if gained_reveal else '',
+                'tone': 'good',
+            })
+    return tuple(assets)
+
+
 def _resource_asset(label: str, value: Any = '', tone: str = 'neutral') -> dict:
     return {'kind': 'resource', 'label': label, 'value': value, 'tone': tone}
 
@@ -655,13 +722,9 @@ def _prelude_effect_line(spell_info: dict, *, own: bool) -> str:
                 f'opponent discarded {opp_dumped or 0}; both redrew.')
 
     if spell_name == 'Forced Deal':
-        given = effect_data.get('cards_given') or effect_data.get('caster_gave') or []
-        received = effect_data.get('cards_received') or effect_data.get('caster_received') or []
-        if not own:
-            given = effect_data.get('opponent_gave') or []
-            received = effect_data.get('opponent_received') or []
-        if given or received:
-            return f'Forced Deal: exchanged {len(given)} card(s) for {len(received)} card(s).'
+        lost, gained = _forced_deal_user_cards(effect_data, own=own)
+        if lost or gained:
+            return f'Forced Deal: you lost {len(lost)} card(s) and gained {len(gained)}.'
         return 'Forced Deal: exchanged 2 random main cards.'
 
     if spell_name == 'Invader Swap':
@@ -737,6 +800,14 @@ def _prelude_info_assets(spells: List[dict], *, own: bool,
 
         assets.extend(_prelude_target_asset(
             spell, effect_data, field_screen=field_screen, game=game))
+
+        if spell_name == 'Forced Deal':
+            assets.extend(_forced_deal_card_assets(spell, own=own))
+            continue
+
+        if spell_name == 'Dump Cards':
+            assets.extend(_dump_cards_card_assets(spell, own=own))
+            continue
 
         if own:
             assets.extend(_card_assets(drawn_cards, reveal=True))
@@ -829,13 +900,10 @@ def _format_number(value: Any) -> Optional[str]:
 
 def _land_info_assets(game: Any, opponent_name: str) -> Tuple[dict, ...]:
     assets: List[dict] = []
-    land_id = _get(game, 'land_id')
     gold_rate = _format_number(_get(game, 'land_gold_rate'))
     suit = _get(game, 'land_suit_bonus_suit')
     bonus = _format_number(_get(game, 'land_suit_bonus_value'))
 
-    if land_id:
-        assets.append(_resource_asset('Land', f'#{land_id}', 'neutral'))
     if gold_rate is not None:
         assets.append(_resource_asset('Gold/hr', gold_rate, 'good'))
     if suit:
@@ -847,23 +915,17 @@ def _land_info_assets(game: Any, opponent_name: str) -> Tuple[dict, ...]:
 
 def _land_overview_text(game: Any) -> Tuple[str, str]:
     tier = _get(game, 'land_tier')
-    land_id = _get(game, 'land_id')
     suit = _get(game, 'land_suit_bonus_suit')
     bonus = _get(game, 'land_suit_bonus_value')
     gold_rate = _format_number(_get(game, 'land_gold_rate'))
     opponent = _opponent_name(game)
     title = f'Tier {tier} Land' if tier else 'Conquer Battle'
-    land_label = title
-    if land_id:
-        land_label = f'{title} #{land_id}'
-    parts = [f'Welcome to the conquest. You are fighting {opponent} for {land_label}.']
+    parts = [f'You are fighting {opponent} for {title.lower()}.']
     if gold_rate is not None:
-        parts.append(f'The land produces {gold_rate} gold/hour.')
-    if tier:
-        parts.append(f'Tier {tier} land.')
+        parts.append(f'It produces {gold_rate} gold/hour.')
     if suit:
         b = f' (+{bonus})' if bonus else ''
-        parts.append(f'{suit} suit bonus{b}.')
+        parts.append(f'Suit bonus: {suit}{b}.')
     return title, ' '.join(parts)
 
 
@@ -916,7 +978,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
 
     # 1) Own prelude -----------------------------------------------------
     own_pre_active = bool(pending_prelude)
-    own_pre_done = bool(own_preludes) and not own_pre_active
+    own_pre_done = not own_pre_active
     own_pre_step = TimelineStep(
         kind='prelude_own',
         title='Your Prelude',
@@ -929,6 +991,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         interactive=own_pre_active,
         primary_action='select_target' if own_pre_active else None,
         tone='action' if own_pre_active else 'good' if own_pre_done else 'neutral',
+        sidenote='No prelude' if not own_preludes and not own_pre_active else '',
         info_headline=(
             f'Resolve {pending_prelude.get("spell_name", "prelude spell")}'
             if isinstance(pending_prelude, dict) else
@@ -953,7 +1016,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
     steps.append(own_pre_step)
 
     # 2) Opponent prelude ------------------------------------------------
-    opp_pre_done = bool(opp_preludes) and not own_pre_active
+    opp_pre_done = not own_pre_active
     opp_pre_step = TimelineStep(
         kind='prelude_opp',
         title=f"{opp_name}'s Prelude",
@@ -963,6 +1026,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         sub_icons=tuple(s.get('spell_name') for s in opp_preludes[1:]),
         completed=opp_pre_done,
         tone='warning' if opp_preludes else 'neutral',
+        sidenote='No prelude' if not opp_preludes and not own_pre_active else '',
         info_headline=(f'{opp_name} cast ' +
                        ', '.join(s.get('spell_name', '') for s in opp_preludes)
                        if opp_preludes else f"{opp_name}'s prelude"),
@@ -1059,7 +1123,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
             else 'Select one of your legal figures on the field to advance.'
             if attacker_select_active
             else (f'{_figure_label(attacker_figure, field_screen, own=bool(own_is_attacker), fallback="Attacker")} '
-                  'is committed as the attacking battle figure.'
+                  'is locked in as the attacker.'
                   if attacker_done else '')
         ),
         info_assets=attacker_info_assets,
@@ -1144,6 +1208,17 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         (defender_figure_2, defender_side, defender_second_reveal),
         (defender_pending_figure, defender_side, defender_reveal),
     ))
+    defender_chosen_by_player = bool(
+        own_is_attacker
+        and not invader_swap
+        and (defender_pending_local or defender_done)
+    )
+    defender_sidenote = (
+        'Chosen by you' if defender_chosen_by_player
+        else 'Invader Swap' if invader_swap
+        else 'Civil War' if defender_second_active or defending_id_2
+        else ''
+    )
     defender_step = TimelineStep(
         kind='defender',
         title='Defending Figure',
@@ -1166,22 +1241,23 @@ def derive_conquer_timeline(game: Any, state: Any = None,
             'action' if (defender_select_active or defender_pending_local)
             else 'good' if defender_done else 'neutral'
         ),
-        sidenote=(
-            'Invader Swap' if invader_swap
-            else 'Civil War' if defender_second_active or defending_id_2
-            else ''
-        ),
+        sidenote=defender_sidenote,
         info_headline=(
-            'Confirm the second defender' if defender_pending_local and defender_second_active
+            'Confirm opponent defender' if defender_pending_local and defender_chosen_by_player
+            else 'Confirm the second defender' if defender_pending_local and defender_second_active
             else 'Confirm the defender' if defender_pending_local
             else 'Choose your second Civil War defender' if defender_second_active and invader_swap
             else 'Pick the second Civil War defender' if defender_second_active
             else 'Pick the defender' if defender_select_active
+            else 'Opponent defender chosen by you' if defender_done and defender_chosen_by_player
             else 'Defender locked in' if defender_done
             else 'Awaiting defender'
         ),
         info_body=(
-            'Press Confirm to commit, or Cancel to pick another figure.'
+            ('Press Confirm to commit, or Cancel to pick another figure. '
+             'This is the opponent battle figure you selected.')
+            if defender_pending_local and defender_chosen_by_player
+            else 'Press Confirm to commit, or Cancel to pick another figure.'
             if defender_pending_local
             else (
                 'Select another of your own village figures of the same color.'
@@ -1193,6 +1269,8 @@ def derive_conquer_timeline(game: Any, state: Any = None,
                 if invader_swap and defender_select_active
                 else 'Select the opponent figure that will fight your advance.'
                 if defender_select_active and own_is_attacker
+                else 'You selected this opponent figure to fight your advance.'
+                if defender_done and defender_chosen_by_player
                 else 'Counter-advance with a legal figure or spend your turn.'
                 if defender_select_active
                 else ''
@@ -1224,9 +1302,9 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         primary_action=None,
         tone='action' if to_battle_active else 'good' if battle_confirmed else 'neutral',
         info_headline='Battle imminent' if to_battle_active else 'Battle in progress',
-        info_body='Both fighters are chosen — preparing the move-selection phase.'
+        info_body='Both fighters are chosen \u2014 the duel is about to begin.'
                   if to_battle_active
-                  else 'Switch tabs freely between Field and Battle.',
+                  else 'The duel is unfolding on the battlefield \u2014 watch the rounds resolve.',
     )
     steps.append(to_battle_step)
 

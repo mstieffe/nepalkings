@@ -83,7 +83,7 @@ def test_overview_step_has_welcome_land_and_gold_info():
     overview = derive_conquer_timeline(game, _make_state(game), None, None)[0]
 
     assert overview.kind == 'overview'
-    assert 'Welcome to the conquest' in overview.info_body
+    assert 'fighting Kathmandu' in overview.info_body
     assert 'Kathmandu' in overview.info_body
     assert '7.5 gold/hour' in overview.info_body
     assert any(a.get('label') == 'Gold/hr' and a.get('value') == '7.5'
@@ -114,7 +114,7 @@ def test_attacker_step_active_when_advancing_figure_pending():
     assert not by_kind['defender'].active
 
 
-def test_no_prelude_steps_stay_hidden_when_attacker_can_act():
+def test_no_prelude_steps_show_empty_frames_when_attacker_can_act():
     from game.screens.conquer_flow import derive_conquer_timeline
 
     game = _make_game(turn=True)
@@ -122,9 +122,13 @@ def test_no_prelude_steps_stay_hidden_when_attacker_can_act():
 
     by_kind = {s.kind: s for s in steps}
     assert not by_kind['prelude_own'].active
-    assert not by_kind['prelude_own'].completed
+    assert by_kind['prelude_own'].completed
+    assert by_kind['prelude_own'].icon_kind == 'none'
+    assert by_kind['prelude_own'].sidenote == 'No prelude'
     assert not by_kind['prelude_opp'].active
-    assert not by_kind['prelude_opp'].completed
+    assert by_kind['prelude_opp'].completed
+    assert by_kind['prelude_opp'].icon_kind == 'none'
+    assert by_kind['prelude_opp'].sidenote == 'No prelude'
     assert by_kind['attacker'].active
 
 
@@ -153,6 +157,44 @@ def test_own_prelude_uses_spell_assets_instead_of_no_spell_text():
     assert 'No prelude' not in own.info_headline
     assert 'drew 1 main card' in own.info_body
     assert any(a.get('kind') == 'card' and a.get('reveal') for a in own.info_assets)
+
+
+def test_forced_deal_prelude_marks_lost_and_gained_cards():
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    lost = [
+        {'id': 101, 'rank': '3', 'suit': 'Hearts', 'value': 3, 'type': 'main'},
+        {'id': 102, 'rank': '5', 'suit': 'Clubs', 'value': 5, 'type': 'main'},
+    ]
+    gained = [
+        {'id': 201, 'rank': 'K', 'suit': 'Spades', 'value': 13, 'type': 'main'},
+        {'id': 202, 'rank': 'A', 'suit': 'Diamonds', 'value': 14, 'type': 'main'},
+    ]
+    game = _make_game(
+        turn=True,
+        pending_forced_advance=True,
+        conquer_own_prelude_spells=[{
+            'spell_name': 'Forced Deal',
+            'effect_data': {
+                'cards_given': lost,
+                'cards_received': gained,
+            },
+        }],
+    )
+
+    steps = derive_conquer_timeline(game, _make_state(game), None, None)
+    own = {s.kind: s for s in steps}['prelude_own']
+    card_assets = [a for a in own.info_assets if a.get('kind') == 'card']
+    lost_assets = [a for a in card_assets if a.get('role') == 'lost']
+    gained_assets = [a for a in card_assets if a.get('role') == 'gained']
+
+    assert 'you lost 2 card(s) and gained 2' in own.info_body
+    assert len(lost_assets) == 2
+    assert len(gained_assets) == 2
+    assert all(a.get('crossed') and a.get('dim') and a.get('label') == 'Lost'
+               for a in lost_assets)
+    assert all(not a.get('crossed') and a.get('label') == 'Gained'
+               for a in gained_assets)
 
 
 def test_sequence_gate_holds_own_then_opponent_prelude_before_attacker():
@@ -397,7 +439,10 @@ def test_opponent_prelude_drawn_cards_are_hidden():
 
 def test_info_asset_layout_contains_many_mixed_icons():
     from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from config import settings
 
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    panel = ConquerTimelinePanel(window)
     rect = pygame.Rect(100, 20, 340, 150)
     assets = [
         {'kind': 'spell', 'name': 'Draw 2 MainCards'},
@@ -410,7 +455,7 @@ def test_info_asset_layout_contains_many_mixed_icons():
         {'kind': 'card', 'card': {'id': 3, 'rank': 'K'}, 'reveal': False},
     ]
 
-    layout = ConquerTimelinePanel._layout_info_asset_rects(
+    layout = panel._layout_info_asset_rects(
         rect, rect.top + 44, rect.bottom - 38, assets)
     clip = pygame.Rect(
         rect.left + 12,
@@ -546,6 +591,12 @@ def test_tactics_hand_prebattle_draws_single_canvas_without_tabs():
         def draw(self, _screen):
             draw_order.append('timeline')
 
+        def draw_within(self, _screen, _rect):
+            draw_order.append('timeline-within')
+
+        def draw_collapsed_strip(self, _screen, _rect):
+            draw_order.append('timeline-strip')
+
         def draw_hover_tooltips(self, _screen):
             draw_order.append('timeline-hover')
 
@@ -575,11 +626,15 @@ def test_tactics_hand_prebattle_draws_single_canvas_without_tabs():
     screen.counter_spell_selector = None
     screen.dialogue_box = None
     screen._ensure_conquer_screen_game = lambda: True
+    # Persistent header collaborators (pre-battle now uses the two-row header).
+    screen._draw_conquer_collapsed_header = lambda: draw_order.append('header')
+    screen._sync_conquer_timeline_hover_state = lambda: None
+    screen._is_conquer_timeline_overlay_open = lambda: False
 
     ConquerGameScreen.render(screen)
 
     assert draw_order == [
-        'field', 'timeline', 'rail', 'ledger', 'timeline-hover',
+        'field', 'header', 'rail', 'ledger', 'timeline-hover',
     ]
 
 
@@ -611,6 +666,70 @@ def test_conquer_battle_move_panel_layout_fits_left_gutter_for_ten_moves():
     assert len(ten['icon_rects']) == 10
     assert all(ten['rect'].contains(icon_rect) for icon_rect in ten['icon_rects'])
     assert ten['icon_size'] <= three['icon_size']
+
+
+def test_collapsed_timeline_strip_uses_larger_icons(monkeypatch):
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((640, 140)))
+    panel.derive_display_steps = lambda _screen: [
+        TimelineStep(kind='overview', title='Land', completed=True),
+        TimelineStep(kind='attacker', title='Attacker', active=True),
+    ]
+    drawn = []
+
+    def capture_icon(_screen, rect, _step):
+        drawn.append(rect.copy())
+
+    monkeypatch.setattr(panel, '_draw_step_icon', capture_icon)
+
+    panel.draw_collapsed_strip(SimpleNamespace(), pygame.Rect(0, 0, 300, 58))
+
+    assert drawn
+    assert max(rect.width for rect in drawn) > 26
+
+
+def test_expanded_timeline_right_reserve_preserves_full_bottom_border(monkeypatch):
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    window = pygame.Surface((1000, 200))
+    window.fill((0, 0, 0))
+    panel = ConquerTimelinePanel(window)
+    rect = pygame.Rect(20, 20, 900, 120)
+    right_reserve = 140
+    panel.derive_display_steps = lambda _screen: [
+        TimelineStep(kind='overview', title='Land', completed=True),
+        TimelineStep(kind='attacker', title='Attacker', completed=True),
+        TimelineStep(
+            kind='defender',
+            title='Defender',
+            active=True,
+            info_headline='Choose Defender',
+            info_body='Waiting for the defender slot.',
+        ),
+    ]
+    bubble_rects = []
+    info_rects = []
+
+    def capture_bubble(_screen, bubble_rect, _step, _is_active):
+        bubble_rects.append(bubble_rect.copy())
+
+    def capture_info(_screen, info_rect, *_args):
+        info_rects.append(info_rect.copy())
+
+    monkeypatch.setattr(panel, '_draw_bubble', capture_bubble)
+    monkeypatch.setattr(panel, '_draw_info_box', capture_info)
+
+    panel.draw_within(SimpleNamespace(), rect, right_reserve=right_reserve)
+
+    content_limit = rect.right - right_reserve
+    assert bubble_rects
+    assert info_rects
+    assert all(bubble_rect.right <= content_limit for bubble_rect in bubble_rects)
+    assert all(info_rect.right <= content_limit for info_rect in info_rects)
+    assert window.get_at((rect.right - 2, rect.bottom - 1))[:3] == (189, 149, 75)
 
 
 def test_step_info_tooltip_draws_step_assets(monkeypatch):
@@ -829,8 +948,8 @@ def test_battle_started_timeline_shows_round_steps_without_overview_hold():
         _conquer_timeline_step_started_at={},
     )
     screen._conquer_battle_timeline_steps = lambda steps: steps + [TimelineStep(
-        kind='battle_round_1',
-        title='Round 1',
+        kind='battle_round_1_player',
+        title='R1 You',
         icon_kind='tactic',
         active=True,
     )]
@@ -839,7 +958,7 @@ def test_battle_started_timeline_shows_round_steps_without_overview_hold():
     steps = panel.derive_display_steps(screen)
     by_kind = {step.kind: step for step in steps}
 
-    assert by_kind['battle_round_1'].active is True
+    assert by_kind['battle_round_1_player'].active is True
     assert by_kind['overview'].active is False
 
 
@@ -977,6 +1096,33 @@ def test_defender_step_active_when_advancing_resolved():
     by_kind = {s.kind: s for s in steps}
     assert by_kind['attacker'].completed
     assert by_kind['defender'].active
+
+
+def test_opponent_defender_selected_by_player_gets_timeline_tag():
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    attacker = _make_figure(10, 'Own Attacker', player_id=1)
+    defender = _make_figure(20, 'Opponent Defender', player_id=2)
+    field = SimpleNamespace(
+        figures=[attacker, defender],
+        icon_cache={20: SimpleNamespace(is_visible=False)},
+        _pending_advance_figure=None,
+        figure_pending_defender_selection=None,
+        figure_pending_own_defender_selection=None,
+    )
+    game = _make_game(
+        advancing_figure_id=10,
+        defending_figure_id=20,
+        advancing_player_id=1,
+    )
+
+    steps = derive_conquer_timeline(game, _make_state(game), field, None)
+    defender_step = {s.kind: s for s in steps}['defender']
+
+    assert defender_step.sidenote == 'Chosen by you'
+    assert defender_step.icon_payload['side'] == 'opponent'
+    assert defender_step.icon_payload['reveal'] is False
+    assert 'You selected this opponent figure' in defender_step.info_body
 
 
 def test_to_battle_step_active_when_battle_confirmed():

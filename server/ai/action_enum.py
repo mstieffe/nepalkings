@@ -363,7 +363,10 @@ def _all_battle_rounds_done(game_dict: dict, ai_player_id: int) -> bool:
     if not game_dict.get('battle_confirmed'):
         return False
 
-    battle_moves = game_dict.get('battle_moves') or []
+    battle_moves = list(game_dict.get('battle_moves') or [])
+    if (game_dict.get('mode') == 'conquer'
+            and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'):
+        battle_moves = list(game_dict.get('conquer_tactics') or [])
     skipped = game_dict.get('battle_skipped_rounds') or {}
 
     # Get both player IDs
