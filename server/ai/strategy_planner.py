@@ -251,14 +251,15 @@ def _estimate_target_figure_for_action(
             ),
         )
         # The change_cards plan is a *bet* on completing this target later.
-        # Discount the headline recipe power by the completion probability
-        # so the planner compares expected future value (not raw potential)
-        # against immediate builds.  Without this, partially-built dream
-        # targets (e.g. a Cavalry missing two key cards) report rank-sum
-        # power ≈ 30 which crowds out a real Castle/Farm we can build now.
+        # Discount the headline recipe power **quadratically** by the
+        # completion probability so distant targets (low completion_p) drop
+        # off faster and stop crowding out immediate builds.  A Cavalry at
+        # p=0.5 used to contribute 0.5·30 = 15 expected power; under the
+        # quadratic discount it contributes 0.25·30 = 7.5 — much closer to
+        # the value of actually building something now.
         recipe_pow = _estimate_recipe_power(best)
         completion_p = float(best.get('completion_probability', 0.0))
-        expected_pow = recipe_pow * completion_p
+        expected_pow = recipe_pow * (completion_p ** 2)
         return {
             'figure_id': None,
             'name': best.get('name'),
@@ -361,6 +362,7 @@ def _modifier_bonus(
     own_figures: list[dict[str, Any]] | None = None,
     game_dict: dict[str, Any] | None = None,
     ai_player_id: int | None = None,
+    recent_change_cards: int = 0,
 ) -> float:
     """Compute action bonus using board state when available.
 
@@ -415,10 +417,10 @@ def _modifier_bonus(
     if action_type == 'build_figure':
         # Structural bias toward actually materializing the figure now,
         # instead of cycling cards in search of a theoretically stronger
-        # future target.  Without this small nudge, change_cards plans —
-        # which sum *missing* rank values into their power estimate — can
-        # narrowly outscore real, available builds.
-        bonus += 2.0
+        # future target.  Bumped from +2 to +4 so concrete builds reliably
+        # outscore speculative change_cards plans even when the cycled
+        # target has high recipe_pow but low completion probability.
+        bonus += 4.0
 
         params = action.get('params', {}) or {}
         build_suit = params.get('suit')
@@ -627,6 +629,13 @@ def _modifier_bonus(
     if 'Blitzkrieg' in active_modifiers and action_type == 'advance_figure':
         bonus += 1.5
 
+    # ── Anti-cycling penalty ──
+    # Stack a modest −1 per consecutive prior change_cards (or change_side_cards)
+    # turn, capped at −5. Prevents the AI from grinding turns away on
+    # back-to-back card swaps when builds or other actions are available.
+    if action_type in ('change_cards', 'change_side_cards') and recent_change_cards > 0:
+        bonus -= float(min(5, int(recent_change_cards)))
+
     return bonus
 
 
@@ -716,8 +725,17 @@ def generate_strategy_plans(
     max_plans: int = 5,
     max_main_draws_per_turn: int = 2,
     max_side_draws_per_turn: int = 1,
+    context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Generate bounded strategy plans seeded by currently legal actions."""
+    """Generate bounded strategy plans seeded by currently legal actions.
+
+    ``context`` carries per-game decision history. Recognised keys:
+      - ``recent_change_cards_count``: consecutive prior change_cards /
+        change_side_cards turns, used to apply a stacking anti-cycling
+        penalty in :func:`_modifier_bonus`.
+    """
+    context = context or {}
+    recent_change_cards = int(context.get('recent_change_cards_count', 0) or 0)
     if not actions:
         return []
 
@@ -764,6 +782,7 @@ def generate_strategy_plans(
             own_figures=ai_player.get('figures', []),
             game_dict=game_dict,
             ai_player_id=ai_player_id,
+            recent_change_cards=recent_change_cards,
         )
         turns_pressure = max(0.0, (4.0 - horizon_turns) * 0.5)
         total_score, score_breakdown = _score_plan(

@@ -886,11 +886,11 @@ def test_same_suit_build_bonus():
 
     Setup: AI has one Hearts castle (King, +4 support source).
     Building a Hearts military figure should add +4 support bonus on top
-    of the flat +2 build-now structural preference.
+    of the flat +4 build-now structural preference.
     Building a Diamonds military figure should add 0 support — only the
-    flat +2 structural bonus applies.
+    flat +4 structural bonus applies.
 
-    Reasoning: planner combines a flat ``+2.0`` build-now structural bias
+    Reasoning: planner combines a flat ``+4.0`` build-now structural bias
     (to outrank optimistic change_cards plans) with the dynamic support
     bonus derived from ``compute_support_bonus``.
     """
@@ -915,8 +915,8 @@ def test_same_suit_build_bonus():
     }
     bonus_h = _modifier_bonus(action_hearts, [], own_figures=own_figures)
     bonus_d = _modifier_bonus(action_spades_new, [], own_figures=own_figures)
-    assert bonus_h == 6.0, f'Expected 6.0 (+2 build bias + 4 support), got {bonus_h}'
-    assert bonus_d == 2.0, f'Expected 2.0 (build bias only, no support), got {bonus_d}'
+    assert bonus_h == 8.0, f'Expected 8.0 (+4 build bias + 4 support), got {bonus_h}'
+    assert bonus_d == 4.0, f'Expected 4.0 (build bias only, no support), got {bonus_d}'
 
 
 # ── Invader Swap with strong defense ─────────────────────────────────
@@ -1606,9 +1606,84 @@ def test_change_cards_power_is_expected_value(monkeypatch):
 
     plans = generate_strategy_plans(game, 1, 'normal_turn', actions, max_plans=2)
 
-    # Build must outrank change_cards: power 13 + 2 (build bias) beats
-    # change_cards expected value 27 * 0.4 ≈ 10.8 (no build bias, lower feasibility).
+    # Build must outrank change_cards: power 13 + 4 (build bias) beats
+    # change_cards expected value 27 * 0.4**2 ≈ 4.3 (quadratic discount, no
+    # build bias, lower feasibility).
     assert plans[0]['seed_action_id'] == 1, (
         f'build_figure should win over change_cards with discounted expected '
         f"power; plans={plans}"
+    )
+
+
+def test_modifier_bonus_build_figure_structural_bias_is_four():
+    """build_figure carries a +4 structural bias (raised from +2) so concrete
+    builds reliably beat speculative change_cards plans."""
+    action = {
+        'type': 'build_figure',
+        'description': 'Build Himalaya King [power=13]',
+        'params': {'family_name': 'Himalaya King', 'suit': 'Spades',
+                   'field': 'castle', 'name': 'Himalaya King'},
+    }
+    # No same-suit allies → only the flat structural bias applies.
+    assert _modifier_bonus(action, [], own_figures=[]) == 4.0
+
+
+def test_modifier_bonus_anti_cycling_penalty_stacks_and_caps():
+    """Consecutive change_cards turns stack a −1 penalty, capped at −5."""
+    change = {'type': 'change_cards', 'description': 'Change cards', 'params': {}}
+    side = {'type': 'change_side_cards', 'description': 'Change side cards', 'params': {}}
+
+    # No prior cycling → no penalty.
+    assert _modifier_bonus(change, [], recent_change_cards=0) == 0.0
+    # One prior change_cards turn → −1.
+    assert _modifier_bonus(change, [], recent_change_cards=1) == -1.0
+    # Three in a row → −3.
+    assert _modifier_bonus(change, [], recent_change_cards=3) == -3.0
+    # Capped at −5 even for long loops.
+    assert _modifier_bonus(change, [], recent_change_cards=12) == -5.0
+    # Side-card swaps share the same penalty.
+    assert _modifier_bonus(side, [], recent_change_cards=2) == -2.0
+    # Non-cycling actions are unaffected.
+    advance = {'type': 'advance_figure', 'description': 'advance', 'params': {}}
+    assert _modifier_bonus(advance, [], recent_change_cards=4) == 0.0
+
+
+def test_anti_cycling_penalty_demotes_change_cards_after_repeated_swaps(monkeypatch):
+    """After several consecutive change_cards turns, the planner should rank
+    change_cards below an alternative action via the context penalty."""
+    target = {
+        'family_name': 'Cavalry', 'name': 'Cavalry',
+        'field': 'military', 'suit': 'Hearts',
+        'card_state': 'build_possible_with_probability',
+        'completion_probability': 0.6, 'resource_blocked': False,
+        'power_estimate': 18,
+    }
+    _stub_planner(monkeypatch, [target])
+    game = _game_with_figures([], [])
+
+    actions = [
+        {'id': 1, 'type': 'change_cards', 'description': 'Change cards', 'params': {}},
+        {'id': 2, 'type': 'cast_spell', 'description': 'Cast Ceasefire',
+         'params': {'spell_name': 'Ceasefire'}},
+    ]
+
+    # No cycling history → change_cards may legitimately rank first.
+    fresh = generate_strategy_plans(
+        game, 1, 'normal_turn', actions, max_plans=2,
+        context={'recent_change_cards_count': 0},
+    )
+    fresh_change = next(p for p in fresh if p['seed_action_id'] == 1)
+
+    # After 4 consecutive change_cards turns → −4 penalty drags it down.
+    cycled = generate_strategy_plans(
+        game, 1, 'normal_turn', actions, max_plans=2,
+        context={'recent_change_cards_count': 4},
+    )
+    cycled_change = next(p for p in cycled if p['seed_action_id'] == 1)
+
+    assert cycled_change['total_score'] < fresh_change['total_score'], (
+        'repeated change_cards turns must lower the change_cards score'
+    )
+    assert cycled[0]['seed_action_id'] == 2, (
+        'after repeated swaps the planner should prefer the alternative action'
     )

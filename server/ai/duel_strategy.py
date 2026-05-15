@@ -47,12 +47,17 @@ def choose_action(
     phase: str,
     actions: list[dict[str, Any]],
     rng,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pick exactly one action from `actions`.
 
     `rng` is a `random.Random` seeded from the game's `ai_seed` and a
     per-loop iteration counter, so the same inputs always produce the same
     action.
+
+    `context` is an optional per-game decision-history dict (currently used
+    by the normal_turn planner to apply an anti-cycling penalty when the AI
+    has just spent several turns in a row on change_cards).
     """
     if not actions:
         raise ValueError("duel_strategy.choose_action called with no actions")
@@ -63,18 +68,21 @@ def choose_action(
     if handler is None:
         logger.warning("duel_strategy: unknown phase %r, returning first action", phase)
         return actions[0]
+    if phase == 'normal_turn':
+        return _choose_normal_turn(game_dict, ai_player_id, actions, rng, context=context)
     return handler(game_dict, ai_player_id, actions, rng)
 
 
 # ── Phase handlers ──────────────────────────────────────────────────
 
-def _choose_normal_turn(game_dict, ai_player_id, actions, rng):
+def _choose_normal_turn(game_dict, ai_player_id, actions, rng, context=None):
     plans = strategy_planner.generate_strategy_plans(
         game_dict,
         ai_player_id,
         'normal_turn',
         actions,
         max_plans=max(NORMAL_TURN_TOP_K, min(len(actions), 12)),
+        context=context,
     )
     if not plans:
         return actions[0]

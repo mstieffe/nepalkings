@@ -242,8 +242,11 @@ def test_enumerate_actions_normal_turn_change_cards_description_uses_swap_summar
     actions = enumerate_actions(game_dict, 9, 'normal_turn')
     change_action = next(a for a in actions if a['type'] == 'change_cards')
 
-    assert '6 suggested swaps' in change_action['description']
+    # K/Q always kept, one A + one J kept via MAYBE_KEEP_RANKS, and the
+    # protect_ids-aware summary excludes cards reserved for figure targets.
+    assert '3 suggested swaps' in change_action['description']
     assert '2 low-rank of 8 free cards' in change_action['description']
+    assert 'protected' in change_action['description']
 
 
 def test_enumerate_actions_normal_turn_omits_change_side_cards_when_side_hand_empty():
@@ -264,7 +267,26 @@ def test_enumerate_actions_normal_turn_omits_change_side_cards_when_side_hand_em
     assert not any(a['type'] == 'change_side_cards' for a in actions)
 
 
-def test_enumerate_actions_normal_turn_includes_change_side_cards_when_side_hand_has_cards():
+def test_enumerate_actions_normal_turn_includes_change_side_cards_when_enough_swappable():
+    """change_side_cards is emitted only when at least 2 side cards would
+    actually swap under the protect_ids-aware policy."""
+    game_dict = _base_game_dict(ai_id=9, opp_id=10)
+    game_dict['turn_player_id'] = 9
+    game_dict['players'][0]['side_hand'] = [
+        {'id': 101, 'rank': '3', 'suit': 'Hearts', 'value': 3,
+         'part_of_figure': False, 'part_of_battle_move': False},
+        {'id': 102, 'rank': '5', 'suit': 'Hearts', 'value': 5,
+         'part_of_figure': False, 'part_of_battle_move': False},
+    ]
+
+    actions = enumerate_actions(game_dict, 9, 'normal_turn')
+
+    assert any(a['type'] == 'change_side_cards' for a in actions)
+
+
+def test_enumerate_actions_normal_turn_omits_change_side_cards_when_single_swap():
+    """A lone swappable side card is a wasted turn — change_side_cards must
+    not be enumerated when fewer than 2 cards would swap."""
     game_dict = _base_game_dict(ai_id=9, opp_id=10)
     game_dict['turn_player_id'] = 9
     game_dict['players'][0]['side_hand'] = [
@@ -274,7 +296,7 @@ def test_enumerate_actions_normal_turn_includes_change_side_cards_when_side_hand
 
     actions = enumerate_actions(game_dict, 9, 'normal_turn')
 
-    assert any(a['type'] == 'change_side_cards' for a in actions)
+    assert not any(a['type'] == 'change_side_cards' for a in actions)
 
 
 def test_enumerate_actions_invader_last_turn_only_offers_advance():

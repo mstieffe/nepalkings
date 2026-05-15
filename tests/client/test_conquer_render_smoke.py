@@ -1648,8 +1648,8 @@ def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):
 def test_timeline_panel_currently_resolved_step_index():
     """Timeline panel mirrors the server step minus the in-flight offset.
 
-    Once the battle proper has started (battle_confirmed + battle_round>=1),
-    all spell preludes are by definition in the past so we reveal every
+    Once the battle proper has started, all spell preludes are by definition
+    in the past so we reveal every
     resolution step the server has bumped to.
     """
     from game.components.conquer_timeline_panel import ConquerTimelinePanel
@@ -1660,6 +1660,7 @@ def test_timeline_panel_currently_resolved_step_index():
         state=SimpleNamespace(game=SimpleNamespace(
             conquer_resolution_step=4,
             battle_confirmed=True,
+            battle_turn_player_id=11,
             battle_round=1,
         )),
     )
@@ -1668,6 +1669,29 @@ def test_timeline_panel_currently_resolved_step_index():
     assert panel.currently_resolved_step_index(screen) == 3
     panel._displayed_step_offset = 99
     assert panel.currently_resolved_step_index(screen) == 0  # clamped
+
+
+def test_timeline_panel_reveals_all_steps_on_zero_indexed_first_battle_round():
+    """The first tactics-hand battle round is battle_round == 0.
+
+    A Dump Cards counter spell can purge/redeal tactics immediately before
+    that first round starts; the rail must not keep showing pre-battle ghosts
+    until round 1.
+    """
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((10, 10)))
+    screen = SimpleNamespace(
+        _conquer_resolution_step_server=3,
+        state=SimpleNamespace(game=SimpleNamespace(
+            conquer_resolution_step=3,
+            battle_confirmed=True,
+            battle_turn_player_id=42,
+            battle_round=0,
+        )),
+    )
+
+    assert panel.currently_resolved_step_index(screen) == 3
 
 
 def test_timeline_panel_step_gated_by_completed_prelude_bubbles():
@@ -1723,3 +1747,32 @@ def test_timeline_panel_step_gated_by_completed_prelude_bubbles():
         TimelineStep(kind='prelude_own', title='Spell A'),
     ]
     assert panel.currently_resolved_step_index(screen) == 0
+
+
+def test_timeline_panel_counter_spell_bubble_reveals_counter_tactic_mutation():
+    """Counter spells are spell timeline beats too.
+
+    Dump Cards used as a counter spell stamps newly redealt tactics with the
+    counter step; once the counter bubble is active/completed, those tactics
+    should replace the purged ghosts in the rail.
+    """
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((10, 10)))
+    screen = SimpleNamespace(
+        _conquer_resolution_step_server=3,
+        state=SimpleNamespace(game=SimpleNamespace(
+            conquer_resolution_step=3,
+            battle_confirmed=False,
+            battle_round=0,
+        )),
+    )
+    panel.derive_display_steps = lambda _screen: [
+        TimelineStep(kind='overview', title='Overview', completed=True),
+        TimelineStep(kind='prelude_own', title='Your Prelude', completed=True),
+        TimelineStep(kind='prelude_opp', title='Opponent Prelude', completed=True),
+        TimelineStep(kind='counter', title='Counter Spell', active=True),
+    ]
+
+    assert panel.currently_resolved_step_index(screen) == 3

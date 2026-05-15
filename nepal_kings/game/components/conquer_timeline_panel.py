@@ -127,26 +127,31 @@ class ConquerTimelinePanel:
             server_step = int(self._last_seen_server_step or 0)
         # Track the latest server step we have seen for parity.
         self._last_seen_server_step = max(self._last_seen_server_step, server_step)
-        # Once the battle proper has started, reveal everything — preludes
-        # are by definition all in the past.
+        # Once the battle proper has started, reveal everything — spell
+        # timeline beats are by definition all in the past. Tactics-hand
+        # battle rounds are zero-indexed, so the reliable battle-start signal
+        # is an assigned battle-turn player, not ``battle_round >= 1``.
         if game is not None and bool(getattr(game, 'battle_confirmed', False)) \
-                and int(getattr(game, 'battle_round', 0) or 0) >= 1:
+            and (
+                getattr(game, 'battle_turn_player_id', None) is not None
+                or int(getattr(game, 'battle_round', 0) or 0) >= 1
+            ):
             return max(0, server_step - int(self._displayed_step_offset or 0))
-        # Count completed-or-active prelude bubbles seen so far. Each acts
-        # as a gate that permits one additional resolution step to surface.
+        # Count completed-or-active spell timeline bubbles seen so far. Each
+        # acts as a gate that permits one additional resolution step to surface.
         # ``derive_display_steps`` is cached on a 20Hz cadence, so this loop
         # is cheap even though it runs many times per frame.
-        prelude_seen = 0
+        spell_steps_seen = 0
         if screen is not None:
             try:
                 steps = self.derive_display_steps(screen)
             except Exception:
                 steps = []
             for step in steps:
-                if getattr(step, 'kind', '') in ('prelude_own', 'prelude_opp'):
+                if getattr(step, 'kind', '') in ('prelude_own', 'prelude_opp', 'counter'):
                     if getattr(step, 'completed', False) or getattr(step, 'active', False):
-                        prelude_seen += 1
-        gated = min(server_step, prelude_seen)
+                        spell_steps_seen += 1
+        gated = min(server_step, spell_steps_seen)
         return max(0, gated - int(self._displayed_step_offset or 0))
 
     # ------------------------------------------------------------------ entry

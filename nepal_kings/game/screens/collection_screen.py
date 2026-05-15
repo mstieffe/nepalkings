@@ -272,6 +272,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # ── Booster reveal overlay ──────────────────────────────────
         self._reveal_overlay = None
         self._pending_booster_type = 'main'  # tracks which type for dialogue flow
+        self._booster_poller = None
+        self._booster_action = None
+        self._booster_pack_type = None
 
         # ── Custom button glow ──────────────────────────────────────
         glow_w = int(settings.COLLECTION_PACK_PANEL_BTN_W * 1.3)
@@ -303,6 +306,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._sell_card = None
         self._sell_dialogue = None
         self._reveal_overlay = None
+        self._booster_poller = None
+        self._booster_action = None
+        self._booster_pack_type = None
         self._trade_card = None
         self._trade_dialogue = None
         self._profile_dialogue = None
@@ -1417,30 +1423,36 @@ class CollectionScreen(MenuScreenMixin, Screen):
             title='Open Booster')
 
     def _perform_open_booster(self):
-        """Execute the open booster API call and show reveal overlay."""
+        """Start the open booster API call and show reveal overlay when done."""
         pack_type = getattr(self, '_pending_booster_type', 'main')
+        self._start_booster_request('open', pack_type)
+
+    def _apply_open_booster_result(self, pack_type, result):
+        """Apply an open-booster response and show the reveal overlay."""
+        if pack_type == 'main':
+            self._boosters = result.get('booster_packs', self._boosters)
+            if self.state.user_dict:
+                self.state.user_dict['booster_packs'] = self._boosters
+        else:
+            self._boosters_side = result.get('booster_packs_side', self._boosters_side)
+            if self.state.user_dict:
+                self.state.user_dict['booster_packs_side'] = self._boosters_side
+        drawn_cards = result.get('cards', [])
+        for c in drawn_cards:
+            key = (c['suit'], c['rank'])
+            self._cards[key] = self._cards.get(key, 0) + 1
+        from game.components.booster_reveal import BoosterRevealOverlay
+        self._reveal_overlay = BoosterRevealOverlay(self.window, drawn_cards, pack_type=pack_type)
+
+    def _open_booster_sync_result(self, pack_type):
         try:
             if pack_type == 'main':
-                result = collection_service.open_booster()
-                self._boosters = result.get('booster_packs', self._boosters)
-                if self.state.user_dict:
-                    self.state.user_dict['booster_packs'] = self._boosters
+                data = collection_service.open_booster()
             else:
-                result = collection_service.open_booster_side()
-                self._boosters_side = result.get('booster_packs_side', self._boosters_side)
-                if self.state.user_dict:
-                    self.state.user_dict['booster_packs_side'] = self._boosters_side
-            drawn_cards = result.get('cards', [])
-            # Update local card counts
-            for c in drawn_cards:
-                key = (c['suit'], c['rank'])
-                self._cards[key] = self._cards.get(key, 0) + 1
-            # Show reveal overlay
-            from game.components.booster_reveal import BoosterRevealOverlay
-            self._reveal_overlay = BoosterRevealOverlay(self.window, drawn_cards, pack_type=pack_type)
+                data = collection_service.open_booster_side()
+            return {'ok': True, 'data': data}
         except Exception as e:
-            logger.error(f'Open booster failed: {e}')
-            self.state.set_msg('Failed to open booster pack')
+            return {'ok': False, 'error': str(e)}
 
     def _confirm_buy_booster(self, pack_type='main'):
         """Show confirmation dialogue for buying a booster."""
@@ -1471,27 +1483,113 @@ class CollectionScreen(MenuScreenMixin, Screen):
         ))
 
     def _perform_buy_booster(self):
-        """Execute the buy booster API call."""
+        """Start the buy booster API call."""
         pack_type = getattr(self, '_pending_booster_type', 'main')
+        self._start_booster_request('buy', pack_type)
+
+    def _apply_buy_booster_result(self, pack_type, result):
+        """Apply a buy-booster response."""
+        if pack_type == 'main':
+            self._boosters = result.get('booster_packs', self._boosters)
+            if self.state.user_dict:
+                self.state.user_dict['booster_packs'] = self._boosters
+        else:
+            self._boosters_side = result.get('booster_packs_side', self._boosters_side)
+            if self.state.user_dict:
+                self.state.user_dict['booster_packs_side'] = self._boosters_side
+        self._gold = result.get('gold', self._gold)
+        if self.state.user_dict:
+            self.state.user_dict['gold'] = self._gold
+        self.state.set_msg('Booster pack purchased!')
+        self._spawn_booster_floater(pack_type)
+
+    def _buy_booster_sync_result(self, pack_type):
         try:
             if pack_type == 'main':
-                result = collection_service.buy_booster()
-                self._boosters = result.get('booster_packs', self._boosters)
-                if self.state.user_dict:
-                    self.state.user_dict['booster_packs'] = self._boosters
+                data = collection_service.buy_booster()
             else:
-                result = collection_service.buy_booster_side()
-                self._boosters_side = result.get('booster_packs_side', self._boosters_side)
-                if self.state.user_dict:
-                    self.state.user_dict['booster_packs_side'] = self._boosters_side
-            self._gold = result.get('gold', self._gold)
-            if self.state.user_dict:
-                self.state.user_dict['gold'] = self._gold
-            self.state.set_msg('Booster pack purchased!')
-            self._spawn_booster_floater(pack_type)
+                data = collection_service.buy_booster_side()
+            return {'ok': True, 'data': data}
         except Exception as e:
-            logger.error(f'Buy booster failed: {e}')
-            self.state.set_msg('Failed to buy booster pack')
+            return {'ok': False, 'error': str(e)}
+
+    def _booster_async_transform(self, responses):
+        response = responses.get('response') if responses else None
+        if response is None:
+            return {'ok': False, 'error': 'No response from server'}
+        status_code = getattr(response, 'status_code', 0)
+        if status_code >= 400 or status_code == 0:
+            return {
+                'ok': False,
+                'status': status_code,
+                'error': getattr(response, 'text', '')[:200] or 'Request failed',
+            }
+        try:
+            return {'ok': True, 'data': response.json()}
+        except Exception as e:
+            return {'ok': False, 'status': status_code, 'error': str(e)}
+
+    def _start_booster_request(self, action, pack_type):
+        if self._booster_poller:
+            return
+        if action == 'open':
+            func = self._open_booster_sync_result
+            endpoint = 'open_booster' if pack_type == 'main' else 'open_booster_side'
+            self.state.set_msg('Opening booster pack...')
+        else:
+            func = self._buy_booster_sync_result
+            endpoint = 'buy_booster' if pack_type == 'main' else 'buy_booster_side'
+            self.state.set_msg('Buying booster pack...')
+        self._booster_action = action
+        self._booster_pack_type = pack_type
+        self._booster_poller = BackgroundPoller(
+            func,
+            args=(pack_type,),
+            async_requests=[{
+                'key': 'response',
+                'method': 'POST',
+                'url': f'{settings.SERVER_URL}/collection/{endpoint}',
+                'data': {'quantity': 1} if action == 'buy' else {},
+            }],
+            async_transform=self._booster_async_transform,
+        )
+        self._booster_poller.poll()
+
+    def _clear_booster_request(self):
+        self._booster_poller = None
+        self._booster_action = None
+        self._booster_pack_type = None
+
+    def _handle_booster_result(self, result):
+        action = self._booster_action
+        pack_type = self._booster_pack_type or 'main'
+        self._clear_booster_request()
+        if not result or not result.get('ok'):
+            error = (result or {}).get('error', 'Unknown booster request failure')
+            logger.error(f'{action or "Booster"} booster failed: {error}')
+            if action == 'buy':
+                self.state.set_msg('Failed to buy booster pack')
+            else:
+                self.state.set_msg('Failed to open booster pack')
+            return
+        data = result.get('data') or {}
+        if action == 'buy':
+            self._apply_buy_booster_result(pack_type, data)
+        else:
+            self._apply_open_booster_result(pack_type, data)
+
+    def _update_booster_request(self):
+        if not self._booster_poller:
+            return
+        if self._booster_poller.has_result():
+            self._handle_booster_result(self._booster_poller.result)
+            return
+        if not self._booster_poller.busy:
+            action = self._booster_action
+            self._clear_booster_request()
+            logger.error(f'{action or "Booster"} booster request ended without a result')
+            self.state.set_msg('Failed to open booster pack' if action == 'open'
+                               else 'Failed to buy booster pack')
 
     # ── update / events ─────────────────────────────────────────────
 
@@ -1517,6 +1615,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         # Clear a failed/stale poller so re-fetch can trigger next frame
         elif self._poller and not self._poller.busy:
             self._poller = None
+
+        self._update_booster_request()
 
         # Update reveal overlay
         if self._reveal_overlay:
@@ -1562,6 +1662,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 self._profile_dialogue = None
             return
         if self.dialogue_box:
+            return
+        if self._booster_poller:
             return
 
         for event in events:

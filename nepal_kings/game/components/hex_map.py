@@ -296,6 +296,11 @@ class HexMap:
         self._world_max_x = 0.0
         self._world_min_y = 0.0
         self._world_max_y = 0.0
+        # Cosmetic caches that only depend on tile data (ownership / suit /
+        # kingdom) — refreshed on _build_tiles / update_data, then reused
+        # every frame.
+        self._suit_clusters_cache = None
+        self._kingdom_badges_cache = None
         self._build_tiles(lands_data)
 
         # Pre-load suit icons as raw surfaces and scale lazily per size.
@@ -378,6 +383,28 @@ class HexMap:
         self._scaled_icon_cache[k] = scaled
         return scaled
 
+    def _cached_text(self, text, font_px, color, *, bold=False):
+        """Return a cached ``font.render`` result.
+
+        Font rendering is one of pygame's most expensive primitives; the same
+        text/colour/size combo is requested by ~100 tiles every frame
+        (bonus numbers, owner names, shield countdowns), so a small dict cache
+        eliminates almost all of the per-frame cost.
+        """
+        cache = getattr(self, '_text_cache', None)
+        if cache is None:
+            cache = self._text_cache = {}
+        key = (text, int(font_px), bool(bold), tuple(color))
+        surf = cache.get(key)
+        if surf is None:
+            font = settings.get_font(int(font_px), bold=bold)
+            surf = font.render(text, True, color)
+            # Bound the cache to avoid unbounded growth across zoom levels.
+            if len(cache) > 256:
+                cache.pop(next(iter(cache)))
+            cache[key] = surf
+        return surf
+
     def _owner_style_key(self, tile, field_name):
         style = getattr(tile, 'owner_style', None) or {}
         default_style = getattr(settings, 'HEX_DEFAULT_OWNER_STYLE', {})
@@ -404,6 +431,9 @@ class HexMap:
             self._tile_by_coord[(tile.col, tile.row)] = tile
         self._update_world_bounds()
         self._precompute_conquest_outcomes()
+        # Data changed — drop derived caches.
+        self._suit_clusters_cache = None
+        self._kingdom_badges_cache = None
 
     def _precompute_conquest_outcomes(self):
         """Pre-compute whether each non-player tile would expand an existing kingdom
@@ -782,22 +812,6 @@ class HexMap:
                  y - glow_rect.y + (y - scy) * 0.10)
                 for x, y in corners
             ]
-        if tile.is_mine:
-            xs = [p[0] for p in corners]
-            ys = [p[1] for p in corners]
-            glow_rect = pygame.Rect(
-                int(min(xs)) - 4,
-                int(min(ys)) - 4,
-                int(max(xs) - min(xs)) + 8,
-                int(max(ys) - min(ys)) + 8,
-            )
-            glow_surf = pygame.Surface((glow_rect.w, glow_rect.h), pygame.SRCALPHA)
-            local_corners = [(x - glow_rect.x, y - glow_rect.y) for x, y in corners]
-            soft_local = [
-                (x - glow_rect.x + (x - scx) * 0.10,
-                 y - glow_rect.y + (y - scy) * 0.10)
-                for x, y in corners
-            ]
             pulse = self._owner_glow_pulse()
             # Tint glow in owner color when an owner palette is set.
             owner_clr = self._tile_owner_color(tile, kind='glow')
@@ -926,8 +940,7 @@ class HexMap:
             text_clr = (225, 190, 105)
 
         font_px = max(8, int(sz * 0.27))
-        font = settings.get_font(font_px)
-        txt_surf = font.render(text, True, text_clr)
+        txt_surf = self._cached_text(text, font_px, text_clr)
         pad_x = max(5, int(sz * 0.11))
         pad_y = max(2, int(sz * 0.05))
         pill_w = txt_surf.get_width() + pad_x * 2
@@ -1037,10 +1050,10 @@ class HexMap:
             return
         # Bonus number in a bold tier-style font, sized relative to icon.
         font_px = max(10, int(icon_sz * 0.55))
-        font = settings.get_font(font_px, bold=True)
-        text = font.render(str(bonus), True, (255, 244, 200))
+        bonus_str = str(bonus)
+        text = self._cached_text(bonus_str, font_px, (255, 244, 200), bold=True)
         # Crisp dark outline for legibility on bright tile fills.
-        outline = font.render(str(bonus), True, (24, 16, 4))
+        outline = self._cached_text(bonus_str, font_px, (24, 16, 4), bold=True)
         cx_i, cy_i = int(scx), int(scy)
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             self.window.blit(outline,
@@ -1057,22 +1070,34 @@ class HexMap:
         phase = (now_ms / 1000.0) * settings.HEX_WARNING_PULSE_HZ * 2 * math.pi
         alpha = 200 + int(40 * math.sin(phase))
         alpha = max(160, min(240, alpha))
-        bg = (*settings.HEX_WARNING_BG_CLR[:3], alpha)
-        size = r * 2 + 4
-        surf = pygame.Surface((size, size), pygame.SRCALPHA)
-        pygame.draw.circle(surf, bg, (r + 2, r + 2), r)
-        pygame.draw.circle(surf, settings.HEX_WARNING_BORDER_CLR,
-                           (r + 2, r + 2), r, 1)
-        if self._broken_icon_raw:
-            icon_sz = max(6, int(r * 1.7))
-            icon = self._get_scaled_icon('broken', self._broken_icon_raw,
-                                          icon_sz)
-            if icon is not None:
-                surf.blit(icon, icon.get_rect(center=(r + 2, r + 2)))
-        else:
-            txt = self._tier_font.render('!', True,
-                                          settings.HEX_WARNING_TEXT_CLR)
-            surf.blit(txt, txt.get_rect(center=(r + 2, r + 2)))
+        # Build the badge once per (r, has_icon) combo and modulate alpha for
+        # the pulse — avoids allocating a fresh Surface every frame per tile.
+        cache = getattr(self, '_warning_badge_cache', None)
+        if cache is None:
+            cache = self._warning_badge_cache = {}
+        cache_key = (r, bool(self._broken_icon_raw))
+        surf = cache.get(cache_key)
+        if surf is None:
+            size = r * 2 + 4
+            surf = pygame.Surface((size, size), pygame.SRCALPHA)
+            base_bg = (*settings.HEX_WARNING_BG_CLR[:3], 255)
+            pygame.draw.circle(surf, base_bg, (r + 2, r + 2), r)
+            pygame.draw.circle(surf, settings.HEX_WARNING_BORDER_CLR,
+                               (r + 2, r + 2), r, 1)
+            if self._broken_icon_raw:
+                icon_sz = max(6, int(r * 1.7))
+                icon = self._get_scaled_icon('broken', self._broken_icon_raw,
+                                              icon_sz)
+                if icon is not None:
+                    surf.blit(icon, icon.get_rect(center=(r + 2, r + 2)))
+            else:
+                txt = self._tier_font.render('!', True,
+                                              settings.HEX_WARNING_TEXT_CLR)
+                surf.blit(txt, txt.get_rect(center=(r + 2, r + 2)))
+            if len(cache) > 32:
+                cache.pop(next(iter(cache)))
+            cache[cache_key] = surf
+        surf.set_alpha(alpha)
         self.window.blit(surf, (cx - r - 2, cy - r - 2))
 
     def _draw_owner_chip(self, tile, scx, scy, sz, *, show_name):
@@ -1157,7 +1182,13 @@ class HexMap:
         Connectivity uses the same odd-q flat-top hex neighbour layout as
         the kingdom-component logic. Tiles without a suit bonus are
         skipped entirely.
+
+        The result depends only on tile data (suit + neighbours), so it is
+        cached and only recomputed when _build_tiles/update_data fires.
         """
+        cached = self._suit_clusters_cache
+        if cached is not None:
+            return cached
         coord_to_tile = {(t.col, t.row): t for t in self.tiles}
         visited = set()
         clusters = []
@@ -1194,6 +1225,7 @@ class HexMap:
                 'center_y': cy,
                 'tile_count': len(members),
             })
+        self._suit_clusters_cache = clusters
         return clusters
 
     # ── Cluster perimeter outline ──────────────────────────────────
@@ -1348,7 +1380,14 @@ class HexMap:
                 icon.get_rect(center=(int(scx), int(scy))))
 
     def _kingdom_badges(self):
-        """Return grouped badge descriptors for all visible owned kingdoms."""
+        """Return grouped badge descriptors for all visible owned kingdoms.
+
+        Depends only on tile ownership/kingdom data; cached and invalidated
+        when _build_tiles/update_data refreshes the tile list.
+        """
+        cached = self._kingdom_badges_cache
+        if cached is not None:
+            return cached
         groups = {}
         for tile in self.tiles:
             if not tile.owner_user_id:
@@ -1430,6 +1469,7 @@ class HexMap:
                 'representative_tile': tiles[0],
                 'group_key': gk,
             })
+        self._kingdom_badges_cache = badges
         return badges
 
     def _draw_kingdom_badges(self, sz):
@@ -1592,9 +1632,8 @@ class HexMap:
         # below centre so it visually sits inside the shield's body.
         label = self._format_countdown(remaining)
         font_px = max(10, int(icon_sz * 0.42))
-        font = settings.get_font(font_px, bold=True)
-        txt = font.render(label, True, (255, 248, 220))
-        outline = font.render(label, True, (16, 12, 4))
+        txt = self._cached_text(label, font_px, (255, 248, 220), bold=True)
+        outline = self._cached_text(label, font_px, (16, 12, 4), bold=True)
         center = (icon_center[0], icon_center[1] + int(icon_sz * 0.05))
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1),
                        (-1, -1), (1, -1), (-1, 1), (1, 1)):

@@ -7,7 +7,12 @@ Determines the current game phase and lists all legal actions
 the AI can take, formatted for the LLM to choose from.
 """
 import logging
-from ai.card_change_strategy import summarize_main_change, summarize_side_change
+from ai.card_change_strategy import (
+    compute_side_tactic_protected_ids,
+    compute_tactic_protected_ids,
+    summarize_main_change,
+    summarize_side_change,
+)
 from ai.figure_recipes import find_buildable_figures
 
 logger = logging.getLogger('nepalkings.ai.actions')
@@ -608,45 +613,57 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
         actions.extend(spell_actions)
 
     # 4) Change cards — blocked during Infinite Hammer and when invader must advance
+    # Only emit when the AI would actually swap at least 2 cards under the
+    # protect_ids-aware policy. A would-be 0-or-1-card swap is a wasted turn
+    # and was the root cause of the "AI keeps swapping one card" stuck loop.
     if not infinite_hammer_active and not must_advance:
         free_cards = [c for c in ai_player.get('main_hand', [])
                       if not c.get('part_of_figure') and not c.get('part_of_battle_move')]
-        summary = summarize_main_change(free_cards)
-        low = summary.get('low_rank_count', 0)
+        from ai.figure_completion import best_figure_targets
+        top_targets = best_figure_targets(game_dict, ai_player.get('id'), max_results=3)
+        protect_ids = compute_tactic_protected_ids(free_cards, top_targets, max_targets=3)
+        summary = summarize_main_change(free_cards, protect_ids=protect_ids)
         swap_count = summary.get('swap_count', 0)
         total_free = summary.get('free_count', len(free_cards))
-        actions.append({
-            'id': action_id,
-            'type': 'change_cards',
-            'description': (
-                "Change main cards — swap selected cards for new ones "
-                f"({swap_count} suggested swaps; {low} low-rank of {total_free} free cards)"
-            ),
-            'params': {},
-        })
-        action_id += 1
-
-    # 4b) Change side cards — same blocking rules as main cards.
-    # Only legal when the AI actually holds side cards to swap; side cards are
-    # dealt post-battle, so a fresh duel turn has none and the server would
-    # reject the request.
-    if not infinite_hammer_active and not must_advance:
-        free_side = [c for c in ai_player.get('side_hand', [])
-                     if not c.get('part_of_figure') and not c.get('part_of_battle_move')]
-        if free_side:
-            side_summary = summarize_side_change(free_side)
-            side_swap = side_summary.get('swap_count', 0)
-            side_free = side_summary.get('free_count', len(free_side))
+        low = summary.get('low_rank_count', 0)
+        if swap_count >= 2:
             actions.append({
                 'id': action_id,
-                'type': 'change_side_cards',
+                'type': 'change_cards',
                 'description': (
-                    "Change side cards — swap selected side cards for new ones "
-                    f"({side_swap} suggested swaps of {side_free} free side cards)"
+                    "Change main cards — swap selected cards for new ones "
+                    f"({swap_count} suggested swaps; {low} low-rank of {total_free} free cards"
+                    f"; {len(protect_ids)} protected)"
                 ),
                 'params': {},
             })
             action_id += 1
+
+    # 4b) Change side cards — same blocking rules as main cards.
+    # Only legal when the AI holds side cards to swap AND at least 2 would
+    # actually swap under the protect_ids-aware policy.
+    if not infinite_hammer_active and not must_advance:
+        free_side = [c for c in ai_player.get('side_hand', [])
+                     if not c.get('part_of_figure') and not c.get('part_of_battle_move')]
+        if free_side:
+            from ai.figure_completion import best_figure_targets
+            side_targets = best_figure_targets(game_dict, ai_player.get('id'), max_results=3)
+            side_protect_ids = compute_side_tactic_protected_ids(free_side, side_targets, max_targets=3)
+            side_summary = summarize_side_change(free_side, protect_ids=side_protect_ids)
+            side_swap = side_summary.get('swap_count', 0)
+            side_free = side_summary.get('free_count', len(free_side))
+            if side_swap >= 2:
+                actions.append({
+                    'id': action_id,
+                    'type': 'change_side_cards',
+                    'description': (
+                        "Change side cards — swap selected side cards for new ones "
+                        f"({side_swap} suggested swaps of {side_free} free side cards"
+                        f"; {len(side_protect_ids)} protected)"
+                    ),
+                    'params': {},
+                })
+                action_id += 1
 
     # 5) End Infinite Hammer — only available when active
     if infinite_hammer_active:

@@ -412,10 +412,17 @@ def _compute_round_ledger(W: int, H: int,
 
 # ── Public entry point ────────────────────────────────────────────────
 
+# Layout output is purely a function of (screen_w, screen_h, mode, narrow).
+# A tiny memo lets repeated callers within a single frame (header, duel lane,
+# tactics rail, ledger, field screen) reuse one ConquerLayout instance instead
+# of re-running rect math + _validate() on every call.
+_LAYOUT_CACHE: Dict[Tuple[int, int, str, Optional[bool]], "ConquerLayout"] = {}
+_LAYOUT_CACHE_MAX = 8
 
-def compute_conquer_layout(screen_w: int, screen_h: int,
-                           mode: str = 'pre_battle',
-                           narrow: Optional[bool] = None) -> ConquerLayout:
+
+def _compute_conquer_layout_uncached(screen_w: int, screen_h: int,
+                                     mode: str = 'pre_battle',
+                                     narrow: Optional[bool] = None) -> ConquerLayout:
     """Compute every named rect for the unified conquer screen.
 
     Args:
@@ -485,6 +492,26 @@ def compute_conquer_layout(screen_w: int, screen_h: int,
         round_ledger=ledger,
     )
     _validate(layout)
+    return layout
+
+
+def compute_conquer_layout(screen_w: int, screen_h: int,
+                           mode: str = 'pre_battle',
+                           narrow: Optional[bool] = None) -> ConquerLayout:
+    """Memoized wrapper around the layout solver.
+
+    The solver is pure (no side effects) and is called many times per frame
+    from independent UI components. Caching by ``(W, H, mode, narrow)`` keeps
+    a frame's worth of identical calls down to one rect-math + validate pass.
+    """
+    key = (int(screen_w), int(screen_h), str(mode), narrow)
+    cached = _LAYOUT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    layout = _compute_conquer_layout_uncached(screen_w, screen_h, mode, narrow)
+    if len(_LAYOUT_CACHE) >= _LAYOUT_CACHE_MAX:
+        _LAYOUT_CACHE.pop(next(iter(_LAYOUT_CACHE)))
+    _LAYOUT_CACHE[key] = layout
     return layout
 
 

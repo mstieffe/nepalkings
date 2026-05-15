@@ -22,6 +22,41 @@ _GLOW_H = int(_CARD_H * 1.55)
 _CLOSE_W = int(0.12 * _SW)
 _CLOSE_H = int(0.045 * _SH)
 
+_RAW_IMAGE_CACHE = {}
+_SCALED_IMAGE_CACHE = {}
+_CARD_FRONT_CACHE = {}
+_TIER_GLOW_CACHE = {}
+
+
+def _load_raw_image(path):
+    if path not in _RAW_IMAGE_CACHE:
+        _RAW_IMAGE_CACHE[path] = pygame.image.load(path).convert_alpha()
+    return _RAW_IMAGE_CACHE[path]
+
+
+def _load_scaled_image(path, size):
+    key = (path, size)
+    if key not in _SCALED_IMAGE_CACHE:
+        _SCALED_IMAGE_CACHE[key] = pygame.transform.smoothscale(
+            _load_raw_image(path), size)
+    return _SCALED_IMAGE_CACHE[key]
+
+
+def _card_front_image(window, suit, rank, size):
+    key = (suit, rank, size)
+    if key not in _CARD_FRONT_CACHE:
+        _CARD_FRONT_CACHE[key] = CardImg(window, suit, rank, size[0], size[1]).front_img
+    return _CARD_FRONT_CACHE[key]
+
+
+def _tier_glow_image(tier, base_glow):
+    if tier not in _TIER_GLOW_CACHE:
+        glow = base_glow.copy()
+        glow.fill(settings.COLLECTION_TIER_GLOW_TINTS[tier],
+                  special_flags=pygame.BLEND_RGBA_MULT)
+        _TIER_GLOW_CACHE[tier] = glow
+    return _TIER_GLOW_CACHE[tier]
+
 
 def _card_tier(card, pack_type='main'):
     """Return the booster tier for a drawn card, falling back to rank inference."""
@@ -72,33 +107,32 @@ class BoosterRevealOverlay:
         # Use the same simple card back for every slot for a consistent pack reveal.
         self._back_imgs = []
         self._back_imgs_big = []
-        back_raw = pygame.image.load(settings.CARD_IMG_PATH + 'back.png').convert_alpha()
+        back_path = settings.CARD_IMG_PATH + 'back.png'
         for i in range(max(1, len(self._cards))):
-            self._back_imgs.append(pygame.transform.smoothscale(back_raw, (_CARD_W, _CARD_H)))
-            self._back_imgs_big.append(pygame.transform.smoothscale(
-                back_raw, (int(_CARD_W * _SCALE_HOVER), int(_CARD_H * _SCALE_HOVER))))
+            self._back_imgs.append(_load_scaled_image(back_path, (_CARD_W, _CARD_H)))
+            self._back_imgs_big.append(_load_scaled_image(
+                back_path, (int(_CARD_W * _SCALE_HOVER), int(_CARD_H * _SCALE_HOVER))))
 
         # Build front images for each card
         self._front_imgs = []
         self._front_imgs_big = []
         for c in self._cards:
-            ci = CardImg(window, c['suit'], c['rank'], _CARD_W, _CARD_H)
-            self._front_imgs.append(ci.front_img)
-            ci_big = CardImg(window, c['suit'], c['rank'],
-                             int(_CARD_W * _SCALE_HOVER), int(_CARD_H * _SCALE_HOVER))
-            self._front_imgs_big.append(ci_big.front_img)
+            self._front_imgs.append(_card_front_image(
+                window, c['suit'], c['rank'], (_CARD_W, _CARD_H)))
+            self._front_imgs_big.append(_card_front_image(
+                window, c['suit'], c['rank'],
+                (int(_CARD_W * _SCALE_HOVER), int(_CARD_H * _SCALE_HOVER))))
 
         # Glow images. Hidden cards keep the existing white/orange language;
         # revealed cards receive a tint based on booster tier.
         self._hidden_glows = {}
         glow_path = 'img/glow/rect/'
         for colour in ('white', 'orange'):
-            raw = pygame.image.load(glow_path + colour + '.png').convert_alpha()
-            self._hidden_glows[colour] = pygame.transform.smoothscale(raw, (_GLOW_W, _GLOW_H))
-        glow_base_raw = pygame.image.load(glow_path + 'white.png').convert_alpha()
-        self._glow_base = pygame.transform.smoothscale(glow_base_raw, (_GLOW_W, _GLOW_H))
+            self._hidden_glows[colour] = _load_scaled_image(
+                glow_path + colour + '.png', (_GLOW_W, _GLOW_H))
+        self._glow_base = _load_scaled_image(glow_path + 'white.png', (_GLOW_W, _GLOW_H))
         self._tier_glows = {
-            tier: self._make_tier_glow(settings.COLLECTION_TIER_GLOW_TINTS[tier])
+            tier: _tier_glow_image(tier, self._glow_base)
             for tier in settings.COLLECTION_TIER_LABELS
         }
 
@@ -123,11 +157,6 @@ class BoosterRevealOverlay:
         # Title / label fonts
         self._title_font = settings.get_font(int(0.028 * _SH), bold=True)
         self._subtitle_font = settings.get_font(int(0.018 * _SH))
-
-    def _make_tier_glow(self, tint):
-        glow = self._glow_base.copy()
-        glow.fill(tint, special_flags=pygame.BLEND_RGBA_MULT)
-        return glow
 
     @property
     def all_revealed(self):

@@ -11,6 +11,7 @@ from game.components.land_detail_box import LandDetailBox
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from config import settings
 from utils import http_compat as requests
+from utils.background_poller import BackgroundPoller
 import logging
 
 logger = logging.getLogger('nk.screens.kingdom')
@@ -184,57 +185,110 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # ── Track last load time ────────────────────────────────────
         self._last_load_tick = 0
 
+        # ── Background loaders ──────────────────────────────────────
+        # The map fetch is a (potentially slow) HTTP round-trip; running it
+        # via BackgroundPoller keeps the main loop unblocked so the game
+        # menu chrome stays interactive while data is in flight.  The
+        # activity fetch (notifications + history + messages) is bundled
+        # into a second poller so it never re-freezes the screen.
+        self._map_poller: BackgroundPoller | None = None
+        self._activity_poller: BackgroundPoller | None = None
+
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def on_enter(self):
-        """Called each time the kingdom screen becomes active."""
-        self._hex_map = None
-        self._last_load_tick = 0
+        """Called each time the kingdom screen becomes active.
+
+        We deliberately do NOT clear ``_hex_map`` here: rebuilding the map
+        from scratch on every entry is what made the screen feel slow.
+        Instead we kick off a non-blocking refresh — on a cold start this
+        shows the loading state, on re-entry the previously rendered map
+        stays interactive while fresh data is fetched in the background.
+        """
+        self._last_load_tick = pygame.time.get_ticks()
         self._floating_text_last_tick = pygame.time.get_ticks()
+        self._load_map()
 
     # ── Data loading ────────────────────────────────────────────────
 
-    def _load_map(self):
-        """Fetch map data from the server and build/update the hex map."""
-        self._loading = True
-        self._error = None
+    @staticmethod
+    def _fetch_map_data():
+        """Worker: blocking HTTP call. Runs in BackgroundPoller's thread/XHR.
+
+        Returns a dict with keys ``data``, ``status_code`` and ``error``.
+        Network exceptions are converted into structured results so the main
+        thread can react via :meth:`_apply_map_response` without re-entering
+        ``requests``.
+        """
         try:
             resp = requests.get(f'{settings.SERVER_URL}/kingdom/map', timeout=15)
             if resp.status_code != 200:
-                self._error = 'Failed to load kingdom map'
-                logger.error(f'Kingdom map load failed: {resp.status_code}')
-                self._loading = False
-                return
-            data = resp.json()
-            self._map_data = data
-            self._cooldown = data.get('conquer_cooldown_remaining', 0)
+                return {'data': None, 'status_code': resp.status_code,
+                        'error': 'Failed to load kingdom map'}
+            return {'data': resp.json(), 'status_code': 200, 'error': None}
+        except Exception as e:  # noqa: BLE001 — surface any failure verbatim
+            return {'data': None, 'status_code': 0, 'error': str(e) or 'Connection error'}
 
-            lands = data.get('lands', [])
-            if self._hex_map is None:
-                self._hex_map = HexMap(lands, self.window, viewport_rect=self._map_viewport_rect)
-            else:
-                self._hex_map.set_viewport(self._map_viewport_rect)
-                self._hex_map.update_data(lands)
+    def _load_map(self):
+        """Kick off a non-blocking kingdom map fetch.
 
-            # Position minimap inside the framed map viewport (bottom-right)
-            mm_w = settings.MINIMAP_W
-            mm_h = settings.MINIMAP_H
-            self._hex_map.minimap_origin = (
-                self._map_viewport_rect.right - mm_w - settings.MINIMAP_MARGIN,
-                self._map_viewport_rect.bottom - mm_h - settings.MINIMAP_MARGIN,
-            )
+        First entry: shows the loading state while the request is in flight.
+        Subsequent re-entries: keeps the previously rendered hex map
+        interactive (the result is applied once the poller returns).
+        """
+        if self._map_poller is None:
+            self._map_poller = BackgroundPoller(self._fetch_map_data)
+        # If a previous request is already in flight, don't queue another.
+        if self._map_poller.busy:
+            return
+        # Only show the "Loading..." overlay on cold starts; warm refreshes
+        # keep the existing map interactive in the background.
+        if self._hex_map is None:
+            self._loading = True
+        self._error = None
+        self._map_poller.poll()
 
-            # On enter/reload, focus on the center of the player's largest
-            # connected kingdom so the map opens where most owned lands are.
-            self._focus_largest_kingdom_component()
+    def _drain_map_poller(self):
+        """Apply a finished map fetch, if any."""
+        poller = self._map_poller
+        if poller is None or not poller.has_result():
+            return
+        result = poller.result
+        self._apply_map_response(result)
 
+    def _apply_map_response(self, result):
+        """Process the structured ``_fetch_map_data`` result on the main thread."""
+        if not result or result.get('error') or not result.get('data'):
+            err = (result or {}).get('error') or 'Connection error'
+            self._error = err if err == 'Failed to load kingdom map' else 'Connection error'
+            logger.error(f'Kingdom map load failed: {err}')
             self._loading = False
-            logger.debug(f'Kingdom map loaded: {len(lands)} lands')
-            self._load_activity()
-        except Exception as e:
-            self._error = 'Connection error'
-            logger.error(f'Kingdom map load error: {e}')
-            self._loading = False
+            return
+        data = result['data']
+        self._map_data = data
+        self._cooldown = data.get('conquer_cooldown_remaining', 0)
+        lands = data.get('lands', [])
+        if self._hex_map is None:
+            self._hex_map = HexMap(lands, self.window, viewport_rect=self._map_viewport_rect)
+        else:
+            self._hex_map.set_viewport(self._map_viewport_rect)
+            self._hex_map.update_data(lands)
+
+        # Position minimap inside the framed map viewport (bottom-right)
+        mm_w = settings.MINIMAP_W
+        mm_h = settings.MINIMAP_H
+        self._hex_map.minimap_origin = (
+            self._map_viewport_rect.right - mm_w - settings.MINIMAP_MARGIN,
+            self._map_viewport_rect.bottom - mm_h - settings.MINIMAP_MARGIN,
+        )
+
+        # On enter/reload, focus on the center of the player's largest
+        # connected kingdom so the map opens where most owned lands are.
+        self._focus_largest_kingdom_component()
+
+        self._loading = False
+        logger.debug(f'Kingdom map loaded: {len(lands)} lands')
+        self._load_activity()
 
     def _focus_largest_kingdom_component(self):
         """Center map camera on the largest connected component of owned lands."""
@@ -270,19 +324,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # Backward-compatible fallback for older HexMap instances.
         return self._hex_map.focus_land(best_land_ids[0])
 
-    def _load_notifications(self):
-        """Fetch unseen kingdom notifications for attack and defence outcomes."""
-        try:
-            resp = requests.get(
-                f'{settings.SERVER_URL}/kingdom/notifications', timeout=10)
-            if resp.status_code == 200:
-                self._notifications = resp.json().get('notifications', [])
-            else:
-                self._notifications = []
-        except Exception as e:
-            logger.warning(f'Failed to load notifications: {e}')
-            self._notifications = []
-
     def _visible_notifications(self):
         """Return notification rows that should still appear in Alerts."""
         return [n for n in getattr(self, '_notifications', []) if not n.get('seen', False)]
@@ -307,19 +348,69 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._messages = list(self._conversations)
 
     def _load_activity(self):
-        """Fetch unseen alerts and recent attack history for the activity panel."""
-        self._load_notifications()
+        """Fetch unseen alerts and recent attack history for the activity panel.
+
+        Runs as a single non-blocking BackgroundPoller job (3 endpoints) so it
+        does not stack a multi-call freeze onto the kingdom-screen entry right
+        after the map itself finishes loading.
+        """
+        if self._activity_poller is None:
+            self._activity_poller = BackgroundPoller(self._fetch_activity_data)
+        if self._activity_poller.busy:
+            return
+        self._activity_poller.poll()
+
+    @staticmethod
+    def _fetch_activity_data():
+        """Worker: fetch notifications, attack history and conversations.
+
+        Runs off the main thread; returns a plain dict the UI thread applies
+        via :meth:`_apply_activity_data`.
+        """
+        base = settings.SERVER_URL
+        out = {'notifications': [], 'attack_history': [],
+               'conversations': [], 'unread_count': 0}
+        try:
+            resp = requests.get(f'{base}/kingdom/notifications', timeout=10)
+            if resp.status_code == 200:
+                out['notifications'] = resp.json().get('notifications', [])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f'Failed to load notifications: {e}')
         try:
             resp = requests.get(
-                f'{settings.SERVER_URL}/kingdom/attack_history?per_page=50', timeout=10)
+                f'{base}/kingdom/attack_history?per_page=50', timeout=10)
             if resp.status_code == 200:
-                self._attack_history = resp.json().get('history', [])
-            else:
-                self._attack_history = []
-        except Exception as e:
+                out['attack_history'] = resp.json().get('history', [])
+        except Exception as e:  # noqa: BLE001
             logger.warning(f'Failed to load attack history: {e}')
-            self._attack_history = []
-        self._load_messages()
+        try:
+            resp = requests.get(
+                f'{base}/kingdom/messages/conversations', timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                out['conversations'] = data.get('conversations', [])
+                out['unread_count'] = data.get('unread_count', 0)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f'Failed to load kingdom conversations: {e}')
+        return out
+
+    def _apply_activity_data(self, data):
+        """Assign a finished ``_fetch_activity_data`` result on the main thread."""
+        if not data:
+            return
+        self._notifications = data.get('notifications', [])
+        self._attack_history = data.get('attack_history', [])
+        self._conversations = data.get('conversations', [])
+        self._message_unread_count = data.get('unread_count', 0)
+        # Maintain legacy flat list for tests/back-compat.
+        self._messages = list(self._conversations)
+
+    def _drain_activity_poller(self):
+        """Apply a finished activity fetch, if any."""
+        poller = self._activity_poller
+        if poller is None or not poller.has_result():
+            return
+        self._apply_activity_data(poller.result)
 
     # ── Rendering ───────────────────────────────────────────────────
 
@@ -1074,6 +1165,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def update(self, events):
         super().update()
         self._update_icon_buttons()
+
+        # Drain any completed background fetches before deciding whether to
+        # kick off another one.
+        self._drain_map_poller()
+        self._drain_activity_poller()
 
         # Auto-load map on first frame (or re-enter)
         now = pygame.time.get_ticks()

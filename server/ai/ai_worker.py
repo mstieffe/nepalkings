@@ -58,6 +58,10 @@ _planner_events = {}  # game_id -> [event, ...]
 _planner_events_lock = threading.Lock()
 # Keep event buffers bounded to prevent memory growth.
 _MAX_PLANNER_EVENTS_PER_GAME = 80
+# Per-game count of consecutive prior change_cards / change_side_cards turns.
+# Read by the planner as an anti-cycling penalty so the AI doesn't grind
+# multiple turns in a row swapping cards instead of building.
+_recent_change_cards: dict[int, int] = {}
 
 _CONQUER_CALL_FIELD_MAP = {
     'Call Villager': 'village',
@@ -1413,6 +1417,7 @@ def _ai_game_loop(app, game_id, ai_player_id):
                     _clear_watchdog_retry(game_id)
                     with _planner_events_lock:
                         _planner_events.pop(game_id, None)
+                    _recent_change_cards.pop(game_id, None)
                     break
                 
                 game_dict = enrich_figures_with_skills(game.serialize())
@@ -1500,8 +1505,12 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 logger.info(f"AI auto-choosing only action: {chosen['type']}")
             else:
                 rng = _make_ai_rng(game_dict.get('ai_seed'), iteration)
+                planner_context = {
+                    'recent_change_cards_count': _recent_change_cards.get(game_id, 0),
+                }
                 chosen = duel_strategy.choose_action(
                     game_dict, ai_player_id, phase, actions, rng,
+                    context=planner_context,
                 )
 
             # Execute the chosen action
@@ -1570,11 +1579,20 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 if not fallback_success:
                     unsuccessful_exit = True
                     break
-                # Fallback action succeeded — continue loop
+                # Fallback action succeeded — recovery path, not a clean
+                # cycle; reset the anti-cycling counter and continue.
+                _recent_change_cards[game_id] = 0
                 time.sleep(settings.AI_THINK_DELAY)
                 continue
 
             _clear_watchdog_retry(game_id)
+
+            # Track consecutive change_cards / change_side_cards turns so the
+            # planner can apply an anti-cycling penalty next turn.
+            if chosen['type'] in ('change_cards', 'change_side_cards'):
+                _recent_change_cards[game_id] = _recent_change_cards.get(game_id, 0) + 1
+            else:
+                _recent_change_cards[game_id] = 0
 
             # Track consecutive normal_turn actions (indicates Infinite Hammer mode)
             if phase == 'normal_turn':

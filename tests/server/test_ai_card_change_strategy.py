@@ -35,22 +35,38 @@ def test_select_main_cards_to_swap_handles_enum_ranks_without_over_swapping():
 
     to_swap = select_main_cards_to_swap(cards)
 
-    # Only K (id=1) and Q (id=5) are kept; everything else is swapped
-    assert set(to_swap) == {2, 3, 4, 6, 7, 8}
+    # K (id=1) and Q (id=5) always kept; one A (id=2) and one J (id=6) kept
+    # via MAYBE_KEEP_RANKS. Everything else is swapped.
+    assert set(to_swap) == {3, 4, 7, 8}
 
 
-def test_select_main_cards_to_swap_swaps_one_card_when_everything_is_keepable():
+def test_select_main_cards_to_swap_keeps_only_one_of_each_maybe_rank():
+    """MAYBE_KEEP_RANKS (J, A) caps at one kept card per rank."""
     cards = [
-        {'id': 1, 'rank': 'K', 'value': 4},
-        {'id': 2, 'rank': 'A', 'value': 3},
-        {'id': 3, 'rank': '10', 'value': 10},
+        {'id': 1, 'rank': 'A', 'value': 14},
+        {'id': 2, 'rank': 'A', 'value': 14},
+        {'id': 3, 'rank': 'J', 'value': 11},
+        {'id': 4, 'rank': 'J', 'value': 11},
     ]
 
     to_swap = select_main_cards_to_swap(cards)
 
-    # A and 10 are no longer kept; both are swapped
+    # Exactly one A and one J kept; the duplicates are swapped.
     assert len(to_swap) == 2
-    assert set(to_swap) == {2, 3}
+
+
+def test_select_main_cards_to_swap_returns_empty_when_all_keepable():
+    """No forced-1-card fallback: an all-keepable hand swaps nothing."""
+    cards = [
+        {'id': 1, 'rank': 'K', 'value': 13},
+        {'id': 2, 'rank': 'A', 'value': 14},
+        {'id': 3, 'rank': 'Q', 'value': 12},
+        {'id': 4, 'rank': 'J', 'value': 11},
+    ]
+
+    to_swap = select_main_cards_to_swap(cards)
+
+    assert to_swap == []
 
 
 def test_summarize_main_change_reports_swap_and_low_rank_counts():
@@ -69,25 +85,26 @@ def test_summarize_main_change_reports_swap_and_low_rank_counts():
 
     assert summary['free_count'] == 8
     assert summary['low_rank_count'] == 2
-    assert summary['swap_count'] == 6  # Only K and Q kept, 6 swapped
+    # K, Q always kept; one A and one J kept via MAYBE_KEEP_RANKS → 4 swapped.
+    assert summary['swap_count'] == 4
 
 
 def test_protect_ids_prevents_swapping():
     """Cards with IDs in protect_ids are never swapped, even if low-value."""
     cards = [
         {'id': 1, 'rank': 'K', 'value': 4},
-        {'id': 2, 'rank': 'J', 'value': 11, 'suit': 'Hearts'},
+        {'id': 2, 'rank': '9', 'value': 9, 'suit': 'Hearts'},
         {'id': 3, 'rank': '8', 'value': 8, 'suit': 'Hearts'},
         {'id': 4, 'rank': '7', 'value': 7, 'suit': 'Spades'},
     ]
 
-    # Without protection: J, 8, 7 are all swapped (only K kept)
+    # Without protection: 9, 8, 7 are all swapped (only K kept)
     assert set(select_main_cards_to_swap(cards)) == {2, 3, 4}
 
-    # Protect J (id=2) — only 8 and 7 swapped
+    # Protect 9 (id=2) — only 8 and 7 swapped
     assert set(select_main_cards_to_swap(cards, protect_ids={2})) == {3, 4}
 
-    # Protect J and 8 — only 7 swapped
+    # Protect 9 and 8 — only 7 swapped
     assert set(select_main_cards_to_swap(cards, protect_ids={2, 3})) == {4}
 
 

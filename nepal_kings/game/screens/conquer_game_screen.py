@@ -5806,10 +5806,17 @@ class ConquerGameScreen(GameScreen):
         # Solid card so the busy battlefield/figure tiles can't bleed
         # through the duel panel (#1).  Two-tone backdrop with a thin gold
         # border reads as a parchment card sitting on top of the field.
-        backdrop = pygame.Surface(lane_rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(backdrop, (22, 19, 16, 240), backdrop.get_rect(), border_radius=10)
-        pygame.draw.rect(backdrop, (38, 32, 24, 240), backdrop.get_rect().inflate(-6, -6), border_radius=8)
-        pygame.draw.rect(backdrop, (188, 152, 84, 220), backdrop.get_rect(), 2, border_radius=10)
+        # The backdrop art depends only on the lane size, so it is cached
+        # and reused across frames instead of being re-rasterized each draw.
+        backdrop_cache = getattr(self, '_conquer_duel_lane_backdrop_cache', None)
+        if backdrop_cache is None or backdrop_cache[0] != lane_rect.size:
+            backdrop = pygame.Surface(lane_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(backdrop, (22, 19, 16, 240), backdrop.get_rect(), border_radius=10)
+            pygame.draw.rect(backdrop, (38, 32, 24, 240), backdrop.get_rect().inflate(-6, -6), border_radius=8)
+            pygame.draw.rect(backdrop, (188, 152, 84, 220), backdrop.get_rect(), 2, border_radius=10)
+            self._conquer_duel_lane_backdrop_cache = (lane_rect.size, backdrop)
+        else:
+            backdrop = backdrop_cache[1]
         self.window.blit(backdrop, lane_rect.topleft)
 
         player_slots, opponent_slots = self._conquer_lane_played_tactics()

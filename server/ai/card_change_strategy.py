@@ -8,7 +8,10 @@ from typing import Any
 
 
 KEEP_RANKS = {'K', 'Q'}                           # Only kings and queens are always kept
-MAYBE_KEEP_RANKS: set[str] = set()                  # Nothing else gets conditional keep
+# Jacks (farms) and Aces (fortress / warriors) preserve option-value when no
+# specific target has them locked via protect_ids.  Limited to 1 of each rank
+# (see ``maybe_keep_limit`` default) so we don't hoard duplicates.
+MAYBE_KEEP_RANKS: set[str] = {'J', 'A'}
 LOW_MAIN_RANKS = {'7', '8'}
 
 KEEP_SIDE_RANKS = {'2'}                            # Rank 2 is key for Healers, Carpenter, Stone Mason
@@ -60,7 +63,7 @@ def _card_numeric_value(card: Any) -> int:
 
 def select_main_cards_to_swap(
     cards: list[Any],
-    maybe_keep_limit: int = 2,
+    maybe_keep_limit: int = 1,
     protect_ids: set[int] | None = None,
 ) -> list[int]:
     """Return card IDs that should be swapped according to AI keep/swap policy.
@@ -103,19 +106,15 @@ def select_main_cards_to_swap(
         except (TypeError, ValueError):
             continue
 
-    if not to_swap and sorted_cards:
-        lowest_id = _field(sorted_cards[0], 'id')
-        try:
-            to_swap = [int(lowest_id)]
-        except (TypeError, ValueError):
-            to_swap = []
-
+    # No forced-1-card fallback: returning [] lets callers (action_enum)
+    # decide whether change_cards is worth offering at all instead of
+    # burning a turn to swap one random low card.
     return to_swap
 
 
 def summarize_main_change(
     cards: list[Any],
-    maybe_keep_limit: int = 2,
+    maybe_keep_limit: int = 1,
     protect_ids: set[int] | None = None,
 ) -> dict[str, int]:
     """Return summary counters for change-card action text and telemetry."""
@@ -275,14 +274,7 @@ def select_side_cards_to_swap(
         except (TypeError, ValueError):
             continue
 
-    # Always swap at least one card when called
-    if not to_swap and sorted_cards:
-        lowest_id = _field(sorted_cards[0], 'id')
-        try:
-            to_swap = [int(lowest_id)]
-        except (TypeError, ValueError):
-            to_swap = []
-
+    # No forced-1-card fallback (same reasoning as main hand).
     return to_swap
 
 
