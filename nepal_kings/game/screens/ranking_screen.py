@@ -5,7 +5,7 @@ from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from config import settings
-from utils.auth_service import fetch_rankings
+from utils.auth_service import fetch_rankings, fetch_kingdom_rankings
 from utils.background_poller import BackgroundPoller
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
@@ -38,6 +38,25 @@ _COL_DEFS = [
     ('Losses',  0.72, 0.14),
     ('W/L',     0.86, 0.14),
 ]
+
+_COL_DEFS_KINGDOM = [
+    ('#',         0.00, 0.06),
+    ('Player',    0.06, 0.20),
+    ('Lands',     0.26, 0.14),
+    ('Production',0.40, 0.16),
+    ('Conquers',  0.56, 0.14),
+    ('C-Wins',    0.70, 0.14),
+    ('D-Wins',    0.84, 0.16),
+]
+
+# Tab geometry
+_TAB_H       = int(0.040 * _SH)
+_TAB_GAP     = int(0.010 * _SW)
+_TAB_W       = int(0.14 * _SW)
+_TAB_ACTIVE  = (200, 185, 140, 255)
+_TAB_INACTIVE = (80, 75, 65, 180)
+_TAB_TEXT_CLR = (240, 230, 200)
+_TAB_TEXT_ACTIVE = (50, 45, 35)
 
 # Scrollbar
 _SCROLLBAR_W   = int(0.006 * _SW)
@@ -72,6 +91,14 @@ _SORT_KEYS = {
     6: ('wl_ratio',    True),   # W/L – descending
 }
 
+_SORT_KEYS_KINGDOM = {
+    2: ('lands_owned',      True),
+    3: ('total_gold_rate',  True),
+    4: ('conquer_attempts', True),
+    5: ('conquer_wins',     True),
+    6: ('defence_wins',     True),
+}
+
 
 class RankingScreen(MenuScreenMixin, Screen):
     def __init__(self, state):
@@ -84,6 +111,7 @@ class RankingScreen(MenuScreenMixin, Screen):
         self._sort_col = 2           # default sort by Gold
         self.last_update_time = 0
         self.update_interval = 10000
+        self._active_tab = 'duel'    # 'duel' or 'kingdom'
 
         # Scroll
         self._scroll_y = 0
@@ -97,35 +125,69 @@ class RankingScreen(MenuScreenMixin, Screen):
 
         self._hdr_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._cell_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
+        self._tab_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE, bold=True)
 
         # Compute fixed layout positions
         self._title_render_y = _TITLE_Y
         title_bottom = _TITLE_Y + self._title_surf.get_height() + int(0.010 * _SH)
-        self._hdr_y = title_bottom
+
+        # Tab rects (below title)
+        total_tab_w = 2 * _TAB_W + _TAB_GAP
+        tab_start_x = _BOX_X + (_BOX_W - total_tab_w) // 2
+        self._tab_rects = {
+            'duel': pygame.Rect(tab_start_x, title_bottom, _TAB_W, _TAB_H),
+            'kingdom': pygame.Rect(tab_start_x + _TAB_W + _TAB_GAP, title_bottom, _TAB_W, _TAB_H),
+        }
+
+        self._hdr_y = title_bottom + _TAB_H + int(0.010 * _SH)
         self._sep_y = self._hdr_y + _HEADER_H + int(0.004 * _SH)
         self._rows_top = self._sep_y + int(0.008 * _SH)
         self._rows_bottom = _BOX_Y + _BOX_H - _BOX_PAD
+
+        # ── X close button (top-right of box) ───────────────────────
+        _xsz = int(0.028 * _SH)
+        _xmargin = int(0.012 * _SW)
+        self._btn_close_rect = pygame.Rect(
+            _BOX_X + _BOX_W - _xsz - _xmargin,
+            _BOX_Y + _xmargin,
+            _xsz, _xsz)
         self._viewport_h = self._rows_bottom - self._rows_top
 
         # Pre-compute header rects for click detection
+        self._rebuild_hdr_rects()
+
+    # ── Tab / Column helpers ────────────────────────────────────────
+
+    def _rebuild_hdr_rects(self):
+        col_defs = self._active_col_defs()
         self._hdr_rects = []
-        for idx, (_, frac_x, frac_w) in enumerate(_COL_DEFS):
+        for idx, (_, frac_x, frac_w) in enumerate(col_defs):
             rx = _TABLE_X + int(frac_x * _TABLE_W)
             rw = int(frac_w * _TABLE_W)
             self._hdr_rects.append(pygame.Rect(rx, self._hdr_y, rw, _HEADER_H))
 
+    def _active_col_defs(self):
+        return _COL_DEFS_KINGDOM if self._active_tab == 'kingdom' else _COL_DEFS
+
+    def _active_sort_keys(self):
+        return _SORT_KEYS_KINGDOM if self._active_tab == 'kingdom' else _SORT_KEYS
+
     # ── Data ──────────────────────────────────────────────────────
 
     def _refresh(self):
-        raw = fetch_rankings()
-        # Pre-compute W/L ratio
-        for r in raw:
-            losses = r.get('losses', 0)
-            wins = r.get('wins', 0)
-            r['wl_ratio'] = wins / losses if losses > 0 else float(wins)
+        if self._active_tab == 'kingdom':
+            raw = fetch_kingdom_rankings()
+        else:
+            raw = fetch_rankings()
+            # Pre-compute W/L ratio for duel rankings
+            for r in raw:
+                losses = r.get('losses', 0)
+                wins = r.get('wins', 0)
+                r['wl_ratio'] = wins / losses if losses > 0 else float(wins)
 
         # Sort
-        key_name, desc = _SORT_KEYS.get(self._sort_col, ('gold', True))
+        sort_keys = self._active_sort_keys()
+        key_name, desc = sort_keys.get(self._sort_col, ('gold', True))
         raw.sort(key=lambda r: r.get(key_name, 0), reverse=desc)
         self.rankings = raw
 
@@ -137,7 +199,7 @@ class RankingScreen(MenuScreenMixin, Screen):
     # ── Helpers ───────────────────────────────────────────────────
 
     def _col_x(self, idx):
-        return _TABLE_X + int(_COL_DEFS[idx][1] * _TABLE_W)
+        return _TABLE_X + int(self._active_col_defs()[idx][1] * _TABLE_W)
 
     def _needs_scroll(self):
         return self._content_h > self._viewport_h if hasattr(self, '_content_h') else False
@@ -170,11 +232,27 @@ class RankingScreen(MenuScreenMixin, Screen):
         tx = _BOX_X + (_BOX_W - self._title_surf.get_width()) // 2
         self.window.blit(self._title_surf, (tx, self._title_render_y))
 
+        # Tabs
+        for tab_name, rect in self._tab_rects.items():
+            is_active = (tab_name == self._active_tab)
+            bg = _TAB_ACTIVE if is_active else _TAB_INACTIVE
+            txt_clr = _TAB_TEXT_ACTIVE if is_active else _TAB_TEXT_CLR
+            tab_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(tab_surf, bg, tab_surf.get_rect(), border_radius=6)
+            self.window.blit(tab_surf, rect.topleft)
+            label = tab_name.capitalize()
+            lbl_surf = self._tab_font.render(label, True, txt_clr)
+            lx = rect.x + (rect.w - lbl_surf.get_width()) // 2
+            ly = rect.y + (rect.h - lbl_surf.get_height()) // 2
+            self.window.blit(lbl_surf, (lx, ly))
+
         # Table header
+        col_defs = self._active_col_defs()
+        sort_keys = self._active_sort_keys()
         cell_pad = int(0.012 * _SW)
         hdr_text_y = self._hdr_y + (_HEADER_H - self._hdr_font.get_height()) // 2
-        for idx, (label, _, _) in enumerate(_COL_DEFS):
-            clr = _HDR_ACTIVE_CLR if idx == self._sort_col else settings.SUB_SCREEN_HEADER_CLR
+        for idx, (label, _, _) in enumerate(col_defs):
+            clr = _HDR_ACTIVE_CLR if idx == self._sort_col and idx in sort_keys else settings.SUB_SCREEN_HEADER_CLR
             surf = self._hdr_font.render(label, True, clr)
             self.window.blit(surf, (self._col_x(idx) + cell_pad, hdr_text_y))
 
@@ -189,7 +267,23 @@ class RankingScreen(MenuScreenMixin, Screen):
         else:
             self._draw_rows(cell_pad)
 
+        self._draw_close_x_button()
         self._draw_menu_overlay()
+
+    def _draw_close_x_button(self):
+        r = self._btn_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        txt = _xfont.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
 
     def _draw_rows(self, cell_pad):
         clip = pygame.Rect(_TABLE_X, self._rows_top, _TABLE_W, self._viewport_h)
@@ -226,28 +320,39 @@ class RankingScreen(MenuScreenMixin, Screen):
             text_y = rect.y + (rect.h - self._cell_font.get_height()) // 2
 
             # W/L display
-            wl = entry.get('wl_ratio', 0)
-            wl_str = f"{wl:.1f}" if entry.get('losses', 0) > 0 else f"{entry.get('wins', 0)}"
-
-            cells = [
-                str(i + 1),
-                entry.get('username', '—'),
-                str(entry.get('gold', 0)),
-                str(entry.get('total_games', 0)),
-                str(entry.get('wins', 0)),
-                str(entry.get('losses', 0)),
-                wl_str,
-            ]
+            if self._active_tab == 'duel':
+                wl = entry.get('wl_ratio', 0)
+                wl_str = f"{wl:.1f}" if entry.get('losses', 0) > 0 else f"{entry.get('wins', 0)}"
+                cells = [
+                    str(i + 1),
+                    entry.get('username', '—'),
+                    str(entry.get('gold', 0)),
+                    str(entry.get('total_games', 0)),
+                    str(entry.get('wins', 0)),
+                    str(entry.get('losses', 0)),
+                    wl_str,
+                ]
+            else:
+                cells = [
+                    str(i + 1),
+                    entry.get('username', '—'),
+                    str(entry.get('lands_owned', 0)),
+                    str(entry.get('total_gold_rate', 0)),
+                    str(entry.get('conquer_attempts', 0)),
+                    str(entry.get('conquer_wins', 0)),
+                    str(entry.get('defence_wins', 0)),
+                ]
             for idx, text in enumerate(cells):
                 x_off = cell_pad + (int(0.018 * _SW) if idx == 1 else 0)
                 surf = self._cell_font.render(text, True, txt_clr)
                 self.window.blit(surf, (self._col_x(idx) + x_off, text_y))
 
-            # Online dot next to player name
-            dot_clr = _DOT_ONLINE if entry.get('is_online', False) else _DOT_OFFLINE
-            dot_x = self._col_x(1) + cell_pad + int(0.006 * _SW)
-            dot_y = rect.y + rect.h // 2
-            pygame.draw.circle(self.window, dot_clr, (dot_x, dot_y), _DOT_RADIUS)
+            # Online dot next to player name (duel tab only)
+            if self._active_tab == 'duel':
+                dot_clr = _DOT_ONLINE if entry.get('is_online', False) else _DOT_OFFLINE
+                dot_x = self._col_x(1) + cell_pad + int(0.006 * _SW)
+                dot_y = rect.y + rect.h // 2
+                pygame.draw.circle(self.window, dot_clr, (dot_x, dot_y), _DOT_RADIUS)
 
         self.window.set_clip(None)
 
@@ -278,19 +383,28 @@ class RankingScreen(MenuScreenMixin, Screen):
                 async_get_url=f'{settings.SERVER_URL}/auth/get_rankings',
                 async_transform=lambda resp: resp.json().get('rankings', []) if resp.status_code == 200 else [],
             )
+        if not hasattr(self, '_kingdom_poller'):
+            self._kingdom_poller = BackgroundPoller(
+                fetch_kingdom_rankings,
+                async_get_url=f'{settings.SERVER_URL}/kingdom/rankings',
+                async_transform=lambda resp: resp.json().get('rankings', []) if resp.status_code == 200 else [],
+            )
+        poller = self._kingdom_poller if self._active_tab == 'kingdom' else self._ranking_poller
         now = pygame.time.get_ticks()
         if now - self.last_update_time > self.update_interval:
             self.last_update_time = now
-            if not self._ranking_poller.busy:
-                self._ranking_poller.poll()
-        if self._ranking_poller.has_result():
-            raw = self._ranking_poller.result
+            if not poller.busy:
+                poller.poll()
+        if poller.has_result():
+            raw = poller.result
             if raw is not None:
-                for r in raw:
-                    losses = r.get('losses', 0)
-                    wins = r.get('wins', 0)
-                    r['wl_ratio'] = wins / losses if losses > 0 else float(wins)
-                key_name, desc = _SORT_KEYS.get(self._sort_col, ('gold', True))
+                if self._active_tab == 'duel':
+                    for r in raw:
+                        losses = r.get('losses', 0)
+                        wins = r.get('wins', 0)
+                        r['wl_ratio'] = wins / losses if losses > 0 else float(wins)
+                sort_keys = self._active_sort_keys()
+                key_name, desc = sort_keys.get(self._sort_col, ('gold', True))
                 raw.sort(key=lambda r: r.get(key_name, 0), reverse=desc)
                 self.rankings = raw
                 n = len(self.rankings)
@@ -320,6 +434,12 @@ class RankingScreen(MenuScreenMixin, Screen):
             if self._handle_icon_events(event):
                 continue
 
+            # X close button
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and self._btn_close_rect.collidepoint(event.pos)):
+                self.state.screen = 'game_menu'
+                return
+
             # Click outside content box → back to game menu
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
@@ -333,8 +453,19 @@ class RankingScreen(MenuScreenMixin, Screen):
                         self._scroll_y - event.y * int(0.04 * _SH)))
 
             if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                # Tab click
+                for tab_name, tab_rect in self._tab_rects.items():
+                    if tab_rect.collidepoint(event.pos) and tab_name != self._active_tab:
+                        self._active_tab = tab_name
+                        self._sort_col = 2
+                        self._scroll_y = 0
+                        self.rankings = []
+                        self.last_update_time = 0  # force immediate refresh
+                        self._rebuild_hdr_rects()
+                        break
+
                 # Header click to toggle sort
-                for idx in _SORT_KEYS:
+                for idx in self._active_sort_keys():
                     if self._hdr_rects[idx].collidepoint(event.pos):
                         self._sort_col = idx
                         self._scroll_y = 0

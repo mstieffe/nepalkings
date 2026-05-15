@@ -44,6 +44,18 @@ class ScoreboardScroll:
         self.font_number = settings.get_font(settings.SCOREBOARD_SCROLL_NUMBER_FONT_SIZE, bold=True)
         self.font_subtitle = settings.get_font(settings.SCOREBOARD_SUBTITLE_FONT_SIZE)
 
+        # Pre-load suit icons for conquer mode
+        self._suit_icons = {}
+        suit_icon_size = int(self.font_text.get_height() * 1.1)
+        for suit_name in ('hearts', 'diamonds', 'clubs', 'spades'):
+            try:
+                raw = pygame.image.load(
+                    settings.SUIT_ICON_IMG_PATH + suit_name + '.png').convert_alpha()
+                self._suit_icons[suit_name] = pygame.transform.smoothscale(
+                    raw, (suit_icon_size, suit_icon_size))
+            except Exception:
+                pass
+
         # Load black and golden rectangle glow images (scale directly to target size)
         glow_w, glow_h = int(width * 1.2), int(height * 1.2)
         raw_black = pygame.image.load(settings.GLOW_RECT_IMG_PATH + 'black.png').convert_alpha()
@@ -59,24 +71,49 @@ class ScoreboardScroll:
         self.cell_width = self.width // 2
         self.cell_height = self.height // 2
 
-        # Adjust height for "stake" section
-        self.stake_section_height = settings.SCOREBOARD_LIMIT_SECTION_HEIGHT
-        self.cross_height = self.height - self.stake_section_height
+        # Adjust height for bottom point-limit section
+        self.limit_section_height = settings.SCOREBOARD_LIMIT_SECTION_HEIGHT
+        self.cross_height = self.height - self.limit_section_height
 
         self.init_background()
+
+    @staticmethod
+    def _to_int(value, default=0):
+        """Safely coerce a numeric value to an integer for display."""
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return default
 
     def make_text_dict(self):
         """Create a dictionary of text values to display on the scoreboard."""
         if self.game:
-            scoreboard_dict = {
-                'opponent': self.game.opponent_name,
-                'date': self.game.date,
-                'turns_left': self.game.current_player.get('turns_left', 0),
-                'round': self.game.current_round,  # Assuming `self.game.round` exists
-                'your_score': self.game.current_player.get('points', 0),
-                'opponent_score': self.game.opponent_player.get('points', 0),
-                'stake': getattr(self.game, 'stake', 45),  # Fallback to 45 if 'stake' isn't defined
-            }
+            is_conquer = getattr(self.game, 'mode', 'duel') == 'conquer'
+            if is_conquer:
+                suit = getattr(self.game, 'land_suit_bonus_suit', None) or '?'
+                bonus = self._to_int(getattr(self.game, 'land_suit_bonus_value', None), 0)
+                gold_rate = self._to_int(getattr(self.game, 'land_gold_rate', None), 0)
+                scoreboard_dict = {
+                    'opponent': self.game.opponent_name,
+                    'land_tier': getattr(self.game, 'land_tier', None) or '?',
+                    'gold_rate': gold_rate,
+                    'suit_bonus_value': bonus,
+                    'suit_bonus_suit': suit.lower(),
+                    'turns_left': self.game.current_player.get('turns_left', 0),
+                }
+            else:
+                scoreboard_dict = {
+                    'opponent': self.game.opponent_name,
+                    'date': self.game.date,
+                    'turns_left': self.game.current_player.get('turns_left', 0),
+                    'round': self.game.current_round,
+                    'your_score': self.game.current_player.get('points', 0),
+                    'opponent_score': self.game.opponent_player.get('points', 0),
+                    'game_limit': (
+                        getattr(self.game, 'game_limit', None)
+                        or getattr(self.game, 'stake', 45)
+                    ),
+                }
         else:
             scoreboard_dict = {
                 'opponent': 'Opponent',
@@ -85,7 +122,7 @@ class ScoreboardScroll:
                 'round': 0,
                 'your_score': 0,
                 'opponent_score': 0,
-                'stake': 45,
+                'game_limit': 45,
             }
         return scoreboard_dict
 
@@ -117,6 +154,18 @@ class ScoreboardScroll:
 
     def draw_cross(self):
         """Draw the cross centered on top of the scroll background."""
+        # Conquer mode uses a dedicated 2-row layout:
+        # top row split into 2 cells, bottom row full-width land summary.
+        if self._is_conquer():
+            split_y = self.height // 2
+            self.draw_transparent_line((0, split_y), (self.width, split_y),
+                                       self._cross_color, settings.SCOREBOARD_CROSS_WIDTH,
+                                       self._cross_alpha)
+            self.draw_transparent_line((self.width // 2, 0), (self.width // 2, split_y),
+                                       self._cross_color, settings.SCOREBOARD_CROSS_WIDTH,
+                                       self._cross_alpha)
+            return
+
         # Horizontal line — shifted down to match bottom-row offset
         h_y = self.height // 2 + settings.SCOREBOARD_BOTTOM_ROW_EXTRA_Y // 2
         horizontal_line_start = (0, h_y)
@@ -129,12 +178,14 @@ class ScoreboardScroll:
         self.draw_transparent_line(vertical_line_start, vertical_line_end, self._cross_color, settings.SCOREBOARD_CROSS_WIDTH, self._cross_alpha)
 
     def draw_cell(self, text, value, cell_x, cell_y, value_color=None,
-                  subtitle=None, subtitle_color=None, y_offset=0, text_spacing=None):
+                  subtitle=None, subtitle_color=None, y_offset=0, text_spacing=None,
+                  value_font=None):
         """Draw the text and value in the specified cell.
 
         :param subtitle: optional smaller text drawn below the main label (e.g. "(battle)").
         :param y_offset: extra pixels to push the value centre downward (used for top-row cells).
         :param text_spacing: gap between title bottom and value top.  Defaults to SCOREBOARD_CELL_TEXT_SPACING.
+        :param value_font: optional font override for the value text.
         """
         if value_color is None:
             value_color = self._value_color
@@ -143,7 +194,8 @@ class ScoreboardScroll:
 
         # Render the text and value
         text_obj = self.font_text.render(text, True, self._text_color)
-        value_obj = self.font_number.render(str(value), True, value_color)
+        vfont = value_font or self.font_number
+        value_obj = vfont.render(str(value), True, value_color)
 
         # Centre text horizontally
         text_rect = text_obj.get_rect(centerx=cell_x + self.cell_width // 2)
@@ -164,17 +216,178 @@ class ScoreboardScroll:
         self.window.blit(text_obj, text_rect)
         self.window.blit(value_obj, value_rect)
 
-    def draw_stake(self):
-        """Draw the stake value at the bottom of the scoreboard."""
-        stake_text = self.text_dict.get("stake", "")
-        stake_obj = self.font_col_names.render(f"{stake_text}", True, self._text_color)
+    def _ellipsize(self, text, font, max_width):
+        """Truncate text with an ellipsis so it fits the target width."""
+        txt = str(text) if text is not None else ''
+        if max_width <= 0:
+            return ''
+        if font.size(txt)[0] <= max_width:
+            return txt
+
+        ellipsis = '…'
+        if font.size(ellipsis)[0] > max_width:
+            return ''
+
+        lo, hi = 0, len(txt)
+        best = ''
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            candidate = txt[:mid] + ellipsis
+            if font.size(candidate)[0] <= max_width:
+                best = candidate
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return best
+
+    def _draw_conquer_cell(self, rect, label, value, *, value_color=None, value_font=None):
+        """Draw a simple two-line conquer cell (label + value), centered and overlap-safe."""
+        if value_color is None:
+            value_color = self._value_color
+        vfont = value_font or self.font_number
+
+        inner_pad = max(2, int(0.004 * settings.SCREEN_WIDTH))
+        label_surf = self.font_text.render(str(label), True, self._text_color)
+        value_txt = self._ellipsize(value, vfont, rect.w - (2 * inner_pad))
+        value_surf = vfont.render(value_txt, True, value_color)
+
+        gap = max(1, int(0.003 * settings.SCREEN_HEIGHT))
+        total_h = label_surf.get_height() + gap + value_surf.get_height()
+        top_y = rect.y + max(0, (rect.h - total_h) // 2)
+
+        label_rect = label_surf.get_rect(centerx=rect.centerx)
+        label_rect.y = top_y
+        value_rect = value_surf.get_rect(centerx=rect.centerx)
+        value_rect.y = label_rect.bottom + gap
+
+        self.window.blit(label_surf, label_rect)
+        self.window.blit(value_surf, value_rect)
+
+    def _build_land_segments(self, row_font, separator_text, *, short_gold=False):
+        """Build rendered segments for the land summary row."""
+        tier = self.text_dict.get('land_tier', '?')
+        bonus_val = self._to_int(self.text_dict.get('suit_bonus_value', 0), 0)
+        bonus_suit = str(self.text_dict.get('suit_bonus_suit', '') or '').lower()
+        gold_rate = self._to_int(self.text_dict.get('gold_rate', 0), 0)
+
+        tier_surf = row_font.render(f'T{tier}', True, self._value_color)
+        sep_surf = row_font.render(separator_text, True, self._text_color)
+        bonus_surf = row_font.render(f'+{bonus_val}', True, (200, 180, 120))
+        gold_label = f'{gold_rate}/h' if short_gold else f'{gold_rate} gold/hr'
+        gold_surf = row_font.render(gold_label, True, (250, 221, 0))
+
+        segments = [tier_surf, sep_surf, bonus_surf]
+
+        suit_icon = self._suit_icons.get(bonus_suit)
+        if suit_icon:
+            segments.append(suit_icon)
+        elif bonus_suit and bonus_suit != '?':
+            suit_fallback = row_font.render(bonus_suit[:1].upper(), True, self._value_color)
+            segments.append(suit_fallback)
+
+        segments.extend([sep_surf, gold_surf])
+        return segments
+
+    def _draw_conquer_land_cell(self, rect):
+        """Draw the merged land cell: tier, suit bonus, and integer gold production."""
+        label_surf = self.font_text.render('Land', True, self._text_color)
+
+        row_font = self.font_text
+        segments = self._build_land_segments(row_font, ' · ')
+
+        inner_pad = max(2, int(0.004 * settings.SCREEN_WIDTH))
+        gap_x = max(1, int(0.0025 * settings.SCREEN_WIDTH))
+
+        def _segments_width(parts):
+            if not parts:
+                return 0
+            return sum(p.get_width() for p in parts) + gap_x * (len(parts) - 1)
+
+        max_inner_w = rect.w - (2 * inner_pad)
+        if _segments_width(segments) > max_inner_w:
+            row_font = self.font_subtitle
+            segments = self._build_land_segments(row_font, '·')
+        if _segments_width(segments) > max_inner_w:
+            segments = self._build_land_segments(row_font, '·', short_gold=True)
+
+        row_h = max((s.get_height() for s in segments), default=0)
+        gap_y = max(1, int(0.003 * settings.SCREEN_HEIGHT))
+        total_h = label_surf.get_height() + gap_y + row_h
+        top_y = rect.y + max(0, (rect.h - total_h) // 2)
+
+        label_rect = label_surf.get_rect(centerx=rect.centerx)
+        label_rect.y = top_y
+        self.window.blit(label_surf, label_rect)
+
+        total_w = _segments_width(segments)
+        row_y = label_rect.bottom + gap_y
+        cursor_x = rect.x + max(inner_pad, (rect.w - total_w) // 2)
+        for seg in segments:
+            seg_y = row_y + (row_h - seg.get_height()) // 2
+            self.window.blit(seg, (cursor_x, seg_y))
+            cursor_x += seg.get_width() + gap_x
+
+    def draw_game_limit(self):
+        """Draw the game point limit at the bottom of the scoreboard."""
+        limit_text = self.text_dict.get("game_limit", "")
+        limit_obj = self.font_col_names.render(f"{limit_text}", True, self._text_color)
 
         # Position at the bottom center of the scoreboard
-        stake_rect = stake_obj.get_rect(center=(self.x + self.width // 2, self.y + self.height - self.stake_section_height // 2))
-        self.window.blit(stake_obj, stake_rect)
+        limit_rect = limit_obj.get_rect(center=(
+            self.x + self.width // 2,
+            self.y + self.height - self.limit_section_height // 2,
+        ))
+        self.window.blit(limit_obj, limit_rect)
+
+    def _is_conquer(self):
+        """Check if we're in conquer mode."""
+        return self.game and getattr(self.game, 'mode', 'duel') == 'conquer'
 
     def draw_msg(self):
         """Render the scoreboard content."""
+        if self._is_conquer():
+            self._draw_conquer_msg()
+        else:
+            self._draw_duel_msg()
+
+    def _draw_conquer_msg(self):
+        """Render conquer-mode scoreboard with semantic cells.
+
+        Layout:
+        - Top-left: opponent
+        - Top-right: battle/build turns
+        - Bottom (full width): land summary (tier + suit bonus + gold/hr)
+        """
+        top_h = self.height // 2
+        top_left_rect = pygame.Rect(self.x, self.y, self.cell_width, top_h)
+        top_right_rect = pygame.Rect(self.x + self.cell_width, self.y,
+                                     self.width - self.cell_width, top_h)
+        bottom_rect = pygame.Rect(self.x, self.y + top_h, self.width, self.height - top_h)
+
+        # Top-left: Opponent name (ellipsized to avoid overlap)
+        opponent_label = self.text_dict.get('opponent', 'Opponent')
+        opponent_value = self._ellipsize(opponent_label, self.font_text,
+                                         top_left_rect.w - max(4, int(0.008 * settings.SCREEN_WIDTH)))
+        self._draw_conquer_cell(top_left_rect, 'Opponent', opponent_value,
+                                value_color=(220, 90, 80), value_font=self.font_text)
+
+        # Top-right: simplified turns label
+        in_battle = (getattr(self.game, 'in_battle_phase', False) or
+                     (getattr(self.game, 'battle_confirmed', False) and
+                      getattr(self.game, 'battle_turn_player_id', None) is not None))
+        if in_battle:
+            battle_turns = getattr(self.game, 'battle_turns_left', 0)
+            self._draw_conquer_cell(top_right_rect, 'Battle Turns', battle_turns,
+                                    value_color=(220, 60, 60))
+        else:
+            self._draw_conquer_cell(top_right_rect, 'Turns Left',
+                                    self.text_dict.get('turns_left', ''))
+
+        # Bottom: merged land summary cell
+        self._draw_conquer_land_cell(bottom_rect)
+
+    def _draw_duel_msg(self):
+        """Render the standard duel-mode scoreboard content."""
         # Top-row cells share offset + subtitle spacing so labels & values stay aligned
         top_offset = settings.SCOREBOARD_CELL_VALUE_OFFSET
         top_spacing = settings.SCOREBOARD_CELL_SUBTITLE_SPACING
@@ -210,8 +423,8 @@ class ScoreboardScroll:
         self.draw_cell(opponent_label, self.text_dict.get("opponent_score", ""), self.x + self.cell_width, self.y + self.cell_height + _bot_extra, settings.COLOR_RED,
                        y_offset=_bot_offset)
 
-        # Draw the stake value
-        self.draw_stake()
+        # Draw the point limit value
+        self.draw_game_limit()
 
     def draw(self):
         """Draw the background, cross, and message to the screen."""

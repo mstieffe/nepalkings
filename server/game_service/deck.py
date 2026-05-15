@@ -1,7 +1,10 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from models import MainCard, SideCard, db, MainRank, Suit
+import logging
 import random
+
+logger = logging.getLogger('nepalkings.game_service.deck')
 
 class Deck:
     def __init__(self, game):
@@ -173,18 +176,17 @@ class Deck:
             }
             suits = suit_map.get(color.lower(), [color])  # Default to color if not black/red
 
-            # Debugging: Print suits being searched
-            print(f"Suits being searched: {suits}")
+            logger.debug(f"Suits being searched: {suits}")
 
-            print(f"Attempting to draw Maharaja for color: {color}")
-            print(f"Game ID: {self.game.id}")
-            print(f"Player ID: {player.id}")
+            logger.debug(f"Attempting to draw Maharaja for color: {color}")
+            logger.debug(f"Game ID: {self.game.id}")
+            logger.debug(f"Player ID: {player.id}")
 
             cards = MainCard.query.filter_by(game_id=self.game.id).all()
-            print([card.serialize() for card in cards if card.rank == MainRank.KING])
+            logger.debug(f"Kings in game: {[card.serialize() for card in cards if card.rank == MainRank.KING]}")
 
             cards = MainCard.query.filter_by(game_id=self.game.id, in_deck=True, rank=MainRank.KING).all()
-            print([card.serialize() for card in cards])
+            logger.debug(f"Kings in deck: {[card.serialize() for card in cards]}")
 
 
             # Query for the first king of the matching suit(s)
@@ -199,11 +201,11 @@ class Deck:
                 .first()
             )
 
-            # Debugging: Print the result of the query
+            # Debugging: Log the result of the query
             if king:
-                print(f"King found: {king.serialize()}")
+                logger.debug(f"King found: {king.serialize()}")
             else:
-                print("No matching king found.")
+                logger.debug("No matching king found.")
 
             if not king:
                 raise ValueError(f"No {color} king available in the deck")

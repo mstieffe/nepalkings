@@ -5,18 +5,51 @@ from pygame.locals import *
 from collections import Counter
 from config import settings
 from game.components.figures.family_configs.skill_config import SKILL_KEYS
+from game.components.figures.skill_display_filters import filter_figure_for_display
 from game.screens.sub_screen import SubScreen
 from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from game.components.figures.figure_db_service import FigureDbService
+from game.core.card_source import CollectionCardSource, GameCardSource
 from utils.utils import ColorTogglePill
+from utils import collection_service, http_compat as requests
+from game.components.castle_cap_indicator import (
+    castle_cap_for_land, count_castle_figures, draw_castle_cap_indicator,
+)
+from game.components import resource_panel as _resource_panel
+import logging
 
+# Suit filter constants
+_SUITS = ('hearts', 'diamonds', 'clubs', 'spades')
+_SUIT_ICON_PATHS = {
+    'hearts':   'img/suits/hearts.png',
+    'diamonds': 'img/suits/diamonds.png',
+    'clubs':    'img/suits/clubs.png',
+    'spades':   'img/suits/spades.png',
+}
+# Which suits are shown for each color toggle. Djungle (red/offensive) shows
+# hearts + diamonds; Himalaya (black/defensive) shows clubs + spades.
+_COLOR_SUITS = {
+    'Djungle':  ('hearts', 'diamonds'),
+    'Himalaya': ('clubs', 'spades'),
+}
+
+logger = logging.getLogger('nk.screens.build_figure')
+
+
+def _is_kingdom_config_mode(mode):
+    return mode in ('conquer', 'defence', 'defence_draft')
+
+
+def _kingdom_mode_path(mode):
+    return 'defence/draft' if mode == 'defence_draft' else mode
 
 class BuildFigureScreen(SubScreen):
     """Screen for building a figure by selecting figures and suits."""
 
-    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None):
+    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None,
+                 card_source=None, mode='duel'):
         super().__init__(window, state.game, x, y, title)
 
         # Initialize the figure manager and load figures
@@ -24,6 +57,8 @@ class BuildFigureScreen(SubScreen):
 
         self.state = state
         self.game = state.game
+        self.card_source = card_source or GameCardSource(self.game)
+        self.mode = mode
 
         # Map display names to internal color names
         self.color_mapping = {
@@ -45,10 +80,19 @@ class BuildFigureScreen(SubScreen):
 
         self.confirm_button = ConfirmButton(
             self.window,
-            settings.BUILD_FIGURE_CONFIRM_BUTTON_X,
-            settings.BUILD_FIGURE_CONFIRM_BUTTON_Y,
+            self._sx(settings.BUILD_FIGURE_CONFIRM_BUTTON_X),
+            self._sy(settings.BUILD_FIGURE_CONFIRM_BUTTON_Y),
             "create!"
         )
+
+        # Kingdom-mode extras: castle-cap badge, resource strip, suit filter.
+        self._suit_filter = set(_SUITS)
+        self._suit_filter_rects = {}   # suit -> pygame.Rect
+        self._suit_icons = {}
+        self._kingdom_resource_icons = {}
+        self._kingdom_res_font = settings.get_font(settings.FS_TINY)
+        if _is_kingdom_config_mode(self.mode):
+            self._init_kingdom_extras()
 
     def reset_state(self):
         """Reset all game-specific transient state.
@@ -58,48 +102,163 @@ class BuildFigureScreen(SubScreen):
         self.selected_figure_family = None
         self.selected_figures = []
         self.dialogue_box = None
-        print("[BuildFigureScreen] State reset for game switch")
+        logger.debug("[BuildFigureScreen] State reset for game switch")
 
     def create_figure_in_db(self, selected_figure, instant_charge_advance=False):
         """Insert the selected figure into the database. Returns the server response dict."""
+        if _is_kingdom_config_mode(self.mode):
+            return self._create_figure_kingdom(selected_figure)
+
         if getattr(self.game, 'game_over', False):
             return {'success': False, 'message': 'Game is finished'}
 
-        # Map dummy cards in the figure to real cards in the player's hand
+        if self.game.action_in_progress:
+            return {'success': False, 'message': 'Action already in progress'}
+
+        self.game.lock_actions()
+        try:
+            # Map dummy cards in the figure to real cards in the player's hand
+            real_cards = self.map_figure_cards_to_hand(selected_figure)
+
+            if real_cards is None:
+                logger.error(f"Failed to create figure: Could not find all cards in the player's hand.")
+                self.game.unlock_actions()
+                return {'success': False, 'message': 'Could not find all cards in hand'}
+
+            # Update the selected figure with real cards
+            selected_figure.cards = real_cards
+            selected_figure.key_cards = [card for card in real_cards if card in selected_figure.key_cards]
+            
+            # Update number_card only if it exists
+            if selected_figure.number_card is not None:
+                selected_figure.number_card = next((card for card in real_cards if card == selected_figure.number_card), None)
+            
+            # Update upgrade_card only if it exists
+            if selected_figure.upgrade_card is not None:
+                selected_figure.upgrade_card = next((card for card in real_cards if card == selected_figure.upgrade_card), None)
+
+            # Save the figure to the database
+            response = FigureDbService.save_figure(
+                figure=selected_figure,
+                player_id=self.game.player_id,
+                game_id=self.game.game_id,
+                instant_charge_advance=instant_charge_advance
+            )
+
+            if response.get('success'):
+                logger.debug(f"Figure {selected_figure.name} created successfully in the database.")
+            else:
+                logger.error(f"Failed to create figure: {response.get('message', 'Unknown error')}")
+                self.game.unlock_actions()
+                return response
+
+            # (update() -> _apply_game_dict -> unlock_actions)
+            self.game.update()
+
+            return response
+        except Exception:
+            self.game.unlock_actions()
+            raise
+
+    # ── Kingdom (conquer / defence) figure creation ─────────────────
+
+    def _create_figure_kingdom(self, selected_figure):
+        """Build a figure via the kingdom config endpoint."""
         real_cards = self.map_figure_cards_to_hand(selected_figure)
-
         if real_cards is None:
-            print(f"Failed to create figure: Could not find all cards in the player's hand.")
-            return {'success': False, 'message': 'Could not find all cards in hand'}
+            return {'success': False, 'message': 'Could not find all cards in collection'}
 
-        # Update the selected figure with real cards
         selected_figure.cards = real_cards
-        selected_figure.key_cards = [card for card in real_cards if card in selected_figure.key_cards]
-        
-        # Update number_card only if it exists
+        selected_figure.key_cards = [c for c in real_cards if c in selected_figure.key_cards]
         if selected_figure.number_card is not None:
-            selected_figure.number_card = next((card for card in real_cards if card == selected_figure.number_card), None)
-        
-        # Update upgrade_card only if it exists
+            selected_figure.number_card = next(
+                (c for c in real_cards if c == selected_figure.number_card), None)
         if selected_figure.upgrade_card is not None:
-            selected_figure.upgrade_card = next((card for card in real_cards if card == selected_figure.upgrade_card), None)
+            selected_figure.upgrade_card = next(
+                (c for c in real_cards if c == selected_figure.upgrade_card), None)
 
-        # Save the figure to the database
-        response = FigureDbService.save_figure(
-            figure=selected_figure,
-            player_id=self.game.player_id,
-            game_id=self.game.game_id,
-            instant_charge_advance=instant_charge_advance
-        )
+        card_specs = [{'suit': c.suit, 'rank': c.rank} for c in real_cards]
+        card_roles = []
+        for c in real_cards:
+            if c in selected_figure.key_cards:
+                card_roles.append('key')
+            elif selected_figure.number_card and c == selected_figure.number_card:
+                card_roles.append('number')
+            elif selected_figure.upgrade_card and c == selected_figure.upgrade_card:
+                card_roles.append('upgrade')
+            else:
+                card_roles.append('number')
 
-        if response.get('success'):
-            print(f"Figure {selected_figure.name} created successfully in the database.")
-        else:
-            print(f"Failed to create figure: {response.get('message', 'Unknown error')}")
+        land_id = getattr(self.game, 'land_id', None)
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/{_kingdom_mode_path(self.mode)}/build_figure',
+                json={
+                    'land_id': land_id,
+                    'family_name': selected_figure.family.name,
+                    'name': getattr(selected_figure, 'name', selected_figure.family.name),
+                    'suit': selected_figure.suit,
+                    'color': getattr(selected_figure.family, 'color', selected_figure.suit),
+                    'field': selected_figure.family.field,
+                    'card_specs': card_specs,
+                    'card_roles': card_roles,
+                    'produces': getattr(selected_figure, 'produces', None),
+                    'requires': getattr(selected_figure, 'requires', None),
+                    'description': getattr(selected_figure, 'description', ''),
+                    'upgrade_family_name': getattr(selected_figure, 'upgrade_family_name', None),
+                    'checkmate': getattr(selected_figure, 'checkmate', False),
+                    'cannot_be_blocked': getattr(selected_figure, 'cannot_be_blocked', False),
+                    'rest_after_attack': getattr(selected_figure, 'rest_after_attack', False),
+                },
+                timeout=15,
+            )
+            result = resp.json()
+            if result.get('success') and result.get('config'):
+                self.game.set_config(result['config'])
+                self._rebuild_card_source_kingdom()
+            return result
+        except Exception as e:
+            logger.error(f'Kingdom build_figure error: {e}')
+            return {'success': False, 'message': 'Connection error'}
 
-        self.game.update()
+    def _rebuild_card_source_kingdom(self):
+        """Re-fetch collection cards and rebuild the kingdom card source."""
+        if not _is_kingdom_config_mode(self.mode):
+            return False
+        try:
+            data = collection_service.fetch_collection_cards()
+        except Exception as e:
+            logger.error(f'Failed to re-fetch collection for figure builder: {e}')
+            return False
 
-        return response
+        config = getattr(self.game, '_config', None) or {}
+        cards = []
+        for c in data.get('cards', []):
+            qty = c.get('free', c.get('total', 0))
+            for i in range(qty):
+                cards.append(Card(
+                    rank=c['rank'], suit=c['suit'],
+                    value=settings.RANK_TO_VALUE.get(c['rank'], 0),
+                    id=c.get('id', hash((c['suit'], c['rank'], i))),
+                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                ))
+
+        locked_ids = set()
+        for fig in config.get('figures', []):
+            for cid in fig.get('card_ids', []):
+                locked_ids.add(cid)
+        for mv in config.get('battle_moves', []):
+            if mv.get('card_id'):
+                locked_ids.add(mv['card_id'])
+        for key in (
+                'modifier_card_ids', 'spell_card_ids',
+                'prelude_spell_card_ids', 'counter_spell_card_ids'):
+            for cid in config.get(key) or []:
+                locked_ids.add(cid)
+
+        self.card_source = CollectionCardSource(
+            cards, config.get('figures', []), locked_ids)
+        return True
 
     def _can_instant_charge_advance(self, figure):
         """
@@ -109,6 +268,9 @@ class BuildFigureScreen(SubScreen):
         - is_counter: True if this would be a counter-advance
         - reason: Short description of why not (if can_advance is False)
         """
+        if _is_kingdom_config_mode(self.mode):
+            return False, False, 'disabled_in_kingdom_config'
+
         if not getattr(figure, 'instant_charge', False):
             return False, False, 'no_instant_charge'
 
@@ -170,6 +332,16 @@ class BuildFigureScreen(SubScreen):
                     return False, is_counter, 'resource_deficit'
 
         return True, is_counter, None
+
+    def _display_figure_for_mode(self, figure):
+        """Hide duel-only skill display in kingdom config builders."""
+        if not _is_kingdom_config_mode(self.mode):
+            return figure
+        return filter_figure_for_display(
+            figure,
+            hide_checkmate=True,
+            hide_instant_charge=True,
+        )
 
     def _check_build_causes_deficit(self, figure):
         """
@@ -242,8 +414,8 @@ class BuildFigureScreen(SubScreen):
                     family.make_icon(
                         self.window,
                         self.game,
-                        family.build_position[0],
-                        family.build_position[1]
+                        self._sx(family.build_position[0]),
+                        self._sy(family.build_position[1])
                     )
                 )
             
@@ -257,7 +429,7 @@ class BuildFigureScreen(SubScreen):
         self.color_buttons = []
         for i, color in enumerate(colors):
             x = start_x + i * (settings.COLOR_TOGGLE_W + gap)
-            btn = ColorTogglePill(self.window, x, settings.BUILD_FIGURE_COLOR_BUTTON_Y, color)
+            btn = ColorTogglePill(self.window, self._sx(x), self._sy(settings.BUILD_FIGURE_COLOR_BUTTON_Y), color)
             self.color_buttons.append(btn)
         self.color_buttons[0].active = True
         self.buttons += self.color_buttons
@@ -283,12 +455,161 @@ class BuildFigureScreen(SubScreen):
             (settings.BUILD_HIERARCHY_WIDTH, settings.BUILD_HIERARCHY_HEIGHT)
         )
 
+    # ── Kingdom-mode extras (cap badge / resource strip / suit filter) ──
+
+    def _init_kingdom_extras(self):
+        """Load assets used only by kingdom config builders."""
+        icon_size = int(0.019 * settings.SCREEN_WIDTH)
+        self._kingdom_resource_icons = _resource_panel.load_resource_icons(icon_size)
+        # Slightly smaller chips than before; positioned at draw time around
+        # the scroll list's chevron arrows.
+        self._suit_chip_size = max(16, int(settings.BUILD_FIGURE_ICON_WIDTH * 0.45))
+        for suit in _SUITS:
+            try:
+                raw = pygame.image.load(_SUIT_ICON_PATHS[suit]).convert_alpha()
+                self._suit_icons[suit] = pygame.transform.smoothscale(
+                    raw, (self._suit_chip_size, self._suit_chip_size))
+            except Exception:
+                self._suit_icons[suit] = None
+        # Chip rects are recomputed each frame in _compute_suit_chip_rects()
+        # because the chevron positions depend on screen state.
+        self._suit_filter_rects = {}
+
+    def _compute_suit_chip_rects(self):
+        """Position the 2 active-color chips left/right of the scroll chevrons."""
+        self._suit_filter_rects = {}
+        shifter = getattr(self, 'scroll_text_list_shifter', None)
+        if shifter is None:
+            return
+        color_suits = _COLOR_SUITS.get(self.color, ())
+        if len(color_suits) < 2:
+            return
+        size = self._suit_chip_size
+        gap = max(8, int(0.008 * settings.SCREEN_WIDTH))
+        left_x = getattr(shifter, '_left_x', None)
+        right_x = getattr(shifter, '_right_x', None)
+        arrow_y = getattr(shifter, '_arrow_y', None)
+        chev_sz = getattr(shifter, '_chevron_sz', size)
+        if left_x is None or right_x is None or arrow_y is None:
+            return
+        cy = arrow_y
+        # Chip 1: left of left chevron.
+        rect_left = pygame.Rect(0, 0, size, size)
+        rect_left.right = left_x - chev_sz - gap
+        rect_left.centery = cy
+        # Chip 2: right of right chevron.
+        rect_right = pygame.Rect(0, 0, size, size)
+        rect_right.left = right_x + chev_sz + gap
+        rect_right.centery = cy
+        self._suit_filter_rects[color_suits[0]] = rect_left
+        self._suit_filter_rects[color_suits[1]] = rect_right
+
+    def _info_box_screen_rect(self):
+        """Return the on-screen rect of the right info/hierarchy sub-box."""
+        return pygame.Rect(
+            self._sx(settings.BUILD_FIGURE_INFO_BOX_X),
+            self._sy(settings.BUILD_FIGURE_INFO_BOX_Y),
+            settings.BUILD_FIGURE_INFO_BOX_WIDTH,
+            settings.BUILD_FIGURE_INFO_BOX_HEIGHT,
+        )
+
+    def _kingdom_land(self):
+        return getattr(self.game, 'land', None) or {}
+
+    def _kingdom_figures(self):
+        cfg = getattr(self.game, '_config', None) or {}
+        return cfg.get('figures', []) or []
+
+    def _draw_castle_cap_badge(self):
+        """Top-right of the hierarchy sub-box: persistent x/N badge.
+
+        Shifted slightly down and left from the corner so it sits inside the
+        sub-box decorations rather than hugging the border.
+        """
+        land = self._kingdom_land()
+        cap = castle_cap_for_land(land)
+        if cap <= 0:
+            return
+        count = count_castle_figures(self._kingdom_figures())
+        box = self._info_box_screen_rect()
+        # Shrinking the right edge moves the badge left; lowering the top
+        # moves it down (the helper anchors the badge to rect.top + 5 and
+        # rect.right - 6).
+        dx = max(12, int(0.012 * settings.SCREEN_WIDTH))
+        dy = max(8, int(0.012 * settings.SCREEN_HEIGHT))
+        adjusted = pygame.Rect(box.x, box.y + dy, max(1, box.w - dx), box.h)
+        draw_castle_cap_indicator(
+            self.window, adjusted, count, cap,
+            font=self._kingdom_res_font, always=True)
+
+    def _resource_strip_rect(self):
+        """Single-row resource strip rect just below the hierarchy sub-box."""
+        box = self._info_box_screen_rect()
+        strip_h = max(28, int(0.04 * settings.SCREEN_HEIGHT))
+        gap = max(6, int(0.008 * settings.SCREEN_HEIGHT))
+        return pygame.Rect(box.x, box.bottom + gap, box.w, strip_h)
+
+    def _draw_resource_strip(self):
+        rect = self._resource_strip_rect()
+        resources_data = self.game.calculate_resources(
+            self.figure_manager.families)
+        _resource_panel.draw_resource_panel(
+            self.window, rect, resources_data,
+            self._kingdom_resource_icons, self._kingdom_res_font,
+            compact=True, show_label=False)
+
+    def _draw_suit_filter(self):
+        self._compute_suit_chip_rects()
+        for suit, rect in self._suit_filter_rects.items():
+            active = suit in self._suit_filter
+            bg_color = (60, 50, 30, 230) if active else (35, 30, 25, 180)
+            border_color = (224, 182, 82) if active else (110, 100, 85)
+            bg = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(bg, bg_color, bg.get_rect(),
+                             border_radius=max(4, rect.h // 4))
+            self.window.blit(bg, rect.topleft)
+            pygame.draw.rect(self.window, border_color, rect, 1,
+                             border_radius=max(4, rect.h // 4))
+            icon = self._suit_icons.get(suit)
+            if icon:
+                ir = icon.get_rect(center=rect.center)
+                if not active:
+                    faded = icon.copy()
+                    faded.set_alpha(110)
+                    self.window.blit(faded, ir.topleft)
+                else:
+                    self.window.blit(icon, ir.topleft)
+
+    def _handle_suit_filter_click(self, pos):
+        """Toggle a suit on click. Returns True if a chip handled the event."""
+        self._compute_suit_chip_rects()
+        color_suits = set(_COLOR_SUITS.get(self.color, ()))
+        for suit, rect in self._suit_filter_rects.items():
+            if rect.collidepoint(pos):
+                if suit in self._suit_filter:
+                    # Toggle off; if no current-color suit remains active,
+                    # restore both for this color to avoid an empty list.
+                    self._suit_filter.discard(suit)
+                    if not (color_suits & self._suit_filter):
+                        self._suit_filter |= color_suits
+                else:
+                    self._suit_filter.add(suit)
+                self._refresh_selected_figure_family()
+                return True
+        return False
+
+    def _reset_suit_filter(self):
+        self._suit_filter = set(_SUITS)
+
     def update(self, game):
         """Update the game state and button components."""
         super().update(game)
         self.game = game
+        # Keep card_source in sync for GameCardSource (duel mode)
+        if hasattr(self.card_source, 'game'):
+            self.card_source.game = game
 
-        if self.game.turn:
+        if _is_kingdom_config_mode(self.mode) or self.game.turn:
             self.confirm_button.disabled = False
         else:
             self.confirm_button.disabled = True
@@ -310,7 +631,8 @@ class BuildFigureScreen(SubScreen):
         for color in ['offensive', 'defensive']:
             for button in self.figure_family_buttons[color]:
                 # Check if any figure in this family can be built with current hand
-                buildable_figures = self.get_figures_in_hand(button.family)
+                buildable_figures = self._filter_figures_by_active_suits(
+                    self.get_figures_in_hand(button.family))
                 # Set active state: true if at least one figure can be built
                 button.is_active = len(buildable_figures) > 0
 
@@ -330,7 +652,7 @@ class BuildFigureScreen(SubScreen):
             response = self.dialogue_box.update(events)
             if response:
                 
-                print("Response:", response)
+                logger.debug("Response: %s", response)
                 if response == 'yes':
                     # Block regular build during forced advance
                     if getattr(self.game, 'pending_forced_advance', False):
@@ -365,7 +687,7 @@ class BuildFigureScreen(SubScreen):
                         )
                         return
                     
-                    print("Creating figure...")
+                    logger.debug("Creating figure...")
                     build_result = self.create_figure_in_db(selected_figure)
 
                     if not build_result or not build_result.get('success'):
@@ -378,9 +700,13 @@ class BuildFigureScreen(SubScreen):
                         )
                         return
 
+                    if _is_kingdom_config_mode(self.mode):
+                        self._refresh_selected_figure_family()
+
+                    _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                     self.make_dialogue_box(
                         message="Your new figure has been placed on the field.",
-                        actions=['to field'],
+                        actions=_post_build_actions,
                         icon="figure",
                         title="Figure Built"
                     )
@@ -398,7 +724,7 @@ class BuildFigureScreen(SubScreen):
                             )
                             return
 
-                    print("Creating figure with instant charge advance...")
+                    logger.debug("Creating figure with instant charge advance...")
                     build_result = self.create_figure_in_db(selected_figure, instant_charge_advance=True)
 
                     if not build_result or not build_result.get('success'):
@@ -410,6 +736,9 @@ class BuildFigureScreen(SubScreen):
                             title="Build Failed"
                         )
                         return
+
+                    if _is_kingdom_config_mode(self.mode):
+                        self._refresh_selected_figure_family()
 
                     # Update game state from the combined response
                     if build_result.get('game'):
@@ -427,9 +756,10 @@ class BuildFigureScreen(SubScreen):
                             color_name = 'red' if civil_war_color == 'offensive' else 'black'
                             self.game.civil_war_awaiting_second = True
                             self.game.civil_war_required_color = civil_war_color
+                            _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                             self.make_dialogue_box(
                                 message=f"{fig_name} has been built and {action_word} toward battle!\n\nCivil War! You may select a second village figure of the same color ({color_name}).",
-                                actions=['to field'],
+                                actions=_post_build_actions,
                                 icon="figure",
                                 title="Instant Charge!"
                             )
@@ -441,25 +771,36 @@ class BuildFigureScreen(SubScreen):
                             # Trigger advance notification
                             self.game.pending_own_advance_notification = True
                             self.game.own_advance_figure_name = fig_name
+                            _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                             self.make_dialogue_box(
                                 message=f"{fig_name} has been built and {action_word} toward battle!",
-                                actions=['to field'],
+                                actions=_post_build_actions,
                                 icon="figure",
                                 title="Instant Charge!"
                             )
                     else:
                         # Advance failed but figure was still built
                         error_msg = charge_result.get('message', 'Advance conditions not met')
+                        _post_build_actions = ['to field', 'build more'] if self.mode == 'conquer' else ['to field']
                         self.make_dialogue_box(
                             message=f"Figure was built successfully, but could not advance:\n\n{error_msg}",
-                            actions=['to field'],
+                            actions=_post_build_actions,
                             icon="error",
                             title="Advance Failed"
                         )
 
                 elif response == 'to field':
                     self.dialogue_box = None
-                    self.state.subscreen = "field"
+                    if _is_kingdom_config_mode(self.mode):
+                        # Signal parent to dismiss the build subscreen
+                        if hasattr(self, '_on_done') and self._on_done:
+                            self._on_done()
+                    else:
+                        self.state.subscreen = "field"
+                elif response == 'build more':
+                    if _is_kingdom_config_mode(self.mode):
+                        self._refresh_selected_figure_family()
+                    self.dialogue_box = None
                 elif response in ['cancel', 'got it!', 'ok']:
                     self.dialogue_box = None
 
@@ -467,6 +808,12 @@ class BuildFigureScreen(SubScreen):
 
             for event in events:
                 if event.type == MOUSEBUTTONDOWN:
+
+                    # Suit-filter chips (kingdom mode only) — handle before
+                    # other widgets so a chip click doesn't fall through.
+                    if (_is_kingdom_config_mode(self.mode)
+                            and self._handle_suit_filter_click(event.pos)):
+                        continue
 
                     # Handle confirm button only if a figure is selected
                     if selected_figure and self.confirm_button.collide() and not self.confirm_button.disabled:
@@ -584,6 +931,10 @@ class BuildFigureScreen(SubScreen):
             other_button.active = False
         button.active = True
         self.color = button.text
+        # Reset suit filter on color change to avoid empty lists.
+        if _is_kingdom_config_mode(self.mode):
+            self._reset_suit_filter()
+            self._refresh_selected_figure_family()
 
     def update_figure_family_selection(self, button):
         """Update figure family selection."""
@@ -592,8 +943,32 @@ class BuildFigureScreen(SubScreen):
         for other_button in self.figure_family_buttons[internal_color]:
             other_button.clicked = False
         button.clicked = True
-        
-        figures = self.get_figures_in_hand(button.family)
+        self._set_figure_family_scroll_text(button.family)
+
+    def _refresh_selected_figure_family(self):
+        """Refresh the visible figure list for the current card pool."""
+        self.update_family_icon_states()
+        if self.selected_figure_family:
+            self._set_figure_family_scroll_text(self.selected_figure_family)
+
+    def _suit_allowed_by_filter(self, suit):
+        """Return whether a suit should appear under the active suit filter."""
+        if not _is_kingdom_config_mode(self.mode):
+            return True
+        suit_filter = getattr(self, '_suit_filter', None)
+        if not suit_filter or suit_filter == set(_SUITS):
+            return True
+        return str(suit or '').lower() in suit_filter
+
+    def _filter_figures_by_active_suits(self, figures):
+        return [
+            figure for figure in figures
+            if self._suit_allowed_by_filter(getattr(figure, 'suit', None))
+        ]
+
+    def _set_figure_family_scroll_text(self, figure_family):
+        figures = self._filter_figures_by_active_suits(
+            self.get_figures_in_hand(figure_family))
         if figures:
             self.selected_figures = figures
             self.scroll_text_list = [{"title": figure.name,
@@ -605,28 +980,33 @@ class BuildFigureScreen(SubScreen):
                                       "requires": figure.requires if figure.requires else None,
                                       **{k: getattr(figure, k, False) for k in SKILL_KEYS},
                                       "cards": figure.cards,
+                                      "suit": getattr(figure, 'suit', None),
                                       "content": figure}
                                      for figure in figures]
             self.scroll_text_list.sort(key=lambda x: x["power"], reverse=True)
         else:
             # Get figure instances to show their attributes even when cards are missing
+            self.selected_figures = []
             self.scroll_text_list = []
-            for suit in button.family.suits:
-                for figure in button.family.get_figures_by_suit(suit):
+            for suit in figure_family.suits:
+                if not self._suit_allowed_by_filter(suit):
+                    continue
+                for figure in figure_family.get_figures_by_suit(suit):
+                    display_figure = self._display_figure_for_mode(figure)
                     self.scroll_text_list.append({
-                        "title": button.family.name,
-                        "figure_type": f"{figure.family.field.capitalize()} Figure",
-                        "text": button.family.description,
+                        "title": figure_family.name,
+                        "figure_type": f"{display_figure.family.field.capitalize()} Figure",
+                        "text": display_figure.family.description,
                         # Don't show power when cards are missing
-                        "support": figure.get_battle_bonus(),
-                        "produces": figure.produces if figure.produces else None,
-                        "requires": figure.requires if figure.requires else None,
-                        **{k: getattr(figure, k, False) for k in SKILL_KEYS},
+                        "support": display_figure.get_battle_bonus(),
+                        "produces": display_figure.produces if display_figure.produces else None,
+                        "requires": display_figure.requires if display_figure.requires else None,
+                        **{k: getattr(display_figure, k, False) for k in SKILL_KEYS},
                         "suit": suit,
-                        "cards": self.get_given_cards_for_figure(figure),
-                        "missing_cards": self.get_missing_cards_converted_ZK_for_figure(figure),
+                        "cards": self.get_given_cards_for_figure(display_figure),
+                        "missing_cards": self.get_missing_cards_converted_ZK_for_figure(display_figure),
                         "content": None,
-                        "_sort_power": figure.get_value()
+                        "_sort_power": display_figure.get_value()
                     })
             self.scroll_text_list.sort(key=lambda x: x["_sort_power"], reverse=True)
         self.scroll_text_list_shifter.set_displayed_texts(self.scroll_text_list)
@@ -635,7 +1015,7 @@ class BuildFigureScreen(SubScreen):
         """Draw the screen, including buttons and background."""
         super().draw()
 
-        self.window.blit(self.build_hierarchy, (settings.BUILD_HIERARCHY_X, settings.BUILD_HIERARCHY_Y))
+        self.window.blit(self.build_hierarchy, self._spos(settings.BUILD_HIERARCHY_X, settings.BUILD_HIERARCHY_Y))
 
         internal_color = self.color_mapping.get(self.color, self.color)
         # Z-order layering: regular → selected → hovered (so info boxes appear on top)
@@ -662,6 +1042,12 @@ class BuildFigureScreen(SubScreen):
             if selected_figure:
                 self.confirm_button.draw()
 
+        # Kingdom-mode overlays (cap badge, resource strip, suit filter).
+        if _is_kingdom_config_mode(self.mode):
+            self._draw_suit_filter()
+            self._draw_castle_cap_badge()
+            self._draw_resource_strip()
+
         super().draw_on_top()
 
     def map_figure_cards_to_hand(self, figure):
@@ -672,7 +1058,7 @@ class BuildFigureScreen(SubScreen):
         :param figure: The Figure object with dummy cards.
         :return: A list of real Card objects mapped from the player's hand.
         """
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
 
         # Create a list of available cards (will remove as we use them)
@@ -693,7 +1079,7 @@ class BuildFigureScreen(SubScreen):
             if real_card:
                 real_cards.append(real_card)
             else:
-                print(f"Card {dummy_card} not found in hand.")
+                logger.debug(f"Card {dummy_card} not found in hand.")
                 return None  # Return None if any card is not found
 
         return real_cards
@@ -702,7 +1088,7 @@ class BuildFigureScreen(SubScreen):
     def get_figures_in_hand(self, figure_family):
         """Get figures in the player's hand."""
         # Get all cards in the player's hand
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
 
         # Count occurrences of each card in the hand
@@ -714,7 +1100,7 @@ class BuildFigureScreen(SubScreen):
             figure_counter = Counter(card.to_tuple() for card in figure.cards)
             # Check if the hand has enough cards to build the figure
             if all(hand_counter[card] >= count for card, count in figure_counter.items()):
-                possible_figures.append(figure)
+                possible_figures.append(self._display_figure_for_mode(figure))
 
         return possible_figures
     
@@ -723,7 +1109,7 @@ class BuildFigureScreen(SubScreen):
     def get_missing_cards(self, figure):
         """Get missing cards for a figure."""
         # Get all cards in the player's hand
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
 
         # Count occurrences of each card in the hand using tuples
@@ -751,7 +1137,7 @@ class BuildFigureScreen(SubScreen):
 
     def get_given_cards_for_figure(self, figure):
         """Get given cards for a specific figure."""
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         hand_counter = Counter(card.to_tuple() for card in hand_cards)
 

@@ -5,6 +5,18 @@ from utils import http_compat as requests
 from config import settings
 from game.core.game import Game
 
+import uuid
+
+
+def _new_client_action_id():
+    """Return a fresh UUID string used for server-side idempotency keys.
+
+    Each user-initiated mutating conquer tactic action gets a unique id so
+    a network retry replays the cached response instead of failing with
+    "not your turn" or mutating state twice.
+    """
+    return uuid.uuid4().hex
+
 def fetch_user_games(username):
     """Fetch the list of games for the user from the server."""
     response = requests.get(f'{settings.SERVER_URL}/games/get_games', params={'username': username}, timeout=10)
@@ -50,13 +62,15 @@ def create_game(challenge_id):
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to create game: {str(e)}"}
 
-def create_challenge(challenger_username, opponent_username, stake=45, turn_time_limit=None):
+def create_challenge(challenger_username, opponent_username, stake=45, game_limit=None, turn_time_limit=None):
     try:
         data = {
             'challenger': challenger_username,
             'opponent': opponent_username,
             'stake': stake,
         }
+        if game_limit is not None:
+            data['game_limit'] = game_limit
         if turn_time_limit is not None:
             data['turn_time_limit'] = turn_time_limit
         response = requests.post(f'{settings.SERVER_URL}/challenges/create_challenge', data=data, timeout=10)
@@ -98,6 +112,36 @@ def select_defender(game_id, player_id, figure_id):
         return response.json()
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to select defender: {str(e)}"}
+
+
+def select_conquer_own_defender(game_id, player_id, figure_id):
+    """Select own figure as defender after a conquer Invader Swap advance."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/conquer_select_own_defender',
+            json={'game_id': game_id, 'player_id': player_id, 'figure_id': figure_id},
+            timeout=10
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to select own defender: {str(e)}"}
+
+
+def resolve_conquer_prelude_target(game_id, spell_id, target_figure_id):
+    """Resolve pending conquer prelude target selection for the invader."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/kingdom/conquer/resolve_prelude_target',
+            json={
+                'game_id': game_id,
+                'spell_id': spell_id,
+                'target_figure_id': target_figure_id,
+            },
+            timeout=10
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to resolve prelude target: {str(e)}"}
 
 
 def skip_civil_war_second(game_id, player_id, context='advance'):
@@ -152,6 +196,23 @@ def defender_no_figures_loss(game_id, player_id):
         return {'success': False, 'message': f"Failed to process defender auto-loss: {str(e)}"}
 
 
+def conquer_withdraw(game_id, player_id):
+    """Withdraw from a conquer battle, making the original defender win."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/conquer_withdraw',
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'client_action_id': _new_client_action_id(),
+            },
+            timeout=10
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to withdraw: {str(e)}"}
+
+
 def finish_battle(game_id, player_id, total_diff):
     """Submit the final battle result to the server for resolution."""
     try:
@@ -183,6 +244,82 @@ def play_battle_move(game_id, player_id, battle_move_id, call_figure_id=None):
         return response.json()
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to play battle move: {str(e)}"}
+
+
+def play_conquer_tactic(game_id, player_id, tactic_id, call_figure_id=None):
+    """Play a conquer tactic in the current battle round."""
+    try:
+        payload = {
+            'game_id': game_id,
+            'player_id': player_id,
+            'tactic_id': tactic_id,
+            'client_action_id': _new_client_action_id(),
+        }
+        if call_figure_id is not None:
+            payload['call_figure_id'] = call_figure_id
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/play_conquer_tactic',
+            json=payload,
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to play conquer tactic: {str(e)}"}
+
+
+def gamble_conquer_tactic(game_id, player_id, tactic_id):
+    """Gamble a conquer tactic for two replacement tactics."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/gamble_conquer_tactic',
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'tactic_id': tactic_id,
+                'client_action_id': _new_client_action_id(),
+            },
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to gamble conquer tactic: {str(e)}"}
+
+
+def combine_conquer_tactics(game_id, player_id, tactic_id_a, tactic_id_b):
+    """Combine two same-colour Dagger conquer tactics."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/combine_conquer_tactics',
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'tactic_id_a': tactic_id_a,
+                'tactic_id_b': tactic_id_b,
+                'client_action_id': _new_client_action_id(),
+            },
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to combine conquer tactics: {str(e)}"}
+
+
+def dismantle_conquer_tactic(game_id, player_id, tactic_id):
+    """Dismantle an unplayed combined conquer tactic."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/dismantle_conquer_tactic',
+            json={
+                'game_id': game_id,
+                'player_id': player_id,
+                'tactic_id': tactic_id,
+                'client_action_id': _new_client_action_id(),
+            },
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to dismantle conquer tactic: {str(e)}"}
 
 
 def get_battle_state(game_id, player_id):
@@ -252,3 +389,16 @@ def finish_battle_draw(game_id, player_id, choice, picked_card_id=None, picked_c
         return response.json()
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to resolve draw: {str(e)}"}
+
+
+def resolve_pending_battle_choice(game_id, player_id):
+    """Apply a server-side default for an expired post-battle choice."""
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/games/resolve_pending_battle_choice',
+            json={'game_id': game_id, 'player_id': player_id},
+            timeout=10,
+        )
+        return response.json()
+    except requests.RequestException as e:
+        return {'success': False, 'message': f"Failed to resolve pending battle choice: {str(e)}"}

@@ -4,10 +4,14 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy_utils import ChoiceType
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 import server_settings as server_config
 
 db = SQLAlchemy()
+
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class ChallengeStatus(enum.Enum):
   OPEN = "open"
@@ -18,11 +22,12 @@ class Challenge(db.Model):
   id = db.Column(db.Integer, primary_key=True)
   challenger_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   challenged_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-  status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default='Open')
-  stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
+  status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default=ChallengeStatus.OPEN)
+  stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake
+  game_limit = db.Column(db.Integer, nullable=False, default=45, server_default='45')  # Points needed to win
   turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
   game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=True)  # Set when challenge is accepted
-  date = db.Column(db.DateTime, default=datetime.utcnow)
+  date = db.Column(db.DateTime, default=_utcnow)
 
   def serialize(self):
     return {
@@ -31,8 +36,9 @@ class Challenge(db.Model):
       'challenged_id': self.challenged_id,
       'challenger_name': self.challenger.username if self.challenger else None,
       'challenged_name': self.challenged.username if self.challenged else None,
-      'status': self.status.value,
+      'status': self.status.value if hasattr(self.status, 'value') else str(self.status),
       'stake': self.stake,
+      'game_limit': self.game_limit or self.stake,
       'turn_time_limit': self.turn_time_limit,
       'game_id': self.game_id,
       'date': self.date.isoformat() if self.date else None
@@ -68,6 +74,16 @@ class User(db.Model):
     gold = db.Column(db.Integer, nullable=False, default=server_config.INITIAL_GOLD)  # Starting gold
     last_active = db.Column(db.DateTime, nullable=True)  # Heartbeat timestamp
     is_ai = db.Column(db.Boolean, nullable=False, default=False)  # AI opponent flag
+    # Email verification fields (all optional for backward compatibility)
+    email = db.Column(db.String(255), nullable=True, unique=True)
+    email_verified = db.Column(db.Boolean, nullable=False, default=False)
+    email_verification_token = db.Column(db.String(128), nullable=True)
+    email_verification_sent_at = db.Column(db.DateTime, nullable=True)
+    # v2.0: Collection & Kingdom
+    booster_packs = db.Column(db.Integer, nullable=False, default=0)
+    booster_packs_side = db.Column(db.Integer, nullable=False, default=0)
+    maps = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_conquer_at = db.Column(db.DateTime, nullable=True)
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
                                         foreign_keys='Challenge.challenger_id')
     challenges_received = db.relationship('Challenge', backref='challenged', lazy=True,
@@ -76,13 +92,17 @@ class User(db.Model):
     def serialize(self):
         is_online = self.is_ai  # AI users are always "online"
         if not is_online and self.last_active:
-            is_online = (datetime.utcnow() - self.last_active).total_seconds() < 60
+            is_online = (_utcnow() - self.last_active).total_seconds() < 60
         return {
             'id': self.id,
             'username': self.username,
             'gold': self.gold,
             'is_online': is_online,
             'is_ai': self.is_ai,
+            'email_verified': self.email_verified,
+            'booster_packs': self.booster_packs,
+            'booster_packs_side': self.booster_packs_side,
+            'maps': int(self.maps or 0),
             'challenges_issued': [challenge.serialize() for challenge in self.challenges_issued],
             'challenges_received': [challenge.serialize() for challenge in self.challenges_received]
         }
@@ -102,11 +122,21 @@ class Game(db.Model):
         foreign_keys='Player.game_id'  # Specify the foreign key explicitly
     )
     state = db.Column(db.String(20), nullable=False, default='open')  # 'open' | 'finished'
-    date = db.Column(db.DateTime, default=datetime.utcnow)
-    stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
+    mode = db.Column(db.String(10), nullable=False, default='duel')  # 'duel' | 'conquer'
+    land_id = db.Column(db.Integer, db.ForeignKey('land.id'), nullable=True)  # conquer mode only
+    conquer_config_id = db.Column(db.Integer, db.ForeignKey('land_config.id',
+                                  use_alter=True, name='fk_game_conquer_config'),
+                                  nullable=True)
+    defence_config_id = db.Column(db.Integer, db.ForeignKey('land_config.id',
+                                  use_alter=True, name='fk_game_defence_config'),
+                                  nullable=True)
+    date = db.Column(db.DateTime, default=_utcnow)
+    stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake
+    game_limit = db.Column(db.Integer, nullable=False, default=45, server_default='45')  # Points needed to win
     turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
     winner_player_id = db.Column(db.Integer, nullable=True)  # Player who won the game
     finished_at = db.Column(db.DateTime, nullable=True)  # When the game ended
+    last_activity_at = db.Column(db.DateTime, nullable=True, default=_utcnow)  # Last meaningful activity (for stuck-game sweeper)
     main_cards = db.relationship('MainCard', backref='game', lazy=True)
     side_cards = db.relationship('SideCard', backref='game', lazy=True)
 
@@ -147,7 +177,8 @@ class Game(db.Model):
 
     # Persisted battle result so the second client can retrieve it after cleanup
     # {winner_player_id, loser_player_id, winner_name, loser_name,
-    #  points_awarded, destroyed_figure_name, destroyed_figure_family}
+    #  points_awarded, destroyed_figure_name, destroyed_figure_family,
+    #  post_battle_pending_choice?}
     last_battle_result = db.Column(db.JSON, nullable=True)
 
     # Reason for auto-loss/fold so the waiting player knows WHY they won/lost
@@ -161,18 +192,46 @@ class Game(db.Model):
     # Battle shop gamble tracking — {str(player_id): count}
     battle_gamble_counts = db.Column(db.JSON, nullable=True)
 
+    # Seed for the deterministic duel AI's softmax sampling / tie-breakers.
+    # Set on game creation so the same (game_state, seed, iteration) tuple
+    # always yields the same AI move — enables replay and reproducible tests.
+    # Conquer mode does not use this column today but may inherit the same
+    # determinism contract later.
+    ai_seed = db.Column(db.Integer, nullable=True)
+
+    # Conquer move model: 'battle_move' (legacy: pre-battle buy phase via battle_shop)
+    # or 'tactics_hand' (unified screen, configured moves are the starting hand,
+    # no battle_shop buy/return phase). Duel games and legacy open conquer games
+    # keep 'battle_move'. New conquer games default to 'tactics_hand'.
+    conquer_move_model = db.Column(db.String(20), nullable=False, default='battle_move',
+                                   server_default='battle_move')
+
+    # Monotonic counter bumped on every spell-driven ConquerTactic mutation.
+    # Each new tactic / soft-purge is stamped with the current value so the
+    # client can replay the visible state at any point on the spell timeline.
+    conquer_resolution_step = db.Column(db.Integer, nullable=False, default=0,
+                                        server_default='0')
+
+    land = db.relationship('Land', foreign_keys=[land_id], lazy=True)
     log_entries = db.relationship('LogEntry', backref='game', lazy=True)
     chat_messages = db.relationship('ChatMessage', backref='game', lazy=True)
     active_spells = db.relationship('ActiveSpell', backref='game', lazy=True, foreign_keys='ActiveSpell.game_id')
     battle_moves = db.relationship('BattleMove', backref='game', lazy=True, foreign_keys='BattleMove.game_id')
-
-
+    conquer_tactics = db.relationship('ConquerTactic', backref='game', lazy=True,
+                                      foreign_keys='ConquerTactic.game_id')
     def serialize(self):
         return {
             'id': self.id,
             'state': self.state,
+            'mode': self.mode,
+            'land_id': self.land_id,
+            'land_tier': self.land.tier if self.land else None,
+            'land_gold_rate': self.land.gold_rate if self.land else None,
+            'land_suit_bonus_suit': self.land.suit_bonus_suit if self.land else None,
+            'land_suit_bonus_value': self.land.suit_bonus_value if self.land else None,
             'date': self.date.isoformat() if self.date else None,
             'stake': self.stake,
+            'game_limit': self.game_limit or self.stake,
             'turn_time_limit': self.turn_time_limit,
             'winner_player_id': self.winner_player_id,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
@@ -203,12 +262,16 @@ class Game(db.Model):
             'last_battle_result': self.last_battle_result,
             'resting_figure_ids': self.resting_figure_ids or [],
             'battle_gamble_counts': self.battle_gamble_counts or {},
+            'ai_seed': self.ai_seed,
+            'conquer_move_model': self.conquer_move_model or 'battle_move',
+            'conquer_resolution_step': int(getattr(self, 'conquer_resolution_step', 0) or 0),
             'players': [player.serialize() for player in self.players],
             'main_cards': [card.serialize() for card in self.main_cards],
             'side_cards': [card.serialize() for card in self.side_cards],
             'log_entries': [entry.serialize() for entry in self.log_entries],
             'chat_messages': [message.serialize() for message in self.chat_messages],
             'battle_moves': [move.serialize() for move in self.battle_moves],
+            'conquer_tactics': [tactic.serialize() for tactic in self.conquer_tactics],
             'active_spells': [spell.serialize() for spell in self.active_spells],
         }
 
@@ -229,11 +292,11 @@ class Player(db.Model):
     received_messages = db.relationship('ChatMessage', foreign_keys='ChatMessage.receiver_id', backref='receiver', lazy=True)
 
     def serialize(self):
-        user = User.query.get(self.user_id)
+        user = db.session.get(User, self.user_id)
         username = user.username if user else None
         is_online = False
         if user and user.last_active:
-            is_online = (datetime.utcnow() - user.last_active).total_seconds() < 60
+            is_online = (_utcnow() - user.last_active).total_seconds() < 60
 
         # Query cards directly to avoid SQLAlchemy relationship caching issues
         main_hand_cards = MainCard.query.filter_by(
@@ -347,9 +410,9 @@ class CardToFigure(db.Model):
 
         # Fetch card details based on card type
         if self.card_type == 'main':
-            card = MainCard.query.get(self.card_id)
+            card = db.session.get(MainCard, self.card_id)
         elif self.card_type == 'side':
-            card = SideCard.query.get(self.card_id)
+            card = db.session.get(SideCard, self.card_id)
         else:
             card = None
 
@@ -386,8 +449,12 @@ class Figure(db.Model):
     checkmate = db.Column(db.Boolean, default=False, nullable=False)  # If destroyed, owner loses
     cannot_be_blocked = db.Column(db.Boolean, default=False, nullable=False)  # Cannot be counter-advanced when advancing
     rest_after_attack = db.Column(db.Boolean, default=False, nullable=False)  # Must rest one round after battle
+    # Conquer-mode link back to the LandConfigFigure this runtime Figure was
+    # built from.  Used to resolve configured spell targets without relying
+    # on insertion-order zips that break after Explosion etc.
+    source_config_figure_id = db.Column(db.Integer, nullable=True)
     cards = db.relationship('CardToFigure', backref='figure', lazy=True)
-    date_created = db.Column(db.DateTime, default=datetime.utcnow)
+    date_created = db.Column(db.DateTime, default=_utcnow)
 
     def serialize(self):
         return {
@@ -419,7 +486,7 @@ class LogEntry(db.Model):
     message = db.Column(db.String(500), nullable=False)  # Description of the event
     author = db.Column(db.String(80), nullable=False)  # Who logged the event (e.g., "system", "player_name")
     type = db.Column(db.String(50), nullable=False)  # Event type (e.g., "move", "draw", "figure", etc.)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)  # When the event occurred
+    timestamp = db.Column(db.DateTime, default=_utcnow)  # When the event occurred
 
     def serialize(self):
         return {
@@ -441,7 +508,7 @@ class ChatMessage(db.Model):
     sender_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)  # Sender of the message
     receiver_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)  # Receiver of the message
     message = db.Column(db.String(1000), nullable=False)  # Content of the message
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)  # When the message was sent
+    timestamp = db.Column(db.DateTime, default=_utcnow)  # When the message was sent
 
     def serialize(self):
         return {
@@ -470,7 +537,7 @@ class ActiveSpell(db.Model):
     is_pending = db.Column(db.Boolean, default=False)  # True if waiting for counter
     counterable = db.Column(db.Boolean, default=False)  # Whether this spell can be countered
     effect_data = db.Column(db.JSON, nullable=True)  # JSON data for spell-specific effects
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
     
     # Relationship to player
     caster = db.relationship('Player', foreign_keys=[player_id], backref='cast_spells')
@@ -514,7 +581,7 @@ class BattleMove(db.Model):
     value_b = db.Column(db.Integer, nullable=True)
     played_round = db.Column(db.Integer, nullable=True)  # None=in hand, 0/1/2=played in that battle round
     call_figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)  # figure called
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
 
     # Relationships
     player = db.relationship('Player', backref='battle_moves', foreign_keys=[player_id])
@@ -548,6 +615,80 @@ class BattleMove(db.Model):
         return data
 
 
+class ConquerTactic(db.Model):
+    """A game-scoped conquer tactic for the unified tactics-hand model."""
+    __tablename__ = 'conquer_tactic'
+
+    id = db.Column(db.Integer, primary_key=True)
+    game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=False, index=True)
+    player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False, index=True)
+    card_id = db.Column(db.Integer, nullable=False)
+    card_type = db.Column(db.String(10), nullable=False, default='main', server_default='main')
+    card_id_b = db.Column(db.Integer, nullable=True)
+    card_type_b = db.Column(db.String(10), nullable=True)
+    family_name = db.Column(db.String(50), nullable=False)
+    suit = db.Column(db.String(20), nullable=False)
+    suit_b = db.Column(db.String(20), nullable=True)
+    rank = db.Column(db.String(12), nullable=False)
+    value = db.Column(db.Integer, nullable=False)
+    value_a = db.Column(db.Integer, nullable=True)
+    value_b = db.Column(db.Integer, nullable=True)
+    source = db.Column(db.String(20), nullable=False, default='config', server_default='config')
+    status = db.Column(db.String(20), nullable=False, default='available', server_default='available')
+    played_round = db.Column(db.Integer, nullable=True)
+    call_figure_id = db.Column(db.Integer, db.ForeignKey('figure.id'), nullable=True)
+    source_tactic_id_a = db.Column(db.Integer, nullable=True)
+    source_tactic_id_b = db.Column(db.Integer, nullable=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    # Spell-timeline replay support: the resolution step at which this tactic
+    # became visible (NULL = present from battle start) and at which it was
+    # spell-purged (NULL = still alive). Status 'spell_purged' is treated as
+    # alive on the client until ``discarded_step_index`` is reached.
+    revealed_step_index = db.Column(db.Integer, nullable=True)
+    discarded_step_index = db.Column(db.Integer, nullable=True)
+
+    player = db.relationship('Player', backref='conquer_tactics', foreign_keys=[player_id])
+
+    __table_args__ = (
+        db.Index('ix_conquer_tactic_game_player_status', 'game_id', 'player_id', 'status'),
+    )
+
+    def serialize(self):
+        data = {
+            'id': self.id,
+            'game_id': self.game_id,
+            'player_id': self.player_id,
+            'card_id': self.card_id,
+            'card_type': self.card_type,
+            'family_name': self.family_name,
+            'suit': self.suit,
+            'rank': self.rank,
+            'value': self.value,
+            'source': self.source,
+            'status': self.status,
+            'played_round': self.played_round,
+            'call_figure_id': self.call_figure_id,
+            'sort_order': self.sort_order,
+            'revealed_step_index': self.revealed_step_index,
+            'discarded_step_index': self.discarded_step_index,
+            # Combine lineage is always emitted (even when None) so the client
+            # can distinguish "not a combined tactic" from "field missing".
+            'source_tactic_id_a': self.source_tactic_id_a,
+            'source_tactic_id_b': self.source_tactic_id_b,
+        }
+        if self.card_id_b is not None:
+            data['card_id_b'] = self.card_id_b
+            data['card_type_b'] = self.card_type_b
+        if self.suit_b is not None:
+            data['suit_b'] = self.suit_b
+        if self.value_a is not None:
+            data['value_a'] = self.value_a
+        if self.value_b is not None:
+            data['value_b'] = self.value_b
+        return data
+
+
 class GameResult(db.Model):
     """Persisted record of a finished game for statistics and ranking."""
     id = db.Column(db.Integer, primary_key=True)
@@ -561,7 +702,7 @@ class GameResult(db.Model):
     stake = db.Column(db.Integer, nullable=False)  # The gold stake / point threshold
     gold_awarded = db.Column(db.Integer, nullable=False)  # Gold given to winner (2 × stake)
     rounds_played = db.Column(db.Integer, nullable=False)
-    finished_at = db.Column(db.DateTime, default=datetime.utcnow)
+    finished_at = db.Column(db.DateTime, default=_utcnow)
 
     def serialize(self):
         return {
@@ -577,4 +718,556 @@ class GameResult(db.Model):
             'gold_awarded': self.gold_awarded,
             'rounds_played': self.rounds_played,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
+        }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# v2.0 Models: Collection, Kingdom, Lands
+# ──────────────────────────────────────────────────────────────────────────────
+
+class CollectionCard(db.Model):
+    """A single card copy in a user's persistent card collection."""
+    __tablename__ = 'collection_card'
+
+    id        = db.Column(db.Integer, primary_key=True)
+    user_id   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    suit      = db.Column(db.String(10), nullable=False)   # Hearts/Diamonds/Clubs/Spades
+    rank      = db.Column(db.String(5),  nullable=False)   # '7'..'A'
+    value     = db.Column(db.Integer,    nullable=False)
+    locked    = db.Column(db.Boolean,    nullable=False, default=False)
+    lock_type = db.Column(db.String(30), nullable=True)    # e.g. 'conquer_figure', 'defence_move'
+    lock_ref_id = db.Column(db.Integer,  nullable=True)    # FK to config element using this card
+
+    user = db.relationship('User', backref=db.backref('collection_cards', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('ix_collection_card_user_suit_rank', 'user_id', 'suit', 'rank'),
+    )
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'suit': self.suit,
+            'rank': self.rank,
+            'value': self.value,
+            'locked': self.locked,
+            'lock_type': self.lock_type,
+            'lock_ref_id': self.lock_ref_id,
+        }
+
+
+class Land(db.Model):
+    """A single hex tile on the kingdom map."""
+    __tablename__ = 'land'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    col              = db.Column(db.Integer, nullable=False)
+    row              = db.Column(db.Integer, nullable=False)
+    tier             = db.Column(db.Integer, nullable=False)   # 1..KINGDOM_TIER_COUNT
+    gold_rate        = db.Column(db.Float,   nullable=False)   # gold per hour
+    suit_bonus_suit  = db.Column(db.String(10), nullable=False)
+    suit_bonus_value = db.Column(db.Integer, nullable=False)
+    owner_user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    kingdom_id       = db.Column(db.Integer, db.ForeignKey('kingdom.id'), nullable=True, index=True)
+    owned_since      = db.Column(db.DateTime, nullable=True)
+    conquer_cooldown_until = db.Column(db.DateTime, nullable=True)
+    defence_config_id = db.Column(db.Integer, db.ForeignKey('land_config.id',
+                                  use_alter=True, name='fk_land_defence_config'),
+                                  nullable=True)
+    ai_template_index = db.Column(db.Integer, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('col', 'row', name='uq_land_col_row'),
+    )
+
+    owner = db.relationship('User', backref=db.backref('owned_lands', lazy='dynamic'),
+                            foreign_keys=[owner_user_id])
+    kingdom = db.relationship('Kingdom', foreign_keys=[kingdom_id],
+                              back_populates='lands', lazy=True)
+
+    def serialize(self):
+        owner_data = None
+        if self.owner_user_id:
+            owner_data = {
+                'user_id': self.owner_user_id,
+                'username': self.owner.username if self.owner else None,
+                'owned_since': self.owned_since.isoformat() if self.owned_since else None,
+            }
+        # Resolve AI name from the deterministic defence generator when unowned.
+        ai_name = None
+        if not self.owner_user_id:
+            from ai.defence.generator import get_ai_defence_template_for_land
+            ai_name = get_ai_defence_template_for_land(self).get('ai_name')
+        return {
+            'id': self.id,
+            'col': self.col,
+            'row': self.row,
+            'tier': self.tier,
+            'gold_rate': self.gold_rate,
+            'suit_bonus_suit': self.suit_bonus_suit,
+            'suit_bonus_value': self.suit_bonus_value,
+            'owner': owner_data,
+            'kingdom_id': self.kingdom_id,
+            'conquer_cooldown_until': (
+                self.conquer_cooldown_until.isoformat()
+                if self.conquer_cooldown_until else None
+            ),
+            'ai_name': ai_name,
+            'defence_config_id': self.defence_config_id,
+            'ai_template_index': self.ai_template_index,
+        }
+
+
+class Kingdom(db.Model):
+    """Persistent configuration for one connected owned-land kingdom."""
+    __tablename__ = 'kingdom'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    owner_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    name          = db.Column(db.String(80), nullable=True)
+    badge_key     = db.Column(db.String(80), nullable=False)
+    border_key    = db.Column(db.String(80), nullable=False)
+    surface_key   = db.Column(db.String(80), nullable=False)
+    # Owner color (gold-purchasable) and kingdom sigil (achievement-only)
+    # are cosmetic axes added in the kingdom cosmetics polish pass.  They
+    # default to the free entries; nullable + server_default lets existing
+    # rows hydrate without an offline migration.
+    color_key     = db.Column(db.String(80), nullable=False,
+                              default='color_royal_gold',
+                              server_default='color_royal_gold')
+    sigil_key     = db.Column(db.String(80), nullable=False,
+                              default='sigil_none',
+                              server_default='sigil_none')
+    shield_until  = db.Column(db.DateTime, nullable=True)
+    # Permanent progression: experience is cumulative XP; level is derived
+    # from experience and cached for fast reads (kept in sync via
+    # kingdom_service.award_kingdom_xp).  skill_points_granted = level *
+    # KINGDOM_SKILL_POINTS_PER_LEVEL.
+    level                    = db.Column(db.Integer, nullable=False, default=1, server_default='1')
+    experience               = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    skill_points_granted     = db.Column(db.Integer, nullable=False, default=3, server_default='3')
+    # Per-kingdom gold vault: pending_gold accrues from owned lands and is
+    # capped by the gold_vault skill effect.  last_gold_collection_at marks
+    # the last time accrual was advanced or collected.
+    pending_gold             = db.Column(db.Float, nullable=False, default=0.0, server_default='0')
+    last_gold_collection_at  = db.Column(db.DateTime, nullable=True)
+    # Per-kingdom booster production.  Each booster type stores at most one
+    # pending pack; collection transfers it to the owning user's collection and
+    # starts the next production cycle from the collection timestamp.
+    pending_main_boosters             = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_main_booster_collection_at   = db.Column(db.DateTime, nullable=True)
+    pending_side_boosters             = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_side_booster_collection_at   = db.Column(db.DateTime, nullable=True)
+    pending_maps                      = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_maps_collection_at           = db.Column(db.DateTime, nullable=True)
+    created_at    = db.Column(db.DateTime, default=_utcnow)
+    updated_at    = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
+
+    owner = db.relationship('User', foreign_keys=[owner_user_id])
+    lands = db.relationship('Land', back_populates='kingdom',
+                            foreign_keys='Land.kingdom_id', lazy='dynamic')
+
+    def serialize_style(self):
+        return {
+            'badge_key': self.badge_key,
+            'border_key': self.border_key,
+            'surface_key': self.surface_key,
+            'color_key': self.color_key or 'color_royal_gold',
+            'sigil_key': self.sigil_key or 'sigil_none',
+        }
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'owner_user_id': self.owner_user_id,
+            'name': self.name or f'Kingdom #{self.id}',
+            'badge_key': self.badge_key,
+            'border_key': self.border_key,
+            'surface_key': self.surface_key,
+            'color_key': self.color_key or 'color_royal_gold',
+            'sigil_key': self.sigil_key or 'sigil_none',
+            'shield_until': self.shield_until.isoformat() if self.shield_until else None,
+            'level': self.level,
+            'experience': self.experience,
+            'skill_points_granted': self.skill_points_granted,
+            'pending_gold': float(self.pending_gold or 0.0),
+            'last_gold_collection_at': (
+                self.last_gold_collection_at.isoformat()
+                if self.last_gold_collection_at else None
+            ),
+            'pending_main_boosters': int(self.pending_main_boosters or 0),
+            'last_main_booster_collection_at': (
+                self.last_main_booster_collection_at.isoformat()
+                if self.last_main_booster_collection_at else None
+            ),
+            'pending_side_boosters': int(self.pending_side_boosters or 0),
+            'last_side_booster_collection_at': (
+                self.last_side_booster_collection_at.isoformat()
+                if self.last_side_booster_collection_at else None
+            ),
+            'pending_maps': int(self.pending_maps or 0),
+            'last_maps_collection_at': (
+                self.last_maps_collection_at.isoformat()
+                if self.last_maps_collection_at else None
+            ),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class LandConfig(db.Model):
+    """A conquer or defence configuration (figures, moves, modifiers, spells)."""
+    __tablename__ = 'land_config'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    user_id       = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    config_type   = db.Column(db.String(20), nullable=False)  # 'conquer' | 'defence'
+    status        = db.Column(db.String(12), nullable=False, default='active', index=True)  # active|draft|archived
+    base_config_id = db.Column(db.Integer, db.ForeignKey('land_config.id'), nullable=True)
+    version       = db.Column(db.Integer, nullable=False, default=1)
+    land_id       = db.Column(db.Integer, db.ForeignKey('land.id',
+                              use_alter=True, name='fk_land_config_land'),
+                              nullable=True)  # defence → which land; conquer → NULL
+    # Battle modifier (JSON): {'type': 'Blitzkrieg'|'Peasant War'|'Civil War'}
+    battle_modifier      = db.Column(db.JSON, nullable=True)
+    modifier_card_ids    = db.Column(db.JSON, nullable=True)  # [collection_card.id, ...]
+    # Battle figure(s) — defence only
+    battle_figure_id     = db.Column(db.Integer,
+                                     db.ForeignKey('land_config_figure.id',
+                                                   use_alter=True,
+                                                   name='fk_lc_battle_fig'),
+                                     nullable=True)
+    battle_figure_id_2   = db.Column(db.Integer,
+                                     db.ForeignKey('land_config_figure.id',
+                                                   use_alter=True,
+                                                   name='fk_lc_battle_fig2'),
+                                     nullable=True)  # civil war
+    # Spell — defence only (alternative to battle figure)
+    spell_name           = db.Column(db.String(50), nullable=True)   # 'health_boost'|'poison'
+    spell_target_figure_id = db.Column(db.Integer, nullable=True)    # health boost target
+    spell_card_ids       = db.Column(db.JSON, nullable=True)         # [collection_card.id, ...]
+    # ── Prelude spell (conquer & defence) ───────────────────────────
+    prelude_spell_name       = db.Column(db.String(50), nullable=True)
+    prelude_spell_data       = db.Column(db.JSON, nullable=True)     # e.g. target info
+    prelude_spell_card_ids   = db.Column(db.JSON, nullable=True)     # [collection_card.id, ...]
+    # ── Counter spell (defence only — alternative to battle figure) ─
+    counter_spell_name           = db.Column(db.String(50), nullable=True)
+    counter_spell_data           = db.Column(db.JSON, nullable=True)
+    counter_spell_card_ids       = db.Column(db.JSON, nullable=True)
+    counter_spell_target_figure_id = db.Column(db.Integer, nullable=True)
+    # Auto-gambling — defence only
+    auto_gamble          = db.Column(db.Boolean, nullable=False, default=False)
+    auto_gamble_threshold = db.Column(db.Integer, nullable=False, default=10)
+    created_at           = db.Column(db.DateTime, default=_utcnow)
+    updated_at           = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
+
+    user = db.relationship('User', backref=db.backref('land_configs', lazy='dynamic'))
+    figures = db.relationship('LandConfigFigure',
+                              backref='config',
+                              lazy=True,
+                              foreign_keys='LandConfigFigure.config_id')
+    battle_moves = db.relationship('LandConfigBattleMove',
+                                   backref='config',
+                                   lazy=True,
+                                   foreign_keys='LandConfigBattleMove.config_id')
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'config_type': self.config_type,
+            'status': self.status,
+            'base_config_id': self.base_config_id,
+            'version': self.version,
+            'land_id': self.land_id,
+            'battle_modifier': self.battle_modifier,
+            'modifier_card_ids': self.modifier_card_ids,
+            'battle_figure_id': self.battle_figure_id,
+            'battle_figure_id_2': self.battle_figure_id_2,
+            'spell_name': self.spell_name,
+            'spell_target_figure_id': self.spell_target_figure_id,
+            'spell_card_ids': self.spell_card_ids,
+            'prelude_spell_name': self.prelude_spell_name,
+            'prelude_spell_data': self.prelude_spell_data,
+            'prelude_spell_card_ids': self.prelude_spell_card_ids,
+            'counter_spell_name': self.counter_spell_name,
+            'counter_spell_data': self.counter_spell_data,
+            'counter_spell_card_ids': self.counter_spell_card_ids,
+            'counter_spell_target_figure_id': self.counter_spell_target_figure_id,
+            'auto_gamble': self.auto_gamble,
+            'auto_gamble_threshold': self.auto_gamble_threshold,
+            'figures': [f.serialize() for f in self.figures],
+            'battle_moves': [m.serialize() for m in self.battle_moves],
+        }
+
+
+class LandConfigFigure(db.Model):
+    """A figure built in a conquer or defence configuration."""
+    __tablename__ = 'land_config_figure'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    config_id   = db.Column(db.Integer, db.ForeignKey('land_config.id'), nullable=False, index=True)
+    family_name = db.Column(db.String(50), nullable=False)
+    name        = db.Column(db.String(50), nullable=False)
+    suit        = db.Column(db.String(10), nullable=False)
+    color       = db.Column(db.String(10), nullable=False)   # 'offensive'|'defensive'
+    field       = db.Column(db.String(10), nullable=False)   # 'castle'|'village'|'military'
+    card_ids    = db.Column(db.JSON, nullable=False)          # [collection_card.id, ...]
+    card_roles  = db.Column(db.JSON, nullable=False)          # ['key','key','number'] etc.
+    produces    = db.Column(db.JSON, nullable=True)           # Resources produced (same as Figure)
+    requires    = db.Column(db.JSON, nullable=True)           # Resources required (same as Figure)
+    description         = db.Column(db.String(255), nullable=True)
+    upgrade_family_name = db.Column(db.String(50), nullable=True)
+    checkmate           = db.Column(db.Boolean, default=False, nullable=False)
+    cannot_be_blocked   = db.Column(db.Boolean, default=False, nullable=False)
+    rest_after_attack   = db.Column(db.Boolean, default=False, nullable=False)
+
+    def serialize(self):
+        card_specs = []
+        for cid in (self.card_ids or []):
+            cc = db.session.get(CollectionCard, cid)
+            card_specs.append(
+                {'rank': cc.rank, 'suit': cc.suit, 'value': cc.value} if cc else None
+            )
+        return {
+            'id': self.id,
+            'config_id': self.config_id,
+            'family_name': self.family_name,
+            'name': self.name,
+            'suit': self.suit,
+            'color': self.color,
+            'field': self.field,
+            'card_ids': self.card_ids,
+            'card_roles': self.card_roles,
+            'card_specs': card_specs,
+            'produces': self.produces or {},
+            'requires': self.requires or {},
+            'description': self.description or '',
+            'upgrade_family_name': self.upgrade_family_name,
+            'checkmate': self.checkmate,
+            'cannot_be_blocked': self.cannot_be_blocked,
+            'rest_after_attack': self.rest_after_attack,
+        }
+
+
+class LandConfigBattleMove(db.Model):
+    """A battle move purchased in a conquer or defence configuration."""
+    __tablename__ = 'land_config_battle_move'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    config_id    = db.Column(db.Integer, db.ForeignKey('land_config.id'), nullable=False, index=True)
+    family_name  = db.Column(db.String(50), nullable=False)
+    card_id      = db.Column(db.Integer, nullable=False)      # collection_card.id
+    suit         = db.Column(db.String(10), nullable=False)
+    rank         = db.Column(db.String(5),  nullable=False)
+    value        = db.Column(db.Integer, nullable=False)
+    round_index  = db.Column(db.Integer, nullable=False)      # 0, 1, 2
+    call_figure_id = db.Column(db.Integer,
+                               db.ForeignKey('land_config_figure.id'), nullable=True)
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'config_id': self.config_id,
+            'family_name': self.family_name,
+            'card_id': self.card_id,
+            'suit': self.suit,
+            'rank': self.rank,
+            'value': self.value,
+            'round_index': self.round_index,
+            'call_figure_id': self.call_figure_id,
+        }
+
+
+class LandAttackLog(db.Model):
+    """History of land conquer battles."""
+    __tablename__ = 'land_attack_log'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    land_id          = db.Column(db.Integer, db.ForeignKey('land.id'), nullable=False)
+    attacker_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    defender_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)  # NULL for AI
+    result           = db.Column(db.String(15), nullable=False)  # 'attacker_won'|'defender_won'
+    card_won_suit    = db.Column(db.String(10), nullable=True)
+    card_won_rank    = db.Column(db.String(5),  nullable=True)
+    card_lost_suit   = db.Column(db.String(10), nullable=True)
+    card_lost_rank   = db.Column(db.String(5),  nullable=True)
+    kingdom_deleted_id = db.Column(db.Integer, nullable=True)
+    kingdom_deleted_name = db.Column(db.String(80), nullable=True)
+    seen_by_attacker = db.Column(db.Boolean, nullable=False, default=False)
+    seen_by_defender = db.Column(db.Boolean, nullable=False, default=False)
+    timestamp        = db.Column(db.DateTime, default=_utcnow)
+
+    land = db.relationship('Land', backref=db.backref('attack_logs', lazy='dynamic'))
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'land_id': self.land_id,
+            'attacker_user_id': self.attacker_user_id,
+            'defender_user_id': self.defender_user_id,
+            'result': self.result,
+            'card_won_suit': self.card_won_suit,
+            'card_won_rank': self.card_won_rank,
+            'card_lost_suit': self.card_lost_suit,
+            'card_lost_rank': self.card_lost_rank,
+            'kingdom_deleted_id': self.kingdom_deleted_id,
+            'kingdom_deleted_name': self.kingdom_deleted_name,
+            'seen_by_attacker': self.seen_by_attacker,
+            'seen_by_defender': self.seen_by_defender,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+        }
+
+
+class KingdomLootEvent(db.Model):
+    """Pending / acknowledged card-loot event for the kingdom UI."""
+    __tablename__ = 'kingdom_loot_event'
+
+    id                 = db.Column(db.Integer, primary_key=True)
+    user_id            = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    kingdom_id         = db.Column(db.Integer, nullable=True, index=True)
+    land_id            = db.Column(db.Integer, db.ForeignKey('land.id'), nullable=True, index=True)
+    attack_log_id      = db.Column(db.Integer, db.ForeignKey('land_attack_log.id'), nullable=True, index=True)
+    direction          = db.Column(db.String(10), nullable=False, index=True)  # gained|lost
+    source             = db.Column(db.String(30), nullable=True)               # attacker_win|defender_win
+    counterparty_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    cards              = db.Column(db.JSON, nullable=False, default=list)
+    collected          = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    seen               = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    created_at         = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+    counterparty = db.relationship('User', foreign_keys=[counterparty_user_id])
+    land = db.relationship('Land', foreign_keys=[land_id])
+    attack_log = db.relationship('LandAttackLog', foreign_keys=[attack_log_id])
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'source': 'kingdom_loot_event',
+            'user_id': self.user_id,
+            'kingdom_id': self.kingdom_id,
+            'land_id': self.land_id,
+            'attack_log_id': self.attack_log_id,
+            'direction': self.direction,
+            'event_source': self.source,
+            'counterparty_user_id': self.counterparty_user_id,
+            'counterparty_username': self.counterparty.username if self.counterparty else None,
+            'cards': self.cards or [],
+            'card_count': len(self.cards or []),
+            'collected': self.collected,
+            'seen': self.seen,
+            'timestamp': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class KingdomMessage(db.Model):
+    """User-to-user messages attached to the kingdom layer."""
+    __tablename__ = 'kingdom_message'
+
+    id                = db.Column(db.Integer, primary_key=True)
+    sender_user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    recipient_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    land_id           = db.Column(db.Integer, db.ForeignKey('land.id'), nullable=True)
+    message           = db.Column(db.String(500), nullable=False)
+    seen_by_recipient = db.Column(db.Boolean, nullable=False, default=False)
+    timestamp         = db.Column(db.DateTime, default=_utcnow)
+
+    sender = db.relationship('User', foreign_keys=[sender_user_id])
+    recipient = db.relationship('User', foreign_keys=[recipient_user_id])
+    land = db.relationship('Land', foreign_keys=[land_id])
+
+    def serialize(self):
+        land = self.land
+        return {
+            'id': self.id,
+            'sender_user_id': self.sender_user_id,
+            'recipient_user_id': self.recipient_user_id,
+            'sender_username': self.sender.username if self.sender else None,
+            'recipient_username': self.recipient.username if self.recipient else None,
+            'land_id': self.land_id,
+            'land_col': land.col if land else None,
+            'land_row': land.row if land else None,
+            'message': self.message,
+            'seen_by_recipient': self.seen_by_recipient,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+        }
+
+
+class KingdomCosmeticUnlock(db.Model):
+    """Permanent cosmetic unlock scoped to one persistent kingdom."""
+    __tablename__ = 'kingdom_cosmetic_unlock'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    kingdom_id   = db.Column(db.Integer, db.ForeignKey('kingdom.id'), nullable=False, index=True)
+    cosmetic_key = db.Column(db.String(80), nullable=False)
+    unlocked_at  = db.Column(db.DateTime, default=_utcnow)
+
+    kingdom = db.relationship('Kingdom', foreign_keys=[kingdom_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('kingdom_id', 'cosmetic_key', name='uq_kingdom_cosmetic_unlock'),
+    )
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'kingdom_id': self.kingdom_id,
+            'cosmetic_key': self.cosmetic_key,
+            'unlocked_at': self.unlocked_at.isoformat() if self.unlocked_at else None,
+        }
+
+
+class KingdomSkillAllocation(db.Model):
+    """Allocated kingdom skill level scoped to one persistent kingdom."""
+    __tablename__ = 'kingdom_skill_allocation'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    kingdom_id       = db.Column(db.Integer, db.ForeignKey('kingdom.id'), nullable=False, index=True)
+    skill_key        = db.Column(db.String(80), nullable=False)
+    level            = db.Column(db.Integer, nullable=False, default=0)
+    last_upgraded_at = db.Column(db.DateTime, nullable=True)
+
+    kingdom = db.relationship('Kingdom', foreign_keys=[kingdom_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('kingdom_id', 'skill_key', name='uq_kingdom_skill_allocation'),
+    )
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'kingdom_id': self.kingdom_id,
+            'skill_key': self.skill_key,
+            'level': self.level,
+            'last_upgraded_at': (
+                self.last_upgraded_at.isoformat() if self.last_upgraded_at else None
+            ),
+        }
+
+
+class KingdomNotification(db.Model):
+    """User-visible kingdom event (skill downgrade, dissolution, shield expiry)."""
+    __tablename__ = 'kingdom_notification'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    kind        = db.Column(db.String(40), nullable=False, index=True)
+    kingdom_id  = db.Column(db.Integer, nullable=True)
+    payload     = db.Column(db.JSON, nullable=True)
+    created_at  = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    seen        = db.Column(db.Boolean, nullable=False, default=False, index=True)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'source': 'kingdom_notification',
+            'kind': self.kind,
+            'kingdom_id': self.kingdom_id,
+            'payload': self.payload or {},
+            'seen': self.seen,
+            'timestamp': self.created_at.isoformat() if self.created_at else None,
         }

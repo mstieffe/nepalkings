@@ -2,7 +2,7 @@
 # See LICENSE file in the project root for full license information.
 import pygame
 from config import settings
-#from Game import Game
+from utils import http_compat as _http
 
 class State:
     def __init__(self):
@@ -17,6 +17,9 @@ class State:
         
         # Track pending spell cast that requires target selection
         self.pending_spell_cast = None  # Dict: {'spell': Spell, 'real_cards': List[Card]}
+
+        # Conquer startup prelude target selection (server-side pending spell)
+        self.pending_conquer_prelude_target = None
 
         # ── Badge tracking (unread indicators) ──────────────────────
         self._known_game_ids = None        # None = not yet initialised
@@ -44,6 +47,14 @@ class State:
             self.message_lines.append((line, current_time))  # Store the line and its disappearance time
 
     def update(self):
+        # Check for expired auth session → redirect to login
+        if _http.is_session_expired() and self.screen != 'login':
+            _http.clear_session_expired()
+            self.user_dict = None
+            self.game = None
+            self.screen = 'login'
+            self.set_msg('Session expired, please log in again')
+
         if self.message_lines:
             current_time = pygame.time.get_ticks()  # Record the current time
 

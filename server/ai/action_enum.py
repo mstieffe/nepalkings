@@ -7,6 +7,7 @@ Determines the current game phase and lists all legal actions
 the AI can take, formatted for the LLM to choose from.
 """
 import logging
+from ai.card_change_strategy import summarize_main_change, summarize_side_change
 from ai.figure_recipes import find_buildable_figures
 
 logger = logging.getLogger('nepalkings.ai.actions')
@@ -22,14 +23,234 @@ def _has_active_infinite_hammer(game_dict, ai_player):
     return False
 
 
-def _est_power(fig):
-    """Estimate figure power (sum of card values, castle=15)."""
+def _modifier_caster_id(modifier):
+    """Best-effort caster ID extraction from battle modifier metadata."""
+    for key in ('caster_id', 'caster_player_id', 'player_id'):
+        raw = modifier.get(key)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _has_own_war_modifier(game_dict, ai_player):
+    """True if AI currently has its own Civil War/Peasant War battle modifier active."""
+    ai_id = ai_player.get('id')
+    if ai_id is None:
+        return False
+
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    for mod in modifiers:
+        if mod.get('type') not in ('Civil War', 'Peasant War'):
+            continue
+        if _modifier_caster_id(mod) == ai_id:
+            return True
+    return False
+
+
+def _enum_forced_counter_advance(game_dict, ai_player, action_id):
+    """Enumerate legal counter-advance actions for the defender side."""
+    actions = []
+
+    # Counter-advance window: opponent has advanced, it's AI turn, battle not yet confirmed.
+    if not game_dict.get('advancing_figure_id'):
+        return actions, action_id
+    if game_dict.get('advancing_player_id') == ai_player.get('id'):
+        return actions, action_id
+    if game_dict.get('turn_player_id') != ai_player.get('id'):
+        return actions, action_id
+    if game_dict.get('battle_confirmed'):
+        return actions, action_id
+
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+    # Blitzkrieg and unblockable advances cannot be counter-advanced.
+    if has_blitzkrieg:
+        return actions, action_id
+
+    advancing_fig_id = game_dict.get('advancing_figure_id')
+    advancing_fig = None
+    for p in game_dict.get('players', []):
+        for f in p.get('figures', []):
+            if f.get('id') == advancing_fig_id:
+                advancing_fig = f
+                break
+        if advancing_fig:
+            break
+    if advancing_fig and advancing_fig.get('cannot_be_blocked'):
+        return actions, action_id
+
+    # Non-Civil-War: once defender is selected, no more counter-advance choices.
+    if not has_civil_war and game_dict.get('defending_figure_id'):
+        return actions, action_id
+
+    # Civil War second pick handling.
+    required_color = None
+    selected_ids = set()
+    if has_civil_war:
+        d1 = game_dict.get('defending_figure_id')
+        d2 = game_dict.get('defending_figure_id_2')
+        if d1 and d2:
+            return actions, action_id
+        if d1 and not d2:
+            selected_ids.add(d1)
+            first = next((f for f in ai_player.get('figures', []) if f.get('id') == d1), None)
+            required_color = first.get('color') if first else None
+
+    resting_ids = set(game_dict.get('resting_figure_ids', []))
+
+    # Skip figures in resource deficit (server rejects counter-advance for them).
+    from ai.game_state import compute_resource_totals as _crt
+    eff_prod, tot_req = _crt(ai_player.get('figures', []))
+
+    for fig in ai_player.get('figures', []):
+        fig_id = fig.get('id')
+        if fig_id in selected_ids:
+            continue
+        if fig_id in resting_ids:
+            continue
+
+        # Peasant/Civil War allow only village defenders.
+        if (has_peasant_war or has_civil_war) and fig.get('field') != 'village':
+            continue
+        if required_color and fig.get('color') != required_color:
+            continue
+
+        reqs = fig.get('requires') or {}
+        in_deficit = any(tot_req.get(res, 0) > eff_prod.get(res, 0) for res in reqs)
+        if in_deficit:
+            continue
+
+        # Skip figures that cannot participate in battle as attackers or defenders
+        if fig.get('cannot_attack'):
+            continue
+        if fig.get('cannot_defend'):
+            continue
+
+        # Skip must_be_attacked figures (e.g. Fortress) — the opponent would
+        # be forced to select them as defender anyway, so counter-advancing
+        # with them wastes a turn.  Collect them as fallback only.
+        if fig.get('must_be_attacked'):
+            continue
+
+        power = _est_figure_power(fig, ai_player.get('figures', []))
+        if required_color:
+            desc = (
+                f"COUNTER-ADVANCE (Civil War second pick): {fig.get('name', '?')} "
+                f"(power≈{power}, color={required_color})"
+            )
+        else:
+            desc = f"COUNTER-ADVANCE now: {fig.get('name', '?')} (power≈{power})"
+
+        actions.append({
+            'id': action_id,
+            'type': 'advance_figure',
+            'description': desc,
+            'params': {'figure_id': fig_id},
+        })
+        action_id += 1
+
+    return actions, action_id
+
+
+def _find_figure_by_id(game_dict, figure_id):
+    """Find a serialized figure in game_dict by ID."""
+    if figure_id is None:
+        return None
+    for player in game_dict.get('players', []):
+        for fig in player.get('figures', []):
+            if fig.get('id') == figure_id:
+                return fig
+    return None
+
+
+def _selectable_defender_targets_if_ai_passes(game_dict, ai_player):
+    """Figures the invader could choose if AI does not counter-advance now."""
+    targets = [f for f in ai_player.get('figures', [])
+               if not f.get('cannot_be_targeted') and not f.get('cannot_defend')]
+
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    has_peasant_war = any(m.get('type') == 'Peasant War' for m in modifiers)
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+
+    if has_peasant_war:
+        targets = [f for f in targets if f.get('field') == 'village']
+
+    if has_civil_war:
+        advancing_fig = _find_figure_by_id(game_dict, game_dict.get('advancing_figure_id'))
+        required_color = advancing_fig.get('color') if advancing_fig else None
+        targets = [f for f in targets if f.get('field') == 'village']
+        if required_color:
+            targets = [f for f in targets if f.get('color') == required_color]
+
+    # Match server behavior: checkmate figures are selectable only when no
+    # non-checkmate alternative exists.
+    non_checkmate = [f for f in targets if not f.get('checkmate')]
+    if non_checkmate:
+        targets = non_checkmate
+
+    # must_be_attacked: if any target has this flag, invader must pick one of those.
+    must_attack = [f for f in targets if f.get('must_be_attacked')]
+    if must_attack:
+        targets = must_attack
+
+    return targets
+
+
+def _should_force_defender_counter_advance(game_dict, ai_player):
+    """Return (force, reason) for defender-side counter-advance policy."""
+    targets = _selectable_defender_targets_if_ai_passes(game_dict, ai_player)
+
+    # If the invader effectively has no choice, passing is less risky.
+    if len(targets) <= 1:
+        return False, 'single_target'
+
+    # Resource-deficit figures are especially vulnerable because being selected
+    # can immediately trigger auto-loss on the server.
+    from ai.game_state import compute_resource_totals as _crt
+    eff_prod, tot_req = _crt(ai_player.get('figures', []))
+    for fig in targets:
+        reqs = fig.get('requires') or {}
+        in_deficit = any(tot_req.get(res, 0) > eff_prod.get(res, 0) for res in reqs)
+        if in_deficit:
+            return True, 'deficit_target_exposed'
+
+    # If invader has multiple defender options and power spread is large,
+    # they can pick the weak one. Force counter-advance in that case.
+    ai_figs = ai_player.get('figures', [])
+    powers = [_est_figure_power(f, ai_figs) for f in targets]
+    if powers and (max(powers) - min(powers) >= 4):
+        return True, 'vulnerable_target_spread'
+
+    # Fortress posture is the main exception where spending the turn elsewhere
+    # can be acceptable when no obvious vulnerable target exists.
+    has_fortress = any(f.get('field') == 'castle' for f in ai_player.get('figures', []))
+    if has_fortress:
+        return False, 'fortress_safe_to_pass'
+
+    # Default policy: deny the invader free defender selection control.
+    return True, 'default_prefer_counter_advance'
+
+
+def _est_power(fig, all_figures=None):
+    """Estimate figure power including support bonus (castle=15 base)."""
     if not fig:
         return 0
     if fig.get('field') == 'castle':
-        return 15
-    cards = fig.get('cards_to_figure', [])
-    return sum(c.get('card_value', c.get('value', 0)) for c in cards)
+        base = 15
+    else:
+        cards = fig.get('cards_to_figure', [])
+        base = sum(c.get('card_value', c.get('value', 0)) for c in cards)
+    if all_figures:
+        from ai.game_state import compute_support_bonus
+        base += compute_support_bonus(fig, all_figures)
+    return base
 
 
 def detect_phase(game_dict: dict, ai_player_id: int) -> str:
@@ -60,6 +281,13 @@ def detect_phase(game_dict: dict, ai_player_id: int) -> str:
     if game_dict.get('waiting_for_counter_player_id') == ai_player_id:
         return 'counter_spell'
 
+    # If AI cast a counterable spell and is waiting for opponent response,
+    # it must not take any further normal actions until allow/counter resolves.
+    if (game_dict.get('pending_spell_id') and
+            game_dict.get('waiting_for_counter_player_id') and
+            game_dict.get('waiting_for_counter_player_id') != ai_player_id):
+        return None
+
     # Battle round — AI's turn to play a battle move
     if (game_dict.get('battle_confirmed') and
             game_dict.get('battle_turn_player_id') == ai_player_id):
@@ -81,6 +309,22 @@ def detect_phase(game_dict: dict, ai_player_id: int) -> str:
             return 'battle_shop'
         # Battle is in progress but it's not the AI's battle turn — wait
         return None
+
+    modifiers = game_dict.get('battle_modifier') if isinstance(game_dict.get('battle_modifier'), list) else []
+    has_civil_war = any(m.get('type') == 'Civil War' for m in modifiers)
+    if (game_dict.get('mode') == 'conquer' and has_civil_war and
+            game_dict.get('advancing_figure_id') and
+            not game_dict.get('advancing_figure_id_2') and
+            game_dict.get('advancing_player_id') == ai_player_id and
+            game_dict.get('turn_player_id') == ai_player_id):
+        return 'normal_turn'
+    if (game_dict.get('mode') == 'conquer' and has_civil_war and
+            game_dict.get('advancing_figure_id') and
+            game_dict.get('defending_figure_id') and
+            not game_dict.get('defending_figure_id_2') and
+            game_dict.get('advancing_player_id') != ai_player_id and
+            game_dict.get('turn_player_id') == ai_player_id):
+        return 'normal_turn'
 
     # Battle decision — advancing + defending figures set, AI hasn't decided
     if (game_dict.get('advancing_figure_id') and
@@ -119,7 +363,10 @@ def _all_battle_rounds_done(game_dict: dict, ai_player_id: int) -> bool:
     if not game_dict.get('battle_confirmed'):
         return False
 
-    battle_moves = game_dict.get('battle_moves') or []
+    battle_moves = list(game_dict.get('battle_moves') or [])
+    if (game_dict.get('mode') == 'conquer'
+            and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'):
+        battle_moves = list(game_dict.get('conquer_tactics') or [])
     skipped = game_dict.get('battle_skipped_rounds') or {}
 
     # Get both player IDs
@@ -155,6 +402,14 @@ def enumerate_actions(game_dict: dict, ai_player_id: int, phase: str) -> list:
     elif phase == 'battle_decision':
         return _enum_battle_decision(game_dict, ai_player, opponent)
     elif phase == 'battle_shop':
+        # Conquer tactics-hand games skip the legacy battle_shop buy/confirm
+        # phase: the configured battle moves are already the player's
+        # starting hand, and the server transitions directly to battle_round.
+        # Returning [] here means the AI worker yields/sleeps until the
+        # battle_round phase is enumerable.
+        if (game_dict.get('mode') == 'conquer'
+                and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'):
+            return []
         return _enum_battle_shop(game_dict, ai_player, opponent)
     elif phase == 'battle_round':
         return _enum_battle_round(game_dict, ai_player, opponent)
@@ -189,7 +444,42 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
     from ai.game_state import compute_resource_totals
     current_produces, current_requires = compute_resource_totals(ai_player.get('figures', []))
 
+    # Determine whether the invader is on their last turn and MUST advance.
+    is_invader = (game_dict.get('invader_player_id') == ai_player.get('id'))
+    turns_left = ai_player.get('turns_left', 99)
+    must_advance = is_invader and turns_left <= 1 and not infinite_hammer_active
+
+    # Force counter-advance after own Civil War/Peasant War when legal, so AI
+    # consistently leverages its own tactics spell investment.
+    if not infinite_hammer_active and _has_own_war_modifier(game_dict, ai_player):
+        forced_actions, _next_id = _enum_forced_counter_advance(game_dict, ai_player, action_id)
+        if forced_actions:
+            return forced_actions
+
+    # General defender policy: in most cases, counter-advance is better than
+    # spending the turn and letting the invader choose your defender.
+    if not infinite_hammer_active:
+        counter_actions, next_action_id = _enum_forced_counter_advance(game_dict, ai_player, action_id)
+        if counter_actions:
+            force_counter, reason = _should_force_defender_counter_advance(game_dict, ai_player)
+            if force_counter:
+                return counter_actions
+
+            if reason == 'single_target':
+                suffix = " - Optional: invader has only one practical defender target."
+            elif reason == 'fortress_safe_to_pass':
+                suffix = " - Optional: fortress posture lowers risk if you pass."
+            else:
+                suffix = " - Preferred defensive line: deny invader defender-choice control."
+
+            for action in counter_actions:
+                action['description'] = f"{action['description']}{suffix}"
+
+            actions.extend(counter_actions)
+            action_id = next_action_id
+
     # 1) Build figures
+    # On invader's final turn, only keep instant-charge builds (build+advance).
     buildable = find_buildable_figures(
         ai_player.get('main_hand', []),
         ai_player.get('side_hand', []),
@@ -203,6 +493,9 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
         card_lookup[c['id']] = c
 
     for fig in buildable:
+        if must_advance and not fig.get('recipe', {}).get('special_flags', {}).get('instant_charge', False):
+            continue
+
         recipe = fig['recipe']
         # Show what cards are being consumed so AI can evaluate the trade-off
         card_strs = []
@@ -219,7 +512,7 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
         # Check if building this figure would cause or worsen a deficit
         deficit_warn = _check_build_deficit_impact(
             fig, ai_player.get('figures', []), current_produces, current_requires)
-        
+            
         actions.append({
             'id': action_id,
             'type': 'build_figure',
@@ -276,7 +569,7 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
                     break
             if in_deficit:
                 continue
-            power = _est_figure_power(fig)
+            power = _est_figure_power(fig, ai_player.get('figures', []))
             field = fig.get('field', '?')
             checkmate_warn = " ⚠️ CHECKMATE RISK" if fig.get('checkmate') else ""
             modifier_note = ""
@@ -296,24 +589,64 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
             })
             action_id += 1
 
-    # 3) Cast spells — blocked during Infinite Hammer
-    if not infinite_hammer_active:
+    # If invader must advance but no advanceable figures, offer auto-loss
+    if must_advance:
+        has_advance_action = any(a['type'] == 'advance_figure' for a in actions)
+        if not has_advance_action:
+            actions.append({
+                'id': action_id,
+                'type': 'cannot_advance_loss',
+                'description': ("No figures can advance — automatic loss. "
+                                "You lose 10 points to the opponent."),
+                'params': {},
+            })
+            action_id += 1
+
+    # 3) Cast spells — blocked during Infinite Hammer and when invader must advance
+    if not infinite_hammer_active and not must_advance:
         spell_actions, action_id = _enum_spells(game_dict, ai_player, opponent, action_id)
         actions.extend(spell_actions)
 
-    # 4) Change cards — blocked during Infinite Hammer
-    if not infinite_hammer_active:
+    # 4) Change cards — blocked during Infinite Hammer and when invader must advance
+    if not infinite_hammer_active and not must_advance:
         free_cards = [c for c in ai_player.get('main_hand', [])
                       if not c.get('part_of_figure') and not c.get('part_of_battle_move')]
-        low = sum(1 for c in free_cards if c.get('rank') in ('7', '8'))
-        total_free = len(free_cards)
+        summary = summarize_main_change(free_cards)
+        low = summary.get('low_rank_count', 0)
+        swap_count = summary.get('swap_count', 0)
+        total_free = summary.get('free_count', len(free_cards))
         actions.append({
             'id': action_id,
             'type': 'change_cards',
-            'description': f"Change cards — swap low-value cards for new ones ({low} low-value of {total_free} free cards)",
+            'description': (
+                "Change main cards — swap selected cards for new ones "
+                f"({swap_count} suggested swaps; {low} low-rank of {total_free} free cards)"
+            ),
             'params': {},
         })
         action_id += 1
+
+    # 4b) Change side cards — same blocking rules as main cards.
+    # Only legal when the AI actually holds side cards to swap; side cards are
+    # dealt post-battle, so a fresh duel turn has none and the server would
+    # reject the request.
+    if not infinite_hammer_active and not must_advance:
+        free_side = [c for c in ai_player.get('side_hand', [])
+                     if not c.get('part_of_figure') and not c.get('part_of_battle_move')]
+        if free_side:
+            side_summary = summarize_side_change(free_side)
+            side_swap = side_summary.get('swap_count', 0)
+            side_free = side_summary.get('free_count', len(free_side))
+            actions.append({
+                'id': action_id,
+                'type': 'change_side_cards',
+                'description': (
+                    "Change side cards — swap selected side cards for new ones "
+                    f"({side_swap} suggested swaps of {side_free} free side cards)"
+                ),
+                'params': {},
+            })
+            action_id += 1
 
     # 5) End Infinite Hammer — only available when active
     if infinite_hammer_active:
@@ -347,7 +680,7 @@ def _enum_select_defender(game_dict, ai_player, opponent):
     ai_power = 0
     for fig in ai_player.get('figures', []):
         if fig['id'] == adv_fig_id:
-            ai_power = _est_figure_power(fig)
+            ai_power = _est_figure_power(fig, ai_player.get('figures', []))
             break
 
     # Check battle modifier restrictions on defender selection
@@ -363,12 +696,18 @@ def _enum_select_defender(game_dict, ai_player, opponent):
                 civil_war_color = fig.get('color')
                 break
 
+    checkmate_fallback = []
+    eligible = []
     for fig in opponent.get('figures', []):
         # Skip figures that can't be targeted
         if fig.get('cannot_be_targeted'):
             continue
-        # Skip checkmate figures — the server rejects these
+        # Skip figures that cannot defend
+        if fig.get('cannot_defend'):
+            continue
+        # Checkmate figures are normally skipped; keep as fallback
         if fig.get('checkmate'):
+            checkmate_fallback.append(fig)
             continue
         # Peasant War: only village figures can be selected
         if has_peasant_war and fig.get('field') != 'village':
@@ -379,7 +718,17 @@ def _enum_select_defender(game_dict, ai_player, opponent):
                 continue
             if civil_war_color and fig.get('color') != civil_war_color:
                 continue
-        fig_power = _est_figure_power(fig)
+        eligible.append(fig)
+
+    # Enforce must_be_attacked: if any eligible figure has this flag,
+    # the invader MUST pick one of those (server rejects other choices).
+    must_attack = [f for f in eligible if f.get('must_be_attacked')]
+    if must_attack:
+        eligible = must_attack
+
+    opp_figs = opponent.get('figures', [])
+    for fig in eligible:
+        fig_power = _est_figure_power(fig, opp_figs)
         diff = ai_power - fig_power
         field = fig.get('field', '?')
         abilities = []
@@ -397,16 +746,36 @@ def _enum_select_defender(game_dict, ai_player, opponent):
             'params': {'figure_id': fig['id']},
         })
         action_id += 1
-    
+
+    # Fallback: if no non-checkmate targets, allow checkmate figures
+    if not actions and checkmate_fallback:
+        for fig in checkmate_fallback:
+            fig_power = _est_figure_power(fig, opp_figs)
+            diff = ai_power - fig_power
+            field = fig.get('field', '?')
+            actions.append({
+                'id': action_id,
+                'type': 'select_defender',
+                'description': (f"Attack opponent's {fig['name']} ({field}, power≈{fig_power}, "
+                                f"diff={diff:+d}) [CHECKMATE — exposed!]"),
+                'params': {'figure_id': fig['id']},
+            })
+            action_id += 1
+
     return actions
 
 
-def _est_figure_power(fig):
-    """Quick power estimate: castle=15, else sum of card values."""
+def _est_figure_power(fig, all_figures=None):
+    """Quick power estimate including support bonus (castle=15 base)."""
     if fig.get('field') == 'castle':
-        return 15
-    cards = fig.get('cards_to_figure', [])
-    return sum(c.get('card_value', c.get('value', 0)) for c in cards)
+        base = 15
+    else:
+        cards = fig.get('cards_to_figure', [])
+        base = sum(c.get('card_value', c.get('value', 0)) for c in cards)
+    if all_figures:
+        from ai.game_state import compute_support_bonus
+        base += compute_support_bonus(fig, all_figures)
+    return base
 
 
 def _check_build_deficit_impact(new_fig, existing_figures, current_produces, current_requires):
@@ -447,6 +816,51 @@ def _check_build_deficit_impact(new_fig, existing_figures, current_produces, cur
     return ""
 
 
+def _has_resource_deficit(total_produces, total_requires):
+    """Return True if any resource requirement exceeds production."""
+    for res, need in (total_requires or {}).items():
+        if need > (total_produces or {}).get(res, 0):
+            return True
+    return False
+
+
+def _is_high_impact_build_option(build_option, current_produces, current_requires):
+    """Heuristic gate for high-impact Infinite Hammer follow-up builds."""
+    deficit_warn = _check_build_deficit_impact(
+        build_option,
+        [],
+        current_produces,
+        current_requires,
+    )
+    # Never count builds that create a new deficit chain.
+    if 'CREATES' in deficit_warn:
+        return False
+
+    recipe = build_option.get('recipe') or {}
+    field = recipe.get('field')
+    name = str(build_option.get('name', '')).lower()
+    number_value = int(build_option.get('number_value') or 0)
+
+    produces = build_option.get('produces') or {}
+    total_production = sum(v for v in produces.values() if isinstance(v, (int, float)) and v > 0)
+    if total_production >= 2:
+        return True
+
+    # Premium board-impact families.
+    if any(token in name for token in ('fortress', 'elite', 'temple', 'king')):
+        return True
+
+    # Strong military spike builds.
+    if field == 'military' and number_value >= 9:
+        return True
+
+    # If currently in deficit, a non-deficit producer build is valuable.
+    if _has_resource_deficit(current_produces, current_requires) and total_production > 0:
+        return True
+
+    return False
+
+
 def _enum_battle_decision(game_dict, ai_player, opponent):
     """AI decides to fold or battle, with rich context about the figures involved."""
     # Find the advancing and defending figures
@@ -469,8 +883,8 @@ def _enum_battle_decision(game_dict, ai_player, opponent):
             else:
                 ai_fig = f
 
-    ai_power = _est_power(ai_fig)
-    opp_power = _est_power(opp_fig)
+    ai_power = _est_power(ai_fig, ai_player.get('figures', []))
+    opp_power = _est_power(opp_fig, opponent.get('figures', []))
     ai_fig_name = ai_fig['name'] if ai_fig else '?'
     opp_fig_name = opp_fig['name'] if opp_fig else '?'
 
@@ -509,8 +923,8 @@ def _enum_battle_decision(game_dict, ai_player, opponent):
 
 def _enum_battle_shop(game_dict, ai_player, opponent):
     """
-    AI buys battle moves from hand cards, can gamble/combine, and confirms.
-    Returns buy + gamble + combine + confirm actions.
+    AI buys battle moves from hand cards, can combine, and confirms.
+    Returns buy + combine + confirm actions.
     """
     actions = []
     action_id = 1
@@ -542,7 +956,7 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
             if fig_color != card_color:
                 continue
             # Base figure power
-            power = _est_power(fig)
+            power = _est_power(fig, ai_figures)
             # Healer buff: +4 per same-suit Healer for village figures
             # (Healer buffs are added to base power, so called villagers benefit)
             if target_field == 'village':
@@ -632,46 +1046,9 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
                     })
                     action_id += 1
     
-    # ── Gamble: sacrifice 1 weak move → draw 2 random (max 3 per battle) ──
-    gamble_counts = game_dict.get('battle_gamble_counts') or {}
-    already_gambled = gamble_counts.get(str(ai_player['id']), 0) >= 3
-    if ai_moves and not already_gambled:
-        for move in ai_moves:
-            if move.get('family_name') == 'Double Dagger':
-                continue  # Don't gamble double daggers
-            move_val = move.get('value', 0)
-            move_name = move.get('family_name', move.get('name', '?'))
-            # Flag unmatched Call moves as prime gamble targets
-            family = move.get('family_name', '')
-            if family in ('Call King', 'Call Military', 'Call Villager'):
-                rank_map = {'Call King': 'K', 'Call Military': 'A', 'Call Villager': 'J'}
-                rank = rank_map.get(family, '')
-                card_suit = move.get('suit', '')
-                eff_power, fig_name = _call_power(rank, card_suit, family)
-                if fig_name:
-                    desc = f"Gamble: sacrifice {move_name}(calls {fig_name}, eff_power≈{eff_power}) → draw 2 random. BAD gamble — keep this Call!"
-                else:
-                    base = {'K': 4, 'A': 3, 'J': 1}.get(rank, 0)
-                    desc = f"Gamble: sacrifice {move_name}(NO matching figure, value={base}) → draw 2 random. GREAT gamble target!"
-            elif move_val >= 9:
-                desc = f"Gamble: sacrifice {move_name}(value={move_val}) → draw 2 random. Risky — {move_val} is already strong."
-            else:
-                desc = f"Gamble: sacrifice {move_name}(value={move_val}) → draw 2 random. Decent gamble — low value card."
-            actions.append({
-                'id': action_id,
-                'type': 'gamble_battle_move',
-                'description': desc,
-                'params': {
-                    'battle_move_id': move['id'],
-                },
-            })
-            action_id += 1
-    
     # Only offer confirm when the AI has 3+ moves (server requires exactly 3).
-    # If AI can't reach 3 (no buy, no gamble), offer confirm as deadlock escape.
+    # If AI can't reach 3 (no buy), offer confirm as deadlock escape.
     has_buy_actions = any(a['type'] == 'buy_battle_move' for a in actions)
-    has_gamble_actions = any(a['type'] == 'gamble_battle_move' for a in actions)
-    has_combine_actions = any(a['type'] == 'combine_battle_moves' for a in actions)
     if num_moves >= 3:
         actions.append({
             'id': action_id,
@@ -680,7 +1057,7 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
             'params': {},
         })
         action_id += 1
-    elif not has_buy_actions and not has_gamble_actions:
+    elif not has_buy_actions:
         # True deadlock — no way to reach 3 moves, offer confirm as escape hatch
         actions.append({
             'id': action_id,
@@ -689,45 +1066,252 @@ def _enum_battle_shop(game_dict, ai_player, opponent):
             'params': {},
         })
         action_id += 1
-    else:
-        # < 3 moves but CAN still buy/gamble — tell LLM it must reach 3
-        if has_gamble_actions and not has_buy_actions:
-            # Mark gamble actions as mandatory
-            for a in actions:
-                if a['type'] == 'gamble_battle_move':
-                    a['description'] = "⚠️ MUST GAMBLE to reach 3 moves! " + a['description']
     
     return actions
 
 
+_CALL_FIELD_MAP = {
+    'Call Villager': 'village',
+    'Call Military': 'military',
+    'Call King': 'castle',
+}
+
+_RED_SUITS = {'Hearts', 'Diamonds'}
+_BLACK_SUITS = {'Clubs', 'Spades'}
+
+
+def _figure_power_from_dict(fig, all_figures=None):
+    """Compute power including support bonus from a serialized figure dict."""
+    if fig.get('field') == 'castle':
+        base = 15
+    else:
+        cards = fig.get('cards', fig.get('cards_to_figure', []))
+        base = sum(c.get('value', 0) for c in cards)
+    if all_figures:
+        from ai.game_state import compute_support_bonus
+        base += compute_support_bonus(fig, all_figures)
+    return base
+
+
+def _get_player_gamble_state(game_dict, player_id):
+    """Return (used_count, used_rounds_set) for a player's battle gambles."""
+    gamble_counts = game_dict.get('battle_gamble_counts') or {}
+    raw_state = gamble_counts.get(str(player_id), 0)
+
+    used_count = 0
+    used_rounds = set()
+
+    if isinstance(raw_state, dict):
+        try:
+            used_count = int(raw_state.get('count', 0) or 0)
+        except (TypeError, ValueError):
+            used_count = 0
+        for raw_round in raw_state.get('rounds', []):
+            try:
+                used_rounds.add(int(raw_round))
+            except (TypeError, ValueError):
+                continue
+    else:
+        try:
+            used_count = int(raw_state or 0)
+        except (TypeError, ValueError):
+            used_count = 0
+
+    return used_count, used_rounds
+
+
+def _get_best_call_figure(move, game_dict, ai_player):
+    """Return the best eligible figure dict for a Call move, or None."""
+    family = move.get('family_name', '')
+    field_type = _CALL_FIELD_MAP.get(family)
+    if not field_type:
+        return None
+
+    bm_suit = move.get('suit', '')
+    bm_is_red = bm_suit in _RED_SUITS
+
+    # IDs of figures already in battle
+    fighting_ids = set()
+    for attr in ('advancing_figure_id', 'advancing_figure_id_2',
+                 'defending_figure_id', 'defending_figure_id_2'):
+        fid = game_dict.get(attr)
+        if fid is not None:
+            fighting_ids.add(fid)
+
+    # IDs of figures already called in earlier rounds of this battle
+    already_called_ids = set()
+    for bm in game_dict.get('battle_moves', []):
+        if bm.get('player_id') == ai_player['id'] and bm.get('played_round') is not None:
+            cfid = bm.get('call_figure_id')
+            if cfid is not None:
+                already_called_ids.add(cfid)
+
+    best_fig = None
+    best_power = -1
+    for fig in ai_player.get('figures', []):
+        if fig.get('field') != field_type:
+            continue
+        if fig['id'] in fighting_ids:
+            continue
+        if fig['id'] in already_called_ids:
+            continue
+        # Colour check: red BM → red figure, black BM → black figure
+        fig_suit = fig.get('suit', '')
+        if bm_is_red and fig_suit not in _RED_SUITS:
+            continue
+        if not bm_is_red and fig_suit not in _BLACK_SUITS:
+            continue
+        power = _figure_power_from_dict(fig, ai_player.get('figures', []))
+        if power > best_power:
+            best_power = power
+            best_fig = fig
+
+    return best_fig
+
+
 def _enum_battle_round(game_dict, ai_player, opponent):
-    """AI plays a battle move or skips."""
+    """AI plays a battle move, may gamble once this round, or skips."""
     actions = []
     action_id = 1
     
     current_round = game_dict.get('battle_round', 0)
+    tactics_hand = (game_dict.get('mode') == 'conquer'
+                    and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand')
     
     # Get unplayed moves
-    ai_moves = [m for m in game_dict.get('battle_moves', [])
-                if m.get('player_id') == ai_player['id'] and m.get('played_round') is None]
+    if tactics_hand:
+        ai_moves = [m for m in game_dict.get('conquer_tactics', [])
+                    if m.get('player_id') == ai_player['id']
+                    and m.get('status', 'available') == 'available'
+                    and m.get('played_round') is None]
+    else:
+        ai_moves = [m for m in game_dict.get('battle_moves', [])
+                    if m.get('player_id') == ai_player['id'] and m.get('played_round') is None]
     
     for move in ai_moves:
+        family = move.get('family_name', '')
+        params = {'battle_move_id': move['id']}
+
+        # For Call moves, auto-select the best eligible figure
+        call_fig = _get_best_call_figure(move, game_dict, ai_player) if family in _CALL_FIELD_MAP else None
+        if call_fig:
+            params['call_figure_id'] = call_fig['id']
+            fig_power = _figure_power_from_dict(call_fig, ai_player.get('figures', []))
+            combined = fig_power + (move.get('value', 0) or 0)
+            desc = (f"Play {family} "
+                    f"(card={move.get('value', '?')}) + "
+                    f"{call_fig.get('name', '?')} (power={fig_power}) "
+                    f"= {combined} total for round {current_round + 1}")
+        elif family in _CALL_FIELD_MAP:
+            # Call move but no eligible figure — only card value applies
+            desc = (f"Play {family} "
+                    f"(value={move.get('value', '?')}, NO eligible figure) "
+                    f"for round {current_round + 1}")
+        else:
+            desc = (f"Play {family} "
+                    f"(value={move.get('value', '?')}) "
+                    f"for round {current_round + 1}")
+
         actions.append({
             'id': action_id,
-            'type': 'play_battle_move',
-            'description': f"Play {move.get('name', '?')} (value={move.get('value', '?')}) for round {current_round + 1}",
-            'params': {'battle_move_id': move['id']},
+            'type': 'play_conquer_tactic' if tactics_hand else 'play_battle_move',
+            'description': desc,
+            'params': params,
         })
         action_id += 1
-    
-    # Can skip if no moves left (or strategically)
-    actions.append({
-        'id': action_id,
-        'type': 'skip_battle_turn',
-        'description': "Skip this round (play no move)",
-        'params': {},
-    })
-    action_id += 1
+
+    # ── Gamble in battle rounds: once per round, up to 3 per battle ──
+    used_count, used_rounds = _get_player_gamble_state(game_dict, ai_player['id'])
+    current_round_int = int(current_round or 0)
+    can_gamble_this_round = current_round_int not in used_rounds and used_count < 3
+
+    if ai_moves and can_gamble_this_round:
+        for move in ai_moves:
+            if move.get('family_name') == 'Double Dagger':
+                continue  # Don't gamble double daggers
+
+            family = move.get('family_name', '')
+            move_name = move.get('family_name', move.get('name', '?'))
+            move_val = move.get('value', 0)
+
+            if family in _CALL_FIELD_MAP:
+                call_fig = _get_best_call_figure(move, game_dict, ai_player)
+                if call_fig:
+                    fig_power = _figure_power_from_dict(call_fig, ai_player.get('figures', []))
+                    suit_bonus = move_val if move.get('suit') == call_fig.get('suit') else 0
+                    eff_power = fig_power + suit_bonus
+                    desc = (
+                        f"Gamble this round: sacrifice {move_name}(calls {call_fig.get('name', '?')}, "
+                        f"eff_power≈{eff_power}) → draw 2 random. BAD gamble — keep this Call!"
+                    )
+                else:
+                    desc = (
+                        f"Gamble this round: sacrifice {move_name}(NO eligible figure, value={move_val}) "
+                        f"→ draw 2 random. GREAT gamble target!"
+                    )
+            elif move_val >= 9:
+                desc = (
+                    f"Gamble this round: sacrifice {move_name}(value={move_val}) → draw 2 random. "
+                    f"Risky — {move_val} is already strong."
+                )
+            else:
+                desc = (
+                    f"Gamble this round: sacrifice {move_name}(value={move_val}) → draw 2 random. "
+                    f"Decent gamble — low value card."
+                )
+
+            actions.append({
+                'id': action_id,
+                'type': 'gamble_conquer_tactic' if tactics_hand else 'gamble_battle_move',
+                'description': desc,
+                'params': {
+                    'battle_move_id': move['id'],
+                    'tactic_id': move['id'],
+                },
+            })
+            action_id += 1
+
+    # ── Combine: merge two same-colour Daggers into a Double Dagger ──
+    # Server allows this during the battle round (the selection-phase guard
+    # only fires before battle starts), so it's a legal mid-round option
+    # that frees a move slot and bundles two cards into one stronger play.
+    if not tactics_hand:
+        dagger_moves = [m for m in ai_moves if m.get('family_name') == 'Dagger']
+        if len(dagger_moves) >= 2:
+            for i in range(len(dagger_moves)):
+                for j in range(i + 1, len(dagger_moves)):
+                    m_a, m_b = dagger_moves[i], dagger_moves[j]
+                    suit_a = m_a.get('suit', '')
+                    suit_b = m_b.get('suit', '')
+                    color_a = 'red' if suit_a in _RED_SUITS_SET else 'black'
+                    color_b = 'red' if suit_b in _RED_SUITS_SET else 'black'
+                    if color_a != color_b:
+                        continue
+                    combined_val = (m_a.get('value', 0) or 0) + (m_b.get('value', 0) or 0)
+                    actions.append({
+                        'id': action_id,
+                        'type': 'combine_battle_moves',
+                        'description': (
+                            f"Combine Dagger({m_a.get('value', 0)}) + "
+                            f"Dagger({m_b.get('value', 0)}) → Double Dagger "
+                            f"(power={combined_val}) — frees 1 move slot!"
+                        ),
+                        'params': {
+                            'move_id_a': m_a['id'],
+                            'move_id_b': m_b['id'],
+                        },
+                    })
+                    action_id += 1
+
+    # Can only skip if no unplayed moves remain
+    if not ai_moves:
+        actions.append({
+            'id': action_id,
+            'type': 'skip_battle_turn',
+            'description': "Skip this round (no moves left to play)",
+            'params': {},
+        })
+        action_id += 1
     
     return actions
 
@@ -741,8 +1325,8 @@ def _enum_counter_spell(game_dict, ai_player, opponent):
     # Get pending spell name from the DB (we're inside app_context)
     spell_name = '?'
     try:
-        from models import ActiveSpell
-        pending = ActiveSpell.query.get(pending_spell_id)
+        from models import ActiveSpell, db
+        pending = db.session.get(ActiveSpell, pending_spell_id)
         if pending:
             spell_name = pending.spell_name
     except Exception as e:
@@ -995,7 +1579,7 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
         for fig in opp_figures:
             if fig.get('checkmate'):
                 continue  # Can't poison Maharaja
-            fig_power = _est_figure_power(fig)
+            fig_power = _est_figure_power(fig, opp_figures)
             desc_cards = '+'.join(f"{c['rank']}{c['suit'][:1]}" for c in poison_cards)
             actions.append({
                 'id': action_id, 'type': 'cast_spell',
@@ -1013,7 +1597,9 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
     hb_cards = _pick(side_by_rank_color, '3', 'red', 2)
     if hb_cards and ai_figures:
         for fig in ai_figures:
-            fig_power = _est_figure_power(fig)
+            if fig.get('checkmate'):
+                continue  # Can't boost Maharaja (immune to spells)
+            fig_power = _est_figure_power(fig, ai_figures)
             desc_cards = '+'.join(f"{c['rank']}{c['suit'][:1]}" for c in hb_cards)
             actions.append({
                 'id': action_id, 'type': 'cast_spell',
@@ -1052,7 +1638,7 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
             for fig in opp_figures:
                 if fig.get('checkmate'):
                     continue
-                fig_power = _est_figure_power(fig)
+                fig_power = _est_figure_power(fig, opp_figures)
                 desc_cards = '+'.join(f"{c['rank']}{c['suit'][:1]}" for c in cards)
                 actions.append({
                     'id': action_id, 'type': 'cast_spell',
@@ -1068,7 +1654,8 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
             break
 
     # Infinite Hammer — 1× K (main, any suit)
-    # Only offer if there are at least 2 builds available AFTER removing the K card
+    # Only offer when it enables at least 2 HIGH-IMPACT builds/upgrades after
+    # paying the K cost. This prevents empty/low-value hammer turns.
     k_cards = main_by_rank.get('K', [])
     if k_cards:
         c = k_cards[0]
@@ -1079,11 +1666,19 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
         remaining_side = [card for card in ai_player.get('side_hand', [])
                           if not card.get('part_of_figure') and not card.get('part_of_battle_move')]
         post_hammer_builds = find_buildable_figures(remaining_main, remaining_side, ai_figures)
-        if len(post_hammer_builds) >= 2:
+
+        from ai.game_state import compute_resource_totals as _crt
+        curr_prod, curr_req = _crt(ai_figures)
+        impactful_builds = [
+            b for b in post_hammer_builds
+            if _is_high_impact_build_option(b, curr_prod, curr_req)
+        ]
+
+        if len(impactful_builds) >= 2:
             actions.append({
                 'id': action_id, 'type': 'cast_spell',
                 'description': (f"Spell: Infinite Hammer (cost: K{c['suit'][:1]}) — unlimited builds this turn! "
-                                f"⚠️ Uses a K card. {len(post_hammer_builds)} builds available after casting."),
+                                f"⚠️ Uses a K card. {len(impactful_builds)} high-impact builds available after casting."),
                 'params': {
                     'spell_name': 'Infinite Hammer', 'spell_type': 'enchantment',
                     'spell_family_name': 'Infinite Hammer', 'suit': c['suit'],
@@ -1093,8 +1688,8 @@ def _enum_spells(game_dict, ai_player, opponent, action_id):
             })
             action_id += 1
 
-    # ── TACTICS SPELLS (NOT during ceasefire, counterable) ──
-    if not ceasefire:
+    # ── TACTICS SPELLS (NOT during ceasefire or advance, counterable) ──
+    if not ceasefire and not game_dict.get('advancing_figure_id'):
         # Check existing battle modifiers to avoid duplicates
         existing_modifiers = set()
         for mod in (game_dict.get('battle_modifier') or []):

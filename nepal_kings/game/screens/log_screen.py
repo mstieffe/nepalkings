@@ -7,6 +7,10 @@ from datetime import datetime
 from config import settings
 from game.core.input_state import get_pressed as _get_pressed
 from game.screens.sub_screen import SubScreen
+import logging
+
+logger = logging.getLogger('nk.screens.log')
+
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -159,7 +163,7 @@ class LogScreen(SubScreen):
                 _img = pygame.transform.smoothscale(_img, (self._log_icon_size, self._log_icon_size))
                 self._log_icons[_path] = _img
             except Exception as _e:
-                print(f"[LogScreen] Failed to load icon: {_path} — {_e}")
+                logger.error(f"[LogScreen] Failed to load icon: {_path} — {_e}")
 
         # Scrollbar attributes
         self.scrollbar_handle_color_active = settings.SCROLLBAR_HANDLE_COLOR_ACTIVE
@@ -198,7 +202,7 @@ class LogScreen(SubScreen):
         self._touch_last_y = 0
         self._touch_accum = 0.0
         self.scrollbar_handle_color = self.scrollbar_handle_color_passive
-        print("[LogScreen] State reset for game switch")
+        logger.debug("[LogScreen] State reset for game switch")
 
     def update(self, game):
         """Update toggle buttons and parent state."""
@@ -551,7 +555,7 @@ class LogScreen(SubScreen):
     def handle_send_message(self, message):
         """Send the chat message to the opponent using the `Game` instance."""
         if not self.game:  # Do nothing if the game is not initialized
-            print("Cannot send message: Game is not initialized.")
+            logger.debug("Cannot send message: Game is not initialized.")
             return
         opponent_id = self.game.opponent_player.get('id', -1)
         try:
@@ -560,7 +564,7 @@ class LogScreen(SubScreen):
             self.scroll_offset = self.calculate_max_scroll()
             self.update_scrollbar_handle()
         except Exception as e:
-            print(f"Failed to send message: {str(e)}")
+            logger.error(f"Failed to send message: {str(e)}")
 
     def max_lines_on_screen(self):
         """Calculate the maximum number of lines that can fit on the screen."""

@@ -36,6 +36,9 @@ GAME_MENU_GLOW_DIR      = 'img/menu_button/glow/'
 
 # ── Gold display (upper-left) ───────────────────────────────────────
 GAME_MENU_GOLD_ICON_PATH     = 'img/dialogue_box/icons/gold.png'
+GAME_MENU_BOOSTER_ICON_PATH       = 'img/dialogue_box/icons/booster_pack.png'
+GAME_MENU_BOOSTER_SIDE_ICON_PATH = 'img/dialogue_box/icons/booster_pack_side.png'
+GAME_MENU_MAP_ICON_PATH          = 'img/dialogue_box/icons/map.png'
 GAME_MENU_GOLD_ICON_SZ       = int(0.045 * SCREEN_HEIGHT * _UI_SCALE)
 GAME_MENU_GOLD_FONT_SIZE     = int(FS_TITLE * 0.9)         # was int(0.036 * _FS)  →  0.04 * 0.9 = 0.036
 GAME_MENU_GOLD_TEXT_CLR      = (250, 221, 0)

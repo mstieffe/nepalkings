@@ -13,7 +13,8 @@ class FigureDetailBox:
     including stats, cards, and action buttons.
     """
 
-    def __init__(self, window, figure, game, x=None, y=None, all_figures=None, resources_data=None):
+    def __init__(self, window, figure, game, x=None, y=None, all_figures=None,
+                 resources_data=None, conquer_view_only=False):
         """
         Initialize the figure detail box.
 
@@ -24,7 +25,9 @@ class FigureDetailBox:
         :param y: Optional y position (defaults to center of screen)
         :param all_figures: Optional list of all figures (to avoid server call)
         :param resources_data: Optional pre-calculated resources data (to avoid recalculation)
+        :param conquer_view_only: When True, suppress all action buttons (conquer mode)
         """
+        self.conquer_view_only = conquer_view_only
         self.window = window
         self.figure = figure
         self.game = game
@@ -126,6 +129,8 @@ class FigureDetailBox:
 
     def _create_action_buttons(self):
         """Create action buttons based on figure state and type."""
+        if self.conquer_view_only:
+            return []
         buttons = []
         button_y_start = self.rect.bottom - settings.MENU_BUTTON_HEIGHT - settings.SMALL_SPACER_Y
         button_x = self.rect.centerx - settings.MENU_BUTTON_WIDTH // 2
@@ -133,6 +138,10 @@ class FigureDetailBox:
         # Example actions - customize based on your game logic
         actions = []
         
+        # No actions available when there's no active game (e.g. kingdom config screens)
+        if not self.game:
+            return actions
+
         # Check if this is the player's own figure
         is_own_figure = self.figure.player_id == self.game.player_id
         is_maharaja = 'Maharaja' in self.figure.name
@@ -440,6 +449,31 @@ class FigureDetailBox:
         except Exception as e:
             return {}
 
+    def _figures_for_selected_side(self):
+        selected_player_id = getattr(self.figure, 'player_id', None)
+        if self.all_figures is not None:
+            all_figures = list(self.all_figures)
+            if selected_player_id is None:
+                return all_figures
+            return [
+                fig for fig in all_figures
+                if getattr(fig, 'player_id', None) == selected_player_id
+            ]
+
+        if not self.game:
+            return []
+
+        from game.components.figures.figure_manager import FigureManager
+        figure_manager = FigureManager()
+        families = figure_manager.families
+        current_player_id = getattr(self.game, 'player_id', None)
+        is_opponent = (
+            selected_player_id is not None
+            and current_player_id is not None
+            and selected_player_id != current_player_id
+        )
+        return self.game.get_figures(families, is_opponent=is_opponent)
+
     def _calculate_potential_battle_bonus(self):
         """
         Calculate the potential battle bonus this figure could receive.
@@ -450,19 +484,7 @@ class FigureDetailBox:
         - Military figures provide 0 bonus
         """
         try:
-            # Use cached figures if available, otherwise fetch from server
-            if self.all_figures is not None:
-                all_figures = [fig for fig in self.all_figures if fig.player_id == self.game.player_id]
-            else:
-                # Import here to avoid circular imports
-                from game.components.figures.figure_manager import FigureManager
-                
-                # Get all families
-                figure_manager = FigureManager()
-                families = figure_manager.families
-                
-                # Get all figures for this player
-                all_figures = self.game.get_figures(families, is_opponent=False)
+            all_figures = self._figures_for_selected_side()
             
             # Determine this figure's type
             current_figure_type = self.figure.family.field if hasattr(self.figure.family, 'field') else None
@@ -509,14 +531,7 @@ class FigureDetailBox:
                     self.figure.family.field == 'village'):
                 return 0
 
-            if self.all_figures is not None:
-                all_figures = [fig for fig in self.all_figures
-                               if fig.player_id == self.figure.player_id]
-            else:
-                from game.components.figures.figure_manager import FigureManager
-                figure_manager = FigureManager()
-                families = figure_manager.families
-                all_figures = self.game.get_figures(families, is_opponent=False)
+            all_figures = self._figures_for_selected_side()
 
             total = 0
             for fig in all_figures:
@@ -535,14 +550,7 @@ class FigureDetailBox:
         Only active when defending, but shown as potential in detail box.
         """
         try:
-            if self.all_figures is not None:
-                all_figures = [fig for fig in self.all_figures
-                               if fig.player_id == self.figure.player_id]
-            else:
-                from game.components.figures.figure_manager import FigureManager
-                figure_manager = FigureManager()
-                families = figure_manager.families
-                all_figures = self.game.get_figures(families, is_opponent=False)
+            all_figures = self._figures_for_selected_side()
 
             total = 0
             for fig in all_figures:
@@ -557,6 +565,8 @@ class FigureDetailBox:
     def _check_upgrade_card_available(self):
         """Check if the upgrade card required for this figure is in the player's hand."""
         if not hasattr(self.figure, 'upgrade_card') or not self.figure.upgrade_card:
+            return False
+        if not self.game:
             return False
         
         # Get player's hand

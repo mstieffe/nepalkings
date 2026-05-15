@@ -138,6 +138,7 @@ Everything you need to run, build, deploy, and maintain Nepal Kings.
 9. [Changing the App Icon](#changing-the-app-icon)
 10. [Configuration & Settings](#configuration--settings)
 11. [Troubleshooting](#troubleshooting)
+12. [AI Opponent Internals](#ai-opponent-internals)
 
 ---
 
@@ -163,10 +164,20 @@ nepalkings/
 │   ├── server.py             # Flask app entry point
 │   ├── models.py             # SQLAlchemy database models
 │   ├── server_settings.py    # Server configuration
+│   ├── security_settings.py  # Security/auth defaults + env parsing
+│   ├── database_settings.py  # DB URL + destructive-reset guard default
 │   ├── requirements.txt      # Server Python dependencies
 │   ├── wsgi.py               # WSGI entry point (PythonAnywhere)
+│   ├── ai/defence/           # Deterministic AI defence generator/config
 │   └── routes/               # API route handlers
 │
+├── docs/                     # Deployment docs and design/plan docs
+│   ├── deployment.md
+│   ├── ai_opponent.md
+│   └── plans/
+├── scripts/                  # Dev/maintenance scripts (non-runtime)
+│   ├── assets/
+│   └── debug/
 ├── run_local.sh              # Run client + local server together
 ├── run_remote.sh             # Run client against PythonAnywhere server
 ├── deploy_server.sh          # Deploy server to PythonAnywhere
@@ -314,6 +325,10 @@ python main.py --server-url http://localhost:5000
 |----------|---------|-------------|
 | `SERVER_URL` | `http://localhost:5000` | Server bind address |
 | `DB_URL` | `sqlite:///test.db` | Database connection string |
+| `CORS_ORIGINS` | localhost-only allowlist | Allowed browser origins for cross-origin API calls |
+| `SECRET_KEY` | random per process | Token/cookie signing key (must be fixed in production) |
+| `FLASK_ENV` | `development` (or empty) | Set to `production` on hosted deployments |
+| `DROP_TABLES_ON_STARTUP` | `False` | When `True`, drops and recreates all tables on startup |
 | `DEBUG_ENABLED` | `False` | Enable debug logging |
 
 ---
@@ -341,6 +356,17 @@ python main.py --server-url http://localhost:5000
    - Set source code directory: `/home/nepalkings/nepalkings`
    - Set virtualenv: `/home/nepalkings/.virtualenvs/nepalkings`
    - Set WSGI file to point to: `/home/nepalkings/nepalkings/pythonanywhere_wsgi.py`
+
+6. **Set production environment values in `pythonanywhere_wsgi.py`**:
+   - `FLASK_ENV='production'`
+   - `SECRET_KEY='<long random secret>'`
+   - `DROP_TABLES_ON_STARTUP='False'`
+   - `CORS_ORIGINS='https://mstieffe.github.io'` (GitHub Pages origin)
+
+   If your web URL is `https://mstieffe.github.io/nepalkings/`, the CORS
+   origin is still just `https://mstieffe.github.io` (origin-level match).
+
+   See [docs/deployment.md](docs/deployment.md) for the full hardened example.
 
 ### Deploying updates
 
@@ -434,11 +460,11 @@ All builds default to the PythonAnywhere server. On first launch, users see the 
 
 2. **Regenerate all icon formats and rebuild:**
    ```bash
-   ./generate_icons.sh
+   ./scripts/assets/generate_icons.sh
    ./build_installer.sh
    ```
 
-   That's it — `generate_icons.sh` handles everything:
+   That's it — `scripts/assets/generate_icons.sh` handles everything:
    - Resizes the source to 16, 32, 48, 64, 128, 256, 512, 1024 px PNGs
    - Creates `app_icon.ico` for Windows (multi-size)
    - Creates `app_icon.icns` for macOS (via `iconutil`)
@@ -587,3 +613,12 @@ cd server
 ./RESET_DATABASE.sh
 ```
 **Warning:** This deletes all game data.
+
+---
+
+## AI Opponent Internals
+
+For a complete technical deep dive of the AI opponent architecture, planning system,
+chat explain commands, telemetry endpoints, and troubleshooting, see:
+
+- [docs/ai_opponent.md](docs/ai_opponent.md)

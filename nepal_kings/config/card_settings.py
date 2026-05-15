@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE, _IS_MOBILE
 
 CARD_IMG_PATH = 'img/cards/'
 RED_CROSS_IMG_PATH = 'img/cards/red_cross.png'
@@ -15,7 +15,7 @@ RED_CROSS_WIDTH = int(0.02 * SCREEN_WIDTH)
 RED_CROSS_HEIGHT = int(0.02 * SCREEN_WIDTH)
 
 # Vertical nudge for the "X/Y cards" text below each hand (negative = up)
-HAND_CARD_COUNT_Y_NUDGE = int(-0.008 * SCREEN_HEIGHT)
+HAND_CARD_COUNT_Y_NUDGE = int(-0.016 * SCREEN_HEIGHT) if _IS_MOBILE else int(-0.008 * SCREEN_HEIGHT)
 
 #CARD_HEIGHT = CARD_WIDTH * test_card.get_height() / test_card.get_width()
 
@@ -38,6 +38,12 @@ RANKS_MAIN_CARDS = ['7', '8', '9', '10', 'J', 'Q', 'K', 'A']
 RANKS_SIDE_CARDS = ['2', '3', '4', '5', '6']
 
 NUMBER_CARDS = ['7', '8', '9', '10']
+
+# Loot bucket classification by rank.  Used by the conquer loot system to
+# bucket every captured card into either "key" or "number" pools.  All ranks
+# are covered, so any card with a rank belongs to exactly one bucket.
+LOOT_NUMBER_RANKS = frozenset({'3', '6', '7', '8', '9', '10'})
+LOOT_KEY_RANKS = frozenset({'2', '4', '5', 'J', 'Q', 'K', 'A'})
 
 RANK_TO_IMG_PATH = {
     'A': '14',

@@ -9,16 +9,25 @@ from game.components.spells.spell_manager import SpellManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
 from utils import spell_service
+import logging
+
+logger = logging.getLogger('nk.screens.cast_spell')
+
 
 
 class CastSpellScreen(SubScreen):
     """Screen for casting spells by selecting spell families and cards."""
 
-    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None):
+    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None,
+                 card_source=None, mode='duel'):
         super().__init__(window, state.game, x, y, title)
 
         self.state = state
         self.game = state.game
+
+        from game.core.card_source import GameCardSource
+        self.card_source = card_source or GameCardSource(self.game)
+        self.mode = mode
         
         # Initialize spell manager and load spells
         self.spell_manager = SpellManager()
@@ -51,7 +60,7 @@ class CastSpellScreen(SubScreen):
         self.selected_spells = []
         self._last_game_data_version = -1
         self.dialogue_box = None
-        print("[CastSpellScreen] State reset for game switch")
+        logger.debug("[CastSpellScreen] State reset for game switch")
 
     def cast_spell_in_db(self, selected_spell):
         """
@@ -59,6 +68,9 @@ class CastSpellScreen(SubScreen):
         Maps dummy cards to real cards and sends to server.
         """
         if getattr(self.game, 'game_over', False):
+            return
+
+        if self.game.action_in_progress:
             return
 
         # Check if player is waiting for counter spell response
@@ -117,23 +129,29 @@ class CastSpellScreen(SubScreen):
         } for card in real_cards]
         
         # Call spell service to cast the spell
-        result = spell_service.cast_spell(
-            player_id=self.game.player_id,
-            game_id=self.game.game_id,
-            spell_name=selected_spell.name,
-            spell_type=selected_spell.family.type,
-            spell_family_name=selected_spell.family.name,
-            suit=selected_spell.suit,
-            cards=cards_data,
-            target_figure_id=target_figure_id,
-            counterable=selected_spell.counterable,
-            possible_during_ceasefire=selected_spell.possible_during_ceasefire
-        )
+        self.game.lock_actions()
+        try:
+            result = spell_service.cast_spell(
+                player_id=self.game.player_id,
+                game_id=self.game.game_id,
+                spell_name=selected_spell.name,
+                spell_type=selected_spell.family.type,
+                spell_family_name=selected_spell.family.name,
+                suit=selected_spell.suit,
+                cards=cards_data,
+                target_figure_id=target_figure_id,
+                counterable=selected_spell.counterable,
+                possible_during_ceasefire=selected_spell.possible_during_ceasefire
+            )
+        except Exception:
+            self.game.unlock_actions()
+            raise
         
         if result.get('success'):
             # Check if waiting for opponent to respond (counterable spell)
             waiting_for_player_id = result.get('waiting_for_player_id')
             if waiting_for_player_id:
+                self.game.unlock_actions()
                 # Store spell name in game_screen for waiting prompt
                 if hasattr(self.state, 'parent_screen') and self.state.parent_screen:
                     self.state.parent_screen.pending_spell_name = selected_spell.name
@@ -141,6 +159,7 @@ class CastSpellScreen(SubScreen):
                 return
             
             # Update game state from server response
+            # (update_from_dict -> unlock_actions)
             if result.get('game'):
                 # Update directly from returned game state (no extra server call)
                 self.game.update_from_dict(result['game'])
@@ -151,11 +170,11 @@ class CastSpellScreen(SubScreen):
             cards_received_data = spell_effect.get('cards_received', [])
             cards_given_data = spell_effect.get('cards_given', [])
             
-            print(f"[CAST_SPELL_SCREEN] Full spell_effect: {spell_effect}")
-            print(f"[CAST_SPELL_SCREEN] Spell effect received: {spell_effect.get('effect')}")
-            print(f"[CAST_SPELL_SCREEN] Drawn cards data: {len(drawn_cards_data)} cards")
-            print(f"[CAST_SPELL_SCREEN] Cards received: {len(cards_received_data)} cards")
-            print(f"[CAST_SPELL_SCREEN] Cards given: {len(cards_given_data)} cards")
+            logger.debug(f"[CAST_SPELL_SCREEN] Full spell_effect: {spell_effect}")
+            logger.debug(f"[CAST_SPELL_SCREEN] Spell effect received: {spell_effect.get('effect')}")
+            logger.debug(f"[CAST_SPELL_SCREEN] Drawn cards data: {len(drawn_cards_data)} cards")
+            logger.debug(f"[CAST_SPELL_SCREEN] Cards received: {len(cards_received_data)} cards")
+            logger.debug(f"[CAST_SPELL_SCREEN] Cards given: {len(cards_given_data)} cards")
             
             # Create card images from drawn cards or swapped cards
             card_images = []
@@ -262,6 +281,7 @@ class CastSpellScreen(SubScreen):
                 button.clicked = False
         
         else:
+            self.game.unlock_actions()
             # Show error message
             error_msg = result.get('message', 'Unknown error')
             self.make_dialogue_box(
@@ -278,7 +298,7 @@ class CastSpellScreen(SubScreen):
         :param spell: The spell with dummy cards
         :return: List of real cards from hand, or None if not all cards available
         """
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         
         # Filter to only cards belonging to this player
@@ -393,6 +413,9 @@ class CastSpellScreen(SubScreen):
         """Update the game state and button components."""
         super().update(game)
         self.game = game
+        # Keep card_source in sync for GameCardSource (duel mode)
+        if hasattr(self.card_source, 'game'):
+            self.card_source.game = game
         
         # Check if confirm button should be disabled
         if not self.game.turn:
@@ -426,7 +449,7 @@ class CastSpellScreen(SubScreen):
     
     def update_spell_icon_states(self):
         """Update the active state of spell icons based on castable spells."""
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         
         # Filter to only cards belonging to this player
@@ -621,7 +644,7 @@ class CastSpellScreen(SubScreen):
         :param spell_family: The SpellFamily to check
         :return: List of castable spells
         """
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         
         # Filter to only cards belonging to this player
@@ -655,7 +678,7 @@ class CastSpellScreen(SubScreen):
         :param spell: The spell to check
         :return: Tuple of (given_cards, missing_cards)
         """
-        main_cards, side_cards = self.game.get_hand()
+        main_cards, side_cards = self.card_source.get_cards()
         hand_cards = main_cards + side_cards
         
         # Filter to only cards belonging to this player

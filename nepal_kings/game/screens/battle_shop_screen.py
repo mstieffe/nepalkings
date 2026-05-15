@@ -5,6 +5,7 @@
 import pygame
 from pygame.locals import *
 from config import settings
+from game.core.figure_buffs import buffs_allies_bonus_for, buffs_allies_sources
 from game.core.input_state import get_pressed as _get_pressed
 from game.screens.sub_screen import SubScreen
 from game.components.battle_moves.battle_move_manager import BattleMoveManager
@@ -14,7 +15,20 @@ from game.components.battle_moves.battle_move_icon_renderer import draw_battle_m
 from game.components.figures.figure_manager import FigureManager
 from game.components.cards.card import Card
 from game.components.buttons.confirm_button import ConfirmButton
+from game.components.floating_text import FloatingText, FloatingTextLayer
 from utils import battle_shop_service
+import logging
+
+logger = logging.getLogger('nk.screens.battle_shop')
+
+
+def _is_kingdom_config_mode(mode):
+    return mode in ('conquer', 'defence', 'defence_draft')
+
+
+def _kingdom_mode_path(mode):
+    return 'defence/draft' if mode == 'defence_draft' else mode
+
 
 
 class BattleShopScreen(SubScreen):
@@ -24,10 +38,15 @@ class BattleShopScreen(SubScreen):
     Buying / returning is NOT a turn action.
     """
 
-    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None):
+    def __init__(self, window, state, x: int = 0.0, y: int = 0.0, title=None,
+                 card_source=None, mode='duel'):
         super().__init__(window, state.game, x, y, title)
         self.state = state
         self.game = state.game
+
+        from game.core.card_source import GameCardSource
+        self.card_source = card_source or GameCardSource(self.game)
+        self.mode = mode
 
         # Manager
         self.battle_move_manager = BattleMoveManager()
@@ -48,7 +67,8 @@ class BattleShopScreen(SubScreen):
 
         # Bought moves (loaded from server)
         self.bought_moves = []  # List of server dicts
-        self._loaded_game_key = None  # Track (game_id, player_id) for reload detection
+        self._loaded_game_key = None  # Track (game_id, player_id) for identity reloads
+        self._loaded_bought_moves_key = None  # Track server data version for live move reloads
         self._load_bought_moves()
 
         # Slot rendering
@@ -61,10 +81,14 @@ class BattleShopScreen(SubScreen):
         # Confirm button
         self.confirm_button = ConfirmButton(
             self.window,
-            settings.BATTLE_SHOP_CONFIRM_BUTTON_X,
-            settings.BATTLE_SHOP_CONFIRM_BUTTON_Y,
+            self._sx(settings.BATTLE_SHOP_CONFIRM_BUTTON_X),
+            self._sy(settings.BATTLE_SHOP_CONFIRM_BUTTON_Y),
             "buy!"
         )
+
+        # Floating text layer (buy feedback, similar to collect in kingdom config)
+        self._floating_text = FloatingTextLayer()
+        self._last_render_ms = pygame.time.get_ticks()
 
         # Pending action state
         self._pending_buy_move = None
@@ -89,10 +113,11 @@ class BattleShopScreen(SubScreen):
 
         self.ready_button = ConfirmButton(
             self.window,
-            settings.BATTLE_SHOP_READY_BUTTON_X,
-            settings.BATTLE_SHOP_READY_BUTTON_Y,
+            self._sx(settings.BATTLE_SHOP_READY_BUTTON_X),
+            self._sy(settings.BATTLE_SHOP_READY_BUTTON_Y),
             "ready!"
         )
+        self._config_ready_pressed = False
         self.phase_banner_font = settings.get_font(settings.BATTLE_SHOP_PHASE_BANNER_FONT_SIZE, bold=True)
 
     def reset_state(self):
@@ -104,6 +129,7 @@ class BattleShopScreen(SubScreen):
         self.selected_moves = []
         self.bought_moves = []
         self._loaded_game_key = None
+        self._loaded_bought_moves_key = None
         self._figures_loaded_game_key = None
         self._player_figures = []
         self._resources_data = None
@@ -114,7 +140,8 @@ class BattleShopScreen(SubScreen):
         self.dialogue_box = None
         self._battle_moves_confirmed = False
         self._waiting_for_opponent = False
-        print("[BattleShop] State reset for game switch")
+        self._config_ready_pressed = False
+        logger.debug("[BattleShop] State reset for game switch")
 
     @property
     def _is_locked(self):
@@ -238,24 +265,46 @@ class BattleShopScreen(SubScreen):
         for i, family in enumerate(self.battle_move_manager.families):
             icon = family.make_icon(
                 self.window, self.game,
-                start_x + i * dx,
-                start_y,
+                self._sx(start_x + i * dx),
+                self._sy(start_y),
             )
             self.move_family_buttons.append(icon)
 
     # ----------------------------------------------------------- data helpers
     def _load_bought_moves(self):
         """Fetch bought battle moves from server."""
+        if _is_kingdom_config_mode(self.mode):
+            # In kingdom mode, moves come from the config
+            if self.game:
+                self.bought_moves = self.game._config.get('battle_moves', [])
+                self._loaded_game_key = self._game_identity_key(self.game)
+                self._loaded_bought_moves_key = self._bought_moves_cache_key(self.game)
+            return
+        if not self.game:
+            return
         try:
             result = battle_shop_service.get_battle_moves(
                 self.game.game_id, self.game.player_id
             )
             self.bought_moves = result.get('battle_moves', [])
-            self._loaded_game_key = (getattr(self.game, 'game_id', None),
-                                     getattr(self.game, 'player_id', None))
+            self._loaded_game_key = self._game_identity_key(self.game)
+            self._loaded_bought_moves_key = self._bought_moves_cache_key(self.game)
         except Exception as e:
-            print(f"[BattleShop] Failed to load bought moves: {e}")
+            logger.error(f"[BattleShop] Failed to load bought moves: {e}")
             self.bought_moves = []
+
+    def _game_identity_key(self, game):
+        return (getattr(game, 'game_id', None), getattr(game, 'player_id', None))
+
+    def _bought_moves_cache_key(self, game):
+        identity = self._game_identity_key(game)
+        if _is_kingdom_config_mode(self.mode):
+            return identity
+        return (*identity, getattr(game, '_game_data_version', 0))
+
+    def _should_reload_bought_moves(self, game):
+        current_key = self._bought_moves_cache_key(game)
+        return bool(current_key[0] and current_key != self._loaded_bought_moves_key)
 
     def _get_bought_card_ids(self):
         """Set of card IDs already reserved for battle moves."""
@@ -263,22 +312,124 @@ class BattleShopScreen(SubScreen):
 
     def _get_hand_cards(self):
         """Get all cards currently in the player's hand (excluding battle-move cards)."""
-        main, side = self.game.get_hand()
+        main, side = self.card_source.get_cards()
         return main + side
+
+    def _required_battle_move_count(self):
+        """How many moves must be confirmed right now.
+
+        Duel normally requires all 3 moves.  If no more buyable moves are
+        available (rare exhausted-deck/hand case), the player can ready with
+        all moves currently selected.
+        """
+        max_moves = settings.BATTLE_SHOP_MAX_MOVES
+        if _is_kingdom_config_mode(self.mode):
+            return min(max_moves, len(self.bought_moves))
+        hand = self._get_hand_cards()
+        bought_ids = self._get_bought_card_ids()
+        available = self.battle_move_manager.get_available_moves(hand, bought_ids)
+        available_card_ids = {
+            move.card.id
+            for moves in available.values()
+            for move in moves
+            if getattr(move, 'card', None) is not None
+        }
+        return min(max_moves, len(self.bought_moves) + len(available_card_ids))
+
+    def _can_ready_for_battle(self):
+        if _is_kingdom_config_mode(self.mode):
+            return len(self.bought_moves) >= settings.BATTLE_SHOP_MAX_MOVES
+        required = self._required_battle_move_count()
+        return len(self.bought_moves) >= required
+
+    def has_available_battle_move_changes(self):
+        """Return True when the hand offers a new battle-move card.
+
+        Conquer battles arrive with preconfigured battle moves.  The shop is
+        only useful during the pre-battle window if a newly drawn/unreserved
+        hand card can actually become a move; otherwise the player can only
+        press Ready and the conquer shell may skip the shop entirely.
+        """
+        hand = self._get_hand_cards()
+        bought_ids = self._get_bought_card_ids()
+        available = self.battle_move_manager.get_available_moves(hand, bought_ids)
+        return any(bool(moves) for moves in available.values())
+
+    def _rebuild_card_source_kingdom(self):
+        """Re-fetch collection and rebuild the card source for kingdom mode."""
+        from utils import collection_service
+        from game.core.card_source import CollectionCardSource
+        try:
+            data = collection_service.fetch_collection_cards()
+        except Exception as e:
+            logger.error(f'Failed to re-fetch collection: {e}')
+            return
+        config = getattr(self.game, '_config', None) or {}
+        cards = []
+        for c in data.get('cards', []):
+            qty = c.get('free', c.get('total', 0))
+            for i in range(qty):
+                cards.append(Card(
+                    rank=c['rank'], suit=c['suit'],
+                    value=settings.RANK_TO_VALUE.get(c['rank'], 0),
+                    id=c.get('id', hash((c['suit'], c['rank'], i))),
+                    type='main' if c['rank'] in settings.RANKS_MAIN_CARDS else 'side_card',
+                ))
+        locked_ids = set()
+        for fig in config.get('figures', []):
+            for cid in fig.get('card_ids', []):
+                locked_ids.add(cid)
+        for mv in config.get('battle_moves', []):
+            if mv.get('card_id'):
+                locked_ids.add(mv['card_id'])
+        if config.get('modifier_card_ids'):
+            for cid in config['modifier_card_ids']:
+                locked_ids.add(cid)
+        if config.get('spell_card_ids'):
+            for cid in config['spell_card_ids']:
+                locked_ids.add(cid)
+        self.card_source = CollectionCardSource(cards, config.get('figures', []), locked_ids)
+
+    def _sync_card_source_locked(self):
+        """Update the card source's locked set from the current config."""
+        if not hasattr(self.card_source, '_locked') or not self.game:
+            return
+        config = getattr(self.game, '_config', None)
+        if not config:
+            return
+        locked = set()
+        for fig in config.get('figures', []):
+            for cid in fig.get('card_ids', []):
+                locked.add(cid)
+        for mv in config.get('battle_moves', []):
+            if mv.get('card_id'):
+                locked.add(mv['card_id'])
+        if config.get('modifier_card_ids'):
+            for cid in config['modifier_card_ids']:
+                locked.add(cid)
+        if config.get('spell_card_ids'):
+            for cid in config['spell_card_ids']:
+                locked.add(cid)
+        self.card_source._locked = locked
 
     # ---------------------------------------------------------------- update
     def update(self, game):
         super().update(game)
         self.game = game
+        # Keep card_source in sync for GameCardSource (duel mode)
+        if hasattr(self.card_source, 'game'):
+            self.card_source.game = game
 
         # Reload bought moves when the game changes (e.g. loading a saved game)
-        current_key = (getattr(game, 'game_id', None),
-                       getattr(game, 'player_id', None))
+        current_key = self._game_identity_key(game)
         if current_key[0] and current_key != self._loaded_game_key:
             self._load_bought_moves()
             self._load_player_figures()
+        elif self._should_reload_bought_moves(game):
+            self._load_bought_moves()
 
         in_phase = getattr(game, 'battle_moves_phase', False)
+        in_config = _is_kingdom_config_mode(self.mode)
 
         # Reset confirmed state when no longer in battle at all
         battle_active = getattr(game, 'battle_confirmed', False) or in_phase
@@ -293,9 +444,14 @@ class BattleShopScreen(SubScreen):
 
         # --- Ready button logic (only during mandatory phase) ---
         self.ready_button.disabled = True
-        if in_phase and not self._battle_moves_confirmed:
-            if len(self.bought_moves) >= settings.BATTLE_SHOP_MAX_MOVES:
+        self.ready_button.active = False
+        if in_config:
+            self.ready_button.disabled = not self._can_ready_for_battle()
+            self.ready_button.active = not self.ready_button.disabled
+        elif in_phase and not self._battle_moves_confirmed:
+            if self._can_ready_for_battle():
                 self.ready_button.disabled = False
+                self.ready_button.active = True
 
         # Update icon active states based on available cards
         self._update_icon_states()
@@ -308,8 +464,16 @@ class BattleShopScreen(SubScreen):
             if selected:
                 self.confirm_button.update()
 
-        if in_phase:
+        if in_phase or in_config:
             self.ready_button.update()
+            if in_config and not self.ready_button.disabled:
+                self.ready_button.active = not getattr(
+                    self.ready_button, 'hovered', False)
+
+    def _ready_button_hit(self, pos=None):
+        if pos is not None:
+            return self.ready_button.rect.collidepoint(pos)
+        return self.ready_button.collide()
 
     def _update_icon_states(self):
         """Set is_active on each family icon based on whether the player has matching cards."""
@@ -350,6 +514,7 @@ class BattleShopScreen(SubScreen):
         super().handle_events(events)
 
         in_phase = getattr(self.game, 'battle_moves_phase', False)
+        in_config = _is_kingdom_config_mode(self.mode)
         selected_move = None
         if self.scroll_text_list_shifter:
             selected_move = self.scroll_text_list_shifter.get_current_selected()
@@ -401,12 +566,33 @@ class BattleShopScreen(SubScreen):
                 if (in_phase and
                         not self._is_locked and
                         not self.ready_button.disabled and
-                        self.ready_button.collide()):
+                        self._ready_button_hit(event.pos)):
                     self._on_ready_confirm()
+                    continue
+
+                # Ready button for kingdom conquer/defence config shops.
+                # Close on mouse-up below so the release event is still
+                # consumed by this subscreen and cannot open a config action
+                # sitting underneath it.
+                if (in_config and
+                        not self.ready_button.disabled and
+                        self._ready_button_hit(event.pos)):
+                    self._config_ready_pressed = True
+                    continue
 
                 # Slot clicks (open detail box — return blocked if locked)
                 if not self._is_locked:
                     self._handle_slot_click(event)
+
+            elif event.type == MOUSEBUTTONUP and event.button == 1:
+                config_ready_pressed = bool(getattr(self, '_config_ready_pressed', False))
+                self._config_ready_pressed = False
+                if (in_config and
+                        config_ready_pressed and
+                        not self.ready_button.disabled and
+                        self._ready_button_hit(event.pos)):
+                    self._on_config_ready()
+                    continue
 
         # Update glow colors after events so scroll changes take effect immediately
         self._update_glow_colors()
@@ -489,21 +675,31 @@ class BattleShopScreen(SubScreen):
             return
 
         card_type = 'side' if move.card.type == 'side_card' else 'main'
-        result = battle_shop_service.buy_battle_move(
-            game_id=self.game.game_id,
-            player_id=self.game.player_id,
-            family_name=move.family.name,
-            card_id=move.card.id,
-            card_type=card_type,
-            suit=move.suit,
-            rank=move.rank,
-            value=move.value,
-        )
+
+        if _is_kingdom_config_mode(self.mode):
+            result = self._buy_move_kingdom(move, card_type)
+        else:
+            result = battle_shop_service.buy_battle_move(
+                game_id=self.game.game_id,
+                player_id=self.game.player_id,
+                family_name=move.family.name,
+                card_id=move.card.id,
+                card_type=card_type,
+                suit=move.suit,
+                rank=move.rank,
+                value=move.value,
+            )
 
         if result.get('success'):
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()
+
+            # Rebuild card source for kingdom mode (re-fetch free counts)
+            if _is_kingdom_config_mode(self.mode):
+                self._rebuild_card_source_kingdom()
+            else:
+                self._sync_card_source_locked()
 
             # Refresh the scroll list for the selected family
             if self.selected_family:
@@ -519,6 +715,7 @@ class BattleShopScreen(SubScreen):
                 icon="figure",
                 title="Battle Move Bought",
             )
+            self._spawn_buy_floater(move)
         else:
             self.make_dialogue_box(
                 message=f"Failed: {result.get('message', 'Unknown error')}",
@@ -529,6 +726,56 @@ class BattleShopScreen(SubScreen):
 
         self._pending_buy_move = None
 
+    def _spawn_buy_floater(self, move):
+        """Spawn a rising '+MoveName' floater from the buy button (like collect in kingdom config)."""
+        font = settings.get_font(settings.COLLECT_FLOAT_FONT_SIZE, bold=True)
+        self._floating_text.add(FloatingText(
+            f'+{move.family.name}',
+            self.confirm_button.rect.center,
+            color=settings.COLLECT_FLOAT_GOLD_CLR,
+            duration_ms=settings.COLLECT_FLOAT_DURATION_MS,
+            rise_px=settings.COLLECT_FLOAT_RISE_PX,
+            font=font,
+        ))
+
+    def _buy_move_kingdom(self, move, card_type):
+        """Buy a battle move via the kingdom config endpoint."""
+        from utils import http_compat as requests
+        land_id = getattr(self.game, 'land_id', None)
+
+        # Auto-assign the next free round_index (0, 1, or 2)
+        used_indices = {m.get('round_index') for m in self.bought_moves}
+        round_index = None
+        for idx in (0, 1, 2):
+            if idx not in used_indices:
+                round_index = idx
+                break
+        if round_index is None:
+            return {'success': False, 'message': 'All 3 move slots are full'}
+
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/{_kingdom_mode_path(self.mode)}/buy_battle_move',
+                json={
+                    'land_id': land_id,
+                    'family_name': move.family.name,
+                    'card_id': 0,
+                    'card_type': card_type,
+                    'suit': move.suit,
+                    'rank': move.rank,
+                    'value': move.value,
+                    'round_index': round_index,
+                },
+                timeout=15,
+            )
+            result = resp.json()
+            if result.get('success') and result.get('config'):
+                self.game.set_config(result['config'])
+            return result
+        except Exception as e:
+            logger.error(f'Kingdom buy_battle_move error: {e}')
+            return {'success': False, 'message': 'Connection error'}
+
     def _handle_slot_click(self, event):
         """Check if the player clicked on a bought-move slot to open its detail box."""
         mx, my = event.pos
@@ -538,10 +785,10 @@ class BattleShopScreen(SubScreen):
         max_moves = settings.BATTLE_SHOP_MAX_MOVES
 
         # Use same centred positions as _draw_bought_slots
-        box_cx = settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2
+        box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         total_span = (max_moves - 1) * delta_x + sw
         slot_start_x = box_cx - total_span // 2
-        sy = settings.BATTLE_SHOP_SLOT_Y
+        sy = self._sy(settings.BATTLE_SHOP_SLOT_Y)
 
         for i in range(max_moves):
             sx = slot_start_x + i * delta_x
@@ -560,6 +807,7 @@ class BattleShopScreen(SubScreen):
                         self.battle_move_manager.families_by_name,
                         self.game,
                         eligible_figures=eligible,
+                        figure_power_bonuses=self._figure_power_bonuses(),
                     )
                 break
 
@@ -582,13 +830,13 @@ class BattleShopScreen(SubScreen):
         """Load all player figures + resource data for Call-move eligibility."""
         try:
             families = self.figure_manager.families
-            self._player_figures = self.game.get_figures(families, is_opponent=False)
+            self._player_figures = self.card_source.get_figures(families, is_opponent=False)
             self._resources_data = self.game.calculate_resources(families, is_opponent=False)
             self._figures_loaded_game_key = (getattr(self.game, 'game_id', None),
                                               getattr(self.game, 'player_id', None),
                                               getattr(self.game, '_figures_data_version', 0))
         except Exception as e:
-            print(f"[BattleShop] Failed to load player figures: {e}")
+            logger.error(f"[BattleShop] Failed to load player figures: {e}")
             self._player_figures = []
             self._resources_data = None
 
@@ -611,12 +859,7 @@ class BattleShopScreen(SubScreen):
         bm_is_red = bm_suit in self._RED_SUITS
 
         # IDs of figures already in battle
-        fighting_ids = set()
-        for attr in ('advancing_figure_id', 'advancing_figure_id_2',
-                     'defending_figure_id', 'defending_figure_id_2'):
-            fid = getattr(self.game, attr, None)
-            if fid is not None:
-                fighting_ids.add(fid)
+        fighting_ids = self._fighting_figure_ids()
 
         eligible = []
         for fig in self._player_figures:
@@ -655,8 +898,8 @@ class BattleShopScreen(SubScreen):
         """Return the power to display for a battle move icon.
 
         For Call moves the value is the maximum combined power
-        (figure base + move bonus if suit matches) across all eligible
-        figures.  For other moves the raw move value is shown.
+        (figure base + healer buff + move bonus if suit matches) across all
+        eligible figures.  For other moves the raw move value is shown.
         """
         family_name = bm.get('family_name', '')
         bm_suit = bm.get('suit', '')
@@ -673,14 +916,44 @@ class BattleShopScreen(SubScreen):
         if not eligible:
             return bm_value
 
+        fighting_ids = self._fighting_figure_ids()
+        healers = buffs_allies_sources(
+            self._player_figures,
+            has_deficit=self._figure_has_deficit,
+            exclude_ids=fighting_ids,
+        )
+
         max_power = 0
         for fig in eligible:
             base = fig.get_value()
+            healer_bonus = buffs_allies_bonus_for(fig, healers)
             bonus = bm_value if fig.suit == bm_suit else 0
-            total = base + bonus
+            total = base + healer_bonus + bonus
             if total > max_power:
                 max_power = total
         return max_power
+
+    def _figure_power_bonuses(self):
+        fighting_ids = self._fighting_figure_ids()
+        healers = buffs_allies_sources(
+            self._player_figures,
+            has_deficit=self._figure_has_deficit,
+            exclude_ids=fighting_ids,
+        )
+        return {
+            fig.id: buffs_allies_bonus_for(fig, healers)
+            for fig in self._player_figures
+        }
+
+    def _fighting_figure_ids(self):
+        """Return figure IDs currently committed as active battle figures."""
+        fighting_ids = set()
+        for attr in ('advancing_figure_id', 'advancing_figure_id_2',
+                     'defending_figure_id', 'defending_figure_id_2'):
+            fid = getattr(self.game, attr, None)
+            if fid is not None:
+                fighting_ids.add(fid)
+        return fighting_ids
 
     def _return_current_slot_move(self):
         """Return a battle move from the slot."""
@@ -693,16 +966,38 @@ class BattleShopScreen(SubScreen):
             return
 
         bm = self.bought_moves[idx]
-        result = battle_shop_service.return_battle_move(
-            game_id=self.game.game_id,
-            player_id=self.game.player_id,
-            battle_move_id=bm['id'],
-        )
+
+        if _is_kingdom_config_mode(self.mode):
+            from utils import http_compat as requests
+            try:
+                resp = requests.post(
+                    f'{settings.SERVER_URL}/kingdom/{_kingdom_mode_path(self.mode)}/return_battle_move',
+                    json={'move_id': bm['id']},
+                    timeout=10,
+                )
+                result = resp.json()
+                if result.get('success') and result.get('config'):
+                    self.game.set_config(result['config'])
+            except Exception as e:
+                logger.error(f'Kingdom return_battle_move error: {e}')
+                result = {'success': False, 'message': 'Connection error'}
+        else:
+            result = battle_shop_service.return_battle_move(
+                game_id=self.game.game_id,
+                player_id=self.game.player_id,
+                battle_move_id=bm['id'],
+            )
 
         if result.get('success'):
             if result.get('game'):
                 self.game.update_from_dict(result['game'])
             self._load_bought_moves()
+
+            # Rebuild card source for kingdom mode (re-fetch free counts)
+            if _is_kingdom_config_mode(self.mode):
+                self._rebuild_card_source_kingdom()
+            else:
+                self._sync_card_source_locked()
 
             # Refresh the scroll list
             if self.selected_family:
@@ -729,10 +1024,10 @@ class BattleShopScreen(SubScreen):
         self._pending_return_index = None
 
     def _on_ready_confirm(self):
-        """Player confirms their 3 battle moves — notify server."""
+        """Player confirms all required battle moves — notify server."""
         if getattr(self.game, 'game_over', False):
             return
-        if len(self.bought_moves) < settings.BATTLE_SHOP_MAX_MOVES:
+        if not self._can_ready_for_battle():
             return
 
         result = battle_shop_service.confirm_battle_moves(
@@ -760,11 +1055,21 @@ class BattleShopScreen(SubScreen):
                 title="Confirmation Failed",
             )
 
+    def _on_config_ready(self):
+        """Return from kingdom config battle shop once all move slots are full."""
+        if not self._can_ready_for_battle():
+            return False
+        if self._on_done:
+            self._on_done()
+            return True
+        return False
+
     # ------------------------------------------------------------------- draw
     def draw(self):
         super().draw()
 
         in_phase = getattr(self.game, 'battle_moves_phase', False)
+        in_config = _is_kingdom_config_mode(self.mode)
 
         # Family icons
         for btn in self.move_family_buttons:
@@ -784,20 +1089,31 @@ class BattleShopScreen(SubScreen):
         if in_phase:
             self._draw_phase_banner()
             if not self._is_locked:
-                if len(self.bought_moves) >= settings.BATTLE_SHOP_MAX_MOVES:
+                if self._can_ready_for_battle():
                     self.ready_button.draw()
+
+        if in_config:
+            self.ready_button.draw()
 
         # Detail box on top of everything except dialogue box / msg
         if self.battle_move_detail_box:
             self.battle_move_detail_box.draw()
 
+        # Drive and draw the floating-text layer (buy feedback, like collect in kingdom config).
+        now_ms = pygame.time.get_ticks()
+        dt_ms = max(0, now_ms - (self._last_render_ms or now_ms))
+        self._last_render_ms = now_ms
+        self._floating_text.update(dt_ms)
+        self._floating_text.draw(self.window)
+
         super().draw_on_top()
 
     def _draw_phase_banner(self):
         """Draw a banner indicating the mandatory battle-move selection phase."""
-        box_cx = settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2
+        box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         count = len(self.bought_moves)
         max_m = settings.BATTLE_SHOP_MAX_MOVES
+        required = self._required_battle_move_count()
 
         if self._waiting_for_opponent:
             text = "Waiting for opponent..."
@@ -805,17 +1121,18 @@ class BattleShopScreen(SubScreen):
         elif self._is_locked:
             text = "Battle moves confirmed! Waiting for opponent..."
             color = settings.BATTLE_SHOP_PHASE_WAITING_COLOR
-        elif count >= max_m:
-            text = "All slots filled — press Ready!"
+        elif count >= required:
+            text = "All slots filled — press Ready!" if required >= max_m else "All available moves selected — press Ready!"
             color = settings.BATTLE_SHOP_PHASE_BANNER_COLOR
         else:
-            text = f"Select {max_m - count} more battle move{'s' if max_m - count > 1 else ''}!"
+            remaining = required - count
+            text = f"Select {remaining} more battle move{'s' if remaining > 1 else ''}!"
             color = settings.BATTLE_SHOP_PHASE_BANNER_COLOR
 
         banner = self.phase_banner_font.render(text, True, color)
         banner_rect = banner.get_rect(
             centerx=box_cx,
-            bottom=settings.BATTLE_SHOP_INFO_BOX_Y + settings.BATTLE_SHOP_INFO_BOX_HEIGHT - int(0.02 * settings.SCREEN_HEIGHT),
+            bottom=self._sy(settings.BATTLE_SHOP_INFO_BOX_Y + settings.BATTLE_SHOP_INFO_BOX_HEIGHT - int(0.02 * settings.SCREEN_HEIGHT)),
         )
         self.window.blit(banner, banner_rect)
 
@@ -832,10 +1149,10 @@ class BattleShopScreen(SubScreen):
         delta_x = settings.BATTLE_SHOP_SLOT_DELTA_X
 
         # Centre the slots horizontally within the info box
-        box_cx = settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2
+        box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         total_span = (max_moves - 1) * delta_x + sw
         slot_start_x = box_cx - total_span // 2
-        sy = settings.BATTLE_SHOP_SLOT_Y
+        sy = self._sy(settings.BATTLE_SHOP_SLOT_Y)
 
         # Label with count — centred above the slots
         count = len(self.bought_moves)

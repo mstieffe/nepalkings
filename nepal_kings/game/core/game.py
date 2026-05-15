@@ -2,22 +2,40 @@
 # See LICENSE file in the project root for full license information.
 from utils import http_compat as requests
 import threading
+import pygame
 from config import settings
 from game.components.cards.card import Card
 from utils.msg_service import fetch_log_entries, add_log_entry, fetch_chat_messages, send_chat_message
 from utils.figure_service import fetch_figures
 from game.components.figures.figure import Figure, FigureFamily
+from game.components.figures.skill_display_filters import filter_figure_for_display
 from typing import List, Dict
+import logging
+
+logger = logging.getLogger('nk.core.game')
+
 
 class Game:
     def __init__(self, game_dict, user_dict, lightweight=False):
         self.game_id = game_dict['id']
         self.state = game_dict['state']
+        self.mode = game_dict.get('mode', 'duel')  # 'duel' or 'conquer'
+        # Conquer-only: 'battle_move' (legacy pre-bought BattleMove flow) vs
+        # 'tactics_hand' (Phase 9 redesign: persistent tactics rail). Default
+        # is 'battle_move' so duel/legacy games behave unchanged.
+        self.conquer_move_model = game_dict.get('conquer_move_model', 'battle_move')
+        self.land_id = game_dict.get('land_id')  # conquer mode only
+        self.land_tier = game_dict.get('land_tier')  # conquer mode only (1..KINGDOM_TIER_COUNT)
+        self.land_gold_rate = game_dict.get('land_gold_rate')  # conquer mode only
+        self.land_suit_bonus_suit = game_dict.get('land_suit_bonus_suit')  # conquer mode only
+        self.land_suit_bonus_value = game_dict.get('land_suit_bonus_value')  # conquer mode only
         self.date = game_dict['date']
         self.stake = game_dict.get('stake', 45)
+        self.game_limit = game_dict.get('game_limit', self.stake)
         self.turn_time_limit = game_dict.get('turn_time_limit')  # Seconds per turn (None = no limit)
         self.winner_player_id = game_dict.get('winner_player_id')
         self.finished_at = game_dict.get('finished_at')
+        self.last_battle_result = game_dict.get('last_battle_result') or {}
         self.players = game_dict.get('players', [])
         self.main_cards = game_dict.get('main_cards', [])
         self.side_cards = game_dict.get('side_cards', [])
@@ -68,14 +86,29 @@ class Game:
         # Initialize to None so first login triggers turn detection if it's their turn
         self.previous_turn_player_id = None
         
+        # Track opponent's turns_left to detect missed intermediate turn states
+        # (e.g. AI responds faster than polling interval)
+        self._last_opponent_turns_left = None
+        
         # Track if game start notification was shown (needs to be shown once per player)
         self.game_start_notification_checked = False
+        self._game_start_pending = False  # True while game_start request is in flight / unprocessed
         
         # Auto-fill notification (cleared after showing dialogue)
         self.pending_auto_fill = None
         
         # Opponent turn summary notification (cleared after showing dialogue)
         self.pending_opponent_turn_summary = None
+        self._last_shown_summary_log_id = None  # dedup stale notifications
+
+        # Conquer startup lock: invader must resolve pending prelude target.
+        self.pending_conquer_prelude_target = False
+
+        # Conquer prelude spell snapshots captured at game_start (the
+        # ActiveSpell entries don't carry a phase_cast field, so we keep
+        # the summary-provided lists for the timeline panel).
+        self.conquer_own_prelude_spells = []
+        self.conquer_opp_prelude_spells = []
         
         # Ceasefire ended notification (cleared after showing dialogue)
         self.pending_ceasefire_ended = False
@@ -126,11 +159,18 @@ class Game:
         self.battle_ready_shown = False  # Track if battle-ready notification was shown
         self.pending_battle_ready = False  # True when both advancing and defending figures are set
         self.battle_ready_shown = False  # Track if battle ready notification was shown
+        self._last_polled_advancing = self.advancing_figure_id  # Poll-only advance snapshot (not affected by update_from_dict)
+        self._last_battle_ready_block_signature = None  # Dedup repeated "battle ready blocked" diagnostics across polls
 
         # Civil War second figure selection tracking
         self.civil_war_awaiting_second = False  # True when waiting for second advance figure
         self.civil_war_defender_second = False  # True when waiting for second defender figure
         self.civil_war_required_color = None  # 'offensive' or 'defensive' — required color for second pick
+
+        # Conquer Invader Swap: original conquerer must select their own defender
+        # after the automated invader advances a blockable figure.
+        self.pending_conquer_own_defender_selection = False
+        self.conquer_own_defender_selection_shown = False
 
         # Battle decision tracking (fold/battle)
         self.battle_decisions = game_dict.get('battle_decisions')
@@ -141,6 +181,7 @@ class Game:
         self.auto_loss_detail = game_dict.get('auto_loss_detail')
         self.resting_figure_ids = game_dict.get('resting_figure_ids', [])
         self.waiting_for_battle_decision = False  # True when waiting for opponent's decision
+        self._battle_decision_miss_count = 0  # consecutive polls without our decision
         self.pending_fold_result = False  # True when fold outcome detected from polling
         self.fold_result_shown = False  # Track if fold result notification was shown
         self.auto_proceed_to_battle = False  # True when both chose battle (detected via polling)
@@ -159,14 +200,31 @@ class Game:
         # Server-authoritative battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)  # current battle round (0-2)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')  # whose turn in battle
+        self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        # Conquer per-round 60s timer (unix timestamp) — None when no timer.
+        self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
+        self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        # Per-player gamble usage (tactics_hand conquer): {pid: {count, rounds}}.
+        self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
 
         # Suppress next turn notification after battle/fold (result dialogue already shown)
         self.suppress_next_turn_summary = False
+
+        # Last polled battle result — kept for safety-net notification if the
+        # battle screen exits without showing a result dialogue.
+        self._last_polled_battle_result = None
 
         # Game-over tracking
         self.game_over = (self.state == 'finished')
         self.pending_game_over = None  # Will be set to game_over dict when detected
         self.game_over_shown = False  # Track if game-over dialogue was shown
+
+        # Prevent double-actions: set True when an action starts, cleared when
+        # fresh game state arrives (via _apply_game_dict / update_from_dict).
+        # A safety timeout (ms) auto-clears the lock if the server never responds.
+        self.action_in_progress = False
+        self._action_lock_time = 0          # pygame.time.get_ticks() when lock was set
+        self._ACTION_LOCK_TIMEOUT_MS = 8000  # safety valve: 8 seconds
 
         # Battle reconnect flag — True until the client has checked for active battle on first poll
         self.battle_reconnect_pending = True
@@ -221,12 +279,12 @@ class Game:
                 timeout=10,
             )
             if resp.status_code != 200:
-                print("Failed to fetch game")
+                logger.error("Failed to fetch game")
                 return None
 
             game_dict = resp.json().get('game')
             if not game_dict:
-                print("Game data not found in response")
+                logger.debug("Game data not found in response")
                 return None
 
             logs = []
@@ -236,23 +294,23 @@ class Game:
             try:
                 logs = fetch_log_entries(game_id)
             except Exception as e:
-                print(f"BG: Failed to fetch log entries: {e}")
+                logger.error(f"BG: Failed to fetch log entries: {e}")
             try:
                 chats = fetch_chat_messages(game_id)
             except Exception as e:
-                print(f"BG: Failed to fetch chat messages: {e}")
+                logger.error(f"BG: Failed to fetch chat messages: {e}")
             try:
                 from utils import spell_service
                 active_spells = spell_service.fetch_active_spells(game_id)
             except Exception as e:
-                print(f"BG: Failed to fetch active spells: {e}")
+                logger.error(f"BG: Failed to fetch active spells: {e}")
             # Fetch figures for all players in the game
             for player in game_dict.get('players', []):
                 pid = player['id']
                 try:
                     figures_by_player[pid] = fetch_figures(pid)
                 except Exception as e:
-                    print(f"BG: Failed to fetch figures for player {pid}: {e}")
+                    logger.error(f"BG: Failed to fetch figures for player {pid}: {e}")
                     figures_by_player[pid] = []
 
             return {
@@ -263,7 +321,7 @@ class Game:
                 'figures': figures_by_player,
             }
         except Exception as e:
-            print(f"BG fetch error: {e}")
+            logger.error(f"BG fetch error: {e}")
             return None
 
     # ── Apply fetched data (main thread only) ──────────────────
@@ -291,15 +349,49 @@ class Game:
         if data:
             self.apply_server_data(data)
 
+    # ── Action lock helpers ────────────────────────────────────
+
+    def lock_actions(self):
+        """Set the action lock.  Call before a server action."""
+        self.action_in_progress = True
+        self._action_lock_time = pygame.time.get_ticks()
+
+    def unlock_actions(self):
+        """Clear the action lock (e.g. on failure / error)."""
+        self.action_in_progress = False
+        self._action_lock_time = 0
+
+    def check_action_lock_timeout(self):
+        """Auto-clear the lock if it's been held too long (safety valve)."""
+        if self.action_in_progress and self._action_lock_time:
+            elapsed = pygame.time.get_ticks() - self._action_lock_time
+            if elapsed > self._ACTION_LOCK_TIMEOUT_MS:
+                logger.info(f"[ACTION_LOCK] Timeout after {elapsed}ms — force-unlocking")
+                self.unlock_actions()
+
     def _apply_game_dict(self, game_dict):
         """Apply a game dict to this instance (main-thread only)."""
         self._game_data_version += 1
+        # Fresh server state arrived — unlock actions
+        self.unlock_actions()
         self.game_id = game_dict['id']
         self.state = game_dict['state']
+        self.mode = game_dict.get('mode', self.mode)
+        self.conquer_move_model = game_dict.get(
+            'conquer_move_model', getattr(self, 'conquer_move_model', 'battle_move'))
+        self.land_id = game_dict.get('land_id', self.land_id)
+        self.land_tier = game_dict.get('land_tier', self.land_tier)
+        self.land_gold_rate = game_dict.get('land_gold_rate', self.land_gold_rate)
+        self.land_suit_bonus_suit = game_dict.get(
+            'land_suit_bonus_suit', self.land_suit_bonus_suit)
+        self.land_suit_bonus_value = game_dict.get(
+            'land_suit_bonus_value', self.land_suit_bonus_value)
         self.date = game_dict['date']
         self.stake = game_dict.get('stake', 45)
+        self.game_limit = game_dict.get('game_limit', self.stake)
         self.winner_player_id = game_dict.get('winner_player_id')
         self.finished_at = game_dict.get('finished_at')
+        self.last_battle_result = game_dict.get('last_battle_result') or {}
         self.players = game_dict.get('players', [])
         self.main_cards = game_dict.get('main_cards', [])
         self.side_cards = game_dict.get('side_cards', [])
@@ -308,7 +400,8 @@ class Game:
         self.turn_player_id = game_dict.get('turn_player_id')
 
         # Detect game-over from server (opponent might have triggered it)
-        if self.state == 'finished' and not self.game_over and not self.game_over_shown:
+        # Skip for conquer mode — battle_screen handles conquer end directly
+        if self.state == 'finished' and not self.game_over and not self.game_over_shown and self.mode != 'conquer':
             self.game_over = True
             # Build game_over info from server state
             winner_player = None
@@ -336,8 +429,17 @@ class Game:
                     'loser_score': loser_player.get('points', 0),
                     'gold_awarded': self.stake * 2,
                     'stake': self.stake,
+                    'game_limit': self.game_limit,
+                    'rounds_played': game_dict.get('current_round', 1),
+                    'stats': last_result.get('game_stats', {}),
+                    'reward_draws': last_result.get('game_over_reward_draws'),
+                    'reward_expectations': last_result.get('game_over_reward_expectations'),
+                    'winner_rewards': last_result.get('game_over_winner_rewards'),
+                    'loser_rewards': last_result.get('game_over_loser_rewards'),
+                    'winner_boosters': last_result.get('game_over_winner_boosters'),
+                    'loser_boosters': last_result.get('game_over_loser_boosters'),
                 }
-                print(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
+                logger.info(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
         
         # Update ceasefire tracking — use _last_polled_ceasefire for transition
         # detection so that update_from_dict (action responses) can't create
@@ -356,7 +458,7 @@ class Game:
         if previous_ceasefire and not self.ceasefire_active and not self.suppress_next_turn_summary:
             # Dedup: only fire once per (round, state) pair
             if self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'ended':
-                print(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive) round={cur_round}")
+                logger.info(f"[CEASEFIRE] Detected ceasefire ended (was active, now inactive) round={cur_round}")
                 self.pending_ceasefire_ended = True
                 self.pending_ceasefire_active_notification = False
                 self._ceasefire_notified_round = cur_round
@@ -371,9 +473,9 @@ class Game:
             # from a concurrent request that loaded the game before the
             # ceasefire-end commit was visible.
             if self._ceasefire_notified_round == cur_round and self._ceasefire_notified_state == 'ended':
-                print(f"[CEASEFIRE] _apply_game_dict: ignoring activation — ceasefire already ended round={cur_round} (stale poll data)")
+                logger.info(f"[CEASEFIRE] _apply_game_dict: ignoring activation — ceasefire already ended round={cur_round} (stale poll data)")
             elif self._ceasefire_notified_round != cur_round or self._ceasefire_notified_state != 'active':
-                print(f"[CEASEFIRE] _apply_game_dict: activating notification, prev_polled={previous_ceasefire}, now={self.ceasefire_active}, round={cur_round}, displayed_round={self._ceasefire_active_displayed_round}")
+                logger.info(f"[CEASEFIRE] _apply_game_dict: activating notification, prev_polled={previous_ceasefire}, now={self.ceasefire_active}, round={cur_round}, displayed_round={self._ceasefire_active_displayed_round}")
                 self.pending_ceasefire_active_notification = True
                 self._ceasefire_notified_round = cur_round
                 self._ceasefire_notified_state = 'active'
@@ -392,12 +494,16 @@ class Game:
             self.pending_spell = None
 
         # Update advance/battle state
-        previous_advancing = self.advancing_figure_id
+        # Use _last_polled_advancing (updated only here) instead of
+        # self.advancing_figure_id which update_from_dict may have already
+        # changed, hiding the set→None transition that resets battle_ready_shown.
+        previous_advancing = self._last_polled_advancing
         self.advancing_figure_id = game_dict.get('advancing_figure_id')
         self.advancing_figure_id_2 = game_dict.get('advancing_figure_id_2')
         self.advancing_player_id = game_dict.get('advancing_player_id')
         self.defending_figure_id = game_dict.get('defending_figure_id')
         self.defending_figure_id_2 = game_dict.get('defending_figure_id_2')
+        self._last_polled_advancing = self.advancing_figure_id
         
         # Clear forced advance once an advance is underway
         if self.pending_forced_advance and self.advancing_figure_id:
@@ -413,6 +519,23 @@ class Game:
             if previous_advancing:
                 self.battle_ready_shown = False
                 self.pending_battle_ready = False
+                # Conquer redesign: a battle just ended (advancing/defending
+                # cleared by the server).  Wipe any client-side latches and
+                # heuristic flags that survived the previous cycle, otherwise
+                # the next conquest would inherit ghost dialogues / modes.
+                if self.mode == 'conquer':
+                    self.pending_forced_advance = False
+                    self.forced_advance_dialogue_shown = False
+                    self.pending_defender_selection = False
+                    self.defender_selection_dialogue_shown = False
+                    self.pending_waiting_for_defender_pick = False
+                    self.waiting_for_defender_pick_shown = False
+                    self.pending_conquer_own_defender_selection = False
+                    self.conquer_own_defender_selection_shown = False
+                    self.civil_war_awaiting_second = False
+                    self.civil_war_defender_second = False
+                    self.civil_war_required_color = None
+                    self.pending_advance_notification = False
         elif not previous_advancing:
             # A brand-new advance appeared (None → set).  Reset battle_ready
             # tracking so the fight/fold dialogue can fire for this new battle.
@@ -446,9 +569,23 @@ class Game:
             self._last_advance_notified_id = self.advancing_figure_id
             self.pending_opponent_turn_summary = None
         
-        # Skip advance/defender detection while battle is confirmed or in progress
-        # (prevents stale flags from re-triggering after battle resolution)
-        battle_active = game_dict.get('battle_confirmed', False) or self.in_battle_phase
+        # Sync local in-battle flag from server state.
+        # If a client misses a cleanup path after battle resolution, a stale
+        # in_battle_phase=True would block all future battle-ready detection.
+        server_battle_confirmed = game_dict.get('battle_confirmed', False)
+        server_battle_turn_player_id = game_dict.get('battle_turn_player_id')
+        if self.in_battle_phase and not server_battle_confirmed and server_battle_turn_player_id is None:
+            logger.warning("[BATTLE_PHASE] Clearing stale in_battle_phase based on server state")
+            self.in_battle_phase = False
+            self.battle_turns_left = 0
+
+        # Skip advance/defender detection while a battle is active on the
+        # server (prevents stale flags from re-triggering after resolution).
+        battle_active = (
+            server_battle_confirmed
+            or bool(game_dict.get('battle_decisions'))
+            or bool(game_dict.get('fold_outcome'))
+        )
 
         # Check for Civil War modifier (needed for defender-pick guard below)
         modifiers = self.battle_modifier if isinstance(self.battle_modifier, list) else []
@@ -486,6 +623,46 @@ class Game:
             not self.waiting_for_defender_pick_shown and
             not (has_civil_war and my_turns_left > 0)):
             self.pending_waiting_for_defender_pick = True
+
+        # Detect: Conquer Invader Swap — original conquerer must select own defender.
+        # Active when: mode=conquer, Invader Swap spell executed, we are the
+        # original conquerer (old_invader_id), opponent has advanced, it's our
+        # turn, no defender chosen, and advance is blockable.
+        if (not battle_active
+                and self.mode == 'conquer'
+                and is_now_our_turn
+                and self.advancing_figure_id
+                and self.advancing_player_id != self.player_id
+                and not self.defending_figure_id
+                and not self.pending_conquer_own_defender_selection
+                and not self.conquer_own_defender_selection_shown):
+            active_spells = game_dict.get('active_spells', [])
+            swap_spell = next(
+                (s for s in active_spells
+                 if s.get('spell_name') == 'Invader Swap'
+                 and isinstance(s.get('effect_data'), dict)
+                 and s['effect_data'].get('conquer_invader_swap')
+                 and s['effect_data'].get('old_invader_id') == self.player_id),
+                None,
+            )
+            if swap_spell:
+                # Check if the advancing figure is cannot_be_blocked
+                # (if so, AI picks the target, not the conquerer)
+                adv_fig_blockable = True
+                for p in game_dict.get('players', []):
+                    for fig in p.get('figures', []):
+                        if fig.get('id') == self.advancing_figure_id:
+                            if fig.get('cannot_be_blocked'):
+                                adv_fig_blockable = False
+                            break
+                if adv_fig_blockable:
+                    self.pending_conquer_own_defender_selection = True
+                    # Suppress the generic waiting-for-defender notification
+                    self.pending_waiting_for_defender_pick = False
+                    logger.info(
+                        f"[INVADER_SWAP] Own defender selection triggered: "
+                        f"advancing={self.advancing_figure_id}"
+                    )
         
         # Battle is ready when both sides have their figures set
         battle_ready = (not battle_active and
@@ -506,25 +683,90 @@ class Game:
             elif (self.advancing_player_id == self.player_id and
                   not is_now_our_turn):
                 battle_ready = False
+
+        # High-signal diagnostics for "no fight/fold dialogue" incidents.
+        # Log once per distinct blocked state to avoid poll spam.
+        if self.advancing_figure_id and self.defending_figure_id:
+            if battle_ready:
+                self._last_battle_ready_block_signature = None
+            else:
+                blocked_reasons = []
+                if battle_active:
+                    blocked_reasons.append('battle_active')
+                if self.pending_battle_ready:
+                    blocked_reasons.append('pending_battle_ready')
+                if self.battle_ready_shown:
+                    blocked_reasons.append('battle_ready_shown')
+                if has_civil_war and self.civil_war_awaiting_second:
+                    blocked_reasons.append('civil_war_invader_second_pending')
+                if has_civil_war and self.civil_war_defender_second:
+                    blocked_reasons.append('civil_war_defender_second_pending')
+                if (has_civil_war and self.advancing_player_id == self.player_id
+                        and not is_now_our_turn):
+                    blocked_reasons.append('civil_war_turn_not_returned')
+
+                signature = (
+                    self.advancing_figure_id,
+                    self.defending_figure_id,
+                    tuple(blocked_reasons),
+                    self.advancing_player_id,
+                    game_dict.get('turn_player_id'),
+                )
+                if signature != self._last_battle_ready_block_signature:
+                    logger.warning(
+                        f"[BATTLE_READY_BLOCKED] adv={self.advancing_figure_id}/{self.advancing_figure_id_2} "
+                        f"def={self.defending_figure_id}/{self.defending_figure_id_2} "
+                        f"reasons={blocked_reasons or ['unknown']} "
+                        f"advancing_player={self.advancing_player_id} turn_player={game_dict.get('turn_player_id')}"
+                    )
+                    self._last_battle_ready_block_signature = signature
         
         if battle_ready:
             self.pending_battle_ready = True
-            print(f"[BATTLE_READY] Figures set: advancing={self.advancing_figure_id}/{self.advancing_figure_id_2}, defending={self.defending_figure_id}/{self.defending_figure_id_2}")
+            logger.info(f"[BATTLE_READY] Figures set: advancing={self.advancing_figure_id}/{self.advancing_figure_id_2}, defending={self.defending_figure_id}/{self.defending_figure_id_2}")
 
         # Detect fold outcome from opponent's battle decision (polling detection)
+        was_battle_moves_phase = self.battle_moves_phase
         previous_fold_outcome = self.fold_outcome
         previous_battle_confirmed = self.battle_confirmed
         self.battle_decisions = game_dict.get('battle_decisions')
         self.battle_confirmed = game_dict.get('battle_confirmed', False)
+        self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
         self.auto_loss_reason = game_dict.get('auto_loss_reason')
         self.auto_loss_detail = game_dict.get('auto_loss_detail')
         self.resting_figure_ids = game_dict.get('resting_figure_ids', [])
 
+        # Safety net: if we think we're waiting for the opponent's decision
+        # but the server has NO record of our decision, the POST may have
+        # failed (e.g. server restart mid-request).  Only reset after
+        # several consecutive misses to avoid a race with the POST still
+        # in flight.
+        if (self.waiting_for_battle_decision and
+                self.advancing_figure_id and self.defending_figure_id and
+                not self.battle_confirmed and not self.fold_outcome):
+            decisions = self.battle_decisions or {}
+            my_decision = decisions.get(str(self.player_id))
+            if my_decision is None:
+                self._battle_decision_miss_count += 1
+                if self._battle_decision_miss_count >= 3:
+                    logger.warning("[BATTLE_DECISION] Safety net: waiting but server has no record of our decision after %d polls — resetting", self._battle_decision_miss_count)
+                    self.waiting_for_battle_decision = False
+                    self._battle_decision_miss_count = 0
+                    self.battle_ready_shown = False
+                    self.pending_battle_ready = False  # will be re-set by battle_ready check below
+            else:
+                self._battle_decision_miss_count = 0
+
         # Update server-authoritative battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
+        self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
+        self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
+        self._sync_battle_moves_phase_from_server()
 
         # Reset fold tracking when server clears fold state (new round started)
         if previous_fold_outcome and not self.fold_outcome:
@@ -535,23 +777,25 @@ class Game:
         if self.fold_outcome and not previous_fold_outcome and not self.fold_result_shown:
             self.pending_fold_result = True
             self.waiting_for_battle_decision = False
-            print(f"[FOLD] Detected fold outcome: {self.fold_outcome}, winner: {self.fold_winner_id}")
+            logger.info(f"[FOLD] Detected fold outcome: {self.fold_outcome}, winner: {self.fold_winner_id}")
 
         # Detect both chose battle (transition from False to True)
-        if self.battle_confirmed and not previous_battle_confirmed and self.waiting_for_battle_decision:
+        if (self.battle_confirmed and not previous_battle_confirmed and
+                (self.waiting_for_battle_decision or self.mode == 'conquer')):
             self.auto_proceed_to_battle = True
             self.waiting_for_battle_decision = False
-            print(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
+            logger.info(f"[BATTLE_DECISION] Both players chose battle — auto-proceeding")
 
-        # Detect opponent confirmed battle moves while we are waiting
-        previous_bm_confirmed = self.battle_moves_confirmed
-        self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
-        if (self.waiting_for_opponent_battle_moves and
-                self.battle_moves_confirmed and
-                len(self.battle_moves_confirmed) >= 2):
+        # Detect transition from move-selection to active battle rounds.
+        player_ids = [str(p.get('id')) for p in (self.players or []) if p.get('id') is not None]
+        confirmed = self.battle_moves_confirmed or {}
+        all_confirmed = bool(player_ids) and all(confirmed.get(pid) for pid in player_ids)
+        if (was_battle_moves_phase and
+            all_confirmed and
+            self.battle_turn_player_id is not None):
             self.both_battle_moves_ready = True
             self.waiting_for_opponent_battle_moves = False
-            print(f"[BATTLE_MOVES] Both players confirmed battle moves — proceed to battle")
+            logger.debug(f"[BATTLE_MOVES] Both players confirmed battle moves — proceed to battle")
 
         # Reinitialize current and opponent players
         for player_dict in self.players:
@@ -566,24 +810,49 @@ class Game:
         self.turn = True if self.turn_player_id == self.player_id else False
         self.invader = True if self.invader_player_id == self.player_id else False
 
+        # Track opponent's turns_left for missed-turn detection
+        opp_turns = None
+        for p in self.players:
+            if p['id'] != self.player_id:
+                opp_turns = p.get('turns_left')
+                break
+        prev_opp_turns = self._last_opponent_turns_left
+        self._last_opponent_turns_left = opp_turns
+
         # Check for game start notification on first update (regardless of turn number)
         if not self.game_start_notification_checked:
-            print(f"[GAME_START] First update - player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
-            print(f"[GAME_START] Checking for welcome message...")
+            logger.info(f"[GAME_START] First update — player_id={self.player_id}, turn={self.turn}, invader={self.invader}")
             self._start_turn_async()
             self.game_start_notification_checked = True
-            print(f"[GAME_START] Flag set to True after first check")
+            self._game_start_pending = True
+        
+        # Suppress all turn-change detection while game_start is in flight /
+        # unprocessed.  Without this guard, a fast AI opponent causes a race:
+        # the turn-change _start_turn_async and the game_start _start_turn_async
+        # both write to pending_opponent_turn_summary and the last writer wins,
+        # potentially losing the opponent action notification.
+        elif self._game_start_pending:
+            pass
         
         # Check if turn changed to current player - call start_turn endpoint
         elif not previous_turn and self.turn and self.previous_turn_player_id != self.turn_player_id:
-            print(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
+            logger.info(f"[TURN CHANGE] Detected turn change to current player. Calling start_turn...")
             self._start_turn_async()
         
         # Detect spell resolution: if our spell was pending and just resolved,
         # and it's still our turn (e.g., Invader Swap keeps turn with caster),
         # trigger _handle_start_turn for auto-fill since turn-change detection missed it
         elif previous_pending_spell_id and not self.pending_spell_id and self.turn and previous_turn:
-            print(f"[SPELL_RESOLVED] Spell resolved while turn stayed with us. Calling start_turn for auto-fill...")
+            logger.info(f"[SPELL_RESOLVED] Spell resolved while turn stayed with us. Calling start_turn for auto-fill...")
+            self._start_turn_async()
+        
+        # Missed intermediate turn: it was our turn before, it's our turn now,
+        # but the opponent's turns_left changed — meaning the opponent took a
+        # turn between polls and we never observed the turn=AI state.
+        elif (self.turn and previous_turn and
+              prev_opp_turns is not None and opp_turns is not None and
+              opp_turns != prev_opp_turns):
+            logger.info(f"[TURN CHANGE] Missed intermediate turn — opponent turns_left {prev_opp_turns}→{opp_turns}. Calling start_turn...")
             self._start_turn_async()
         
         # Update previous turn player for next check
@@ -598,14 +867,17 @@ class Game:
             if my_cards:
                 self.pending_post_battle_side_cards = my_cards
                 self._post_battle_side_cards_round = self.current_round
-                print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
+                logger.info(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
 
         # Detect loot notification for battle loser (which card the winner kept)
         last_result = game_dict.get('last_battle_result') or {}
+        # Keep a copy for the battle-screen safety net (missed result dialogue)
+        if last_result and (last_result.get('winner_player_id') or last_result.get('conquer_resolved')):
+            self._last_polled_battle_result = dict(last_result)
         picked_card = last_result.get('picked_card')
         loser_id = last_result.get('loser_player_id')
-        if last_result:
-            print(f"[LOOT_DEBUG] _apply_game_dict: last_battle_result keys={list(last_result.keys())}, picked_card={picked_card}, loser_id={loser_id} (type={type(loser_id)}), player_id={self.player_id} (type={type(self.player_id)}), round={self.current_round}, loot_round={self._loot_notification_round}")
+        if last_result and picked_card and loser_id == self.player_id and self.current_round != self._loot_notification_round:
+            logger.debug(f"[LOOT_DEBUG] _apply_game_dict: picked_card={picked_card}, loser_id={loser_id}, round={self.current_round}")
         if (picked_card and self.player_id and
                 loser_id == self.player_id and
                 self.current_round != self._loot_notification_round):
@@ -616,16 +888,33 @@ class Game:
                 'winner_name': last_result.get('winner_name', 'Opponent'),
             }
             self._loot_notification_round = self.current_round
-            print(f"[LOOT] Opponent kept card: {picked_card}")
+            logger.info(f"[LOOT] Opponent kept card: {picked_card}")
 
 
     def update_from_dict(self, game_dict):
         """Update game state directly from a dictionary (e.g., from spell service response)."""
         self._game_data_version += 1
+        # Fresh server state arrived — unlock actions
+        self.unlock_actions()
         # Update game data
         self.game_id = game_dict['id']
         self.state = game_dict['state']
+        self.mode = game_dict.get('mode', self.mode)
+        self.conquer_move_model = game_dict.get(
+            'conquer_move_model', getattr(self, 'conquer_move_model', 'battle_move'))
+        self.land_id = game_dict.get('land_id', self.land_id)
+        self.land_tier = game_dict.get('land_tier', self.land_tier)
+        self.land_gold_rate = game_dict.get('land_gold_rate', self.land_gold_rate)
+        self.land_suit_bonus_suit = game_dict.get(
+            'land_suit_bonus_suit', self.land_suit_bonus_suit)
+        self.land_suit_bonus_value = game_dict.get(
+            'land_suit_bonus_value', self.land_suit_bonus_value)
         self.date = game_dict['date']
+        self.stake = game_dict.get('stake', getattr(self, 'stake', 45))
+        self.game_limit = game_dict.get('game_limit', self.stake)
+        self.winner_player_id = game_dict.get('winner_player_id')
+        self.finished_at = game_dict.get('finished_at')
+        self.last_battle_result = game_dict.get('last_battle_result') or {}
         self.players = game_dict.get('players', [])
         self.main_cards = game_dict.get('main_cards', [])
         self.side_cards = game_dict.get('side_cards', [])
@@ -657,14 +946,48 @@ class Game:
         
         # Update battle decision/fold state
         self.battle_decisions = game_dict.get('battle_decisions')
+        previous_battle_confirmed = self.battle_confirmed
         self.battle_confirmed = game_dict.get('battle_confirmed', False)
         self.battle_moves_confirmed = game_dict.get('battle_moves_confirmed')
+        previous_fold_outcome = self.fold_outcome
         self.fold_outcome = game_dict.get('fold_outcome')
         self.fold_winner_id = game_dict.get('fold_winner_id')
+
+        # Fix: If battle is confirmed, forcibly set guards to prevent double notification
+        if self.battle_confirmed:
+            self.pending_battle_ready = False
+            self.battle_ready_shown = True
+
+        # Detect both chose battle (transition) — mirrors _apply_game_dict
+        if (self.battle_confirmed and not previous_battle_confirmed and
+                (self.waiting_for_battle_decision or self.mode == 'conquer')):
+            self.auto_proceed_to_battle = True
+            self.waiting_for_battle_decision = False
+            logger.info("[BATTLE_DECISION] update_from_dict: both players chose battle — auto-proceeding")
+
+        # Detect fold outcome (transition) — mirrors _apply_game_dict
+        if (self.fold_outcome and not previous_fold_outcome and
+                not self.fold_result_shown):
+            self.pending_fold_result = True
+            self.waiting_for_battle_decision = False
+            logger.info(f"[FOLD] update_from_dict: fold outcome={self.fold_outcome}, winner={self.fold_winner_id}")
+        
+        # Detect battle_ready when both figures are set (e.g. after select_defender)
+        if (self.advancing_figure_id and self.defending_figure_id and
+                not self.battle_confirmed and
+                not self.pending_battle_ready and not self.battle_ready_shown):
+            self.pending_battle_ready = True
+            logger.info(f"[BATTLE_READY] update_from_dict: both figures set, triggering battle_ready")
         
         # Update battle round tracking
         self.battle_round = game_dict.get('battle_round', 0)
         self.battle_turn_player_id = game_dict.get('battle_turn_player_id')
+        self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
+        # Conquer per-round 60s move deadline (unix ts) — None if no timer.
+        self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
+        self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
+        self._sync_battle_moves_phase_from_server()
         
         # Check if we're waiting for this player to counter
         if self.pending_spell_id and self.waiting_for_counter_player_id:
@@ -698,7 +1021,7 @@ class Game:
             if my_cards:
                 self.pending_post_battle_side_cards = my_cards
                 self._post_battle_side_cards_round = self.current_round
-                print(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
+                logger.info(f"[POST_BATTLE] Drew side cards for new round {self.current_round}: {my_cards}")
 
         # Detect loot notification for battle loser (which card the winner kept)
         last_result = game_dict.get('last_battle_result') or {}
@@ -713,7 +1036,7 @@ class Game:
                 'winner_name': last_result.get('winner_name', 'Opponent'),
             }
             self._loot_notification_round = self.current_round
-            print(f"[LOOT] Opponent kept card (update_from_dict): {picked_card}")
+            logger.info(f"[LOOT] Opponent kept card (update_from_dict): {picked_card}")
 
         # Note: logs and chats are fetched by the background poller
         # No need to block here — the next poll cycle will pick them up
@@ -733,7 +1056,7 @@ class Game:
                 'game_id': self.game_id,
                 'player_id': self.player_id
             }
-            print(f"[START_TURN] Sending payload: game_id={self.game_id} (type={type(self.game_id)}), player_id={self.player_id} (type={type(self.player_id)})")
+            logger.debug(f"[START_TURN] Sending payload: game_id={self.game_id} (type={type(self.game_id)}), player_id={self.player_id} (type={type(self.player_id)})")
             
             response = requests.post(
                 f'{settings.SERVER_URL}/games/start_turn',
@@ -742,56 +1065,75 @@ class Game:
             )
             
             if response.status_code != 200:
-                print(f"[START_TURN] Failed with status {response.status_code}: {response.json()}")
+                logger.error(f"[START_TURN] Failed with status {response.status_code}: {response.json()}")
                 return
             
             data = response.json()
-            print(f"[START_TURN] Response: {data}")
+            logger.debug(f"[START_TURN] Response: {data}")
             if data.get('success'):
                 auto_fill = data.get('auto_fill')
                 if auto_fill:
                     # Store for dialogue display
-                    print(f"[START_TURN] Auto-fill needed: {auto_fill}")
+                    logger.debug(f"[START_TURN] Auto-fill needed: {auto_fill}")
                     self.pending_auto_fill = auto_fill
                 else:
-                    print(f"[START_TURN] No auto-fill needed")
+                    logger.debug(f"[START_TURN] No auto-fill needed")
                 
                 # Store opponent turn summary for dialogue display
                 # But suppress it if an advance notification is pending (advance has its own notification)
                 # Also suppress after battle/fold resolution (result dialogue already shown)
                 # Exception: never suppress notifications that directly affect the player
                 # (e.g. Forced Deal card swap, Dump Cards, Poison on player's figure, Explosion)
+                # In conquer mode, suppress all non-game_start turn summaries
                 opponent_turn_summary = data.get('opponent_turn_summary')
                 action_data = opponent_turn_summary.get('action', {}) if opponent_turn_summary and isinstance(opponent_turn_summary.get('action'), dict) else {}
                 affects_player = action_data.get('affects_player', False)
+                action_type = opponent_turn_summary.get('action') if opponent_turn_summary else None
                 
-                if affects_player and opponent_turn_summary:
+                # In conquer mode, suppress only truly empty/unknown turn summaries.
+                # Allow spell casts, counter-advances, and player-affecting actions through.
+                action_type_str = action_data.get('type', '') if isinstance(action_data, dict) else ''
+                is_meaningful = (affects_player
+                                 or action_type == 'game_start'
+                                 or action_type_str in ('spell', 'counter_advance', 'advance'))
+                if self.mode == 'conquer' and not is_meaningful:
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — conquer mode (action_type={action_type_str})")
+                    self.pending_opponent_turn_summary = None
+                elif affects_player and opponent_turn_summary:
                     # Always show notifications that directly affect the player's state
-                    print(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
+                    logger.debug(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
                     self.pending_opponent_turn_summary = opponent_turn_summary
                 elif self.suppress_next_turn_summary:
                     self.suppress_next_turn_summary = False
                     # Fully suppress the post-battle/fold turn summary — the
                     # round-start notifications (victory/defeat, ceasefire, side
                     # cards) already cover what the player needs to know.
-                    print(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
                     self.pending_opponent_turn_summary = None
                 elif (self.pending_advance_notification or
                       (self.advancing_figure_id and
                        self.advancing_player_id != self.player_id)):
-                    print(f"[START_TURN] Suppressing opponent turn summary — advance notification pending or opponent advance active")
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — advance notification pending or opponent advance active")
                 elif self.pending_battle_ready:
-                    print(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
                 elif self.pending_fold_result:
-                    print(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
+                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
                 elif opponent_turn_summary:
-                    print(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
-                    self.pending_opponent_turn_summary = opponent_turn_summary
+                    # Deduplicate: skip if this exact log was already shown
+                    summary_log_id = opponent_turn_summary.get('log_id')
+                    if summary_log_id and summary_log_id == self._last_shown_summary_log_id:
+                        logger.debug(f"[START_TURN] Skipping duplicate opponent turn summary (log_id={summary_log_id})")
+                        self.pending_opponent_turn_summary = None
+                    else:
+                        logger.debug(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
+                        self.pending_opponent_turn_summary = opponent_turn_summary
+                        if summary_log_id:
+                            self._last_shown_summary_log_id = summary_log_id
                 else:
-                    print(f"[START_TURN] No opponent turn summary")
+                    logger.debug(f"[START_TURN] No opponent turn summary")
                     self.pending_opponent_turn_summary = None
         except Exception as e:
-            print(f"Error in start_turn: {str(e)}")
+            logger.error(f"Error in start_turn: {str(e)}")
 
     def get_player_username(self, player_id):
         """Fetch the username of a player given their player_id."""
@@ -822,7 +1164,7 @@ class Game:
                 type=c.get('type')  # Include the card type
             )
             for c in self.main_cards
-            if c['player_id'] == player_id and not c.get('part_of_figure', False) and not c.get('in_deck', False)
+            if c['player_id'] == player_id and not c.get('in_deck', False) and not c.get('part_of_figure', False)
         ]
 
         # Side hand
@@ -841,7 +1183,7 @@ class Game:
                 type=c.get('type')  # Include the card type
             )
             for c in self.side_cards
-            if c['player_id'] == player_id and not c.get('part_of_figure', False) and not c.get('in_deck', False)
+            if c['player_id'] == player_id and not c.get('in_deck', False) and not c.get('part_of_figure', False)
         ]
 
         return main_hand, side_hand
@@ -865,7 +1207,7 @@ class Game:
             for figure_data in figures_data:
                 family_name = figure_data['family_name']
                 if family_name not in families:
-                    print(f"Skipping unknown family: {family_name}")
+                    logger.warning(f"Skipping unknown family: {family_name}")
                     continue
 
                 family = families[family_name]
@@ -874,57 +1216,54 @@ class Game:
 
 
                 if not any(cards.values()):
-                    print(f"Skipping figure with no valid cards: {figure_data}")
+                    logger.warning(f"Skipping figure with no valid cards: {figure_data}")
                     continue
 
                 # Safely retrieve number_card and upgrade_card
                 number_card = cards.get('number')[0] if cards.get('number') else None
                 upgrade_card = cards.get('upgrade')[0] if cards.get('upgrade') else None
 
-                # If upgrade_card is not in the saved cards, try to get it from the family definition
-                # Match this figure to the correct variant in the family to get upgrade_card and combat attributes
+                # Match this figure to the correct variant in the family to get upgrade_card
+                # and combat attributes that are not stored on the server Figure model.
+                # Match by suit only — key-card rank matching is intentionally skipped because
+                # players may use collection cards with non-standard ranks, which would cause
+                # the match to fail and silently zero-out all combat attributes.
                 key_cards = cards.get('key', [])
                 matched_family_figure = None
-                
-                # Find matching figure in family definitions
+
                 for family_figure in family.figures:
-                    # Match by suit and cards
-                    if (family_figure.suit == figure_data['suit'] and 
-                        len(family_figure.key_cards) == len(key_cards)):
-                        # Check if key cards match
-                        key_cards_match = all(
-                            any(kc.rank == fkc.rank and kc.suit == fkc.suit 
-                                for fkc in family_figure.key_cards)
-                            for kc in key_cards
-                        )
-                        # Check if number cards match (if present)
-                        number_cards_match = True
-                        if number_card and family_figure.number_card:
-                            number_cards_match = (number_card.rank == family_figure.number_card.rank and
-                                                number_card.suit == family_figure.number_card.suit)
-                        elif number_card or family_figure.number_card:
-                            number_cards_match = False
-                        
-                        if key_cards_match and number_cards_match:
-                            matched_family_figure = family_figure
-                            if not upgrade_card:
-                                upgrade_card = family_figure.upgrade_card
+                    if family_figure.suit != figure_data['suit']:
+                        continue
+                    matched_family_figure = family_figure
+                    if not upgrade_card:
+                        upgrade_card = family_figure.upgrade_card
+                    # Prefer the variant whose number-card rank exactly matches.
+                    if number_card and family_figure.number_card:
+                        if number_card.rank == family_figure.number_card.rank:
                             break
 
-                # Extract combat attributes from matched family figure
-                cannot_attack = matched_family_figure.cannot_attack if matched_family_figure and hasattr(matched_family_figure, 'cannot_attack') else False
-                must_be_attacked = matched_family_figure.must_be_attacked if matched_family_figure and hasattr(matched_family_figure, 'must_be_attacked') else False
-                rest_after_attack = matched_family_figure.rest_after_attack if matched_family_figure and hasattr(matched_family_figure, 'rest_after_attack') else False
-                distance_attack = matched_family_figure.distance_attack if matched_family_figure and hasattr(matched_family_figure, 'distance_attack') else False
-                buffs_allies = matched_family_figure.buffs_allies if matched_family_figure and hasattr(matched_family_figure, 'buffs_allies') else False
-                buffs_allies_defence = matched_family_figure.buffs_allies_defence if matched_family_figure and hasattr(matched_family_figure, 'buffs_allies_defence') else False
-                blocks_bonus = matched_family_figure.blocks_bonus if matched_family_figure and hasattr(matched_family_figure, 'blocks_bonus') else False
-                cannot_defend = matched_family_figure.cannot_defend if matched_family_figure and hasattr(matched_family_figure, 'cannot_defend') else False
-                instant_charge = matched_family_figure.instant_charge if matched_family_figure and hasattr(matched_family_figure, 'instant_charge') else False
-                cannot_be_blocked = matched_family_figure.cannot_be_blocked if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_blocked') else False
-                cannot_be_targeted = matched_family_figure.cannot_be_targeted if matched_family_figure and hasattr(matched_family_figure, 'cannot_be_targeted') else False
-                checkmate = figure_data.get('checkmate', False) or (matched_family_figure.checkmate if matched_family_figure and hasattr(matched_family_figure, 'checkmate') else False)
-                override_base_power = matched_family_figure.override_base_power if matched_family_figure and hasattr(matched_family_figure, 'override_base_power') else None
+                # Extract combat attributes. Attributes persisted on the server Figure model
+                # (cannot_be_blocked, rest_after_attack) are read directly from figure_data so
+                # they remain correct even when the family-figure match is imprecise.
+                # All other attributes are derived from the matched family figure.
+                _mff = matched_family_figure
+                cannot_attack        = getattr(_mff, 'cannot_attack', False)        if _mff else False
+                must_be_attacked     = getattr(_mff, 'must_be_attacked', False)     if _mff else False
+                distance_attack      = getattr(_mff, 'distance_attack', False)      if _mff else False
+                buffs_allies         = getattr(_mff, 'buffs_allies', False)         if _mff else False
+                buffs_allies_defence = getattr(_mff, 'buffs_allies_defence', False) if _mff else False
+                blocks_bonus         = getattr(_mff, 'blocks_bonus', False)         if _mff else False
+                cannot_defend        = getattr(_mff, 'cannot_defend', False)        if _mff else False
+                instant_charge       = getattr(_mff, 'instant_charge', False)       if _mff else False
+                cannot_be_targeted   = getattr(_mff, 'cannot_be_targeted', False)   if _mff else False
+                override_base_power  = getattr(_mff, 'override_base_power', None)   if _mff else None
+                # Prefer server-stored values; fall back to family definition.
+                cannot_be_blocked = figure_data.get(
+                    'cannot_be_blocked', getattr(_mff, 'cannot_be_blocked', False) if _mff else False)
+                rest_after_attack = figure_data.get(
+                    'rest_after_attack', getattr(_mff, 'rest_after_attack', False) if _mff else False)
+                checkmate = figure_data.get('checkmate', False) or (
+                    getattr(_mff, 'checkmate', False) if _mff else False)
 
                 figure = Figure(
                     name=figure_data['name'],
@@ -954,6 +1293,11 @@ class Game:
                     checkmate=checkmate,
                     override_base_power=override_base_power,
                 )
+                if self.mode == 'conquer':
+                    figure = filter_figure_for_display(
+                        figure,
+                        hide_instant_charge=True,
+                    )
                 figures.append(figure)
 
             # Load active enchantments for all figures
@@ -961,7 +1305,7 @@ class Game:
 
             return figures
         except Exception as e:
-            print(f"Error loading figures: {str(e)}")
+            logger.error(f"Error loading figures: {str(e)}")
             return []
     
     def _load_enchantments_for_figures(self, figures: List[Figure]):
@@ -996,8 +1340,7 @@ class Game:
                             )
                             break
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"Error loading enchantments: {e}")
 
     def has_active_all_seeing_eye(self) -> bool:
         """
@@ -1030,6 +1373,61 @@ class Game:
                 spell_data.get('player_id') == self.player_id):
                 return True
         return False
+
+    def _sync_battle_moves_phase_from_server(self):
+        """Synchronize battle-move selection flags from server battle fields.
+
+        Selection phase is authoritative when battle is confirmed but the first
+        battle turn has not been assigned yet (battle_turn_player_id is None).
+        In conquer mode, moves are pre-purchased — skip the selection phase.
+        """
+        # Conquer mode: moves are pre-purchased in the config screen.
+        # However, if the player has extra hand cards (from prelude spells)
+        # the client opens the battle shop and sets battle_moves_phase=True.
+        # Don't overwrite that — use the server's confirmed state instead.
+        if self.mode == 'conquer':
+            if self.battle_confirmed and self.battle_turn_player_id is None:
+                # Battle confirmed but moves not finalized — keep current
+                # battle_moves_phase flag (may be True if shop is open)
+                confirmed = self.battle_moves_confirmed or {}
+                my_pid = str(self.player_id) if self.player_id is not None else None
+                player_ids = [str(p.get('id')) for p in (self.players or []) if p.get('id') is not None]
+                all_ready = bool(player_ids) and all(confirmed.get(pid) for pid in player_ids)
+                if all_ready:
+                    self.both_battle_moves_ready = True
+                elif my_pid and confirmed.get(my_pid):
+                    self.waiting_for_opponent_battle_moves = True
+            elif not self.battle_confirmed:
+                # No battle yet — default conquer state
+                self.battle_moves_phase = False
+                self.battle_moves_ready = True
+                self.waiting_for_opponent_battle_moves = False
+                self.both_battle_moves_ready = False
+            return
+
+        in_selection_phase = bool(
+            self.battle_confirmed and
+            self.battle_turn_player_id is None and
+            not self.fold_outcome
+        )
+
+        if in_selection_phase:
+            confirmed = self.battle_moves_confirmed or {}
+            my_pid = str(self.player_id) if self.player_id is not None else None
+            player_ids = [str(p.get('id')) for p in (self.players or []) if p.get('id') is not None]
+            all_ready = bool(player_ids) and all(confirmed.get(pid) for pid in player_ids)
+            self.battle_moves_phase = True
+            self.battle_moves_ready = bool(my_pid and confirmed.get(my_pid))
+            self.waiting_for_opponent_battle_moves = bool(self.battle_moves_ready and not all_ready)
+            self.both_battle_moves_ready = False
+            return
+
+        # Outside selection phase, clear local waiting flags.
+        self.battle_moves_phase = False
+        self.battle_moves_ready = False
+        self.waiting_for_opponent_battle_moves = False
+        if not self.battle_confirmed:
+            self.both_battle_moves_ready = False
 
     def is_battle_active(self) -> bool:
         """Return True while a battle is actually in progress (confirmed → resolution).
@@ -1082,11 +1480,7 @@ class Game:
         """
         figures = self.get_figures(families, is_opponent=is_opponent)
         
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[CLIENT] Calculating resources for {len(figures)} figures\n")
-                for figure in figures:
-                    f.write(f"[CLIENT] Figure: {figure.name}, produces: {figure.produces}, requires: {figure.requires}\n")
+        logger.debug(f"Calculating resources for {len(figures)} figures")
 
         # Total requires is always the sum across ALL figures (never changes)
         total_requires = {}
@@ -1120,13 +1514,9 @@ class Game:
                         stable = False
                         break
         
-        if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[CLIENT] Total produces: {total_produces}\n")
-                f.write(f"[CLIENT] Total requires: {total_requires}\n")
-                if excluded:
-                    f.write(f"[CLIENT] Deficit figures excluded from production: "
-                            f"{[figures[i].name for i in excluded]}\n")
+        if excluded:
+            logger.debug(f"Resource deficit: excluded={[figures[i].name for i in excluded]}, "
+                         f"produces={total_produces}, requires={total_requires}")
         return {'produces': total_produces, 'requires': total_requires}
 
     @staticmethod
@@ -1158,7 +1548,7 @@ class Game:
                 if card_data.get('role') in cards:
                     cards[card_data['role']].append(card)
             except KeyError as e:
-                print(f"Skipping card with missing data: {card_data}, Error: {e}")
+                logger.error(f"Skipping card with missing data: {card_data}, Error: {e}")
                 continue
 
         return cards
@@ -1169,7 +1559,7 @@ class Game:
         try:
             self.log_entries = fetch_log_entries(self.game_id)
         except Exception as e:
-            print(f"Failed to fetch log entries: {str(e)}")
+            logger.error(f"Failed to fetch log entries: {str(e)}")
 
     def add_log_entry(self, round_number, turn_number, message, author, entry_type):
         """Add a log entry and update the log list."""
@@ -1177,14 +1567,14 @@ class Game:
             add_log_entry(self.game_id, self.player_id, round_number, turn_number, message, author, entry_type)
             self.update_logs()
         except Exception as e:
-            print(f"Failed to add log entry: {str(e)}")
+            logger.error(f"Failed to add log entry: {str(e)}")
 
     def update_chats(self):
         """Fetch and update chat messages."""
         try:
             self.chat_messages = fetch_chat_messages(self.game_id)
         except Exception as e:
-            print(f"Failed to fetch chat messages: {str(e)}")
+            logger.error(f"Failed to fetch chat messages: {str(e)}")
 
     def send_chat_message(self, receiver_id, message):
         """Send a chat message and update the chat list."""
@@ -1192,7 +1582,7 @@ class Game:
             send_chat_message(self.game_id, self.player_id, receiver_id, message)
             self.update_chats()
         except Exception as e:
-            print(f"Failed to send chat message: {str(e)}")
+            logger.error(f"Failed to send chat message: {str(e)}")
 
 
     def change_main_cards(self, cards):
@@ -1222,7 +1612,7 @@ class Game:
             }, timeout=10)
 
             if response.status_code != 200:
-                print(f"Failed to change {card_type} cards: {response.json().get('message', 'Unknown error')}")
+                logger.error(f"Failed to change {card_type} cards: {response.json().get('message', 'Unknown error')}")
                 return []
 
             # Update the game state after a successful response
@@ -1232,7 +1622,7 @@ class Game:
 
             return new_cards
         except Exception as e:
-            print(f"An error occurred while changing {card_type} cards: {str(e)}")
+            logger.error(f"An error occurred while changing {card_type} cards: {str(e)}")
             return []
     
     def _discard_cards(self, cards, card_type):
@@ -1246,7 +1636,7 @@ class Game:
             }, timeout=10)
 
             if response.status_code != 200:
-                print(f"Failed to discard {card_type} cards: {response.json().get('message', 'Unknown error')}")
+                logger.error(f"Failed to discard {card_type} cards: {response.json().get('message', 'Unknown error')}")
                 return False
 
             # Log the card discard action
@@ -1259,5 +1649,5 @@ class Game:
 
             return True
         except Exception as e:
-            print(f"An error occurred while discarding {card_type} cards: {str(e)}")
+            logger.error(f"An error occurred while discarding {card_type} cards: {str(e)}")
             return False

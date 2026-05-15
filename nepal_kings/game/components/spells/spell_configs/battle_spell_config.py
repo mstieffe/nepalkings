@@ -129,6 +129,7 @@ BLITZKRIEG_CONFIG = {
     "name": "Blitzkrieg",
     "type": "tactics",
     "description": "You become the invader (if you are not already). The next advancing figure cannot be blocked, i.e. the defender can not counter advance. Both players have 2 turns left. The invader starts next turn. Ceasefire is active until the last turn.",
+    "mini_game_descripition": "The next advancing figure cannot be blocked.",
     "suits": ["Hearts", "Spades"],  # Represents red and black suit groups
     "icon_img": "blitzkrieg.png",
     "icon_gray_img": "blitzkrieg.png",

@@ -4,18 +4,22 @@
 
 import random
 import logging
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from models import db, Game, Player, MainCard, SideCard, BattleMove, User, LogEntry
 import server_settings as settings
+from routes.auth import require_token, verify_player_ownership
 
 battle_shop = Blueprint('battle_shop', __name__)
 
+logger = logging.getLogger('nepalkings.server')
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 
 @battle_shop.after_request
 def _ai_trigger_hook(response):
     """After every POST, check if an AI player needs to act."""
     if request.method == 'POST' and settings.AI_ENABLED:
+        if request.headers.get('X-NepalKings-AI-Internal') == '1':
+            return response
         game_id = None
         try:
             if request.is_json and request.json:
@@ -34,7 +38,103 @@ def _ai_trigger_hook(response):
 MAX_BATTLE_MOVES = 3
 
 
+def _available_battle_move_card_count(game_id, player_id):
+    """Count unreserved in-hand cards that can still back battle moves."""
+    main_count = MainCard.query.filter_by(
+        game_id=game_id,
+        player_id=player_id,
+        in_deck=False,
+        part_of_figure=False,
+        part_of_battle_move=False,
+    ).count()
+    side_count = SideCard.query.filter_by(
+        game_id=game_id,
+        player_id=player_id,
+        in_deck=False,
+        part_of_figure=False,
+        part_of_battle_move=False,
+    ).count()
+    return main_count + side_count
+
+
+def _required_battle_move_count(game, player_id):
+    """Return how many moves this player must confirm for the battle.
+
+    Duel normally requires all three moves.  The only exception is the rare
+    exhausted-deck state where auto-fill could not leave enough in-hand cards;
+    then the player must confirm every move they can actually make.
+    """
+    if not game or game.mode == 'conquer':
+        return 0
+    existing = BattleMove.query.filter_by(
+        game_id=game.id,
+        player_id=player_id,
+    ).count()
+    available_cards = _available_battle_move_card_count(game.id, player_id)
+    return min(MAX_BATTLE_MOVES, existing + available_cards)
+
+
+def _battle_move_requirement_payload(game, player_id):
+    required = _required_battle_move_count(game, player_id)
+    existing = BattleMove.query.filter_by(
+        game_id=game.id,
+        player_id=player_id,
+    ).count() if game else 0
+    return {
+        'required_battle_moves': required,
+        'selected_battle_moves': existing,
+        'max_battle_moves': MAX_BATTLE_MOVES,
+    }
+
+
+def _is_battle_move_selection_phase(game):
+    """Return True while players are selecting/confirming pre-battle moves."""
+    return bool(game and game.battle_confirmed and game.battle_turn_player_id is None)
+
+
+def _is_tactics_hand_conquer(game):
+    """Return True for conquer games using the unified tactics-hand model.
+
+    These games skip the legacy battle_shop buy/return/confirm phase: the
+    configured battle moves are already the player's starting hand at
+    battle-decision time, and the player interacts with them directly via
+    play/combine/dismantle/gamble.
+    """
+    return bool(
+        game
+        and game.mode == 'conquer'
+        and (getattr(game, 'conquer_move_model', None) or 'battle_move') == 'tactics_hand'
+    )
+
+
+def _block_legacy_battle_shop_mutation(game):
+    """Reject buy/return/confirm requests for tactics-hand conquer games."""
+    if _is_tactics_hand_conquer(game):
+        return jsonify({
+            'success': False,
+            'message': 'Battle shop is disabled for this conquer game (tactics-hand model).',
+            'reason': 'tactics_hand_no_shop',
+        }), 400
+    return None
+
+
+def _guard_confirmed_selection_locked(game, player_id):
+    """Block editing pre-battle moves after this player pressed Ready."""
+    if not _is_battle_move_selection_phase(game):
+        return None
+
+    confirmed = game.battle_moves_confirmed or {}
+    if confirmed.get(str(player_id)):
+        return jsonify({
+            'success': False,
+            'message': 'Your battle moves are already confirmed and cannot be changed.',
+            'reason': 'battle_moves_locked'
+        }), 400
+    return None
+
+
 @battle_shop.route('/buy_battle_move', methods=['POST'])
+@require_token
 def buy_battle_move():
     """Buy a battle move by reserving one card from the player's hand.
 
@@ -57,13 +157,32 @@ def buy_battle_move():
     if not all([game_id, player_id, family_name, card_id, suit, rank]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-    game = Game.query.get(game_id)
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
+
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-    player = Player.query.get(player_id)
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
+    player = db.session.get(Player, player_id)
     if not player or player.game_id != game_id:
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
+
+    # Once active rounds start, battle moves are fixed.
+    if game.battle_confirmed and game.battle_turn_player_id is not None:
+        return jsonify({
+            'success': False,
+            'message': 'Cannot buy battle moves after battle rounds have started.'
+        }), 400
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
 
     # Check max battle moves
     existing_moves = BattleMove.query.filter_by(game_id=game_id, player_id=player_id).count()
@@ -72,9 +191,9 @@ def buy_battle_move():
 
     # Find and validate the card
     if card_type == 'side':
-        card = SideCard.query.get(card_id)
+        card = db.session.get(SideCard, card_id)
     else:
-        card = MainCard.query.get(card_id)
+        card = db.session.get(MainCard, card_id)
 
     if not card:
         return jsonify({'success': False, 'message': 'Card not found'}), 404
@@ -123,6 +242,7 @@ def buy_battle_move():
 
 
 @battle_shop.route('/return_battle_move', methods=['POST'])
+@require_token
 def return_battle_move():
     """Return (cancel) a previously bought battle move.
 
@@ -138,22 +258,40 @@ def return_battle_move():
     if not all([game_id, player_id, battle_move_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-    battle_move = BattleMove.query.get(battle_move_id)
+    battle_move = db.session.get(BattleMove, battle_move_id)
     if not battle_move:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
+
+    err = verify_player_ownership(battle_move.player_id)
+    if err:
+        return err
 
     if battle_move.game_id != game_id or battle_move.player_id != player_id:
         return jsonify({'success': False, 'message': 'Battle move does not belong to this player'}), 400
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
+    if game.battle_confirmed and game.battle_turn_player_id is not None:
+        return jsonify({
+            'success': False,
+            'message': 'Cannot return battle moves after battle rounds have started.'
+        }), 400
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
+
     # Un-reserve the card
     if battle_move.card_type == 'side':
-        card = SideCard.query.get(battle_move.card_id)
+        card = db.session.get(SideCard, battle_move.card_id)
     else:
-        card = MainCard.query.get(battle_move.card_id)
+        card = db.session.get(MainCard, battle_move.card_id)
 
     if card:
         card.part_of_battle_move = False
@@ -189,6 +327,7 @@ def get_battle_moves():
 
 
 @battle_shop.route('/confirm_battle_moves', methods=['POST'])
+@require_token
 def confirm_battle_moves():
     """Mark a player as ready (all 3 battle moves selected).
 
@@ -204,29 +343,78 @@ def confirm_battle_moves():
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'Missing game_id or player_id'}), 400
 
-    game = Game.query.get(game_id)
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
+
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-    # Verify the player has exactly MAX_BATTLE_MOVES battle moves
-    move_count = BattleMove.query.filter_by(game_id=game_id, player_id=player_id).count()
-    if move_count < MAX_BATTLE_MOVES:
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
+    if not game.battle_confirmed:
         return jsonify({
             'success': False,
-            'message': f'You must select {MAX_BATTLE_MOVES} battle moves before confirming.'
+            'message': 'Battle move confirmation is only available during battle preparation.'
+        }), 400
+
+    # Idempotent: if battle already started, treat this as already ready.
+    if game.battle_turn_player_id is not None:
+        return jsonify({
+            'success': True,
+            'both_ready': True,
+            'game': game.serialize(),
+            **_battle_move_requirement_payload(game, player_id),
+        })
+
+    # Verify the player has all currently possible battle moves.  Duel normally
+    # requires three, but if auto-fill truly cannot provide enough cards (deck
+    # exhausted and no more unreserved hand cards), the player may confirm fewer.
+    # Conquer mode is config-driven and may have fewer prebuilt moves.
+    move_count = BattleMove.query.filter_by(game_id=game_id, player_id=player_id).count()
+    required_count = _required_battle_move_count(game, player_id)
+    if game.mode != 'conquer' and move_count < required_count:
+        return jsonify({
+            'success': False,
+            'message': f'You must select {required_count} battle move(s) before confirming.',
+            **_battle_move_requirement_payload(game, player_id),
         }), 400
 
     # Record this player's confirmation
-    confirmed = dict(game.battle_moves_confirmed) if game.battle_moves_confirmed else {}
+    player_ids = [str(p.id) for p in game.players]
+    raw_confirmed = dict(game.battle_moves_confirmed) if game.battle_moves_confirmed else {}
+    # Keep only current players to avoid stale confirmation maps.
+    confirmed = {pid: bool(raw_confirmed.get(pid)) for pid in player_ids if raw_confirmed.get(pid)}
     confirmed[str(player_id)] = True
     game.battle_moves_confirmed = confirmed
 
     # Check if both players have confirmed
-    player_ids = [str(p.id) for p in game.players]
     both_ready = all(confirmed.get(pid) for pid in player_ids)
+
+    # Safety: even if confirmation flags are set, ensure each player still has
+    # the required number of moves before battle rounds can start.
+    # (skip for conquer mode — moves are pre-built from config)
+    if both_ready and game.mode != 'conquer':
+        not_ready_ids = []
+        for pid in player_ids:
+            pid_int = int(pid)
+            cnt = BattleMove.query.filter_by(game_id=game_id, player_id=pid_int).count()
+            required = _required_battle_move_count(game, pid_int)
+            if cnt < required:
+                not_ready_ids.append(pid)
+
+        if not_ready_ids:
+            for pid in not_ready_ids:
+                confirmed.pop(pid, None)
+            game.battle_moves_confirmed = confirmed
+            both_ready = False
 
     # Initialize 3-round battle tracking when both players are ready
     if both_ready:
+        game.battle_moves_confirmed = {pid: True for pid in player_ids}
         game.battle_round = 0
         game.battle_turn_player_id = game.invader_player_id
         # Reset played_round on all battle moves so they start as "in hand"
@@ -241,6 +429,7 @@ def confirm_battle_moves():
         'success': True,
         'both_ready': both_ready,
         'game': game.serialize(),
+        **_battle_move_requirement_payload(game, player_id),
     })
 
 
@@ -264,8 +453,12 @@ def _family_for_rank(rank):
 
 
 @battle_shop.route('/gamble_battle_move', methods=['POST'])
+@require_token
 def gamble_battle_move():
     """Gamble: sacrifice one battle move and draw two random replacements.
+
+    This action is only allowed DURING active battle rounds (not in battle shop).
+    A player can gamble at most once per battle round, up to 3 times per battle.
 
     • Returns the sacrificed move's card to the player's hand (un-reserves it).
     • Draws 2 cards from the main-card deck at random (cards still in deck).
@@ -284,32 +477,82 @@ def gamble_battle_move():
     if not all([game_id, player_id, battle_move_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-    game = Game.query.get(game_id)
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
+
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-    player = Player.query.get(player_id)
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
+
+    player = db.session.get(Player, player_id)
     if not player or player.game_id != game_id:
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 404
 
-    # Enforce gamble limit: max 3 gambles per player per battle (once per move slot)
+    # Gambling is a battle-round action, not a battle-shop action.
+    if not game.battle_confirmed:
+        return jsonify({'success': False, 'message': 'Gamble is only available during active battle rounds'}), 400
+
+    if game.battle_turn_player_id != player_id:
+        return jsonify({'success': False, 'message': 'It is not your turn in the battle'}), 400
+
+    # Enforce gamble limits: once per round, max 3 per battle.
     gamble_counts = game.battle_gamble_counts or {}
     pid_str = str(player_id)
-    if gamble_counts.get(pid_str, 0) >= 3:
-        return jsonify({'success': False, 'message': 'You can only gamble 3 times per battle (once per move)'}), 400
+    player_gamble_state = gamble_counts.get(pid_str, 0)
+
+    if isinstance(player_gamble_state, dict):
+        try:
+            used_count = int(player_gamble_state.get('count', 0) or 0)
+        except (TypeError, ValueError):
+            used_count = 0
+        used_rounds = []
+        for r in player_gamble_state.get('rounds', []):
+            try:
+                used_rounds.append(int(r))
+            except (TypeError, ValueError):
+                continue
+        used_rounds = sorted(set(used_rounds))
+    else:
+        try:
+            used_count = int(player_gamble_state or 0)
+        except (TypeError, ValueError):
+            used_count = 0
+        used_rounds = []
+
+    current_round = int(game.battle_round or 0)
+
+    if current_round in used_rounds:
+        return jsonify({'success': False, 'message': 'You can only gamble once per battle round'}), 400
+
+    if used_count >= 3:
+        return jsonify({'success': False, 'message': 'You can only gamble 3 times per battle (once per round)'}), 400
 
     # Find the battle move to sacrifice
-    bm = BattleMove.query.get(battle_move_id)
+    bm = db.session.get(BattleMove, battle_move_id)
     if not bm:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
     if bm.game_id != game_id or bm.player_id != player_id:
         return jsonify({'success': False, 'message': 'Battle move does not belong to this player'}), 400
 
+    # ── Conquer mode: special gamble flow ──
+    if game.mode == 'conquer':
+        return _gamble_conquer(game, player, bm, gamble_counts, pid_str,
+                               used_count, used_rounds, current_round)
+
     # 1. Un-reserve the sacrificed card
     if bm.card_type == 'side':
-        old_card = SideCard.query.get(bm.card_id)
+        old_card = db.session.get(SideCard, bm.card_id)
     else:
-        old_card = MainCard.query.get(bm.card_id)
+        old_card = db.session.get(MainCard, bm.card_id)
     if old_card:
         old_card.part_of_battle_move = False
 
@@ -355,11 +598,123 @@ def gamble_battle_move():
         db.session.flush()  # get move.id
         new_moves.append(move.serialize())
 
-    # Track gamble count for this player
-    gamble_counts[pid_str] = gamble_counts.get(pid_str, 0) + 1
+    # Track gamble usage for this player (count + rounds used)
+    used_rounds = sorted(set(used_rounds + [current_round]))
+    gamble_counts[pid_str] = {
+        'count': used_count + 1,
+        'rounds': used_rounds,
+    }
     game.battle_gamble_counts = gamble_counts
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(game, 'battle_gamble_counts')
+
+    drew_desc = ', '.join(
+        '{}/{}/{} id={}'.format(m.get('family_name'), m.get('suit'), m.get('rank'), m.get('id'))
+        for m in new_moves
+    )
+    logger.info(f"[GAMBLE] game={game_id} player={player_id} round={current_round} "
+                f"sacrificed_bm={battle_move_id} ({sacrificed_data.get('family_name')}/{sacrificed_data.get('suit')}) "
+                f"drew=[{drew_desc}]")
+
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'sacrificed': sacrificed_data,
+        'new_moves': new_moves,
+        'game': game.serialize(),
+    })
+
+
+def _gamble_conquer(game, player, bm, gamble_counts, pid_str,
+                    used_count, used_rounds, current_round):
+    """Handle gamble for conquer mode.
+
+    Sacrificed card is permanently removed from the player's collection.
+    Two random replacement cards are generated as temporary in-game cards
+    (not added to the collection).
+    """
+    from models import CollectionCard, LandConfig, LandConfigBattleMove
+
+    sacrificed_data = bm.serialize()
+
+    # Find and delete the corresponding CollectionCard via the config
+    cfg_id = game.conquer_config_id
+    if cfg_id:
+        # Match by suit + rank in the config's battle moves
+        cfg_move = LandConfigBattleMove.query.filter_by(
+            config_id=cfg_id, suit=bm.suit, rank=bm.rank,
+        ).first()
+        if cfg_move and cfg_move.card_id:
+            cc = db.session.get(CollectionCard, cfg_move.card_id)
+            if cc:
+                db.session.delete(cc)
+            db.session.delete(cfg_move)
+
+    # Delete the in-game MainCard backing this battle move
+    old_card = db.session.get(MainCard, bm.card_id)
+    if old_card:
+        db.session.delete(old_card)
+
+    # Delete the sacrificed battle move
+    db.session.delete(bm)
+
+    # Generate 2 random temporary replacement cards
+    _SUITS = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
+    _RANKS = ['7', '8', '9', '10', 'J', 'Q', 'A']
+    _RANK_VALUES = {'7': 7, '8': 8, '9': 9, '10': 10, 'J': 1, 'Q': 2, 'A': 3}
+
+    new_moves = []
+    for _ in range(2):
+        suit = random.choice(_SUITS)
+        rank = random.choice(_RANKS)
+        value = _RANK_VALUES.get(rank, 0)
+        family_name = _family_for_rank(rank)
+
+        mc = MainCard(
+            rank=rank,
+            suit=suit,
+            value=value,
+            game_id=game.id,
+            player_id=player.id,
+            in_deck=False,
+            part_of_figure=False,
+            part_of_battle_move=True,
+        )
+        db.session.add(mc)
+        db.session.flush()
+
+        move = BattleMove(
+            game_id=game.id,
+            player_id=player.id,
+            family_name=family_name,
+            card_id=mc.id,
+            card_type='main',
+            suit=suit,
+            rank=rank,
+            value=value,
+        )
+        db.session.add(move)
+        db.session.flush()
+        new_moves.append(move.serialize())
+
+    # Track gamble usage
+    used_rounds = sorted(set(used_rounds + [current_round]))
+    gamble_counts[pid_str] = {
+        'count': used_count + 1,
+        'rounds': used_rounds,
+    }
+    game.battle_gamble_counts = gamble_counts
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(game, 'battle_gamble_counts')
+
+    drew_desc = ', '.join(
+        '{}/{}/{} id={}'.format(m.get('family_name'), m.get('suit'), m.get('rank'), m.get('id'))
+        for m in new_moves
+    )
+    logger.info(f"[GAMBLE_CONQUER] game={game.id} player={player.id} round={current_round} "
+                f"sacrificed_bm={bm.id} ({sacrificed_data.get('family_name')}/{sacrificed_data.get('suit')}) "
+                f"drew=[{drew_desc}]")
 
     db.session.commit()
 
@@ -386,6 +741,7 @@ def _same_colour(suit_a, suit_b):
 
 
 @battle_shop.route('/combine_battle_moves', methods=['POST'])
+@require_token
 def combine_battle_moves():
     """Combine two same-colour Dagger battle moves into a Double Dagger.
 
@@ -409,15 +765,27 @@ def combine_battle_moves():
     if not all([game_id, player_id, move_id_a, move_id_b]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
+
     if move_id_a == move_id_b:
         return jsonify({'success': False, 'message': 'Cannot combine a move with itself'}), 400
 
-    game = Game.query.get(game_id)
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-    bm_a = BattleMove.query.get(move_id_a)
-    bm_b = BattleMove.query.get(move_id_b)
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
+
+    bm_a = db.session.get(BattleMove, move_id_a)
+    bm_b = db.session.get(BattleMove, move_id_b)
 
     if not bm_a or not bm_b:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
@@ -480,6 +848,7 @@ def combine_battle_moves():
 
 
 @battle_shop.route('/dismantle_battle_move', methods=['POST'])
+@require_token
 def dismantle_battle_move():
     """Split a Double Dagger back into its two original Dagger battle moves.
 
@@ -498,11 +867,23 @@ def dismantle_battle_move():
     if not all([game_id, player_id, battle_move_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-    game = Game.query.get(game_id)
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
+
+    game = db.session.get(Game, game_id)
     if not game:
         return jsonify({'success': False, 'message': 'Game not found'}), 404
 
-    dd = BattleMove.query.get(battle_move_id)
+    block = _block_legacy_battle_shop_mutation(game)
+    if block:
+        return block
+
+    lock_err = _guard_confirmed_selection_locked(game, player_id)
+    if lock_err:
+        return lock_err
+
+    dd = db.session.get(BattleMove, battle_move_id)
     if not dd:
         return jsonify({'success': False, 'message': 'Battle move not found'}), 404
 

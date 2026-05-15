@@ -16,6 +16,14 @@ import json
 import os
 import sys
 
+# ── Logging (initialise before any other module) ──
+from log import setup as _setup_logging
+_CFG_DIR    = os.path.join(os.path.expanduser('~'), '.nepalkings')
+_setup_logging(
+    debug=os.getenv('NK_DEBUG', '').lower() in ('1', 'true'),
+    log_dir=_CFG_DIR,          # logs land in ~/.nepalkings/
+)
+
 # Raise per-process file-descriptor limit so heavy image/font loading
 # during init doesn't hit macOS's default 256-fd ceiling.
 if sys.platform != "emscripten":
@@ -31,7 +39,6 @@ import pygame
 
 # ── Paths / Constants ──────────────────────────────────────────────
 _DIR        = os.path.dirname(os.path.abspath(__file__))
-_CFG_DIR    = os.path.join(os.path.expanduser('~'), '.nepalkings')
 _CFG_FILE   = os.path.join(_CFG_DIR, 'resolution.json')
 
 # Resolutions offered (width, height, label)  — 16∶9 aspect ratio

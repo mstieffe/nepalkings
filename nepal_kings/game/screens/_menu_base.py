@@ -11,6 +11,7 @@ Provides:
 
 import pygame
 from config import settings
+from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.core.input_state import get_pressed as _get_pressed
 
 
@@ -181,10 +182,25 @@ class MenuScreenMixin:
         if not cls._chrome_cache:
             raw_bg = pygame.image.load(settings.GAME_MENU_BG_IMG_PATH).convert()
             raw_gold = pygame.image.load(settings.GAME_MENU_GOLD_ICON_PATH).convert_alpha()
+            raw_booster = pygame.image.load(settings.GAME_MENU_BOOSTER_ICON_PATH).convert_alpha()
+            raw_booster_side = pygame.image.load(settings.GAME_MENU_BOOSTER_SIDE_ICON_PATH).convert_alpha()
+            raw_map = pygame.image.load(settings.GAME_MENU_MAP_ICON_PATH).convert_alpha()
             sz = settings.GAME_MENU_GOLD_ICON_SZ
+            # Larger version used by dialogue boxes / pack panels so the icon
+            # stays crisp instead of being upscaled from the small HUD size.
+            dialog_sz = max(sz, settings.DIALOGUE_BOX_IMG_HEIGHT)
             cls._chrome_cache = {
-                'bg':   pygame.transform.smoothscale(raw_bg, (_SW, _SH)),
-                'gold': pygame.transform.smoothscale(raw_gold, (sz, sz)),
+                'bg':                  pygame.transform.smoothscale(raw_bg, (_SW, _SH)),
+                'gold':                pygame.transform.smoothscale(raw_gold, (sz, sz)),
+                'booster':             pygame.transform.smoothscale(raw_booster, (sz, sz)),
+                'booster_side':        pygame.transform.smoothscale(raw_booster_side, (sz, sz)),
+                'map':                 pygame.transform.smoothscale(raw_map, (sz, sz)),
+                'booster_dialog':      pygame.transform.smoothscale(
+                    raw_booster, (dialog_sz, dialog_sz)),
+                'booster_side_dialog': pygame.transform.smoothscale(
+                    raw_booster_side, (dialog_sz, dialog_sz)),
+                'map_dialog':          pygame.transform.smoothscale(
+                    raw_map, (dialog_sz, dialog_sz)),
             }
         return cls._chrome_cache
 
@@ -193,7 +209,21 @@ class MenuScreenMixin:
         cache = self._load_chrome_cache()
         self._bg = cache['bg']
         self._gold_icon = cache['gold']
+        self._booster_icon = cache['booster']
+        self._booster_side_icon = cache['booster_side']
+        self._map_icon = cache['map']
+        self._booster_icon_dialog = cache['booster_dialog']
+        self._booster_side_icon_dialog = cache['booster_side_dialog']
+        self._map_icon_dialog = cache['map_dialog']
         self._gold_font = settings.get_font(settings.GAME_MENU_GOLD_FONT_SIZE)
+        self._gold_floaters = FloatingTextLayer()
+        self._gold_floaters_last_tick = pygame.time.get_ticks()
+        self._last_seen_gold = self._current_gold_amount()
+        # Optional one-shot controls for the next automatic top-bar gold
+        # floater. Screens that show their own collect animation can suppress
+        # or re-anchor the shared HUD floater to avoid duplicates.
+        self._suppress_next_gold_gain_floater = False
+        self._next_gold_gain_floater_pos = None
 
         # Icon buttons (top-right): home at top, settings at bottom, logout just above settings
         stone_sz = settings.GAME_MENU_ICON_STONE_SZ
@@ -218,9 +248,10 @@ class MenuScreenMixin:
     # ── draw helpers ────────────────────────────────────────────────
 
     def _draw_menu_chrome(self):
-        """Draw background + gold display.  Call FIRST in render()."""
+        """Draw background + gold display + booster pack display.  Call FIRST in render()."""
         self.window.blit(self._bg, (0, 0))
         self._draw_gold()
+        self._draw_booster_packs()
 
     def _draw_menu_overlay(self):
         """Draw icon buttons + messages.  Call LAST in render()."""
@@ -229,41 +260,137 @@ class MenuScreenMixin:
             self.dialogue_box.draw()
         for ib in self._icon_buttons:
             ib.draw()
+        self._draw_gold_floaters()
         self._draw_logout_dialogue()
 
     def _draw_gold(self):
-        """Gold icon + amount with a background box (upper-left)."""
-        gold = 0
-        if self.state.user_dict:
-            gold = self.state.user_dict.get('gold', 0)
+        """Gold + booster pack icons in one horizontal box (upper-left)."""
+        ud = self.state.user_dict or {}
+        gold = ud.get('gold', 0)
+        bpacks = ud.get('booster_packs', 0)
+        bpacks_side = ud.get('booster_packs_side', 0)
+        maps = ud.get('maps', 0)
 
-        icon_sz  = settings.GAME_MENU_GOLD_ICON_SZ
-        pad_x    = settings.GAME_MENU_GOLD_BOX_PAD_X
-        pad_y    = settings.GAME_MENU_GOLD_BOX_PAD_Y
-        gap      = settings.GAME_MENU_GOLD_ICON_TEXT_GAP
-        mx       = settings.GAME_MENU_GOLD_MARGIN_X
-        my       = settings.GAME_MENU_GOLD_MARGIN_Y
+        icon_sz = settings.GAME_MENU_GOLD_ICON_SZ
+        pad_x   = settings.GAME_MENU_GOLD_BOX_PAD_X
+        pad_y   = settings.GAME_MENU_GOLD_BOX_PAD_Y
+        gap     = settings.GAME_MENU_GOLD_ICON_TEXT_GAP
+        mx      = settings.GAME_MENU_GOLD_MARGIN_X
+        my      = settings.GAME_MENU_GOLD_MARGIN_Y
+        sep     = int(0.018 * _SW)  # separator between items
 
-        text_surf = self._gold_font.render(str(gold), True, settings.GAME_MENU_GOLD_TEXT_CLR)
+        items = [
+            (self._gold_icon,         str(gold)),
+            (self._booster_icon,      str(bpacks)),
+            (self._booster_side_icon, str(bpacks_side)),
+            (self._map_icon,          str(maps)),
+        ]
 
-        cw = icon_sz + gap + text_surf.get_width()
-        ch = max(icon_sz, text_surf.get_height())
-        bw = pad_x * 2 + cw
-        bh = pad_y * 2 + ch
+        # Pre-render text surfaces
+        text_surfs = [self._gold_font.render(txt, True, settings.GAME_MENU_GOLD_TEXT_CLR)
+                      for _, txt in items]
 
+        # Compute total content width and row height
+        total_w = 0
+        row_h = 0
+        for i, (icon, _) in enumerate(items):
+            ts = text_surfs[i]
+            total_w += icon_sz + gap + ts.get_width()
+            row_h = max(row_h, icon_sz, ts.get_height())
+        total_w += sep * (len(items) - 1)
+
+        bw = pad_x * 2 + total_w
+        bh = pad_y * 2 + row_h
+
+        # Draw box background
         box = pygame.Surface((bw, bh), pygame.SRCALPHA)
         box.fill(settings.GAME_MENU_GOLD_BOX_BG_CLR)
         pygame.draw.rect(box, settings.GAME_MENU_GOLD_BOX_BORDER_CLR,
                          box.get_rect(), settings.GAME_MENU_GOLD_BOX_BORDER_W)
         self.window.blit(box, (mx, my))
 
-        ix = mx + pad_x
-        iy = my + pad_y + (ch - icon_sz) // 2
-        self.window.blit(self._gold_icon, (ix, iy))
+        # Draw each icon + text pair
+        cx = mx + pad_x
+        gold_floater_pos = None
+        for i, (icon, _) in enumerate(items):
+            ts = text_surfs[i]
+            iy = my + pad_y + (row_h - icon_sz) // 2
+            self.window.blit(icon, (cx, iy))
+            tx = cx + icon_sz + gap
+            ty = my + pad_y + (row_h - ts.get_height()) // 2
+            self.window.blit(ts, (tx, ty))
+            if i == 0:
+                gold_floater_pos = (tx + ts.get_width() // 2, my + bh + int(0.012 * _SH))
+            cx = tx + ts.get_width() + sep
 
-        tx = ix + icon_sz + gap
-        ty = my + pad_y + (ch - text_surf.get_height()) // 2
-        self.window.blit(text_surf, (tx, ty))
+        self._maybe_spawn_gold_gain_floater(gold, gold_floater_pos)
+
+    def _current_gold_amount(self):
+        state = getattr(self, 'state', None)
+        ud = getattr(state, 'user_dict', None) or {}
+        try:
+            return int(ud.get('gold', 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _suppress_next_gold_floater(self):
+        """Skip the next automatic top-bar gold gain floater exactly once."""
+        self._suppress_next_gold_gain_floater = True
+
+    def _set_next_gold_floater_pos(self, pos):
+        """Override the next automatic top-bar gold floater start position."""
+        if pos is None:
+            self._next_gold_gain_floater_pos = None
+            return
+        self._next_gold_gain_floater_pos = (int(pos[0]), int(pos[1]))
+
+    def _maybe_spawn_gold_gain_floater(self, current_gold, start_pos):
+        try:
+            current_gold = int(current_gold or 0)
+        except (TypeError, ValueError):
+            current_gold = 0
+        previous_gold = getattr(self, '_last_seen_gold', None)
+        self._last_seen_gold = current_gold
+        if previous_gold is None or current_gold <= previous_gold:
+            return
+        if getattr(self, '_suppress_next_gold_gain_floater', False):
+            self._suppress_next_gold_gain_floater = False
+            self._next_gold_gain_floater_pos = None
+            return
+        floater_pos = getattr(self, '_next_gold_gain_floater_pos', None) or start_pos
+        self._next_gold_gain_floater_pos = None
+        if not floater_pos:
+            return
+        self._spawn_gold_gain_floater(current_gold - previous_gold, floater_pos)
+
+    def _spawn_gold_gain_floater(self, amount, start_pos):
+        layer = getattr(self, '_gold_floaters', None)
+        if layer is None:
+            return
+        font = settings.get_font(getattr(settings, 'COLLECT_FLOAT_FONT_SIZE', settings.GAME_MENU_GOLD_FONT_SIZE))
+        layer.add(FloatingText(
+            f'+{int(amount)}g',
+            start_pos,
+            color=getattr(settings, 'COLLECT_FLOAT_GOLD_CLR', settings.GAME_MENU_GOLD_TEXT_CLR),
+            duration_ms=getattr(settings, 'COLLECT_FLOAT_DURATION_MS', 900),
+            rise_px=getattr(settings, 'COLLECT_FLOAT_RISE_PX', int(0.07 * _SH)),
+            font=font,
+            jitter_px=5,
+        ))
+
+    def _draw_gold_floaters(self):
+        layer = getattr(self, '_gold_floaters', None)
+        if layer is None:
+            return
+        now = pygame.time.get_ticks()
+        last_tick = getattr(self, '_gold_floaters_last_tick', now)
+        self._gold_floaters_last_tick = now
+        layer.update(max(0, now - last_tick))
+        layer.draw(self.window)
+
+    def _draw_booster_packs(self):
+        """No-op — boosters are now drawn inside _draw_gold."""
+        pass
 
     # ── update / event helpers ──────────────────────────────────────
 
@@ -309,6 +436,10 @@ class MenuScreenMixin:
             self.state.user = None
             self.state.user_dict = None
             self.state.game = None
+            self.state.pending_spell_cast = None
+            self.state.pending_conquer_prelude_target = None
+            self.state._notified_accepted_challenges = set()
+            self.state._pending_accepted_challenge = None
             self.state.set_msg('Logged out')
         elif response is not None:  # 'no' or any other response
             self._logout_dialogue = None

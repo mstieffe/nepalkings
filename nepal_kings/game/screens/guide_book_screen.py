@@ -1033,6 +1033,7 @@ class GuideBookScreen(SubScreen):
                     'equal the sum of both figures\' base power.',
                 ],
             },
+
         ]
 
     # ════════════════════════════════════════════════════════════════════

@@ -681,6 +681,11 @@ class FieldFigureIcon(FigureIcon):
         self.defender_selectable = True
         self.in_defender_selection_mode = False
 
+        # Conquer mode: when True the figure is not part of the active battle
+        # and should be rendered greyed out (set by ConquerGameScreen each
+        # frame based on the current battle moves).
+        self.conquer_battle_dimmed = False
+
         # Blocks-bonus: when True the support bonus is negated (shown as red strikethrough)
         self.battle_bonus_blocked = False
 
@@ -792,7 +797,7 @@ class FieldFigureIcon(FigureIcon):
             is_resting = (hasattr(self, 'game') and self.game and
                           hasattr(self, 'figure') and self.figure and
                           self.figure.id in (getattr(self.game, 'resting_figure_ids', None) or []))
-            greyed_out = (hasattr(self, 'defender_selectable') and not self.defender_selectable) or is_resting or self.has_deficit
+            greyed_out = (hasattr(self, 'defender_selectable') and not self.defender_selectable) or is_resting or self.has_deficit or bool(getattr(self, 'conquer_battle_dimmed', False))
             
             # Choose icon/frame images based on greyed-out state
             icon_normal = self.icon_gray_img if greyed_out else self.icon_img
@@ -833,7 +838,10 @@ class FieldFigureIcon(FigureIcon):
         else:
             # For hidden figures: white glow for hover, black otherwise
             # Check if greyed out for defender selection
-            greyed_out_hidden = hasattr(self, 'defender_selectable') and not self.defender_selectable
+            greyed_out_hidden = (
+                (hasattr(self, 'defender_selectable') and not self.defender_selectable)
+                or bool(getattr(self, 'conquer_battle_dimmed', False))
+            )
             is_big_state = self.hovered and not is_mouse_pressed
             
             if greyed_out_hidden:
@@ -882,6 +890,12 @@ class FieldFigureIcon(FigureIcon):
             advancing_id_2 = getattr(self.game, 'advancing_figure_id_2', None)
             defending_id = getattr(self.game, 'defending_figure_id', None)
             defending_id_2 = getattr(self.game, 'defending_figure_id_2', None)
+
+            # In conquer mode, hide the defending icon until the invader has
+            # actually advanced (advancing_figure_id is set).
+            if getattr(self.game, 'mode', 'duel') == 'conquer' and not advancing_id:
+                defending_id = None
+                defending_id_2 = None
             
             is_advancing = (advancing_id == self.figure.id) or (advancing_id_2 == self.figure.id)
             is_defending = (defending_id == self.figure.id) or (defending_id_2 == self.figure.id)
@@ -1767,6 +1781,16 @@ class FieldFigureIcon(FigureIcon):
             
             # Sum battle bonuses from other figures
             total_bonus = sum(fig.get_battle_bonus() for fig in same_suit_figures)
+
+            # Conquer mode: land suit bonus for figures matching the land's suit
+            if (self.game and
+                    getattr(self.game, 'mode', 'duel') == 'conquer'):
+                land_suit = getattr(self.game, 'land_suit_bonus_suit', None)
+                land_value = getattr(self.game, 'land_suit_bonus_value', None)
+                if land_suit and land_value:
+                    if (self.figure.suit or '').lower() == land_suit.lower():
+                        total_bonus += land_value
+
             return total_bonus
         except Exception as e:
             # If anything fails, just return 0

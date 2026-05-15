@@ -5,15 +5,29 @@ from pygame.locals import *
 from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin, ListButton
 from game.core.game import Game
+from game.core.screen_routing import gameplay_screen_for
 from config import settings
 from utils.utils import Button, InputField
 from utils.game_service import fetch_users, fetch_user, create_challenge, remove_challenge, create_game, fetch_game
 from utils.background_poller import BackgroundPoller
+import logging
+import math
+
+logger = logging.getLogger('nk.screens.new_game')
+
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
 DEFAULT_STAKE = 45
-DEFAULT_TURN_TIME = ''
+DEFAULT_GAME_LIMIT = DEFAULT_STAKE
+MAX_GAME_LIMIT = int(getattr(settings, 'MAX_GAME_LIMIT', 100) or 100)
+DUEL_REWARD_GOLD_AMOUNT = int(getattr(settings, 'DUEL_REWARD_GOLD_AMOUNT', 80) or 0)
+DUEL_REWARD_POOL_PROBABILITIES = getattr(settings, 'DUEL_REWARD_POOL_PROBABILITIES', {
+    'main_booster': 0.25,
+    'side_booster': 0.25,
+    'map': 0.25,
+    'gold': 0.25,
+})
 
 # Online-status dot
 _DOT_RADIUS    = int(0.006 * _SH)
@@ -66,6 +80,32 @@ def _draw_panel(window, rect, corner_r=None):
                      settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
 
 
+def _duel_reward_draw_counts(game_limit):
+    try:
+        limit = max(1, int(game_limit))
+    except (TypeError, ValueError):
+        limit = DEFAULT_GAME_LIMIT
+    winner_draws = int(math.ceil(limit / 10.0))
+    loser_draws = max(1, winner_draws // 2)
+    return {'winner': winner_draws, 'loser': loser_draws}
+
+
+def _duel_reward_expectation(draws):
+    return {
+        'main_booster': draws * float(DUEL_REWARD_POOL_PROBABILITIES.get('main_booster', 0)),
+        'side_booster': draws * float(DUEL_REWARD_POOL_PROBABILITIES.get('side_booster', 0)),
+        'map': draws * float(DUEL_REWARD_POOL_PROBABILITIES.get('map', 0)),
+        'gold': draws * float(DUEL_REWARD_POOL_PROBABILITIES.get('gold', 0)) * DUEL_REWARD_GOLD_AMOUNT,
+    }
+
+
+def _fmt_expected(value):
+    value = float(value or 0)
+    if abs(value - round(value)) < 0.005:
+        return str(int(round(value)))
+    return f"{value:.2f}".rstrip('0').rstrip('.')
+
+
 class NewGameScreen(MenuScreenMixin, Screen):
     def __init__(self, state):
         super().__init__(state)
@@ -89,6 +129,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._header_font = settings.get_font(settings.SUB_SCREEN_HEADER_FONT_SIZE)
         self._panel_font = settings.get_font(settings.LIST_BTN_FONT_SIZE)
         self._tag_font = settings.get_font(int(0.016 * _SH), bold=True)
+        self._reward_font = settings.get_font(int(0.017 * _SH))
+        self._reward_title_font = settings.get_font(int(0.018 * _SH), bold=True)
 
         # Layout positions inside box
         self._title_y = _BOX_Y + _BOX_PAD
@@ -105,6 +147,14 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._dragging_thumb = None  # 'col1' | 'col2' | None
         self._drag_offset = 0
 
+        # ── X close button (top-right of box) ───────────────────────
+        _xsz = int(0.028 * _SH)
+        _xmargin = int(0.012 * _SW)
+        self._btn_close_rect = pygame.Rect(
+            _BOX_X + _BOX_W - _xsz - _xmargin,
+            _BOX_Y + _xmargin,
+            _xsz, _xsz)
+
         # ── Config panel widgets ────────────────────────────────────
         field_x = _BOX_X + int(0.20 * _SW)
         field_w = int(0.06 * _SW)
@@ -117,27 +167,23 @@ class NewGameScreen(MenuScreenMixin, Screen):
             "Stake (gold)", str(DEFAULT_STAKE), False, False,
             max_length=6, width=field_w, height=field_h)
 
-        self.time_field = InputField(
+        self.game_limit_field = InputField(
             self.window, field_x, cfg_row2,
-            "Turn Time (min)", DEFAULT_TURN_TIME, False, False,
-            max_length=4, width=field_w, height=field_h)
+            "Game Limit (points)", str(DEFAULT_GAME_LIMIT), False, False,
+            max_length=3, width=field_w, height=field_h)
+        self._game_limit_synced = True
 
         # Smaller fonts for config-panel input fields
         _cfg_font_sz  = int(0.022 * _SH)
         _cfg_title_sz = int(0.018 * _SH)
-        for fld in (self.stake_field, self.time_field):
+        for fld in (self.stake_field, self.game_limit_field):
             fld.font       = settings.get_font(_cfg_font_sz)
             fld.font_title = settings.get_font(_cfg_title_sz)
-
-        self.no_time_limit = True
-        self._checkbox_size = int(0.022 * _SH)
-        self._checkbox_x = field_x + field_w + int(0.012 * _SW)
-        self._checkbox_y = cfg_row2 + (field_h - self._checkbox_size) // 2
 
         # ── Send button (menu-button style) ─────────────────────────
         _send_w = int(0.18 * _SW)
         _send_h = int(0.055 * _SH)
-        _send_x = _BOX_X + int(0.54 * _SW)
+        _send_x = _BOX_X + int(0.66 * _SW)
         _send_y = _CONFIG_Y + int(0.075 * _SH)
         self.send_button = Button(
             self.window, _send_x, _send_y,
@@ -290,6 +336,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
         # Config panel separator + content
         self._draw_config_panel()
 
+        self._draw_close_x_button()
         self._draw_menu_overlay()
 
     def _draw_scrollable_list(self, buttons, col_x, scroll, col_key):
@@ -374,14 +421,29 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.window.blit(header, (_COL1_X, _CONFIG_Y + int(0.025 * _SH)))
 
             self.stake_field.draw()
-            self.time_field.draw()
-            self._draw_checkbox()
+            self.game_limit_field.draw()
+            self._draw_expected_rewards()
             self._draw_send_button()
         else:
             hint = self._panel_font.render(
                 "Select an opponent to configure a challenge",
                 True, (140, 140, 140))
             self.window.blit(hint, (_COL1_X, _CONFIG_Y + int(0.038 * _SH)))
+
+    def _draw_close_x_button(self):
+        r = self._btn_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        txt = _xfont.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
 
     def _draw_send_button(self):
         """Draw the send-challenge button with menu-button glow."""
@@ -411,16 +473,37 @@ class NewGameScreen(MenuScreenMixin, Screen):
         text_surf = font.render(btn.text, True, btn.get_text_color())
         self.window.blit(text_surf, text_surf.get_rect(center=btn.rect.center))
 
-    def _draw_checkbox(self):
-        box_rect = pygame.Rect(self._checkbox_x, self._checkbox_y,
-                               self._checkbox_size, self._checkbox_size)
-        pygame.draw.rect(self.window, (180, 180, 180), box_rect, 2)
-        if self.no_time_limit:
-            inner = box_rect.inflate(-6, -6)
-            pygame.draw.rect(self.window, (250, 170, 0), inner)
-        label = self._panel_font.render("No Limit", True, (200, 200, 200))
-        self.window.blit(label, (self._checkbox_x + self._checkbox_size + 8,
-                                 self._checkbox_y + (self._checkbox_size - label.get_height()) // 2))
+    def _draw_expected_rewards(self):
+        try:
+            game_limit = int(self.game_limit_field.content)
+        except (TypeError, ValueError):
+            return
+        if game_limit < 1 or game_limit > MAX_GAME_LIMIT:
+            return
+
+        counts = _duel_reward_draw_counts(game_limit)
+        winner = _duel_reward_expectation(counts['winner'])
+        loser = _duel_reward_expectation(counts['loser'])
+        x = _BOX_X + int(0.34 * _SW)
+        y = _CONFIG_Y + int(0.046 * _SH)
+        line_h = self._reward_font.get_height() + int(0.006 * _SH)
+        title = self._reward_title_font.render('Expected rewards', True, (220, 200, 100))
+        self.window.blit(title, (x, y))
+        rows = [
+            (f"Winner {counts['winner']} draws: "
+             f"{_fmt_expected(winner['main_booster'])} main, "
+             f"{_fmt_expected(winner['side_booster'])} side, "
+             f"{_fmt_expected(winner['map'])} maps, "
+             f"{_fmt_expected(winner['gold'])} gold"),
+            (f"Loser {counts['loser']} draws: "
+             f"{_fmt_expected(loser['main_booster'])} main, "
+             f"{_fmt_expected(loser['side_booster'])} side, "
+             f"{_fmt_expected(loser['map'])} maps, "
+             f"{_fmt_expected(loser['gold'])} gold"),
+        ]
+        for idx, text in enumerate(rows):
+            surf = self._reward_font.render(text, True, (200, 200, 200))
+            self.window.blit(surf, (x, y + (idx + 1) * line_h))
 
     # ── Update ────────────────────────────────────────────────────
 
@@ -457,7 +540,10 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self.users = data['users']
                 self.user = data['user']
                 # Check for accepted challenges (notify challenger)
-                self._check_accepted_challenges()
+                try:
+                    self._check_accepted_challenges()
+                except Exception as e:
+                    logger.error(f"[new_game] _check_accepted_challenges error: {e}")
                 all_challenges = self.user['challenges_issued'] + self.user['challenges_received']
                 self.open_challenges = [ch for ch in all_challenges if ch.get('status') == 'open']
                 self.open_opponents = {}
@@ -479,8 +565,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
         if self._selected_opponent:
             self.stake_field.update_color()
-            if not self.no_time_limit:
-                self.time_field.update_color()
+            self.game_limit_field.update_color()
             self.send_button.update()
 
     # ── Events ────────────────────────────────────────────────────
@@ -494,17 +579,21 @@ class NewGameScreen(MenuScreenMixin, Screen):
             if self._handle_icon_events(event):
                 continue
 
-            # Click outside content box → back to game menu
+            # X close button
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and self._btn_close_rect.collidepoint(event.pos)):
+                self.state.screen = 'duel_menu'
+                return
+
+            # Click outside content box → back to duel menu
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not _box_rect.collidepoint(event.pos)):
-                self.state.screen = 'game_menu'
+                self.state.screen = 'duel_menu'
                 return
 
             if self._selected_opponent:
-                self.stake_field.handle_event(event)
-                if not self.no_time_limit:
-                    self.time_field.handle_event(event)
+                self._handle_config_field_event(event)
 
             # Scroll wheel
             if event.type == MOUSEWHEEL:
@@ -599,31 +688,20 @@ class NewGameScreen(MenuScreenMixin, Screen):
                     if game_dict:
                         self.state.game = Game(game_dict, self.state.user_dict)
                         remove_challenge(challenge_id)
+                        self.state._notified_accepted_challenges.discard(challenge_id)
                         self.state._pending_accepted_challenge = None
                         self.reset_action()
-                        self.state.screen = "game"
+                        self.state.screen = gameplay_screen_for(self.state.game)
                         return
                     else:
                         self.state.set_msg("Failed to load game")
                 else:  # "close"
                     remove_challenge(challenge_id)
+                self.state._notified_accepted_challenges.discard(challenge_id)
                 self.state._pending_accepted_challenge = None
             self.reset_action()
 
     def _handle_clicks(self):
-        # Checkbox
-        if self._selected_opponent:
-            label_w = self._panel_font.size("No Limit")[0] + self._checkbox_size + 8
-            click_rect = pygame.Rect(self._checkbox_x, self._checkbox_y,
-                                     label_w, self._checkbox_size)
-            if click_rect.collidepoint(pygame.mouse.get_pos()):
-                self.no_time_limit = not self.no_time_limit
-                if self.no_time_limit:
-                    self.time_field.deactivate()
-                    self.time_field.content = ''
-                    self.time_field.cursor_pos = 0
-                return
-
         # Send button
         if self._selected_opponent and self.send_button.collide():
             self._send_challenge()
@@ -636,30 +714,44 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self._selected_opponent = user
                 self.stake_field.content = str(DEFAULT_STAKE)
                 self.stake_field.cursor_pos = len(self.stake_field.content)
-                self.time_field.content = ''
-                self.time_field.cursor_pos = 0
-                self.no_time_limit = True
+                self.game_limit_field.content = str(DEFAULT_GAME_LIMIT)
+                self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
+                self._game_limit_synced = True
                 self.stake_field.activate()
-                self.time_field.deactivate()
+                self.game_limit_field.deactivate()
                 return
+
+    def _handle_config_field_event(self, event):
+        previous_stake = self.stake_field.content
+        previous_limit = self.game_limit_field.content
+        self.stake_field.handle_event(event)
+        self.game_limit_field.handle_event(event)
+
+        if self.stake_field.content != previous_stake and self._game_limit_synced:
+            self._set_game_limit_content(self.stake_field.content)
+        elif self.game_limit_field.content != previous_limit:
+            self._game_limit_synced = (self.game_limit_field.content == self.stake_field.content)
+
+    def _set_game_limit_content(self, content):
+        self.game_limit_field.content = str(content)[:self.game_limit_field.max_length]
+        self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
 
         # Open challenges (only visible buttons)
         for btn, ch in zip(self.open_challenge_buttons, self.open_challenges):
             if (btn.rect.top >= self._list_top and btn.rect.bottom <= self._list_bottom
                     and btn.collide()):
                 stake = ch.get('stake', 45)
-                turn_time = ch.get('turn_time_limit')
-                time_str = f"{turn_time // 60} min" if turn_time else "No Limit"
+                game_limit = ch.get('game_limit') or stake
                 if ch in self.user['challenges_issued']:
                     self.make_dialogue_box(
                         f'You have challenged {btn.text} at {ch["date"]}\n\n'
-                        f'Stake: {stake} gold\nTurn Time: {time_str}',
+                        f'Stake: {stake} gold\nGame Limit: {game_limit} points',
                         actions=['ok'], title="Challenge Pending")
                 else:
                     self.set_action("accept_game_challenge", ch, "open")
                     self.make_dialogue_box(
                         f'Do you want to accept a game with {btn.text}?\n\n'
-                        f'Stake: {stake} gold\nTurn Time: {time_str}',
+                        f'Stake: {stake} gold\nGame Limit: {game_limit} points',
                         actions=["accept", "reject"], title="Accept Challenge")
                 return
 
@@ -667,24 +759,45 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
     def _check_accepted_challenges(self):
         """Check if any issued challenges have been accepted and show notification."""
-        if self.dialogue_box or self.state._pending_accepted_challenge:
+        issued = self.user.get('challenges_issued', [])
+        accepted = [ch for ch in issued if ch.get('status') == 'accepted']
+        if accepted:
+            logger.debug(f"[new_game] Found {len(accepted)} accepted challenge(s): "
+                  f"{[(ch['id'], ch.get('game_id')) for ch in accepted]}, "
+                  f"already notified: {self.state._notified_accepted_challenges}, "
+                  f"dialogue_box: {bool(self.dialogue_box)}")
+        if self.dialogue_box:
             return
+        # If a previous notification was set on another screen (or the dialogue
+        # was dismissed by navigating away), clean up the stale state.
+        if self.state._pending_accepted_challenge:
+            stale_id = self.state._pending_accepted_challenge['challenge_id']
+            try:
+                remove_challenge(stale_id)
+            except Exception:
+                pass
+            self.state._notified_accepted_challenges.discard(stale_id)
+            self.state._pending_accepted_challenge = None
+            if self.state.action.get('task') == 'challenge_accepted':
+                self.reset_action()
         for ch in self.user.get('challenges_issued', []):
             if (ch.get('status') == 'accepted'
                     and ch['id'] not in self.state._notified_accepted_challenges):
                 opponent_name = ch.get('challenged_name', 'opponent')
                 stake = ch.get('stake', 45)
+                game_limit = ch.get('game_limit') or stake
                 self.state._pending_accepted_challenge = {
                     'challenge_id': ch['id'],
                     'game_id': ch.get('game_id'),
                     'opponent_name': opponent_name,
                     'stake': stake,
+                    'game_limit': game_limit,
                 }
                 self.state._notified_accepted_challenges.add(ch['id'])
                 self.set_action("challenge_accepted", ch['id'], "open")
                 self.make_dialogue_box(
                     f'{opponent_name} accepted your challenge!\n\n'
-                    f'Stake: {stake} gold',
+                    f'Stake: {stake} gold\nGame Limit: {game_limit} points',
                     actions=["Go to Game", "Close"],
                     title="Challenge Accepted")
                 break
@@ -706,26 +819,28 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.state.set_msg(f"Not enough gold ({gold}/{stake})")
             return
 
-        turn_time_limit = None
-        if not self.no_time_limit:
-            try:
-                minutes = int(self.time_field.content)
-                if minutes < 1:
-                    self.state.set_msg("Turn time must be at least 1 minute")
-                    return
-                turn_time_limit = minutes * 60
-            except (ValueError, TypeError):
-                self.state.set_msg("Turn time must be a number (minutes)")
-                return
+        try:
+            game_limit = int(self.game_limit_field.content)
+        except (ValueError, TypeError):
+            self.state.set_msg("Game limit must be a number")
+            return
+        if game_limit < 1:
+            self.state.set_msg("Game limit must be at least 1 point")
+            return
+        if game_limit > MAX_GAME_LIMIT:
+            self.state.set_msg(f"Game limit must be at most {MAX_GAME_LIMIT} points")
+            return
 
         opponent_name = self._selected_opponent['username']
-        self.handle_create_challenge(opponent_name, stake, turn_time_limit)
+        self.handle_create_challenge(opponent_name, stake, game_limit)
         self._selected_opponent = None
 
     # ── Actions ───────────────────────────────────────────────────
 
-    def handle_create_challenge(self, opponent_name, stake=45, turn_time_limit=None):
-        response = create_challenge(self.state.user_dict['username'], opponent_name, stake=stake, turn_time_limit=turn_time_limit)
+    def handle_create_challenge(self, opponent_name, stake=45, game_limit=None):
+        response = create_challenge(
+            self.state.user_dict['username'], opponent_name,
+            stake=stake, game_limit=game_limit)
         if response.get('success'):
             self.state.set_msg(f"Challenge sent to {opponent_name}")
         else:
@@ -735,7 +850,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
         response = create_game(challenge['id'])
         if response['success'] and 'game' in response:
             self.state.game = Game(response['game'], self.state.user_dict)
-            self.state.screen = "game"
+            self.state.screen = gameplay_screen_for(self.state.game)
         else:
             self.state.set_msg(response['message'])
 
@@ -745,5 +860,5 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.state.set_msg(response['message'])
 
     def reset_action(self):
-        print(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
+        logger.debug(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
         self.state.action = {"task": None, "content": None, "status": None}

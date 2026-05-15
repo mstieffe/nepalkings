@@ -1,3 +1,7 @@
+# Root requirements: combined client + minimal server dependencies
+# used by the GitHub Actions test workflow (.github/workflows/tests.yml).
+# DO NOT use for production deploys -- prefer server/requirements.txt for
+# the backend and nepal_kings/requirements.txt for the client.
 blinker==1.6.2
 certifi==2023.5.7
 charset-normalizer==3.1.0

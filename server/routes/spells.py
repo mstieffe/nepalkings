@@ -5,22 +5,42 @@ Server-side spell routes for handling spell casting, countering, and management.
 """
 
 import logging
-from flask import Blueprint, request, jsonify, current_app
-from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult
-from datetime import datetime
+from flask import Blueprint, request, jsonify, current_app, g
+from models import db, Game, Player, ActiveSpell, MainCard, SideCard, LogEntry, Figure, CardToFigure, User, GameResult, BattleMove
+from datetime import datetime, timezone
 from game_service.deck_manager import DeckManager
+from game_service.battle_move_replenisher import auto_convert_conquer_battle_move_cards
+from game_service.conquer_tactics_service import (
+    auto_convert_conquer_tactic_cards,
+    is_tactics_hand_conquer,
+    purge_conquer_tactics_referencing_card,
+)
+from game_service.conquer_prelude_replay_targets import (
+    conquer_explosion_replay_target_for_id,
+    conquer_spell_allows_destroyed_replay_target,
+)
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
+from routes.auth import require_token, verify_player_ownership
+from routes.games import _guard_must_advance, _guard_pending_conquer_prelude_target
+
+logger = logging.getLogger('nepalkings.routes.spells')
 
 spells = Blueprint('spells', __name__)
 
 _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 @spells.after_request
 def _ai_trigger_hook(response):
     """After every POST, check if an AI player needs to act."""
     if request.method == 'POST' and settings.AI_ENABLED:
+        if request.headers.get('X-NepalKings-AI-Internal') == '1':
+            return response
         game_id = None
         try:
             if request.is_json and request.json:
@@ -37,7 +57,65 @@ def _ai_trigger_hook(response):
     return response
 
 
+def _guard_spell_mutation(game, *, action_label='spell_action', player_id=None):
+    """Block non-battle spell mutations during active battle and pre-decision lock."""
+    if not game:
+        return None
+
+    if game.battle_confirmed or game.battle_decisions:
+        logger.info(
+            f"[BATTLE_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} reason=active_battle"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed during an active battle',
+            'reason': 'active_battle'
+        }), 400
+
+    if (
+        settings.BATTLE_RESOLUTION_HARD_LOCK_ENABLED
+        and game.advancing_figure_id
+        and game.defending_figure_id
+        and not game.battle_confirmed
+    ):
+        logger.info(
+            f"[BATTLE_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} reason=battle_resolution_locked"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed while battle resolution is pending. Choose fight/fold first.',
+            'reason': 'battle_resolution_locked'
+        }), 400
+
+    # Counterable spell lock: while waiting for allow/counter, block other
+    # spell mutations. (allow_spell/counter_spell routes do not use this guard.)
+    if game.pending_spell_id and game.waiting_for_counter_player_id:
+        logger.info(
+            f"[SPELL_LOCK] blocked action={action_label} route={request.path} "
+            f"game={getattr(game, 'id', None)} player={player_id} "
+            f"reason=pending_counter_spell pending_spell_id={game.pending_spell_id}"
+        )
+        return jsonify({
+            'success': False,
+            'message': 'Action not allowed while a counterable spell is pending. Resolve allow/counter first.',
+            'reason': 'pending_counter_spell'
+        }), 400
+
+    prelude_err = _guard_pending_conquer_prelude_target(
+        game,
+        player_id=player_id,
+        action_label=action_label,
+    )
+    if prelude_err:
+        return prelude_err
+
+    return None
+
+
 @spells.route('/cast_spell', methods=['POST'])
+@require_token
 def cast_spell():
     """
     Cast a spell (both counterable and non-counterable).
@@ -60,6 +138,10 @@ def cast_spell():
     player_id = data.get('player_id')
     game_id = data.get('game_id')
     spell_name = data.get('spell_name')
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     spell_type = data.get('spell_type')
     spell_family_name = data.get('spell_family_name')
     suit = data.get('suit')
@@ -73,16 +155,39 @@ def cast_spell():
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
     
     # Get game and player
-    game = Game.query.get(game_id)
-    player = Player.query.get(player_id)
+    game = db.session.get(Game, game_id)
+    player = db.session.get(Player, player_id)
     
     if not game or not player:
         return jsonify({'success': False, 'message': 'Game or player not found'}), 404
+
+    # Lock spell casting while a counterable spell is pending resolution.
+    if game.pending_spell_id:
+        return jsonify({
+            'success': False,
+            'message': 'Cannot cast a new spell while a counterable spell is pending'
+        }), 400
+    
+    battle_err = _guard_spell_mutation(game, action_label='cast_spell', player_id=player_id)
+    if battle_err:
+        return battle_err
     
     # Verify it's player's turn
     if game.turn_player_id != player_id:
         return jsonify({'success': False, 'message': 'Not your turn'}), 403
+
+    # Invader must advance on last turn — no spells allowed
+    must_adv = _guard_must_advance(game, player_id, action_label='cast_spell')
+    if must_adv:
+        return must_adv
     
+    # Block tactics spells when an advance is in progress
+    if spell_type == 'tactics' and game.advancing_figure_id:
+        return jsonify({
+            'success': False,
+            'message': 'Cannot cast battle modifier spells while a figure is advancing'
+        }), 403
+
     # Check if spell can be cast during ceasefire
     if not possible_during_ceasefire and game.ceasefire_active:
         return jsonify({
@@ -154,6 +259,16 @@ def cast_spell():
             # Execute spell immediately
             spell_effect = _execute_spell(active_spell, game, player)
             
+            # Check if spell execution failed (e.g., invalid target)
+            if spell_effect.get('error'):
+                active_spell.is_active = False
+                db.session.commit()
+                return jsonify({
+                    'success': False,
+                    'message': spell_effect.get('effect', 'Spell execution failed'),
+                    'spell_effect': spell_effect,
+                }), 400
+            
             # Add log entry before commit
             _add_spell_log_entry(
                 game_id, player_id, game.current_round,
@@ -184,10 +299,12 @@ def cast_spell():
             
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error casting spell: {str(e)}'}), 500
+        logger.exception('Error casting spell')
+        return jsonify({'success': False, 'message': 'Error casting spell'}), 500
 
 
 @spells.route('/counter_spell', methods=['POST'])
+@require_token
 def counter_spell():
     """
     Counter a pending spell with another spell.
@@ -213,9 +330,13 @@ def counter_spell():
     
     if not all([player_id, game_id, pending_spell_id, counter_spell_name]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
-    game = Game.query.get(game_id)
-    pending_spell = ActiveSpell.query.get(pending_spell_id)
+    game = db.session.get(Game, game_id)
+    pending_spell = db.session.get(ActiveSpell, pending_spell_id)
     
     if not game or not pending_spell:
         return jsonify({'success': False, 'message': 'Game or spell not found'}), 404
@@ -238,7 +359,7 @@ def counter_spell():
         game.waiting_for_counter_player_id = None
         
         # Add log entry before commit
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         _add_spell_log_entry(
             game_id, player_id, game.current_round,
             player.turns_left, counter_spell_name, 'spell_countered',
@@ -260,10 +381,12 @@ def counter_spell():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error countering spell: {str(e)}'}), 500
+        logger.exception('Error countering spell')
+        return jsonify({'success': False, 'message': 'Error countering spell'}), 500
 
 
 @spells.route('/allow_spell', methods=['POST'])
+@require_token
 def allow_spell():
     """
     Allow an opponent's pending spell to execute.
@@ -283,9 +406,13 @@ def allow_spell():
     
     if not all([player_id, game_id, pending_spell_id]):
         return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
-    game = Game.query.get(game_id)
-    pending_spell = ActiveSpell.query.get(pending_spell_id)
+    game = db.session.get(Game, game_id)
+    pending_spell = db.session.get(ActiveSpell, pending_spell_id)
     
     if not game or not pending_spell:
         return jsonify({'success': False, 'message': 'Game or spell not found'}), 404
@@ -304,11 +431,11 @@ def allow_spell():
         game.waiting_for_counter_player_id = None
         
         # Execute the spell
-        caster = Player.query.get(pending_spell.player_id)
+        caster = db.session.get(Player, pending_spell.player_id)
         spell_effect = _execute_spell(pending_spell, game, caster)
         
         # Add log entry before commit
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         _add_spell_log_entry(
             game_id, player_id, game.current_round,
             player.turns_left, pending_spell.spell_name, 'spell_allowed',
@@ -343,7 +470,8 @@ def allow_spell():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error allowing spell: {str(e)}'}), 500
+        logger.exception('Error allowing spell')
+        return jsonify({'success': False, 'message': 'Error allowing spell'}), 500
 
 
 @spells.route('/get_active_spells', methods=['GET'])
@@ -361,17 +489,40 @@ def get_active_spells():
     if not game_id:
         return jsonify({'success': False, 'message': 'game_id required'}), 400
     
-    query = ActiveSpell.query.filter_by(game_id=game_id, is_active=True)
-    
-    if player_id:
-        query = query.filter_by(player_id=player_id)
-    
-    active_spells = query.all()
+    game = db.session.get(Game, game_id)
+
+    if game and game.mode == 'conquer':
+        query = ActiveSpell.query.filter_by(game_id=game_id)
+        if player_id:
+            query = query.filter_by(player_id=player_id)
+        spells = query.all()
+        active_spells = [
+            spell for spell in spells
+            if spell.is_active or _is_conquer_prelude_replay_spell(spell)
+        ]
+    else:
+        query = ActiveSpell.query.filter_by(game_id=game_id, is_active=True)
+        if player_id:
+            query = query.filter_by(player_id=player_id)
+        active_spells = query.all()
     
     return jsonify({
         'success': True,
         'active_spells': [spell.serialize() for spell in active_spells]
     }), 200
+
+
+def _is_conquer_prelude_replay_spell(spell):
+    """Keep resolved conquer preludes available for client timeline replay."""
+    effect_data = spell.effect_data if isinstance(spell.effect_data, dict) else {}
+    if not effect_data.get('prelude_origin'):
+        return False
+    return bool(
+        effect_data.get('prelude_status')
+        or effect_data.get('prelude_pending_target')
+        or effect_data.get('target_figure_snapshot')
+        or effect_data.get('destroyed_figure_snapshot')
+    )
 
 
 @spells.route('/get_pending_spell', methods=['GET'])
@@ -387,7 +538,7 @@ def get_pending_spell():
     if not spell_id:
         return jsonify({'success': False, 'message': 'spell_id required'}), 400
     
-    spell = ActiveSpell.query.get(spell_id)
+    spell = db.session.get(ActiveSpell, spell_id)
     
     if not spell:
         return jsonify({'success': False, 'message': 'Spell not found'}), 404
@@ -399,6 +550,7 @@ def get_pending_spell():
 
 
 @spells.route('/remove_spell_effect', methods=['POST'])
+@require_token
 def remove_spell_effect():
     """
     Remove/deactivate a spell effect.
@@ -414,10 +566,19 @@ def remove_spell_effect():
     if not spell_id:
         return jsonify({'success': False, 'message': 'spell_id required'}), 400
     
-    spell = ActiveSpell.query.get(spell_id)
+    spell = db.session.get(ActiveSpell, spell_id)
     
     if not spell:
         return jsonify({'success': False, 'message': 'Spell not found'}), 404
+
+    err = verify_player_ownership(spell.player_id)
+    if err:
+        return err
+
+    game = db.session.get(Game, spell.game_id)
+    battle_err = _guard_spell_mutation(game, action_label='remove_spell_effect', player_id=spell.player_id)
+    if battle_err:
+        return battle_err
     
     try:
         spell.is_active = False
@@ -430,10 +591,12 @@ def remove_spell_effect():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error removing spell: {str(e)}'}), 500
+        logger.exception('Error removing spell')
+        return jsonify({'success': False, 'message': 'Error removing spell'}), 500
 
 
 @spells.route('/end_infinite_hammer', methods=['POST'])
+@require_token
 def end_infinite_hammer():
     """
     End Infinite Hammer mode and flip the turn to the opponent.
@@ -450,10 +613,26 @@ def end_infinite_hammer():
     
     if not game_id or not player_id:
         return jsonify({'success': False, 'message': 'game_id and player_id required'}), 400
+
+    err = verify_player_ownership(player_id)
+    if err:
+        return err
     
     try:
         # Expire session to get the latest ActiveSpell data with all accumulated actions
         db.session.expire_all()
+
+        game = db.session.get(Game, game_id)
+        if not game:
+            return jsonify({'success': False, 'message': 'Game not found'}), 404
+
+        battle_err = _guard_spell_mutation(game, action_label='end_infinite_hammer', player_id=player_id)
+        if battle_err:
+            return battle_err
+
+        must_adv = _guard_must_advance(game, player_id, action_label='end_infinite_hammer')
+        if must_adv:
+            return must_adv
         
         # Find the active Infinite Hammer spell for this player
         active_hammer = ActiveSpell.query.filter_by(
@@ -467,27 +646,24 @@ def end_infinite_hammer():
         
         # Get all accumulated actions BEFORE deactivating
         actions = active_hammer.effect_data.get('actions', []) if active_hammer.effect_data else []
-        print(f"[END_INFINITE_HAMMER] Actions tracked: {actions}")
-        print(f"[END_INFINITE_HAMMER] Full effect_data: {active_hammer.effect_data}")
+        logger.debug(f"[END_INFINITE_HAMMER] Actions tracked: {actions}")
+        logger.debug(f"[END_INFINITE_HAMMER] Full effect_data: {active_hammer.effect_data}")
         
         # Deactivate the spell
         active_hammer.is_active = False
         
         # Decrement turns_left (Infinite Hammer consumes one turn)
-        player = Player.query.get(player_id)
+        player = db.session.get(Player, player_id)
         if player and player.turns_left > 0:
             player.turns_left -= 1
         
         # Flip the turn to the opponent
-        game = Game.query.get(game_id)
-        if not game:
-            return jsonify({'success': False, 'message': 'Game not found'}), 404
         
         if game.turn_player_id == player_id:
             game.turn_player_id = game.players[0].id if game.players[0].id != player_id else game.players[1].id
         
         # Create log entry
-        user = User.query.get(player.user_id)
+        user = db.session.get(User, player.user_id)
         username = user.username if user else f"Player {player_id}"
         
         # Build action summary for log
@@ -518,7 +694,8 @@ def end_infinite_hammer():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'Error ending Infinite Hammer: {str(e)}'}), 500
+        logger.exception('Error ending Infinite Hammer')
+        return jsonify({'success': False, 'message': 'Error ending Infinite Hammer'}), 500
 
 
 # Helper functions
@@ -538,14 +715,17 @@ def _validate_and_mark_spell_cards(player_id, cards_data):
         side_card_ranks = ['2', '3', '4', '5', '6']
         
         for card_data in cards_data:
-            card_id = card_data['id']
+            try:
+                card_id = int(card_data['id'])
+            except (TypeError, ValueError):
+                return False
             card_rank = card_data['rank']
             
             # Determine which table to query based on rank
             if card_rank in side_card_ranks:
-                card = SideCard.query.get(card_id)
+                card = db.session.get(SideCard, card_id)
             else:
-                card = MainCard.query.get(card_id)
+                card = db.session.get(MainCard, card_id)
             
             if not card:
                 return False
@@ -563,11 +743,179 @@ def _validate_and_mark_spell_cards(player_id, cards_data):
         
     except Exception as e:
         db.session.rollback()
-        print(f"Error validating spell cards: {e}")
+        logger.debug(f"Error validating spell cards: {e}")
         return False
 
 
+def _purge_battle_moves_referencing_card(game_id, card_id, card_type):
+    """Delete BattleMove rows referencing the given card.
+
+    Used when a spell removes or relocates a hand card that was reserved
+    for a pre-bought battle move (Forced Deal swap, Dump Cards return-to-
+    deck) so the battle shop no longer shows a dangling move whose card
+    has changed owner / been recycled.
+
+    For Double Dagger moves (two cards), the partner card is freed back
+    to its owner's hand (part_of_battle_move=False, in_deck=False) so it
+    can be re-used.
+
+    Returns the number of BattleMove rows deleted.
+    """
+    if not card_id:
+        return 0
+    primary = BattleMove.query.filter_by(
+        game_id=game_id, card_id=card_id, card_type=card_type,
+    ).all()
+    secondary = BattleMove.query.filter_by(
+        game_id=game_id, card_id_b=card_id, card_type_b=card_type,
+    ).all()
+    affected = {bm.id: bm for bm in primary}
+    affected.update({bm.id: bm for bm in secondary})
+    if not affected:
+        return 0
+    for bm in affected.values():
+        # Free the partner card (other side of a Double Dagger), if any
+        partner_card_id = None
+        partner_card_type = None
+        if bm.card_id == card_id and bm.card_type == card_type:
+            partner_card_id = bm.card_id_b
+            partner_card_type = bm.card_type_b
+        elif bm.card_id_b == card_id and bm.card_type_b == card_type:
+            partner_card_id = bm.card_id
+            partner_card_type = bm.card_type
+        if partner_card_id:
+            partner_model = SideCard if partner_card_type == 'side' else MainCard
+            partner = db.session.get(partner_model, partner_card_id)
+            if partner:
+                partner.part_of_battle_move = False
+                partner.in_deck = False
+        logger.info(
+            f"[BM_PURGE] game={game_id} bm_id={bm.id} family={bm.family_name} "
+            f"player={bm.player_id} trigger_card={card_type}#{card_id}"
+        )
+        db.session.delete(bm)
+    return len(affected)
+
+
+def _purge_spell_move_state_referencing_card(game, card_id, card_type):
+    if is_tactics_hand_conquer(game):
+        return purge_conquer_tactics_referencing_card(
+            game.id,
+            card_id,
+            card_type,
+        ).get('deleted', 0)
+    return _purge_battle_moves_referencing_card(game.id, card_id, card_type)
+
+
+def _auto_convert_spell_battle_moves(
+    spell_effect,
+    key,
+    game,
+    player,
+    cards,
+    *,
+    reason,
+):
+    if is_tactics_hand_conquer(game):
+        info = auto_convert_conquer_tactic_cards(
+            game,
+            player,
+            cards,
+            reason=reason,
+        )
+        if info.get('added'):
+            tactic_key = key.replace('battle_moves', 'conquer_tactics')
+            spell_effect[tactic_key] = info
+            spell_effect[key] = info
+        return info
+
+    info = auto_convert_conquer_battle_move_cards(
+        game,
+        player,
+        cards,
+        reason=reason,
+    )
+    if info.get('added'):
+        spell_effect[key] = info
+    return info
+
+
 def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
+    """Execute a spell.  Wraps :func:`_execute_spell_impl` with a single
+    spell-resolution-step lock so the timeline transition stays as one
+    bubble even when the spell purges and adds tactics for both players.
+    """
+    # Sentinel; the first ``_bump_resolution_step`` inside the scope pins
+    # the step value here for all subsequent bumps.  ``None`` after exit so
+    # later bumps (e.g. another spell on the same Game in-process) re-enter
+    # the unlocked state.
+    game._spell_step_lock = 'pending'
+    try:
+        return _execute_spell_impl(spell, game, caster)
+    finally:
+        try:
+            game._spell_step_lock = None
+        except Exception:
+            pass
+
+
+def _execute_destroyed_conquer_replay_enchantment(spell, game):
+    """Resolve Health Boost/Poison on a deleted Explosion victim as replay only."""
+    if not conquer_spell_allows_destroyed_replay_target(spell.spell_name):
+        return None
+
+    payload = conquer_explosion_replay_target_for_id(game, spell.target_figure_id)
+    if not payload:
+        return None
+
+    snapshot = dict(payload.get('snapshot') or {})
+    target_id = payload.get('id')
+    target_name = (
+        snapshot.get('name')
+        or snapshot.get('family_name')
+        or f'Figure {target_id}'
+    )
+
+    if spell.spell_name == 'Poison':
+        spell_icon = 'poisson_portion.png'
+        power_modifier = -6
+        effect = f'Poisoned {target_name} (-6 power)'
+    elif spell.spell_name == 'Health Boost':
+        spell_icon = 'health_portion.png'
+        power_modifier = 6
+        effect = f'Boosted {target_name} (+6 power)'
+    else:
+        return None
+
+    effect_data = dict(spell.effect_data or {})
+    effect_data.update({
+        'spell_icon': spell_icon,
+        'power_modifier': power_modifier,
+        'target_figure_id': target_id,
+        'target_figure_name': target_name,
+        'target_figure_snapshot': snapshot,
+        'target_destroyed_by_explosion': True,
+        'replay_target_only': True,
+    })
+    spell.effect_data = effect_data
+
+    # The visual replay still needs metadata, but there is no surviving
+    # figure to enchant for battle math.
+    spell.is_active = False
+
+    return {
+        'effect': effect,
+        'target_figure_id': target_id,
+        'target_figure_name': target_name,
+        'target_figure_snapshot': snapshot,
+        'power_modifier': power_modifier,
+        'spell_icon': spell_icon,
+        'target_destroyed_by_explosion': True,
+        'replay_target_only': True,
+    }
+
+
+def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
     """
     Execute a spell's effect based on its type.
     
@@ -590,7 +938,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
         # Draw card spells
         if spell.spell_name == 'Draw 2 SideCards':
             try:
-                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 2, 'side')
+                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 2, 'side', force=True)
                 spell_effect['effect'] = f'Drew {len(drawn_cards)} side cards'
                 spell_effect['cards_drawn'] = len(drawn_cards)
                 spell_effect['card_type'] = 'side'
@@ -602,15 +950,24 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
                 db.session.rollback()
-                spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Failed to draw side cards')
+                spell_effect['effect'] = 'Failed to draw cards'
+                spell_effect['error'] = True
         
         elif spell.spell_name == 'Draw 2 MainCards':
             try:
-                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 2, 'main')
+                drawn_cards = DeckManager.draw_cards_from_deck(game, caster, 2, 'main', force=True)
                 spell_effect['effect'] = f'Drew {len(drawn_cards)} main cards'
                 spell_effect['cards_drawn'] = len(drawn_cards)
                 spell_effect['card_type'] = 'main'
+                _auto_convert_spell_battle_moves(
+                    spell_effect,
+                    'battle_moves_added',
+                    game,
+                    caster,
+                    drawn_cards,
+                    reason='draw_main_spell',
+                )
                 # Add type field to serialized cards
                 spell_effect['drawn_cards'] = []
                 for card in drawn_cards:
@@ -619,8 +976,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['drawn_cards'].append(card_data)
             except Exception as e:
                 db.session.rollback()
-                spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Failed to draw main cards')
+                spell_effect['effect'] = 'Failed to draw cards'
+                spell_effect['error'] = True
         
         elif spell.spell_name == 'Fill up to 10':
             try:
@@ -633,35 +991,43 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                 
                 cards_needed = max(0, 10 - main_hand_count)
                 
-                print(f"[FILL UP TO 10] Current hand: {main_hand_count}, Cards needed: {cards_needed}")
+                logger.debug(f"[FILL UP TO 10] Current hand: {main_hand_count}, Cards needed: {cards_needed}")
                 
                 if cards_needed > 0:
                     # Draw main cards to fill up to 10
                     drawn_cards = DeckManager.draw_cards_from_deck(game, caster, cards_needed, 'main')
-                    print(f"[FILL UP TO 10] Drew {len(drawn_cards)} cards")
+                    logger.debug(f"[FILL UP TO 10] Drew {len(drawn_cards)} cards")
                     spell_effect['effect'] = f'Drew {len(drawn_cards)} main cards to reach 10 total'
                     spell_effect['cards_drawn'] = len(drawn_cards)
                     spell_effect['card_type'] = 'main'
                     spell_effect['previous_total'] = main_hand_count
                     spell_effect['new_total'] = main_hand_count + len(drawn_cards)
+                    _auto_convert_spell_battle_moves(
+                        spell_effect,
+                        'battle_moves_added',
+                        game,
+                        caster,
+                        drawn_cards,
+                        reason='fill_to_10_spell',
+                    )
                     # Add type field to serialized cards
                     spell_effect['drawn_cards'] = []
                     for card in drawn_cards:
                         card_data = card.serialize()
                         card_data['type'] = 'main'
                         spell_effect['drawn_cards'].append(card_data)
-                    print(f"[FILL UP TO 10] Serialized {len(spell_effect['drawn_cards'])} cards to spell_effect")
+                    logger.debug(f"[FILL UP TO 10] Serialized {len(spell_effect['drawn_cards'])} cards to spell_effect")
                 else:
                     spell_effect['effect'] = f'Already at or above 10 main cards (current: {main_hand_count})'
                     spell_effect['cards_drawn'] = 0
                     spell_effect['drawn_cards'] = []
                     spell_effect['current_total'] = main_hand_count
-                    print(f"[FILL UP TO 10] Already at {main_hand_count} cards, no draw needed")
+                    logger.debug(f"[FILL UP TO 10] Already at {main_hand_count} cards, no draw needed")
             except Exception as e:
                 db.session.rollback()
-                print(f"[FILL UP TO 10] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to draw cards: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Fill up to 10 failed')
+                spell_effect['effect'] = 'Failed to draw cards'
+                spell_effect['error'] = True
         
         elif spell.spell_name == 'Dump Cards':
             try:
@@ -704,10 +1070,22 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Count dumped cards
                     caster_dumped = len(caster_main_cards) + len(caster_side_cards)
                     opponent_dumped = len(opponent_main_cards) + len(opponent_side_cards)
+                    caster_dumped_cards = [c.serialize() for c in caster_main_cards] + [c.serialize() for c in caster_side_cards]
+                    opponent_dumped_cards = [c.serialize() for c in opponent_main_cards] + [c.serialize() for c in opponent_side_cards]
                     
                     # Return all cards to deck
                     all_cards_to_dump = caster_main_cards + caster_side_cards + opponent_main_cards + opponent_side_cards
                     if all_cards_to_dump:
+                        # Drop any pre-bought BattleMove rows whose cards are
+                        # being recycled into the deck — otherwise the battle
+                        # shop would keep showing moves whose underlying cards
+                        # are gone.
+                        for card in all_cards_to_dump:
+                            if not getattr(card, 'part_of_battle_move', False):
+                                continue
+                            ct = 'side' if isinstance(card, SideCard) else 'main'
+                            _purge_spell_move_state_referencing_card(game, card.id, ct)
+                            card.part_of_battle_move = False
                         DeckManager.return_cards_to_deck(all_cards_to_dump)
                     
                     # Deal new cards to both players (5 main, 4 side)
@@ -715,10 +1093,28 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     caster_new_side = DeckManager.draw_cards_from_deck(game, caster, 4, 'side')
                     opponent_new_main = DeckManager.draw_cards_from_deck(game, opponent, 5, 'main')
                     opponent_new_side = DeckManager.draw_cards_from_deck(game, opponent, 4, 'side')
+                    _auto_convert_spell_battle_moves(
+                        spell_effect,
+                        'battle_moves_added',
+                        game,
+                        caster,
+                        caster_new_main,
+                        reason='dump_cards_spell',
+                    )
+                    _auto_convert_spell_battle_moves(
+                        spell_effect,
+                        'opponent_battle_moves_added',
+                        game,
+                        opponent,
+                        opponent_new_main,
+                        reason='dump_cards_spell_opponent',
+                    )
                     
                     spell_effect['effect'] = f'Both players dumped all cards and drew 5 main + 4 side cards'
                     spell_effect['caster_dumped'] = caster_dumped
                     spell_effect['opponent_dumped'] = opponent_dumped
+                    spell_effect['caster_dumped_cards'] = caster_dumped_cards
+                    spell_effect['opponent_dumped_cards'] = opponent_dumped_cards
                     spell_effect['cards_drawn'] = len(caster_new_main) + len(caster_new_side)
                     
                     # Add caster's new cards
@@ -731,26 +1127,36 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         card_data = card.serialize()
                         card_data['type'] = 'side'
                         spell_effect['drawn_cards'].append(card_data)
+                    spell_effect['opponent_drawn_cards'] = []
+                    for card in opponent_new_main:
+                        card_data = card.serialize()
+                        card_data['type'] = 'main'
+                        spell_effect['opponent_drawn_cards'].append(card_data)
+                    for card in opponent_new_side:
+                        card_data = card.serialize()
+                        card_data['type'] = 'side'
+                        spell_effect['opponent_drawn_cards'].append(card_data)
             except Exception as e:
                 db.session.rollback()
-                spell_effect['effect'] = f'Failed to dump cards: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Failed to dump cards')
+                spell_effect['effect'] = 'Failed to dump cards'
+                spell_effect['error'] = True
         
         elif 'Forced Deal' in spell.spell_name:
             # Exchange 2 random cards with opponent
             try:
                 import random
                 
-                print(f"[FORCED DEAL] Starting Forced Deal spell execution")
+                logger.debug(f"[FORCED DEAL] Starting Forced Deal spell execution")
                 
                 # Get opponent
                 opponent = next((p for p in game.players if p.id != caster.id), None)
                 if not opponent:
                     spell_effect['effect'] = 'No opponent found'
                     spell_effect['error'] = 'No opponent'
-                    print(f"[FORCED DEAL] ERROR: No opponent found")
+                    logger.error(f"[FORCED DEAL] ERROR: No opponent found")
                 else:
-                    print(f"[FORCED DEAL] Caster: {caster.id}, Opponent: {opponent.id}")
+                    logger.debug(f"[FORCED DEAL] Caster: {caster.id}, Opponent: {opponent.id}")
                     
                     # Get caster's MAIN hand cards only (not in deck, not part of figure)
                     caster_main_cards = MainCard.query.filter_by(
@@ -759,7 +1165,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         part_of_figure=False
                     ).all()
                     
-                    print(f"[FORCED DEAL] Caster has {len(caster_main_cards)} main cards in hand")
+                    logger.debug(f"[FORCED DEAL] Caster has {len(caster_main_cards)} main cards in hand")
                     
                     # Get opponent's MAIN hand cards only
                     opponent_main_cards = MainCard.query.filter_by(
@@ -768,34 +1174,58 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         part_of_figure=False
                     ).all()
                     
-                    print(f"[FORCED DEAL] Opponent has {len(opponent_main_cards)} main cards in hand")
+                    logger.debug(f"[FORCED DEAL] Opponent has {len(opponent_main_cards)} main cards in hand")
                     
                     # Check if both players have at least 2 main cards
                     if len(caster_main_cards) < 2:
                         spell_effect['effect'] = 'Not enough main cards in your hand (need at least 2)'
                         spell_effect['error'] = 'Insufficient cards'
-                        print(f"[FORCED DEAL] ERROR: Caster has only {len(caster_main_cards)} main cards")
+                        logger.error(f"[FORCED DEAL] ERROR: Caster has only {len(caster_main_cards)} main cards")
                     elif len(opponent_main_cards) < 2:
                         spell_effect['effect'] = 'Opponent does not have enough main cards (need at least 2)'
                         spell_effect['error'] = 'Insufficient opponent cards'
-                        print(f"[FORCED DEAL] ERROR: Opponent has only {len(opponent_main_cards)} main cards")
+                        logger.error(f"[FORCED DEAL] ERROR: Opponent has only {len(opponent_main_cards)} main cards")
                     else:
                         # Select 2 random MAIN cards from each player
                         caster_cards_to_swap = random.sample(caster_main_cards, 2)
                         opponent_cards_to_swap = random.sample(opponent_main_cards, 2)
                         
-                        print(f"[FORCED DEAL] Swapping cards:")
-                        print(f"[FORCED DEAL] Caster gives: {[f'{c.rank}{c.suit}' for c in caster_cards_to_swap]}")
-                        print(f"[FORCED DEAL] Opponent gives: {[f'{c.rank}{c.suit}' for c in opponent_cards_to_swap]}")
+                        logger.debug(f"[FORCED DEAL] Swapping cards:")
+                        logger.debug(f"[FORCED DEAL] Caster gives: {[f'{c.rank}{c.suit}' for c in caster_cards_to_swap]}")
+                        logger.debug(f"[FORCED DEAL] Opponent gives: {[f'{c.rank}{c.suit}' for c in opponent_cards_to_swap]}")
                         
+                        # Any pre-bought BattleMove that referenced a swapped
+                        # card is now stale — drop it before ownership changes.
+                        for card in caster_cards_to_swap + opponent_cards_to_swap:
+                            if getattr(card, 'part_of_battle_move', False):
+                                _purge_spell_move_state_referencing_card(game, card.id, 'main')
+                                card.part_of_battle_move = False
+
                         # Swap ownership
                         for card in caster_cards_to_swap:
                             card.player_id = opponent.id
                         
                         for card in opponent_cards_to_swap:
                             card.player_id = caster.id
+
+                        _auto_convert_spell_battle_moves(
+                            spell_effect,
+                            'battle_moves_added',
+                            game,
+                            caster,
+                            opponent_cards_to_swap,
+                            reason='forced_deal_spell',
+                        )
+                        _auto_convert_spell_battle_moves(
+                            spell_effect,
+                            'opponent_battle_moves_added',
+                            game,
+                            opponent,
+                            caster_cards_to_swap,
+                            reason='forced_deal_spell_opponent',
+                        )
                         
-                        print(f"[FORCED DEAL] Card ownership updated successfully")
+                        logger.debug(f"[FORCED DEAL] Card ownership updated successfully")
                         
                         spell_effect['effect'] = 'Exchanged 2 random cards with opponent'
                         spell_effect['cards_given'] = [card.serialize() for card in caster_cards_to_swap]
@@ -811,6 +1241,10 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                             'opponent_received': [card.serialize() for card in caster_cards_to_swap],
                             'notification_pending': True  # Flag to show this needs to be shown to opponent
                         }
+                        if spell_effect.get('battle_moves_added'):
+                            spell.effect_data['battle_moves_added'] = spell_effect['battle_moves_added']
+                        if spell_effect.get('opponent_battle_moves_added'):
+                            spell.effect_data['opponent_battle_moves_added'] = spell_effect['opponent_battle_moves_added']
                         
                         # Add opponent notification data (opponent sees opposite perspective)
                         spell_effect['opponent_notification'] = {
@@ -819,15 +1253,13 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                             'cards_received': [card.serialize() for card in caster_cards_to_swap]
                         }
                         
-                        print(f"[FORCED DEAL] Spell effect prepared with {len(spell_effect['cards_given'])} cards given and {len(spell_effect['cards_received'])} cards received")
+                        logger.debug(f"[FORCED DEAL] Spell effect prepared with {len(spell_effect['cards_given'])} cards given and {len(spell_effect['cards_received'])} cards received")
                         
             except Exception as e:
                 db.session.rollback()
-                spell_effect['effect'] = f'Failed to force deal: {str(e)}'
-                spell_effect['error'] = str(e)
-                print(f"[FORCED DEAL] EXCEPTION: {str(e)}")
-                import traceback
-                traceback.print_exc()
+                logger.exception('Forced Deal failed')
+                spell_effect['effect'] = 'Failed to force deal'
+                spell_effect['error'] = True
         
     elif spell.spell_type == 'enchantment':
         # Figure enchantment spells
@@ -856,21 +1288,27 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
             spell_effect['target_figure_id'] = spell.target_figure_id
             
             # Get target figure to validate it exists
-            target_figure = Figure.query.get(spell.target_figure_id)
+            target_figure = db.session.get(Figure, spell.target_figure_id)
             if not target_figure:
-                spell_effect['effect'] = 'Target figure not found'
-                spell_effect['error'] = 'Invalid target'
+                replay_effect = _execute_destroyed_conquer_replay_enchantment(
+                    spell,
+                    game,
+                )
+                if replay_effect:
+                    spell_effect.update(replay_effect)
+                else:
+                    spell_effect['effect'] = 'Target figure not found'
+                    spell_effect['error'] = 'Invalid target'
             else:
+                target_figure_snapshot = target_figure.serialize()
+                spell_effect['target_figure_name'] = target_figure.name
+                spell_effect['target_figure_snapshot'] = target_figure_snapshot
+
                 # Check if target figure has checkmate (immune to all spells)
                 if getattr(target_figure, 'checkmate', False):
                     spell_effect['effect'] = f'{target_figure.name} is immune to spells (Checkmate)'
                     spell_effect['error'] = 'Invalid target: Checkmate figures are immune to spells'
-                    db.session.commit()
-                    return jsonify({
-                        'success': False, 
-                        'message': f'{target_figure.name} is immune to spells!',
-                        'spell_effect': spell_effect
-                    }), 400
+                    return spell_effect
                 
                 # Determine spell icon filename based on spell name
                 spell_icon = 'default_spell_icon.png'
@@ -915,30 +1353,58 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         # Delete card associations
                         CardToFigure.query.filter_by(figure_id=target_figure.id).delete()
                         
-                        # Remove any other active enchantment spells on this figure
-                        ActiveSpell.query.filter_by(
-                            game_id=game.id,
-                            target_figure_id=target_figure.id
-                        ).delete()
+                        # Remove any active enchantment spells on this figure.
+                        # In conquer mode keep the Explosion record itself so
+                        # game-start/prelude notifications can report the
+                        # executed effect; duel mode keeps its existing cleanup.
+                        if getattr(game, 'mode', None) == 'conquer':
+                            ActiveSpell.query.filter(
+                                ActiveSpell.game_id == game.id,
+                                ActiveSpell.target_figure_id == target_figure.id,
+                                ActiveSpell.id != spell.id,
+                            ).delete(synchronize_session=False)
+                        else:
+                            ActiveSpell.query.filter_by(
+                                game_id=game.id,
+                                target_figure_id=target_figure.id
+                            ).delete()
                         
                         # Store figure name before deletion for logging
                         destroyed_figure_name = target_figure.name
                         destroyed_figure_field = target_figure.field
                         destroyed_figure_owner_id = target_figure.player_id
+                        destroyed_figure_id = target_figure.id
                         card_count = len(main_card_ids) + len(side_card_ids)
+
+                        if getattr(game, 'mode', None) == 'conquer':
+                            if game.advancing_figure_id == destroyed_figure_id:
+                                game.advancing_figure_id = None
+                                game.advancing_figure_id_2 = None
+                                game.advancing_player_id = None
+                            elif game.advancing_figure_id_2 == destroyed_figure_id:
+                                game.advancing_figure_id_2 = None
+                            if game.defending_figure_id == destroyed_figure_id:
+                                game.defending_figure_id = None
+                                game.defending_figure_id_2 = None
+                            elif game.defending_figure_id_2 == destroyed_figure_id:
+                                game.defending_figure_id_2 = None
+                            BattleMove.query.filter_by(
+                                game_id=game.id,
+                                call_figure_id=destroyed_figure_id,
+                            ).update({'call_figure_id': None}, synchronize_session='fetch')
                         
                         # Check checkmate before deleting the figure
                         checkmate_game_over = None
                         if getattr(target_figure, 'checkmate', False) and game.state != 'finished':
-                            loser_player = Player.query.get(target_figure.player_id)
+                            loser_player = db.session.get(Player, target_figure.player_id)
                             winner_player = [p for p in game.players if p.id != loser_player.id][0]
                             stake = game.stake or settings.DEFAULT_GAME_STAKE
                             gold_awarded = stake * 2
                             game.state = 'finished'
                             game.winner_player_id = winner_player.id
-                            game.finished_at = datetime.utcnow()
-                            winner_user = User.query.get(winner_player.user_id)
-                            loser_user = User.query.get(loser_player.user_id)
+                            game.finished_at = _utcnow()
+                            winner_user = db.session.get(User, winner_player.user_id)
+                            loser_user = db.session.get(User, loser_player.user_id)
                             if winner_user:
                                 winner_user.gold += gold_awarded
                             winner_username = winner_user.username if winner_user else f"Player {winner_player.id}"
@@ -976,13 +1442,37 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                                 author="System", type='game_over'
                             )
                             db.session.add(checkmate_log)
+
+                            # Conquer mode: also resolve land/card consequences
+                            # so the loser's loot/consumption record is created
+                            # and the attacker's LandConfig is cleaned up.
+                            if game.mode == 'conquer':
+                                try:
+                                    from routes.games import _resolve_conquer_battle
+                                    conquer_payload = _resolve_conquer_battle(
+                                        game, winner_player, winner_player)
+                                    if isinstance(conquer_payload, dict):
+                                        checkmate_game_over['conquer_result'] = conquer_payload.get('conquer_result')
+                                        checkmate_game_over['attacker_won'] = conquer_payload.get('attacker_won')
+                                        checkmate_game_over['land_id'] = conquer_payload.get('land_id')
+                                        for _k in ('card_won_suit', 'card_won_rank',
+                                                   'card_lost_suit', 'card_lost_rank',
+                                                   'loot_lost_cards', 'consumed_cards',
+                                                   'cards_spent', 'is_ai_defender'):
+                                            if _k in conquer_payload:
+                                                checkmate_game_over[_k] = conquer_payload[_k]
+                                except Exception:
+                                    logger.exception("[EXPLOSION_CHECKMATE] conquer resolve failed")
                         
                         # Delete the figure
                         db.session.delete(target_figure)
                         db.session.flush()
                         
                         spell_effect['effect'] = f'Destroyed {destroyed_figure_name} ({card_count} cards returned to deck)'
+                        spell_effect['target_figure_name'] = destroyed_figure_name
                         spell_effect['destroyed_figure_name'] = destroyed_figure_name
+                        spell_effect['target_figure_snapshot'] = target_figure_snapshot
+                        spell_effect['destroyed_figure_snapshot'] = target_figure_snapshot
                         spell_effect['card_count'] = card_count
                         if checkmate_game_over:
                             spell_effect['game_over'] = checkmate_game_over
@@ -1004,8 +1494,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         
                     except Exception as e:
                         db.session.rollback()
-                        spell_effect['effect'] = f'Failed to destroy figure: {str(e)}'
-                        spell_effect['error'] = str(e)
+                        logger.exception('Failed to destroy figure')
+                        spell_effect['effect'] = 'Failed to destroy figure'
+                        spell_effect['error'] = True
                         spell.is_active = False
                 
                 # Only store enchantment data for non-Explosion spells (Explosion destroys the figure)
@@ -1014,12 +1505,17 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell.effect_data = {
                         'spell_icon': spell_icon,
                         'power_modifier': power_modifier,
-                        'target_figure_name': target_figure.name
+                        'target_figure_id': target_figure.id,
+                        'target_figure_name': target_figure.name,
+                        'target_figure_snapshot': target_figure_snapshot,
                     }
                     
                     # Keep spell active so it persists until battle/end of turn
                     spell.is_active = True
                     
+                    spell_effect['target_figure_id'] = target_figure.id
+                    spell_effect['target_figure_name'] = target_figure.name
+                    spell_effect['target_figure_snapshot'] = target_figure_snapshot
                     spell_effect['power_modifier'] = power_modifier
                     spell_effect['spell_icon'] = spell_icon
         else:
@@ -1034,7 +1530,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
         if spell.spell_name == 'Ceasefire':
             try:
                 # Give both players 3 additional turns
-                invader_player = Player.query.get(game.invader_player_id)
+                invader_player = db.session.get(Player, game.invader_player_id)
                 defender_player = next((p for p in game.players if p.id != game.invader_player_id), None)
                 
                 if not invader_player or not defender_player:
@@ -1050,7 +1546,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Record the invader's current turn index so ceasefire lasts exactly 3 more invader turns
                     game.ceasefire_start_turn = settings.INITIAL_TURNS_INVADER - invader_player.turns_left
                     
-                    print(f"[CEASEFIRE SPELL] Both players gained 3 turns. Invader: {invader_player.turns_left}, Defender: {defender_player.turns_left}")
+                    logger.info(f"[CEASEFIRE SPELL] Both players gained 3 turns. Invader: {invader_player.turns_left}, Defender: {defender_player.turns_left}")
                     
                     spell_effect['effect'] = 'Both players gained 3 additional turns. Ceasefire restored.'
                     spell_effect['ceasefire_activated'] = True
@@ -1058,51 +1554,141 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     spell_effect['defender_turns'] = defender_player.turns_left
             except Exception as e:
                 db.session.rollback()
-                print(f"[CEASEFIRE SPELL] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to activate ceasefire: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception('Ceasefire spell failed')
+                spell_effect['effect'] = 'Failed to activate ceasefire'
+                spell_effect['error'] = True
         
         elif spell.spell_name == 'Invader Swap':
-            try:
-                old_invader_id = game.invader_player_id
-                new_invader = next((p for p in game.players if p.id != old_invader_id), None)
-                
-                if not new_invader:
-                    spell_effect['effect'] = 'Failed to swap invader: opponent not found'
-                    spell_effect['error'] = 'Player not found'
-                else:
-                    old_invader = Player.query.get(old_invader_id)
-                    old_invader_name = old_invader.serialize()['username'] if old_invader else 'Unknown'
-                    new_invader_name = new_invader.serialize()['username']
-                    
-                    # Swap invader
-                    game.invader_player_id = new_invader.id
-                    
-                    # Set both players' turns left to 2
-                    old_invader.turns_left = 2
-                    new_invader.turns_left = 2
-                    
-                    # Invader starts next turn
-                    game.turn_player_id = new_invader.id
-                    
-                    print(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
-                    print(f"[INVADER SWAP] Both players' turns_left set to 2. Invader starts next turn.")
-                    
-                    spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 2 turns left. The invader starts next turn.'
-                    spell_effect['turn_set'] = True
-                    spell_effect['sets_turns'] = True
-                    spell_effect['old_invader_id'] = old_invader_id
-                    spell_effect['new_invader_id'] = new_invader.id
-                    spell_effect['invader_swapped'] = True
-            except Exception as e:
-                db.session.rollback()
-                print(f"[INVADER SWAP] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to swap invader: {str(e)}'
-                spell_effect['error'] = str(e)
+            # Conquer prelude path: swap roles with conquer-specific 1-action budget
+            if (
+                game.mode == 'conquer'
+                and isinstance(spell.effect_data, dict)
+                and spell.effect_data.get('prelude_origin')
+            ):
+                try:
+                    old_invader_id = game.invader_player_id
+                    # Validate caster is the original conquerer/attacker
+                    if caster.id != old_invader_id:
+                        logger.warning(
+                            f"[INVADER SWAP CONQUER] Caster {caster.id} is not the "
+                            f"original conquerer {old_invader_id}; rejecting."
+                        )
+                        spell_effect['effect'] = 'Invader Swap can only be used by the conquerer'
+                        spell_effect['error'] = True
+                    else:
+                        new_invader = next((p for p in game.players if p.id != old_invader_id), None)
+                        if not new_invader:
+                            spell_effect['effect'] = 'Failed to swap invader: opponent not found'
+                            spell_effect['error'] = 'Player not found'
+                        else:
+                            old_invader = db.session.get(Player, old_invader_id)
+                            old_invader_name = old_invader.serialize()['username'] if old_invader else 'Unknown'
+                            new_invader_name = new_invader.serialize()['username']
+
+                            # Swap invader role
+                            game.invader_player_id = new_invader.id
+
+                            # Conquer-only budget: 1 action each
+                            old_invader.turns_left = 1
+                            new_invader.turns_left = 1
+
+                            # New invader (original defender) acts first
+                            game.turn_player_id = new_invader.id
+
+                            # Clear any stale advance/defend state
+                            game.advancing_figure_id = None
+                            game.advancing_figure_id_2 = None
+                            game.advancing_player_id = None
+                            game.defending_figure_id = None
+                            game.defending_figure_id_2 = None
+                            game.battle_decisions = None
+                            game.battle_confirmed = False
+
+                            # Log ignored defence counter spell (server-only, no player notification)
+                            if game.defence_config_id:
+                                from models import LandConfig
+                                cfg = db.session.get(LandConfig, game.defence_config_id)
+                                if cfg and cfg.counter_spell_name:
+                                    logger.info(
+                                        f"[INVADER SWAP CONQUER] Ignoring defence counter spell "
+                                        f"'{cfg.counter_spell_name}' after conquer Invader Swap "
+                                        f"(game={game.id})"
+                                    )
+
+                            logger.info(
+                                f"[INVADER SWAP CONQUER] Swapped invader from "
+                                f"{old_invader_name} (id={old_invader_id}) to "
+                                f"{new_invader_name} (id={new_invader.id}). "
+                                f"Both players' turns_left set to 1."
+                            )
+
+                            spell_effect['effect'] = (
+                                f'Invader Swap (conquer): {new_invader_name} is now the invader. '
+                                f'They must advance first. Both players have 1 action.'
+                            )
+                            spell_effect['turn_set'] = True
+                            spell_effect['sets_turns'] = True
+                            spell_effect['old_invader_id'] = old_invader_id
+                            spell_effect['new_invader_id'] = new_invader.id
+                            spell_effect['invader_swapped'] = True
+                            spell_effect['conquer_invader_swap'] = True
+                except Exception as e:
+                    db.session.rollback()
+                    logger.exception('Conquer Invader Swap failed')
+                    spell_effect['effect'] = 'Failed to swap invader'
+                    spell_effect['error'] = True
+
+            else:
+                # Duel path: existing behavior (2 turns each)
+                try:
+                    old_invader_id = game.invader_player_id
+                    new_invader = next((p for p in game.players if p.id != old_invader_id), None)
+
+                    if not new_invader:
+                        spell_effect['effect'] = 'Failed to swap invader: opponent not found'
+                        spell_effect['error'] = 'Player not found'
+                    else:
+                        old_invader = db.session.get(Player, old_invader_id)
+                        old_invader_name = old_invader.serialize()['username'] if old_invader else 'Unknown'
+                        new_invader_name = new_invader.serialize()['username']
+
+                        # Swap invader
+                        game.invader_player_id = new_invader.id
+
+                        # Set both players' turns left to 2
+                        old_invader.turns_left = 2
+                        new_invader.turns_left = 2
+
+                        # Invader starts next turn
+                        game.turn_player_id = new_invader.id
+
+                        # Clear any in-progress advance/defend state to prevent
+                        # a stale advancing_player_id from causing a battle
+                        # deadlock after the swap (Bug #3).
+                        game.advancing_figure_id = None
+                        game.advancing_figure_id_2 = None
+                        game.advancing_player_id = None
+                        game.defending_figure_id = None
+                        game.defending_figure_id_2 = None
+
+                        logger.info(f"[INVADER SWAP] Swapped invader from {old_invader_name} (id={old_invader_id}) to {new_invader_name} (id={new_invader.id})")
+                        logger.info(f"[INVADER SWAP] Both players' turns_left set to 2. Advance/defend state cleared. Invader starts next turn.")
+
+                        spell_effect['effect'] = f'Invader and defender roles have been swapped! {new_invader_name} is now the invader. Both players have 2 turns left. The invader starts next turn.'
+                        spell_effect['turn_set'] = True
+                        spell_effect['sets_turns'] = True
+                        spell_effect['old_invader_id'] = old_invader_id
+                        spell_effect['new_invader_id'] = new_invader.id
+                        spell_effect['invader_swapped'] = True
+                except Exception as e:
+                    db.session.rollback()
+                    logger.exception('Invader Swap failed')
+                    spell_effect['effect'] = 'Failed to swap invader'
+                    spell_effect['error'] = True
         
         elif spell.spell_name in ('Civil War', 'Peasant War', 'Blitzkrieg'):
             try:
-                invader_player = Player.query.get(game.invader_player_id)
+                invader_player = db.session.get(Player, game.invader_player_id)
                 defender_player = next((p for p in game.players if p.id != game.invader_player_id), None)
                 
                 if not invader_player or not defender_player:
@@ -1116,9 +1702,9 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         old_invader_id = game.invader_player_id
                         game.invader_player_id = caster.id
                         # Reassign invader/defender player references after swap
-                        invader_player = Player.query.get(caster.id)
+                        invader_player = db.session.get(Player, caster.id)
                         defender_player = next((p for p in game.players if p.id != caster.id), None)
-                        print(f"[BLITZKRIEG] Invader swapped from player {old_invader_id} to caster {caster.id}")
+                        logger.info(f"[BLITZKRIEG] Invader swapped from player {old_invader_id} to caster {caster.id}")
                         spell_effect['invader_swapped'] = True
                         spell_effect['old_invader_id'] = old_invader_id
                         spell_effect['new_invader_id'] = caster.id
@@ -1137,7 +1723,7 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                         game.ceasefire_active = True
                         # ceasefire_start_turn not needed — Blitzkrieg ceasefire uses
                         # its own end condition (both players at 0 turns)
-                        print(f"[BLITZKRIEG] Ceasefire activated for last turn")
+                        logger.info(f"[BLITZKRIEG] Ceasefire activated for last turn")
                         spell_effect['ceasefire_activated'] = True
                     
                     # Initialize battle_modifier as list if needed (stackable modifiers)
@@ -1170,15 +1756,15 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
                     # Signal SQLAlchemy that the JSON column was mutated in place
                     flag_modified(game, 'battle_modifier')
                     
-                    print(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 2. Invader starts next turn.")
-                    print(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
+                    logger.debug(f"[{spell.spell_name.upper()}] Activated by {caster_name}. Battle modifier appended. Both players' turns_left set to 2. Invader starts next turn.")
+                    logger.debug(f"[{spell.spell_name.upper()}] Active battle modifiers: {game.battle_modifier}")
             except Exception as e:
                 db.session.rollback()
-                print(f"[{spell.spell_name.upper()}] ERROR: {str(e)}")
-                spell_effect['effect'] = f'Failed to activate {spell.spell_name}: {str(e)}'
-                spell_effect['error'] = str(e)
+                logger.exception(f'{spell.spell_name} failed')
+                spell_effect['effect'] = f'Failed to activate {spell.spell_name}'
+                spell_effect['error'] = True
     
-    print(f"[_EXECUTE_SPELL] Returning spell_effect: {spell_effect}")
+    logger.debug(f"[_EXECUTE_SPELL] Returning spell_effect: {spell_effect}")
     return spell_effect
 
 

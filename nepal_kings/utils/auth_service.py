@@ -3,11 +3,14 @@
 from utils import http_compat as requests
 from config import settings
 
-def send_heartbeat(username):
-    """Ping the server to mark this user as online."""
+def send_heartbeat(username=None):
+    """Ping the server to mark this user as online.
+
+    The token is sent automatically via http_compat's Authorization header;
+    the username parameter is kept for backward compatibility but ignored.
+    """
     try:
-        requests.post(f'{settings.SERVER_URL}/auth/heartbeat',
-                      data={'username': username}, timeout=3)
+        requests.post(f'{settings.SERVER_URL}/auth/heartbeat', timeout=3)
     except Exception:
         pass
 
@@ -15,6 +18,16 @@ def fetch_rankings():
     """Fetch the leaderboard data for all players."""
     try:
         response = requests.get(f'{settings.SERVER_URL}/auth/get_rankings', timeout=5)
+        response.raise_for_status()
+        return response.json().get('rankings', [])
+    except Exception:
+        return []
+
+
+def fetch_kingdom_rankings():
+    """Fetch the kingdom leaderboard data for all players."""
+    try:
+        response = requests.get(f'{settings.SERVER_URL}/kingdom/rankings', timeout=5)
         response.raise_for_status()
         return response.json().get('rankings', [])
     except Exception:
@@ -51,13 +64,24 @@ def login(username, password):
         return {'success': False, 'message': 'Login failed. Please check your internet connection or try again later.'}
 
 
-def register(username, password):
+def register(username, password, email=None):
     try:
-        response = requests.post(f'{settings.SERVER_URL}/auth/register', data={'username': username, 'password': password}, timeout=10)
+        data = {'username': username, 'password': password}
+        if email:
+            data['email'] = email
+        response = requests.post(f'{settings.SERVER_URL}/auth/register', data=data, timeout=10)
 
         # Check for username conflicts (409 Conflict)
         if response.status_code == 409:
             return {'success': False, 'message': 'Registration failed. Username already exists.'}
+
+        # Handle validation errors (400) — read the server's message
+        if response.status_code == 400:
+            try:
+                msg = response.json().get('message', 'Registration failed.')
+            except Exception:
+                msg = 'Registration failed.'
+            return {'success': False, 'message': msg}
 
         # If the status code is not 200, raise an exception for other kinds of errors
         response.raise_for_status()

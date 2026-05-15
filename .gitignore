@@ -28,12 +28,26 @@ env/
 
 # ── OS files ──────────────────────────────────────────────────────
 .DS_Store
+**/.DS_Store
 Thumbs.db
 
 # ── Database / instance ──────────────────────────────────────────
 test.db
 *.db
+*.sqlite
+*.sqlite3
 server/instance/
+
+# ── Secrets / local env ──────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*_rsa
+*_rsa.pub
+secrets.*
+credentials.*
 
 # ── Unused / legacy image assets ──────────────────────────────────
 nepal_kings/img/_legacy/

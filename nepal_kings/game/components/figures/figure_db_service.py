@@ -92,8 +92,10 @@ class FigureDbService:
         rest_after_attack = getattr(figure, 'rest_after_attack', False)
 
         if settings.DEBUG_ENABLED:
-            with open(settings.DEBUG_LOG_PATH, 'a') as f:
-                f.write(f"[CLIENT] Saving figure {name}: produces={produces}, requires={requires}\n")
+            import logging
+            logging.getLogger('nk.figures.db_service').debug(
+                f"Saving figure {name}: produces={produces}, requires={requires}"
+            )
 
         # Call create_figure with individual arguments
         return create_figure(

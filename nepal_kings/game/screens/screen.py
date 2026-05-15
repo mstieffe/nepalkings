@@ -95,20 +95,37 @@ class Screen:
 
     def handle_events(self, events):
         """Handle events like mouse clicks and quit."""
+        legacy_controls_enabled = (
+            self.state.screen not in ("login", "game")
+            and bool(getattr(self, 'control_buttons', []))
+        )
+
         for event in events:
             if event.type == QUIT:
                 pygame.quit()
                 sys.exit()
-            elif event.type == MOUSEBUTTONDOWN:
-                # Handle logout and home buttons
-                if self.logout_button.collide():
+            elif event.type == MOUSEBUTTONDOWN and legacy_controls_enabled:
+                # Handle legacy top-level logout/home controls only when enabled.
+                if (
+                    hasattr(self, 'logout_button')
+                    and self.logout_button in self.control_buttons
+                    and self.logout_button.collide()
+                ):
                     self.state.screen = "login"
                     self.reset_action()
                     self.state.user = None
                     self.state.user_dict = None
                     self.state.game = None  # Clear game object to prevent stale state
+                    self.state.pending_spell_cast = None
+                    self.state.pending_conquer_prelude_target = None
+                    self.state._notified_accepted_challenges = set()
+                    self.state._pending_accepted_challenge = None
                     self.state.set_msg("Logged out")
-                elif self.home_button.collide():
+                elif (
+                    hasattr(self, 'home_button')
+                    and self.home_button in self.control_buttons
+                    and self.home_button.collide()
+                ):
                     self.state.screen = "game_menu"
 
         # Handle events for dialogue box

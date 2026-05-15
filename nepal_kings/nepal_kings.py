@@ -5,11 +5,18 @@ import pygame
 #from pygame.locals import *
 from game.screens.login_screen import LoginScreen
 from game.screens.game_menu_screen import GameMenuScreen
+from game.screens.duel_menu_screen import DuelMenuScreen
 from game.screens.new_game_screen import NewGameScreen
 from game.screens.load_game_screen import LoadGameScreen
 from game.screens.ranking_screen import RankingScreen
 from game.screens.settings_screen import SettingsScreen
+from game.screens.kingdom_screen import KingdomScreen
+from game.screens.kingdom_config_screen import KingdomConfigScreen
+from game.screens.conquer_screen import ConquerScreen
+from game.screens.defence_screen import DefenceScreen
+from game.screens.collection_screen import CollectionScreen
 from game.screens.game_screen import GameScreen
+from game.screens.conquer_game_screen import ConquerGameScreen
 from game.core.state import State
 from game.core.input_state import process_events as _process_input
 from config import settings
@@ -61,13 +68,20 @@ class Client:
         # Screen constructors in load order
         # weight = relative time cost (used for smooth progress)
         screen_steps = [
-            ('login',     'Loading login …',      LoginScreen,    1),
-            ('game_menu', 'Loading menu …',        GameMenuScreen, 1),
-            ('new_game',  'Loading new game …',    NewGameScreen,  1),
-            ('load_game', 'Loading load game …',   LoadGameScreen, 1),
-            ('rankings',  'Loading rankings …',    RankingScreen,  1),
-            ('settings',  'Loading settings …',    SettingsScreen, 1),
-            ('game',      'Loading game …',        GameScreen,    12),
+            ('login',      'Loading login …',       LoginScreen,      1),
+            ('game_menu',  'Loading menu …',         GameMenuScreen,   1),
+            ('duel_menu',  'Loading duel menu …',    DuelMenuScreen,   1),
+            ('new_game',   'Loading new game …',     NewGameScreen,    1),
+            ('load_game',  'Loading load game …',    LoadGameScreen,   1),
+            ('rankings',   'Loading rankings …',     RankingScreen,    1),
+            ('settings',   'Loading settings …',     SettingsScreen,   1),
+            ('kingdom',    'Loading kingdom …',      KingdomScreen,    1),
+            ('kingdom_config', 'Loading kingdom config …', KingdomConfigScreen, 1),
+            ('conquer',    'Loading conquer …',      ConquerScreen,    1),
+            ('defence',    'Loading defence …',      DefenceScreen,    1),
+            ('collection', 'Loading collection …',   CollectionScreen, 1),
+            ('game',       'Loading game …',         GameScreen,      12),
+            ('conquer_game', 'Loading conquer battle …', ConquerGameScreen, 8),
         ]
         total_weight = sum(w for *_, w in screen_steps)
 
@@ -125,6 +139,9 @@ class Client:
         return events
 
     async def run_screen(self, screen):
+        scr = self.screens[screen]
+        if hasattr(scr, 'on_enter'):
+            scr.on_enter()
         while self.state.screen == screen:
             events = self.get_events()
 

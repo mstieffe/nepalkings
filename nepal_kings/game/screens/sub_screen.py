@@ -18,6 +18,8 @@ class SubScreen:
 
         self.x = x
         self.y = y
+        self._layout_offset_x = self.x - settings.SUB_SCREEN_X
+        self._layout_offset_y = self.y - settings.SUB_SCREEN_Y
 
         self.title = title
 
@@ -39,6 +41,29 @@ class SubScreen:
         self.scroll_text_list = []
         self.scroll_text_list_shifter = None
 
+        # Close / X button (top-right of subscreen background)
+        self._on_done = None  # callback set by parent screen
+        self._close_font = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        _cbsz = int(0.028 * settings.SCREEN_HEIGHT)  # square X button
+        _bg_w = settings.SUB_SCREEN_BACKGROUND_IMG_WIDTH
+        _margin = int(0.012 * settings.SCREEN_WIDTH)
+        self._close_rect = pygame.Rect(
+            self.x + _bg_w - _cbsz - _margin,
+            self.y + _margin,
+            _cbsz, _cbsz)
+
+    def _sx(self, x):
+        """Translate a base screen x-coordinate by this subscreen origin."""
+        return int(x + self._layout_offset_x)
+
+    def _sy(self, y):
+        """Translate a base screen y-coordinate by this subscreen origin."""
+        return int(y + self._layout_offset_y)
+
+    def _spos(self, x, y):
+        """Translate a base screen coordinate pair by this subscreen origin."""
+        return self._sx(x), self._sy(y)
+
     def make_button(self, text, x, y, width: int = None, height: int = None, button_img_active=None, button_img_inactive=None):
         """Helper to create a button."""
         return SubScreenButton(self.window, x, y, text, width=width, height=height, 
@@ -55,7 +80,7 @@ class SubScreen:
             title_surf = self.title_font.render(self.title, True,
                                                settings.SUB_SCREEN_TITLE_COLOR)
             title_rect = title_surf.get_rect(
-                center=(settings.SUB_SCREEN_TITLE_X, settings.SUB_SCREEN_TITLE_Y))
+                center=self._spos(settings.SUB_SCREEN_TITLE_X, settings.SUB_SCREEN_TITLE_Y))
 
             # Background badge rect with padding
             bg_rect = pygame.Rect(
@@ -76,8 +101,8 @@ class SubScreen:
             shadow_surf = self.title_font.render(self.title, True,
                                                 settings.SUB_SCREEN_TITLE_SHADOW_COLOR)
             shadow_rect = shadow_surf.get_rect(
-                center=(settings.SUB_SCREEN_TITLE_X + _off,
-                        settings.SUB_SCREEN_TITLE_Y + _off))
+                center=self._spos(settings.SUB_SCREEN_TITLE_X + _off,
+                                  settings.SUB_SCREEN_TITLE_Y + _off))
             self.window.blit(shadow_surf, shadow_rect)
 
             # Gold title text
@@ -171,13 +196,13 @@ class SubScreen:
                          (0, 0, width, height), bw, border_radius=r)
 
         self.sub_box_background = panel
-        self.sub_box_x = x
-        self.sub_box_y = y
+        self.sub_box_x = self._sx(x)
+        self.sub_box_y = self._sy(y)
 
     def init_scroll_background(self, x, y, width, height):
         """Build a warm brown programmatic scroll panel (replaces scroll.png)."""
-        self.scroll_x = x
-        self.scroll_y = y
+        self.scroll_x = self._sx(x)
+        self.scroll_y = self._sy(y)
         self.scroll_w = width
         self.scroll_h = height
         self.scroll_text_list = []
@@ -231,7 +256,7 @@ class SubScreen:
         if hasattr(self, 'scroll_x'):
             scroll_rect = pygame.Rect(self.scroll_x, self.scroll_y, self.scroll_w, self.scroll_h)
         self.scroll_text_list_shifter = ScrollTextListShifter(
-            self.window, text_list, x, y,
+            self.window, text_list, self._sx(x), self._sy(y),
             scroll_height=scroll_height, scroll_rect=scroll_rect
         )
 
@@ -239,6 +264,11 @@ class SubScreen:
         """Handle events like mouse clicks and quit."""
         if self.scroll_text_list_shifter:
             self.scroll_text_list_shifter.handle_events(events)
+        for event in events:
+            if event.type == MOUSEBUTTONUP and getattr(event, 'button', 1) == 1:
+                if self._close_rect.collidepoint(event.pos):
+                    if self._on_done:
+                        self._on_done()
 
     def draw(self):
         """Render buttons, messages, and the dialogue box."""
@@ -264,6 +294,27 @@ class SubScreen:
             button.draw()
             
         self.draw_title()
+        self._draw_close_button()
+
+    def _draw_close_button(self):
+        """Draw a small X button in the top-right corner of the subscreen."""
+        if not self._on_done:
+            return
+        r = self._close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+
+        txt = self._close_font.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
 
     def draw_on_top(self):
 

@@ -9,7 +9,12 @@ from game.screens._menu_base import MenuScreenMixin
 from config import settings
 from utils import http_compat as requests
 from game.core.game import Game
+from game.core.screen_routing import gameplay_screen_for
 from utils.background_poller import BackgroundPoller
+import logging
+
+logger = logging.getLogger('nk.screens.load_game')
+
 
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
@@ -37,7 +42,7 @@ _COL_DEFS = [
     ('Score',      0.29, 0.14),
     ('Duration',   0.43, 0.17),
     ('Stake',      0.60, 0.12),
-    ('Turn Limit', 0.72, 0.14),
+    ('Game Limit', 0.72, 0.14),
     ('',           0.86, 0.14),   # "your turn" / NEW column
 ]
 
@@ -143,13 +148,21 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         self._rows_bottom = _BOX_Y + _BOX_H - _BOX_PAD
         self._viewport_h = self._rows_bottom - self._rows_top
 
+        # ── X close button (top-right of box) ───────────────────────
+        _xsz = int(0.028 * _SH)
+        _xmargin = int(0.012 * _SW)
+        self._btn_close_rect = pygame.Rect(
+            _BOX_X + _BOX_W - _xsz - _xmargin,
+            _BOX_Y + _xmargin,
+            _xsz, _xsz)
+
     # ── Data ──────────────────────────────────────────────────────
 
     def _refresh_games(self):
         try:
             self.games = self._fetch_games()
         except Exception as e:
-            print(f"Error fetching games: {str(e)}")
+            logger.error(f"Error fetching games: {str(e)}")
             self.games = []
 
         # Compute total content height & max scroll
@@ -168,7 +181,10 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             timeout=10)
         if response.status_code != 200:
             return []
-        game_dicts = response.json().get('games', [])
+        game_dicts = [
+            gd for gd in response.json().get('games', [])
+            if gd.get('mode', 'duel') == 'duel'
+        ]
         games = [Game(gd, self.state.user_dict) for gd in game_dicts]
         games.sort(key=lambda g: (g.state == 'finished',))
         return games
@@ -177,7 +193,10 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         """Transform an HTTP response into a list of Game objects (used by async poller)."""
         if response.status_code != 200:
             return []
-        game_dicts = response.json().get('games', [])
+        game_dicts = [
+            gd for gd in response.json().get('games', [])
+            if gd.get('mode', 'duel') == 'duel'
+        ]
         games = [Game(gd, self.state.user_dict, lightweight=True) for gd in game_dicts]
         games.sort(key=lambda g: (g.state == 'finished',))
         return games
@@ -236,7 +255,23 @@ class LoadGameScreen(MenuScreenMixin, Screen):
         else:
             self._draw_rows(cell_pad)
 
+        self._draw_close_x_button()
         self._draw_menu_overlay()
+
+    def _draw_close_x_button(self):
+        r = self._btn_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+        _xfont = settings.get_font(int(settings.FONT_SIZE * 0.85), bold=True)
+        txt = _xfont.render('\u00d7', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
 
     def _draw_rows(self, cell_pad):
         clip = pygame.Rect(_TABLE_X, self._rows_top, _TABLE_W, self._viewport_h)
@@ -278,7 +313,7 @@ class LoadGameScreen(MenuScreenMixin, Screen):
                 f"{my_score} – {opp_score}",
                 _duration_str(game.date),
                 f"{game.stake} gold",
-                f"{game.turn_time_limit // 60} min" if game.turn_time_limit else "No limit",
+                f"{game.game_limit} pts",
             ]
             for idx, text in enumerate(cells):
                 surf = self._cell_font.render(text, True, txt_clr)
@@ -392,11 +427,17 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             if self._handle_icon_events(event):
                 continue
 
-            # Click outside content box → back to game menu
+            # X close button
+            if (event.type == MOUSEBUTTONUP and event.button == 1
+                    and self._btn_close_rect.collidepoint(event.pos)):
+                self.state.screen = 'duel_menu'
+                return
+
+            # Click outside content box → back to duel menu
             if (event.type == MOUSEBUTTONUP and event.button == 1
                     and not self.dialogue_box
                     and not _box_rect.collidepoint(event.pos)):
-                self.state.screen = 'game_menu'
+                self.state.screen = 'duel_menu'
                 return
 
             # Scroll wheel
@@ -454,13 +495,13 @@ class LoadGameScreen(MenuScreenMixin, Screen):
                 label = f"{game.opponent_name}  —  {game.date}"
                 self.set_action("load_game", label, "open")
                 stake_str = f"{game.stake} gold"
-                time_str = f"{game.turn_time_limit // 60} min" if game.turn_time_limit else "No Limit"
+                game_limit_str = f"{game.game_limit} points"
                 is_finished = (game.state == 'finished')
                 title = "Review Game" if is_finished else "Load Game"
                 prompt = (f'Review finished game vs {game.opponent_name}?\n\n'
-                          f'Stake: {stake_str}\nTurn Limit: {time_str}') if is_finished else (
+                          f'Stake: {stake_str}\nGame Limit: {game_limit_str}') if is_finished else (
                          f'Load game vs {game.opponent_name}?\n\n'
-                         f'Stake: {stake_str}\nTurn Limit: {time_str}')
+                         f'Stake: {stake_str}\nGame Limit: {game_limit_str}')
                 self.make_dialogue_box(prompt, actions=["yes", "cancel"], title=title)
                 return
 
@@ -473,11 +514,11 @@ class LoadGameScreen(MenuScreenMixin, Screen):
             if game:
                 self.state.game = game
                 self.state.set_msg(f"Loaded game with {game.opponent_name}")
-                self.state.screen = "game"
+                self.state.screen = gameplay_screen_for(self.state.game)
             else:
                 self.state.set_msg("Game not found")
         self.reset_action()
 
     def reset_action(self):
-        print(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
+        logger.debug(f"Resetting action. Task: {self.state.action['task']}, Status: {self.state.action['status']}")
         self.state.action = {"task": None, "content": None, "status": None}

@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
+from __future__ import annotations
 """
 Game state serializer for LLM prompts.
 
@@ -8,7 +9,30 @@ description that the LLM can understand and reason about.
 """
 import logging
 
+from ai.figure_recipes import FAMILY_SKILLS
+
 logger = logging.getLogger('nepalkings.ai.game_state')
+
+
+def enrich_figures_with_skills(game_dict: dict) -> dict:
+    """Inject family-based skill flags into every serialized figure.
+
+    Figure.serialize() only stores checkmate, cannot_be_blocked, and
+    rest_after_attack in the DB.  The remaining nine skill flags
+    (cannot_attack, must_be_attacked, cannot_defend, cannot_be_targeted,
+    instant_charge, blocks_bonus, distance_attack, buffs_allies,
+    buffs_allies_defence) are derived from the figure's family_name.
+
+    This must be called once on the game_dict before any AI logic touches it.
+    """
+    for player in game_dict.get('players', []):
+        for fig in player.get('figures', []):
+            skills = FAMILY_SKILLS.get(fig.get('family_name'), {})
+            for key, val in skills.items():
+                # Don't overwrite DB-authoritative columns
+                if key not in fig:
+                    fig[key] = val
+    return game_dict
 
 
 def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
@@ -64,7 +88,7 @@ def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
     # AI's figures
     lines.append(f"\n=== YOUR FIGURES ({len(ai_player['figures'])}) ===")
     for fig in ai_player['figures']:
-        lines.append(_describe_figure(fig))
+        lines.append(_describe_figure(fig, all_figures=ai_player['figures']))
     
     # Resource balance summary
     resource_summary = _compute_resource_summary(ai_player['figures'])
@@ -73,15 +97,34 @@ def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
     # Opponent's figures (visible info only — no card details)
     lines.append(f"\n=== OPPONENT'S FIGURES ({len(opponent['figures'])}) ===")
     for fig in opponent['figures']:
-        lines.append(_describe_figure(fig, show_cards=False))
+        lines.append(_describe_figure(fig, show_cards=False, all_figures=opponent['figures']))
     
-    # Opponent's hand size (no card details)
-    opp_main = len(opponent.get('main_hand', []))
-    opp_side = len(opponent.get('side_hand', []))
-    lines.append(f"\nOpponent has {opp_main} main cards and {opp_side} side cards in hand.")
+    # Check if AI has an active All Seeing Eye spell
+    has_all_seeing_eye = any(
+        'All Seeing Eye' in s.get('spell_name', '')
+        and s.get('player_id') == ai_player_id
+        and s.get('is_active')
+        for s in game_dict.get('active_spells', [])
+    )
+
+    opp_main = opponent.get('main_hand', [])
+    opp_side = opponent.get('side_hand', [])
+
+    if has_all_seeing_eye and opp_main:
+        lines.append(f"\n👁️ ALL SEEING EYE ACTIVE — opponent's cards revealed!")
+        lines.append(f"Opponent main hand ({len(opp_main)}): {_summarize_cards(opp_main)}")
+        if opp_side:
+            lines.append(f"Opponent side hand ({len(opp_side)}): {_summarize_cards(opp_side)}")
+        # Show opponent's figure card details too
+        lines.append(f"\nOpponent's figure cards (revealed):")
+        for fig in opponent['figures']:
+            lines.append(_describe_figure(fig, show_cards=True, all_figures=opponent['figures']))
+    else:
+        lines.append(f"\nOpponent has {len(opp_main)} main cards and {len(opp_side)} side cards in hand.")
     
-    # Opponent threat analysis — infer possible cards and battle potential
-    lines.append(_analyze_opponent_threats(game_dict, ai_player, opponent))
+    # Opponent threat analysis — skip when All Seeing Eye provides perfect info
+    if not has_all_seeing_eye:
+        lines.append(_analyze_opponent_threats(game_dict, ai_player, opponent))
     
     # Battle state if active
     if game_dict.get('advancing_figure_id'):
@@ -90,20 +133,29 @@ def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
         def_id = game_dict.get('defending_figure_id')
         adv_fig = _find_figure(game_dict, adv_id)
         def_fig = _find_figure(game_dict, def_id) if def_id else None
+        adv_owner_figs = _owner_figures(game_dict, adv_fig)
+        def_owner_figs = _owner_figures(game_dict, def_fig) if def_fig else None
         adv_name = adv_fig['name'] if adv_fig else f"ID {adv_id}"
-        lines.append(f"Advancing figure: {adv_name} (power≈{_est_power(adv_fig)})")
+        lines.append(f"Advancing figure: {adv_name} (power≈{_est_power(adv_fig, adv_owner_figs)})")
         if def_fig:
-            lines.append(f"Defending figure: {def_fig['name']} (power≈{_est_power(def_fig)})")
+            lines.append(f"Defending figure: {def_fig['name']} (power≈{_est_power(def_fig, def_owner_figs)})")
         if game_dict.get('battle_confirmed'):
             lines.append(f"Battle confirmed! Round: {game_dict.get('battle_round', 0)+1}/3")
         if game_dict.get('battle_decisions'):
             lines.append(f"Battle decisions: {game_dict['battle_decisions']}")
     
-    # Battle moves if in battle
+    # Battle tactics/moves if in battle
     if game_dict.get('battle_confirmed'):
-        ai_moves = [m for m in game_dict.get('battle_moves', []) if m.get('player_id') == ai_player_id]
-        if ai_moves:
-            lines.append(f"\nYour battle moves: {_summarize_battle_moves(ai_moves)}")
+        if _is_tactics_hand_conquer(game_dict):
+            ai_tactics = [t for t in game_dict.get('conquer_tactics', [])
+                          if t.get('player_id') == ai_player_id]
+            if ai_tactics:
+                lines.append(f"\nYour conquer tactics: {_summarize_battle_moves(ai_tactics)}")
+        else:
+            ai_moves = [m for m in game_dict.get('battle_moves', [])
+                        if m.get('player_id') == ai_player_id]
+            if ai_moves:
+                lines.append(f"\nYour battle moves: {_summarize_battle_moves(ai_moves)}")
     
     # Active spells
     if game_dict.get('battle_modifier'):
@@ -113,6 +165,13 @@ def serialize_game_for_llm(game_dict: dict, ai_player_id: int) -> str:
             lines.append(f"\nActive battle modifiers: {', '.join(mod_names)}")
     
     return '\n'.join(lines)
+
+
+def _is_tactics_hand_conquer(game_dict: dict) -> bool:
+    return bool(
+        game_dict.get('mode') == 'conquer'
+        and (game_dict.get('conquer_move_model') or 'battle_move') == 'tactics_hand'
+    )
 
 
 def _find_figure(game_dict: dict, figure_id: int) -> dict | None:
@@ -126,14 +185,29 @@ def _find_figure(game_dict: dict, figure_id: int) -> dict | None:
     return None
 
 
-def _est_power(fig: dict | None) -> int:
-    """Estimate a figure's base power from its cards (castle=15)."""
+def _owner_figures(game_dict: dict, fig: dict | None) -> list | None:
+    """Return the figures list of the player who owns *fig*."""
+    if not fig:
+        return None
+    pid = fig.get('player_id')
+    for p in game_dict.get('players', []):
+        if p.get('id') == pid:
+            return p.get('figures', [])
+    return None
+
+
+def _est_power(fig: dict | None, all_figures: list | None = None) -> int:
+    """Estimate a figure's power including support bonus (castle=15 base)."""
     if not fig:
         return 0
     if fig.get('field') == 'castle':
-        return 15
-    cards = fig.get('cards_to_figure', [])
-    return sum(c.get('card_value', c.get('value', 0)) for c in cards)
+        base = 15
+    else:
+        cards = fig.get('cards_to_figure', [])
+        base = sum(c.get('card_value', c.get('value', 0)) for c in cards)
+    if all_figures:
+        base += compute_support_bonus(fig, all_figures)
+    return base
 
 
 def _summarize_cards(cards: list) -> str:
@@ -158,12 +232,12 @@ def _summarize_cards(cards: list) -> str:
     return ' '.join(parts)
 
 
-def _describe_figure(fig: dict, show_cards: bool = True) -> str:
+def _describe_figure(fig: dict, show_cards: bool = True, all_figures: list | None = None) -> str:
     """Describe a figure for the LLM."""
     name = fig.get('name', '?')
     field = fig.get('field', '?')
     color = fig.get('color', '?')
-    power = _est_power(fig)
+    power = _est_power(fig, all_figures)
     
     parts = [f"  - {name} ({field}/{color}, power≈{power})"]
     
@@ -193,6 +267,18 @@ def _describe_figure(fig: dict, show_cards: bool = True) -> str:
         abilities.append('ranged')
     if fig.get('buffs_allies'):
         abilities.append('buff-allies')
+    if fig.get('buffs_allies_defence'):
+        abilities.append('buff-allies-defence')
+    if fig.get('blocks_bonus'):
+        abilities.append('blocks-bonus')
+    if fig.get('cannot_defend'):
+        abilities.append('cannot-defend')
+    if fig.get('cannot_be_targeted'):
+        abilities.append('cannot-be-targeted')
+    if fig.get('instant_charge'):
+        abilities.append('instant-charge')
+    if fig.get('rest_after_attack'):
+        abilities.append('rest-after-attack')
     if abilities:
         parts.append(f"[{', '.join(abilities)}]")
     
@@ -215,7 +301,7 @@ def _summarize_battle_moves(moves: list) -> str:
         return "(none)"
     parts = []
     for m in moves:
-        name = m.get('name', '?')
+        name = m.get('name') or m.get('family_name') or '?'
         value = m.get('value', '?')
         played_round = m.get('played_round')
         status = f" (played R{played_round})" if played_round is not None else ""
@@ -284,6 +370,80 @@ def _compute_resource_summary(figures: list) -> str:
     return '\n'.join(lines)
 
 
+def compute_support_bonus(figure: dict, all_player_figures: list,
+                          land_suit_bonus=None) -> int:
+    """Compute support bonus a figure receives from same-suit allies.
+
+    Mirrors server ``_compute_support_bonus()`` but works with serialized
+    game dicts instead of SQLAlchemy models.
+
+    Rules:
+    - Castle figures receive support from: other same-suit castle figures
+    - Village figures receive support from: same-suit castle figures
+    - Military figures receive support from: same-suit castle + village figures
+    - Castle supporter: Maharaja +5, King +4
+    - Village supporter: sum of KEY card values
+    - Military figures provide 0 support
+    - Figures in resource deficit provide nothing
+
+    *land_suit_bonus*: optional ``(suit_str, value_int)`` for conquer mode.
+    Every figure whose suit matches gets *value* added.
+    """
+    fig_field = (figure.get('field') or '').lower()
+    if fig_field == 'castle':
+        valid_fields = {'castle'}
+    elif fig_field == 'village':
+        valid_fields = {'castle'}
+    elif fig_field == 'military':
+        valid_fields = {'castle', 'village'}
+    else:
+        return 0
+
+    fig_suit = (figure.get('suit') or '').lower()
+    fig_id = figure.get('id')
+
+    # Pre-compute which figures are in deficit
+    eff_prod, tot_req = compute_resource_totals(all_player_figures)
+    deficit_indices = set()
+    for i, f in enumerate(all_player_figures):
+        for res in (f.get('requires') or {}):
+            if tot_req.get(res, 0) > eff_prod.get(res, 0):
+                deficit_indices.add(i)
+                break
+
+    total = 0
+    for i, f in enumerate(all_player_figures):
+        if f.get('id') == fig_id:
+            continue
+        if (f.get('suit') or '').lower() != fig_suit:
+            continue
+        f_field = (f.get('field') or '').lower()
+        if f_field not in valid_fields:
+            continue
+        # Military figures provide 0 bonus
+        if f_field == 'military':
+            continue
+        # Figures in deficit provide nothing
+        if i in deficit_indices:
+            continue
+        # Castle: Maharaja +5, King +4
+        if f_field == 'castle':
+            total += 5 if 'Maharaja' in (f.get('name') or '') else 4
+        else:
+            # Village: sum of KEY card values only
+            for card in (f.get('cards_to_figure') or f.get('cards') or []):
+                if (card.get('role') or '').lower() == 'key':
+                    total += int(card.get('card_value') or card.get('value') or 0)
+
+    # Conquer mode: land suit bonus (applied to every matching figure)
+    if land_suit_bonus:
+        bonus_suit, bonus_value = land_suit_bonus
+        if (figure.get('suit') or '').lower() == bonus_suit.lower():
+            total += bonus_value
+
+    return total
+
+
 def compute_resource_totals(figures: list) -> tuple:
     """Return (effective_produces, total_requires) dicts after iterative deficit exclusion."""
     total_requires = {}
@@ -340,19 +500,20 @@ def _analyze_opponent_threats(game_dict, ai_player, opponent):
         if not c.get('part_of_figure') and not c.get('part_of_battle_move'):
             ai_hand[c.get('rank', '?')] = ai_hand.get(c.get('rank', '?'), 0) + 1
 
-    # Key card threat analysis (4 of each rank in game)
+    # Key card threat analysis (8 of each main-card rank in game)
+    key_rank_copies = 8
     key_info = [
         ('K', 'Call King(19), King castle, Infinite Hammer'),
-        ('A', 'Call Military(16), military build, Invader Swap'),
+        ('A', 'Call Military(up to 23 with upgraded no-deficit military), military build, Invader Swap'),
         ('Q', 'Block(nullify round), Temple, Blitzkrieg'),
-        ('J', 'Call Villager(up to 22), Farm build, Peasant War'),
+        ('J', 'Call Villager(up to 18 in 2-copy deck), Farm build, Peasant War'),
         ('10', 'Dagger(10), strongest guaranteed move'),
         ('9', 'Dagger(9), All Seeing Eye'),
     ]
 
     threat_lines = []
     for rank, threats in key_info:
-        total = 4
+        total = key_rank_copies
         in_figs = committed.get(rank, 0)
         in_ai = ai_hand.get(rank, 0)
         max_opp = max(0, min(total - in_figs - in_ai, opp_main))
@@ -362,7 +523,7 @@ def _analyze_opponent_threats(game_dict, ai_player, opponent):
             threat_lines.append(f"  {rank}: ALL accounted for — opponent CANNOT have any")
 
     if threat_lines:
-        lines.append("Key card tracking (4 of each rank exist):")
+        lines.append("Key card tracking (8 of each main-card rank exist):")
         lines.extend(threat_lines)
 
     # Opponent's potential Call moves based on their figures
@@ -370,20 +531,20 @@ def _analyze_opponent_threats(game_dict, ai_player, opponent):
     call_warnings = []
     for fig in opp_figures:
         field = fig.get('field', '?')
-        power = _est_power(fig)
+        power = _est_power(fig, opp_figures)
         name = fig.get('name', '?')
         suit = fig.get('suit', '?')
 
         if field == 'castle':
-            if committed.get('K', 0) + ai_hand.get('K', 0) < 4:
+            if committed.get('K', 0) + ai_hand.get('K', 0) < key_rank_copies:
                 call_warnings.append(
                     f"  ⚠️ Call King → {name} ({suit}): up to {power + 4} power")
         elif field == 'military':
-            if committed.get('A', 0) + ai_hand.get('A', 0) < 4:
+            if committed.get('A', 0) + ai_hand.get('A', 0) < key_rank_copies:
                 call_warnings.append(
                     f"  ⚠️ Call Military → {name} ({suit}): up to {power + 3} power")
         elif field == 'village':
-            if committed.get('J', 0) + ai_hand.get('J', 0) < 4:
+            if committed.get('J', 0) + ai_hand.get('J', 0) < key_rank_copies:
                 healer_buff = sum(4 for f in opp_figures
                                   if f.get('buffs_allies') and f.get('suit') == suit)
                 total_power = power + healer_buff + 1
@@ -400,9 +561,9 @@ def _analyze_opponent_threats(game_dict, ai_player, opponent):
     ceasefire = game_dict.get('ceasefire_active', False)
     if not ceasefire and opp_main >= 2:
         counterable = []
-        if max(0, 4 - committed.get('Q', 0) - ai_hand.get('Q', 0)) >= 2:
+        if max(0, key_rank_copies - committed.get('Q', 0) - ai_hand.get('Q', 0)) >= 2:
             counterable.append("Blitzkrieg(2×Q)")
-        if max(0, 4 - committed.get('A', 0) - ai_hand.get('A', 0)) >= 2:
+        if max(0, key_rank_copies - committed.get('A', 0) - ai_hand.get('A', 0)) >= 2:
             counterable.append("Invader Swap(2×A)")
         if counterable:
             spell_threats.append(f"  Counterable tactics: {', '.join(counterable)}")

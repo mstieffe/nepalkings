@@ -240,6 +240,7 @@ village_dict_list = [
                 number_card=Card("7", suit, 7),
                 produces={'armor_black': 7} if suit in ['Clubs', 'Spades'] else {'armor_black': 7},
                 requires={'villager_black': 1},
+                #cannot_attack=True,
             )
         ]
     },
@@ -269,7 +270,8 @@ village_dict_list = [
                 number_card=Card("7", suit, 7),
                 produces={'armor_red': 7} if suit in ['Hearts', 'Diamonds'] else {'armor_black': 7},
                 requires={'villager_red': 1},
-                )
+                #cannot_attack=True,
+            )
         ]
     },
     # Carpenter

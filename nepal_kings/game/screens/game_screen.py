@@ -21,6 +21,11 @@ from game.screens.battle_shop_screen import BattleShopScreen
 from game.components.figures.figure_manager import FigureManager
 from utils.background_poller import BackgroundPoller
 from game.core.game import Game
+import logging
+from datetime import datetime
+
+logger = logging.getLogger('nk.screens.game_screen')
+
 
 
 class GameScreen(Screen):
@@ -36,6 +41,7 @@ class GameScreen(Screen):
 
         # ── Background game-state poller (non-blocking) ────────
         self._game_poller = None  # Created on first update_game()
+        self._poller_data_version = 0  # _game_data_version when poll started
         self.update_interval = 2000  # ms between polls (remote-friendly)
 
         # Unread chat message tracking
@@ -117,16 +123,50 @@ class GameScreen(Screen):
         self._previous_battle_modifiers = []  # Track for change detection / notifications
         self._just_allowed_spell = False  # Flag to suppress duplicate notification after allowing a spell
         self._hovered_battle_modifier = None  # Index of currently hovered modifier (or None)
+        self._seen_conquer_opponent_spell_ids = set()  # Active opponent spell IDs already announced in conquer mode
         self._battle_modifier_font = settings.get_font(settings.GAME_BUTTON_FONT_SIZE)
         self._spell_box_title_font = settings.get_font(settings.BATTLE_SPELL_BOX_TITLE_FONT_SIZE, bold=True)
         self._tooltip_font = settings.get_font(settings.TOOLTIP_FONT_SIZE)
+
+    def on_enter(self):
+        """Mark this screen as the active game parent for shared subscreens."""
+        self.state.parent_screen = self
+        self._ensure_duel_screen_game()
+
+    def _ensure_duel_screen_game(self):
+        """Route conquer battles to their dedicated parent screen."""
+        if self.state.game and getattr(self.state.game, 'mode', 'duel') == 'conquer':
+            self.state.screen = 'conquer_game'
+            return False
+        return True
     
+    # Notification dict keys consumed by routing/dedup/tone logic rather than by
+    # the DialogueBox itself. Stripped before forwarding to make_dialogue_box so
+    # callers can attach metadata without crashing the dialogue constructor.
+    _NOTIFICATION_META_KEYS = (
+        'type', 'event_key', 'phase', 'tone', 'spell_names',
+        'force_modal', 'target_tab', 'no_gate', 'spell_side', 'spell_role',
+    )
+
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
         from game.components.dialogue_box import DialogueBox
         self._active_dialogue_type = None  # Clear — callers via queue_or_show set it after
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
-    
+
+    def _consume_notification_meta(self, notification_data):
+        """Split notification meta keys from dialogue-box kwargs.
+
+        Returns ``(dialogue_kwargs, dialogue_type)``. Unknown meta keys are
+        dropped silently so callers can attach routing/dedup hints (`phase`,
+        `tone`, `event_key`, ...) without crashing make_dialogue_box.
+        """
+        data = dict(notification_data)
+        dialogue_type = data.pop('type', None)
+        for key in self._NOTIFICATION_META_KEYS:
+            data.pop(key, None)
+        return data, dialogue_type
+
     def queue_or_show_notification(self, notification_data):
         """Queue a notification if dialogue box is active, otherwise show it immediately."""
         if self.dialogue_box:
@@ -134,17 +174,15 @@ class GameScreen(Screen):
             self.pending_notifications.append(notification_data)
         else:
             # No dialogue box - show immediately
-            data = dict(notification_data)
-            dialogue_type = data.pop('type', None)
+            data, dialogue_type = self._consume_notification_meta(notification_data)
             self.make_dialogue_box(**data)
             self._active_dialogue_type = dialogue_type
-    
+
     def show_next_queued_notification(self):
         """Show the next queued notification if any exist."""
         if self.pending_notifications:
             notification_data = self.pending_notifications.pop(0)
-            data = dict(notification_data)
-            dialogue_type = data.pop('type', None)
+            data, dialogue_type = self._consume_notification_meta(notification_data)
             self.make_dialogue_box(**data)
             self._active_dialogue_type = dialogue_type
         else:
@@ -412,6 +450,7 @@ class GameScreen(Screen):
             # Recreate poller for the new game
             self._game_poller = BackgroundPoller(
                 Game.fetch_server_data, args=(current_id,))
+            self._poller_data_version = getattr(self.state.game, '_game_data_version', 0)
         
         # Check if subscreen changed - if so, deselect all cards
         if self.previous_subscreen != self.state.subscreen:
@@ -436,9 +475,22 @@ class GameScreen(Screen):
                 self._last_seen_battle_round = self._get_battle_snapshot()
             self.previous_subscreen = self.state.subscreen
         
+        if self._try_handle_finished_conquer_game():
+            return
+
         # ── Finished game: read-only mode — skip polling and notifications ──
         if self.state.game.game_over:
-            self.state.game.game_over_shown = True  # suppress game-over dialogue
+            pending_game_over = getattr(self.state.game, 'pending_game_over', None)
+            if pending_game_over and not getattr(self.state.game, 'game_over_shown', False):
+                subscreen = self.subscreens.get(self.state.subscreen) if self.state.subscreen in self.subscreens else None
+                subscreen_dialogue_open = bool(getattr(subscreen, 'dialogue_box', None))
+                if not subscreen_dialogue_open:
+                    self.check_game_over()
+            else:
+                self.state.game.game_over_shown = True  # suppress loaded finished games without a result payload
+            self.check_conquer_battle_ended()
+            if not self.state.game:
+                return  # conquer ended — game cleared
 
             # One-time figure fetch for lightweight games (e.g. from async poller)
             if not any(self.state.game.cached_figures_data.values()):
@@ -468,15 +520,29 @@ class GameScreen(Screen):
                 self._game_poller = BackgroundPoller(
                     Game.fetch_server_data,
                     args=(self.state.game.game_id,))
+                self._poller_data_version = self.state.game._game_data_version
             if self._game_poller.has_result():
-                self.state.game.apply_server_data(self._game_poller.result)
+                result = self._game_poller.result
+                # Only apply if no action (discard, advance, etc.) updated
+                # the game state while this poll was in flight.
+                if self._poller_data_version == self.state.game._game_data_version:
+                    self.state.game.apply_server_data(result)
+                else:
+                    logger.warning(f"[POLLER] Discarding stale result (poll v{self._poller_data_version} vs current v{self.state.game._game_data_version})")
             if not self._game_poller.busy:
+                self._poller_data_version = self.state.game._game_data_version
                 self._game_poller.poll(
                     args=(self.state.game.game_id,))
+
+        if self._try_handle_finished_conquer_game():
+            return
         
         # ── Badge tracking (field & battle) ──
         self._update_field_badge()
         self._update_battle_badge()
+        
+        # ── Safety valve: auto-clear stale action lock ──
+        self.state.game.check_action_lock_timeout()
         
         # Check for battle loot notification (which card the winner kept)
         self.check_loot_notification()
@@ -495,17 +561,21 @@ class GameScreen(Screen):
         self.check_own_advance_notification()
         self.check_opponent_advance_notification()
         self.check_defender_selection_needed()
+        self.check_conquer_own_defender_selection()
         self.check_waiting_for_defender_pick()
         self.check_battle_ready()
         
         # Check for fold outcome and auto-proceed (polling detection for waiting player)
         self.check_fold_result()
+        self.check_pending_battle_choice_timeout()
         self.check_game_over()
+        self.check_conquer_battle_ended()
         self.check_auto_proceed_to_battle()
         self.check_battle_moves_ready()
         
         # Reconnect: detect active battle on server that the client missed
         self.check_battle_reconnect()
+        self._enforce_battle_navigation_state()
         
         # Check for ceasefire ended notification AFTER action results
         # so it appears after the success message of the action that caused it
@@ -573,6 +643,8 @@ class GameScreen(Screen):
         self._previous_battle_modifiers = []
         self._hovered_battle_modifier = None
         self._just_allowed_spell = False
+        self._seen_conquer_opponent_spell_ids = set()
+        self.state.pending_conquer_prelude_target = None
         
         # Clear queued notifications and stale advance/turn flags so
         # they don't replay after the fold/battle result dialogue.
@@ -581,6 +653,7 @@ class GameScreen(Screen):
             self.state.game.pending_advance_notification = False
             self.state.game.pending_own_advance_notification = False
             self.state.game.pending_opponent_turn_summary = None
+            self.state.game.pending_conquer_prelude_target = False
         
         # ── Reset ALL subscreens ──
         # Each subscreen has a reset_state() that clears its game-specific
@@ -645,7 +718,7 @@ class GameScreen(Screen):
                 self.side_hand.cards_to_discard_count = 0
                 self.side_hand.dialogue_box = None
         
-        print(f"[GAME_SCREEN] State reset for new game {self._current_game_key}")
+        logger.info(f"[GAME_SCREEN] State reset for new game {self._current_game_key}")
 
     def check_counter_spell_state(self):
         """Check if player needs to respond to counter spell or is waiting for opponent."""
@@ -986,6 +1059,12 @@ class GameScreen(Screen):
         current_modifiers = self.state.game.battle_modifier
         if not isinstance(current_modifiers, list):
             current_modifiers = []
+
+        # Conquer mode has dedicated prelude/counter notifications; suppress
+        # generic modifier popups to keep the sequence clean and non-duplicated.
+        if self.state.game.mode == 'conquer':
+            self._previous_battle_modifiers = list(current_modifiers)
+            return
         
         # Skip detection right after a battle ended — stale poll data may
         # still contain old modifiers that look "new" after the reset.
@@ -1012,12 +1091,9 @@ class GameScreen(Screen):
                     if hasattr(self, '_just_allowed_spell') and self._just_allowed_spell:
                         self._just_allowed_spell = False
                     else:
-                        descriptions = {
-                            'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 2 turns left. The invader starts next turn.',
-                            'Peasant War': 'Only villagers can be selected for the battle. Both players have 2 turns left. The invader starts next turn.',
-                            'Blitzkrieg': "The advancing figure cannot be blocked. Both players have 2 turns left. The invader starts next turn. Ceasefire is active until the last turn."
-                        }
-                        desc = descriptions.get(modifier_type, 'A battle modifier is now active.')
+                        desc = self._get_battle_modifier_description(modifier_type)
+                        if not desc:
+                            desc = 'A battle modifier is now active.'
                         
                         # Load icon for the notification
                         icon_img = self._battle_modifier_icons.get(modifier_type)
@@ -1072,6 +1148,9 @@ class GameScreen(Screen):
         """Check for auto-fill notification and show dialogue if needed."""
         if not self.state.game or not self.state.game.pending_auto_fill:
             return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_auto_fill = None
+            return
         
         auto_fill = self.state.game.pending_auto_fill
         main_filled = auto_fill.get('main_cards_filled', 0)
@@ -1109,6 +1188,9 @@ class GameScreen(Screen):
     def check_post_battle_side_cards(self):
         """Check for post-battle side card draw notification and show dialogue."""
         if not self.state.game or not self.state.game.pending_post_battle_side_cards:
+            return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_post_battle_side_cards = None
             return
         
         # Defer side card notification while still on battle screen —
@@ -1148,13 +1230,18 @@ class GameScreen(Screen):
         if not self.state.game or not self.state.game.pending_loot_notification:
             return
 
+        # Suppress loot notification when the game is over
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_loot_notification = None
+            return
+
         # Defer while still on battle screen
         if self.state.subscreen == 'battle':
-            print(f"[LOOT_DEBUG] check_loot_notification: deferred (subscreen=battle)")
+            logger.debug(f"[LOOT_DEBUG] check_loot_notification: deferred (subscreen=battle)")
             return
 
         loot = self.state.game.pending_loot_notification
-        print(f"[LOOT_DEBUG] check_loot_notification: showing loot={loot}, dialogue_box={self.dialogue_box is not None}")
+        logger.debug(f"[LOOT_DEBUG] check_loot_notification: showing loot={loot}, dialogue_box={self.dialogue_box is not None}")
         winner_name = loot.get('winner_name', 'Opponent')
         suit = loot['suit']
         rank = loot['rank']
@@ -1180,24 +1267,231 @@ class GameScreen(Screen):
         """Check for opponent turn summary and show dialogue if needed."""
         if not self.state.game or not self.state.game.pending_opponent_turn_summary:
             return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_opponent_turn_summary = None
+            return
         
         summary = self.state.game.pending_opponent_turn_summary
         opponent_name = summary.get('opponent_name', 'Opponent')
         action = summary.get('action')
         
-        print(f"\n{'='*60}")
-        print(f"[OPPONENT_TURN_CLIENT] Processing notification")
-        print(f"[OPPONENT_TURN_CLIENT] Summary: {summary}")
-        print(f"[OPPONENT_TURN_CLIENT] Action: {action}")
-        print(f"{'='*60}\n")
-        print(f"[WELCOME_MSG] Processing notification - action: {action}")
-        print(f"{'='*60}\n")
+        logger.debug(f"\n{'='*60}")
+        logger.debug(f"[OPPONENT_TURN_CLIENT] Processing notification")
+        logger.debug(f"[OPPONENT_TURN_CLIENT] Summary: {summary}")
+        logger.debug(f"[OPPONENT_TURN_CLIENT] Action: {action}")
+        logger.debug(f"{'='*60}\n")
+        logger.info(f"[WELCOME_MSG] Processing notification - action: {action}")
+        logger.debug(f"{'='*60}\n")
         
         # Check for game start notification
         if action == 'game_start':
-            maharaja_data = summary.get('maharaja', {})
             is_turn = summary.get('is_turn', False)
             is_invader = summary.get('is_invader', False)
+
+            # ── Conquer mode game start ──
+            if summary.get('mode') == 'conquer':
+                self.state.game._game_start_pending = False
+
+                own_spells = summary.get('own_prelude_spells', [])
+                own_drawn_cards = summary.get('own_drawn_cards', [])
+                opp_spells = summary.get('opponent_prelude_spells', [])
+                own_no_target_spells = summary.get('own_prelude_no_target_spells', [])
+                opponent_no_target_spells = summary.get('opponent_prelude_no_target_spells', [])
+                pending_prelude_target = summary.get('pending_prelude_target')
+
+                # Snapshot prelude spells on the game so the conquer
+                # timeline panel can read them later (ActiveSpell rows
+                # do not carry a phase_cast marker).
+                self.state.game.conquer_own_prelude_spells = (
+                    list(own_spells) + list(own_no_target_spells)
+                )
+                self.state.game.conquer_opp_prelude_spells = (
+                    list(opp_spells) + list(opponent_no_target_spells)
+                )
+                # Include any pending target-required prelude (own side) so
+                # the panel shows the icon while the user is still picking
+                # a target.
+                if isinstance(pending_prelude_target, dict):
+                    self.state.game.conquer_own_prelude_spells.append(
+                        dict(pending_prelude_target)
+                    )
+
+                self.state.pending_conquer_prelude_target = None
+                self.state.game.pending_conquer_prelude_target = False
+
+                # Seed baseline tracking so generic modifier alerts and stale
+                # prelude spells are not re-announced later in conquer flow.
+                summary_modifiers = summary.get('battle_modifier')
+                if isinstance(summary_modifiers, list):
+                    self._previous_battle_modifiers = list(summary_modifiers)
+                active_spells = getattr(self.state.game, 'cached_active_spells', []) or []
+                self._seen_conquer_opponent_spell_ids = {
+                    s.get('id') for s in active_spells
+                    if s.get('id') is not None and s.get('player_id') != self.state.game.player_id
+                }
+
+                # (1) Intro box — who, what land, invader/defender role
+                tier = self.state.game.land_tier
+                land_label = f"Tier {tier} land" if tier else "this land"
+                role_text = "invader" if is_invader else "defender"
+                intro_msg = (f"Conquer Battle Started!\n\n"
+                             f"You are the {role_text}. You are fighting "
+                             f"{opponent_name} for control of {land_label}.")
+                self.queue_or_show_notification({
+                    'message': intro_msg,
+                    'actions': ['ok'],
+                    'icon': 'welcome',
+                    'title': 'Conquer Battle',
+                    'phase': 'start',
+                    'tone': 'info',
+                    'event_key': f"conquer_start:{getattr(self.state.game, 'game_id', 'local')}",
+                })
+
+                # (2) Own prelude spell success (if any)
+                if own_spells:
+                    from game.components.cards.card import Card
+                    card_images = []
+                    for card_data in own_drawn_cards:
+                        card = Card(
+                            rank=card_data['rank'],
+                            suit=card_data['suit'],
+                            value=card_data['value'],
+                            id=card_data.get('id'),
+                            type=card_data.get('type', 'main'),
+                        )
+                        card_img = card.make_icon(self.window, self.state.game, 0, 0)
+                        card_images.append(card_img.front_img)
+
+                    spell_names = ', '.join(s['spell_name'] for s in own_spells)
+                    effect_lines = [
+                        self._describe_conquer_prelude_effect(spell, own=True)
+                        for spell in own_spells
+                    ]
+                    spell_msg = f"Your prelude spell {spell_names} was executed!"
+                    if effect_lines:
+                        spell_msg += "\n\n" + "\n".join(f"• {line}" for line in effect_lines)
+
+                    spell_icon_images = self._get_spell_icon_image(own_spells[0]['spell_name'])
+                    all_images = spell_icon_images + card_images
+                    self.queue_or_show_notification({
+                        'message': spell_msg,
+                        'actions': ['ok'],
+                        'images': all_images if all_images else None,
+                        'icon': None if all_images else 'magic',
+                        'title': 'Prelude Spell',
+                        'phase': 'prelude',
+                        'tone': 'good',
+                        'spell_names': [s['spell_name'] for s in own_spells],
+                        'spell_side': 'own',
+                        'spell_role': 'prelude',
+                        'event_key': 'own_prelude:' + ','.join(
+                            str(s.get('id') or s.get('spell_name')) for s in own_spells),
+                    })
+
+                # (3) Opponent prelude spell turn notification (if any)
+                if opp_spells:
+                    opp_spell_names = ', '.join(s['spell_name'] for s in opp_spells)
+                    opp_effect_lines = [
+                        self._describe_conquer_prelude_effect(spell, own=False)
+                        for spell in opp_spells
+                    ]
+
+                    opp_images = []
+                    for s in opp_spells:
+                        opp_images.extend(self._get_spell_icon_image(s['spell_name']))
+
+                    opp_msg = f"{opponent_name}'s turn:"
+                    opp_msg_after = f"• Cast {opp_spell_names}"
+                    if opp_effect_lines:
+                        opp_msg_after += "\n" + "\n".join(f"  > {line}" for line in opp_effect_lines)
+
+                    self.queue_or_show_notification({
+                        'message': opp_msg,
+                        'actions': ['ok'],
+                        'images': opp_images if opp_images else None,
+                        'icon': None if opp_images else 'info',
+                        'title': 'Opponent Prelude',
+                        'message_after_images': opp_msg_after,
+                        'phase': 'prelude',
+                        'tone': 'warning',
+                        'spell_names': [s['spell_name'] for s in opp_spells],
+                        'spell_side': 'opponent',
+                        'spell_role': 'prelude',
+                        'event_key': 'opponent_prelude:' + ','.join(
+                            str(s.get('id') or s.get('spell_name')) for s in opp_spells),
+                    })
+
+                # (4) Explicit no-target notifications
+                for spell_info in own_no_target_spells:
+                    spell_name = spell_info.get('spell_name', 'Prelude spell')
+                    spell_images = self._get_spell_icon_image(spell_name)
+                    self.queue_or_show_notification({
+                        'message': (f"Your prelude spell {spell_name} could not be applied.\n\n"
+                                    f"No valid target was available (checkmate figures are excluded)."),
+                        'actions': ['ok'],
+                        'images': spell_images if spell_images else None,
+                        'icon': None if spell_images else 'info',
+                        'title': 'No Valid Target',
+                        'phase': 'prelude',
+                        'tone': 'warning',
+                        'spell_names': [spell_name],
+                        'spell_side': 'own',
+                        'spell_role': 'prelude',
+                        'event_key': f'own_no_target:{spell_name}',
+                    })
+
+                for spell_info in opponent_no_target_spells:
+                    spell_name = spell_info.get('spell_name', 'Prelude spell')
+                    spell_images = self._get_spell_icon_image(spell_name)
+                    self.queue_or_show_notification({
+                        'message': (f"{opponent_name}'s prelude spell {spell_name} had no valid target.\n\n"
+                                    f"Checkmate figures are excluded from targeting."),
+                        'actions': ['ok'],
+                        'images': spell_images if spell_images else None,
+                        'icon': None if spell_images else 'info',
+                        'title': 'Opponent Prelude',
+                        'phase': 'prelude',
+                        'tone': 'warning',
+                        'spell_names': [spell_name],
+                        'spell_side': 'opponent',
+                        'spell_role': 'prelude',
+                        'event_key': f'opponent_no_target:{spell_name}',
+                    })
+
+                # (5) Pending attacker prelude target selection
+                if pending_prelude_target:
+                    spell_name = pending_prelude_target.get('spell_name', 'Prelude spell')
+                    scope = pending_prelude_target.get('target_scope')
+                    if scope == 'own':
+                        target_hint = "one of your own figures"
+                    else:
+                        target_hint = "one of your opponent's figures"
+
+                    self.state.pending_conquer_prelude_target = pending_prelude_target
+                    self.state.game.pending_conquer_prelude_target = True
+
+                    spell_images = self._get_spell_icon_image(spell_name)
+                    self.queue_or_show_notification({
+                        'message': (f"Your prelude spell {spell_name} needs a target.\n\n"
+                                    f"Select {target_hint} on the field to resolve it.\n\n"
+                                    f"Checkmate figures cannot be targeted."),
+                        'actions': ['got it!'],
+                        'images': spell_images if spell_images else None,
+                        'icon': None if spell_images else 'magic',
+                        'title': 'Select Prelude Target',
+                        'phase': 'prelude',
+                        'tone': 'action',
+                        'spell_names': [spell_name],
+                        'spell_side': 'own',
+                        'spell_role': 'prelude',
+                        'event_key': f'prelude_target:{pending_prelude_target.get("spell_id") or spell_name}',
+                    })
+
+                self.state.game.pending_opponent_turn_summary = None
+                return
+
+            # ── Duel mode game start ──
+            maharaja_data = summary.get('maharaja', {})
             
             # Create Figure object from maharaja data to generate FieldFigureIcon
             from game.components.figures.figure import Figure
@@ -1211,8 +1505,8 @@ class GameScreen(Screen):
             maharaja_figure = self._create_figure_from_data(maharaja_data, families)
             
             if maharaja_figure:
-                print(f"[WELCOME_MSG] Creating FieldFigureIcon for {maharaja_figure.name}")
-                print(f"[WELCOME_MSG] Figure has {len(maharaja_figure.cards)} cards")
+                logger.info(f"[WELCOME_MSG] Creating FieldFigureIcon for {maharaja_figure.name}")
+                logger.info(f"[WELCOME_MSG] Figure has {len(maharaja_figure.cards)} cards")
                 
                 # Create FieldFigureIcon for the maharaja (same as explosion spell)
                 from game.components.figures.figure_icon import FieldFigureIcon
@@ -1231,7 +1525,7 @@ class GameScreen(Screen):
                 import os
                 images = [maharaja_icon]
                 
-                print(f"[WELCOME_MSG] Showing dialogue with {len(images)} images")
+                logger.info(f"[WELCOME_MSG] Showing dialogue with {len(images)} images")
                 
                 # Build welcome message with game information
                 role_text = "invader" if is_invader else "defender"
@@ -1240,14 +1534,30 @@ class GameScreen(Screen):
                 
                 turn_msg = f"Hello Adventurer!\n\nYou are playing with the {maharaja_name} and start with the {role_text} role. You are fighting {opponent_name}."
                 
-                self.queue_or_show_notification({
+                notification = {
                     'message': turn_msg,
                     'actions': ['ok'],
                     'images': images,
-                    'message_after_images': turn_status,
                     'icon': "welcome",
                     'title': "Game Started"
-                })
+                }
+                if is_invader:
+                    notification['message_after_images'] = turn_status
+                self.queue_or_show_notification(notification)
+
+                # Clear the pending flag so turn-change detection resumes.
+                self.state.game._game_start_pending = False
+
+                # For the defender's first turn the invader has already played.
+                # Use the live turn state (updated by polling) rather than the
+                # potentially stale is_turn from the server response — a fast
+                # AI opponent may have played between the request and now.
+                if not is_invader and self.state.game.turn:
+                    logger.info("[WELCOME_MSG] Defender first turn — re-requesting start_turn for opponent action")
+                    self.state.game._start_turn_async()
+            else:
+                # Safety: clear flag even if maharaja wasn't found
+                self.state.game._game_start_pending = False
             
             # Clear the notification
             self.state.game.pending_opponent_turn_summary = None
@@ -1269,15 +1579,15 @@ class GameScreen(Screen):
             action_message = action.get('message', 'completed their turn')
             spell_name = action.get('spell_name', '')
             
-            print(f"[OPPONENT_TURN_CLIENT] Processing action: type={action_type}, spell={repr(spell_name)}, has_new_cards={'new_cards' in action}")
+            logger.debug(f"[OPPONENT_TURN_CLIENT] Processing action: type={action_type}, spell={repr(spell_name)}, has_new_cards={'new_cards' in action}")
             if 'new_cards' in action:
-                print(f"[OPPONENT_TURN_CLIENT] new_cards present with {len(action.get('new_cards', []))} cards")
+                logger.debug(f"[OPPONENT_TURN_CLIENT] new_cards present with {len(action.get('new_cards', []))} cards")
             
             # Load icons for actions
             images = []
             
             # Special handling for Forced Deal with card details
-            if (action_type == 'spell' and spell_name == 'Forced Deal' and 
+            if (action_type in ('spell', 'counter_spell') and spell_name == 'Forced Deal' and 
                 'cards_given' in action and 'cards_received' in action):
                 
                 from game.components.cards.card import Card
@@ -1286,7 +1596,7 @@ class GameScreen(Screen):
                 cards_given = action.get('cards_given', [])
                 cards_received = action.get('cards_received', [])
                 
-                print(f"[FORCED_DEAL_CLIENT] Showing cards: gave {len(cards_given)}, received {len(cards_received)}")
+                logger.info(f"[FORCED_DEAL_CLIENT] Showing cards: gave {len(cards_given)}, received {len(cards_received)}")
                 
                 # Add received cards (show first)
                 for card_data in cards_received:
@@ -1326,16 +1636,16 @@ class GameScreen(Screen):
                     images.append(given_card_img)
             
             # Special handling for Dump Cards with new cards
-            elif (action_type == 'spell' and spell_name == 'Dump Cards' and 
+            elif (action_type in ('spell', 'counter_spell') and spell_name == 'Dump Cards' and 
                   'new_cards' in action):
                 
-                print(f"[DUMP_CARDS_CLIENT] ENTERING Dump Cards card display block")
+                logger.debug(f"[DUMP_CARDS_CLIENT] ENTERING Dump Cards card display block")
                 
                 from game.components.cards.card import Card
                 new_cards = action.get('new_cards', [])
                 
-                print(f"[DUMP_CARDS_CLIENT] Showing {len(new_cards)} new cards from opponent turn notification")
-                print(f"[DUMP_CARDS_CLIENT] new_cards data: {new_cards}")
+                logger.debug(f"[DUMP_CARDS_CLIENT] Showing {len(new_cards)} new cards from opponent turn notification")
+                logger.debug(f"[DUMP_CARDS_CLIENT] new_cards data: {new_cards}")
                 
                 # Add all new cards
                 for card_data in new_cards:
@@ -1350,7 +1660,7 @@ class GameScreen(Screen):
                     images.append(card_img.front_img)
             
             # Special handling for Poison with affected figure
-            elif (action_type == 'spell' and spell_name == 'Poison' and 
+            elif (action_type in ('spell', 'counter_spell') and spell_name == 'Poison' and 
                   action.get('affects_player') and action.get('target_figure_id')):
                 import os
                 spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon', 'poisson_portion.png'))
@@ -1367,7 +1677,7 @@ class GameScreen(Screen):
                             break
             
             # Load spell icon if this is a spell action (and not Forced Deal/Dump Cards/Poison with cards)
-            elif action_type == 'spell' and action.get('spell_icon'):
+            elif action_type in ('spell', 'counter_spell') and action.get('spell_icon'):
                 import os
                 spell_icon_path = os.path.join('img', 'spells', 'icons', action.get('spell_icon'))
                 if os.path.exists(spell_icon_path):
@@ -1402,7 +1712,7 @@ class GameScreen(Screen):
                 message_after = None
                 icon = "error"
             # Special handling for Poison on player's figure
-            elif (action_type == 'spell' and spell_name == 'Poison' and 
+            elif (action_type in ('spell', 'counter_spell') and spell_name == 'Poison' and 
                   action.get('affects_player') and action.get('target_figure_name')):
                 target_name = action.get('target_figure_name')
                 message = f"{opponent_name} cast Poison!\n\nYour {target_name} was poisoned (-6 power).\n\nIt's your turn now!"
@@ -1440,6 +1750,9 @@ class GameScreen(Screen):
     def check_ceasefire_ended_notification(self):
         """Check if ceasefire ended and show notification if needed."""
         if not self.state.game or not self.state.game.pending_ceasefire_ended:
+            return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_ceasefire_ended = False
             return
         
         # Guard: if ceasefire is actually active now (e.g. transient state during
@@ -1484,23 +1797,26 @@ class GameScreen(Screen):
         """Show ceasefire-active notification when ceasefire activates."""
         if not self.state.game or not self.state.game.pending_ceasefire_active_notification:
             return
+        if self.state.game.game_over or self.state.game.pending_game_over:
+            self.state.game.pending_ceasefire_active_notification = False
+            return
         
         # If ceasefire is no longer active, discard the stale notification
         if not self.state.game.ceasefire_active:
-            print(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire no longer active")
+            logger.info(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire no longer active")
             self.state.game.pending_ceasefire_active_notification = False
             return
         
         # Display-level dedup: only show once per round regardless of source
         if self.state.game._ceasefire_active_displayed_round == self.state.game.current_round:
-            print(f"[CEASEFIRE] check_ceasefire_active: discarding — already displayed for round {self.state.game.current_round}")
+            logger.info(f"[CEASEFIRE] check_ceasefire_active: discarding — already displayed for round {self.state.game.current_round}")
             self.state.game.pending_ceasefire_active_notification = False
             return
         
         # If ceasefire already ended this round, this is stale data — discard
         if (self.state.game._ceasefire_notified_round == self.state.game.current_round
                 and self.state.game._ceasefire_notified_state == 'ended'):
-            print(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire already ended round {self.state.game.current_round}")
+            logger.info(f"[CEASEFIRE] check_ceasefire_active: discarding — ceasefire already ended round {self.state.game.current_round}")
             self.state.game.pending_ceasefire_active_notification = False
             return
         
@@ -1530,7 +1846,7 @@ class GameScreen(Screen):
         else:
             message = "Ceasefire is active!\n\nNo battles can commence while ceasefire is in effect.\n\nThe ceasefire will last for 3 invader turns."
         
-        print(f"[CEASEFIRE] check_ceasefire_active: SHOWING notification for round {self.state.game.current_round}")
+        logger.info(f"[CEASEFIRE] check_ceasefire_active: SHOWING notification for round {self.state.game.current_round}")
         self.state.game._ceasefire_active_displayed_round = self.state.game.current_round
         
         self.queue_or_show_notification({
@@ -1578,10 +1894,20 @@ class GameScreen(Screen):
         if self.state.game.battle_confirmed:
             return
         
-        # Force advance when: 1 or fewer turns left, ceasefire not active,
-        # no active advance already, and dialogue not already shown.
-        # Any player (invader or defender) on their last turn must advance.
-        if (self.state.game.current_player.get('turns_left', 0) <= 1 and
+        # Wait for the conquer game-start sequence (intro + prelude spells)
+        # to be shown before prompting the player to advance.
+        if self.state.game.mode == 'conquer' and (
+            self.state.game._game_start_pending
+            or self.state.game.pending_opponent_turn_summary
+            or getattr(self.state.game, 'pending_conquer_prelude_target', False)
+        ):
+            return
+        
+        # Force advance when: invader, 1 or fewer turns left, ceasefire not
+        # active, no active advance already, and dialogue not already shown.
+        # Only the INVADER must advance on their last turn — not the defender.
+        if (self.state.game.invader and
+            self.state.game.current_player.get('turns_left', 0) <= 1 and
             not self.state.game.ceasefire_active and
             not self.state.game.advancing_figure_id and
             not self.state.game.forced_advance_dialogue_shown):
@@ -1606,12 +1932,26 @@ class GameScreen(Screen):
                 advance_img = pygame.image.load(icon_path).convert_alpha()
                 images.append(advance_img)
             
+            # Build message depending on game mode
+            if self.state.game.mode == 'conquer':
+                msg = "Select one of your figures on the field to advance toward battle."
+                title = "Advance your Battle Figure"
+            else:
+                msg = "Last turn!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance, or build a figure with Instant Charge to build and advance in one action."
+                title = "Battle Time"
+            
             self.queue_or_show_notification({
-                'message': "Last turn!\n\nIt's time to advance a figure toward battle.\n\nGo to the field and select a figure to advance, or build a figure with Instant Charge to build and advance in one action.",
+                'message': msg,
                 'actions': ['ok'],
                 'images': images if images else None,
                 'icon': None if images else "info",
-                'title': "Battle Time"
+                'title': title,
+                'phase': 'advance',
+                'tone': 'action',
+                'event_key': (
+                    f"forced_advance:{getattr(self.state.game, 'game_id', 'local')}:"
+                    f"{getattr(self.state.game, 'current_round', 'current')}"
+                ),
             })
     
     def _check_any_figure_can_advance(self):
@@ -1688,6 +2028,10 @@ class GameScreen(Screen):
         result = cannot_advance_loss(self.state.game.game_id, self.state.game.player_id)
         
         if result.get('success'):
+            if result.get('conquer_result'):
+                self._handle_conquer_result_response(result)
+                return
+
             # Check for game-over
             if result.get('game_over'):
                 if result.get('game'):
@@ -1722,7 +2066,7 @@ class GameScreen(Screen):
             })
         else:
             error_msg = result.get('message', 'Unknown error')
-            print(f"[GAME_SCREEN] Auto-loss failed: {error_msg}")
+            logger.error(f"[GAME_SCREEN] Auto-loss failed: {error_msg}")
     
     def _check_any_defender_selectable(self):
         """Check if any of the opponent's figures can be selected as a defender."""
@@ -1759,16 +2103,21 @@ class GameScreen(Screen):
         skip_must_be_attacked = advancing_cannot_be_blocked or has_blitzkrieg
         
         eligible = []
+        checkmate_fallback = []
         for fig in all_opponent_figures:
             if hasattr(fig, 'cannot_defend') and fig.cannot_defend:
                 continue
             if hasattr(fig, 'cannot_be_targeted') and fig.cannot_be_targeted:
                 continue
-            if hasattr(fig, 'checkmate') and fig.checkmate:
-                continue
             if village_only and hasattr(fig, 'family') and fig.family.field != 'village':
                 continue
+            if hasattr(fig, 'checkmate') and fig.checkmate:
+                checkmate_fallback.append(fig)
+                continue
             eligible.append(fig)
+
+        if not eligible and checkmate_fallback:
+            eligible = checkmate_fallback
         
         if not eligible:
             return False
@@ -1787,6 +2136,10 @@ class GameScreen(Screen):
         result = defender_no_figures_loss(self.state.game.game_id, self.state.game.player_id)
         
         if result.get('success'):
+            if result.get('conquer_result'):
+                self._handle_conquer_result_response(result)
+                return
+
             # Check for game-over
             if result.get('game_over'):
                 if result.get('game'):
@@ -1822,35 +2175,161 @@ class GameScreen(Screen):
             })
         else:
             error_msg = result.get('message', 'Unknown error')
-            print(f"[GAME_SCREEN] Defender auto-loss failed: {error_msg}")
+            logger.error(f"[GAME_SCREEN] Defender auto-loss failed: {error_msg}")
     
+    def _get_battle_modifier_description(self, modifier_type):
+        """Return human-readable effect text for a battle modifier spell."""
+        if self.state.game and getattr(self.state.game, 'mode', None) == 'conquer':
+            conquer_descriptions = {
+                'Civil War': 'Conquer restriction: only village figures can fight, and each side may use up to two same-color village figures.',
+                'Peasant War': 'Conquer restriction: only village figures can be selected for this battle.',
+                'Blitzkrieg': 'Conquer restriction: the defender cannot counter-advance; the invader selects the defender after advancing. Ceasefire is active until the last turn.',
+            }
+            if modifier_type in conquer_descriptions:
+                return conquer_descriptions[modifier_type]
+        descriptions = {
+            'Civil War': 'Each player may choose up to two villagers of the same color. Both players have 2 turns left. The invader starts next turn.',
+            'Peasant War': 'Only villagers can be selected for the battle. Both players have 2 turns left. The invader starts next turn.',
+            'Blitzkrieg': 'The advancing figure cannot be blocked. Both players have 2 turns left. The invader starts next turn. Ceasefire is active until the last turn.',
+        }
+        return descriptions.get(modifier_type)
+
+    def _is_battle_modifier_spell(self, spell_name):
+        """Return True when the spell name maps to a battle modifier."""
+        return self._get_battle_modifier_description(spell_name) is not None
+
+    def _get_modifier_explanation_lines(self, modifier_names):
+        """Build de-duplicated '<Modifier>: <effect>' lines for notifications."""
+        lines = []
+        seen = set()
+        for modifier_name in modifier_names:
+            if not modifier_name or modifier_name in seen:
+                continue
+            seen.add(modifier_name)
+            desc = self._get_battle_modifier_description(modifier_name)
+            if desc:
+                lines.append(f"{modifier_name}: {desc}")
+        return lines
+
+    def _describe_conquer_prelude_effect(self, spell_info, *, own=True):
+        """Return a concise human-readable conquer prelude effect line."""
+        spell_name = spell_info.get('spell_name', 'Prelude spell')
+        effect_data = spell_info.get('effect_data') or {}
+        target_name = spell_info.get('target_figure_name') or effect_data.get('target_figure_name')
+
+        modifier_desc = self._get_battle_modifier_description(spell_name)
+        if modifier_desc:
+            return f"{spell_name}: {modifier_desc}"
+        if spell_name == 'Invader Swap':
+            if effect_data.get('conquer_invader_swap'):
+                if own:
+                    return ("Invader Swap: the defender became the invader. "
+                            "They must advance first; you will choose a defender "
+                            "unless the advance cannot be blocked.")
+                else:
+                    return ("Opponent cast Invader Swap: you are now the invader "
+                            "and must advance first.")
+            return "Invader Swap: roles have been swapped."
+        if spell_name == 'Poison':
+            if target_name:
+                return f"Poison: {target_name} receives -6 battle power."
+            return "Poison: target receives -6 battle power."
+        if spell_name == 'Health Boost':
+            if target_name:
+                return f"Health Boost: {target_name} receives +6 battle power."
+            return "Health Boost: target receives +6 battle power."
+        if spell_name == 'Explosion':
+            destroyed = effect_data.get('destroyed_figure_name') or target_name or 'a figure'
+            card_count = effect_data.get('card_count')
+            if card_count is not None:
+                return f"Explosion: destroyed {destroyed}; {card_count} card(s) returned to the deck."
+            return f"Explosion: destroyed {destroyed}."
+        if spell_name == 'Dump Cards':
+            own_dumped = effect_data.get('caster_dumped') if own else effect_data.get('opponent_dumped')
+            opp_dumped = effect_data.get('opponent_dumped') if own else effect_data.get('caster_dumped')
+            caster_label = 'You' if own else 'Opponent'
+            return (f"Dump Cards (cast by {caster_label}): you discarded {own_dumped or 0} card(s), "
+                    f"opponent discarded {opp_dumped or 0}; both redrew a fresh hand.")
+        if spell_name == 'Forced Deal':
+            given = effect_data.get('cards_given') or effect_data.get('caster_gave') or []
+            received = effect_data.get('cards_received') or effect_data.get('caster_received') or []
+            if not own:
+                given = effect_data.get('opponent_gave') or []
+                received = effect_data.get('opponent_received') or []
+            if given or received:
+                return f"Forced Deal: exchanged {len(given)} card(s) for {len(received)} card(s)."
+            return "Forced Deal: exchanged 2 random main cards."
+        drawn = effect_data.get('drawn_cards') or []
+        if drawn:
+            return f"{spell_name}: drew {len(drawn)} card(s)."
+        return f"{spell_name}: executed successfully."
+
     def _get_battle_modifier_info(self):
         """Get battle modifier summary text and icon images for notification dialogues."""
         modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
         if not modifiers:
             return "", []
-        
-        modifier_texts = []
+
+        modifier_names = []
         modifier_images = []
         for mod in modifiers:
             mod_type = mod.get('type', 'Unknown')
             icon_img = self._battle_modifier_icons.get(mod_type)
             if icon_img:
                 modifier_images.append(icon_img)
-            if mod_type == 'Peasant War':
-                modifier_texts.append("Peasant War: Only village figures can be selected for battle.")
-            elif mod_type == 'Blitzkrieg':
-                modifier_texts.append("Blitzkrieg: The advancing figure cannot be blocked. Ceasefire is active until the last turn.")
-            elif mod_type == 'Civil War':
-                modifier_texts.append("Civil War: Each player selects two village figures of the same color for battle.")
-        
+            modifier_names.append(mod_type)
+
+        modifier_texts = self._get_modifier_explanation_lines(modifier_names)
         text = "\n".join(modifier_texts)
         return text, modifier_images
 
     def check_own_advance_notification(self):
         """Check if Blitzkrieg combine-advance-and-select is needed.
-        For normal advances, the persistent prompt replaces the dialogue."""
+        For normal advances, the persistent prompt replaces the dialogue.
+        In conquer mode, show a confirmation notification."""
         if not self.state.game or not self.state.game.pending_own_advance_notification:
+            return
+        
+        figure_name = self.state.game.own_advance_figure_name or "your figure"
+
+        # Conquer mode: show a brief advance confirmation
+        if self.state.game.mode == 'conquer':
+            self.state.game.pending_own_advance_notification = False
+
+            images = []
+            if self.state.game.advancing_figure_id:
+                field_screen = self.subscreens.get('field')
+                if field_screen:
+                    for icon in getattr(field_screen, 'figure_icons', []):
+                        if hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id:
+                            images.append(icon)
+                            break
+
+            modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+            has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+
+            if has_blitzkrieg:
+                modifier_text, modifier_icons = self._get_battle_modifier_info()
+                images.extend(modifier_icons)
+                msg = (f"You advanced {figure_name} toward battle!\n\n"
+                       f"Blitzkrieg is active — the defender cannot counter-advance.\n"
+                       f"Select which of the defender's figures to face in battle.")
+                title = "Blitzkrieg Advance"
+            else:
+                msg = f"You advanced {figure_name} toward battle!"
+                title = "Advancing!"
+
+            self.queue_or_show_notification({
+                'message': msg,
+                'actions': ['ok'],
+                'images': images if images else None,
+                'icon': None if images else "info",
+                'title': title,
+                'phase': 'advance',
+                'tone': 'action' if has_blitzkrieg else 'good',
+                'spell_names': ['Blitzkrieg'] if has_blitzkrieg else [],
+                'event_key': f'own_advance:{self.state.game.advancing_figure_id}:{has_blitzkrieg}',
+            })
             return
         
         figure_name = self.state.game.own_advance_figure_name or "your figure"
@@ -1942,7 +2421,11 @@ class GameScreen(Screen):
         # Message before images: "Your opponent advanced..."
         # Message after images: options/instructions
         message_after = None
-        if 'Blitzkrieg' in modifier_types and not has_cannot_be_blocked:
+        if self.state.game.mode == 'conquer':
+            title = "Opponent Advancing"
+            message = f"Your opponent advanced {advancing_description}!"
+            message_after = "The battle will begin shortly."
+        elif 'Blitzkrieg' in modifier_types and not has_cannot_be_blocked:
             title = "Blitzkrieg — Opponent Advancing"
             message = f"Your opponent advanced {advancing_description}!"
             message_after = (f"Blitzkrieg is active — you cannot counter-advance.\n\n"
@@ -1983,7 +2466,12 @@ class GameScreen(Screen):
             'images': images if images else None,
             'icon': None if images else "info",
             'title': title,
-            'message_after_images': message_after
+            'message_after_images': message_after,
+            'phase': 'advance',
+            'tone': 'warning',
+            'spell_names': [m for m in ('Blitzkrieg', 'Civil War', 'Peasant War')
+                            if m in modifier_types],
+            'event_key': f'opponent_advance:{self.state.game.advancing_figure_id}',
         })
         
         self.state.game.pending_advance_notification = False
@@ -2057,7 +2545,12 @@ class GameScreen(Screen):
             'actions': ['got it!'],
             'images': images if images else None,
             'icon': None if images else "info",
-            'title': "Select Opponent's Defender"
+            'title': "Select Opponent's Defender",
+            'phase': 'defender',
+            'tone': 'action',
+            'spell_names': [m for m in ('Civil War', 'Peasant War')
+                            if m in modifier_types],
+            'event_key': f'select_defender:{self.state.game.advancing_figure_id}',
         })
         
         # Prevent re-queuing on subsequent update cycles
@@ -2067,6 +2560,40 @@ class GameScreen(Screen):
         """Handle response from forced advance confirmation — switch to field screen."""
         self.state.subscreen = 'field'
     
+    def check_conquer_own_defender_selection(self):
+        """After a conquer Invader Swap blockable advance, prompt the original
+        conquerer to select one of their own figures as their defender."""
+        if not self.state.game or not self.state.game.pending_conquer_own_defender_selection:
+            return
+        if self.state.game.conquer_own_defender_selection_shown:
+            return
+
+        self.state.game.conquer_own_defender_selection_shown = True
+
+        modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+        modifier_types = [m.get('type') for m in modifiers]
+        restriction_note = ""
+        if 'Civil War' in modifier_types:
+            restriction_note = "\n\nCivil War is active — only village figures may defend."
+        elif 'Peasant War' in modifier_types:
+            restriction_note = "\n\nPeasant War is active — only village figures may defend."
+
+        message = (
+            f"Invader Swap — Choose Your Defender\n\n"
+            f"The opponent has advanced. Select one of your own figures to defend against them.\n\n"
+            f"Fortresses may also defend if legal.{restriction_note}"
+        )
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'icon': 'info',
+            'title': 'Invader Swap — Choose Defender',
+            'phase': 'defender',
+            'tone': 'action',
+            'spell_names': ['Invader Swap'],
+            'event_key': f"invader_swap_own_defender:{getattr(self.state.game, 'game_id', 'local')}",
+        })
+
     def check_waiting_for_defender_pick(self):
         """Check if defender (Player B) should be notified that opponent is picking their battle figure.
         Instead of a click-through dialogue, we just activate the persistent 'BATTLE INCOMING' prompt."""
@@ -2091,6 +2618,11 @@ class GameScreen(Screen):
         if self.state.game.battle_ready_shown:
             return
         
+        logger.info(f"[CHECK_BATTLE_READY] Firing: advancing={self.state.game.advancing_figure_id}, "
+              f"defending={self.state.game.defending_figure_id}, "
+              f"is_advancing={self.state.game.advancing_player_id == self.state.game.player_id}, "
+              f"dialogue_box={'yes' if self.dialogue_box else 'no'}")
+        
         # ── Reconnect guard: battle already confirmed on server ──
         if self.state.game.battle_confirmed:
             self.state.game.battle_ready_shown = True
@@ -2099,16 +2631,17 @@ class GameScreen(Screen):
             bmc = self.state.game.battle_moves_confirmed or {}
             player_ids = [str(p['id']) for p in self.state.game.players]
             both_moves_ready = all(bmc.get(pid) for pid in player_ids)
+            battle_started = both_moves_ready and self.state.game.battle_turn_player_id is not None
             my_moves_ready = bmc.get(str(self.state.game.player_id))
 
-            if both_moves_ready:
+            if battle_started:
                 # Both players already confirmed moves — go straight to battle
                 self.battle_button.locked = False
                 self.state.subscreen = 'battle'
-                print("[BATTLE_READY] Reconnect: both moves confirmed — entering battle screen")
+                logger.info("[BATTLE_READY] Reconnect: both moves confirmed — entering battle screen")
             elif my_moves_ready:
                 # We confirmed but opponent hasn't — go to battle shop in waiting mode
-                self.battle_button.locked = False
+                self.battle_button.locked = True
                 self.state.game.battle_moves_phase = True
                 self.state.game.battle_moves_ready = True
                 self.state.game.waiting_for_opponent_battle_moves = True
@@ -2118,12 +2651,12 @@ class GameScreen(Screen):
                     shop._load_bought_moves()
                     shop._battle_moves_confirmed = True
                     shop._waiting_for_opponent = True
-                print("[BATTLE_READY] Reconnect: our moves confirmed — waiting for opponent")
+                logger.info("[BATTLE_READY] Reconnect: our moves confirmed — waiting for opponent")
             else:
                 # Neither confirmed yet — enter battle shop normally
-                self.battle_button.locked = False
+                self.battle_button.locked = True
                 self.state.game.auto_proceed_to_battle = True
-                print("[BATTLE_READY] Reconnect: battle confirmed, moves not yet selected")
+                logger.info("[BATTLE_READY] Reconnect: battle confirmed, moves not yet selected")
             return
         
         # ── Reconnect guard: we already submitted our decision ──
@@ -2132,7 +2665,171 @@ class GameScreen(Screen):
         if my_decision == 'battle':
             self.state.game.battle_ready_shown = True
             self.state.game.waiting_for_battle_decision = True
-            print("[BATTLE_READY] Reconnect: our decision already recorded — resuming wait")
+            logger.info("[BATTLE_READY] Reconnect: our decision already recorded — resuming wait")
+            return
+        
+        # ── Conquer mode: auto-fight (no fight/fold dialogue) ──
+        if self.state.game.mode == 'conquer':
+            self.state.game.battle_ready_shown = True
+
+            is_invader = (self.state.game.advancing_player_id == self.state.game.player_id)
+            if not is_invader:
+                decisions = self.state.game.battle_decisions or {}
+                invader_decided = (
+                    decisions.get(str(self.state.game.advancing_player_id)) == 'battle'
+                )
+                if not invader_decided:
+                    # Invader Swap can make the human the defender in conquer
+                    # mode. The server still enforces invader-first battle
+                    # decisions, so wait for the automated invader instead of
+                    # submitting a defender decision that would be rejected.
+                    self.state.game.pending_battle_ready = False
+                    self.state.game.battle_ready_shown = False
+                    logger.info(
+                        "[BATTLE_READY] Conquer defender waiting for invader "
+                        "battle decision"
+                    )
+                    return
+
+            if is_invader:
+                # Check for Blitzkrieg (invader already selected defender's figure)
+                modifiers = self.state.game.battle_modifier if isinstance(self.state.game.battle_modifier, list) else []
+                has_blitzkrieg = any(m.get('type') == 'Blitzkrieg' for m in modifiers)
+
+                defender_counter_advanced = bool(self.state.game.defending_figure_id)
+
+                # Check for defender counter-spell (enchantment, NOT greed).
+                # Filter out spells already seen during conquer startup so
+                # prelude effects are not announced again as counter spells.
+                all_counter_spells = [
+                    s for s in (getattr(self.state.game, 'cached_active_spells', []) or [])
+                    if s.get('player_id') != self.state.game.player_id
+                    and s.get('spell_name') not in ('Draw 2 MainCards', 'Fill up to 10', 'Dump Cards')
+                ]
+
+                seen_spell_ids = set(getattr(self, '_seen_conquer_opponent_spell_ids', set()) or set())
+                counter_spells = []
+                for spell_data in all_counter_spells:
+                    spell_id = spell_data.get('id')
+                    if spell_id is None or spell_id not in seen_spell_ids:
+                        counter_spells.append(spell_data)
+
+                current_opponent_spell_ids = {
+                    s.get('id') for s in all_counter_spells if s.get('id') is not None
+                }
+                if current_opponent_spell_ids:
+                    self._seen_conquer_opponent_spell_ids.update(current_opponent_spell_ids)
+
+                if defender_counter_advanced and not has_blitzkrieg:
+                    # (7) No counter spell — defender counter-advanced.
+                    # Keep defender identity hidden: show field category + card count.
+                    images = []
+                    field_screen = self.subscreens.get('field')
+                    defending_description = "a hidden figure"
+                    if field_screen and self.state.game.defending_figure_id:
+                        for fig in getattr(field_screen, 'figures', []):
+                            if fig.id == self.state.game.defending_figure_id:
+                                field_key = getattr(fig.family, 'field', 'unknown') if hasattr(fig, 'family') else 'unknown'
+                                field_map = {
+                                    'castle': 'Castle',
+                                    'village': 'Village',
+                                    'military': 'Military',
+                                }
+                                field_label = field_map.get(str(field_key).lower(), str(field_key).title())
+                                card_count = len(fig.cards) if hasattr(fig, 'cards') else '?'
+                                defending_description = f"a hidden {field_label} figure with {card_count} cards"
+                                break
+
+                        for icon in getattr(field_screen, 'figure_icons', []):
+                            if hasattr(icon, 'figure') and icon.figure.id == self.state.game.defending_figure_id:
+                                hidden_icon = getattr(icon, 'frame_hidden_img', None)
+                                if hidden_icon is not None:
+                                    images.append(hidden_icon.copy())
+                                break
+
+                    if not images:
+                        import os
+                        icon_path = os.path.join('img', 'figures', 'state_icons', 'charge_opponent.png')
+                        if os.path.exists(icon_path):
+                            images.append(pygame.image.load(icon_path).convert_alpha())
+
+                    self.queue_or_show_notification({
+                        'message': f"The defender counter-advanced with {defending_description}!",
+                        'actions': ['ok'],
+                        'images': images if images else None,
+                        'icon': None if images else 'info',
+                        'title': 'Defender Response',
+                        'phase': 'defender',
+                        'tone': 'warning',
+                        'event_key': f'defender_response:{self.state.game.defending_figure_id}',
+                    })
+
+                elif counter_spells:
+                    # (6) Defender cast a counter spell — show turn notification
+                    opponent_name = self.state.game.opponent_name or "Defender"
+                    spell_names = ', '.join(s.get('spell_name', '?') for s in counter_spells)
+                    modifier_lines = self._get_modifier_explanation_lines(
+                        [s.get('spell_name') for s in counter_spells if self._is_battle_modifier_spell(s.get('spell_name'))]
+                    )
+
+                    spell_images = []
+                    for s in counter_spells:
+                        spell_images.extend(self._get_spell_icon_image(s.get('spell_name', '')))
+
+                    msg_after = f"• Cast {spell_names}"
+                    if modifier_lines:
+                        msg_after += "\n" + "\n".join(f"  > {line}" for line in modifier_lines)
+
+                    self.queue_or_show_notification({
+                        'message': f"{opponent_name}'s turn:",
+                        'actions': ['ok'],
+                        'images': spell_images if spell_images else None,
+                        'icon': None if spell_images else 'info',
+                        'title': 'Defender Counter Spell',
+                        'message_after_images': msg_after,
+                        'phase': 'defender',
+                        'tone': 'warning',
+                        'spell_names': [s.get('spell_name', '') for s in counter_spells],
+                        'spell_side': 'opponent',
+                        'spell_role': 'counter',
+                        'event_key': 'defender_counter:' + ','.join(
+                            str(s.get('id') or s.get('spell_name')) for s in counter_spells),
+                    })
+
+                    # (8) Defender used last turn for spell — did not counter-advance
+                    # Invader must select defender's battle figure (skip if
+                    # Blitzkrieg already handled this via check_defender_selection_needed)
+                    if not self.state.game.defending_figure_id and not has_blitzkrieg:
+                        advancing_figure_name = "your figure"
+                        advancing_icons = []
+                        field_screen = self.subscreens.get('field')
+                        if field_screen and self.state.game.advancing_figure_id:
+                            for fig in getattr(field_screen, 'figures', []):
+                                if fig.id == self.state.game.advancing_figure_id:
+                                    advancing_figure_name = fig.name
+                                    break
+                            for icon in getattr(field_screen, 'figure_icons', []):
+                                if hasattr(icon, 'figure') and icon.figure.id == self.state.game.advancing_figure_id:
+                                    advancing_icons.append(icon)
+                                    break
+
+                        sel_images = advancing_icons if advancing_icons else None
+                        self.queue_or_show_notification({
+                            'message': (f"The defender did not counter-advance.\n\n"
+                                        f"Select one of the defender's figures to face "
+                                        f"{advancing_figure_name} in battle."),
+                            'actions': ['got it!'],
+                            'images': sel_images,
+                            'icon': None if sel_images else 'info',
+                            'title': "Select Opponent's Defender",
+                            'phase': 'defender',
+                            'tone': 'action',
+                            'event_key': f'defender_no_counter:{self.state.game.advancing_figure_id}',
+                        })
+
+            logger.info("[BATTLE_READY] Conquer mode — auto-submitting 'battle' decision")
+            self.state.game.pending_battle_ready = False
+            self._submit_battle_decision('battle')
             return
         
         is_advancing = (self.state.game.advancing_player_id == self.state.game.player_id)
@@ -2257,15 +2954,26 @@ class GameScreen(Screen):
         result = battle_decision(self.state.game.game_id, self.state.game.player_id, decision)
         
         if not result.get('success'):
-            print(f"[GAME_SCREEN] Battle decision failed: {result.get('message')}")
-            # Reconnect fallback: if server rejects because our decision was
-            # already recorded, resume waiting for the opponent's decision
-            if decision == 'battle':
-                self.state.game.waiting_for_battle_decision = True
+            logger.error(f"[GAME_SCREEN] Battle decision failed: {result.get('message')}")
+            # Check if the failure is because our decision was already recorded
+            # (reconnect scenario).  If so, resume waiting for the opponent.
+            # Otherwise (network error, server down), allow the fight/fold
+            # dialogue to re-appear so the user can retry.
+            reason = result.get('reason', '')
+            if reason == 'already_decided' or 'already' in str(result.get('message', '')).lower():
+                if decision == 'battle':
+                    self.state.game.waiting_for_battle_decision = True
+            else:
+                # Network/server error — let the dialogue re-appear
+                self.state.game.battle_ready_shown = False
+                logger.error("[GAME_SCREEN] Battle decision POST failed — will re-show fight/fold dialogue")
             return
         
         if result.get('resolved'):
             outcome = result.get('outcome')
+            if result.get('conquer_result'):
+                self._handle_conquer_result_response(result)
+                return
             if outcome == 'battle':
                 # Both chose to fight — go to battle shop for move selection
                 if result.get('game'):
@@ -2311,6 +3019,17 @@ class GameScreen(Screen):
             # Waiting for opponent's decision (invader chose battle, waiting for defender)
             self.state.game.waiting_for_battle_decision = True
 
+    def _can_submit_battle_decision(self):
+        """Return True if local state represents an unresolved battle decision phase."""
+        game = self.state.game
+        if not game:
+            return False
+        if not game.advancing_figure_id or not game.defending_figure_id:
+            return False
+        if game.battle_confirmed or game.fold_outcome:
+            return False
+        return True
+
     def _reset_battle_state(self):
         """Reset all battle-related state after fold or loss."""
         self.state.game.pending_battle_ready = False
@@ -2324,8 +3043,14 @@ class GameScreen(Screen):
         self.state.game.defender_selection_dialogue_shown = False
         self.state.game.pending_waiting_for_defender_pick = False
         self.state.game.waiting_for_defender_pick_shown = False
-        # Suppress the next turn notification since battle/fold result was already shown
-        self.state.game.suppress_next_turn_summary = True
+        # Clear fold result flag so it doesn't suppress future turn notifications
+        self.state.game.pending_fold_result = False
+        # Suppress the next turn notification only if it's our turn now.
+        # The fold/battle result dialogue already told us everything; the
+        # immediate _handle_start_turn would just repeat it.  But if it's
+        # the opponent's turn, our first _handle_start_turn fires only after
+        # they complete an action — that's a genuine notification we must show.
+        self.state.game.suppress_next_turn_summary = bool(self.state.game.turn)
         self.state.game.civil_war_awaiting_second = False
         self.state.game.civil_war_defender_second = False
         self.state.game.civil_war_required_color = None
@@ -2344,7 +3069,7 @@ class GameScreen(Screen):
         # Queue ceasefire-active notification for the new round
         # (only if not already displayed this round)
         if self.state.game.ceasefire_active and self.state.game._ceasefire_active_displayed_round != self.state.game.current_round:
-            print(f"[CEASEFIRE] _reset_battle_state: queuing ceasefire-active, round={self.state.game.current_round}")
+            logger.info(f"[CEASEFIRE] _reset_battle_state: queuing ceasefire-active, round={self.state.game.current_round}")
             self.state.game.pending_ceasefire_active_notification = True
             # Mark as notified so polling doesn't re-trigger
             self.state.game._ceasefire_notified_round = self.state.game.current_round
@@ -2376,7 +3101,22 @@ class GameScreen(Screen):
 
     def check_fold_result(self):
         """Check if a fold outcome was detected via polling (for the waiting player)."""
-        if not self.state.game or not self.state.game.pending_fold_result:
+        if not self.state.game:
+            return
+
+        # Safety net: fold_outcome is set but pending_fold_result was never
+        # triggered (e.g. update_from_dict overwrote fold_outcome before
+        # _apply_game_dict could detect the transition).
+        if (not self.state.game.pending_fold_result and
+                self.state.game.fold_outcome and
+                self.state.game.waiting_for_battle_decision and
+                not self.state.game.fold_result_shown):
+            logger.warning("[FOLD] Safety net: fold_outcome set but pending_fold_result "
+                  "missed — forcing fold result")
+            self.state.game.pending_fold_result = True
+            self.state.game.waiting_for_battle_decision = False
+
+        if not self.state.game.pending_fold_result:
             return
         if self.state.game.fold_result_shown:
             return
@@ -2443,6 +3183,100 @@ class GameScreen(Screen):
             'title': title
         })
 
+    def check_pending_battle_choice_timeout(self):
+        """Resolve expired post-battle choices with the server default."""
+        game = self.state.game
+        if not game or getattr(game, 'game_over', False):
+            return
+        if getattr(game, 'mode', 'duel') == 'conquer':
+            return
+        local_player_id = getattr(game, 'player_id', None)
+        if local_player_id is None:
+            return
+
+        last = getattr(game, 'last_battle_result', None) or {}
+        if not isinstance(last, dict):
+            return
+
+        # Surface a "defaulted" notice once even after the server already
+        # cleared the pending choice (covers the path where the opposite
+        # client triggered the default first).
+        if last.get('post_battle_choice_defaulted'):
+            seen_key = (last.get('post_battle_choice'), id(last))
+            if getattr(game, '_pending_choice_defaulted_seen', None) != seen_key:
+                game._pending_choice_defaulted_seen = seen_key
+                self.queue_or_show_notification({
+                    'message': 'A post-battle choice timed out and was resolved with the default.',
+                    'actions': ['ok'],
+                    'icon': 'magic',
+                    'title': 'Battle Choice Defaulted',
+                })
+
+        pending = last.get('post_battle_pending_choice')
+        if not pending:
+            return
+
+        pending_key = (pending.get('type'), pending.get('player_id'), pending.get('deadline_at'))
+        if getattr(game, '_pending_choice_resolve_inflight', False):
+            return
+
+        deadline_raw = pending.get('deadline_at')
+        try:
+            deadline = datetime.fromisoformat(deadline_raw) if deadline_raw else None
+            expired = bool(deadline and datetime.utcnow() >= deadline)
+        except Exception:
+            expired = False
+
+        if not expired:
+            if getattr(game, '_pending_choice_notice_key', None) != pending_key:
+                game._pending_choice_notice_key = pending_key
+                pending_player_id = pending.get('player_id')
+                if (pending_player_id is not None
+                        and pending_player_id != local_player_id):
+                    choice_type = pending.get('type')
+                    if choice_type == 'draw_choice':
+                        msg = "Waiting for the defender to choose the draw reward. A default will apply if they do not respond."
+                    else:
+                        msg = "Waiting for the battle winner to pick a card. A default will apply if they do not respond."
+                    self.queue_or_show_notification({
+                        'message': msg,
+                        'actions': ['ok'],
+                        'icon': 'info',
+                        'title': 'Waiting for Battle Choice',
+                    })
+            return
+
+        # Cooldown: avoid retrying the resolve endpoint every frame on
+        # transient failures or while the network round-trip is slow.
+        now_ts = datetime.utcnow().timestamp()
+        last_attempt = getattr(game, '_pending_choice_last_attempt_ts', 0.0)
+        if now_ts - last_attempt < 5.0:
+            return
+        game._pending_choice_last_attempt_ts = now_ts
+
+        from utils import game_service
+        game._pending_choice_resolve_inflight = True
+        try:
+            result = game_service.resolve_pending_battle_choice(
+                game.game_id, local_player_id
+            )
+        finally:
+            game._pending_choice_resolve_inflight = False
+
+        if result.get('success'):
+            if result.get('game'):
+                game.update_from_dict(result['game'])
+            if result.get('defaulted'):
+                self._reset_battle_state()
+                self.queue_or_show_notification({
+                    'message': result.get('message', 'Post-battle choice defaulted.'),
+                    'actions': ['ok'],
+                    'icon': 'magic',
+                    'title': 'Battle Choice Defaulted',
+                })
+        elif result.get('reason') != 'pending_choice_not_expired':
+            logger.warning(f"[POST_BATTLE_DEFAULT] Failed: {result.get('message')}")
+
     def check_game_over(self):
         """Check if the game has ended (detected via polling or response)."""
         if not self.state.game:
@@ -2452,103 +3286,627 @@ class GameScreen(Screen):
         if self.state.game.pending_game_over:
             self._show_game_over_dialogue(self.state.game.pending_game_over)
 
+    def _card_line(self, card):
+        if not isinstance(card, dict):
+            return None
+        rank = card.get('rank')
+        suit = card.get('suit')
+        if rank and suit:
+            return f"{rank} of {suit}"
+        if rank:
+            return str(rank)
+        if suit:
+            return str(suit)
+        return None
+
+    def _card_lines(self, cards, max_lines=10):
+        lines = []
+        for card in cards or []:
+            label = self._card_line(card)
+            if label:
+                lines.append(label)
+        if len(lines) <= max_lines:
+            return lines
+        overflow = len(lines) - max_lines
+        return lines[:max_lines] + [f"... and {overflow} more"]
+
+    def _card_images(self, cards, max_images=4):
+        from game.components.cards.card_img import CardImg
+
+        images = []
+        valid_cards = 0
+        for card in cards or []:
+            if not isinstance(card, dict):
+                continue
+            rank = card.get('rank')
+            suit = card.get('suit')
+            if not rank or not suit:
+                continue
+            valid_cards += 1
+            if len(images) >= max_images:
+                continue
+            try:
+                images.append(CardImg(self.window, suit, rank).front_img)
+            except Exception:
+                logger.warning(
+                    "[CONQUER_RESULT] Failed to load loot card image for %s of %s",
+                    rank,
+                    suit,
+                    exc_info=True,
+                )
+        return images, valid_cards
+
+    def _auto_loss_reason_text(self, result):
+        reason = result.get('auto_loss_reason')
+        detail = result.get('auto_loss_detail') or ''
+        if reason == 'no_figures_to_advance':
+            return 'No figure could legally advance, so the attack was forfeited.'
+        if reason == 'no_defender_figures':
+            return 'The defender had no legal battle figure, so the defence was forfeited.'
+        if reason == 'resource_deficit':
+            name = detail or 'A selected figure'
+            return f'{name} had a resource deficit and could not fight.'
+        if reason == 'fold':
+            return 'The battle was forfeited by fold.'
+        if reason == 'withdraw':
+            name = detail or 'The attacker'
+            return f'{name} withdrew from the conquest.'
+        return ''
+
+    def _derive_finished_conquer_result(self):
+        game = self.state.game if self.state else None
+        if not game or game.mode != 'conquer' or game.state != 'finished':
+            return None
+
+        last = getattr(game, 'last_battle_result', None) or getattr(
+            game, '_last_polled_battle_result', {}) or {}
+        conquer_result = last.get('conquer_result')
+        attacker_won = last.get('attacker_won')
+        if conquer_result == 'draw' or game.winner_player_id is None:
+            conquer_result = 'draw'
+            attacker_won = False
+        elif conquer_result in ('attacker_won', 'defender_won'):
+            attacker_won = (conquer_result == 'attacker_won')
+        else:
+            attacker_player_id = last.get('conquer_attacker_player_id') or getattr(
+                game, 'invader_player_id', None)
+            attacker_won = bool(attacker_player_id and game.winner_player_id == attacker_player_id)
+            conquer_result = 'attacker_won' if attacker_won else 'defender_won'
+
+        result = {
+            'success': True,
+            'already_resolved': True,
+            'conquer_result': conquer_result,
+            'attacker_won': bool(attacker_won),
+            'land_id': getattr(game, 'land_id', None),
+            'land_tier': getattr(game, 'land_tier', None),
+            'land_gold_rate': getattr(game, 'land_gold_rate', 0),
+            'auto_loss_reason': last.get('auto_loss_reason'),
+            'auto_loss_detail': last.get('auto_loss_detail'),
+            'card_won_suit': last.get('card_won_suit'),
+            'card_won_rank': last.get('card_won_rank'),
+            'card_lost_suit': last.get('card_lost_suit'),
+            'card_lost_rank': last.get('card_lost_rank'),
+            'loot_gained_cards': last.get('conquer_loot_gained_cards') or last.get('loot_gained_cards') or [],
+            'loot_lost_cards': last.get('conquer_loot_lost_cards') or last.get('loot_lost_cards') or [],
+            'consumed_cards': last.get('conquer_consumed_cards') or last.get('consumed_cards') or [],
+            'defence_consumed_cards': last.get('defence_consumed_cards') or [],
+            'cards_spent': last.get('cards_spent'),
+            'is_ai_defender': bool(last.get('is_ai_defender')),
+            'conquer_attacker_player_id': last.get('conquer_attacker_player_id'),
+            'conquer_defender_player_id': last.get('conquer_defender_player_id'),
+        }
+        return result
+
+    def _handle_conquer_result_response(self, result):
+        """Show conquer resolution from non-battle-screen server responses."""
+        if not result or not result.get('conquer_result') or not self.state.game:
+            return False
+
+        if result.get('game'):
+            self.state.game.update_from_dict(result['game'])
+
+        game = self.state.game
+        if getattr(game, '_conquer_result_dialogue_shown', False):
+            return True
+
+        game._conquer_result_dialogue_shown = True
+        game.game_over = True
+        game.conquer_result = result.get('conquer_result')
+        self._reset_battle_state()
+
+        attacker_won = bool(result.get('attacker_won'))
+        conquer_result = result.get('conquer_result')
+        is_attacker = self._is_current_player_conquer_attacker(result)
+        reason_text = self._auto_loss_reason_text(result)
+        images = []
+        after_messages = []
+
+        if conquer_result == 'draw':
+            title = 'Draw!'
+            icon = 'draw'
+            message = (
+                'The battle ended in a draw.\n\n'
+                'The land remains unchanged. No cards were looted; all attack cards returned to your collection.'
+            )
+        elif attacker_won and is_attacker:
+            land_tier = result.get('land_tier') or getattr(game, 'land_tier', None)
+            gold_rate = result.get('land_gold_rate', 0) or 0
+            land_label = f'Tier {land_tier} land' if land_tier else 'this land'
+            title = 'Land Conquered!'
+            icon = 'victory'
+            message = f'You have conquered {land_label}!'
+            if gold_rate:
+                message += f'\n\nGold production increased by {gold_rate:.1f} gold/hour.'
+            loot_cards = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []
+            loot_images, loot_count = self._card_images(loot_cards)
+            if loot_images:
+                images.extend(loot_images)
+                message += '\n\nLoot gained (pending collection):'
+                if loot_count > len(loot_images):
+                    after_messages.append(
+                        f'Showing {len(loot_images)} of {loot_count} looted cards.'
+                    )
+                after_messages.append(
+                    'Collect looted cards from the Loot Inbox in your kingdom configuration.'
+                )
+            else:
+                loot_lines = self._card_lines(loot_cards)
+                if loot_lines:
+                    message += '\n\nLoot gained (pending collection):\n' + '\n'.join(
+                        f'• {line}' for line in loot_lines)
+                    message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
+        elif attacker_won and not is_attacker:
+            title = 'Land Lost!'
+            icon = 'defeat'
+            message = 'The attacker has conquered your land.'
+            loot_cards = result.get('loot_lost_cards') or result.get('loot_gained_cards') or []
+            loot_images, loot_count = self._card_images(loot_cards)
+            if loot_images:
+                images.extend(loot_images)
+                message += '\n\nLoot lost:'
+                if loot_count > len(loot_images):
+                    after_messages.append(
+                        f'Showing {len(loot_images)} of {loot_count} looted cards.'
+                    )
+                after_messages.append('Every unlooted defence card returned to your collection.')
+            else:
+                loot_lines = self._card_lines(loot_cards)
+                if loot_lines:
+                    message += '\n\nLoot lost:\n' + '\n'.join(
+                        f'• {line}' for line in loot_lines)
+                message += '\n\nEvery unlooted defence card returned to your collection.'
+        elif not attacker_won and is_attacker:
+            title = 'Attack Failed'
+            icon = 'defeat'
+            message = 'You did not conquer this land.'
+            is_ai_defender = bool(result.get('is_ai_defender'))
+            loot_cards = result.get('loot_lost_cards') or []
+            loot_images, loot_count = self._card_images(loot_cards)
+            if loot_images:
+                images.extend(loot_images)
+                loot_title = 'Cards destroyed by AI defence:' if is_ai_defender else 'Cards looted by defending kingdom:'
+                message += f'\n\n{loot_title}'
+                if loot_count > len(loot_images):
+                    after_messages.append(
+                        f'Showing {len(loot_images)} of {loot_count} looted cards.'
+                    )
+                after_messages.append('Every unlooted attack card returned to your collection.')
+            else:
+                loot_lines = self._card_lines(loot_cards)
+                if loot_lines:
+                    loot_title = 'Cards destroyed by AI defence:' if is_ai_defender else 'Cards looted by defending kingdom:'
+                    message += f'\n\n{loot_title}\n' + '\n'.join(
+                        f'• {line}' for line in loot_lines)
+                message += '\n\nEvery unlooted attack card returned to your collection.'
+        else:
+            title = 'Defence Successful!'
+            icon = 'victory'
+            message = 'You defended your land successfully!'
+            loot_cards = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []
+            loot_images, loot_count = self._card_images(loot_cards)
+            if loot_images:
+                images.extend(loot_images)
+                message += '\n\nLoot gained (pending collection):'
+                if loot_count > len(loot_images):
+                    after_messages.append(
+                        f'Showing {len(loot_images)} of {loot_count} looted cards.'
+                    )
+                after_messages.append(
+                    'Collect looted cards from the Loot Inbox in your kingdom configuration.'
+                )
+            else:
+                loot_lines = self._card_lines(loot_cards)
+                if loot_lines:
+                    message += '\n\nLoot gained (pending collection):\n' + '\n'.join(
+                        f'• {line}' for line in loot_lines)
+                    message += '\n\nCollect looted cards from the Loot Inbox in your kingdom configuration.'
+
+        if reason_text:
+            message = f'{reason_text}\n\n{message}'
+
+        self.queue_or_show_notification({
+            'message': message,
+            'actions': ['ok'],
+            'images': images if images else None,
+            'icon': icon,
+            'title': title,
+            'message_after_images': '\n\n'.join(after_messages) if after_messages else None,
+            'type': 'game_over',
+        })
+        return True
+
+    def _is_current_player_conquer_attacker(self, result=None):
+        """Return whether the local player is the original conquer attacker.
+
+        In conquer Invader Swap the current invader becomes the automated
+        defender, so game.invader no longer identifies the player whose
+        conquer config is attacking the land.
+        """
+        game = self.state.game if self.state else None
+        if not game:
+            return False
+
+        result = result or {}
+        last = getattr(game, 'last_battle_result', None) or getattr(
+            game, '_last_polled_battle_result', {}) or {}
+        attacker_id = (
+            result.get('conquer_attacker_player_id')
+            or last.get('conquer_attacker_player_id')
+        )
+        if attacker_id is not None:
+            return str(attacker_id) == str(getattr(game, 'player_id', None))
+
+        active_spells = (
+            getattr(game, 'cached_active_spells', None)
+            or getattr(game, 'active_spells', None)
+            or []
+        )
+        for spell in active_spells:
+            if not isinstance(spell, dict):
+                continue
+            effect_data = spell.get('effect_data')
+            if (spell.get('spell_name') == 'Invader Swap'
+                    and isinstance(effect_data, dict)
+                    and effect_data.get('conquer_invader_swap')):
+                old_invader_id = effect_data.get('old_invader_id')
+                if old_invader_id is not None:
+                    return str(old_invader_id) == str(getattr(game, 'player_id', None))
+
+        return bool(getattr(game, 'invader', False))
+
+    def _try_handle_finished_conquer_game(self):
+        """Safety net for finished conquer games resolved outside BattleScreen."""
+        game = self.state.game if self.state else None
+        if not game or game.mode != 'conquer' or game.state != 'finished':
+            return False
+        if getattr(game, '_conquer_result_dialogue_shown', False):
+            return True
+        if getattr(game, '_conquer_battle_ended', False):
+            return True
+        result = self._derive_finished_conquer_result()
+        if not result:
+            return False
+        return self._handle_conquer_result_response(result)
+
     def _show_game_over_dialogue(self, game_over_info):
         """Show a game-over dialogue with the result and gold awarded."""
         if self.state.game.game_over_shown:
             return
+        self.state.game.game_over = True
         self.state.game.game_over_shown = True
         self.state.game.pending_game_over = game_over_info
+
+        is_winner = (game_over_info.get('winner_player_id') == self.state.game.player_id)
+
+        # Conquer mode: simplified game-over message (fallback path — normally
+        # handled by battle_screen._handle_conquer_end with richer data)
+        if self.state.game.mode == 'conquer':
+            winner_pid = game_over_info.get('winner_player_id')
+            is_attacker = self._is_current_player_conquer_attacker(game_over_info)
+            if winner_pid is None:
+                # Draw — land ownership unchanged and attack cards returned.
+                title = "Draw!"
+                icon = 'draw'
+                message = (
+                    "The battle ended in a draw.\n\n"
+                    "The land remains unchanged. No cards were looted; all attack cards returned to your collection."
+                )
+            elif is_winner and is_attacker:
+                land_tier = self.state.game.land_tier
+                land_label = "Tier {} land".format(land_tier) if land_tier else "this land"
+                title = "Land Conquered!"
+                icon = 'victory'
+                message = "You have conquered {}!\n\nThe territory is now yours.".format(land_label)
+            elif is_winner and not is_attacker:
+                title = "Defence Successful!"
+                icon = 'victory'
+                message = "You defended your land successfully!"
+            elif not is_winner and is_attacker:
+                title = "Attack Failed"
+                icon = 'defeat'
+                message = "You did not conquer this land."
+            else:
+                title = "Land Lost!"
+                icon = 'defeat'
+                message = "The attacker has conquered your land."
+
+            self.queue_or_show_notification({
+                'message': message,
+                'actions': ['ok'],
+                'icon': icon,
+                'title': title,
+                'type': 'game_over',
+            })
+            return
 
         winner_name = game_over_info.get('winner_username', 'Winner')
         loser_name = game_over_info.get('loser_username', 'Loser')
         winner_score = game_over_info.get('winner_score', 0)
         loser_score = game_over_info.get('loser_score', 0)
-        gold_awarded = game_over_info.get('gold_awarded', 0)
         stake = game_over_info.get('stake', 45)
+        game_limit = game_over_info.get('game_limit', stake)
         reason = game_over_info.get('reason', 'stake')
         checkmate_figure_name = game_over_info.get('checkmate_figure_name', 'Maharaja')
+        rounds_played = game_over_info.get('rounds_played', 0)
 
         is_winner = (game_over_info.get('winner_player_id') == self.state.game.player_id)
-
-        # Pick the gold image to display (normal for victory, greyed with red cross for defeat)
-        if is_winner:
-            gold_img_key = 'gold'
-        else:
-            gold_img_key = 'gold_lost'
-        gold_image = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT.get(gold_img_key)
-        images = [gold_image] if gold_image else []
+        player_id = self.state.game.player_id
+        winner_pid = game_over_info.get('winner_player_id')
+        loser_pid = game_over_info.get('loser_player_id')
 
         if reason == 'checkmate':
-            # Checkmate-specific messaging
             if is_winner:
                 title = "Checkmate!"
                 icon = 'victory'
                 message = (
                     f"You destroyed {loser_name}'s {checkmate_figure_name}!\n\n"
                     f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Game Limit: {game_limit} points\n"
                     f"Stake: {stake} gold"
                 )
-                message_after = f"You earned {gold_awarded} gold!"
             else:
                 title = "Checkmate!"
                 icon = 'defeat'
                 message = (
                     f"Your {checkmate_figure_name} was destroyed!\n\n"
                     f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Game Limit: {game_limit} points\n"
                     f"Stake: {stake} gold"
                 )
-                message_after = f"You lost {stake} gold."
         else:
-            # Standard stake-based game over
             if is_winner:
                 title = "Victory!"
                 icon = 'victory'
                 message = (
                     f"Congratulations! You won the game!\n\n"
                     f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Game Limit: {game_limit} points\n"
                     f"Stake: {stake} gold"
                 )
-                message_after = f"You earned {gold_awarded} gold!"
             else:
                 title = "Defeat"
                 icon = 'defeat'
                 message = (
                     f"{winner_name} has won the game.\n\n"
                     f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Game Limit: {game_limit} points\n"
                     f"Stake: {stake} gold"
                 )
-                message_after = f"You lost {stake} gold."
+
+        # Dialogue 1 contains only the result + game statistics. Rewards
+        # (gold, booster packs, maps) move to a second dialogue with a
+        # wooden-chest reveal interaction (see _show_game_over_rewards_dialogue).
+        stats = game_over_info.get('stats', {})
+        my_stats = stats.get(player_id) or stats.get(str(player_id)) or {}
+        opp_id = loser_pid if is_winner else winner_pid
+        opp_stats = stats.get(opp_id) or stats.get(str(opp_id)) or {}
+        opp_name = loser_name if is_winner else winner_name
+
+        message_after = ""
+        if my_stats or opp_stats:
+            stats_lines = [f"Rounds played: {rounds_played}",
+                           f"          You / {opp_name}"]
+            stat_labels = [
+                ('battles_won', 'Battles won'),
+                ('figures_built', 'Figures built'),
+                ('spells_cast', 'Spells cast'),
+                ('cards_changed', 'Cards changed'),
+            ]
+            for key, label in stat_labels:
+                my_val = my_stats.get(key, 0)
+                opp_val = opp_stats.get(key, 0)
+                stats_lines.append(f"{label}: {my_val} / {opp_val}")
+            message_after = "\n".join(stats_lines)
 
         self.queue_or_show_notification({
             'message': message,
             'actions': ['ok'],
             'icon': icon,
             'title': title,
-            'images': images,
             'message_after_images': message_after,
             'type': 'game_over',
         })
 
+    def _show_game_over_rewards_dialogue(self, game_over_info):
+        """Show the second game-over dialogue: wooden-chest reveal of all loot.
+
+        Each reward-pool draw (booster pack, map, or bonus gold) becomes a
+        clickable chest. The stake winnings/losses are shown directly above
+        the chest row because they are predictable loot, not a draw."""
+        from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
+        _GOLD_PER_DRAW = int(getattr(settings, 'DUEL_REWARD_GOLD_AMOUNT', 80) or 80)
+
+        is_winner = (game_over_info.get('winner_player_id') == self.state.game.player_id)
+        stake = int(game_over_info.get('stake', 45) or 0)
+        gold_awarded = int(game_over_info.get('gold_awarded', 0) or 0)
+        rewards_key = 'winner_rewards' if is_winner else 'loser_rewards'
+        rewards = game_over_info.get(rewards_key) or {}
+
+        if is_winner:
+            title = "Spoils of War"
+            icon = 'victory'
+            summary_lines = [f"Stake winnings: +{gold_awarded} gold"]
+            gold_img_key = 'gold'
+        else:
+            title = "Spoils of War"
+            icon = 'defeat'
+            summary_lines = [f"Stake lost: -{stake} gold"]
+            gold_img_key = 'gold_lost'
+        summary_image = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT.get(gold_img_key)
+
+        # Build one chest per reward-pool item. Stake is NOT hidden.
+        items = []
+        main_n = int(rewards.get('main_booster') or 0)
+        side_n = int(rewards.get('side_booster') or 0)
+        map_n = int(rewards.get('map') or 0)
+        gold_total = int(rewards.get('gold') or 0)
+        gold_draws = (gold_total // _GOLD_PER_DRAW) if _GOLD_PER_DRAW > 0 else 0
+
+        for _ in range(main_n):
+            items.append({'kind': 'main_booster', 'label': 'Main booster pack'})
+        for _ in range(side_n):
+            items.append({'kind': 'side_booster', 'label': 'Side booster pack'})
+        for _ in range(map_n):
+            items.append({'kind': 'map', 'label': 'Map'})
+        for _ in range(gold_draws):
+            items.append({'kind': 'gold', 'label': f'+{_GOLD_PER_DRAW} gold'})
+
+        # Mirror server-side maps award into the cached user dict so the
+        # kingdom UI reflects the new count without a refetch.
+        if map_n > 0 and self.state.user_dict is not None:
+            self.state.user_dict['maps'] = int(
+                self.state.user_dict.get('maps', 0)) + map_n
+
+        if not items:
+            # No draws to reveal (rare — e.g. all zero) → still show the
+            # summary so the player can dismiss the result cleanly.
+            footer = "No additional loot this duel."
+        else:
+            footer = "All loot collected!"
+
+        dialogue = RewardsRevealDialogueBox(
+            self.window,
+            title=title,
+            icon=icon,
+            summary_lines=summary_lines,
+            items=items,
+            footer_when_done=footer,
+            summary_image=summary_image,
+        )
+        self.dialogue_box = dialogue
+        self._active_dialogue_type = 'game_over_rewards'
+
     def _on_game_over_acknowledged(self, response=None):
-        """Handle game-over dialogue acknowledgement — return to game menu."""
-        print("[GAME_OVER] Player acknowledged — returning to game menu")
+        """Handle game-over dialogue acknowledgement — return to game menu or kingdom."""
+        if self.state.game and self.state.game.mode == 'conquer':
+            logger.info("[GAME_OVER] Conquer game acknowledged — returning to kingdom")
+            self.state.game = None
+            self.state.screen = 'kingdom'
+        else:
+            logger.info("[GAME_OVER] Player acknowledged — returning to game menu")
+            self.state.game = None
+            self.state.screen = 'game_menu'
+
+    def check_conquer_battle_ended(self):
+        """Check if a conquer battle just ended (set by battle screen) and route to kingdom."""
+        if not self.state.game:
+            return
+        if not getattr(self.state.game, '_conquer_battle_ended', False):
+            return
+        self.state.game._conquer_battle_ended = False
+        logger.info("[CONQUER] Battle ended — returning to kingdom screen")
         self.state.game = None
-        self.state.screen = 'game_menu'
+        self.state.screen = 'kingdom'
 
     def check_auto_proceed_to_battle(self):
         """Check if both players chose battle (detected via polling for the waiting player)."""
-        if not self.state.game or not self.state.game.auto_proceed_to_battle:
+        if not self.state.game:
             return
-        
-        self.state.game.auto_proceed_to_battle = False
-        self._enter_battle_moves_phase()
+
+        if self.state.game.auto_proceed_to_battle:
+            self.state.game.auto_proceed_to_battle = False
+            self._enter_battle_moves_phase()
+            return
+
+        # Safety net: if battle_confirmed is True on the server but the
+        # auto_proceed flag was never set (e.g. update_from_dict overwrote
+        # battle_confirmed before _apply_game_dict could detect the
+        # transition), force the transition now.
+        if (self.state.game.battle_confirmed and
+                (self.state.game.waiting_for_battle_decision or
+                 self.state.game.mode == 'conquer') and
+                not self.state.game.battle_moves_phase and
+                not self.state.game.battle_moves_ready and
+                not self.state.game.in_battle_phase):
+            logger.warning("[BATTLE_DECISION] Safety net: battle_confirmed=True but "
+                  "auto_proceed missed — forcing transition to battle shop")
+            self.state.game.waiting_for_battle_decision = False
+            self._enter_battle_moves_phase()
 
     def _enter_battle_moves_phase(self):
-        """Transition both players into the battle shop for mandatory battle-move selection."""
+        """Transition both players into the battle shop for mandatory battle-move selection.
+        In conquer mode, moves are pre-purchased — auto-confirm unless the
+        player has extra hand cards (from prelude spells) that could be used
+        to buy additional battle moves.
+        """
+        # Guard against double-entry (poller can re-trigger via pending_battle_ready).
+        # `_sync_battle_moves_phase_from_server` flips battle_moves_phase=True from
+        # polling alone — without navigation — so the guard must also confirm we
+        # are already viewing the battle_shop subscreen. Otherwise the human
+        # never leaves the field after the AI confirms 'battle'.
+        if (self.state.game and self.state.game.battle_moves_phase
+                and self.state.subscreen == 'battle_shop'):
+            logger.debug("[BATTLE_MOVES] Already in battle moves phase — skipping")
+            return
+
+        if self.state.game and self.state.game.mode == 'conquer':
+            # Check if the player has free hand cards (not part of figures
+            # or battle moves — battle-move cards are pre-built from config)
+            hand_cards = self.main_hand.cards if hasattr(self, 'main_hand') else []
+            hand_cards = [c for c in hand_cards if not getattr(c, 'part_of_battle_move', False)]
+            if len(hand_cards) > 0:
+                # Player has extra cards — open battle shop so they can use them
+                logger.info(f"[CONQUER] Player has {len(hand_cards)} hand cards — opening battle shop")
+                self.state.game.battle_moves_phase = True
+                self.state.game.battle_moves_ready = False
+                self.state.game.waiting_for_opponent_battle_moves = False
+                self.state.game.both_battle_moves_ready = False
+                self.battle_button.locked = True
+                self.state.subscreen = 'battle_shop'
+                shop = self.subscreens.get('battle_shop')
+                if shop:
+                    shop._load_bought_moves()
+                self.queue_or_show_notification({
+                    'message': "You have extra cards from your prelude spell!\n\n"
+                               "You may swap battle moves, or press\n"
+                               "'Ready!' to proceed with your current moves.",
+                    'actions': ['got it!'],
+                    'icon': 'magic',
+                    'title': 'Battle Shop',
+                    'phase': 'moves',
+                    'tone': 'action',
+                    'event_key': f"extra_cards_battle_shop:{getattr(self.state.game, 'game_id', 'local')}",
+                })
+                return
+
+            # No extra cards — auto-confirm moves
+            from utils.battle_shop_service import confirm_battle_moves
+            try:
+                confirm_battle_moves(self.state.game.game_id, self.state.game.player_id)
+            except Exception as e:
+                logger.error(f"[CONQUER] Failed to auto-confirm battle moves: {e}")
+            self.state.game.battle_moves_phase = False
+            self.state.game.battle_moves_ready = True
+            self.state.game.waiting_for_opponent_battle_moves = False
+            self.battle_button.locked = False
+            return
+
         self.state.game.battle_moves_phase = True
         self.state.game.battle_moves_ready = False
         self.state.game.waiting_for_opponent_battle_moves = False
         self.state.game.both_battle_moves_ready = False
+        self.battle_button.locked = True
         self.state.subscreen = 'battle_shop'
 
         # Reload bought moves in the battle shop screen
@@ -2568,12 +3926,44 @@ class GameScreen(Screen):
 
     def check_battle_moves_ready(self):
         """Check if both players have confirmed their battle moves (polling detection)."""
-        if not self.state.game or not self.state.game.both_battle_moves_ready:
+        if not self.state.game:
+            return
+
+        game = self.state.game
+        server_started_battle = bool(game.battle_confirmed and game.battle_turn_player_id is not None)
+        should_enter_battle = bool(
+            game.both_battle_moves_ready or
+            (self.state.subscreen == 'battle_shop' and server_started_battle) or
+            (game.mode == 'conquer' and server_started_battle)
+        )
+        if not should_enter_battle:
             return
 
         self.state.game.both_battle_moves_ready = False
         self.state.game.battle_moves_phase = False
+        self.battle_button.locked = False
         self.state.subscreen = 'battle'
+
+    def _enforce_battle_navigation_state(self):
+        """Keep battle/battle-shop navigation aligned with server battle phase."""
+        if not self.state.game:
+            return
+
+        game = self.state.game
+        in_move_selection = bool(game.battle_confirmed and game.battle_turn_player_id is None and not game.fold_outcome)
+        if in_move_selection:
+            # In conquer mode, moves are already chosen — don't redirect to shop
+            if game.mode == 'conquer':
+                return
+            # Battle rounds have not started yet: keep arena locked and route
+            # accidental battle-screen entries back to battle shop.
+            self.battle_button.locked = True
+            if self.state.subscreen == 'battle':
+                self.state.subscreen = 'battle_shop'
+            return
+
+        if game.battle_confirmed and game.battle_turn_player_id is not None:
+            self.battle_button.locked = False
 
     def check_battle_reconnect(self):
         """Detect an active 3-round battle on the server that the client isn't showing.
@@ -2597,7 +3987,7 @@ class GameScreen(Screen):
         if (self.state.game.battle_confirmed and
                 self.state.game.battle_turn_player_id is not None and
                 not self.state.game.in_battle_phase):
-            print("[BATTLE_RECONNECT] Detected active battle on server — entering battle screen")
+            logger.info("[BATTLE_RECONNECT] Detected active battle on server — entering battle screen")
             self.battle_button.locked = False
             self.state.game.in_battle_phase = True
             self.state.game.battle_turns_left = 3  # will be synced by battle screen poll
@@ -2611,12 +4001,21 @@ class GameScreen(Screen):
         """Draw a persistent prompt indicating player must advance a figure."""
         # Create prompt text
         target_prompt_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE)
-        prompt_text = "BATTLE TIME"
+        
+        if self.state.game.mode == 'conquer':
+            tier = self.state.game.land_tier
+            land_label = "TIER {} LAND".format(tier) if tier else "LAND"
+            prompt_text = "BATTLE FOR {}".format(land_label)
+        else:
+            prompt_text = "BATTLE TIME"
         prompt_surface = target_prompt_font.render(prompt_text, True, (255, 200, 100))  # Orange
         
         # Create instruction text
         cancel_font = settings.get_font(settings.FIELD_TITLE_FONT_SIZE - 2)
-        instruction_text = "Advance a figure on the field, or build+advance with Instant Charge"
+        if self.state.game.mode == 'conquer':
+            instruction_text = "Advance a figure on the field"
+        else:
+            instruction_text = "Advance a figure on the field, or build+advance with Instant Charge"
         instruction_surface = cancel_font.render(instruction_text, True, (255, 230, 150))  # Light orange
         
         # Create background box for better visibility
@@ -2972,11 +4371,11 @@ class GameScreen(Screen):
                     timeout=10,
                 )
                 if resp.status_code == 200:
-                    print("[INFINITE_HAMMER] Mode ended successfully")
+                    logger.info("[INFINITE_HAMMER] Mode ended successfully")
                 else:
-                    print(f"[INFINITE_HAMMER] Failed: {resp.text}")
+                    logger.error(f"[INFINITE_HAMMER] Failed: {resp.text}")
             except Exception as e:
-                print(f"[INFINITE_HAMMER] Error: {e}")
+                logger.error(f"[INFINITE_HAMMER] Error: {e}")
 
         try:
             threading.Thread(target=_do, daemon=True).start()
@@ -3012,7 +4411,7 @@ class GameScreen(Screen):
             self._show_counter_spell_selection(castable_spells, spell_name)
             
         except Exception as e:
-            print(f"[COUNTER_SPELL] Error: {str(e)}")
+            logger.error(f"[COUNTER_SPELL] Error: {str(e)}")
             self.make_dialogue_box(
                 message=f"Error loading counter spells: {str(e)}",
                 actions=['ok'],
@@ -3162,16 +4561,16 @@ class GameScreen(Screen):
         side_hand_cards = self.side_hand.cards if hasattr(self, 'side_hand') else []
         all_cards = main_hand_cards + side_hand_cards
         
-        print(f"[COUNTER_SPELL_SELECTOR] Main hand cards count: {len(main_hand_cards)}")
-        print(f"[COUNTER_SPELL_SELECTOR] Side hand cards count: {len(side_hand_cards)}")
-        print(f"[COUNTER_SPELL_SELECTOR] Total playable cards: {len(all_cards)}")
-        print(f"[COUNTER_SPELL_SELECTOR] Main hand: {[(c.suit, c.rank) for c in main_hand_cards]}")
-        print(f"[COUNTER_SPELL_SELECTOR] Side hand: {[(c.suit, c.rank) for c in side_hand_cards]}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Main hand cards count: {len(main_hand_cards)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Side hand cards count: {len(side_hand_cards)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Total playable cards: {len(all_cards)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Main hand: {[(c.suit, c.rank) for c in main_hand_cards]}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Side hand: {[(c.suit, c.rank) for c in side_hand_cards]}")
         
         hand_counter = Counter((card.suit, card.rank) for card in all_cards)
         
-        print(f"[COUNTER_SPELL_SELECTOR] Player hand: {dict(hand_counter)}")
-        print(f"[COUNTER_SPELL_SELECTOR] Input castable_spells count: {len(castable_spells)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Player hand: {dict(hand_counter)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Input castable_spells count: {len(castable_spells)}")
         
         # Double-check each spell is actually castable with current hand
         verified_spells = []
@@ -3179,15 +4578,15 @@ class GameScreen(Screen):
             spell_counter = Counter((card.suit, card.rank) for card in spell.cards)
             can_cast = all(hand_counter[card_tuple] >= count 
                           for card_tuple, count in spell_counter.items())
-            print(f"[COUNTER_SPELL_SELECTOR] Spell '{spell.name}' requires {dict(spell_counter)}, can_cast={can_cast}")
+            logger.debug(f"[COUNTER_SPELL_SELECTOR] Spell '{spell.name}' requires {dict(spell_counter)}, can_cast={can_cast}")
             if can_cast:
                 verified_spells.append(spell)
         
-        print(f"[COUNTER_SPELL_SELECTOR] Verified spells count: {len(verified_spells)}")
+        logger.debug(f"[COUNTER_SPELL_SELECTOR] Verified spells count: {len(verified_spells)}")
         
         if not verified_spells:
             # No valid spells after verification - player cannot counter
-            print(f"[COUNTER_SPELL_SELECTOR] No verified spells found")
+            logger.debug(f"[COUNTER_SPELL_SELECTOR] No verified spells found")
             self.make_dialogue_box(
                 message=f"You don't have the cards to counter {target_spell_name}.\n\nYou'll need to allow it.",
                 actions=['allow'],
@@ -3584,6 +4983,8 @@ class GameScreen(Screen):
         # Check if game exists (may be None after logout)
         if not self.state.game:
             return
+        if not self._ensure_duel_screen_game():
+            return
 
         for element in self.display_elements:
             element.draw()
@@ -3659,25 +5060,37 @@ class GameScreen(Screen):
             self.state.game.forced_advance_dialogue_shown and not self.dialogue_box and
             not self.state.game.advancing_figure_id):
             self._draw_forced_advance_prompt()
+
+        # Modal guard: do not render persistent top prompts while a subscreen
+        # dialogue is open (e.g. battle result dialogue) or during game-over
+        # resolution.
+        subscreen = self.subscreens.get(self.state.subscreen) if self.state.subscreen in self.subscreens else None
+        subscreen_dialogue_open = bool(
+            subscreen and hasattr(subscreen, 'dialogue_box') and getattr(subscreen, 'dialogue_box')
+        )
+        in_result_phase = bool(getattr(self.state.game, 'game_over', False) or getattr(self.state.game, 'pending_game_over', False))
         
         # Draw own advance waiting prompt (advancing player waiting for opponent's reaction)
         if (self.state.game and self.state.game.advancing_figure_id and
             self.state.game.advancing_player_id == self.state.game.player_id and
-            not self.state.game.turn and not self.state.game.defending_figure_id):
+            not self.state.game.turn and not self.state.game.defending_figure_id and
+            not subscreen_dialogue_open and not in_result_phase):
             self._draw_own_advance_waiting_prompt()
         
         # Draw opponent advance prompt (opponent advanced, your turn to respond: counter-advance or spend turn)
         if (self.state.game and self.state.game.advancing_figure_id and 
             self.state.game.advancing_player_id != self.state.game.player_id and
             self.state.game.turn and not self.state.game.pending_forced_advance and
-            not self.state.game.defending_figure_id):
+            not self.state.game.defending_figure_id and
+            not subscreen_dialogue_open and not in_result_phase):
             self._draw_opponent_advance_prompt()
         
         # Draw waiting for defender pick prompt
         if (self.state.game and self.state.game.advancing_figure_id and
             self.state.game.advancing_player_id != self.state.game.player_id and
             not self.state.game.turn and not self.state.game.defending_figure_id and
-            self.state.game.waiting_for_defender_pick_shown):
+            self.state.game.waiting_for_defender_pick_shown and
+            not subscreen_dialogue_open and not in_result_phase):
             self._draw_waiting_for_defender_pick_prompt()
         
         # Draw defender selection prompt for advancing player
@@ -3693,23 +5106,22 @@ class GameScreen(Screen):
         if self.waiting_for_counter_response:
             self._draw_counter_spell_waiting_prompt()
         
-        # Draw waiting for battle decision prompt if active
+        # Draw waiting for battle decision prompt if active (skip in conquer mode — AI always fights)
         if self.state.game and not self.dialogue_box:
             fold_active = (self.state.game.fold_outcome or self.state.game.pending_fold_result)
-            if self.state.game.waiting_for_battle_decision and not fold_active:
+            is_conquer = (self.state.game.mode == 'conquer')
+            if not is_conquer and self.state.game.waiting_for_battle_decision and not fold_active:
                 self._draw_waiting_for_battle_decision_prompt()
-            elif (self.state.game.pending_battle_ready and
+            elif (not is_conquer and self.state.game.pending_battle_ready and
                   not self.state.game.battle_ready_shown and
                   self.state.game.advancing_player_id != self.state.game.player_id and
                   not fold_active):
                 self._draw_waiting_for_battle_decision_prompt()
         
-        # Draw counter spell selector on top of everything if active
+        # Draw counter spell selector on top of everything if active.
+        # The selector blits its own dark overlay; do not draw a second one
+        # here or the screen darkens twice (cosmetic regression).
         if self.counter_spell_selector:
-            overlay = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
-            overlay.set_alpha(180)
-            overlay.fill((0, 0, 0))
-            self.window.blit(overlay, (0, 0))
             self.counter_spell_selector.draw()
 
         # Draw battle modifier hover text on top of everything
@@ -3724,6 +5136,12 @@ class GameScreen(Screen):
 
     def update(self, events):
         """Update the game screen and all relevant components."""
+        if not self._ensure_duel_screen_game():
+            return
+        if (self.state.game and
+            getattr(self.state.game, 'pending_conquer_prelude_target', False)):
+            self.state.subscreen = 'field'
+
         # During defender selection, block subscreen changes from button clicks
         # super().update() calls button.update() which can change state.subscreen
         field_screen = self.subscreens.get('field')
@@ -3772,6 +5190,8 @@ class GameScreen(Screen):
 
     def handle_events(self, events):
         """Handle user input events (e.g., clicks, key presses)."""
+        if not self._ensure_duel_screen_game():
+            return
         # Handle dialogue box first if present
         if self.dialogue_box:
             response = self.dialogue_box.update(events)
@@ -3801,23 +5221,48 @@ class GameScreen(Screen):
                         field_screen.defender_selection_mode = True
                         field_screen._update_defender_selectable()
                     self.state.game.defender_selection_dialogue_shown = True
+                # Handle Invader Swap own-defender selection 'ok' response
+                elif (response == 'ok' and self.state.game and
+                      getattr(self.state.game, 'pending_conquer_own_defender_selection', False)
+                      and not getattr(self.state.game, 'defending_figure_id', None)):
+                    self.state.subscreen = 'field'
+                    field_screen = self.subscreens.get('field')
+                    if field_screen:
+                        field_screen.conquer_own_defender_mode = True
+                elif (response == 'got it!' and self.state.game and
+                      getattr(self.state.game, 'pending_conquer_prelude_target', False)):
+                    self.state.subscreen = 'field'
                 # Handle battle ready 'to battle!' response — submit battle decision
-                elif (response == 'to battle!' and self.state.game and
-                      self.state.game.pending_battle_ready):
+                elif response == 'to battle!' and self._can_submit_battle_decision():
                     self.dialogue_box = None
                     self._submit_battle_decision('battle')
                     self.show_next_queued_notification()
                     return
                 # Handle battle ready 'fold' response — submit fold decision
-                elif (response == 'fold' and self.state.game and
-                      self.state.game.pending_battle_ready):
+                elif response == 'fold' and self._can_submit_battle_decision():
                     self.dialogue_box = None
                     self._submit_battle_decision('fold')
                     self.show_next_queued_notification()
                     return
-                # Handle game-over acknowledgement — return to main menu
+                # Handle game-over acknowledgement — for duel mode, the first
+                # dialogue ('game_over') just shows result + stats; clicking ok
+                # opens the rewards reveal dialogue. For conquer mode (or any
+                # case without a pending_game_over payload), navigate away
+                # immediately.
                 elif (response == 'ok' and self.state.game and
-                      self.state.game.game_over and self._active_dialogue_type == 'game_over'):
+                      self._active_dialogue_type == 'game_over'):
+                    pending = getattr(self.state.game, 'pending_game_over', None)
+                    is_duel = (getattr(self.state.game, 'mode', None) != 'conquer')
+                    self.dialogue_box = None
+                    self._active_dialogue_type = None
+                    if is_duel and isinstance(pending, dict):
+                        self._show_game_over_rewards_dialogue(pending)
+                    else:
+                        self._on_game_over_acknowledged()
+                    return
+                # Handle rewards-reveal acknowledgement — actually navigate away
+                elif (response == 'ok' and self.state.game and
+                      self._active_dialogue_type == 'game_over_rewards'):
                     self.dialogue_box = None
                     self._active_dialogue_type = None
                     self._on_game_over_acknowledged()
@@ -3890,6 +5335,11 @@ class GameScreen(Screen):
                 return
             if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
                 self.subscreens[self.state.subscreen].handle_events(events)
+            # After field screen handled events, defender may have been selected
+            # (update_from_dict sets pending_battle_ready) — show fight/fold
+            # immediately instead of waiting for the throttled update_game cycle.
+            if self.state.game and self.state.game.pending_battle_ready:
+                self.check_battle_ready()
             return
         
         # During Civil War second figure selection, only allow field screen access
@@ -3904,6 +5354,23 @@ class GameScreen(Screen):
                 return
             if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
                 self.subscreens[self.state.subscreen].handle_events(events)
+            # Civil War second pick may complete defender selection — check immediately
+            if self.state.game and self.state.game.pending_battle_ready:
+                self.check_battle_ready()
+            return
+        
+        # During active battle (fight/fold decided, battle-move selection, or
+        # in-battle), block all normal game actions.  Only battle-related
+        # subscreens (battle_shop, battle) and tab navigation are allowed.
+        if self.state.game and self.state.game.is_battle_active():
+            # Allow tab navigation (super handles tab buttons)
+            super().handle_events(events)
+            if not self.state.game:
+                return
+            # Only battle_shop, battle, log, and tutorial subscreens are interactive
+            if self.state.subscreen in ('battle_shop', 'battle', 'log', 'tutorial'):
+                if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
+                    self.subscreens[self.state.subscreen].handle_events(events)
             return
         
         super().handle_events(events)
@@ -3919,5 +5386,3 @@ class GameScreen(Screen):
         # Pass events to the active subscreen
         if self.state.subscreen in self.subscreens and self.subscreens[self.state.subscreen]:
             self.subscreens[self.state.subscreen].handle_events(events)
-
-

@@ -21,6 +21,7 @@ class SpellFamily:
         frame_hidden_img: pygame.Surface,
         glow_img: pygame.Surface,
         spells: Optional[List['Spell']] = None,
+        mini_game_description: Optional[str] = None,
     ):
         """
         Initialize a SpellFamily.
@@ -35,10 +36,12 @@ class SpellFamily:
         :param frame_hidden_img: Hidden frame image (for opponent spells)
         :param glow_img: Glow effect image for active state
         :param spells: List of spell instances in this family
+        :param mini_game_description: Optional alternative description for mini game mode
         """
         self.name = name
         self.type = type
         self.description = description
+        self.mini_game_description = mini_game_description
         self.icon_img = icon_img
         self.icon_gray_img = icon_gray_img
         self.frame_img = frame_img

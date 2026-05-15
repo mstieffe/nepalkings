@@ -15,6 +15,7 @@ class Hand:
     def __init__(self, window, state, x: float = 0.0, y: float = 0.0, type="main_card", hidden=False):
         self.window = window
         self.font = settings.get_font(settings.FONT_SIZE_DETAIL)
+        self.font_small = settings.get_font(int(settings.FONT_SIZE_DETAIL * 0.85))
         self.state = state
         self.game = state.game if state else None
         self.type = type
@@ -275,9 +276,14 @@ class Hand:
         """Handle confirmation of card discard."""
         if getattr(self.game, 'game_over', False):
             return False
+        if self.game.action_in_progress:
+            return False
         selected_cards = self.get_selected_cards()
         
         if len(selected_cards) == self.cards_to_discard_count:
+            # Lock actions to prevent double-confirm and stale poller overwrites
+            # (discard_cards -> game.update() -> _apply_game_dict -> unlock_actions)
+            self.game.lock_actions()
             # Discard the cards
             if self.type == "main_card":
                 success = self.game.discard_main_cards(selected_cards)
@@ -295,6 +301,8 @@ class Hand:
                     slot.clicked = False
                 
                 return True
+            else:
+                self.game.unlock_actions()
         
         return False
 
@@ -359,16 +367,27 @@ class Hand:
                     if getattr(self.game, 'game_over', False):
                         self.dialogue_box = None
                         return
+                    if self.game.action_in_progress:
+                        self.dialogue_box = None
+                        return
                     print("Cards changed!")
                     # Change the selected cards
                     selected_cards = self.get_selected_cards()
 
                     if selected_cards:
                         # Call the appropriate card change method based on type and fetch new cards
-                        if self.type == "main_card":
-                            new_cards = self.game.change_main_cards(selected_cards)
-                        else:  # SideCards
-                            new_cards = self.game.change_side_cards(selected_cards)
+                        # Note: change_main_cards/change_side_cards internally call game.update()
+                        # which refreshes the full game state before returning
+                        # (update() -> _apply_game_dict -> unlock_actions)
+                        self.game.lock_actions()
+                        try:
+                            if self.type == "main_card":
+                                new_cards = self.game.change_main_cards(selected_cards)
+                            else:  # SideCards
+                                new_cards = self.game.change_side_cards(selected_cards)
+                        except Exception:
+                            self.game.unlock_actions()
+                            raise
 
                         # Open a new DialogueBox to display the drawn cards
                         self.dialogue_box = DialogueBox(
@@ -467,8 +486,24 @@ class Hand:
             # Draw the background addon frame behind the cards
             self.window.blit(self.background_image_addon, (self.x - self.backgorund_dx, self.y - self.backgorund_dy))
 
-            self.draw_text(f'{str(len(self.cards))}/{self.num_slots} cards', settings.BLACK, self.text_occupied_slots_x,
-                           self.y + settings.CARD_HEIGHT * 1.04 + settings.TINY_SPACER_Y + settings.HAND_CARD_COUNT_Y_NUDGE)
+            card_count_y = self.y + settings.CARD_HEIGHT * 1.04 + settings.TINY_SPACER_Y + settings.HAND_CARD_COUNT_Y_NUDGE
+            player_text = f'{str(len(self.cards))}/{self.num_slots} cards'
+            self.draw_text(player_text, settings.BLACK, self.text_occupied_slots_x, card_count_y)
+
+            # Draw opponent card count to the right, baseline-aligned with player text
+            try:
+                opp_main, opp_side = self.game.get_hand(is_opponent=True)
+                opp_count = len(opp_main) if self.type == "main_card" else len(opp_side)
+                player_surface = self.font.render(player_text, True, settings.BLACK)
+                opp_x = self.text_occupied_slots_x + player_surface.get_width() + settings.CARD_WIDTH * 0.3
+                opp_text = f'(opp: {opp_count})'
+                opp_surface = self.font_small.render(opp_text, True, (40, 40, 40))
+                opp_rect = opp_surface.get_rect()
+                # Align baselines: both fonts share the same top y
+                opp_rect.topleft = (opp_x, card_count_y)
+                self.window.blit(opp_surface, opp_rect)
+            except Exception:
+                pass
 
             for button in self.buttons:
                 button.draw()

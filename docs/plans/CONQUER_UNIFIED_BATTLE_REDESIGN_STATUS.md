@@ -1,0 +1,388 @@
+# Conquer Unified Battle Redesign Status
+
+Last updated: 2026-05-10
+Branch: v2.0-conquer-redesign
+Plan source: Copilot memory plan.md for "Conquer Unified Battle Redesign"
+
+## Current Baseline
+
+- DONE: Branch exists and is tracking origin/v2.0-conquer-redesign.
+- DONE: Working tree was clean before this implementation pass.
+- DONE: New conquer games are marked with `Game.conquer_move_model='tactics_hand'` when `CONQUER_TACTICS_HAND_ENABLED=True`.
+- DONE: Legacy conquer/duel games keep the `battle_move` model marker.
+
+## Implemented In This Pass
+
+- DONE: Added `ConquerTactic` SQLAlchemy model in `server/models.py`.
+  - Fields include game/player, primary card, optional secondary card, family/suit/rank/value, split values, source, status, played_round, call_figure_id, source tactic ids for combine/dismantle, sort_order, created_at.
+  - `Game.serialize()` now includes `conquer_tactics`.
+
+- DONE: New tactics-hand conquer games initialize `ConquerTactic` rows instead of `BattleMove` rows.
+  - Attacker config moves are converted to runtime `MainCard` plus `ConquerTactic`.
+  - Player-owned defender config moves are converted the same way.
+  - AI template defender moves are converted the same way.
+  - Legacy `battle_move` games still use `_build_battle_moves_from_config` / `_build_battle_moves_from_template`.
+
+- DONE: Added player-safe battle-state serialization for tactics-hand games.
+  - `/games/get_battle_state` now returns `player_tactics` and `opponent_tactics`.
+  - It also maps those lists into existing `player_moves` / `opponent_moves` keys so current client rail/ledger code can consume them.
+  - Opponent unplayed tactics hide family/suit/rank/value.
+
+- DONE: Added conquer-specific tactic endpoints in `server/routes/games.py`.
+  - `POST /games/play_conquer_tactic`
+  - `POST /games/gamble_conquer_tactic`
+  - `POST /games/combine_conquer_tactics`
+  - `POST /games/dismantle_conquer_tactic`
+
+- DONE: Updated battle turn/skip/math plumbing for tactics-hand games.
+  - `skip_battle_turn` checks available `ConquerTactic` rows.
+  - `_compute_server_total_diff` reads played `ConquerTactic` rows for tactics-hand games.
+  - Battle card collection/cleanup can collect played tactic cards and return/delete unplayed tactic rows.
+
+- DONE: Closed legacy battle-shop mutation holes for tactics-hand games.
+  - Existing legacy `buy`, `return`, and `confirm` gates remain.
+  - Added blocking for old `gamble`, `combine`, and `dismantle` routes so tactics-hand games use the new endpoints.
+
+- DONE: Updated client service and conquer rail dispatch.
+  - `nepal_kings/utils/game_service.py` has wrappers for play/gamble/combine/dismantle conquer tactic endpoints.
+  - `ConquerGameScreen` calls those wrappers for tactics-hand games.
+  - Tactics rail now ignores discarded tactics in the playable hand and recognizes combined `Double Dagger` tactics.
+
+- DONE: Added the tactics-hand battle/result collapsed header in `ConquerGameScreen`.
+  - Battle/result mode now draws the layout-helper status strip plus narration log instead of the full timeline header.
+  - The strip keeps phase/turn/stake/land-bonus chips visible, clears stale hidden timeline command rects, and exposes the existing Withdraw command for attackers.
+  - Clicking the collapsed header temporarily expands the full timeline as an overlay.
+
+- DONE: Kept tactics-hand battle rounds centered on the field shell.
+  - Tactics-hand battle objectives and auto-routing now target `field` instead of the legacy `battle` subscreen.
+  - The legacy battle tab is locked for tactics-hand games, while legacy `battle_move` games still route to `battle`.
+  - `FieldScreen` now treats tactics-hand battle rounds as view-only inspection: figure detail boxes still open, but stale figure-action confirmations/selection flags cannot queue advance or defender actions.
+
+- DONE: Added first-pass tactics-hand duel lane fighter rendering.
+  - `ConquerGameScreen` now draws the current player/opponent battle figures inside the layout helper's `duel_lane` while the field remains the base view.
+  - The lane handles the primary and optional second Civil War fighters from the player perspective and shows a compact starting power diff.
+  - This is fighter-only rendering; support badges, leader lines, receipt rows, and tactic flight/replay remain follow-up work.
+
+- DONE: Unified tactics-hand pre-battle and battle into the same field-first canvas.
+  - Tactics-hand conquer games now normalize every legacy `battle` / `battle_shop` subscreen state back to `field`.
+  - The legacy field/battle tab buttons are hidden and do not capture clicks for tactics-hand games.
+  - The tactics rail and round ledger are visible from pre-battle onward.
+  - Ledger result review now opens the shared conquer result dialogue from the unified field canvas instead of routing to the hidden battle subscreen.
+  - `FieldScreen` now uses the shared conquer layout helper for tactics-hand field columns, so figure hitboxes align with the battlefield area instead of sitting underneath the rail.
+  - The rail was narrowed to reduce empty horizontal padding and give more room back to the battlefield.
+
+- DONE: Added richer tactics-hand duel lane round readouts.
+  - The lane now shows the focused round's tactic badge for each side.
+  - Tactic badges have leader lines back to their fighter bands.
+  - The center diff band now shows a compact receipt row: figure power + tactic power = side total.
+
+- DONE: Added first-pass predictive ledger math for hovered tactics.
+  - The tactics rail now exposes the hovered available tactic during the player's battle turn.
+  - The current round card draws that tactic as a ghost chip without committing it.
+  - The round diff and total circle update with a ghost projection while the hover is active.
+
+- DONE: Added first-pass round ledger recap popovers.
+  - Hovering a completed round card now opens a compact recap above the card.
+  - The recap shows each side's tactic power and the color/glyph-safe round diff.
+
+- DONE: Added first-pass played tactic flight animation.
+  - Successful tactics-hand Play actions start a fixed-duration, non-blocking overlay animation.
+  - The animation travels from the selected rail cell toward the active round card slot and then expires.
+
+- DONE: Added first-pass tactics-hand battle field context overlays.
+  - Battle fighters are suppressed from their home field columns while the duel lane is active.
+  - Remaining field figures stay inspectable but are visually de-emphasized during battle rounds.
+  - Called figures and likely support-source figures get colored rings so their field origins remain locatable.
+
+- DONE: Added first-pass round-card reveal replay animation.
+  - Newly completed ledger rounds now get a short gold sweep/pulse keyed to the revealed tactic pair.
+  - The animation expires without restarting every frame once the completed round identity is already known.
+
+- DONE: Added first-pass duel-lane predictive tactic highlighting.
+  - The hovered available rail tactic now appears as a cyan ghost badge in the active duel-lane support rail when the player has not committed that round.
+  - The duel-lane receipt/diff preview uses the hovered tactic power, matching the ledger hover-preview behavior.
+
+- DONE: Added first-pass field predictive source highlighting.
+  - Hovering an available tactic that calls a figure now pulses that field figure as a cyan preview source.
+  - Played called figures and support-source rings remain distinct from hovered preview rings.
+
+- DONE: Added real first-pass duel-lane support contributor rails.
+  - Player/opponent badge rails now collect actual non-fighter support contributors from the field: buffs_allies, wall/defence buffs, blocks_bonus, and distance_attack.
+  - Support badges show source portrait, skill marker, and contribution value; overflow collapses to a +N chip.
+  - Narrow chip rails now show compact called-figure, land-bonus, and enchantment modifier cues when available.
+
+- DONE: Added first-pass duel-lane receipt rows.
+  - The center diff band now stacks compact rows for base, called figure, buffs, wall, land, enchantment, tactic, range penalty, block marker, and total when those inputs are present.
+  - Receipt totals now use the same visible contributor sources as the support/chip rails instead of only showing base+tactic.
+
+- DONE: Added first-pass support badge hover cross-links.
+  - Duel-lane support badges now register hit rects and highlight on hover.
+  - Hovered support badges publish their source figure id to the field overlay and draw a direct cyan leader line from the badge edge to the source figure icon when its rect is available.
+
+- DONE: Added first-pass support rail overflow popovers.
+  - Overflow chips now register hover hit areas and open compact contributor popovers for hidden support sources.
+
+- DONE: Added first-pass receipt-row hover/source highlighting.
+  - Visible receipt rows now register hit areas and brighten under the cursor.
+  - Rows with concrete source figures, such as Called and Range, now feed the same field-source highlight system as support badges without drawing extra receipt-row leader lines.
+
+- DONE: Cleaned up client tactics-hand helper terminology.
+  - Added `_current_conquer_tactics()` as the tactics-hand data helper with a tactics-named cache.
+  - Updated the tactics rail, round ledger, field source detection, and duel lane to prefer the tactics helper while keeping legacy battle-move fallbacks intact.
+
+- DONE: Added ordinary same-suit support contributors to the duel-lane support UI.
+  - Castle/village support sources now appear in the support badge rail when they support same-suit battle figures under the same rules used by field/battle support math.
+  - Receipt totals now include ordinary support and zero ordinary support/land when enemy Block support is present.
+
+- DONE: Polished screenshot-driven unified battle UI issues.
+  - Tactics rail width is reduced again and the battlefield columns/duel lane now scale from battlefield inner width, giving the field and support/duel panels the reclaimed space.
+  - Round ledger chips now draw tactic icons and read revealed opponent tactics from the tactics-hand battle-state payload, while still tolerating shorter legacy `opp_played` lists.
+  - Expanded battle timeline overlays now expose a Collapse button and append live round tactic entries once battle rounds start.
+  - Always-on duel-lane support guide lines were removed; hover-only support/receipt source cross-links remain.
+  - Tactics-hand battle field overlays no longer draw black dim circles over non-fighter figures; only meaningful called/support/preview rings are rendered.
+  - Latest screenshot pass narrows the rail to 16% W and clips all rail/list/cell drawing so long tactic cells cannot paint outside the tactics panel.
+  - Support badges now show an explicit label chip and ordinary support sources are included in field source rings.
+  - Opponent support-source field figures are revealed during tactics-hand battle rounds while unrelated hidden opponent figures stay hidden.
+  - Ambiguous receipt-row leader lines were removed; leader lines now appear only for direct support-badge hover and start at the badge edge.
+
+- DONE: Completed latest duel-lane/rail precision pass from screenshot review.
+  - Support-source field icons for the opponent still become visible when they appear in the support lane, but support rings are now hover-only: badge hover highlights the source icon and source-icon hover highlights the badge.
+  - Receipt rows still highlight under the cursor, but no longer force field source rings; visual source linking is reserved for direct support badge/source hover.
+  - Duel-lane panel borders were softened so fighter bands, diff, and rails read as one lane instead of stacked subpanels with repeated horizontal rules.
+  - Client receipt math now mirrors the server's effective Call tactic rule: called figure base power plus healer buff, plus tactic value only when tactic suit matches called figure suit.
+  - Call tactic value is counted once in the duel receipt and round ledger instead of showing raw tactic value plus a separate base-only called figure.
+  - Active battle Temples now still block support in the client receipt/support display, matching the server-authoritative battle math.
+  - The tactics rail now derives visible scroll rows from the actual viewport, clamps scrolling to that capacity, and keeps cells clipped to the list area.
+  - The empty selected-detail panel is compacted; action buttons are adaptive to the selected tactic so Call tactics do not show combine/dismantle, single Daggers show combine, and combined Double Daggers show dismantle.
+  - Gamble is available from the rail on the player's battle turn, and combine/dismantle are no longer disabled merely because battle rounds have started.
+  - Unified-rail Play auto-binds the best eligible figure for Call tactics when no call figure is already attached, preserving the legacy effective-power behavior without reopening the old battle screen.
+
+- DONE: Tightened tactics rail text and render coverage.
+  - Long tactic names, selected details, top-strip labels, and action buttons now fit inside their rail containers.
+  - The rail top strip now shows state/intent labels without instruction-style copy and does not leak hidden opponent tactic details.
+  - Added client render smoke coverage for a scrollable populated rail and a filled round ledger/result click target.
+
+- DONE: Updated automated conquer battle-round execution enough for tactics-hand rows.
+  - `server/ai/ai_worker.py` reads `ConquerTactic` rows for tactics-hand games.
+  - Auto-gamble, auto-combine, play, and skip fallback route through conquer tactic endpoints when appropriate.
+  - `server/ai/action_enum.py` can enumerate `play_conquer_tactic` / `gamble_conquer_tactic` for tactics-hand battle rounds.
+  - Added integration-style AI coverage proving the conquer loop plays a real tactics-hand DB battle round through the conquer tactic endpoint.
+  - Added skip-fallback coverage proving tactics-hand skip recovery plays a conquer tactic instead of a legacy battle move.
+
+- DONE: Updated AI game-state and strategy-planner summaries for tactics-hand games.
+  - `server/ai/game_state.py` now labels live rows as `conquer_tactics` for tactics-hand conquer games instead of showing stale `battle_moves` wording.
+  - `server/ai/strategy_planner.py` now emits `planned_conquer_tactics` and scores tactics-hand plans from available `ConquerTactic` rows while preserving compatibility `planned_battle_moves` data.
+  - Planner prompt formatting now prefers `planned_conquer_tactics` when present.
+
+- DONE: Added focused server tests in `tests/server/test_conquer_tactics_hand.py`.
+  - Initialization creates `ConquerTactic` rows and no `BattleMove` rows for tactics-hand conquer games.
+  - Opponent unplayed tactics are hidden in `/games/get_battle_state`.
+  - Playing two tactics advances battle turn and round.
+  - Gambling creates replacement tactics and does not delete persistent collection cards.
+  - Gambling enforces once-per-round and three-per-battle limits.
+  - Combining/dismantling restores source tactics.
+  - Tactics-hand skip rejects while tactics are available and advances when no tactics remain.
+  - Call-figure validation rejects wrong-field targets and accepts legal targets.
+  - Family/rank consistency validation rejects corrupted tactic metadata and mismatched Double Dagger ranks.
+
+- DONE: Added tactics-hand spell mutation service in `server/game_service/conquer_tactics_service.py`.
+  - Purges `ConquerTactic` rows that reference cards moved or recycled by spells.
+  - Restores surviving source tactics when a combined tactic is dismantled by card mutation.
+  - Auto-converts eligible newly received runtime cards into spell-sourced tactics up to the tactics cap.
+  - Replenishes automated defenders back to the standard tactics count after spell mutation.
+
+- DONE: Updated spell and counter-spell mutation flows for tactics-hand conquer games.
+  - `Forced Deal` and `Dump Cards` branch between legacy `BattleMove` purge/replenish and new `ConquerTactic` purge/replenish by `Game.conquer_move_model`.
+  - `Forced Deal` purges stale move/tactic state before card ownership changes.
+  - Battle-start prelude replenishment now uses `ConquerTactic` rows for tactics-hand games.
+  - Counter-spell defender replenishment now uses `ConquerTactic` rows for tactics-hand games while preserving compatibility response keys.
+  - Added Phase 7 edge coverage proving targeted non-greed enchantments leave existing tactics intact.
+  - Added Phase 7 guard coverage proving spell auto-conversion does not reserve new tactics after battle rounds are active.
+
+- DONE: Updated broader land-battle tests to read the active conquer move model.
+  - Tactics-hand conquer games assert against `ConquerTactic` rows.
+  - Legacy rollback games still assert against `BattleMove` rows.
+  - Figure creation coverage now uses a deterministic no-prelude AI template so it is not affected by generated spell preludes.
+
+## Verified In This Pass
+
+- DONE: Diagnostics reported no errors for edited Python/client files.
+- DONE: `python -m pytest tests/server/test_conquer_tactics_hand.py` passed: 10 passed.
+- DONE: Focused server/AI regression passed: 40 passed.
+- DONE: Existing focused client layout/routing tests passed: 65 passed.
+- DONE: Focused client header/layout regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py` passed: 98 passed.
+- DONE: Broader conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py` passed: 152 passed.
+- DONE: Focused field-routing regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_timeline.py` passed: 83 passed.
+- DONE: Broader conquer client render regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 160 passed.
+- DONE: Spell mutation regression passed: `tests/server/test_spells.py::TestSpellPurgesBattleMoves tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 6 passed.
+- DONE: Focused server regression passed: `tests/server/test_schema_guards.py tests/server/test_conquer_tactics_math.py tests/server/test_conquer_tactics_hand.py tests/server/test_spells.py tests/server/test_battle_shop.py tests/server/test_conquer_ai_defender_response.py tests/server/test_ai_action_enum.py tests/server/test_land_battle.py` passed: 135 passed.
+- DONE: AI summary/planner/worker regression passed: `tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py tests/server/test_ai_worker.py tests/server/test_ai_action_enum.py` passed: 80 passed.
+- DONE: AI worker tactics-hand routing regression passed: `tests/server/test_ai_worker.py` passed: 36 passed.
+- DONE: Tactics math/card-fate regression passed: `tests/server/test_conquer_tactics_math.py` passed: 6 passed.
+- DONE: Production schema guard regression passed: `tests/server/test_schema_guards.py` passed: 1 passed.
+- DONE: Invader Swap tactics-hand regression passed: `tests/server/test_conquer_invader_swap.py` passed: 20 passed.
+- DONE: Broader Invader Swap/tactics/AI worker regression passed: `tests/server/test_conquer_invader_swap.py tests/server/test_conquer_tactics_hand.py tests/server/test_ai_worker.py` passed: 66 passed.
+- DONE: Unified pre-battle layout/routing regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_timeline.py tests/client/test_conquer_layout.py` passed: 145 passed.
+- DONE: Broader unified conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 164 passed.
+- DONE: Focused duel-lane readout regression passed: `tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py` passed: 107 passed.
+- DONE: Focused predictive ledger regression passed: `tests/client/test_conquer_render_smoke.py` passed: 4 passed.
+- DONE: Broader predictive conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 165 passed.
+- DONE: Focused round recap ledger regression passed: `tests/client/test_conquer_render_smoke.py` passed: 5 passed.
+- DONE: Broader round recap conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 166 passed.
+- DONE: Focused tactic flight regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_render_smoke.py` passed: 53 passed.
+- DONE: Broader tactic flight conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 168 passed.
+- DONE: Focused field context overlay regression passed: `tests/client/test_conquer_game_screen.py` passed: 49 passed.
+- DONE: Focused round reveal replay regression passed: `tests/client/test_conquer_render_smoke.py` passed: 7 passed.
+- DONE: Broader round reveal conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 171 passed.
+- DONE: Focused duel-lane predictive highlight regression passed: `tests/client/test_conquer_render_smoke.py` passed: 8 passed.
+- DONE: Broader duel-lane predictive highlight conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 172 passed.
+- DONE: Focused field predictive source highlight regression passed: `tests/client/test_conquer_game_screen.py` passed: 50 passed.
+- DONE: Broader field predictive source highlight conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 173 passed.
+- DONE: Focused duel-lane support contributor regression passed: `tests/client/test_conquer_render_smoke.py` passed: 9 passed.
+- DONE: Broader duel-lane support contributor conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 174 passed.
+- DONE: Focused duel-lane receipt-row regression passed: `tests/client/test_conquer_render_smoke.py` passed: 9 passed.
+- DONE: Broader duel-lane receipt-row conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 174 passed.
+- DONE: Focused support badge hover-link regression passed: `tests/client/test_conquer_render_smoke.py` passed: 9 passed.
+- DONE: Broader support badge hover-link conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 174 passed.
+- DONE: Focused support overflow popover regression passed: `tests/client/test_conquer_render_smoke.py` passed: 10 passed.
+- DONE: Broader support overflow popover conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
+- DONE: Focused receipt-row hover/source regression passed: `tests/client/test_conquer_render_smoke.py` passed: 10 passed.
+- DONE: Broader receipt-row hover/source conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
+- DONE: Focused tactics helper terminology regression passed: `tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py` passed: 60 passed.
+- DONE: Broader tactics helper terminology conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
+- DONE: Focused ordinary support contributor regression passed: `tests/client/test_conquer_render_smoke.py` passed: 10 passed.
+- DONE: Broader ordinary support contributor conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 175 passed.
+- DONE: Focused screenshot UI/timeline regression passed: `tests/client/test_conquer_layout.py tests/client/test_conquer_render_smoke.py tests/client/test_conquer_game_screen.py::TestTacticsHandRouting tests/client/test_conquer_timeline.py` passed: 134 passed.
+- DONE: Broader screenshot UI conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 183 passed.
+- DONE: Latest focused screenshot UI regression passed: `tests/client/test_conquer_layout.py tests/client/test_conquer_render_smoke.py` passed: 74 passed.
+- DONE: Latest broader screenshot UI conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 184 passed.
+- DONE: Focused AI tactics-hand loop/fallback regression passed: `tests/server/test_ai_integration_scenarios.py::test_conquer_loop_battle_round_uses_tactics_hand_rows tests/server/test_ai_worker.py::test_conquer_skip_battle_turn_with_fallback_uses_conquer_tactic_endpoint` passed: 2 passed.
+- DONE: Broader AI tactics-hand regression passed: `tests/server/test_ai_worker.py tests/server/test_ai_integration_scenarios.py tests/server/test_ai_action_enum.py tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py` passed: 88 passed.
+- DONE: Richer AI first-round full-flow regression passed: `tests/server/test_ai_integration_scenarios.py::test_conquer_loop_first_round_posts_real_tactics_for_both_sides` passed: 1 passed.
+- DONE: Broader AI tactics-hand regression passed after full-flow coverage: `tests/server/test_ai_worker.py tests/server/test_ai_integration_scenarios.py tests/server/test_ai_action_enum.py tests/server/test_ai_game_state.py tests/server/test_ai_strategy_planner.py` passed: 89 passed.
+- DONE: Focused Phase 7 spell edge regression passed: `tests/server/test_spells.py::TestSpellMutatesConquerTactics` passed: 5 passed.
+- DONE: Broader spell/tactics-hand server regression passed: `tests/server/test_spells.py tests/server/test_conquer_tactics_hand.py tests/server/test_conquer_tactics_math.py` passed: 38 passed.
+- DONE: Focused battle-shop route-gating regression passed: `tests/server/test_battle_shop.py::TestTacticsHandBattleShopGating` passed: 2 passed.
+- DONE: Broader legacy battle-shop/duel flow regression passed: `tests/server/test_battle_shop.py tests/server/test_game_flow_end_to_end.py tests/server/test_finish_battle_draw.py` passed: 25 passed.
+- DONE: Latest focused UI/layout precision regression passed: `tests/client/test_conquer_render_smoke.py tests/client/test_conquer_layout.py` passed: 75 passed.
+- DONE: Latest broader conquer client regression passed: `tests/client/test_conquer_game_screen.py tests/client/test_conquer_layout.py tests/client/test_conquer_timeline.py tests/client/test_battle_screen_conquer_flow.py tests/client/test_conquer_render_smoke.py` passed: 185 passed.
+- DONE: Latest focused server math regression passed: `tests/server/test_conquer_tactics_math.py` passed: 6 passed.
+
+## Partial / Needs Follow-Up
+
+- PARTIAL: Phase 5 tactic APIs exist, but need broader behavior coverage.
+  - DONE: Basic tests exist for `gamble_conquer_tactic` replacement source behavior.
+  - DONE: Basic tests exist for `combine_conquer_tactics` and `dismantle_conquer_tactic` restoration behavior.
+  - DONE: Tests exist for `gamble_conquer_tactic` per-round and per-battle limits.
+  - DONE: Tests exist for skip being allowed only when no available tactics remain.
+  - DONE: Tests exist for legal/illegal call figure validation.
+  - DONE: Tests exist for family/rank consistency validation.
+
+- DONE: Phase 6 battle math, cleanup, card fate, and resolver idempotency are covered for tactics-hand rows.
+  - DONE: Added total-diff tests for Block, Call figure, Double Dagger, land bonus, support, healer, wall, enchantment, and distance attack using `ConquerTactic` rows.
+  - DONE: Added finish-battle/card-fate tests proving played tactic cards enter the returnable pool, picked card ownership, deck return, and row cleanup.
+  - DONE: Verified unplayed tactic runtime cards are cleaned while played tactic cards remain collectible.
+  - DONE: Verified the tactics-hand finish-battle cleanup path reuses the cached conquer resolver without duplicating attack logs.
+
+- DONE: Phase 7 spell mutation has a first tactics-hand implementation.
+  - DONE: Added `conquer_tactics_service` helper.
+  - DONE: Replaced tactics-hand spell purge/replenish logic for Forced Deal and Dump Cards.
+  - DONE: Added spell mutation tests proving stale tactics are purged/replenished without deleting persistent collection cards.
+  - DONE: Added Forced Deal coverage for combined tactics: moving one Double Dagger source deletes the combined row, drops the moved source, restores the partner source, and recreates a spell-sourced tactic for the new owner when eligible.
+  - DONE: Added non-greed enchantment coverage proving Poison leaves existing `ConquerTactic` rows and reserved cards intact.
+  - DONE: Added active-battle guard coverage proving spell auto-conversion does not create tactics after battle rounds start.
+  - TODO: Add more spell coverage for defender fallback edge cases if Phase 7 needs exhaustive coverage.
+
+- DONE: Production startup explicitly ensures the `conquer_tactic` table and index exist for persistent deployments.
+
+- PARTIAL: Phase 8 AI reads, summarizes, and plays tactics; remaining work is deeper scenario coverage.
+  - DONE: `server/ai/game_state.py` and `server/ai/strategy_planner.py` summarize `conquer_tactics` explicitly for tactics-hand games.
+  - DONE: Added AI worker tests proving tactics-hand play, auto-gamble, and auto-combine route to conquer tactic endpoints.
+  - DONE: Added AI integration coverage proving a tactics-hand battle-round loop reads real `ConquerTactic` rows and plays through the conquer tactic endpoint.
+  - DONE: Added AI skip-fallback coverage proving stale skip recovery stays on the conquer tactic endpoint for tactics-hand games.
+  - DONE: Added Invader Swap regression proving a swapped AI invader keeps tactics-hand rows and player-safe tactic serialization.
+  - DONE: Added first-round attacker/defender full-flow AI coverage that posts through the real `play_conquer_tactic` endpoint for both sides and verifies round advancement.
+  - TODO: Add additional later-round/result AI full-flow scenarios if Phase 8 needs exhaustive coverage.
+  - TODO: Check generic LLM action paths for `combine_conquer_tactics` enumeration if needed beyond deterministic conquer flow.
+
+- PARTIAL: Phase 9 UI has the unified field-first implementation and latest screenshot fixes; remaining work is manual/responsive polish.
+  - DONE: Header collapsed status strip, narration log, transient timeline overlay, and battle-strip Withdraw command are implemented for tactics-hand battle/result modes.
+  - DONE: Expanded battle timeline overlays now include an explicit Collapse button and live round tactic entries.
+  - DONE: Tactics rail text fitting and public-only top-strip intent labels are implemented.
+  - DONE: Tactics rail width is reduced and the battlefield/duel lane now use the reclaimed horizontal space.
+  - DONE: Tactics-hand pre-battle and battle now share one field-first canvas with the rail, ledger, and field columns using the same layout helper.
+  - DONE: Field inert-but-inspectable battle behavior is implemented for tactics-hand battle rounds.
+  - DONE: First-pass battlefield context overlays hide fighters from home columns and ring called/support-source figures without black dim circles over idle figures.
+  - DONE: First-pass duel lane fighter-only rendering is implemented for tactics-hand battle rounds.
+  - DONE: Round tactic badge strips and power receipt rows are implemented in the duel lane; source links are hover-driven instead of always-on guide lines.
+  - DONE: Round ledger chips now display tactic icons and revealed opponent tactic data.
+  - DONE: First-pass ghost predictive math is implemented for rail-hovered tactics in the active ledger round and total circle.
+  - DONE: First-pass played tactic flight animation is implemented for successful tactics-hand Play actions.
+  - DONE: First-pass predictive support-badge pulsing is implemented in the duel lane for rail-hovered tactics.
+  - DONE: First-pass predictive source highlighting pulses hovered tactic call-figure sources in the field.
+  - DONE: Real first-pass support contributor badge rails are implemented for buffs, walls, blockers, and distance attackers.
+  - DONE: Ordinary same-suit castle/village support contributors are included in support rails and receipt totals.
+  - DONE: First-pass receipt rows now explain the duel-lane diff from visible contributors.
+  - DONE: First-pass support badge hover cross-links now highlight the badge/source and draw source leader lines.
+  - DONE: First-pass support rail overflow popovers are implemented.
+  - DONE: First-pass receipt-row highlighting and source cross-linking are implemented.
+  - DONE: First-pass round-card recap popovers are implemented for completed ledger cards.
+  - DONE: First-pass round-card reveal replay animation is implemented for newly completed ledger cards.
+  - DONE: Support-source rings are hover-only while opponent support-source figures stay revealed.
+  - DONE: Duel-lane receipt/tactic power display now uses effective Call tactic values instead of base move values.
+  - DONE: Tactics rail actions are adaptive and battle-round shaping actions are reachable from the unified rail.
+  - DONE: Tactics rail scroll capacity now matches the visible list viewport.
+
+- DONE: Phase 10 routing is mostly bypassed and the primary tactics-hand client helper now uses tactics terminology.
+  - DONE: Added `_current_conquer_tactics()` and moved tactics-hand cache reads to `_conquer_tactic_cache*`.
+  - DONE: Kept `_current_conquer_battle_moves()` as a legacy/fallback compatibility helper for battle_move flows and old test doubles.
+  - DONE: Confirmed tactics-hand polling edge cases route stale move/battle targets back to `field`, not `battle_shop` or legacy `battle`.
+
+- PARTIAL: Phase 11 tests started but are not comprehensive.
+  - DONE: Added server tests for tactic initialization from AI templates.
+  - DONE: Added server tests for legacy `battle_move` rollback with `CONQUER_TACTICS_HAND_ENABLED=False`.
+  - DONE: Added client tests for tactics-hand header mode switching, overlay expansion, hidden action rect clearing, and gamble/dismantle dispatch to conquer endpoints.
+  - DONE: Added initial client render smoke tests for populated tactics rail scrolling and filled round ledger/result control behavior.
+  - DONE: Added battle-shop route-gating regressions proving tactics-hand conquer rejects legacy shop mutations while legacy `battle_move` conquer still uses buy/return.
+  - TODO: Add broader screenshot/manual smoke checks for support badges, called figures, long receipt rows, and responsive battle view framing.
+
+## Known Risks
+
+- RISK: `Game.serialize()` currently includes full `conquer_tactics`, matching the old `battle_moves` serialization style. Player-safe hiding is implemented in `/games/get_battle_state`; any client path that consumes raw `game.conquer_tactics` should avoid displaying opponent unplayed details.
+- RISK: Spell mutation now has tactics-hand coverage for Forced Deal and Dump Cards, but more edge-case spell coverage is still useful before production rollout.
+- RISK: Existing UI/AI names still say battle move in several places. That is compatibility glue for now, not the final terminology.
+- RISK: Client display now mirrors the key server math paths, but it still recomputes a local receipt instead of consuming an authoritative server breakdown payload.
+
+## Polish & Hardening Pass
+
+- DONE: Phase 1 — Server hardening.
+  - DONE: `Game.serialize_player_view()` is now used for tactics-hand state so opponent unplayed tactic family/suit/rank/value never leaks via raw `conquer_tactics`.
+  - DONE: Added idempotency guard `server/game_service/conquer_tactics_idempotency.py`; `/games/play_conquer_tactic`, `/games/combine_conquer_tactics`, and `/games/dismantle_conquer_tactic` accept an optional `client_op_id` and short-circuit replays with the original response.
+  - DONE: Dismantle endpoint now validates the source tactic is in a dismantleable state (`combined` and unplayed) before mutating, returning a 400 on stale clients instead of corrupting state.
+  - DONE: Server tests cover the player-view masking, replay idempotency on play, and dismantle-state rejection.
+
+- DONE: Phase 2 — Client correctness.
+  - DONE: Added a `ghost` flag on tactics so unplayed combine children render disabled in the rail while their parent is in play.
+  - DONE: Cold-load now primes the tactics cache from `Game.serialize()` so refreshing into an in-progress battle no longer flashes an empty rail.
+  - DONE: Reconnect routing inspects `finished` payload on `/games/get_battle_state` and routes directly to the result dialog instead of `field`.
+  - DONE: Flight-mode actions are gated until the tactics-hand server ack returns to prevent double-fire of `play`/`combine`/`dismantle`.
+
+- DONE: Phase 3 — UX polish.
+  - DONE: Gamble button shows a contextual disabled tooltip explaining the rank requirement when the selected tactic is ineligible.
+  - DONE: Combined tactics now show a small `1/2` / `2/2` indicator badge in the rail to communicate child usage at a glance.
+  - DONE: Top strip now shows accurate counters for tactics in hand, played, and combined.
+  - DONE: `/games/get_battle_state` returns a richer `finished` payload (winner, reward summary) so the result dialog can render without an extra round-trip.
+
+- DONE: Test stability.
+  - DONE: Added autouse `_reset_land_coord_counter` fixture in `tests/server/conftest.py`. The counter lives in `tests/server/test_land_battle.py` and feeds deterministic `Land.col/row`, which seeds `ai/defence/generator._template_seed(land)`. Resetting per-test prevents cross-file order from shifting AI prelude rolls (e.g. Explosion wiping the attacker's only figure in `test_conquer_game_finishes_after_battle`).
+
+- DONE: Final regression.
+  - DONE: `python -m pytest tests/server/ -q` → 727 passed, 4 pre-existing `test_kingdom.py` failures unrelated to the conquer redesign.
+  - DONE: `python -m pytest tests/client/ -q` → 568 passed.
+
+## Suggested Next Session Start
+
+1. Add later-round/result AI full-flow scenarios if Phase 8 needs exhaustive coverage.
+2. Add more Phase 7 spell edge coverage for defender fallback cases and rare non-greed interactions.
+3. Continue Phase 9/11 screenshot and manual smoke checks for responsive battle view framing, support badges, called figures, and replay details.
+4. Consider replacing local client receipt recomputation with an authoritative server breakdown payload for zero-drift battle math display.
