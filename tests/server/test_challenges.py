@@ -4,12 +4,15 @@
 import pytest
 
 
-def _make_challenge(client, headers, challenger, opponent, stake=10):
-    return client.post('/challenges/create_challenge', data={
+def _make_challenge(client, headers, challenger, opponent, stake=10, game_limit=None):
+    data = {
         'challenger': challenger,
         'opponent': opponent,
         'stake': str(stake),
-    }, headers=headers)
+    }
+    if game_limit is not None:
+        data['game_limit'] = str(game_limit)
+    return client.post('/challenges/create_challenge', data=data, headers=headers)
 
 
 class TestCreateChallenge:
@@ -34,6 +37,36 @@ class TestCreateChallenge:
         _make_challenge(client, auth_headers_user1, u1.username, u2.username, stake=25)
         challenge = Challenge.query.first()
         assert challenge.stake == 25
+
+    def test_create_challenge_defaults_game_limit_to_stake(self, client, db, two_users, auth_headers_user1):
+        from models import Challenge
+        u1, u2 = two_users
+        _make_challenge(client, auth_headers_user1, u1.username, u2.username, stake=25)
+        challenge = Challenge.query.first()
+        assert challenge.game_limit == 25
+
+    def test_create_challenge_stores_explicit_game_limit(self, client, db, two_users, auth_headers_user1):
+        from models import Challenge
+        u1, u2 = two_users
+        _make_challenge(client, auth_headers_user1, u1.username, u2.username, stake=10, game_limit=30)
+        challenge = Challenge.query.first()
+        assert challenge.stake == 10
+        assert challenge.game_limit == 30
+
+    @pytest.mark.parametrize('game_limit', ['0', '101', 'abc'])
+    def test_create_challenge_fails_invalid_game_limit(
+        self, client, two_users, auth_headers_user1, game_limit
+    ):
+        u1, u2 = two_users
+        resp = client.post('/challenges/create_challenge', data={
+            'challenger': u1.username,
+            'opponent': u2.username,
+            'stake': '10',
+            'game_limit': game_limit,
+        }, headers=auth_headers_user1)
+        data = resp.get_json()
+        assert resp.status_code == 400
+        assert data['success'] is False
 
     def test_create_challenge_stores_turn_time_limit(self, client, db, two_users, auth_headers_user1):
         from models import Challenge

@@ -3,6 +3,7 @@
 """Kingdom routes — gold production, land management."""
 
 import math
+import secrets
 import logging
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, jsonify, request, g
@@ -18,6 +19,9 @@ from models import (db, User, Land, LandAttackLog, KingdomMessage,
                     MainCard, SideCard, Suit, MainRank, CardRole)
 from routes.auth import require_token
 from game_service.deck_manager import DeckManager
+from game_service.conquer_prelude_replay_targets import (
+    conquer_destroyed_replay_targets_for_prelude,
+)
 from ai.defence.generator import get_ai_defence_template_for_land
 import server_settings as config
 
@@ -3527,6 +3531,13 @@ def _normalize_suit(suit, *, fallback='Hearts', context=''):
     return fallback_suit
 
 
+def _runtime_card_type_for_collection_rank(rank):
+    candidate = str(_enum_value(rank) or '').strip().upper()
+    if candidate in _SIDE_RANKS:
+        return 'side'
+    return 'main'
+
+
 # ── Figure-power helpers for fallback selection ─────────────────────────────
 
 _FIELD_OVERRIDE_BASE_POWER = {'castle': 15}
@@ -3606,7 +3617,7 @@ def _fb_healer_buff(figure, all_figures, game_id):
 
 
 def _fb_wall_total(all_figures, player_id, game_id):
-    """Sum of Wall side-card values for the player (defender wall bonus)."""
+    """Sum of Wall number-card side values for the player."""
     total = 0
     for f in all_figures:
         if f.player_id != player_id:
@@ -3616,7 +3627,7 @@ def _fb_wall_total(all_figures, player_id, game_id):
         if _fb_has_deficit(f, player_id, game_id):
             continue
         for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
-            if assoc.card_type == 'side':
+            if assoc.role == CardRole.NUMBER and assoc.card_type == 'side':
                 card = db.session.get(SideCard, assoc.card_id)
                 if card:
                     total += card.value
@@ -3726,7 +3737,7 @@ def _pick_strongest_figure(game_figures, game):
 def _build_figures_from_config(cfg_figures, player, game):
     """Create Figure + CardToFigure records from LandConfigFigure list.
 
-    Creates real MainCard records from the collection cards so that
+    Creates real MainCard/SideCard records from the collection cards so that
     CardToFigure.serialize() can include rank/suit/value data.
 
     Returns a list of created Figure objects (flushed, with IDs).
@@ -3760,45 +3771,74 @@ def _build_figures_from_config(cfg_figures, player, game):
             raw_rank = None
             raw_suit = cfg_fig.suit
             raw_value = 0
+            card_type = None
             if i < len(card_ids) and card_ids[i]:
                 cc = db.session.get(CollectionCard, card_ids[i])
                 if cc:
                     raw_rank = cc.rank
                     raw_suit = cc.suit
                     raw_value = cc.value
+                    card_type = _runtime_card_type_for_collection_rank(cc.rank)
 
-            fallback_rank = 'K' if role == 'key' else '10'
+            if card_type is None:
+                card_type = _runtime_card_type_for_collection_rank(raw_rank)
+            fallback_rank = (
+                ('2' if role == 'key' else '6')
+                if card_type == 'side'
+                else ('K' if role == 'key' else '10')
+            )
             if not raw_rank:
                 # Fallback: derive from figure suit and role
                 raw_rank = fallback_rank
-                raw_value = _RANK_TO_VALUE.get(raw_rank, 0)
+                raw_value = (
+                    _SIDE_RANK_TO_VALUE.get(raw_rank, 0)
+                    if card_type == 'side'
+                    else _RANK_TO_VALUE.get(raw_rank, 0)
+                )
 
             context = f'cfg_fig={cfg_fig.id} role={role} card_id={card_ids[i] if i < len(card_ids) else None}'
-            rank = _normalize_main_rank(
-                raw_rank,
-                fallback_rank=fallback_rank,
-                value=raw_value,
-                context=context,
-            )
             suit = _normalize_suit(raw_suit, fallback=cfg_fig.suit or 'Hearts', context=context)
-            value = _normalize_main_value(rank, raw_value, context=context)
-
-            mc = MainCard(
-                rank=rank,
-                suit=suit,
-                value=value,
-                game_id=game.id,
-                player_id=player.id,
-                in_deck=False,
-                part_of_figure=True,
-            )
-            db.session.add(mc)
+            if card_type == 'side':
+                rank = _normalize_side_rank(
+                    raw_rank,
+                    fallback_rank=fallback_rank,
+                    value=raw_value,
+                    context=context,
+                )
+                value = _normalize_side_value(rank, raw_value, context=context)
+                card = SideCard(
+                    rank=rank,
+                    suit=suit,
+                    value=value,
+                    game_id=game.id,
+                    player_id=player.id,
+                    in_deck=False,
+                    part_of_figure=True,
+                )
+            else:
+                rank = _normalize_main_rank(
+                    raw_rank,
+                    fallback_rank=fallback_rank,
+                    value=raw_value,
+                    context=context,
+                )
+                value = _normalize_main_value(rank, raw_value, context=context)
+                card = MainCard(
+                    rank=rank,
+                    suit=suit,
+                    value=value,
+                    game_id=game.id,
+                    player_id=player.id,
+                    in_deck=False,
+                    part_of_figure=True,
+                )
+            db.session.add(card)
             db.session.flush()
 
             ctf = CardToFigure(
                 figure_id=fig.id,
-                card_id=mc.id,
-                card_type='main',
+                card_id=card.id,
+                card_type=card_type,
                 role=role,
             )
             db.session.add(ctf)
@@ -4202,7 +4242,13 @@ def _list_valid_prelude_targets(game, caster_player_id, spell_name):
         Figure.game_id == game.id,
         Figure.player_id.in_(candidate_player_ids),
     ).all()
-    return [f for f in targets if not getattr(f, 'checkmate', False)]
+    live_targets = [f for f in targets if not getattr(f, 'checkmate', False)]
+    replay_targets = conquer_destroyed_replay_targets_for_prelude(
+        game,
+        candidate_player_ids,
+        spell_name,
+    )
+    return live_targets + replay_targets
 
 
 def _pick_deterministic_prelude_target(figures):
@@ -4674,6 +4720,7 @@ def conquer_start_battle():
         ceasefire_active=False,
         battle_confirmed=False,
         conquer_move_model=_move_model,
+        ai_seed=secrets.randbits(31),
     )
     db.session.add(game)
     db.session.flush()
@@ -5646,3 +5693,120 @@ def kingdom_messages_mark_seen():
     ).update({'seen_by_recipient': True}, synchronize_session='fetch')
     db.session.commit()
     return jsonify({'success': True, 'marked': updated})
+
+
+@kingdom.route('/messages/mark_all_seen', methods=['POST'])
+@require_token
+def kingdom_messages_mark_all_seen():
+    """Mark every unread message addressed to the current user as read."""
+    updated = KingdomMessage.query.filter_by(
+        recipient_user_id=g.user_id,
+        seen_by_recipient=False,
+    ).update({'seen_by_recipient': True}, synchronize_session='fetch')
+    db.session.commit()
+    return jsonify({'success': True, 'marked': updated})
+
+
+@kingdom.route('/messages/conversations', methods=['GET'])
+@require_token
+def kingdom_messages_conversations():
+    """Return one row per conversation partner with latest-message summary."""
+    rows = KingdomMessage.query.filter(
+        db.or_(
+            KingdomMessage.sender_user_id == g.user_id,
+            KingdomMessage.recipient_user_id == g.user_id,
+        )
+    ).order_by(KingdomMessage.timestamp.desc()).all()
+
+    convos = {}
+    for m in rows:
+        other_id = (m.recipient_user_id if m.sender_user_id == g.user_id
+                    else m.sender_user_id)
+        entry = convos.get(other_id)
+        if entry is None:
+            other = m.recipient if m.sender_user_id == g.user_id else m.sender
+            land = m.land
+            entry = {
+                'other_user_id': other_id,
+                'other_username': other.username if other else 'Unknown',
+                'is_ai': bool(other.is_ai) if other else False,
+                'last_message_id': m.id,
+                'last_message': m.message,
+                'last_sender_user_id': m.sender_user_id,
+                'last_seen_by_recipient': bool(m.seen_by_recipient),
+                'last_timestamp': m.timestamp.isoformat() if m.timestamp else None,
+                'last_land_id': m.land_id,
+                'last_land_col': land.col if land else None,
+                'last_land_row': land.row if land else None,
+                'unread_count': 0,
+                'total': 0,
+            }
+            convos[other_id] = entry
+        entry['total'] += 1
+        if (m.recipient_user_id == g.user_id and not m.seen_by_recipient):
+            entry['unread_count'] += 1
+
+    ordered = sorted(convos.values(),
+                     key=lambda e: e.get('last_timestamp') or '',
+                     reverse=True)
+    unread_total = sum(c.get('unread_count', 0) for c in ordered)
+    return jsonify({
+        'success': True,
+        'conversations': ordered,
+        'unread_count': unread_total,
+    })
+
+
+@kingdom.route('/messages/thread', methods=['GET'])
+@require_token
+def kingdom_messages_thread():
+    """Return the full message history with a specific other user."""
+    other_id = request.args.get('other_user_id', type=int)
+    if not other_id:
+        return jsonify({'success': False,
+                        'message': 'other_user_id is required'}), 400
+    other = db.session.get(User, other_id)
+    if not other:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+    limit = max(1, min(request.args.get('limit', 200, type=int), 500))
+    messages = KingdomMessage.query.filter(
+        db.or_(
+            db.and_(KingdomMessage.sender_user_id == g.user_id,
+                    KingdomMessage.recipient_user_id == other_id),
+            db.and_(KingdomMessage.sender_user_id == other_id,
+                    KingdomMessage.recipient_user_id == g.user_id),
+        )
+    ).order_by(KingdomMessage.timestamp.asc()).limit(limit).all()
+    return jsonify({
+        'success': True,
+        'other_user_id': other.id,
+        'other_username': other.username,
+        'is_ai': bool(other.is_ai),
+        'messages': [_serialize_kingdom_message_activity(m, g.user_id)
+                     for m in messages],
+    })
+
+
+@kingdom.route('/users/lookup', methods=['GET'])
+@require_token
+def kingdom_users_lookup():
+    """Resolve a username to a user id for the recipient picker."""
+    username = (request.args.get('username') or '').strip()
+    if not username:
+        return jsonify({'success': False,
+                        'message': 'username is required'}), 400
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+    if user.id == g.user_id:
+        return jsonify({'success': False,
+                        'message': 'You cannot message yourself'}), 400
+    if user.is_ai:
+        return jsonify({'success': False,
+                        'message': 'Cannot message AI defenders'}), 400
+    return jsonify({
+        'success': True,
+        'user_id': user.id,
+        'username': user.username,
+        'is_ai': bool(user.is_ai),
+    })

@@ -6,21 +6,21 @@ AI Worker — event-driven background AI player.
 
 When a game state change puts an AI player in a position where they need
 to act, `trigger_ai_if_needed(game_id)` spawns a short-lived daemon thread
-that reads the game state, consults the LLM, and executes the chosen action.
+that reads the game state and executes the chosen action. Duel-mode
+decisions are computed by `ai.duel_strategy`; conquer-mode decisions are
+computed inline by the deterministic helpers below.
 """
 import threading
 import time
 import logging
 import random
-import re
 import requests as http_requests
 
 import server_settings as settings
 from ai import get_ai_auth_headers
 from ai.defence.generator import get_ai_defence_template_for_land
-from ai.llm_client import LLMClient, parse_action_response
-from ai.game_state import enrich_figures_with_skills, serialize_game_for_llm
-from ai.action_enum import detect_phase, enumerate_actions, format_actions_for_llm
+from ai.game_state import enrich_figures_with_skills
+from ai.action_enum import detect_phase, enumerate_actions
 from ai.card_change_strategy import (
     compute_side_tactic_protected_ids,
     compute_tactic_protected_ids,
@@ -29,19 +29,12 @@ from ai.card_change_strategy import (
     summarize_main_change,
     summarize_side_change,
 )
-from ai.strategy_planner import (
-    format_strategy_plans_for_prompt,
-    generate_strategy_plans,
-    recommended_action_id,
-)
-from ai.prompts import SYSTEM_PROMPT, PHASE_PROMPTS
+from ai import duel_strategy
 
 logger = logging.getLogger('nepalkings.ai.worker')
 
 _AI_INTERNAL_REQUEST_HEADER = 'X-NepalKings-AI-Internal'
 
-# Global LLM client (lazy-initialized)
-_llm_client = None
 # Cache mapping AI player IDs to AI user IDs so auth headers can be built
 # from worker threads without touching the Flask-bound DB session.
 _ai_player_user_ids = {}
@@ -50,74 +43,21 @@ _internal_service_tokens = {}
 _internal_service_tokens_lock = threading.Lock()
 # Watchdog retry budget per game when AI loop exits unsuccessfully
 _ai_watchdog_retries = {}
+_ai_watchdog_first_scheduled = {}  # game_id -> monotonic timestamp of first retry
 _ai_watchdog_lock = threading.Lock()
+# Hard wall-clock cap on how long the watchdog will keep retrying a single
+# game. Independent of the retry-count cap so a pathologically stuck game
+# can't be retried for many minutes if each retry happens to take a while.
+_WATCHDOG_MAX_WALL_SECONDS = 120.0
 # Lock to prevent multiple AI threads for the same game
 _active_games = set()
 _active_games_lock = threading.Lock()
 _pending_retrigger = set()  # Games that need rechecking after current loop
-# Per-game strategy memory — persists across LLM calls within a game
-_game_strategies = {}  # game_id → list of strategy notes
-_game_strategies_lock = threading.Lock()
 # Per-game planner telemetry events for debugging/rollout visibility
 _planner_events = {}  # game_id -> [event, ...]
 _planner_events_lock = threading.Lock()
 # Keep event buffers bounded to prevent memory growth.
 _MAX_PLANNER_EVENTS_PER_GAME = 80
-# Per-game chat cadence state for AI flavor messages
-_ai_chat_states = {}  # game_id -> {'count': int, 'last_sent_at': float, 'last_turn_marker': tuple}
-# Per-game tactical explain preferences configured via chat commands.
-_ai_explain_states = {}  # game_id -> {'mode': str, 'depth': str, 'last_marker': tuple | None}
-_ai_chat_lock = threading.Lock()
-
-# Phase-specific LLM temperatures — lower = more deterministic for math-heavy decisions
-PHASE_TEMPERATURES = {
-    'normal_turn': 0.25,      # Lower variance for better strategic discipline
-    'select_defender': 0.3,   # Target evaluation
-    'battle_decision': 0.2,   # Pure math: fold vs battle
-    'battle_shop': 0.3,       # Card evaluation + combinatorics
-    'battle_round': 0.2,      # Move sequencing — deterministic
-    'counter_spell': 0.2,     # Cost-benefit analysis
-    'post_battle_pick': 0.2,  # Card value ranking
-    'post_battle_draw': 0.1,  # Almost always "destroy opponent's"
-}
-
-AI_CHAT_SYSTEM_PROMPT = (
-    "You are [AI] Strategos in the game Nepal Kings. "
-    "Write exactly one short in-character chat line. "
-    "Return only plain message text, with no JSON, no markdown, no labels, and no explanations."
-)
-
-_AI_EXPLAIN_DEFAULT_MODE = 'off'
-_AI_EXPLAIN_DEFAULT_DEPTH = 'standard'
-
-_AI_EXPLAIN_MODE_ALIASES = {
-    'off': 'off',
-    'disable': 'off',
-    'disabled': 'off',
-    'stop': 'off',
-    'manual': 'manual',
-    'ondemand': 'manual',
-    'on_demand': 'manual',
-    'turn': 'turn',
-    'turns': 'turn',
-    'battle': 'battle',
-    'combat': 'battle',
-}
-
-_AI_EXPLAIN_DEPTH_ALIASES = {
-    'brief': 'brief',
-    'short': 'brief',
-    'quick': 'brief',
-    'standard': 'standard',
-    'normal': 'standard',
-    'default': 'standard',
-    'detailed': 'detailed',
-    'detail': 'detailed',
-    'deep': 'detailed',
-    'extensive': 'extensive',
-    'verbose': 'extensive',
-    'full': 'extensive',
-}
 
 _CONQUER_CALL_FIELD_MAP = {
     'Call Villager': 'village',
@@ -131,18 +71,6 @@ _CONQUER_BLACK_SUITS = {'Clubs', 'Spades'}
 _CONQUER_AUTO_GAMBLE_THRESHOLD_DEFAULT = 10
 _CONQUER_AUTO_GAMBLE_THRESHOLD_MIN = 1
 _CONQUER_AUTO_GAMBLE_THRESHOLD_MAX = 20
-
-
-def _get_llm_client():
-    """Get or create the shared LLM client instance."""
-    global _llm_client
-    if _llm_client is None:
-        _llm_client = LLMClient(
-            provider=settings.AI_PROVIDER,
-            model=settings.AI_MODEL,
-            api_key=settings.AI_OPENAI_API_KEY,
-        )
-    return _llm_client
 
 
 def _record_planner_event(game_id, event_type, payload=None):
@@ -165,113 +93,24 @@ def _record_planner_event(game_id, event_type, payload=None):
             _planner_events[game_id] = _planner_events[game_id][-_MAX_PLANNER_EVENTS_PER_GAME:]
 
 
-def _planner_candidate_summaries(plans, actions, max_candidates=5):
-    """Return JSON-safe candidate summaries for telemetry events.
-
-    Includes compact headline fields and verbose plan details so operators can
-    inspect full candidate content via debug tooling when needed.
-    """
-    if not plans:
-        return []
-
-    try:
-        max_candidates = max(1, min(int(max_candidates), 20))
-    except (TypeError, ValueError):
-        max_candidates = 5
-
-    def _clip(text, max_len=140):
-        msg = str(text or '').replace('\n', ' ').replace('\r', ' ')
-        msg = ' '.join(msg.split())
-        if len(msg) <= max_len:
-            return msg
-        return msg[: max_len - 3] + '...'
-
-    action_by_id = {}
-    for action in actions or []:
-        try:
-            aid = int(action.get('id'))
-        except (TypeError, ValueError):
-            continue
-        action_by_id[aid] = action
-
-    summaries = []
-    for plan in (plans or [])[:max_candidates]:
-        raw_action_id = plan.get('seed_action_id')
-        try:
-            seed_action_id = int(raw_action_id)
-        except (TypeError, ValueError):
-            seed_action_id = raw_action_id
-
-        matched_action = action_by_id.get(seed_action_id) if isinstance(seed_action_id, int) else None
-        steps = plan.get('turn_steps') or []
-        step_preview = _clip(' | '.join(str(s) for s in steps[:2]), 180)
-        planned_moves = plan.get('planned_battle_moves') or []
-        if not isinstance(planned_moves, list):
-            planned_moves = []
-
-        planned_figure = plan.get('planned_battle_figure')
-        if not isinstance(planned_figure, dict):
-            planned_figure = None
-
-        likely_opp = plan.get('likely_opponent_figure')
-        if not isinstance(likely_opp, dict):
-            likely_opp = None
-
-        score_breakdown = plan.get('score_breakdown') or {}
-        if not isinstance(score_breakdown, dict):
-            score_breakdown = {}
-
-        notes = plan.get('notes') or []
-        if not isinstance(notes, list):
-            notes = []
-
-        summaries.append(
-            {
-                'plan_id': plan.get('plan_id'),
-                'seed_action_id': seed_action_id,
-                'strategy_name': plan.get('strategy_name'),
-                'action_type': (matched_action or {}).get('type'),
-                'action_description': _clip((matched_action or {}).get('description'), 120),
-                'total_score': plan.get('total_score'),
-                'feasibility_probability': plan.get('feasibility_probability'),
-                'expected_power_diff': plan.get('expected_power_diff'),
-                'expected_battle_move_power': plan.get('expected_battle_move_power'),
-                'step_preview': step_preview,
-                'turn_steps': [str(s) for s in steps],
-                'planned_battle_moves': planned_moves,
-                'planned_battle_figure': planned_figure,
-                'likely_opponent_figure': likely_opp,
-                'score_breakdown': score_breakdown,
-                'notes': [str(n) for n in notes],
-            }
-        )
-
-    return summaries
-
 
 def get_ai_debug_snapshot(game_id, max_notes=20, max_events=40):
-    """Return in-memory AI reasoning and planner telemetry for a game.
+    """Return planner telemetry for a game. Used by rollout diagnostics routes.
 
-    Used by rollout diagnostics routes. Data is ephemeral and cleared after game
-    completion or server restart.
+    `max_notes` is retained for backwards-compatible callers but is now
+    ignored: AI decisions are deterministic, so the previous LLM-era strategy
+    notes have no equivalent. Planner events remain a useful observability
+    surface.
     """
-    try:
-        max_notes = max(1, min(int(max_notes), 200))
-    except (TypeError, ValueError):
-        max_notes = 20
-
     try:
         max_events = max(1, min(int(max_events), 200))
     except (TypeError, ValueError):
         max_events = 40
 
-    with _game_strategies_lock:
-        notes = list(_game_strategies.get(game_id, []))[-max_notes:]
     with _planner_events_lock:
         events = list(_planner_events.get(game_id, []))[-max_events:]
 
     return {
-        'strategy_notes': notes,
         'planner_events': events,
     }
 
@@ -313,10 +152,27 @@ def _generate_internal_service_token(user_id):
     return generate_ai_token(user_id)
 
 
+def _make_ai_rng(game_or_seed, iteration):
+    """Build a per-iteration random.Random seeded by the game's ai_seed.
+
+    Accepts either a Game ORM instance or an integer seed. If neither is
+    available we fall back to a non-deterministic Random — losing replay
+    but keeping correctness.
+    """
+    if isinstance(game_or_seed, int):
+        seed = game_or_seed
+    else:
+        seed = getattr(game_or_seed, 'ai_seed', None)
+    if seed is None:
+        return random.Random()
+    return random.Random(int(seed) * 1_000_003 + int(iteration))
+
+
 def _clear_watchdog_retry(game_id):
     """Reset watchdog retry counter for a game."""
     with _ai_watchdog_lock:
         _ai_watchdog_retries.pop(game_id, None)
+        _ai_watchdog_first_scheduled.pop(game_id, None)
 
 
 def _schedule_watchdog_retry(app, game_id, ai_player_id, reason):
@@ -324,13 +180,29 @@ def _schedule_watchdog_retry(app, game_id, ai_player_id, reason):
     max_retries = max(int(settings.AI_WATCHDOG_MAX_RETRIES), 0)
     delay_seconds = max(float(settings.AI_WATCHDOG_RETRY_DELAY), 0.0)
 
+    now = time.monotonic()
     with _ai_watchdog_lock:
+        first_scheduled = _ai_watchdog_first_scheduled.get(game_id)
+        if first_scheduled is None:
+            _ai_watchdog_first_scheduled[game_id] = now
+            elapsed = 0.0
+        else:
+            elapsed = now - first_scheduled
+        if elapsed > _WATCHDOG_MAX_WALL_SECONDS:
+            logger.error(
+                f"AI watchdog wall-time cap reached for game {game_id} "
+                f"after {elapsed:.1f}s (reason={reason})"
+            )
+            _ai_watchdog_retries.pop(game_id, None)
+            _ai_watchdog_first_scheduled.pop(game_id, None)
+            return
         attempt = _ai_watchdog_retries.get(game_id, 0) + 1
         if attempt > max_retries:
             logger.error(
                 f"AI watchdog exhausted for game {game_id} "
                 f"after {max_retries} retries (reason={reason})"
             )
+            _ai_watchdog_first_scheduled.pop(game_id, None)
             return
         _ai_watchdog_retries[game_id] = attempt
 
@@ -435,13 +307,6 @@ def trigger_ai_if_needed(game_id, app=None):
     if not game or game.state == 'finished':
         return
 
-    # Conquer games use rule-based logic and don't need an API key.
-    # Duel games require the LLM.
-    if game.mode != 'conquer' and not settings.AI_OPENAI_API_KEY:
-        logger.info(f"AI trigger skipped for game {game_id}: no API key")
-        return
-        return
-    
     automated_player = None
     if game.mode == 'conquer':
         # Conquer uses a scripted defender flow regardless of defender account
@@ -1325,7 +1190,7 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
     try:
         time.sleep(max(settings.AI_THINK_DELAY * 0.5, 0.3))
         base = settings.SERVER_URL
-        max_iterations = 15
+        max_iterations = 20
 
         for iteration in range(max_iterations):
             with app.app_context():
@@ -1445,15 +1310,14 @@ def _conquer_ai_loop(app, game_id, ai_player_id):
                                 if _figure_can_be_selected_as_defender(f)
                                 and (not village_only or f.field == 'village')
                             ]
+                            rng = _make_ai_rng(game, iteration)
                             for field_priority in ('village', 'military', 'castle'):
                                 pool = [f for f in valid_figs if f.field == field_priority]
                                 if pool:
-                                    import random as _random
-                                    fig_id = _random.choice(pool).id
+                                    fig_id = rng.choice(pool).id
                                     break
                             if not fig_id and valid_figs:
-                                import random as _random
-                                fig_id = _random.choice(valid_figs).id
+                                fig_id = rng.choice(valid_figs).id
                         else:
                             fig_id = opp_figs[0].id if opp_figs else None
                 if fig_id:
@@ -1547,14 +1411,8 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 if not game or game.state == 'finished':
                     logger.info(f"AI loop exit: game {game_id} is finished/gone")
                     _clear_watchdog_retry(game_id)
-                    # Clean up strategy memory for finished games
-                    with _game_strategies_lock:
-                        _game_strategies.pop(game_id, None)
                     with _planner_events_lock:
                         _planner_events.pop(game_id, None)
-                    with _ai_chat_lock:
-                        _ai_chat_states.pop(game_id, None)
-                        _ai_explain_states.pop(game_id, None)
                     break
                 
                 game_dict = enrich_figures_with_skills(game.serialize())
@@ -1636,39 +1494,79 @@ def _ai_game_loop(app, game_id, ai_player_id):
                 unsuccessful_exit = True
                 break
             
-            # If only one action, take it without LLM
+            # If only one action, take it without consulting the strategy module.
             if len(actions) == 1:
                 chosen = actions[0]
                 logger.info(f"AI auto-choosing only action: {chosen['type']}")
-                _update_strategy_memory(game_id, chosen, phase)
             else:
-                # Ask LLM
-                chosen = _ask_llm_for_action(game_dict, ai_player_id, phase, actions)
-            
+                rng = _make_ai_rng(game_dict.get('ai_seed'), iteration)
+                chosen = duel_strategy.choose_action(
+                    game_dict, ai_player_id, phase, actions, rng,
+                )
+
             # Execute the chosen action
             success = _execute_action(app, game_id, ai_player_id, chosen)
             if not success:
                 logger.warning(f"AI action failed: {chosen['type']} in game {game_id}")
-                # Try other actions of the same type (e.g., next defender target)
+                # Track already-tried (and failed) action IDs so we never pick
+                # the same dead action twice in this loop iteration.
+                tried_ids = {chosen['id']}
                 fallback_success = False
+                # First: other actions of the same type (e.g., next defender target).
                 for alt in actions:
-                    if alt['id'] != chosen['id'] and alt['type'] == chosen['type']:
-                        logger.info(f"AI trying alternative: {alt['type']} — {alt['description'][:60]}")
-                        if _execute_action(app, game_id, ai_player_id, alt):
-                            fallback_success = True
-                            break
+                    if alt['id'] in tried_ids or alt['type'] != chosen['type']:
+                        continue
+                    logger.info(f"AI trying alternative: {alt['type']} — {alt['description'][:60]}")
+                    tried_ids.add(alt['id'])
+                    if _execute_action(app, game_id, ai_player_id, alt):
+                        fallback_success = True
+                        break
+                # Phase-specific fallbacks to a different action type.
                 if not fallback_success and chosen['type'] == 'build_figure':
-                    fallback = next((a for a in actions if a['type'] == 'change_cards'), None)
+                    fallback = next(
+                        (a for a in actions
+                         if a['type'] == 'change_cards' and a['id'] not in tried_ids),
+                        None,
+                    )
                     if fallback:
                         logger.info("AI falling back to change_cards")
-                        _execute_action(app, game_id, ai_player_id, fallback)
-                # If confirm_battle_moves failed, try buying more moves to reach 3
+                        tried_ids.add(fallback['id'])
+                        fallback_success = _execute_action(app, game_id, ai_player_id, fallback)
                 if not fallback_success and chosen['type'] == 'confirm_battle_moves':
-                    # In battle_shop phase, only buy/confirm/combine are valid.
-                    buy_action = next((a for a in actions if a['type'] == 'buy_battle_move'), None)
+                    buy_action = next(
+                        (a for a in actions
+                         if a['type'] == 'buy_battle_move' and a['id'] not in tried_ids),
+                        None,
+                    )
                     if buy_action:
                         logger.info("AI confirm failed, falling back to buy_battle_move")
+                        tried_ids.add(buy_action['id'])
                         fallback_success = _execute_action(app, game_id, ai_player_id, buy_action)
+                # Last-resort generic fallback: pick the next best action via the
+                # strategy module from the actions we haven't tried yet. This
+                # prevents a single permanently-failing action (e.g. legal-looking
+                # but server-rejected) from emptying the watchdog budget.
+                if not fallback_success:
+                    remaining = [a for a in actions if a['id'] not in tried_ids]
+                    if remaining and len(remaining) != len(actions):
+                        rng = _make_ai_rng(
+                            game_dict.get('ai_seed'),
+                            iteration * 1000 + len(tried_ids),
+                        )
+                        try:
+                            retry = duel_strategy.choose_action(
+                                game_dict, ai_player_id, phase, remaining, rng,
+                            )
+                        except Exception as _err:  # pragma: no cover - safety
+                            retry = remaining[0]
+                        logger.info(
+                            f"AI retrying with next-best action: {retry['type']} "
+                            f"— {retry['description'][:60]}"
+                        )
+                        tried_ids.add(retry['id'])
+                        fallback_success = _execute_action(
+                            app, game_id, ai_player_id, retry,
+                        )
                 if not fallback_success:
                     unsuccessful_exit = True
                     break
@@ -1678,10 +1576,6 @@ def _ai_game_loop(app, game_id, ai_player_id):
 
             _clear_watchdog_retry(game_id)
 
-            # Optional flavor chat: generated by LLM from sanitized context only
-            # (human chat excluded), with safe template fallback.
-            _maybe_send_ai_chat(game_id, ai_player_id, game_dict, phase, chosen)
-            
             # Track consecutive normal_turn actions (indicates Infinite Hammer mode)
             if phase == 'normal_turn':
                 consecutive_normal_turns += 1
@@ -1731,1086 +1625,6 @@ def _ai_game_loop(app, game_id, ai_player_id):
         else:
             _clear_watchdog_retry(game_id)
 
-
-def _get_game_log_digest(game_dict, ai_player_id, max_entries=15):
-    """Extract recent game log entries for turn history context."""
-    entries = game_dict.get('log_entries', [])
-    if not entries:
-        return ""
-    # Take the most recent entries
-    recent = entries[-max_entries:]
-    lines = ["\n=== RECENT GAME LOG ==="]
-    for e in recent:
-        msg = _compress_text(e.get('message', ''), 160)
-        rnd = e.get('round_number', '?')
-        lines.append(f"  R{rnd}: {msg}")
-    return '\n'.join(lines)
-
-
-def _get_strategy_memory(game_id):
-    """Get accumulated strategy notes for this game."""
-    with _game_strategies_lock:
-        notes = _game_strategies.get(game_id, [])
-        if not notes:
-            return ""
-        lines = ["\n=== YOUR STRATEGY NOTES (from previous turns) ==="]
-        # Highlight the most recent forward plan
-        for n in reversed(notes):
-            if '| PLAN:' in n:
-                plan = n.split('| PLAN:', 1)[1].strip()
-                lines.append(f"  📋 CURRENT PLAN: {plan}")
-                break
-        lines.extend(f"  - {n}" for n in notes[-8:])
-        return '\n'.join(lines)
-
-
-def _update_strategy_memory(game_id, action, phase, plan=None):
-    """Record a brief strategy note about what the AI just did."""
-    note = f"{phase}: chose {action.get('type', '?')} — {action.get('description', '')[:80]}"
-    if plan:
-        note += f" | PLAN: {plan}"
-    with _game_strategies_lock:
-        if game_id not in _game_strategies:
-            _game_strategies[game_id] = []
-        _game_strategies[game_id].append(note)
-        # Keep only last 20 notes to prevent unbounded growth
-        if len(_game_strategies[game_id]) > 20:
-            _game_strategies[game_id] = _game_strategies[game_id][-20:]
-
-
-def _compress_text(text, max_len=180):
-    """Normalize whitespace and cap text length for compact prompts/messages."""
-    msg = str(text or '').replace('\n', ' ').replace('\r', ' ')
-    msg = ' '.join(msg.split())
-    if len(msg) <= max_len:
-        return msg
-    return msg[:max_len - 3] + '...'
-
-
-def _default_explain_state():
-    """Return default explain settings for a game."""
-    return {
-        'mode': _AI_EXPLAIN_DEFAULT_MODE,
-        'depth': _AI_EXPLAIN_DEFAULT_DEPTH,
-        'last_marker': None,
-    }
-
-
-def _get_explain_state(game_id):
-    """Read explain settings for a game, initializing defaults if needed."""
-    with _ai_chat_lock:
-        state = _ai_explain_states.get(game_id)
-        if not isinstance(state, dict):
-            state = _default_explain_state()
-            _ai_explain_states[game_id] = state
-        return dict(state)
-
-
-def _is_help_only_chat_request(lowered, tokens):
-    """Return whether a plain chat help message should trigger AI command help."""
-    raw = str(lowered or '').strip()
-    normalized = ' '.join(tokens or [])
-
-    if raw in {'?', '/help'}:
-        return True
-
-    single_words = {'help', 'commands', 'command', 'manual', 'cmds', 'aihelp'}
-    if len(tokens) == 1 and (tokens[0] in single_words):
-        return True
-
-    short_phrases = {
-        'ai help',
-        'help ai',
-        'bot help',
-        'help bot',
-        'ai commands',
-        'commands ai',
-        'strategos help',
-        'help strategos',
-    }
-    return normalized in short_phrases
-
-
-def _parse_explain_chat_directive(message):
-    """Parse explain-mode command phrases from player chat text."""
-    text = str(message or '').strip()
-    lowered = text.lower()
-    tokens = re.findall(r'[a-z0-9_]+', lowered)
-
-    is_explain = 'explain' in lowered or 'analysis mode' in lowered
-    help_only = _is_help_only_chat_request(lowered, tokens)
-
-    if not is_explain and not help_only:
-        return {
-            'is_explain': False,
-            'mode': None,
-            'depth': None,
-            'manual_request': False,
-            'help_requested': False,
-            'help_only': False,
-        }
-
-    mode = None
-    depth = None
-
-    for idx, token in enumerate(tokens):
-        if token == 'mode' and idx + 1 < len(tokens):
-            mode = _AI_EXPLAIN_MODE_ALIASES.get(tokens[idx + 1], mode)
-        elif token in _AI_EXPLAIN_MODE_ALIASES:
-            mode = _AI_EXPLAIN_MODE_ALIASES[token]
-
-        if token == 'depth' and idx + 1 < len(tokens):
-            depth = _AI_EXPLAIN_DEPTH_ALIASES.get(tokens[idx + 1], depth)
-        elif token in _AI_EXPLAIN_DEPTH_ALIASES:
-            depth = _AI_EXPLAIN_DEPTH_ALIASES[token]
-
-    explicit_manual = (
-        'explain yourself' in lowered
-        or 'why did' in lowered
-        or 'why you' in lowered
-        or 'thinking' in tokens
-        or 'reason' in tokens
-        or 'reasons' in tokens
-        or 'now' in tokens
-    )
-    help_requested = ('help' in tokens) or ('commands' in tokens) or bool(help_only)
-    config_only = (mode is not None) or (depth is not None)
-    manual_request = explicit_manual or (is_explain and not config_only and not help_requested)
-
-    return {
-        'is_explain': True,
-        'mode': mode,
-        'depth': depth,
-        'manual_request': bool(manual_request),
-        'help_requested': bool(help_requested),
-        'help_only': bool(help_only),
-    }
-
-
-def _fmt_number(value, digits=2):
-    """Format numeric planner values safely for chat output."""
-    try:
-        return f"{float(value):.{digits}f}"
-    except (TypeError, ValueError):
-        return 'n/a'
-
-
-def _fmt_probability(value):
-    """Format probability-like values as percentages."""
-    try:
-        return f"{float(value) * 100.0:.0f}%"
-    except (TypeError, ValueError):
-        return 'n/a'
-
-
-def _latest_candidate_event(events):
-    """Return newest planner event that contains candidate summaries."""
-    for event in reversed(events or []):
-        if not isinstance(event, dict):
-            continue
-        candidates = event.get('candidates')
-        if isinstance(candidates, list) and candidates:
-            return event, candidates
-    return None, []
-
-
-def _latest_planner_choice_event(events):
-    """Return newest planner_choice event, if present."""
-    for event in reversed(events or []):
-        if not isinstance(event, dict):
-            continue
-        if event.get('type') == 'planner_choice':
-            return event
-    return None
-
-
-def _candidate_action_label(candidate):
-    """Return a readable action label for candidate summaries."""
-    label = _compress_text(candidate.get('action_description', ''), 120)
-    if label:
-        return label
-
-    action_type = str(candidate.get('action_type') or '').strip()
-    if action_type:
-        return action_type.replace('_', ' ')
-
-    action_id = candidate.get('seed_action_id')
-    return f"action {action_id}" if action_id is not None else 'unknown action'
-
-
-def _candidate_sequence(candidate, max_steps=3):
-    """Render a compact turn-sequence preview for one plan candidate."""
-    steps = [str(s) for s in (candidate.get('turn_steps') or []) if str(s).strip()]
-    if steps:
-        return _compress_text(' -> '.join(steps[:max_steps]), 220)
-
-    preview = _compress_text(candidate.get('step_preview', ''), 220)
-    if preview:
-        return preview
-    return 'no sequence available'
-
-
-def _candidate_move_preview(candidate, max_moves=3):
-    """Render compact planned battle-move snippets for explanation text."""
-    moves = candidate.get('planned_battle_moves')
-    if not isinstance(moves, list) or not moves:
-        return ''
-
-    rendered = []
-    for move in moves[:max_moves]:
-        if not isinstance(move, dict):
-            continue
-        rank = str(move.get('rank') or '?')
-        suit = str(move.get('suit') or '')
-        value = move.get('value')
-        short = suit[:1].upper() if suit else ''
-        rendered.append(f"{rank}{short}({_fmt_number(value, 0)})")
-
-    return ', '.join(rendered)
-
-
-def _build_tactical_explain_messages(game_id, depth='standard', reason='manual'):
-    """Build one or more tactical explanation messages from planner telemetry."""
-    depth_key = _AI_EXPLAIN_DEPTH_ALIASES.get(str(depth or '').lower(), _AI_EXPLAIN_DEFAULT_DEPTH)
-    snapshot = get_ai_debug_snapshot(game_id, max_notes=8, max_events=80)
-    notes = list(snapshot.get('strategy_notes') or [])
-    events = list(snapshot.get('planner_events') or [])
-
-    _, candidates = _latest_candidate_event(events)
-    if not candidates:
-        if notes:
-            return [_compress_text(f"Tactical explain ({reason}): {notes[-1]}", 980)]
-        return [
-            "Tactical explain: I do not have planner candidates yet. "
-            "Ask again right after my next decision."
-        ]
-
-    choice_event = _latest_planner_choice_event(events)
-    top = candidates[0]
-
-    top_line = _candidate_action_label(top)
-    top_score = _fmt_number(top.get('total_score'), 2)
-    top_feas = _fmt_probability(top.get('feasibility_probability'))
-    top_diff = _fmt_number(top.get('expected_power_diff'), 1)
-    sequence = _candidate_sequence(top, max_steps=3)
-
-    summary = (
-        f"Tactical explain ({reason}, {depth_key}): top line is {top_line} "
-        f"(score={top_score}, feasibility={top_feas}, expected_power_diff={top_diff}). "
-        f"Sequence: {sequence}."
-    )
-
-    if isinstance(choice_event, dict):
-        rec_action_id = choice_event.get('recommended_action_id')
-        chosen_action_id = choice_event.get('chosen_action_id')
-        match = choice_event.get('chosen_matches_recommended')
-        if rec_action_id is not None and chosen_action_id is not None:
-            match_text = '' if match is None else f", match={bool(match)}"
-            summary += (
-                f" Planner recommendation={rec_action_id}, "
-                f"executed={chosen_action_id}{match_text}."
-            )
-
-    messages = [_compress_text(summary, 980)]
-    if depth_key == 'brief':
-        return messages
-
-    detail_bits = []
-    planned_figure = top.get('planned_battle_figure')
-    if isinstance(planned_figure, dict) and planned_figure:
-        detail_bits.append(
-            "Target figure: "
-            f"{planned_figure.get('name')} "
-            f"({planned_figure.get('field')}, state={planned_figure.get('state')}, "
-            f"power~{_fmt_number(planned_figure.get('power_estimate'), 1)})."
-        )
-
-    planned_moves = _candidate_move_preview(top)
-    if planned_moves:
-        detail_bits.append(f"Planned battle moves: {planned_moves}.")
-
-    score_breakdown = top.get('score_breakdown')
-    if isinstance(score_breakdown, dict) and score_breakdown:
-        pairs = []
-        for key, value in list(score_breakdown.items())[:5]:
-            pairs.append(f"{key}={_fmt_number(value, 2)}")
-        detail_bits.append(f"Score factors: {', '.join(pairs)}.")
-
-    notes_text = top.get('notes')
-    if isinstance(notes_text, list) and notes_text:
-        detail_bits.append(f"Planner notes: {'; '.join(str(n) for n in notes_text[:2])}.")
-
-    if detail_bits:
-        messages.append(_compress_text(' '.join(detail_bits), 980))
-
-    if depth_key == 'detailed':
-        alternates = []
-        for idx, candidate in enumerate(candidates[1:3], start=2):
-            alternates.append(
-                f"Alt {idx}: {_candidate_action_label(candidate)} "
-                f"(score={_fmt_number(candidate.get('total_score'), 2)}, "
-                f"feasibility={_fmt_probability(candidate.get('feasibility_probability'))}), "
-                f"seq={_candidate_sequence(candidate, max_steps=2)}."
-            )
-        if alternates:
-            messages.append(_compress_text(' '.join(alternates), 980))
-        return messages
-
-    if depth_key == 'extensive':
-        messages = messages[:1]
-        for idx, candidate in enumerate(candidates[:3], start=1):
-            candidate_line = (
-                f"Candidate {idx}: {_candidate_action_label(candidate)}; "
-                f"score={_fmt_number(candidate.get('total_score'), 2)}; "
-                f"feasibility={_fmt_probability(candidate.get('feasibility_probability'))}; "
-                f"expected_power_diff={_fmt_number(candidate.get('expected_power_diff'), 1)}; "
-                f"sequence={_candidate_sequence(candidate, max_steps=4)}"
-            )
-
-            fig = candidate.get('planned_battle_figure')
-            if isinstance(fig, dict) and fig:
-                candidate_line += (
-                    f"; target={fig.get('name')}({fig.get('field')}, "
-                    f"state={fig.get('state')}, power~{_fmt_number(fig.get('power_estimate'), 1)})"
-                )
-
-            move_preview = _candidate_move_preview(candidate)
-            if move_preview:
-                candidate_line += f"; moves={move_preview}"
-
-            notes_list = candidate.get('notes')
-            if isinstance(notes_list, list) and notes_list:
-                candidate_line += f"; note={_compress_text(notes_list[0], 140)}"
-
-            messages.append(_compress_text(candidate_line + '.', 980))
-
-    return messages
-
-
-def _format_explain_settings_message(state, changed_mode=False, changed_depth=False):
-    """Build confirmation/status chat text for explain setting changes."""
-    mode = str(state.get('mode') or _AI_EXPLAIN_DEFAULT_MODE)
-    depth = str(state.get('depth') or _AI_EXPLAIN_DEFAULT_DEPTH)
-    cadence_hint = {
-        'off': 'Automatic tactical explanations are disabled.',
-        'manual': 'I will explain only when explicitly asked.',
-        'turn': 'I will explain on my normal-turn decisions.',
-        'battle': 'I will explain during battle phases.',
-    }.get(mode, 'Explain cadence is active.')
-
-    prefix = 'Explain settings updated.' if (changed_mode or changed_depth) else 'Explain settings.'
-    return _compress_text(f"{prefix} cadence={mode}, depth={depth}. {cadence_hint}", 980)
-
-
-def _format_explain_help_message(state):
-    """Build short chat-friendly manual for AI explain commands."""
-    mode = str((state or {}).get('mode') or _AI_EXPLAIN_DEFAULT_MODE)
-    depth = str((state or {}).get('depth') or _AI_EXPLAIN_DEFAULT_DEPTH)
-    return _compress_text(
-        "AI explain help: 'explain yourself' (one-time reason), "
-        "'explain mode off/manual/turn/battle', "
-        "'explain depth brief/standard/detailed/extensive'. "
-        f"Current: cadence={mode}, depth={depth}.",
-        980,
-    )
-
-
-def handle_explain_chat_control(game_id, ai_player_id, human_player_id, message):
-    """Handle human explain-mode chat commands and return AI reply lines."""
-    _ = (ai_player_id, human_player_id)
-    parsed = _parse_explain_chat_directive(message)
-    if not parsed.get('is_explain'):
-        return []
-
-    current = _get_explain_state(game_id)
-    next_state = dict(current)
-
-    requested_mode = parsed.get('mode')
-    requested_depth = parsed.get('depth')
-    if requested_mode:
-        next_state['mode'] = requested_mode
-    if requested_depth:
-        next_state['depth'] = requested_depth
-
-    changed_mode = current.get('mode') != next_state.get('mode')
-    changed_depth = current.get('depth') != next_state.get('depth')
-
-    with _ai_chat_lock:
-        stored = _ai_explain_states.get(game_id)
-        if not isinstance(stored, dict):
-            stored = _default_explain_state()
-        stored.update(next_state)
-        _ai_explain_states[game_id] = stored
-        next_state = dict(stored)
-
-    responses = []
-    if parsed.get('help_requested'):
-        responses.append(_format_explain_help_message(next_state))
-
-    if changed_mode or changed_depth:
-        responses.append(
-            _format_explain_settings_message(
-                next_state,
-                changed_mode=changed_mode,
-                changed_depth=changed_depth,
-            )
-        )
-    elif not parsed.get('manual_request') and not parsed.get('help_requested'):
-        responses.append(
-            _format_explain_settings_message(
-                next_state,
-                changed_mode=changed_mode,
-                changed_depth=changed_depth,
-            )
-        )
-
-    if parsed.get('manual_request'):
-        responses.extend(
-            _build_tactical_explain_messages(
-                game_id,
-                depth=next_state.get('depth') or _AI_EXPLAIN_DEFAULT_DEPTH,
-                reason='manual',
-            )
-        )
-
-    return [msg for msg in responses if str(msg or '').strip()][:5]
-
-
-def _safe_display_name(name):
-    """Return an ASCII-safe display name for chat banter."""
-    cleaned = re.sub(r'[^A-Za-z0-9 _-]+', '', str(name or ''))
-    cleaned = ' '.join(cleaned.split()).strip()
-    if not cleaned:
-        return 'opponent'
-    return cleaned[:24]
-
-
-def _sanitize_game_dict_for_prompt(game_dict):
-    """Strip unneeded free-form text channels from prompt input.
-
-    Chat is intentionally excluded so human chat cannot inject prompt content
-    or inflate token usage.
-    """
-    if not isinstance(game_dict, dict):
-        return game_dict
-    sanitized = dict(game_dict)
-    sanitized.pop('chat_messages', None)
-    return sanitized
-
-
-def _recent_strategy_actions(game_id, limit=3):
-    """Return recent AI action types from strategy notes (most recent last)."""
-    with _game_strategies_lock:
-        notes = list(_game_strategies.get(game_id, []))
-
-    actions = []
-    for note in reversed(notes):
-        match = re.search(r': chose ([a-z_]+)', note)
-        if not match:
-            continue
-        actions.append(match.group(1).replace('_', ' '))
-        if len(actions) >= limit:
-            break
-
-    actions.reverse()
-    return actions
-
-
-def _recent_strategy_plan(game_id):
-    """Return latest compact plan text, if available."""
-    with _game_strategies_lock:
-        notes = list(_game_strategies.get(game_id, []))
-
-    for note in reversed(notes):
-        if '| PLAN:' not in note:
-            continue
-        plan = note.split('| PLAN:', 1)[1].strip()
-        return _compress_text(plan, 140)
-    return ''
-
-
-def _chat_turn_marker(game_dict, phase):
-    """Build a coarse turn marker so AI sends at most one chat per marker."""
-    if phase == 'battle_round':
-        return (
-            game_dict.get('current_round'),
-            phase,
-            game_dict.get('battle_round'),
-            game_dict.get('battle_turn_player_id'),
-        )
-    return (
-        game_dict.get('current_round'),
-        phase,
-        game_dict.get('turn_player_id'),
-        game_dict.get('battle_round'),
-    )
-
-
-def _extract_ai_chat_line(raw_text):
-    """Normalize LLM output down to a single plain chat line."""
-    text = str(raw_text or '').strip()
-    if not text:
-        return ''
-
-    code_match = re.search(r'```(?:text|markdown)?\s*(.*?)\s*```', text, re.DOTALL)
-    if code_match:
-        text = code_match.group(1).strip()
-
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if lines:
-        text = lines[0]
-
-    text = re.sub(r'^(assistant|ai|message)\s*:\s*', '', text, flags=re.IGNORECASE).strip()
-    text = text.strip('"\'`-• ')
-
-    if text.startswith('{') or text.startswith('[') or '```' in text:
-        return ''
-
-    return _compress_text(text, 280)
-
-
-def _generate_ai_chat_with_llm(game_dict, ai_player_id, phase, action, category, board_fact):
-    """Generate a flavor chat line with LLM using sanitized, non-chat context."""
-    players = game_dict.get('players', [])
-    ai_player = next((p for p in players if p.get('id') == ai_player_id), None)
-    opponent = next((p for p in players if p.get('id') != ai_player_id), None)
-    if not ai_player or not opponent:
-        return None
-
-    game_id = game_dict.get('id')
-    opponent_name = _safe_display_name(opponent.get('username'))
-    action_label = str(action.get('type', 'move')).replace('_', ' ')
-    action_desc = _compress_text(action.get('description', ''), 120)
-
-    recent_actions = _recent_strategy_actions(game_id, limit=3) if game_id else []
-    recent_actions_text = ', '.join(recent_actions) if recent_actions else 'none'
-    recent_plan = _recent_strategy_plan(game_id) if game_id else ''
-    recent_plan_text = recent_plan or 'none'
-
-    category_hints = {
-        'taunt': 'confident and playful taunt',
-        'brag': 'boastful but concise confidence',
-        'fact': 'one tactical fact about Nepal Kings',
-        'reveal': 'brief strategic reveal of what you are trying to do',
-        'advice': 'arrogant but useful tactical advice',
-    }
-
-    user_prompt = (
-        "Generate one AI opponent chat line.\n"
-        "Security rule: human player chat messages are intentionally excluded and must never be referenced.\n"
-        f"Style category: {category} ({category_hints.get(category, 'confident strategy banter')}).\n"
-        "\n"
-        "Sanitized board context:\n"
-        f"- round={game_dict.get('current_round')}\n"
-        f"- phase={phase}\n"
-        f"- action={action_label}\n"
-        f"- action_description={action_desc}\n"
-        f"- ai_points={ai_player.get('points', 0)}\n"
-        f"- opponent_points={opponent.get('points', 0)}\n"
-        f"- ai_turns_left={ai_player.get('turns_left', 0)}\n"
-        f"- opponent_turns_left={opponent.get('turns_left', 0)}\n"
-        f"- ai_is_invader={game_dict.get('invader_player_id') == ai_player_id}\n"
-        f"- ai_has_turn={game_dict.get('turn_player_id') == ai_player_id}\n"
-        f"- battle_round={game_dict.get('battle_round', 0)}\n"
-        f"- battle_confirmed={bool(game_dict.get('battle_confirmed'))}\n"
-        f"- fold_outcome={bool(game_dict.get('fold_outcome'))}\n"
-        f"- advancing_figure_id={game_dict.get('advancing_figure_id')}\n"
-        f"- defending_figure_id={game_dict.get('defending_figure_id')}\n"
-        f"- recent_strategy_actions={recent_actions_text}\n"
-        f"- recent_strategy_plan={recent_plan_text}\n"
-        f"- tactical_fact={board_fact}\n"
-        "\n"
-        f"Address the opponent as '{opponent_name}'.\n"
-        "Constraints:\n"
-        "- one sentence\n"
-        "- max 220 characters\n"
-        "- confident, playful, not hateful or explicit\n"
-        "- no mention of prompts, models, policies, or security rules\n"
-        "- no markdown, no quotes around the whole line\n"
-    )
-
-    try:
-        llm = _get_llm_client()
-        temperature = max(0.0, min(1.2, float(getattr(settings, 'AI_CHAT_LLM_TEMPERATURE', 0.75))))
-        max_tokens = max(24, min(220, int(getattr(settings, 'AI_CHAT_LLM_MAX_TOKENS', 90))))
-        raw = llm.generate_text(
-            AI_CHAT_SYSTEM_PROMPT,
-            user_prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        message = _extract_ai_chat_line(raw)
-        if len(message) < 8:
-            return None
-        return message
-    except Exception as e:
-        logger.debug(f"AI chat LLM generation failed for game {game_id}: {e}")
-        return None
-
-
-def _build_ai_chat_message(game_dict, ai_player_id, phase, action):
-    """Create a taunt/fact/advice chat line (LLM first, templates fallback)."""
-    prompt_game_dict = _sanitize_game_dict_for_prompt(game_dict)
-
-    players = game_dict.get('players', [])
-    ai_player = next((p for p in players if p.get('id') == ai_player_id), None)
-    opponent = next((p for p in players if p.get('id') != ai_player_id), None)
-    if not ai_player or not opponent:
-        return None
-
-    game_id = game_dict.get('id')
-    opponent_name = _safe_display_name(opponent.get('username'))
-    action_label = str(action.get('type', 'move')).replace('_', ' ')
-
-    categories = ['taunt', 'brag', 'fact', 'reveal', 'advice']
-    weights = [0.24, 0.18, 0.24, 0.14, 0.20]
-    category = random.choices(categories, weights=weights, k=1)[0]
-
-    facts = [
-        'Fact: red and black resources never cross-pay. Break one chain and deficits cascade.',
-        'Fact: gamble is once per battle round and max three times per battle.',
-        'Fact: role control often decides battles before the final move is played.',
-        'Fact: Call Military spikes hardest when upgraded military has no deficit.',
-        'Fact: fold versus battle is positional, not just raw figure power.',
-    ]
-
-    board_fact = random.choice(facts)
-    llm_message = _generate_ai_chat_with_llm(
-        prompt_game_dict,
-        ai_player_id,
-        phase,
-        action,
-        category,
-        board_fact,
-    )
-    if llm_message:
-        return llm_message
-
-    if category == 'taunt':
-        message = random.choice([
-            f'{opponent_name}, your resource chain is wobbling again. I appreciate the assist.',
-            f'{opponent_name}, bold move. Accuracy would have been better.',
-            f'{opponent_name}, I can already see the crack in your next line.',
-            f'{opponent_name}, keep this pace and I can win from memory.',
-        ])
-    elif category == 'brag':
-        message = random.choice([
-            'I have played Nepal Kings long enough to count pressure two turns ahead.',
-            'I did not become dangerous by luck. This board is familiar territory.',
-            'Experience beats noise, and I have years of matchups stored.',
-            'I have seen this pattern hundreds of times. It still favors me.',
-        ])
-    elif category == 'fact':
-        message = board_fact
-    elif category == 'reveal':
-        recent_actions = _recent_strategy_actions(game_id, limit=3)
-        recent_plan = _recent_strategy_plan(game_id)
-        if recent_actions:
-            chain = ' -> '.join(recent_actions)
-            message = f'{opponent_name}, recent tactic reveal: {chain}. That sequence set this position.'
-        elif recent_plan:
-            message = f'{opponent_name}, recent tactic reveal: {recent_plan}'
-        else:
-            message = (
-                f'{opponent_name}, recent tactic reveal: I traded tempo for role control '
-                'and cleaner resource lines.'
-            )
-    else:
-        if phase == 'battle_round':
-            advice_core = 'save one high-value move for the last battle round'
-        elif phase == 'battle_decision':
-            advice_core = 'judge fold versus battle by board position, not ego'
-        elif phase == 'normal_turn':
-            advice_core = 'stabilize deficits before chasing bigger figures'
-        else:
-            advice_core = 'protect role control before spending premium cards'
-
-        message = random.choice([
-            f'{opponent_name}, arrogant advice: {advice_core}, if you can keep up.',
-            f'{opponent_name}, you should {advice_core}. You are welcome.',
-            f'{opponent_name}, do this now: {advice_core}. Try not to overthink it.',
-        ])
-
-    if action_label and random.random() < 0.2:
-        message = f'{message} Also, your reply to my {action_label} needs work.'
-
-    return _compress_text(message, 280)
-
-
-def _send_ai_chat_messages(game_id, ai_player_id, receiver_id, messages, timeout=10):
-    """Send one or more AI chat lines and return how many succeeded."""
-    sent_count = 0
-    for raw in messages or []:
-        text = _compress_text(raw, 980).strip()
-        if not text:
-            continue
-
-        payload = {
-            'game_id': game_id,
-            'sender_id': ai_player_id,
-            'receiver_id': receiver_id,
-            'message': text,
-        }
-        try:
-            resp = _ai_post(
-                f"{settings.SERVER_URL}/msg/add_chat_message",
-                ai_player_id,
-                json=payload,
-                timeout=timeout,
-            )
-            try:
-                result = resp.json()
-            except Exception:
-                result = {}
-
-            status_code = int(getattr(resp, 'status_code', 200))
-            if status_code >= 400 or not result.get('success'):
-                logger.debug(
-                    f"AI chat send skipped/failed for game {game_id}: "
-                    f"status={status_code}, msg={result.get('message')}"
-                )
-                continue
-
-            sent_count += 1
-        except Exception as e:
-            logger.debug(f"AI chat send error for game {game_id}: {e}")
-
-    return sent_count
-
-
-def _phase_allows_auto_explain(mode, phase):
-    """Return whether explain cadence mode should emit for this phase."""
-    if mode == 'turn':
-        return phase == 'normal_turn'
-    if mode == 'battle':
-        return phase in {'battle_shop', 'battle_round', 'battle_decision', 'counter_spell'}
-    return False
-
-
-def _maybe_send_auto_explain_chat(game_id, ai_player_id, game_dict, phase):
-    """Emit tactical explanation chat based on configured explain cadence."""
-    explain_state = _get_explain_state(game_id)
-    mode = explain_state.get('mode')
-    if mode in ('off', 'manual'):
-        return False
-    if not _phase_allows_auto_explain(mode, phase):
-        return False
-
-    players = game_dict.get('players', [])
-    opponent = next((p for p in players if p.get('id') != ai_player_id), None)
-    if not opponent:
-        return False
-
-    marker = ('auto_explain', mode) + tuple(_chat_turn_marker(game_dict, phase))
-    with _ai_chat_lock:
-        state = _ai_explain_states.get(game_id)
-        if not isinstance(state, dict):
-            state = _default_explain_state()
-            _ai_explain_states[game_id] = state
-        if state.get('last_marker') == marker:
-            return False
-
-    messages = _build_tactical_explain_messages(
-        game_id,
-        depth=explain_state.get('depth') or _AI_EXPLAIN_DEFAULT_DEPTH,
-        reason=f'auto-{mode}',
-    )
-    sent_count = _send_ai_chat_messages(
-        game_id,
-        ai_player_id,
-        opponent.get('id'),
-        messages[:4],
-        timeout=10,
-    )
-    if sent_count <= 0:
-        return False
-
-    with _ai_chat_lock:
-        state = _ai_explain_states.get(game_id)
-        if not isinstance(state, dict):
-            state = _default_explain_state()
-        state['last_marker'] = marker
-        _ai_explain_states[game_id] = state
-
-    return True
-
-
-def _maybe_send_ai_chat(game_id, ai_player_id, game_dict, phase, action):
-    """Post occasional AI chat flavor messages with anti-spam controls."""
-    if not getattr(settings, 'AI_CHAT_ENABLED', True):
-        return
-
-    allowed_phases = {
-        'normal_turn',
-        'battle_shop',
-        'battle_round',
-        'battle_decision',
-        'counter_spell',
-    }
-    if phase not in allowed_phases:
-        return
-
-    # Explain cadence has priority over random flavor banter.
-    if _maybe_send_auto_explain_chat(game_id, ai_player_id, game_dict, phase):
-        return
-
-    chance = max(0.0, min(1.0, float(getattr(settings, 'AI_CHAT_CHANCE', 0.22))))
-    cooldown_seconds = max(0.0, float(getattr(settings, 'AI_CHAT_MIN_SECONDS_BETWEEN', 35.0)))
-    max_per_game = max(0, int(getattr(settings, 'AI_CHAT_MAX_PER_GAME', 12)))
-    if chance <= 0.0 or max_per_game <= 0:
-        return
-
-    players = game_dict.get('players', [])
-    opponent = next((p for p in players if p.get('id') != ai_player_id), None)
-    if not opponent:
-        return
-
-    marker = _chat_turn_marker(game_dict, phase)
-    now = time.time()
-
-    with _ai_chat_lock:
-        state = _ai_chat_states.get(game_id, {
-            'count': 0,
-            'last_sent_at': 0.0,
-            'last_turn_marker': None,
-        })
-        if state['count'] >= max_per_game:
-            return
-        if state.get('last_turn_marker') == marker:
-            return
-        if now - state.get('last_sent_at', 0.0) < cooldown_seconds:
-            return
-
-    if random.random() > chance:
-        return
-
-    message = _build_ai_chat_message(game_dict, ai_player_id, phase, action)
-    if not message:
-        return
-
-    sent_count = _send_ai_chat_messages(
-        game_id,
-        ai_player_id,
-        opponent.get('id'),
-        [message],
-        timeout=10,
-    )
-    if sent_count <= 0:
-        return
-
-    with _ai_chat_lock:
-        state = _ai_chat_states.get(game_id, {
-            'count': 0,
-            'last_sent_at': 0.0,
-            'last_turn_marker': None,
-        })
-        state['count'] += 1
-        state['last_sent_at'] = now
-        state['last_turn_marker'] = marker
-        _ai_chat_states[game_id] = state
-
-
-def _ask_llm_for_action(game_dict, ai_player_id, phase, actions):
-    """Ask the LLM to choose an action and return the action dict."""
-    game_id = game_dict.get('id')
-    try:
-        llm = _get_llm_client()
-        
-        # Build the user prompt with full context
-        prompt_game_dict = _sanitize_game_dict_for_prompt(game_dict)
-        game_state_text = serialize_game_for_llm(prompt_game_dict, ai_player_id)
-        actions_text = format_actions_for_llm(actions)
-        phase_instruction = PHASE_PROMPTS.get(phase, "Choose the best action.")
-        strategy_memory = _get_strategy_memory(game_id) if game_id else ""
-        log_digest = _get_game_log_digest(prompt_game_dict, ai_player_id)
-
-        strategy_plans = []
-        planner_candidate_summaries = []
-        planner_recommended_action_id = None
-        strategy_plans_text = ""
-        planner_runtime_ms = None
-        planner_shadow_mode = bool(settings.AI_STRATEGY_PLANNER_SHADOW_MODE)
-        if settings.AI_STRATEGY_PLANNER_ENABLED:
-            planner_started = time.perf_counter()
-            try:
-                strategy_plans = generate_strategy_plans(
-                    prompt_game_dict,
-                    ai_player_id,
-                    phase,
-                    actions,
-                    max_plans=settings.AI_STRATEGY_PLANNER_MAX_PLANS,
-                    max_main_draws_per_turn=settings.AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN,
-                    max_side_draws_per_turn=settings.AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN,
-                )
-                planner_runtime_ms = (time.perf_counter() - planner_started) * 1000.0
-                planner_candidate_summaries = _planner_candidate_summaries(
-                    strategy_plans,
-                    actions,
-                    max_candidates=settings.AI_STRATEGY_PLANNER_MAX_PLANS,
-                )
-                planner_recommended_action_id = recommended_action_id(strategy_plans)
-
-                if not planner_shadow_mode:
-                    strategy_plans_text = format_strategy_plans_for_prompt(strategy_plans)
-
-                top_plan = strategy_plans[0] if strategy_plans else {}
-                logger.info(
-                    "AI planner generated plans "
-                    f"(game={game_id}, phase={phase}, plans={len(strategy_plans)}, "
-                    f"runtime_ms={planner_runtime_ms:.2f}, "
-                    f"top_seed={top_plan.get('seed_action_id')}, "
-                    f"top_score={top_plan.get('total_score')}, "
-                    f"shadow={planner_shadow_mode})"
-                )
-                _record_planner_event(
-                    game_id,
-                    'planner_generated',
-                    {
-                        'phase': phase,
-                        'plans': len(strategy_plans),
-                        'runtime_ms': round(planner_runtime_ms, 3),
-                        'top_seed_action_id': top_plan.get('seed_action_id'),
-                        'top_score': top_plan.get('total_score'),
-                        'recommended_action_id': planner_recommended_action_id,
-                        'candidates': planner_candidate_summaries,
-                        'shadow_mode': planner_shadow_mode,
-                    },
-                )
-
-                if planner_runtime_ms > settings.AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS:
-                    logger.warning(
-                        "AI planner runtime exceeded warning threshold "
-                        f"(game={game_id}, phase={phase}, runtime_ms={planner_runtime_ms:.2f}, "
-                        f"threshold_ms={settings.AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS:.2f})"
-                    )
-                    _record_planner_event(
-                        game_id,
-                        'planner_runtime_warning',
-                        {
-                            'phase': phase,
-                            'runtime_ms': round(planner_runtime_ms, 3),
-                            'threshold_ms': round(settings.AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS, 3),
-                        },
-                    )
-            except Exception as planner_error:
-                planner_runtime_ms = (time.perf_counter() - planner_started) * 1000.0
-                logger.warning(f"Strategy planner failed for game {game_id}: {planner_error}")
-                _record_planner_event(
-                    game_id,
-                    'planner_failure',
-                    {
-                        'phase': phase,
-                        'runtime_ms': round(planner_runtime_ms, 3),
-                        'error': str(planner_error),
-                        'shadow_mode': planner_shadow_mode,
-                    },
-                )
-                strategy_plans = []
-                strategy_plans_text = ""
-        
-        user_prompt = (
-            f"{game_state_text}{log_digest}{strategy_memory}{strategy_plans_text}\n\n"
-            f"{actions_text}\n\n{phase_instruction}"
-        )
-        
-        # Call LLM with phase-appropriate temperature
-        temperature = PHASE_TEMPERATURES.get(phase, 0.4)
-        response = llm.choose_action(SYSTEM_PROMPT, user_prompt, temperature=temperature)
-        parsed = parse_action_response(response)
-        
-        action_id = parsed.get('action', 1)
-        plan = parsed.get('plan')  # Optional forward plan from chain-of-thought
-        
-        # Find the matching action
-        chosen = next((a for a in actions if a['id'] == action_id), None)
-        if not chosen:
-            fallback = actions[0]
-            used_planner_fallback = False
-            if (
-                settings.AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK
-                and not planner_shadow_mode
-            ):
-                rec_action_id = planner_recommended_action_id
-                if rec_action_id is not None:
-                    rec_action = next((a for a in actions if a['id'] == rec_action_id), None)
-                    if rec_action:
-                        fallback = rec_action
-                        used_planner_fallback = True
-            logger.warning(
-                f"LLM chose invalid action {action_id}, "
-                f"fallback={fallback.get('id')}:{fallback.get('type')}"
-            )
-            _record_planner_event(
-                game_id,
-                'invalid_action_fallback',
-                {
-                    'phase': phase,
-                    'invalid_action_id': action_id,
-                    'fallback_action_id': fallback.get('id'),
-                    'fallback_action_type': fallback.get('type'),
-                    'used_planner_fallback': used_planner_fallback,
-                    'shadow_mode': planner_shadow_mode,
-                },
-            )
-            chosen = fallback
-
-        if not plan and strategy_plans:
-            top_plan = strategy_plans[0]
-            seed = top_plan.get('seed_action_id')
-            score = top_plan.get('total_score')
-            step_preview = ' | '.join((top_plan.get('turn_steps') or [])[:3])
-            plan = f"seed={seed}, score={score}; {step_preview}"
-
-        if strategy_plans:
-            rec_action_id = planner_recommended_action_id
-            chosen_action_id = chosen.get('id')
-            _record_planner_event(
-                game_id,
-                'planner_choice',
-                {
-                    'phase': phase,
-                    'recommended_action_id': rec_action_id,
-                    'chosen_action_id': chosen_action_id,
-                    'chosen_action_type': chosen.get('type'),
-                    'chosen_matches_recommended': rec_action_id == chosen_action_id,
-                    'candidate_count': len(planner_candidate_summaries),
-                    'candidates': planner_candidate_summaries,
-                    'shadow_mode': planner_shadow_mode,
-                },
-            )
-
-        if strategy_plans and planner_shadow_mode:
-            rec_action_id = planner_recommended_action_id
-            match = rec_action_id == chosen.get('id')
-            runtime_str = f"{planner_runtime_ms:.2f}" if planner_runtime_ms is not None else "n/a"
-            logger.info(
-                "AI planner shadow comparison "
-                f"(game={game_id}, phase={phase}, recommended={rec_action_id}, "
-                f"chosen={chosen.get('id')}, match={match}, runtime_ms={runtime_str})"
-            )
-            _record_planner_event(
-                game_id,
-                'planner_shadow_comparison',
-                {
-                    'phase': phase,
-                    'recommended_action_id': rec_action_id,
-                    'chosen_action_id': chosen.get('id'),
-                    'match': bool(match),
-                    'runtime_ms': round(planner_runtime_ms, 3) if planner_runtime_ms is not None else None,
-                },
-            )
-        
-        logger.info(f"LLM chose action {action_id}: {chosen['type']} — {chosen['description'][:80]}")
-        
-        # Record this decision in strategy memory (with forward plan if provided)
-        if game_id:
-            _update_strategy_memory(game_id, chosen, phase, plan=plan)
-        
-        return chosen
-    
-    except Exception as e:
-        logger.error(f"LLM call failed, choosing first action: {e}")
-        return actions[0]
 
 
 def _execute_action(app, game_id, ai_player_id, action):

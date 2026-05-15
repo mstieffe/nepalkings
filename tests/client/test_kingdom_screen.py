@@ -95,8 +95,12 @@ class TestKingdomActivityPanel:
         screen._activity_rect = pygame.Rect(10, 10, 300, 400)
         screen._activity_tab = 'alerts'
         screen._messages = []
+        screen._conversations = []
         screen._message_unread_count = 0
         screen._message_compose = None
+        screen._thread = None
+        screen._new_msg_picker = None
+        screen._new_msg_rect = None
         screen._activity_tab_rects = {
             'alerts': pygame.Rect(20, 20, 80, 30),
             'history': pygame.Rect(105, 20, 80, 30),
@@ -132,7 +136,16 @@ class TestKingdomActivityPanel:
         assert screen._hex_map.focused == [42]
         screen.state.set_msg.assert_called_once()
 
-    def test_message_row_click_opens_reply_compose(self):
+    def test_message_row_click_opens_thread_modal(self, monkeypatch):
+        from game.screens import kingdom_screen as ks_module
+
+        monkeypatch.setattr(
+            ks_module.requests, 'get',
+            lambda *a, **k: _Response({'success': True, 'messages': [],
+                                        'other_user_id': 8, 'other_username': 'rival'}))
+        monkeypatch.setattr(
+            ks_module.requests, 'post', lambda *a, **k: _Response({'success': True}))
+
         KingdomScreen, screen = self._screen()
         message = {
             'id': 1,
@@ -148,9 +161,46 @@ class TestKingdomActivityPanel:
         handled = KingdomScreen._handle_activity_click(screen, (30, 90))
 
         assert handled is True
+        # Thread modal opens with the other participant prefilled.
+        assert screen._thread is not None
+        assert screen._thread['other_user_id'] == 8
+        assert screen._thread['other_username'] == 'rival'
+        assert screen._thread['land_id'] == 42
+        # Back-compat shim still mirrors compose state for legacy code paths.
         assert screen._message_compose['recipient_user_id'] == 8
         assert screen._message_compose['recipient_username'] == 'rival'
         assert screen._message_compose['land_id'] == 42
+
+    def test_conversation_row_click_opens_thread_modal(self, monkeypatch):
+        from game.screens import kingdom_screen as ks_module
+
+        monkeypatch.setattr(
+            ks_module.requests, 'get',
+            lambda *a, **k: _Response({'success': True, 'messages': [],
+                                        'other_user_id': 8, 'other_username': 'rival'}))
+        monkeypatch.setattr(
+            ks_module.requests, 'post', lambda *a, **k: _Response({'success': True}))
+
+        KingdomScreen, screen = self._screen()
+        conv = {
+            'other_user_id': 8,
+            'other_username': 'rival',
+            'is_ai': False,
+            'last_message': 'Hi',
+            'last_sender_user_id': 8,
+            'last_seen_by_recipient': False,
+            'last_timestamp': '2026-05-14T10:00:00',
+            'last_land_id': 42,
+            'unread_count': 1,
+        }
+        screen._activity_row_rects = [(pygame.Rect(20, 80, 260, 50), conv)]
+
+        handled = KingdomScreen._handle_activity_click(screen, (30, 90))
+
+        assert handled is True
+        assert screen._thread['other_user_id'] == 8
+        assert screen._thread['other_username'] == 'rival'
+        assert screen._thread['land_id'] == 42
 
     def test_history_formatting_is_role_aware(self):
         KingdomScreen, screen = self._screen()
@@ -402,6 +452,9 @@ class TestKingdomDragRelease:
         screen.dialogue_box = None
         screen._detail_box = None
         screen._message_compose = None
+        screen._thread = None
+        screen._new_msg_picker = None
+        screen._new_msg_rect = None
         screen._btn_close_rect = pygame.Rect(0, 0, 20, 20)
         screen._box_rect = pygame.Rect(100, 100, 400, 300)
         screen._activity_rect = pygame.Rect(550, 120, 220, 240)

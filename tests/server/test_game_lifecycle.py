@@ -83,6 +83,28 @@ class TestCreateGame:
         assert u1.gold == gold_before_u1 - challenge.stake
         assert u2.gold == gold_before_u2 - challenge.stake
 
+    def test_create_game_copies_game_limit_from_challenge(self, client, db, two_users, auth_headers_user1):
+        from models import Challenge, Game
+        u1, u2 = two_users
+        resp = client.post('/challenges/create_challenge', data={
+            'challenger': u1.username,
+            'opponent': u2.username,
+            'stake': '10',
+            'game_limit': '25',
+        }, headers=auth_headers_user1)
+        assert resp.get_json()['success'] is True
+        challenge = Challenge.query.first()
+
+        create_resp = client.post('/games/create_game', data={
+            'challenge_id': str(challenge.id),
+        }, headers=auth_headers_user1)
+        data = create_resp.get_json()
+        assert data['success'] is True, data.get('message')
+        game = db.session.get(Game, data['game']['id'])
+        assert data['game']['stake'] == 10
+        assert data['game']['game_limit'] == 25
+        assert game.game_limit == 25
+
     def test_create_game_marks_challenge_accepted(self, app, db, two_users_with_challenge, client, auth_headers_user1):
         from models import Challenge, ChallengeStatus
         u1, u2, challenge = two_users_with_challenge
@@ -114,7 +136,7 @@ class TestGameState:
     def test_game_state_serialization(self, app, db, created_game):
         """Verify all expected fields are present in the serialized game."""
         required_fields = [
-            'id', 'state', 'stake', 'current_round', 'invader_player_id',
+            'id', 'state', 'stake', 'game_limit', 'current_round', 'invader_player_id',
             'turn_player_id', 'ceasefire_active', 'players',
         ]
         for field in required_fields:
@@ -158,6 +180,33 @@ class TestGameOver:
         db.session.commit()
         db.session.refresh(winner_user)
         assert winner_user.gold == gold_before + game.stake * 2
+
+    def test_game_over_uses_game_limit_but_pays_stake(self, app, db, created_game):
+        from models import Game, User
+        from routes.games import _check_game_over
+        from unittest.mock import patch
+        game = db.session.get(Game, created_game['id'])
+        game.stake = 10
+        game.game_limit = 25
+        winner_player = game.players[0]
+        winner_user = db.session.get(User, winner_player.user_id)
+        gold_before = winner_user.gold
+
+        winner_player.points = game.stake
+        db.session.commit()
+        assert _check_game_over(game) is None
+
+        winner_player.points = game.game_limit
+        db.session.commit()
+        with patch('routes.games.random.choices', return_value=['main_booster']):
+            result = _check_game_over(game)
+        db.session.commit()
+
+        assert result is not None
+        assert result['game_limit'] == 25
+        assert result['stake'] == 10
+        db.session.refresh(winner_user)
+        assert winner_user.gold == gold_before + 20
 
     def test_checkmate_triggers_game_over(self, app, db, created_game):
         from models import Figure, Game

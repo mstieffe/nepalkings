@@ -140,12 +140,33 @@ class GameScreen(Screen):
             return False
         return True
     
+    # Notification dict keys consumed by routing/dedup/tone logic rather than by
+    # the DialogueBox itself. Stripped before forwarding to make_dialogue_box so
+    # callers can attach metadata without crashing the dialogue constructor.
+    _NOTIFICATION_META_KEYS = (
+        'type', 'event_key', 'phase', 'tone', 'spell_names',
+        'force_modal', 'target_tab', 'no_gate', 'spell_side', 'spell_role',
+    )
+
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
         from game.components.dialogue_box import DialogueBox
         self._active_dialogue_type = None  # Clear — callers via queue_or_show set it after
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
-    
+
+    def _consume_notification_meta(self, notification_data):
+        """Split notification meta keys from dialogue-box kwargs.
+
+        Returns ``(dialogue_kwargs, dialogue_type)``. Unknown meta keys are
+        dropped silently so callers can attach routing/dedup hints (`phase`,
+        `tone`, `event_key`, ...) without crashing make_dialogue_box.
+        """
+        data = dict(notification_data)
+        dialogue_type = data.pop('type', None)
+        for key in self._NOTIFICATION_META_KEYS:
+            data.pop(key, None)
+        return data, dialogue_type
+
     def queue_or_show_notification(self, notification_data):
         """Queue a notification if dialogue box is active, otherwise show it immediately."""
         if self.dialogue_box:
@@ -153,17 +174,15 @@ class GameScreen(Screen):
             self.pending_notifications.append(notification_data)
         else:
             # No dialogue box - show immediately
-            data = dict(notification_data)
-            dialogue_type = data.pop('type', None)
+            data, dialogue_type = self._consume_notification_meta(notification_data)
             self.make_dialogue_box(**data)
             self._active_dialogue_type = dialogue_type
-    
+
     def show_next_queued_notification(self):
         """Show the next queued notification if any exist."""
         if self.pending_notifications:
             notification_data = self.pending_notifications.pop(0)
-            data = dict(notification_data)
-            dialogue_type = data.pop('type', None)
+            data, dialogue_type = self._consume_notification_meta(notification_data)
             self.make_dialogue_box(**data)
             self._active_dialogue_type = dialogue_type
         else:
@@ -3617,8 +3636,8 @@ class GameScreen(Screen):
         loser_name = game_over_info.get('loser_username', 'Loser')
         winner_score = game_over_info.get('winner_score', 0)
         loser_score = game_over_info.get('loser_score', 0)
-        gold_awarded = game_over_info.get('gold_awarded', 0)
         stake = game_over_info.get('stake', 45)
+        game_limit = game_over_info.get('game_limit', stake)
         reason = game_over_info.get('reason', 'stake')
         checkmate_figure_name = game_over_info.get('checkmate_figure_name', 'Maharaja')
         rounds_played = game_over_info.get('rounds_played', 0)
@@ -3628,86 +3647,58 @@ class GameScreen(Screen):
         winner_pid = game_over_info.get('winner_player_id')
         loser_pid = game_over_info.get('loser_player_id')
 
-        # Pick the gold image to display (normal for victory, greyed with red cross for defeat)
-        if is_winner:
-            gold_img_key = 'gold'
-        else:
-            gold_img_key = 'gold_lost'
-        gold_image = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT.get(gold_img_key)
-        images = [gold_image] if gold_image else []
-
         if reason == 'checkmate':
-            # Checkmate-specific messaging
             if is_winner:
                 title = "Checkmate!"
                 icon = 'victory'
                 message = (
                     f"You destroyed {loser_name}'s {checkmate_figure_name}!\n\n"
                     f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Game Limit: {game_limit} points\n"
                     f"Stake: {stake} gold"
                 )
-                message_after = f"You earned {gold_awarded} gold!"
             else:
                 title = "Checkmate!"
                 icon = 'defeat'
                 message = (
                     f"Your {checkmate_figure_name} was destroyed!\n\n"
                     f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Game Limit: {game_limit} points\n"
                     f"Stake: {stake} gold"
                 )
-                message_after = f"You lost {stake} gold."
         else:
-            # Standard stake-based game over
             if is_winner:
                 title = "Victory!"
                 icon = 'victory'
                 message = (
                     f"Congratulations! You won the game!\n\n"
                     f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Game Limit: {game_limit} points\n"
                     f"Stake: {stake} gold"
                 )
-                message_after = f"You earned {gold_awarded} gold!"
             else:
                 title = "Defeat"
                 icon = 'defeat'
                 message = (
                     f"{winner_name} has won the game.\n\n"
                     f"Final Score: {winner_score} - {loser_score}\n"
+                    f"Game Limit: {game_limit} points\n"
                     f"Stake: {stake} gold"
                 )
-                message_after = f"You lost {stake} gold."
 
-        # Build game stats summary
+        # Dialogue 1 contains only the result + game statistics. Rewards
+        # (gold, booster packs, maps) move to a second dialogue with a
+        # wooden-chest reveal interaction (see _show_game_over_rewards_dialogue).
         stats = game_over_info.get('stats', {})
-        # stats is keyed by player_id (int or str)
         my_stats = stats.get(player_id) or stats.get(str(player_id)) or {}
         opp_id = loser_pid if is_winner else winner_pid
         opp_stats = stats.get(opp_id) or stats.get(str(opp_id)) or {}
         opp_name = loser_name if is_winner else winner_name
 
-        # Reward info (booster packs + maps)
-        boosters_key = 'winner_boosters' if is_winner else 'loser_boosters'
-        boosters = game_over_info.get(boosters_key)
-        if boosters:
-            total = boosters.get('main', 0) + boosters.get('side', 0)
-            if total > 0:
-                parts = []
-                if boosters.get('main', 0) > 0:
-                    parts.append(f"{boosters['main']} main")
-                if boosters.get('side', 0) > 0:
-                    parts.append(f"{boosters['side']} side")
-                message_after += f"\nBooster packs: {', '.join(parts)}"
-        rewards_key = 'winner_rewards' if is_winner else 'loser_rewards'
-        rewards = game_over_info.get(rewards_key) or {}
-        maps_reward = int(rewards.get('map', 0))
-        if maps_reward > 0:
-            message_after += f"\nMaps: +{maps_reward}"
-            if self.state.user_dict is not None:
-                self.state.user_dict['maps'] = int(self.state.user_dict.get('maps', 0)) + maps_reward
-
+        message_after = ""
         if my_stats or opp_stats:
-            stats_lines = [f"\nRounds played: {rounds_played}"]
-            stats_lines.append(f"          You / {opp_name}")
+            stats_lines = [f"Rounds played: {rounds_played}",
+                           f"          You / {opp_name}"]
             stat_labels = [
                 ('battles_won', 'Battles won'),
                 ('figures_built', 'Figures built'),
@@ -3718,17 +3709,85 @@ class GameScreen(Screen):
                 my_val = my_stats.get(key, 0)
                 opp_val = opp_stats.get(key, 0)
                 stats_lines.append(f"{label}: {my_val} / {opp_val}")
-            message_after += "\n" + "\n".join(stats_lines)
+            message_after = "\n".join(stats_lines)
 
         self.queue_or_show_notification({
             'message': message,
             'actions': ['ok'],
             'icon': icon,
             'title': title,
-            'images': images,
             'message_after_images': message_after,
             'type': 'game_over',
         })
+
+    def _show_game_over_rewards_dialogue(self, game_over_info):
+        """Show the second game-over dialogue: wooden-chest reveal of all loot.
+
+        Each reward-pool draw (booster pack, map, or bonus gold) becomes a
+        clickable chest. The stake winnings/losses are shown directly above
+        the chest row because they are predictable loot, not a draw."""
+        from game.components.rewards_reveal_dialogue import RewardsRevealDialogueBox
+        _GOLD_PER_DRAW = int(getattr(settings, 'DUEL_REWARD_GOLD_AMOUNT', 80) or 80)
+
+        is_winner = (game_over_info.get('winner_player_id') == self.state.game.player_id)
+        stake = int(game_over_info.get('stake', 45) or 0)
+        gold_awarded = int(game_over_info.get('gold_awarded', 0) or 0)
+        rewards_key = 'winner_rewards' if is_winner else 'loser_rewards'
+        rewards = game_over_info.get(rewards_key) or {}
+
+        if is_winner:
+            title = "Spoils of War"
+            icon = 'victory'
+            summary_lines = [f"Stake winnings: +{gold_awarded} gold"]
+            gold_img_key = 'gold'
+        else:
+            title = "Spoils of War"
+            icon = 'defeat'
+            summary_lines = [f"Stake lost: -{stake} gold"]
+            gold_img_key = 'gold_lost'
+        summary_image = settings.DIALOGUE_BOX_ICON_NAME_TO_IMG_DICT.get(gold_img_key)
+
+        # Build one chest per reward-pool item. Stake is NOT hidden.
+        items = []
+        main_n = int(rewards.get('main_booster') or 0)
+        side_n = int(rewards.get('side_booster') or 0)
+        map_n = int(rewards.get('map') or 0)
+        gold_total = int(rewards.get('gold') or 0)
+        gold_draws = (gold_total // _GOLD_PER_DRAW) if _GOLD_PER_DRAW > 0 else 0
+
+        for _ in range(main_n):
+            items.append({'kind': 'main_booster', 'label': 'Main booster pack'})
+        for _ in range(side_n):
+            items.append({'kind': 'side_booster', 'label': 'Side booster pack'})
+        for _ in range(map_n):
+            items.append({'kind': 'map', 'label': 'Map'})
+        for _ in range(gold_draws):
+            items.append({'kind': 'gold', 'label': f'+{_GOLD_PER_DRAW} gold'})
+
+        # Mirror server-side maps award into the cached user dict so the
+        # kingdom UI reflects the new count without a refetch.
+        if map_n > 0 and self.state.user_dict is not None:
+            self.state.user_dict['maps'] = int(
+                self.state.user_dict.get('maps', 0)) + map_n
+
+        if not items:
+            # No draws to reveal (rare — e.g. all zero) → still show the
+            # summary so the player can dismiss the result cleanly.
+            footer = "No additional loot this duel."
+        else:
+            footer = "All loot collected!"
+
+        dialogue = RewardsRevealDialogueBox(
+            self.window,
+            title=title,
+            icon=icon,
+            summary_lines=summary_lines,
+            items=items,
+            footer_when_done=footer,
+            summary_image=summary_image,
+        )
+        self.dialogue_box = dialogue
+        self._active_dialogue_type = 'game_over_rewards'
 
     def _on_game_over_acknowledged(self, response=None):
         """Handle game-over dialogue acknowledgement — return to game menu or kingdom."""
@@ -3783,8 +3842,13 @@ class GameScreen(Screen):
         player has extra hand cards (from prelude spells) that could be used
         to buy additional battle moves.
         """
-        # Guard against double-entry (poller can re-trigger via pending_battle_ready)
-        if self.state.game and self.state.game.battle_moves_phase:
+        # Guard against double-entry (poller can re-trigger via pending_battle_ready).
+        # `_sync_battle_moves_phase_from_server` flips battle_moves_phase=True from
+        # polling alone — without navigation — so the guard must also confirm we
+        # are already viewing the battle_shop subscreen. Otherwise the human
+        # never leaves the field after the AI confirms 'battle'.
+        if (self.state.game and self.state.game.battle_moves_phase
+                and self.state.subscreen == 'battle_shop'):
             logger.debug("[BATTLE_MOVES] Already in battle moves phase — skipping")
             return
 
@@ -5172,9 +5236,25 @@ class GameScreen(Screen):
                     self._submit_battle_decision('fold')
                     self.show_next_queued_notification()
                     return
-                # Handle game-over acknowledgement — return to main menu
+                # Handle game-over acknowledgement — for duel mode, the first
+                # dialogue ('game_over') just shows result + stats; clicking ok
+                # opens the rewards reveal dialogue. For conquer mode (or any
+                # case without a pending_game_over payload), navigate away
+                # immediately.
                 elif (response == 'ok' and self.state.game and
                       self.state.game.game_over and self._active_dialogue_type == 'game_over'):
+                    pending = getattr(self.state.game, 'pending_game_over', None)
+                    is_duel = (getattr(self.state.game, 'mode', None) != 'conquer')
+                    self.dialogue_box = None
+                    self._active_dialogue_type = None
+                    if is_duel and isinstance(pending, dict):
+                        self._show_game_over_rewards_dialogue(pending)
+                    else:
+                        self._on_game_over_acknowledged()
+                    return
+                # Handle rewards-reveal acknowledgement — actually navigate away
+                elif (response == 'ok' and self.state.game and
+                      self._active_dialogue_type == 'game_over_rewards'):
                     self.dialogue_box = None
                     self._active_dialogue_type = None
                     self._on_game_over_acknowledged()

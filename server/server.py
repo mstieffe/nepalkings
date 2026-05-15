@@ -141,6 +141,8 @@ with app.app_context():
 
     try:
         from kingdom_service import (ensure_conquer_tactics_schema,
+                                     ensure_duel_game_limit_columns,
+                                     ensure_game_ai_seed_column,
                                      ensure_kingdom_production_columns)
         added_columns = ensure_kingdom_production_columns()
         if added_columns:
@@ -150,6 +152,12 @@ with app.app_context():
         if ensured_conquer_schema:
             logger.info("Conquer tactics schema ensured: %s",
                         ', '.join(ensured_conquer_schema))
+        added_duel_columns = ensure_duel_game_limit_columns()
+        if added_duel_columns:
+            logger.info("Duel game-limit schema upgraded: added %s",
+                        ', '.join(added_duel_columns))
+        if ensure_game_ai_seed_column():
+            logger.info("Game schema upgraded: added ai_seed column")
     except Exception as _kingdom_schema_err:  # pragma: no cover — safety net
         logger.exception("Kingdom production schema upgrade failed: %s", _kingdom_schema_err)
         db.session.rollback()
@@ -294,10 +302,13 @@ if __name__ == '__main__':
         with app.app_context():
             db.create_all()
             from kingdom_service import (ensure_conquer_tactics_schema,
+                                         ensure_duel_game_limit_columns,
+                                         ensure_game_ai_seed_column,
                                          ensure_kingdom_production_columns)
             ensure_kingdom_production_columns()
             ensure_conquer_tactics_schema()
+            ensure_duel_game_limit_columns()
+            ensure_game_ai_seed_column()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
         logger.error(f'Application failed to start: {e}')
-

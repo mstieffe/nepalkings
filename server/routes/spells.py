@@ -15,6 +15,10 @@ from game_service.conquer_tactics_service import (
     is_tactics_hand_conquer,
     purge_conquer_tactics_referencing_card,
 )
+from game_service.conquer_prelude_replay_targets import (
+    conquer_explosion_replay_target_for_id,
+    conquer_spell_allows_destroyed_replay_target,
+)
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
@@ -855,6 +859,62 @@ def _execute_spell(spell: ActiveSpell, game: Game, caster: Player):
             pass
 
 
+def _execute_destroyed_conquer_replay_enchantment(spell, game):
+    """Resolve Health Boost/Poison on a deleted Explosion victim as replay only."""
+    if not conquer_spell_allows_destroyed_replay_target(spell.spell_name):
+        return None
+
+    payload = conquer_explosion_replay_target_for_id(game, spell.target_figure_id)
+    if not payload:
+        return None
+
+    snapshot = dict(payload.get('snapshot') or {})
+    target_id = payload.get('id')
+    target_name = (
+        snapshot.get('name')
+        or snapshot.get('family_name')
+        or f'Figure {target_id}'
+    )
+
+    if spell.spell_name == 'Poison':
+        spell_icon = 'poisson_portion.png'
+        power_modifier = -6
+        effect = f'Poisoned {target_name} (-6 power)'
+    elif spell.spell_name == 'Health Boost':
+        spell_icon = 'health_portion.png'
+        power_modifier = 6
+        effect = f'Boosted {target_name} (+6 power)'
+    else:
+        return None
+
+    effect_data = dict(spell.effect_data or {})
+    effect_data.update({
+        'spell_icon': spell_icon,
+        'power_modifier': power_modifier,
+        'target_figure_id': target_id,
+        'target_figure_name': target_name,
+        'target_figure_snapshot': snapshot,
+        'target_destroyed_by_explosion': True,
+        'replay_target_only': True,
+    })
+    spell.effect_data = effect_data
+
+    # The visual replay still needs metadata, but there is no surviving
+    # figure to enchant for battle math.
+    spell.is_active = False
+
+    return {
+        'effect': effect,
+        'target_figure_id': target_id,
+        'target_figure_name': target_name,
+        'target_figure_snapshot': snapshot,
+        'power_modifier': power_modifier,
+        'spell_icon': spell_icon,
+        'target_destroyed_by_explosion': True,
+        'replay_target_only': True,
+    }
+
+
 def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
     """
     Execute a spell's effect based on its type.
@@ -1230,8 +1290,15 @@ def _execute_spell_impl(spell: ActiveSpell, game: Game, caster: Player):
             # Get target figure to validate it exists
             target_figure = db.session.get(Figure, spell.target_figure_id)
             if not target_figure:
-                spell_effect['effect'] = 'Target figure not found'
-                spell_effect['error'] = 'Invalid target'
+                replay_effect = _execute_destroyed_conquer_replay_enchantment(
+                    spell,
+                    game,
+                )
+                if replay_effect:
+                    spell_effect.update(replay_effect)
+                else:
+                    spell_effect['effect'] = 'Target figure not found'
+                    spell_effect['error'] = 'Invalid target'
             else:
                 target_figure_snapshot = target_figure.serialize()
                 spell_effect['target_figure_name'] = target_figure.name

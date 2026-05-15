@@ -9,15 +9,11 @@ import ai.ai_worker as ai_worker
 
 @pytest.fixture(autouse=True)
 def reset_ai_debug_state():
-    with ai_worker._game_strategies_lock:
-        ai_worker._game_strategies.clear()
     with ai_worker._planner_events_lock:
         ai_worker._planner_events.clear()
 
     yield
 
-    with ai_worker._game_strategies_lock:
-        ai_worker._game_strategies.clear()
     with ai_worker._planner_events_lock:
         ai_worker._planner_events.clear()
 
@@ -83,23 +79,18 @@ def test_get_ai_debug_forbidden_for_non_participant(client, db):
     assert resp.status_code == 403
 
 
-def test_get_ai_debug_returns_reasoning_and_planner_events_for_participant(client, db):
+def test_get_ai_debug_returns_planner_events_for_participant(client, db):
     game, _ai_user, human_user, _outsider_user, ai_player, _human_player = _create_users_and_game(db)
 
-    with ai_worker._game_strategies_lock:
-        ai_worker._game_strategies[game.id] = [
-            'normal_turn: chose change_cards',
-            'normal_turn: chose advance_figure | PLAN: seed=2',
-        ]
     with ai_worker._planner_events_lock:
         ai_worker._planner_events[game.id] = [
             {'type': 'planner_generated', 'plans': 5},
-            {'type': 'planner_shadow_comparison', 'match': False},
+            {'type': 'planner_runtime_warning', 'runtime_ms': 200.0},
         ]
 
     resp = client.get(
         '/games/get_ai_debug',
-        query_string={'game_id': game.id, 'max_notes': 1, 'max_events': 1},
+        query_string={'game_id': game.id, 'max_events': 1},
         headers=_auth_headers_for_user(human_user.id),
     )
 
@@ -111,7 +102,5 @@ def test_get_ai_debug_returns_reasoning_and_planner_events_for_participant(clien
     assert payload['ai_player_id'] == ai_player.id
 
     ai_debug = payload['ai_debug']
-    assert len(ai_debug['strategy_notes']) == 1
-    assert ai_debug['strategy_notes'][0].startswith('normal_turn: chose advance_figure')
     assert len(ai_debug['planner_events']) == 1
-    assert ai_debug['planner_events'][0]['type'] == 'planner_shadow_comparison'
+    assert ai_debug['planner_events'][0]['type'] == 'planner_runtime_warning'

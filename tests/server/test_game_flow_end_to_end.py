@@ -422,6 +422,17 @@ class TestFullGameFlow:
         assert pick_data['game_over'].get('winner_player_id') == invader.id
         assert pick_data['game_over'].get('reason') == 'checkmate'
 
+        # Rewards from the (checkmate-triggered) _finalize_game_over call
+        # made earlier in finish_battle must survive into the pick_card
+        # response — otherwise the client's spoils-of-war dialogue shows no
+        # loot. winner_rewards is a dict with keys main_booster, side_booster,
+        # map, gold (counts/amounts depend on the random draws). The
+        # Winner gets at least one scaled reward draw, so at least one entry
+        # must be non-zero.
+        winner_rewards = pick_data['game_over'].get('winner_rewards')
+        assert isinstance(winner_rewards, dict), pick_data['game_over']
+        assert sum(int(v or 0) for v in winner_rewards.values()) > 0, winner_rewards
+
         db.session.refresh(game)
         assert game.state == 'finished'
         assert game.winner_player_id == invader.id

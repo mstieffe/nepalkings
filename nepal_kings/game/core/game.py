@@ -31,6 +31,7 @@ class Game:
         self.land_suit_bonus_value = game_dict.get('land_suit_bonus_value')  # conquer mode only
         self.date = game_dict['date']
         self.stake = game_dict.get('stake', 45)
+        self.game_limit = game_dict.get('game_limit', self.stake)
         self.turn_time_limit = game_dict.get('turn_time_limit')  # Seconds per turn (None = no limit)
         self.winner_player_id = game_dict.get('winner_player_id')
         self.finished_at = game_dict.get('finished_at')
@@ -387,6 +388,7 @@ class Game:
             'land_suit_bonus_value', self.land_suit_bonus_value)
         self.date = game_dict['date']
         self.stake = game_dict.get('stake', 45)
+        self.game_limit = game_dict.get('game_limit', self.stake)
         self.winner_player_id = game_dict.get('winner_player_id')
         self.finished_at = game_dict.get('finished_at')
         self.last_battle_result = game_dict.get('last_battle_result') or {}
@@ -427,8 +429,15 @@ class Game:
                     'loser_score': loser_player.get('points', 0),
                     'gold_awarded': self.stake * 2,
                     'stake': self.stake,
+                    'game_limit': self.game_limit,
                     'rounds_played': game_dict.get('current_round', 1),
                     'stats': last_result.get('game_stats', {}),
+                    'reward_draws': last_result.get('game_over_reward_draws'),
+                    'reward_expectations': last_result.get('game_over_reward_expectations'),
+                    'winner_rewards': last_result.get('game_over_winner_rewards'),
+                    'loser_rewards': last_result.get('game_over_loser_rewards'),
+                    'winner_boosters': last_result.get('game_over_winner_boosters'),
+                    'loser_boosters': last_result.get('game_over_loser_boosters'),
                 }
                 logger.info(f"[GAME_OVER] Detected from polling: {self.pending_game_over}")
         
@@ -901,6 +910,8 @@ class Game:
         self.land_suit_bonus_value = game_dict.get(
             'land_suit_bonus_value', self.land_suit_bonus_value)
         self.date = game_dict['date']
+        self.stake = game_dict.get('stake', getattr(self, 'stake', 45))
+        self.game_limit = game_dict.get('game_limit', self.stake)
         self.winner_player_id = game_dict.get('winner_player_id')
         self.finished_at = game_dict.get('finished_at')
         self.last_battle_result = game_dict.get('last_battle_result') or {}

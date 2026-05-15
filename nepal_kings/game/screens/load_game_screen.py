@@ -42,7 +42,7 @@ _COL_DEFS = [
     ('Score',      0.29, 0.14),
     ('Duration',   0.43, 0.17),
     ('Stake',      0.60, 0.12),
-    ('Turn Limit', 0.72, 0.14),
+    ('Game Limit', 0.72, 0.14),
     ('',           0.86, 0.14),   # "your turn" / NEW column
 ]
 
@@ -313,7 +313,7 @@ class LoadGameScreen(MenuScreenMixin, Screen):
                 f"{my_score} – {opp_score}",
                 _duration_str(game.date),
                 f"{game.stake} gold",
-                f"{game.turn_time_limit // 60} min" if game.turn_time_limit else "No limit",
+                f"{game.game_limit} pts",
             ]
             for idx, text in enumerate(cells):
                 surf = self._cell_font.render(text, True, txt_clr)
@@ -495,13 +495,13 @@ class LoadGameScreen(MenuScreenMixin, Screen):
                 label = f"{game.opponent_name}  —  {game.date}"
                 self.set_action("load_game", label, "open")
                 stake_str = f"{game.stake} gold"
-                time_str = f"{game.turn_time_limit // 60} min" if game.turn_time_limit else "No Limit"
+                game_limit_str = f"{game.game_limit} points"
                 is_finished = (game.state == 'finished')
                 title = "Review Game" if is_finished else "Load Game"
                 prompt = (f'Review finished game vs {game.opponent_name}?\n\n'
-                          f'Stake: {stake_str}\nTurn Limit: {time_str}') if is_finished else (
+                          f'Stake: {stake_str}\nGame Limit: {game_limit_str}') if is_finished else (
                          f'Load game vs {game.opponent_name}?\n\n'
-                         f'Stake: {stake_str}\nTurn Limit: {time_str}')
+                         f'Stake: {stake_str}\nGame Limit: {game_limit_str}')
                 self.make_dialogue_box(prompt, actions=["yes", "cancel"], title=title)
                 return
 

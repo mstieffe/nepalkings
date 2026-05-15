@@ -382,6 +382,37 @@ class TestCounterableSpellFlow:
         assert 'pending' in second_data.get('message', '').lower()
 
 
+class TestSpellExecutionEffects:
+    def test_missing_target_remains_invalid_outside_conquer_replay(
+        self, app, db, spell_game
+    ):
+        from models import ActiveSpell
+        from routes.spells import _execute_spell
+
+        with app.app_context():
+            game, p1, _p2, _, _ = spell_game
+            game.mode = 'duel'
+            spell = ActiveSpell(
+                game_id=game.id,
+                player_id=p1.id,
+                spell_name='Health Boost',
+                spell_type='enchantment',
+                spell_family_name='Health Boost',
+                suit='Diamonds',
+                cast_round=1,
+                target_figure_id=999999,
+                is_active=True,
+            )
+            db.session.add(spell)
+            db.session.commit()
+
+            effect = _execute_spell(spell, game, p1)
+
+            assert effect['effect'] == 'Target figure not found'
+            assert effect['error'] == 'Invalid target'
+            assert not (spell.effect_data or {}).get('replay_target_only')
+
+
 class TestPendingSpellRoutes:
     def test_get_pending_spell_returns_serialized_spell(self, client, db, app, spell_game, token_sp1):
         game, p1, _, _, _ = spell_game

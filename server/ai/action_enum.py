@@ -626,23 +626,27 @@ def _enum_normal_turn(game_dict, ai_player, opponent):
         })
         action_id += 1
 
-    # 4b) Change side cards — same blocking rules as main cards
+    # 4b) Change side cards — same blocking rules as main cards.
+    # Only legal when the AI actually holds side cards to swap; side cards are
+    # dealt post-battle, so a fresh duel turn has none and the server would
+    # reject the request.
     if not infinite_hammer_active and not must_advance:
         free_side = [c for c in ai_player.get('side_hand', [])
                      if not c.get('part_of_figure') and not c.get('part_of_battle_move')]
-        side_summary = summarize_side_change(free_side)
-        side_swap = side_summary.get('swap_count', 0)
-        side_free = side_summary.get('free_count', len(free_side))
-        actions.append({
-            'id': action_id,
-            'type': 'change_side_cards',
-            'description': (
-                "Change side cards — swap selected side cards for new ones "
-                f"({side_swap} suggested swaps of {side_free} free side cards)"
-            ),
-            'params': {},
-        })
-        action_id += 1
+        if free_side:
+            side_summary = summarize_side_change(free_side)
+            side_swap = side_summary.get('swap_count', 0)
+            side_free = side_summary.get('free_count', len(free_side))
+            actions.append({
+                'id': action_id,
+                'type': 'change_side_cards',
+                'description': (
+                    "Change side cards — swap selected side cards for new ones "
+                    f"({side_swap} suggested swaps of {side_free} free side cards)"
+                ),
+                'params': {},
+            })
+            action_id += 1
 
     # 5) End Infinite Hammer — only available when active
     if infinite_hammer_active:
@@ -1266,7 +1270,39 @@ def _enum_battle_round(game_dict, ai_player, opponent):
                 },
             })
             action_id += 1
-    
+
+    # ── Combine: merge two same-colour Daggers into a Double Dagger ──
+    # Server allows this during the battle round (the selection-phase guard
+    # only fires before battle starts), so it's a legal mid-round option
+    # that frees a move slot and bundles two cards into one stronger play.
+    if not tactics_hand:
+        dagger_moves = [m for m in ai_moves if m.get('family_name') == 'Dagger']
+        if len(dagger_moves) >= 2:
+            for i in range(len(dagger_moves)):
+                for j in range(i + 1, len(dagger_moves)):
+                    m_a, m_b = dagger_moves[i], dagger_moves[j]
+                    suit_a = m_a.get('suit', '')
+                    suit_b = m_b.get('suit', '')
+                    color_a = 'red' if suit_a in _RED_SUITS_SET else 'black'
+                    color_b = 'red' if suit_b in _RED_SUITS_SET else 'black'
+                    if color_a != color_b:
+                        continue
+                    combined_val = (m_a.get('value', 0) or 0) + (m_b.get('value', 0) or 0)
+                    actions.append({
+                        'id': action_id,
+                        'type': 'combine_battle_moves',
+                        'description': (
+                            f"Combine Dagger({m_a.get('value', 0)}) + "
+                            f"Dagger({m_b.get('value', 0)}) → Double Dagger "
+                            f"(power={combined_val}) — frees 1 move slot!"
+                        ),
+                        'params': {
+                            'move_id_a': m_a['id'],
+                            'move_id_b': m_b['id'],
+                        },
+                    })
+                    action_id += 1
+
     # Can only skip if no unplayed moves remain
     if not ai_moves:
         actions.append({

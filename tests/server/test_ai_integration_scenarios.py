@@ -68,11 +68,9 @@ def _create_game_with_ai(db):
 
 def _patch_common_loop_controls(monkeypatch):
     monkeypatch.setattr(ai_worker.settings, 'AI_ENABLED', True)
-    monkeypatch.setattr(ai_worker.settings, 'AI_OPENAI_API_KEY', 'test-key')
     monkeypatch.setattr(ai_worker.settings, 'AI_THINK_DELAY', 0)
     monkeypatch.setattr(ai_worker.time, 'sleep', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(ai_worker.threading, 'Thread', _InlineThread)
-    monkeypatch.setattr(ai_worker, '_maybe_send_ai_chat', lambda *_args, **_kwargs: None)
 
 
 def _reset_worker_state():
@@ -83,10 +81,7 @@ def _reset_worker_state():
         ai_worker._ai_player_user_ids.clear()
     with ai_worker._ai_watchdog_lock:
         ai_worker._ai_watchdog_retries.clear()
-    with ai_worker._game_strategies_lock:
-        ai_worker._game_strategies.clear()
-    with ai_worker._ai_chat_lock:
-        ai_worker._ai_chat_states.clear()
+        ai_worker._ai_watchdog_first_scheduled.clear()
 
 
 def test_trigger_runs_normal_turn_flow_inline(app, db, monkeypatch):
@@ -131,7 +126,7 @@ def test_trigger_runs_normal_turn_flow_inline(app, db, monkeypatch):
         assert game.id not in ai_worker._active_games
 
 
-def test_trigger_uses_llm_choice_when_multiple_actions(app, db, monkeypatch):
+def test_trigger_uses_duel_strategy_when_multiple_actions(app, db, monkeypatch):
     _reset_worker_state()
     game, _ai_player = _create_game_with_ai(db)
     _patch_common_loop_controls(monkeypatch)
@@ -147,7 +142,11 @@ def test_trigger_uses_llm_choice_when_multiple_actions(app, db, monkeypatch):
         {'id': 2, 'type': 'confirm_battle_moves', 'description': 'confirm', 'params': {}},
     ]
     monkeypatch.setattr(ai_worker, 'enumerate_actions', lambda *_args, **_kwargs: choices)
-    monkeypatch.setattr(ai_worker, '_ask_llm_for_action', lambda *_args, **_kwargs: choices[1])
+    monkeypatch.setattr(
+        ai_worker.duel_strategy,
+        'choose_action',
+        lambda *_args, **_kwargs: choices[1],
+    )
 
     executed = []
     monkeypatch.setattr(
@@ -177,7 +176,11 @@ def test_trigger_battle_shop_confirm_failure_falls_back_to_buy(app, db, monkeypa
         {'id': 2, 'type': 'confirm_battle_moves', 'description': 'confirm', 'params': {}},
     ]
     monkeypatch.setattr(ai_worker, 'enumerate_actions', lambda *_args, **_kwargs: actions)
-    monkeypatch.setattr(ai_worker, '_ask_llm_for_action', lambda *_args, **_kwargs: actions[1])
+    monkeypatch.setattr(
+        ai_worker.duel_strategy,
+        'choose_action',
+        lambda *_args, **_kwargs: actions[1],
+    )
 
     attempts = []
 
@@ -288,10 +291,8 @@ def test_conquer_loop_first_round_posts_real_tactics_for_both_sides(app, db, mon
     )
     _force_active_battle(db, game, attacker_player, defender_player)
     monkeypatch.setattr(ai_worker.settings, 'AI_ENABLED', True)
-    monkeypatch.setattr(ai_worker.settings, 'AI_OPENAI_API_KEY', 'test-key')
     monkeypatch.setattr(ai_worker.settings, 'AI_THINK_DELAY', 0)
     monkeypatch.setattr(ai_worker.time, 'sleep', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(ai_worker, '_maybe_send_ai_chat', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(ai_worker, 'trigger_ai_if_needed', lambda *_args, **_kwargs: None)
 
     monkeypatch.setattr(

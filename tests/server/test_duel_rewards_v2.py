@@ -4,9 +4,11 @@
 
 from unittest.mock import patch
 
-from models import db as _db, User, Game, Challenge
+import pytest
+
+from models import Game, Challenge
 import server_settings as settings
-from routes.games import _award_duel_rewards, _finalize_game_over
+from routes.games import _award_duel_rewards, _duel_reward_draw_counts, _finalize_game_over
 
 
 class TestAwardDuelRewards:
@@ -70,14 +72,33 @@ class TestFinalizeGameOverRewards:
                                                    auth_headers_user1):
         game = self._create_game(client, db, two_users, auth_headers_user1)
         winner = game.players[0]
-        winner.points = game.stake
+        winner.points = game.game_limit
         with patch('routes.games.random.choices', return_value=['main_booster']):
             result = _finalize_game_over(game, winner)
+        expected_draws = _duel_reward_draw_counts(game.game_limit)
         assert 'winner_rewards' in result
         assert 'loser_rewards' in result
-        assert result['winner_rewards']['main_booster'] == settings.DUEL_WINNER_REWARD_DRAWS
-        assert result['loser_rewards']['main_booster'] == settings.DUEL_LOSER_REWARD_DRAWS
+        assert result['game_limit'] == game.game_limit
+        assert result['reward_draws'] == expected_draws
+        assert result['reward_expectations']['winner']['draws'] == expected_draws['winner']
+        assert result['reward_expectations']['loser']['draws'] == expected_draws['loser']
+        assert result['winner_rewards']['main_booster'] == expected_draws['winner']
+        assert result['loser_rewards']['main_booster'] == expected_draws['loser']
         # Legacy keys preserved for older clients.
         assert 'winner_boosters' in result
         assert 'loser_boosters' in result
-        assert result['winner_boosters']['main'] == settings.DUEL_WINNER_REWARD_DRAWS
+        assert result['winner_boosters']['main'] == expected_draws['winner']
+
+
+class TestDuelRewardDrawCounts:
+
+    @pytest.mark.parametrize('game_limit, expected', [
+        (1, {'winner': 1, 'loser': 1}),
+        (10, {'winner': 1, 'loser': 1}),
+        (11, {'winner': 2, 'loser': 1}),
+        (20, {'winner': 2, 'loser': 1}),
+        (40, {'winner': 4, 'loser': 2}),
+        (100, {'winner': 10, 'loser': 5}),
+    ])
+    def test_scaled_draw_counts(self, game_limit, expected):
+        assert _duel_reward_draw_counts(game_limit) == expected

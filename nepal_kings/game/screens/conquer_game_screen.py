@@ -2628,20 +2628,18 @@ class ConquerGameScreen(GameScreen):
         actions = [str(a).lower() for a in data.get('actions', ['ok'])]
         return set(actions).issubset({'ok', 'got it!'})
 
-    def _strip_conquer_notification_meta(self, data):
-        stripped = dict(data)
-        for key in ('event_key', 'phase', 'tone', 'spell_names', 'force_modal',
-                    'target_tab', 'no_gate', 'spell_side', 'spell_role',
-                    'message_after_images'):
-            stripped.pop(key, None)
-        return stripped
-
     def queue_or_show_notification(self, notification_data):
-        """In conquer mode, route informational receipts away from modals."""
+        """In conquer mode, route informational receipts away from modals.
+
+        Base GameScreen already strips routing/dedup metadata; conquer also
+        suppresses `message_after_images` since the timeline panel already
+        narrates the same content.
+        """
         data = dict(notification_data)
         if self._should_drop_conquer_notification(data):
             return
-        super().queue_or_show_notification(self._strip_conquer_notification_meta(data))
+        data.pop('message_after_images', None)
+        super().queue_or_show_notification(data)
 
     def request_conquer_figure_confirmation(self, kind, figure, icon=None,
                                             message='', title='Confirm'):

@@ -138,6 +138,42 @@ def ensure_kingdom_production_columns():
     return added
 
 
+def ensure_game_ai_seed_column():
+    """Idempotently add the ``Game.ai_seed`` column on existing databases."""
+    inspector = inspect(db.engine)
+    if 'game' not in inspector.get_table_names():
+        return False
+    existing = {col['name'] for col in inspector.get_columns('game')}
+    if 'ai_seed' in existing:
+        return False
+    db.session.execute(text('ALTER TABLE game ADD COLUMN ai_seed INTEGER'))
+    db.session.commit()
+    return True
+
+
+def ensure_duel_game_limit_columns():
+    """Idempotently add duel point-limit columns to existing databases."""
+    inspector = inspect(db.engine)
+    added = []
+    default_limit = int(getattr(config, 'DEFAULT_GAME_LIMIT', 35) or 35)
+    for table_name in ('challenge', 'game'):
+        if table_name not in inspector.get_table_names():
+            continue
+        existing = {col['name'] for col in inspector.get_columns(table_name)}
+        if 'game_limit' in existing:
+            continue
+        db.session.execute(text(
+            f'ALTER TABLE "{table_name}" ADD COLUMN game_limit INTEGER NOT NULL DEFAULT {default_limit}'
+        ))
+        db.session.execute(text(
+            f'UPDATE "{table_name}" SET game_limit = stake WHERE stake IS NOT NULL'
+        ))
+        added.append(f'{table_name}.game_limit')
+    if added:
+        db.session.commit()
+    return added
+
+
 def ensure_conquer_tactics_schema():
     """Idempotently create conquer tactics table/indexes for existing DBs."""
     inspector = inspect(db.engine)

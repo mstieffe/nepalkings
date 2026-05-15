@@ -105,7 +105,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # ── Attack notifications ────────────────────────────────────
         self._notifications = []      # unseen attack notifications
         self._attack_history = []     # recent attack history for this user
-        self._messages = []           # kingdom user messages
+        self._messages = []           # legacy flat list (kept for tests / fallback)
+        self._conversations = []      # one row per conversation partner
         self._message_unread_count = 0
         self._activity_tab = 'alerts'
         self._activity_tab_rects = {}
@@ -114,6 +115,21 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._activity_scrollbar_rect = None
         self._mark_read_rect = None
         self._mark_read_kind = None
+        self._new_msg_rect = None     # "+ New message" button on Messages tab
+        # Thread modal: opened conversation with full history + composer
+        self._thread = None           # dict or None
+        self._thread_scrollbar_rect = None
+        self._thread_input_rect = None
+        self._thread_send_rect = None
+        self._thread_cancel_rect = None
+        self._thread_close_rect = None
+        # Recipient picker modal for "+ New message"
+        self._new_msg_picker = None
+        self._new_msg_picker_input_rect = None
+        self._new_msg_picker_ok_rect = None
+        self._new_msg_picker_cancel_rect = None
+        self._new_msg_picker_close_rect = None
+        # Back-compat shim: tests reference _message_compose; mirror thread state.
         self._message_compose = None
         self._message_input_rect = None
         self._message_send_rect = None
@@ -272,21 +288,23 @@ class KingdomScreen(MenuScreenMixin, Screen):
         return [n for n in getattr(self, '_notifications', []) if not n.get('seen', False)]
 
     def _load_messages(self):
-        """Fetch recent kingdom messages for the activity panel."""
+        """Fetch conversation summaries for the Messages tab."""
         try:
             resp = requests.get(
-                f'{settings.SERVER_URL}/kingdom/messages?limit=50', timeout=10)
+                f'{settings.SERVER_URL}/kingdom/messages/conversations', timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
-                self._messages = data.get('messages', [])
+                self._conversations = data.get('conversations', [])
                 self._message_unread_count = data.get('unread_count', 0)
             else:
-                self._messages = []
+                self._conversations = []
                 self._message_unread_count = 0
         except Exception as e:
-            logger.warning(f'Failed to load kingdom messages: {e}')
-            self._messages = []
+            logger.warning(f'Failed to load kingdom conversations: {e}')
+            self._conversations = []
             self._message_unread_count = 0
+        # Maintain legacy flat list for tests/back-compat.
+        self._messages = list(self._conversations)
 
     def _load_activity(self):
         """Fetch unseen alerts and recent attack history for the activity panel."""
@@ -335,8 +353,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # Modal layer
         if self._detail_box:
             self._detail_box.render()
-        if self._message_compose:
-            self._draw_message_compose()
+        if self._thread:
+            self._draw_thread_modal()
+        if self._new_msg_picker:
+            self._draw_new_msg_picker()
 
         # Floating text (gold collect / level up) above modals' chrome
         now_ms = pygame.time.get_ticks()
@@ -386,6 +406,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def _activity_visible_count(self):
         row_h = settings.KINGDOM_ACTIVITY_ROW_H
         available_h = self._activity_rect.bottom - 10 - self._activity_content_top()
+        # Reserve space for "+ New message" button on Messages tab.
+        if self._activity_tab == 'messages':
+            available_h -= 32
         return max(1, available_h // row_h)
 
     def _activity_rows_for_tab(self, tab=None):
@@ -395,8 +418,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if tab == 'history':
             return getattr(self, '_attack_history', []), 'No attacks yet.'
         if tab == 'messages':
-            return (getattr(self, '_messages', []),
-                    'No kingdom messages yet. Click another player land and choose Message.')
+            convos = getattr(self, '_conversations', None)
+            if convos is None:
+                convos = getattr(self, '_messages', [])
+            return (convos,
+                    'No conversations yet. Use "+ New message" or click another player\'s land.')
         return [], 'Select a kingdom activity tab.'
 
     def _clamp_activity_scroll(self, tab=None, row_count=None, visible_count=None):
@@ -447,6 +473,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._activity_scrollbar_rect = None
         self._mark_read_rect = None
         self._mark_read_kind = None
+        self._new_msg_rect = None
 
         surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
         pygame.draw.rect(surf, settings.KINGDOM_ACTIVITY_BG, surf.get_rect(), border_radius=8)
@@ -484,6 +511,19 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
             content_top = self._activity_content_top()
             rows, empty = self._activity_rows_for_tab(self._activity_tab)
+            # "+ New message" button on the Messages tab, above the row list.
+            if self._activity_tab == 'messages':
+                new_btn_h = 24
+                self._new_msg_rect = pygame.Rect(r.x + 10, content_top,
+                                                 r.w - 20, new_btn_h)
+                pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_TAB_ACTIVE_BG,
+                                 self._new_msg_rect, border_radius=5)
+                pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
+                                 self._new_msg_rect, 1, border_radius=5)
+                lbl = self._activity_small_font.render('+ New message', True,
+                                                       settings.KINGDOM_ACTIVITY_TEXT_CLR)
+                self.window.blit(lbl, lbl.get_rect(center=self._new_msg_rect.center))
+                content_top = self._new_msg_rect.bottom + 8
             if self._activity_tab == 'alerts' and rows:
                 self._mark_read_rect = pygame.Rect(r.right - 102, r.y + 8, 88, 20)
                 self._mark_read_kind = 'alerts'
@@ -536,7 +576,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
         max_w = rect.w - 16
         title = self._fit_text(title, self._activity_font, max_w)
         detail = self._fit_text(detail, self._activity_small_font, max_w)
-        if self._is_message_item(item):
+        if self._is_conversation_item(item):
+            unread = int(item.get('unread_count') or 0) > 0
+            title_clr = settings.KINGDOM_INFO_CLR if unread else settings.KINGDOM_ACTIVITY_TEXT_CLR
+        elif self._is_message_item(item):
             unread = (item.get('recipient_user_id') == self._current_user_id()
                       and not item.get('seen_by_recipient'))
             title_clr = settings.KINGDOM_INFO_CLR if unread else settings.KINGDOM_ACTIVITY_TEXT_CLR
@@ -605,6 +648,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         return (clipped + ellipsis) if clipped else ellipsis
 
     def _format_activity_item(self, item):
+        if self._is_conversation_item(item):
+            return self._format_conversation_item(item)
         if item.get('activity_title') is not None or item.get('activity_detail') is not None:
             title = item.get('activity_title') or 'Kingdom event'
             detail = item.get('activity_detail') or ''
@@ -673,6 +718,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def _is_message_item(self, item):
         return 'sender_user_id' in item and 'recipient_user_id' in item and 'message' in item
 
+    def _is_conversation_item(self, item):
+        return isinstance(item, dict) and 'other_user_id' in item and 'last_message' in item
+
     def _format_message_item(self, item):
         current_user_id = self._current_user_id()
         is_sent = item.get('sender_user_id') == current_user_id
@@ -681,6 +729,53 @@ class KingdomScreen(MenuScreenMixin, Screen):
         title = f'To {other}' if is_sent else f'From {other}'
         detail = item.get('message') or ''
         return title, detail, True
+
+    def _format_conversation_item(self, item):
+        other = item.get('other_username') or 'Unknown'
+        unread = int(item.get('unread_count') or 0)
+        title = f'{other}'
+        if unread > 0:
+            title = f'● {other}'
+        last = item.get('last_message') or ''
+        last_sender = item.get('last_sender_user_id')
+        if last_sender == self._current_user_id():
+            seen = item.get('last_seen_by_recipient')
+            tick = ' ✓✓' if seen else ' ✓'
+            detail = f'You: {last}{tick}'
+        else:
+            detail = last
+        return title, detail, True
+
+    @staticmethod
+    def _format_relative_time(timestamp_iso):
+        """Return a compact relative-time label like '2m', '1h', 'yest.', 'Mar 3'."""
+        if not timestamp_iso:
+            return ''
+        try:
+            from datetime import datetime, timezone
+            ts = timestamp_iso
+            # Python's fromisoformat doesn't parse trailing Z prior to 3.11.
+            if ts.endswith('Z'):
+                ts = ts[:-1] + '+00:00'
+            then = datetime.fromisoformat(ts)
+            if then.tzinfo is None:
+                then = then.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            delta = now - then
+            secs = int(delta.total_seconds())
+            if secs < 45:
+                return 'now'
+            if secs < 3600:
+                return f'{max(1, secs // 60)}m'
+            if secs < 86400:
+                return f'{secs // 3600}h'
+            if secs < 86400 * 2:
+                return 'yest.'
+            if secs < 86400 * 7:
+                return f'{secs // 86400}d'
+            return then.strftime('%b %-d') if hasattr(then, 'strftime') else then.isoformat()[:10]
+        except Exception:
+            return ''
 
     def _is_kingdom_event_item(self, item):
         """True for KingdomNotification rows (have ``kind`` + ``payload``)."""
@@ -778,6 +873,22 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def _activity_land_label(self, item):
         if item.get('activity_land_label'):
             return str(item.get('activity_land_label'))
+        if self._is_conversation_item(item):
+            rel = self._format_relative_time(item.get('last_timestamp'))
+            unread = int(item.get('unread_count') or 0)
+            parts = []
+            if rel:
+                parts.append(rel)
+            col = item.get('last_land_col')
+            row = item.get('last_land_row')
+            land_id = item.get('last_land_id')
+            if col is not None and row is not None:
+                parts.append(f'Land ({col}, {row})')
+            elif land_id is not None:
+                parts.append(f'Land #{land_id}')
+            if unread > 0:
+                parts.append(f'({unread} unread)')
+            return '  ·  '.join(parts) if parts else ''
         col = item.get('land_col')
         row = item.get('land_row')
         land_id = item.get('land_id')
@@ -788,14 +899,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
             row = payload.get('land_row')
         if land_id is None:
             land_id = payload.get('land_id')
+        rel = self._format_relative_time(item.get('timestamp'))
+        base = ''
         if col is not None and row is not None:
-            return f'Land ({col}, {row})'
-        if land_id is not None:
-            return f'Land #{land_id}'
-        if self._is_kingdom_event_item(item):
+            base = f'Land ({col}, {row})'
+        elif land_id is not None:
+            base = f'Land #{land_id}'
+        elif self._is_kingdom_event_item(item):
             kingdom_name = payload.get('kingdom_name') or payload.get('absorbed_kingdom_name')
-            return kingdom_name or 'Kingdom event'
-        return 'Kingdom land'
+            base = kingdom_name or 'Kingdom event'
+        else:
+            base = 'Kingdom land'
+        return f'{rel}  ·  {base}' if rel else base
 
     def _draw_info_bar(self):
         """Draw production rate / lands count bar at top of box, below title."""
@@ -977,9 +1092,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if self._handle_icon_events(event):
                 continue
 
-            # Message composer captures normal kingdom input.
-            if self._message_compose:
-                self._handle_message_compose_event(event)
+            # Recipient picker captures input first when open.
+            if self._new_msg_picker:
+                self._handle_new_msg_picker_event(event)
+                continue
+
+            # Thread modal captures normal kingdom input.
+            if self._thread:
+                self._handle_thread_event(event)
                 continue
 
             # X close button
@@ -1167,10 +1287,32 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 # Keep the click consumed even if the list was already at an edge.
                 return True
             return True
+        # "+ New message" button on Messages tab
+        if (self._new_msg_rect and self._activity_tab == 'messages'
+                and self._new_msg_rect.collidepoint(pos)):
+            self._open_new_msg_picker()
+            return True
         for rect, item in self._activity_row_rects:
             if rect.collidepoint(pos):
+                if self._is_conversation_item(item):
+                    self._open_thread(
+                        item.get('other_user_id'),
+                        item.get('other_username'),
+                        land_id=item.get('last_land_id'),
+                        is_ai=bool(item.get('is_ai')),
+                    )
+                    return True
                 if self._is_message_item(item):
-                    self._open_reply_to_message(item)
+                    # Back-compat: derive the other participant and open thread.
+                    current_user_id = self._current_user_id()
+                    if item.get('sender_user_id') == current_user_id:
+                        other_id = item.get('recipient_user_id')
+                        other_name = item.get('recipient_username')
+                    else:
+                        other_id = item.get('sender_user_id')
+                        other_name = item.get('sender_username')
+                    self._open_thread(other_id, other_name,
+                                      land_id=item.get('land_id'))
                     return True
                 land_id = item.get('land_id')
                 if land_id and self._hex_map:
@@ -1180,79 +1322,90 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 return True
         return True
 
-    # ── Kingdom messages ─────────────────────────────────────────────────────────
+    # ── Thread modal (full conversation + composer) ─────────────────────────
 
-    def _open_message_compose(self, recipient_user_id, recipient_username, land_id=None):
-        """Open the message composer for a kingdom user."""
-        if not recipient_user_id:
+    def _open_thread(self, other_user_id, other_username, land_id=None, is_ai=False):
+        """Open the thread modal for a conversation with another player."""
+        if not other_user_id:
             self.state.set_msg('Cannot message AI defenders.')
             return
-        if recipient_user_id == self._current_user_id():
+        if other_user_id == self._current_user_id():
             self.state.set_msg('You cannot message yourself.')
             return
+        if is_ai:
+            self.state.set_msg('Cannot message AI defenders.')
+            return
+        self._thread = {
+            'other_user_id': int(other_user_id),
+            'other_username': other_username or 'Player',
+            'land_id': land_id,
+            'messages': [],
+            'text': '',
+            'error': '',
+            'scroll': 0,        # bottom-anchored offset (rows from bottom)
+            'loading': True,
+        }
+        # Tests rely on _message_compose mirroring composer state for back-compat.
         self._message_compose = {
-            'recipient_user_id': recipient_user_id,
-            'recipient_username': recipient_username or 'Player',
+            'recipient_user_id': int(other_user_id),
+            'recipient_username': other_username or 'Player',
             'land_id': land_id,
             'text': '',
             'error': '',
         }
         self._activity_tab = 'messages'
+        self._load_thread()
 
-    def _open_reply_to_message(self, item):
-        """Open composer to reply to the other participant in a message row."""
-        current_user_id = self._current_user_id()
-        if item.get('sender_user_id') == current_user_id:
-            recipient_user_id = item.get('recipient_user_id')
-            recipient_username = item.get('recipient_username')
-        else:
-            recipient_user_id = item.get('sender_user_id')
-            recipient_username = item.get('sender_username')
-        self._open_message_compose(
-            recipient_user_id,
-            recipient_username,
-            land_id=item.get('land_id'),
-        )
+    def _load_thread(self):
+        """Fetch full message history for the open thread."""
+        if not self._thread:
+            return
+        other_id = self._thread.get('other_user_id')
+        try:
+            resp = requests.get(
+                f'{settings.SERVER_URL}/kingdom/messages/thread'
+                f'?other_user_id={other_id}', timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                self._thread['messages'] = data.get('messages', [])
+                self._thread['other_username'] = (
+                    data.get('other_username') or self._thread.get('other_username'))
+            else:
+                self._thread['error'] = 'Could not load conversation.'
+        except Exception as e:
+            logger.warning(f'Failed to load thread: {e}')
+            self._thread['error'] = 'Connection error.'
+        self._thread['loading'] = False
+        # If thread had unread messages from the other side, mark them seen
+        # since opening the thread implies the user has read them.
+        try:
+            unread_ids = [m.get('id') for m in (self._thread.get('messages') or [])
+                          if m.get('recipient_user_id') == self._current_user_id()
+                          and not m.get('seen_by_recipient')
+                          and m.get('id')]
+            if unread_ids:
+                requests.post(
+                    f'{settings.SERVER_URL}/kingdom/messages/mark_seen',
+                    json={'message_ids': unread_ids}, timeout=10)
+                for m in self._thread['messages']:
+                    if m.get('id') in unread_ids:
+                        m['seen_by_recipient'] = True
+                # Reload conversation list so unread counts refresh.
+                self._load_messages()
+        except Exception as e:
+            logger.warning(f'Failed to auto-mark thread seen: {e}')
 
-    def _handle_message_compose_event(self, event):
-        """Handle input for the message composer. Returns True when captured."""
-        if not self._message_compose:
+    def _send_thread_message(self):
+        """Send the composer text in the current thread."""
+        if not self._thread:
             return False
-        if event.type == KEYDOWN:
-            if event.key == K_ESCAPE:
-                self._message_compose = None
-            elif event.key == K_BACKSPACE:
-                self._message_compose['text'] = self._message_compose.get('text', '')[:-1]
-                self._message_compose['error'] = ''
-            elif event.key == K_RETURN:
-                self._send_kingdom_message()
-            return True
-        if event.type == pygame.TEXTINPUT:
-            text = self._message_compose.get('text', '')
-            if len(text) < 500:
-                self._message_compose['text'] = (text + event.text)[:500]
-                self._message_compose['error'] = ''
-            return True
-        if event.type == MOUSEBUTTONUP and event.button == 1:
-            if self._message_cancel_rect and self._message_cancel_rect.collidepoint(event.pos):
-                self._message_compose = None
-                return True
-            if self._message_send_rect and self._message_send_rect.collidepoint(event.pos):
-                self._send_kingdom_message()
-                return True
-        return True
-
-    def _send_kingdom_message(self):
-        """Send the current composer text through the kingdom message endpoint."""
-        if not self._message_compose:
-            return False
-        text = (self._message_compose.get('text') or '').strip()
+        text = (self._thread.get('text') or '').strip()
         if not text:
-            self._message_compose['error'] = 'Write a message first.'
+            self._thread['error'] = 'Write a message first.'
             return False
         payload = {
-            'recipient_user_id': self._message_compose.get('recipient_user_id'),
-            'land_id': self._message_compose.get('land_id'),
+            'recipient_user_id': self._thread.get('other_user_id'),
+            'land_id': self._thread.get('land_id'),
             'message': text,
         }
         try:
@@ -1260,26 +1413,357 @@ class KingdomScreen(MenuScreenMixin, Screen):
                                  json=payload, timeout=10)
             data = resp.json() if hasattr(resp, 'json') else {}
             if resp.status_code == 200 and data.get('success'):
-                recipient = self._message_compose.get('recipient_username') or 'player'
-                self._message_compose = None
-                self._activity_tab = 'messages'
+                self._thread['text'] = ''
+                self._thread['error'] = ''
+                if self._message_compose:
+                    self._message_compose['text'] = ''
+                self._load_thread()
                 self._load_messages()
-                self.state.set_msg(f'Message sent to {recipient}.')
                 return True
-            self._message_compose['error'] = data.get('message', 'Message failed.')
+            self._thread['error'] = data.get('message', 'Message failed.')
         except Exception as e:
             logger.warning(f'Failed to send kingdom message: {e}')
-            self._message_compose['error'] = 'Connection error.'
+            self._thread['error'] = 'Connection error.'
         return False
 
-    def _draw_message_compose(self):
-        """Draw a modal message composer."""
+    def _handle_thread_event(self, event):
+        """Handle input while the thread modal is open. Returns True when captured."""
+        if not self._thread:
+            return False
+        if event.type == KEYDOWN:
+            if event.key == K_ESCAPE:
+                self._thread = None
+                self._message_compose = None
+                return True
+            if event.key == K_BACKSPACE:
+                self._thread['text'] = self._thread.get('text', '')[:-1]
+                self._thread['error'] = ''
+                if self._message_compose:
+                    self._message_compose['text'] = self._thread['text']
+                return True
+            if event.key == K_RETURN:
+                mods = pygame.key.get_mods()
+                if mods & KMOD_SHIFT:
+                    text = self._thread.get('text', '')
+                    if len(text) < 500:
+                        self._thread['text'] = (text + '\n')[:500]
+                        if self._message_compose:
+                            self._message_compose['text'] = self._thread['text']
+                else:
+                    self._send_thread_message()
+                return True
+            return True
+        if event.type == pygame.TEXTINPUT:
+            text = self._thread.get('text', '')
+            if len(text) < 500:
+                self._thread['text'] = (text + event.text)[:500]
+                self._thread['error'] = ''
+                if self._message_compose:
+                    self._message_compose['text'] = self._thread['text']
+            return True
+        if event.type == MOUSEWHEEL:
+            self._thread['scroll'] = max(0, self._thread.get('scroll', 0) - event.y)
+            return True
+        if event.type == MOUSEBUTTONUP and event.button == 1:
+            if self._thread_close_rect and self._thread_close_rect.collidepoint(event.pos):
+                self._thread = None
+                self._message_compose = None
+                return True
+            if self._thread_cancel_rect and self._thread_cancel_rect.collidepoint(event.pos):
+                self._thread = None
+                self._message_compose = None
+                return True
+            if self._thread_send_rect and self._thread_send_rect.collidepoint(event.pos):
+                self._send_thread_message()
+                return True
+        return True
+
+    def _draw_thread_modal(self):
+        """Draw the conversation thread modal with full history + composer."""
         sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
         overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 130))
+        overlay.fill((0, 0, 0, 150))
         self.window.blit(overlay, (0, 0))
 
-        box = pygame.Rect(0, 0, int(0.42 * sw), int(0.31 * sh))
+        box = pygame.Rect(0, 0, int(0.54 * sw), int(0.72 * sh))
+        box.center = (sw // 2, sh // 2)
+        surf = pygame.Surface((box.w, box.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, settings.KINGDOM_ACTIVITY_BG, surf.get_rect(), border_radius=10)
+        self.window.blit(surf, box.topleft)
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER, box, 1, border_radius=10)
+
+        pad = int(0.018 * sh)
+        # Header: recipient name + close button.
+        other = self._thread.get('other_username') or 'Player'
+        title = self._activity_title_font.render(
+            f'Conversation with {other}', True, settings.KINGDOM_INFO_CLR)
+        self.window.blit(title, (box.x + pad, box.y + pad))
+
+        _xsz = int(0.028 * sh)
+        self._thread_close_rect = pygame.Rect(
+            box.right - _xsz - pad, box.y + pad, _xsz, _xsz)
+        self._draw_compose_button(self._thread_close_rect, '×', active=False)
+
+        # Sub-header: land context if present.
+        sub_y = box.y + pad + title.get_height() + 4
+        land_id = self._thread.get('land_id')
+        sub_text_parts = []
+        if land_id:
+            sub_text_parts.append(f'About Land #{land_id}')
+        sub_text_parts.append('Enter sends · Shift+Enter newline · Esc closes')
+        sub_surf = self._activity_small_font.render(
+            '   ·   '.join(sub_text_parts), True, settings.KINGDOM_ACTIVITY_DIM_CLR)
+        self.window.blit(sub_surf, (box.x + pad, sub_y))
+
+        # Composer area at the bottom.
+        comp_h = int(0.13 * sh)
+        comp_top = box.bottom - pad - comp_h - int(0.05 * sh)  # leave space for buttons
+        # Buttons row.
+        btn_w = int(0.085 * sw)
+        btn_h = int(0.04 * sh)
+        gap = int(0.010 * sw)
+        by = box.bottom - pad - btn_h
+        self._thread_cancel_rect = pygame.Rect(
+            box.right - pad - btn_w * 2 - gap, by, btn_w, btn_h)
+        self._thread_send_rect = pygame.Rect(
+            box.right - pad - btn_w, by, btn_w, btn_h)
+        self._draw_compose_button(self._thread_cancel_rect, 'Cancel', active=False)
+        self._draw_compose_button(self._thread_send_rect, 'Send', active=True)
+
+        # Composer input box (multi-line, wrapped).
+        self._thread_input_rect = pygame.Rect(
+            box.x + pad, comp_top, box.w - 2 * pad, comp_h)
+        pygame.draw.rect(self.window, (18, 17, 24, 235),
+                         self._thread_input_rect, border_radius=6)
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
+                         self._thread_input_rect, 1, border_radius=6)
+        text = self._thread.get('text') or ''
+        placeholder = 'Type a message...'
+        self._draw_thread_compose_text(text, placeholder)
+
+        err = self._thread.get('error')
+        if err:
+            err_surf = self._activity_small_font.render(
+                err, True, settings.KINGDOM_ACTIVITY_BAD_CLR)
+            self.window.blit(err_surf,
+                             (box.x + pad, comp_top - err_surf.get_height() - 2))
+
+        # History area.
+        hist_top = sub_y + sub_surf.get_height() + 8
+        hist_bottom = comp_top - 8
+        hist_rect = pygame.Rect(box.x + pad, hist_top,
+                                box.w - 2 * pad, max(1, hist_bottom - hist_top))
+        pygame.draw.rect(self.window, (16, 14, 22, 180), hist_rect, border_radius=6)
+        self._draw_thread_history(hist_rect)
+
+    def _draw_thread_compose_text(self, text, placeholder):
+        """Render the multi-line composer text inside _thread_input_rect."""
+        r = self._thread_input_rect
+        font = self._activity_font
+        pad_x = 8
+        line_h = font.get_height() + 2
+        if not text:
+            ph = font.render(placeholder, True, settings.KINGDOM_ACTIVITY_DIM_CLR)
+            self.window.blit(ph, (r.x + pad_x, r.y + 6))
+            return
+        # Wrap by explicit newlines first, then by max width.
+        lines = []
+        for raw_line in text.split('\n'):
+            lines.extend(self._wrap_text(raw_line, font, r.w - pad_x * 2)
+                         if raw_line else [''])
+        max_lines = max(1, (r.h - 8) // line_h)
+        if len(lines) > max_lines:
+            lines = lines[-max_lines:]
+        y = r.y + 4
+        for ln in lines:
+            surf = font.render(ln, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+            self.window.blit(surf, (r.x + pad_x, y))
+            y += line_h
+        # Blinking cursor at the end.
+        if (pygame.time.get_ticks() // 500) % 2 == 0 and lines:
+            last = lines[-1]
+            cx = r.x + pad_x + min(font.size(last)[0], r.w - pad_x * 2 - 2)
+            cy = y - line_h
+            pygame.draw.line(self.window, settings.KINGDOM_ACTIVITY_TEXT_CLR,
+                             (cx, cy + 2), (cx, cy + font.get_height() - 2), 1)
+
+    def _draw_thread_history(self, rect):
+        """Render scrollable conversation history inside rect."""
+        if not self._thread:
+            return
+        if self._thread.get('loading'):
+            txt = self._activity_font.render('Loading…', True,
+                                             settings.KINGDOM_ACTIVITY_DIM_CLR)
+            self.window.blit(txt, txt.get_rect(center=rect.center))
+            return
+        messages = self._thread.get('messages') or []
+        if not messages:
+            txt = self._activity_font.render('No messages yet. Say hi!', True,
+                                             settings.KINGDOM_ACTIVITY_DIM_CLR)
+            self.window.blit(txt, txt.get_rect(center=rect.center))
+            return
+
+        old_clip = self.window.get_clip()
+        self.window.set_clip(rect)
+        try:
+            current_user_id = self._current_user_id()
+            font = self._activity_font
+            small = self._activity_small_font
+            line_h = font.get_height() + 2
+            bubble_pad = 6
+            max_bubble_w = int(rect.w * 0.78)
+            # Build bubble (rect, lines, sender_is_me, header, footer) per message.
+            entries = []
+            for m in messages:
+                is_me = m.get('sender_user_id') == current_user_id
+                body = m.get('message') or ''
+                wrapped = []
+                for raw_line in body.split('\n'):
+                    if raw_line:
+                        wrapped.extend(self._wrap_text(raw_line, font, max_bubble_w - 2 * bubble_pad))
+                    else:
+                        wrapped.append('')
+                rel = self._format_relative_time(m.get('timestamp'))
+                header = ('You' if is_me else m.get('sender_username') or 'Other')
+                header_txt = f'{header}  ·  {rel}' if rel else header
+                footer_txt = ''
+                if is_me:
+                    footer_txt = '✓✓' if m.get('seen_by_recipient') else '✓'
+                bubble_w = min(max_bubble_w,
+                               max(small.size(header_txt)[0],
+                                   max((font.size(ln)[0] for ln in wrapped), default=0))
+                               + 2 * bubble_pad)
+                bubble_h = (small.get_height() + 4 + line_h * len(wrapped)
+                            + (small.get_height() + 2 if footer_txt else 0))
+                entries.append({
+                    'is_me': is_me,
+                    'header': header_txt,
+                    'lines': wrapped,
+                    'footer': footer_txt,
+                    'w': bubble_w,
+                    'h': bubble_h,
+                })
+
+            gap = 6
+            total_h = sum(e['h'] for e in entries) + gap * max(0, len(entries) - 1)
+            scroll = int(self._thread.get('scroll') or 0)
+            # Bottom-anchored: layout so newest is at bottom; scroll moves upward.
+            start_y = rect.bottom - total_h + scroll * line_h
+            min_start_y = rect.y + 4
+            if start_y < min_start_y:
+                # Clamp so the oldest bubble is visible at top when fully scrolled.
+                start_y = min_start_y
+                self._thread['scroll'] = max(0, int((rect.bottom - total_h - min_start_y) / line_h))
+            y = start_y
+            for e in entries:
+                x = rect.right - e['w'] - 8 if e['is_me'] else rect.x + 8
+                bubble = pygame.Rect(x, y, e['w'], e['h'])
+                clr = ((44, 80, 60, 215) if e['is_me']
+                       else (40, 38, 54, 215))
+                bsurf = pygame.Surface((bubble.w, bubble.h), pygame.SRCALPHA)
+                pygame.draw.rect(bsurf, clr, bsurf.get_rect(), border_radius=8)
+                pygame.draw.rect(bsurf, settings.KINGDOM_ACTIVITY_BORDER,
+                                 bsurf.get_rect(), 1, border_radius=8)
+                self.window.blit(bsurf, bubble.topleft)
+                hy = bubble.y + 4
+                hsurf = small.render(e['header'], True, settings.KINGDOM_ACTIVITY_DIM_CLR)
+                self.window.blit(hsurf, (bubble.x + bubble_pad, hy))
+                hy += small.get_height() + 2
+                for ln in e['lines']:
+                    ls = font.render(ln, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+                    self.window.blit(ls, (bubble.x + bubble_pad, hy))
+                    hy += line_h
+                if e['footer']:
+                    fclr = ((150, 200, 150) if e['footer'] == '✓✓'
+                            else settings.KINGDOM_ACTIVITY_DIM_CLR)
+                    fsurf = small.render(e['footer'], True, fclr)
+                    self.window.blit(fsurf, (bubble.right - bubble_pad - fsurf.get_width(),
+                                             bubble.bottom - small.get_height() - 2))
+                y += e['h'] + gap
+        finally:
+            self.window.set_clip(old_clip)
+
+    # ── Recipient picker for "+ New message" ────────────────────────────────
+
+    def _open_new_msg_picker(self):
+        """Open the recipient-username picker modal."""
+        self._new_msg_picker = {
+            'username': '',
+            'error': '',
+            'loading': False,
+        }
+
+    def _resolve_recipient_and_open_thread(self):
+        """Validate the typed username and open a thread on success."""
+        if not self._new_msg_picker:
+            return
+        username = (self._new_msg_picker.get('username') or '').strip()
+        if not username:
+            self._new_msg_picker['error'] = 'Type a username.'
+            return
+        self._new_msg_picker['loading'] = True
+        try:
+            resp = requests.get(
+                f'{settings.SERVER_URL}/kingdom/users/lookup'
+                f'?username={username}', timeout=10)
+            data = resp.json() if hasattr(resp, 'json') else {}
+            if resp.status_code == 200 and data.get('success'):
+                user_id = data.get('user_id')
+                resolved = data.get('username') or username
+                self._new_msg_picker = None
+                self._open_thread(user_id, resolved, is_ai=bool(data.get('is_ai')))
+                return
+            self._new_msg_picker['error'] = data.get('message', 'User not found.')
+        except Exception as e:
+            logger.warning(f'Failed to look up recipient: {e}')
+            self._new_msg_picker['error'] = 'Connection error.'
+        finally:
+            if self._new_msg_picker:
+                self._new_msg_picker['loading'] = False
+
+    def _handle_new_msg_picker_event(self, event):
+        """Handle input for the recipient picker modal."""
+        if not self._new_msg_picker:
+            return False
+        if event.type == KEYDOWN:
+            if event.key == K_ESCAPE:
+                self._new_msg_picker = None
+                return True
+            if event.key == K_BACKSPACE:
+                self._new_msg_picker['username'] = (
+                    self._new_msg_picker.get('username', '')[:-1])
+                self._new_msg_picker['error'] = ''
+                return True
+            if event.key == K_RETURN:
+                self._resolve_recipient_and_open_thread()
+                return True
+            return True
+        if event.type == pygame.TEXTINPUT:
+            uname = self._new_msg_picker.get('username', '')
+            if len(uname) < 40:
+                self._new_msg_picker['username'] = (uname + event.text)[:40]
+                self._new_msg_picker['error'] = ''
+            return True
+        if event.type == MOUSEBUTTONUP and event.button == 1:
+            if self._new_msg_picker_close_rect and self._new_msg_picker_close_rect.collidepoint(event.pos):
+                self._new_msg_picker = None
+                return True
+            if self._new_msg_picker_cancel_rect and self._new_msg_picker_cancel_rect.collidepoint(event.pos):
+                self._new_msg_picker = None
+                return True
+            if self._new_msg_picker_ok_rect and self._new_msg_picker_ok_rect.collidepoint(event.pos):
+                self._resolve_recipient_and_open_thread()
+                return True
+        return True
+
+    def _draw_new_msg_picker(self):
+        """Draw the recipient-username picker modal."""
+        sw, sh = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
+        overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.window.blit(overlay, (0, 0))
+
+        box = pygame.Rect(0, 0, int(0.36 * sw), int(0.24 * sh))
         box.center = (sw // 2, sh // 2)
         surf = pygame.Surface((box.w, box.h), pygame.SRCALPHA)
         pygame.draw.rect(surf, settings.KINGDOM_ACTIVITY_BG, surf.get_rect(), border_radius=8)
@@ -1287,59 +1771,59 @@ class KingdomScreen(MenuScreenMixin, Screen):
         pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER, box, 1, border_radius=8)
 
         pad = int(0.018 * sh)
-        y = box.y + pad
-        recipient = self._message_compose.get('recipient_username') or 'Player'
-        title = self._activity_title_font.render(f'Message {recipient}', True, settings.KINGDOM_INFO_CLR)
-        self.window.blit(title, (box.x + pad, y))
-        y += title.get_height() + 8
+        title = self._activity_title_font.render(
+            'Send message to player', True, settings.KINGDOM_INFO_CLR)
+        self.window.blit(title, (box.x + pad, box.y + pad))
 
-        land_id = self._message_compose.get('land_id')
-        helper = 'Enter sends. Esc cancels.'
-        if land_id:
-            helper = f'About Land #{land_id}.  {helper}'
-        helper_surf = self._activity_small_font.render(helper, True, settings.KINGDOM_ACTIVITY_DIM_CLR)
-        self.window.blit(helper_surf, (box.x + pad, y))
-        y += helper_surf.get_height() + 10
+        _xsz = int(0.028 * sh)
+        self._new_msg_picker_close_rect = pygame.Rect(
+            box.right - _xsz - pad, box.y + pad, _xsz, _xsz)
+        self._draw_compose_button(self._new_msg_picker_close_rect, '×', active=False)
 
-        self._message_input_rect = pygame.Rect(
-            box.x + pad,
-            y,
-            box.w - 2 * pad,
-            int(0.072 * sh),
-        )
-        pygame.draw.rect(self.window, (18, 17, 24, 235), self._message_input_rect, border_radius=6)
-        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER,
-                         self._message_input_rect, 1, border_radius=6)
-        text = self._message_compose.get('text') or ''
-        placeholder = 'Write message...'
-        display = text if text else placeholder
-        color = settings.KINGDOM_ACTIVITY_TEXT_CLR if text else settings.KINGDOM_ACTIVITY_DIM_CLR
-        input_text = self._fit_text(display, self._activity_font, self._message_input_rect.w - 16)
-        input_surf = self._activity_font.render(input_text, True, color)
-        self.window.blit(input_surf, (self._message_input_rect.x + 8,
-                                      self._message_input_rect.centery - input_surf.get_height() // 2))
+        label = self._activity_small_font.render(
+            'Username:', True, settings.KINGDOM_ACTIVITY_DIM_CLR)
+        ly = box.y + pad + title.get_height() + 10
+        self.window.blit(label, (box.x + pad, ly))
 
-        if text and (pygame.time.get_ticks() // 500) % 2 == 0:
-            cursor_x = self._message_input_rect.x + 10 + min(
-                self._activity_font.size(text)[0], self._message_input_rect.w - 24)
+        input_rect = pygame.Rect(box.x + pad,
+                                 ly + label.get_height() + 6,
+                                 box.w - 2 * pad, int(0.05 * sh))
+        pygame.draw.rect(self.window, (18, 17, 24, 235), input_rect, border_radius=6)
+        pygame.draw.rect(self.window, settings.KINGDOM_ACTIVITY_BORDER, input_rect, 1, border_radius=6)
+        uname = self._new_msg_picker.get('username') or ''
+        placeholder = 'Type a username...'
+        display = uname if uname else placeholder
+        color = (settings.KINGDOM_ACTIVITY_TEXT_CLR if uname
+                 else settings.KINGDOM_ACTIVITY_DIM_CLR)
+        usurf = self._activity_font.render(
+            self._fit_text(display, self._activity_font, input_rect.w - 16),
+            True, color)
+        self.window.blit(usurf, (input_rect.x + 8,
+                                 input_rect.centery - usurf.get_height() // 2))
+        if uname and (pygame.time.get_ticks() // 500) % 2 == 0:
+            cx = input_rect.x + 10 + min(
+                self._activity_font.size(uname)[0], input_rect.w - 24)
             pygame.draw.line(self.window, settings.KINGDOM_ACTIVITY_TEXT_CLR,
-                             (cursor_x, self._message_input_rect.y + 8),
-                             (cursor_x, self._message_input_rect.bottom - 8), 1)
+                             (cx, input_rect.y + 6),
+                             (cx, input_rect.bottom - 6), 1)
 
-        y = self._message_input_rect.bottom + 8
-        err = self._message_compose.get('error')
+        err = self._new_msg_picker.get('error')
         if err:
-            err_surf = self._activity_small_font.render(err, True, settings.KINGDOM_ACTIVITY_BAD_CLR)
-            self.window.blit(err_surf, (box.x + pad, y))
+            err_surf = self._activity_small_font.render(
+                err, True, settings.KINGDOM_ACTIVITY_BAD_CLR)
+            self.window.blit(err_surf,
+                             (box.x + pad, input_rect.bottom + 6))
 
-        btn_w = int(0.095 * sw)
-        btn_h = int(0.042 * sh)
-        gap = int(0.012 * sw)
+        btn_w = int(0.085 * sw)
+        btn_h = int(0.04 * sh)
+        gap = int(0.010 * sw)
         by = box.bottom - pad - btn_h
-        self._message_cancel_rect = pygame.Rect(box.right - pad - btn_w * 2 - gap, by, btn_w, btn_h)
-        self._message_send_rect = pygame.Rect(box.right - pad - btn_w, by, btn_w, btn_h)
-        self._draw_compose_button(self._message_cancel_rect, 'Cancel', active=False)
-        self._draw_compose_button(self._message_send_rect, 'Send', active=True)
+        self._new_msg_picker_cancel_rect = pygame.Rect(
+            box.right - pad - btn_w * 2 - gap, by, btn_w, btn_h)
+        self._new_msg_picker_ok_rect = pygame.Rect(
+            box.right - pad - btn_w, by, btn_w, btn_h)
+        self._draw_compose_button(self._new_msg_picker_cancel_rect, 'Cancel', active=False)
+        self._draw_compose_button(self._new_msg_picker_ok_rect, 'Continue', active=True)
 
     def _draw_compose_button(self, rect, label, active=False):
         bg = settings.KINGDOM_ACTIVITY_TAB_ACTIVE_BG if active else settings.KINGDOM_ACTIVITY_TAB_BG
@@ -1377,23 +1861,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._activity_scroll_offsets_map()['alerts'] = 0
 
     def _mark_messages_seen(self):
-        """Tell the server to mark received kingdom messages as read."""
-        current_user_id = self._current_user_id()
-        ids = [m.get('id') for m in self._messages
-               if m.get('id') and m.get('recipient_user_id') == current_user_id]
-        if not ids:
-            self._message_unread_count = 0
+        """Mark every unread kingdom message addressed to the current user as read."""
+        if self._message_unread_count <= 0:
             self._activity_scroll_offsets_map()['messages'] = 0
             return
         try:
             requests.post(
-                f'{settings.SERVER_URL}/kingdom/messages/mark_seen',
-                json={'message_ids': ids}, timeout=10)
+                f'{settings.SERVER_URL}/kingdom/messages/mark_all_seen',
+                json={}, timeout=10)
         except Exception as e:
             logger.warning(f'Failed to mark kingdom messages seen: {e}')
-        for msg in self._messages:
-            if msg.get('id') in ids:
-                msg['seen_by_recipient'] = True
+        for conv in getattr(self, '_conversations', []) or []:
+            conv['unread_count'] = 0
         self._message_unread_count = 0
         self._activity_scroll_offsets_map()['messages'] = 0
 
@@ -1437,10 +1916,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._detail_box = None
 
     def _on_message_owner(self, tile):
-        """Open the kingdom message composer for a land owner."""
+        """Open the kingdom thread modal for a land owner."""
         self._detail_box = None
-        self._open_message_compose(
+        self._open_thread(
             getattr(tile, 'owner_user_id', None),
             getattr(tile, 'owner_username', None) or 'Owner',
             land_id=getattr(tile, 'land_id', None),
+            is_ai=bool(getattr(tile, 'owner_is_ai', False)),
         )

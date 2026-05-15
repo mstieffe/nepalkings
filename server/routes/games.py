@@ -4,10 +4,15 @@ from flask import Blueprint, request, jsonify, current_app, g
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import random
+import secrets
 import logging
+import math
 from datetime import datetime, timezone, timedelta
 from models import db, User, Challenge, ChallengeStatus, Player, Game, MainCard, SideCard, Figure, CardToFigure, CardRole, LogEntry, ChatMessage, BattleMove, ConquerTactic, ActiveSpell, GameResult, Land, LandAttackLog, LandConfig, LandConfigFigure, CollectionCard, Kingdom, KingdomNotification, KingdomLootEvent
 from game_service.deck_manager import DeckManager
+from game_service.conquer_prelude_replay_targets import (
+    conquer_destroyed_replay_targets_for_prelude,
+)
 from game_service.conquer_tactics_idempotency import (
     game_lock as _conquer_game_lock,
     get_cached_response as _conquer_idem_get,
@@ -836,7 +841,13 @@ def _list_valid_conquer_prelude_targets(game, caster_player_id, spell_name):
         Figure.game_id == game.id,
         Figure.player_id.in_(candidate_player_ids),
     ).all()
-    return [f for f in targets if not getattr(f, 'checkmate', False)]
+    live_targets = [f for f in targets if not getattr(f, 'checkmate', False)]
+    replay_targets = conquer_destroyed_replay_targets_for_prelude(
+        game,
+        candidate_player_ids,
+        spell_name,
+    )
+    return live_targets + replay_targets
 
 
 def _guard_must_advance(game, player_id, *, action_label='action'):
@@ -1018,8 +1029,51 @@ def _is_ceasefire_active(game_id):
     return game.ceasefire_active
 
 
+def _duel_game_limit(game):
+    """Return the point threshold for a duel, falling back to stake for old rows."""
+    fallback = getattr(game, 'stake', None) or getattr(settings, 'DEFAULT_GAME_LIMIT', None) or settings.DEFAULT_GAME_STAKE
+    raw_limit = getattr(game, 'game_limit', None) or fallback
+    try:
+        return max(1, int(raw_limit))
+    except (TypeError, ValueError):
+        return max(1, int(fallback))
+
+
+def _duel_reward_draw_counts(game_limit):
+    """Return scaled winner/loser reward-pool draw counts for a point limit."""
+    try:
+        limit = max(1, int(game_limit))
+    except (TypeError, ValueError):
+        limit = int(getattr(settings, 'DEFAULT_GAME_LIMIT', settings.DEFAULT_GAME_STAKE))
+    winner_draws = int(math.ceil(limit / 10.0))
+    loser_draws = max(1, winner_draws // 2)
+    return {'winner': winner_draws, 'loser': loser_draws}
+
+
+def _duel_reward_expectation(total_draws):
+    """Expected reward values for *total_draws* from the duel reward pool."""
+    draws = max(0, int(total_draws or 0))
+    probs = settings.DUEL_REWARD_POOL_PROBABILITIES
+    gold_amount = int(settings.DUEL_REWARD_GOLD_AMOUNT or 0)
+    return {
+        'draws': draws,
+        'main_booster': draws * float(probs.get('main_booster', 0)),
+        'side_booster': draws * float(probs.get('side_booster', 0)),
+        'map': draws * float(probs.get('map', 0)),
+        'gold': draws * float(probs.get('gold', 0)) * gold_amount,
+    }
+
+
+def _duel_reward_expectations(game_limit):
+    counts = _duel_reward_draw_counts(game_limit)
+    return {
+        'winner': _duel_reward_expectation(counts['winner']),
+        'loser': _duel_reward_expectation(counts['loser']),
+    }
+
+
 def _check_game_over(game):
-    """Check if any player has reached the game's point stake.
+    """Check if any player has reached the game's point limit.
 
     If a winner is found:
     - Sets game.state = 'finished', game.winner_player_id, game.finished_at
@@ -1030,12 +1084,12 @@ def _check_game_over(game):
     if game.state == 'finished':
         return None  # Already finished
 
-    stake = game.stake or settings.DEFAULT_GAME_STAKE
+    game_limit = _duel_game_limit(game)
 
     winner_player = None
     loser_player = None
     for p in game.players:
-        if p.points >= stake:
+        if p.points >= game_limit:
             winner_player = p
             break
 
@@ -1157,6 +1211,7 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
     Returns a dict with game_over info.
     """
     stake = game.stake or settings.DEFAULT_GAME_STAKE
+    game_limit = _duel_game_limit(game)
 
     # Determine the loser
     loser_player = [p for p in game.players if p.id != winner_player.id][0]
@@ -1186,8 +1241,10 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         pass
 
     # ── Duel reward-pool draws ──────────────────────────────────────
-    winner_rewards = _award_duel_rewards(winner_user, settings.DUEL_WINNER_REWARD_DRAWS)
-    loser_rewards = _award_duel_rewards(loser_user, settings.DUEL_LOSER_REWARD_DRAWS)
+    reward_draws = _duel_reward_draw_counts(game_limit)
+    reward_expectations = _duel_reward_expectations(game_limit)
+    winner_rewards = _award_duel_rewards(winner_user, reward_draws['winner'])
+    loser_rewards = _award_duel_rewards(loser_user, reward_draws['loser'])
     # Legacy payload shape preserved for older clients that only display
     # booster pack rewards.
     winner_boosters = {
@@ -1271,8 +1328,11 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         'loser_score': loser_player.points,
         'gold_awarded': gold_awarded,
         'stake': stake,
+        'game_limit': game_limit,
         'rounds_played': game.current_round,
         'stats': game_stats,
+        'reward_draws': reward_draws,
+        'reward_expectations': reward_expectations,
         'winner_rewards': winner_rewards,
         'loser_rewards': loser_rewards,
         'winner_boosters': winner_boosters,
@@ -1288,6 +1348,23 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
                    'cards_spent', 'is_ai_defender'):
             if _k in conquer_payload:
                 info[_k] = conquer_payload[_k]
+
+    # Persist the reward-draw results onto last_battle_result so that a
+    # follow-up endpoint (finish_battle_pick_card / finish_battle_draw_choice)
+    # can reconstruct the full game_over payload via
+    # _build_game_over_info_from_finished. Without this, checkmate-triggered
+    # game-overs lose their winner_rewards/loser_rewards on the response.
+    existing_lbr = dict(game.last_battle_result) if isinstance(game.last_battle_result, dict) else {}
+    existing_lbr['game_over_winner_rewards'] = winner_rewards
+    existing_lbr['game_over_loser_rewards'] = loser_rewards
+    existing_lbr['game_over_winner_boosters'] = winner_boosters
+    existing_lbr['game_over_loser_boosters'] = loser_boosters
+    existing_lbr['game_over_gold_awarded'] = gold_awarded
+    existing_lbr['game_over_reward_draws'] = reward_draws
+    existing_lbr['game_over_reward_expectations'] = reward_expectations
+    game.last_battle_result = existing_lbr
+    flag_modified(game, 'last_battle_result')
+
     return info
 
 
@@ -1301,6 +1378,7 @@ def _build_game_over_info_from_finished(game):
         return None
 
     stake = game.stake or settings.DEFAULT_GAME_STAKE
+    game_limit = _duel_game_limit(game)
     gold_awarded = stake * 2
 
     winner_player = db.session.get(Player, game.winner_player_id)
@@ -1320,6 +1398,20 @@ def _build_game_over_info_from_finished(game):
     # Determine reason from checkmate_figure_name
     reason = 'checkmate' if checkmate_figure_name else 'stake'
 
+    # Read reward-draw results persisted by _finalize_game_over so that
+    # checkmate-triggered game-overs (where the actual finalize happened in a
+    # prior endpoint call) still include the loot the client needs to display.
+    saved = game.last_battle_result if isinstance(game.last_battle_result, dict) else {}
+    saved_winner_rewards = saved.get('game_over_winner_rewards') or {}
+    saved_loser_rewards = saved.get('game_over_loser_rewards') or {}
+    saved_winner_boosters = saved.get('game_over_winner_boosters')
+    saved_loser_boosters = saved.get('game_over_loser_boosters')
+    saved_reward_draws = saved.get('game_over_reward_draws') or _duel_reward_draw_counts(game_limit)
+    saved_reward_expectations = (
+        saved.get('game_over_reward_expectations')
+        or _duel_reward_expectations(game_limit)
+    )
+
     return {
         'game_over': True,
         'reason': reason,
@@ -1332,10 +1424,15 @@ def _build_game_over_info_from_finished(game):
         'loser_score': loser_player.points,
         'gold_awarded': gold_awarded,
         'stake': stake,
+        'game_limit': game_limit,
         'rounds_played': game.current_round,
         'stats': _compute_game_stats(game.id, [winner_player.id, loser_player.id]),
-        'winner_boosters': None,  # not available for reconstructed info
-        'loser_boosters': None,
+        'reward_draws': saved_reward_draws,
+        'reward_expectations': saved_reward_expectations,
+        'winner_rewards': saved_winner_rewards,
+        'loser_rewards': saved_loser_rewards,
+        'winner_boosters': saved_winner_boosters,
+        'loser_boosters': saved_loser_boosters,
     }
 
 
@@ -2157,8 +2254,13 @@ def create_game():
         if not user1 or not user2:
             return jsonify({'success': False, 'message': 'One or both players do not exist'}), 400
 
-        # Get game stake from the challenge (gold bet)
+        # Get game stake from the challenge (gold bet) and point limit.
         game_stake = challenge.stake or settings.DEFAULT_GAME_STAKE
+        game_limit = getattr(challenge, 'game_limit', None) or game_stake
+        try:
+            game_limit = max(1, int(game_limit))
+        except (TypeError, ValueError):
+            game_limit = max(1, int(game_stake))
 
         # Deduct gold from both players (they bet the stake)
         if user1.gold < game_stake:
@@ -2171,12 +2273,14 @@ def create_game():
 
         # Create a new Game instance
         game = Game(
-            current_round=1, 
+            current_round=1,
             invader_player_id=None,
             ceasefire_active=True,
             ceasefire_start_turn=0,
             stake=game_stake,
-            turn_time_limit=challenge.turn_time_limit
+            game_limit=game_limit,
+            turn_time_limit=challenge.turn_time_limit,
+            ai_seed=secrets.randbits(31),
         )
         db.session.add(game)
         db.session.commit()
@@ -4526,7 +4630,7 @@ def _compute_wall_defence_total(walls):
     total = 0
     for f in walls:
         for assoc in CardToFigure.query.filter_by(figure_id=f.id).all():
-            if assoc.card_type == 'side':
+            if assoc.role == CardRole.NUMBER and assoc.card_type == 'side':
                 card = db.session.get(SideCard, assoc.card_id)
                 if card:
                     total += card.value
@@ -6581,7 +6685,16 @@ def finish_battle():
         # Store the winner so the second client can retrieve the result
         game.fold_winner_id = winner_player.id
 
-        # Persist battle result for the second client (survives _clear_battle_state)
+        # Persist battle result for the second client (survives _clear_battle_state).
+        # Preserve any 'game_over_*' keys stashed by _finalize_game_over (called
+        # earlier in _check_checkmate_loss) so that finish_battle_pick_card can
+        # still reconstruct the rewards payload via
+        # _build_game_over_info_from_finished.
+        preserved_game_over = {}
+        if isinstance(game.last_battle_result, dict):
+            for _k, _v in game.last_battle_result.items():
+                if _k.startswith('game_over_'):
+                    preserved_game_over[_k] = _v
         game.last_battle_result = {
             'winner_player_id': winner_player.id,
             'loser_player_id': loser_player.id,
@@ -6591,6 +6704,7 @@ def finish_battle():
             'destroyed_figure_name': destroyed_name,
             'destroyed_figure_family': destroyed_family,
             'checkmate_figure_name': checkmate_game_over.get('checkmate_figure_name') if checkmate_game_over else None,
+            **preserved_game_over,
         }
         _set_post_battle_pending_choice(
             game,
@@ -6599,13 +6713,14 @@ def finish_battle():
             'first_available_card',
         )
 
-        # Check if someone reached the stake (will be finalized in pick_card)
+        # Check if someone reached the point limit (will be finalized in pick_card)
         game_over_info = None
         if checkmate_game_over:
             game_over_info = True  # Checkmate overrides — game ends at pick_card
         else:
+            game_limit = _duel_game_limit(game)
             for p in game.players:
-                if p.points >= (game.stake or settings.DEFAULT_GAME_STAKE):
+                if p.points >= game_limit:
                     game_over_info = True
                     break
 
@@ -7233,43 +7348,33 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 new_owner_id=attacker_user.id,
                 commit=False,
             )
-            # Award XP for connecting a new land to an existing kingdom: the
-            # land must now belong to a kingdom that already held >= 1 other
-            # land before collateral split transfers.  Brand-new kingdoms
-            # created only by this resolution award no immediate XP.
+            # Award XP for every conquered land based on its tier, including
+            # founding lands that create brand-new kingdoms.  Collateral lands
+            # from splits also award tier-based XP.
             if land and land.kingdom_id:
                 joined_kingdom = db.session.get(Kingdom, land.kingdom_id)
                 if joined_kingdom and joined_kingdom.owner_user_id == attacker_user.id:
                     collateral_ids = set(
                         (split_transfer_summary or {}).get('transferred_land_ids') or []
                     )
-                    siblings_query = Land.query.filter(
-                        Land.kingdom_id == joined_kingdom.id,
-                        Land.id != land.id,
+                    # Award XP for the directly conquered land.
+                    award_kingdom_xp(
+                        joined_kingdom,
+                        xp_for_land_tier(int(land.tier or 0)),
+                        reason='conquer',
                     )
-                    if collateral_ids:
-                        siblings_query = siblings_query.filter(
-                            ~Land.id.in_(collateral_ids)
-                        )
-                    siblings = siblings_query.count()
-                    if siblings >= 1:
-                        award_kingdom_xp(
-                            joined_kingdom,
-                            xp_for_land_tier(int(land.tier or 0)),
-                            reason='conquer',
-                        )
-                        # Also award XP for every collateral land the split
-                        # transferred to the attacker; they all join the same
-                        # kingdom so the attacker should receive the tier-based
-                        # XP for each one, just like a direct conquer would.
-                        for coll_id in collateral_ids:
-                            coll_land = db.session.get(Land, coll_id)
-                            if coll_land and coll_land.owner_user_id == attacker_user.id:
-                                award_kingdom_xp(
-                                    joined_kingdom,
-                                    xp_for_land_tier(int(coll_land.tier or 0)),
-                                    reason='conquer_split',
-                                )
+                    # Also award XP for every collateral land the split
+                    # transferred to the attacker; they all join the same
+                    # kingdom so the attacker should receive the tier-based
+                    # XP for each one, just like a direct conquer would.
+                    for coll_id in collateral_ids:
+                        coll_land = db.session.get(Land, coll_id)
+                        if coll_land and coll_land.owner_user_id == attacker_user.id:
+                            award_kingdom_xp(
+                                joined_kingdom,
+                                xp_for_land_tier(int(coll_land.tier or 0)),
+                                reason='conquer_split',
+                            )
             if lost_kingdom_id and db.session.get(Kingdom, lost_kingdom_id) is None:
                 deleted_kingdom_id = lost_kingdom_id
                 deleted_kingdom_name = lost_kingdom_name or f'Kingdom #{lost_kingdom_id}'

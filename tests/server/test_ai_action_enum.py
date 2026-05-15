@@ -246,6 +246,37 @@ def test_enumerate_actions_normal_turn_change_cards_description_uses_swap_summar
     assert '2 low-rank of 8 free cards' in change_action['description']
 
 
+def test_enumerate_actions_normal_turn_omits_change_side_cards_when_side_hand_empty():
+    """Fresh duels start with zero side cards (side cards are dealt
+    post-battle), so the change_side_cards action must not be enumerated -
+    the server would reject it and the AI would loop on a dead choice.
+    """
+    game_dict = _base_game_dict(ai_id=9, opp_id=10)
+    game_dict['turn_player_id'] = 9
+    game_dict['players'][0]['main_hand'] = [
+        {'id': 1, 'rank': 'K', 'suit': 'Hearts', 'value': 4,
+         'part_of_figure': False, 'part_of_battle_move': False},
+    ]
+    game_dict['players'][0]['side_hand'] = []
+
+    actions = enumerate_actions(game_dict, 9, 'normal_turn')
+
+    assert not any(a['type'] == 'change_side_cards' for a in actions)
+
+
+def test_enumerate_actions_normal_turn_includes_change_side_cards_when_side_hand_has_cards():
+    game_dict = _base_game_dict(ai_id=9, opp_id=10)
+    game_dict['turn_player_id'] = 9
+    game_dict['players'][0]['side_hand'] = [
+        {'id': 101, 'rank': '3', 'suit': 'Hearts', 'value': 3,
+         'part_of_figure': False, 'part_of_battle_move': False},
+    ]
+
+    actions = enumerate_actions(game_dict, 9, 'normal_turn')
+
+    assert any(a['type'] == 'change_side_cards' for a in actions)
+
+
 def test_enumerate_actions_invader_last_turn_only_offers_advance():
     game_dict = _base_game_dict(ai_id=21, opp_id=22)
     game_dict['turn_player_id'] = 21

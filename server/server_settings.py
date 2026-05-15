@@ -55,11 +55,13 @@ MAX_SIDE_HAND_SIZE = 8
 INITIAL_TURNS_DEFENDER = 6
 INITIAL_TURNS_INVADER = 6
 
-# Game win condition
-DEFAULT_GAME_STAKE = 35  # Default gold stake / point threshold to win
+# Game wager / win condition
+DEFAULT_GAME_STAKE = 35  # Default gold stake
+DEFAULT_GAME_LIMIT = DEFAULT_GAME_STAKE  # Default point threshold to win
+MAX_GAME_LIMIT = 100
 
 # New player starting gold
-INITIAL_GOLD = 100000
+INITIAL_GOLD = 1000
 
 # Auth token settings: TOKEN_EXPIRY_SECONDS now lives in config/security.py
 # and is re-exported above. Set a fixed SECRET_KEY env var in production
@@ -89,45 +91,27 @@ CONQUER_TACTICS_HAND_ENABLED = os.getenv('CONQUER_TACTICS_HAND_ENABLED', 'True')
 AI_USERNAMES = ['[AI] Strategos']  # AI player usernames created at startup
 AI_INITIAL_GOLD = 999999  # AI starts with effectively infinite gold
 AI_THINK_DELAY = 2  # Seconds of artificial "thinking" delay
-AI_OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')  # OpenAI API key
-AI_MODEL = os.getenv('AI_MODEL', 'gpt-4.1-mini')  # LLM model name
-AI_PROVIDER = os.getenv('AI_PROVIDER', 'openai')  # LLM provider
 AI_ENABLED = os.getenv('AI_ENABLED', 'True').lower() == 'true'
-AI_CHAT_ENABLED = os.getenv('AI_CHAT_ENABLED', 'True').lower() == 'true'
-AI_CHAT_CHANCE = float(os.getenv('AI_CHAT_CHANCE', '0.22'))
-AI_CHAT_MIN_SECONDS_BETWEEN = float(os.getenv('AI_CHAT_MIN_SECONDS_BETWEEN', '35'))
-AI_CHAT_MAX_PER_GAME = int(os.getenv('AI_CHAT_MAX_PER_GAME', '12'))
-AI_CHAT_LLM_TEMPERATURE = float(os.getenv('AI_CHAT_LLM_TEMPERATURE', '0.75'))
-AI_CHAT_LLM_MAX_TOKENS = int(os.getenv('AI_CHAT_LLM_MAX_TOKENS', '90'))
 
-# Strategy planner (bounded multi-turn planning context for the LLM)
+# Strategy planner (bounded multi-turn planning used by duel decision module)
 AI_STRATEGY_PLANNER_ENABLED = os.getenv('AI_STRATEGY_PLANNER_ENABLED', 'True').lower() == 'true'
 AI_STRATEGY_PLANNER_MAX_PLANS = int(os.getenv('AI_STRATEGY_PLANNER_MAX_PLANS', '5'))
 # Base per-turn draw caps used by planner heuristics. Effective assumed draws
 # can scale higher with larger free hands via adaptive cap logic.
 AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN = int(os.getenv('AI_STRATEGY_PLANNER_MAX_MAIN_DRAWS_PER_TURN', '2'))
 AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN = int(os.getenv('AI_STRATEGY_PLANNER_MAX_SIDE_DRAWS_PER_TURN', '1'))
-AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK = (
-    os.getenv('AI_STRATEGY_PLANNER_USE_RECOMMENDATION_FALLBACK', 'True').lower() == 'true'
-)
-AI_STRATEGY_PLANNER_SHADOW_MODE = os.getenv('AI_STRATEGY_PLANNER_SHADOW_MODE', 'False').lower() == 'true'
 AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS = float(os.getenv('AI_STRATEGY_PLANNER_RUNTIME_WARNING_MS', '120.0'))
 
 # Blocks non-battle actions when advance+defender are locked and game is waiting
 # for fight/fold resolution. Enabled by default; set env var to False to disable.
 BATTLE_RESOLUTION_HARD_LOCK_ENABLED = os.getenv('BATTLE_RESOLUTION_HARD_LOCK_ENABLED', 'True').lower() == 'true'
 
-# LLM reliability
-AI_LLM_TIMEOUT_SECONDS = float(os.getenv('AI_LLM_TIMEOUT_SECONDS', '12'))
-AI_LLM_MAX_RETRIES = int(os.getenv('AI_LLM_MAX_RETRIES', '2'))
-AI_LLM_RETRY_BACKOFF_SECONDS = float(os.getenv('AI_LLM_RETRY_BACKOFF_SECONDS', '1.0'))
-
 # Watchdog retries for failed AI loops while AI still owns the turn
 AI_WATCHDOG_RETRY_DELAY = float(os.getenv('AI_WATCHDOG_RETRY_DELAY', '4.0'))
 AI_WATCHDOG_MAX_RETRIES = int(os.getenv('AI_WATCHDOG_MAX_RETRIES', '3'))
 
 # ── v2.0: Collection & Boosters ──
-STARTER_BOOSTER_PACKS = 5                   # Free main-card packs on registration
+STARTER_BOOSTER_PACKS = 8                   # Free main-card packs on registration
 STARTER_BOOSTER_PACKS_SIDE = 2              # Free side-card packs on registration
 BOOSTER_PACK_PRICE = 100                    # Gold cost per main pack
 BOOSTER_PACK_SIDE_PRICE = 100               # Gold cost per side pack
@@ -155,9 +139,9 @@ DUEL_REWARD_POOL_PROBABILITIES = {          # Must sum to 1.0
 }
 
 BOOSTER_TIER_PROBABILITIES = {              # Probability of drawing each tier (main)
-    1: 0.30,   # common
+    1: 0.50,   # common
     2: 0.30,   # uncommon
-    3: 0.40,   # rare
+    3: 0.20,   # rare
 }
 BOOSTER_TIER_RANKS = {                      # Card ranks per tier (main)
     1: ['7', '8', '9'],
@@ -166,9 +150,9 @@ BOOSTER_TIER_RANKS = {                      # Card ranks per tier (main)
 }
 
 BOOSTER_SIDE_TIER_PROBABILITIES = {         # Probability of drawing each tier (side)
-    1: 0.60,   # common
+    1: 0.50,   # common
     2: 0.30,   # uncommon
-    3: 0.10,   # rare
+    3: 0.20,   # rare
 }
 BOOSTER_SIDE_TIER_RANKS = {                 # Card ranks per tier (side)
     1: ['2', '3'],
@@ -252,12 +236,12 @@ LAND_NEUTRAL_TIER_PROBABILITIES = {
 }
 
 LAND_GOLD_RATE_RANGES = {                   # Gold per hour (min, max) per tier
-    1: (1, 3),
-    2: (3, 7),
-    3: (7, 15),
-    4: (15, 28),
-    5: (28, 50),
-    6: (50, 85),
+    1: (1, 10),
+    2: (10, 20),
+    3: (20, 30),
+    4: (30, 40),
+    5: (40, 50),
+    6: (50, 80),
 }
 LAND_SUIT_BONUS_RANGES = {                  # Suit combat bonus (min, max) per tier
     1: (1, 2),
@@ -267,7 +251,7 @@ LAND_SUIT_BONUS_RANGES = {                  # Suit combat bonus (min, max) per t
     5: (10, 14),
     6: (14, 20),
 }
-CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(120)))#str(6 * 3600)))
+CONQUER_COOLDOWN_SECONDS = int(os.getenv('CONQUER_COOLDOWN_SECONDS', str(900)))#str(6 * 3600)))
 LAND_CONQUER_PROTECTION_SECONDS = int(
     os.getenv('LAND_CONQUER_PROTECTION_SECONDS', str(5 * 60))
 )
@@ -752,6 +736,5 @@ from kingdom_progression import (  # noqa: F401  (public re-export)
 )
 
 # AI defence generation rules and safe fallbacks live in ai/defence/config.py.
-
 
 

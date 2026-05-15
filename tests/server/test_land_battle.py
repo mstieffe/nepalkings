@@ -7,7 +7,8 @@ from datetime import datetime, timezone, timedelta
 
 from models import (db, User, Land, LandConfig, LandConfigFigure,
                     LandConfigBattleMove, CollectionCard, Game, Player,
-                    Figure, BattleMove, ConquerTactic, MainCard,
+                    Figure, BattleMove, ConquerTactic, MainCard, SideCard,
+                    CardToFigure,
                     LandAttackLog, ActiveSpell, KingdomLootEvent)
 from kingdom_service import seed_kingdom_map
 import server_settings as config
@@ -1218,6 +1219,132 @@ class TestConquerStartBattle:
 class TestConquerPreludeTargeting:
     """Conquer startup prelude targeting behavior."""
 
+    def test_invader_swap_preserves_automated_defender_prelude(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_swap_ai_prelude')
+            land = _make_land(db, tier=1)
+            atk_cfg = _make_conquer_config(db, attacker, land)
+            atk_cfg.prelude_spell_name = 'Invader Swap'
+            atk_cfg.prelude_spell_data = {}
+            db.session.commit()
+
+            template = _scripted_ai_template(prelude_spell_name='Poison')
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            with patch('routes.kingdom.get_ai_defence_template_for_land', return_value=template), \
+                    patch('routes.games.get_ai_defence_template_for_land', return_value=template):
+                resp = client.post('/kingdom/conquer/start_battle',
+                                   json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            game = db.session.get(Game, resp.get_json()['game_id'])
+
+            attacker_player = Player.query.filter_by(
+                game_id=game.id,
+                user_id=attacker.id,
+            ).first()
+            automated_defender = db.session.get(Player, game.invader_player_id)
+            assert attacker_player is not None
+            assert automated_defender is not None
+            assert automated_defender.id != attacker_player.id
+
+            poison = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=automated_defender.id,
+                spell_name='Poison',
+            ).first()
+            assert poison is not None
+            assert (poison.effect_data or {}).get('prelude_status') == 'executed'
+            assert poison.target_figure_id is not None
+
+            target = db.session.get(Figure, poison.target_figure_id)
+            assert target is not None
+            assert target.player_id == attacker_player.id
+
+            start_resp = client.post('/games/start_turn', json={
+                'game_id': game.id,
+                'player_id': attacker_player.id,
+            }, headers=headers)
+            assert start_resp.status_code == 200, start_resp.get_json()
+            summary = (start_resp.get_json() or {}).get('opponent_turn_summary') or {}
+            opponent_spells = summary.get('opponent_prelude_spells') or []
+            assert any(sp.get('spell_name') == 'Poison' for sp in opponent_spells)
+
+    def test_config_side_card_wall_preserves_cards_and_number_bonus(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_wall_side_cards')
+            defender = _make_user(db, username='def_wall_side_cards')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+
+            wall_cards = []
+            for rank, value in (('4', 4), ('5', 5), ('6', 6)):
+                card = CollectionCard(
+                    user_id=defender.id,
+                    suit='Spades',
+                    rank=rank,
+                    value=value,
+                    locked=True,
+                    lock_type='defence_figure',
+                )
+                db.session.add(card)
+                wall_cards.append(card)
+            db.session.flush()
+
+            wall_cfg = LandConfigFigure(
+                config_id=def_cfg.id,
+                family_name='Wall',
+                name='Wall',
+                suit='Spades',
+                color='defensive',
+                field='military',
+                card_ids=[card.id for card in wall_cards],
+                card_roles=['key', 'key', 'number'],
+                produces={},
+                requires={},
+            )
+            db.session.add(wall_cfg)
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200, resp.get_json()
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            def_player = [p for p in game.players if p.user_id == defender.id][0]
+
+            runtime_wall = Figure.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                source_config_figure_id=wall_cfg.id,
+            ).first()
+            assert runtime_wall is not None
+
+            assocs = CardToFigure.query.filter_by(
+                figure_id=runtime_wall.id,
+            ).order_by(CardToFigure.id).all()
+            assert [(a.card_type, a.role.value) for a in assocs] == [
+                ('side', 'key'),
+                ('side', 'key'),
+                ('side', 'number'),
+            ]
+
+            side_cards = [db.session.get(SideCard, assoc.card_id) for assoc in assocs]
+            assert [(card.rank.value, card.suit.value, card.value) for card in side_cards] == [
+                ('4', 'Spades', 4),
+                ('5', 'Spades', 5),
+                ('6', 'Spades', 6),
+            ]
+
+            from routes.games import _compute_wall_defence_total
+            from routes.kingdom import _fb_wall_total
+
+            all_figures = Figure.query.filter_by(game_id=game.id).all()
+            assert _compute_wall_defence_total([runtime_wall]) == 6
+            assert _fb_wall_total(all_figures, def_player.id, game.id) == 6
+
     def test_defender_targeted_prelude_auto_targets_non_checkmate(self, app, db):
         with app.app_context():
             attacker = _make_user(db, username='atk')
@@ -1408,6 +1535,80 @@ class TestConquerPreludeTargeting:
             assert pending_spell.target_figure_id == def_target.id
             assert (pending_spell.effect_data or {}).get('prelude_status') == 'executed'
 
+    def test_attacker_health_boost_can_target_pending_explosion_victim(self, app, db):
+        with app.app_context():
+            attacker = _make_user(db, username='atk_boost_explosion_victim')
+            defender = _make_user(db, username='def_boost_explosion_victim')
+
+            land = _make_land(db, tier=1, owner_user_id=defender.id)
+            atk_cfg = _make_conquer_config(db, attacker, land)
+            def_cfg = _make_defence_config(db, defender, land)
+
+            atk_cfg.prelude_spell_name = 'Health Boost'
+            atk_cfg.prelude_spell_data = {}
+            def_cfg.prelude_spell_name = 'Explosion'
+            def_cfg.prelude_spell_data = {}
+            db.session.commit()
+
+            client = app.test_client()
+            headers = _auth_headers(app, attacker)
+            resp = client.post('/kingdom/conquer/start_battle',
+                               json={'land_id': land.id}, headers=headers)
+            assert resp.status_code == 200
+            game = db.session.get(Game, resp.get_json()['game_id'])
+            atk_player = db.session.get(Player, game.invader_player_id)
+            def_player = [p for p in game.players if p.id != atk_player.id][0]
+
+            explosion = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=def_player.id,
+                spell_name='Explosion',
+            ).first()
+            assert explosion is not None
+            explosion_data = explosion.effect_data or {}
+            destroyed_id = explosion_data.get('target_figure_id')
+            assert destroyed_id is not None
+            assert db.session.get(Figure, destroyed_id) is None
+
+            pending_spell = ActiveSpell.query.filter_by(
+                game_id=game.id,
+                player_id=atk_player.id,
+                spell_name='Health Boost',
+            ).first()
+            assert pending_spell is not None
+            pending_data = pending_spell.effect_data or {}
+            assert pending_data.get('prelude_pending_target') is True
+            assert destroyed_id in pending_data.get('valid_target_ids', [])
+
+            start_resp = client.post('/games/start_turn', json={
+                'game_id': game.id,
+                'player_id': atk_player.id,
+            }, headers=headers)
+            assert start_resp.status_code == 200
+            summary = (start_resp.get_json() or {}).get('opponent_turn_summary') or {}
+            target_prompt = summary.get('pending_prelude_target') or {}
+            assert target_prompt.get('spell_name') == 'Health Boost'
+            assert destroyed_id in target_prompt.get('valid_target_ids', [])
+
+            resolve_resp = client.post('/kingdom/conquer/resolve_prelude_target', json={
+                'game_id': game.id,
+                'spell_id': pending_spell.id,
+                'target_figure_id': destroyed_id,
+            }, headers=headers)
+            assert resolve_resp.status_code == 200
+            assert resolve_resp.get_json()['success'] is True
+
+            db.session.refresh(pending_spell)
+            resolved_data = pending_spell.effect_data or {}
+            assert pending_spell.is_active is False
+            assert pending_spell.target_figure_id == destroyed_id
+            assert resolved_data.get('prelude_status') == 'executed'
+            assert resolved_data.get('target_figure_id') == destroyed_id
+            assert resolved_data.get('target_figure_snapshot', {}).get('id') == destroyed_id
+            assert resolved_data.get('power_modifier') == 6
+            assert resolved_data.get('target_destroyed_by_explosion') is True
+            assert resolved_data.get('replay_target_only') is True
+            assert db.session.get(Figure, destroyed_id) is None
 
     def test_attacker_targeted_prelude_no_target_is_reported_in_game_start(self, app, db):
         with app.app_context():
@@ -2348,7 +2549,6 @@ class TestConquerAutoPlay:
             with aw._active_games_lock:
                 aw._active_games.clear()
             with patch.object(aw.settings, 'AI_ENABLED', True), \
-                 patch.object(aw.settings, 'AI_OPENAI_API_KEY', 'fake-key'), \
                  patch('threading.Thread', side_effect=capture_thread):
                 aw.trigger_ai_if_needed(game.id, app=app)
 

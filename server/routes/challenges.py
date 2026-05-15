@@ -38,6 +38,14 @@ def create_challenge():
         challenger = request.form.get('challenger')
         opponent = request.form.get('opponent')
         stake = request.form.get('stake', settings.DEFAULT_GAME_STAKE, type=int)
+        game_limit_raw = request.form.get('game_limit')
+        if game_limit_raw in (None, ''):
+            game_limit = stake
+        else:
+            try:
+                game_limit = int(game_limit_raw)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'message': 'Game limit must be a number'}), 400
         turn_time_limit_str = request.form.get('turn_time_limit', None)
         turn_time_limit = int(turn_time_limit_str) if turn_time_limit_str else None
 
@@ -54,6 +62,11 @@ def create_challenge():
         # Validate stake
         if stake < 1:
             return jsonify({'success': False, 'message': 'Stake must be at least 1 gold'}), 400
+        if game_limit < 1:
+            return jsonify({'success': False, 'message': 'Game limit must be at least 1 point'}), 400
+        max_game_limit = int(getattr(settings, 'MAX_GAME_LIMIT', 100) or 100)
+        if game_limit > max_game_limit:
+            return jsonify({'success': False, 'message': f'Game limit must be at most {max_game_limit} points'}), 400
 
         # Check that the challenger has enough gold
         if challenger_user.gold < stake:
@@ -65,6 +78,7 @@ def create_challenge():
             challenged=opponent_user,
             status=ChallengeStatus.OPEN,
             stake=stake,
+            game_limit=game_limit,
             turn_time_limit=turn_time_limit,
         )
 

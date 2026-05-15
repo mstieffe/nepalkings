@@ -23,7 +23,8 @@ class Challenge(db.Model):
   challenger_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   challenged_id = db.Column(db.Integer, db.ForeignKey('user.id'))
   status = db.Column(ChoiceType(ChallengeStatus, impl=db.String()), nullable=False, default=ChallengeStatus.OPEN)
-  stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
+  stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake
+  game_limit = db.Column(db.Integer, nullable=False, default=45, server_default='45')  # Points needed to win
   turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
   game_id = db.Column(db.Integer, db.ForeignKey('game.id'), nullable=True)  # Set when challenge is accepted
   date = db.Column(db.DateTime, default=_utcnow)
@@ -37,6 +38,7 @@ class Challenge(db.Model):
       'challenged_name': self.challenged.username if self.challenged else None,
       'status': self.status.value if hasattr(self.status, 'value') else str(self.status),
       'stake': self.stake,
+      'game_limit': self.game_limit or self.stake,
       'turn_time_limit': self.turn_time_limit,
       'game_id': self.game_id,
       'date': self.date.isoformat() if self.date else None
@@ -129,7 +131,8 @@ class Game(db.Model):
                                   use_alter=True, name='fk_game_defence_config'),
                                   nullable=True)
     date = db.Column(db.DateTime, default=_utcnow)
-    stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake / point threshold to win
+    stake = db.Column(db.Integer, nullable=False, default=45)  # Gold stake
+    game_limit = db.Column(db.Integer, nullable=False, default=45, server_default='45')  # Points needed to win
     turn_time_limit = db.Column(db.Integer, nullable=True, default=None)  # Seconds per turn (None = no limit)
     winner_player_id = db.Column(db.Integer, nullable=True)  # Player who won the game
     finished_at = db.Column(db.DateTime, nullable=True)  # When the game ended
@@ -189,6 +192,13 @@ class Game(db.Model):
     # Battle shop gamble tracking — {str(player_id): count}
     battle_gamble_counts = db.Column(db.JSON, nullable=True)
 
+    # Seed for the deterministic duel AI's softmax sampling / tie-breakers.
+    # Set on game creation so the same (game_state, seed, iteration) tuple
+    # always yields the same AI move — enables replay and reproducible tests.
+    # Conquer mode does not use this column today but may inherit the same
+    # determinism contract later.
+    ai_seed = db.Column(db.Integer, nullable=True)
+
     # Conquer move model: 'battle_move' (legacy: pre-battle buy phase via battle_shop)
     # or 'tactics_hand' (unified screen, configured moves are the starting hand,
     # no battle_shop buy/return phase). Duel games and legacy open conquer games
@@ -221,6 +231,7 @@ class Game(db.Model):
             'land_suit_bonus_value': self.land.suit_bonus_value if self.land else None,
             'date': self.date.isoformat() if self.date else None,
             'stake': self.stake,
+            'game_limit': self.game_limit or self.stake,
             'turn_time_limit': self.turn_time_limit,
             'winner_player_id': self.winner_player_id,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
@@ -251,6 +262,7 @@ class Game(db.Model):
             'last_battle_result': self.last_battle_result,
             'resting_figure_ids': self.resting_figure_ids or [],
             'battle_gamble_counts': self.battle_gamble_counts or {},
+            'ai_seed': self.ai_seed,
             'conquer_move_model': self.conquer_move_model or 'battle_move',
             'conquer_resolution_step': int(getattr(self, 'conquer_resolution_step', 0) or 0),
             'players': [player.serialize() for player in self.players],

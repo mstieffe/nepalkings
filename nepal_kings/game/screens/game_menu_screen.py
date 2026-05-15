@@ -340,17 +340,19 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     and ch['id'] not in self.state._notified_accepted_challenges):
                 opponent_name = ch.get('challenged_name', 'opponent')
                 stake = ch.get('stake', 45)
+                game_limit = ch.get('game_limit') or stake
                 self.state._pending_accepted_challenge = {
                     'challenge_id': ch['id'],
                     'game_id': ch.get('game_id'),
                     'opponent_name': opponent_name,
                     'stake': stake,
+                    'game_limit': game_limit,
                 }
                 self.state._notified_accepted_challenges.add(ch['id'])
                 self.set_action("challenge_accepted", ch['id'], "open")
                 self.make_dialogue_box(
                     f'{opponent_name} accepted your challenge!\n\n'
-                    f'Stake: {stake} gold',
+                    f'Stake: {stake} gold\nGame Limit: {game_limit} points',
                     actions=["Go to Game", "Close"],
                     title="Challenge Accepted")
                 break

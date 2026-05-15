@@ -62,13 +62,15 @@ def create_game(challenge_id):
     except requests.RequestException as e:
         return {'success': False, 'message': f"Failed to create game: {str(e)}"}
 
-def create_challenge(challenger_username, opponent_username, stake=45, turn_time_limit=None):
+def create_challenge(challenger_username, opponent_username, stake=45, game_limit=None, turn_time_limit=None):
     try:
         data = {
             'challenger': challenger_username,
             'opponent': opponent_username,
             'stake': stake,
         }
+        if game_limit is not None:
+            data['game_limit'] = game_limit
         if turn_time_limit is not None:
             data['turn_time_limit'] = turn_time_limit
         response = requests.post(f'{settings.SERVER_URL}/challenges/create_challenge', data=data, timeout=10)
