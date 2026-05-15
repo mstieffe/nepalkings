@@ -819,11 +819,13 @@ def test_modifier_bonus_explosion_values_resource_production():
 
 
 def test_modifier_bonus_blitzkrieg_unchanged():
-    """Tactical spells should keep their fixed rule-derived bonus.
+    """Tactical spells should keep a fixed rule-derived bonus.
 
     Blitzkrieg's value is structural (attacker picks the defender's
     battle figure), not dependent on any specific target's power.
-    The bonus should always be exactly 3.5.
+    The bonus is +2.5 — softened from the historical +3.5 so that
+    context-rich spells (greed, enchantments, All-Seeing-Eye combo)
+    can compete when they're the right call.
     """
     action = {
         'type': 'cast_spell',
@@ -831,7 +833,7 @@ def test_modifier_bonus_blitzkrieg_unchanged():
         'params': {'spell_name': 'Blitzkrieg'},
     }
     bonus = _modifier_bonus(action, [])
-    assert bonus == 3.5
+    assert bonus == 2.5
 
 
 # ── Maharaja advance penalty ──────────────────────────────────────────
@@ -883,11 +885,14 @@ def test_same_suit_build_bonus():
     """Build bonus mirrors support-bonus estimate from current board state.
 
     Setup: AI has one Hearts castle (King, +4 support source).
-    Building a Hearts military figure should estimate +4 support bonus.
-    Building a Diamonds military figure should estimate 0.0.
+    Building a Hearts military figure should add +4 support bonus on top
+    of the flat +2 build-now structural preference.
+    Building a Diamonds military figure should add 0 support — only the
+    flat +2 structural bonus applies.
 
-    Reasoning: planner uses ``compute_support_bonus`` for build valuation,
-    not a flat per-figure same-suit increment.
+    Reasoning: planner combines a flat ``+2.0`` build-now structural bias
+    (to outrank optimistic change_cards plans) with the dynamic support
+    bonus derived from ``compute_support_bonus``.
     """
     own_figures = [
         {
@@ -910,8 +915,8 @@ def test_same_suit_build_bonus():
     }
     bonus_h = _modifier_bonus(action_hearts, [], own_figures=own_figures)
     bonus_d = _modifier_bonus(action_spades_new, [], own_figures=own_figures)
-    assert bonus_h == 4.0, f'Expected 4.0 support estimate for Hearts military build, got {bonus_h}'
-    assert bonus_d == 0.0, f'Expected 0.0 for no matching Diamonds, got {bonus_d}'
+    assert bonus_h == 6.0, f'Expected 6.0 (+2 build bias + 4 support), got {bonus_h}'
+    assert bonus_d == 2.0, f'Expected 2.0 (build bias only, no support), got {bonus_d}'
 
 
 # ── Invader Swap with strong defense ─────────────────────────────────
@@ -1344,4 +1349,266 @@ def test_civil_war_ranks_below_peasant_war_without_village_pair(monkeypatch):
     plans = generate_strategy_plans(game, 1, 'normal_turn', actions, max_plans=2)
     assert plans[0]['seed_action_id'] == 2, (
         'Peasant War should outrank Civil War when AI lacks a same-color village pair'
+    )
+
+
+# ── Build-figure regression: not in top_targets, but legal ─────────────
+
+def test_build_figure_not_in_top_targets_still_scores_well(monkeypatch):
+    """A legal build_figure action whose recipe isn't in the cached
+    top_targets list must still score competitively.
+
+    Regression: previously, ``_estimate_target_figure_for_action`` would
+    fall through to ``top_targets[0]`` (often an impossible/blocked
+    target with completion_probability≈0), which made build_figure score
+    ≈ -3 via the risk_penalty and lose to change_cards every time.
+
+    With the synthetic-target fallback + build_now feasibility floor,
+    the action should beat change_cards when the build is legal now.
+    """
+    # The single cached top target is a high-power but impossible build.
+    impossible_target = {
+        'family_name': 'Far Away Dream',
+        'name': 'Far Away Dream',
+        'field': 'castle',
+        'suit': 'Hearts',
+        'card_state': 'build_possible_with_probability',
+        'completion_probability': 0.0,
+        'resource_blocked': False,
+        'power_estimate': 30,
+    }
+    _stub_planner(monkeypatch, [impossible_target])
+
+    game = _game_with_figures([], [])
+
+    actions = [
+        # Legal build action whose family doesn't match the cached target.
+        {'id': 1, 'type': 'build_figure',
+         'description': 'Build Sherpa Guard [power=12]',
+         'params': {'family_name': 'Sherpa Guard', 'suit': 'Spades',
+                    'field': 'military', 'name': 'Sherpa Guard'}},
+        {'id': 2, 'type': 'change_cards',
+         'description': 'Change cards', 'params': {}},
+    ]
+
+    plans = generate_strategy_plans(game, 1, 'normal_turn', actions, max_plans=2)
+    assert plans[0]['seed_action_id'] == 1, (
+        'build_figure should outrank change_cards when the build is legal '
+        'right now, even if the recipe is not in top_targets'
+    )
+    # And the build's feasibility floor should be the synthetic 1.0.
+    build_plan = next(p for p in plans if p['seed_action_id'] == 1)
+    assert build_plan['feasibility_probability'] == 1.0
+
+
+# ── Defender advance penalty ───────────────────────────────────────────
+
+def test_defender_advance_gets_penalty():
+    """Advancing during one's own turn while the opponent is the invader
+    is poor strategy — the invader is forced to advance themselves.
+
+    The penalty is soft (~-3) and scales by +1.5 when opponent still
+    holds ≥2 turns. Capped at -5 so an overwhelming advantage can
+    still pursue an offensive line in the planner.
+    """
+    own_fig = {'id': 1, 'field': 'military', 'cards': [{'value': 10}]}
+    action = {'type': 'advance_figure', 'params': {'figure_id': 1}}
+
+    # AI is defender (invader is player 2); opponent has 3 turns left.
+    game = {
+        'invader_player_id': 2,
+        'players': [
+            {'id': 1, 'turns_left': 3, 'figures': [own_fig]},
+            {'id': 2, 'turns_left': 3, 'figures': []},
+        ],
+    }
+    bonus = _modifier_bonus(action, [], own_figures=[own_fig],
+                            game_dict=game, ai_player_id=1)
+    # -3 base + -1.5 (opponent turns_left >= 2) = -4.5, capped at -5.
+    assert -5.0 <= bonus <= -3.0, f'Expected defender penalty in [-5, -3], got {bonus}'
+
+    # As invader, no defender penalty applies.
+    game_invader = {
+        'invader_player_id': 1,
+        'players': [
+            {'id': 1, 'turns_left': 3, 'figures': [own_fig]},
+            {'id': 2, 'turns_left': 3, 'figures': []},
+        ],
+    }
+    bonus_inv = _modifier_bonus(action, [], own_figures=[own_fig],
+                                game_dict=game_invader, ai_player_id=1)
+    assert bonus_inv == 0.0, f'Invader advance should be unpenalized, got {bonus_inv}'
+
+
+def test_defender_advance_lighter_penalty_when_opp_low_turns():
+    """When the opponent has only 1 turn left, the bonus +1.5 doesn't
+    apply — the defender penalty stays at -3."""
+    own_fig = {'id': 1, 'field': 'military', 'cards': [{'value': 10}]}
+    action = {'type': 'advance_figure', 'params': {'figure_id': 1}}
+    game = {
+        'invader_player_id': 2,
+        'players': [
+            {'id': 1, 'turns_left': 2, 'figures': [own_fig]},
+            {'id': 2, 'turns_left': 1, 'figures': []},
+        ],
+    }
+    bonus = _modifier_bonus(action, [], own_figures=[own_fig],
+                            game_dict=game, ai_player_id=1)
+    assert bonus == -3.0, f'Expected -3.0 when opp turns_left=1, got {bonus}'
+
+
+# ── New spell bonus regressions ────────────────────────────────────────
+
+def _game_with_hands(main_hand, side_hand=None):
+    """Game dict with a configurable AI hand for spell-bonus tests."""
+    return {
+        'invader_player_id': 2,
+        'players': [
+            {'id': 1, 'turns_left': 3, 'figures': [],
+             'main_hand': main_hand,
+             'side_hand': side_hand or []},
+            {'id': 2, 'turns_left': 3, 'figures': [],
+             'main_hand': [], 'side_hand': []},
+        ],
+    }
+
+
+def test_fill_up_to_10_prefers_low_hand():
+    """Fill up to 10 should score higher when the AI has few free
+    main cards."""
+    action = {
+        'type': 'cast_spell',
+        'description': 'Spell: Fill up to 10',
+        'params': {'spell_name': 'Fill up to 10'},
+    }
+
+    low_hand = _game_with_hands(
+        [{'id': i, 'rank': '10', 'suit': 'Hearts',
+          'part_of_figure': False, 'part_of_battle_move': False}
+         for i in range(3)]  # 3 free main cards
+    )
+    full_hand = _game_with_hands(
+        [{'id': i, 'rank': '10', 'suit': 'Hearts',
+          'part_of_figure': False, 'part_of_battle_move': False}
+         for i in range(10)]  # already at 10
+    )
+
+    bonus_low = _modifier_bonus(action, [], game_dict=low_hand, ai_player_id=1)
+    bonus_full = _modifier_bonus(action, [], game_dict=full_hand, ai_player_id=1)
+    assert bonus_low > bonus_full, (
+        f'Fill up to 10 should score higher with a low hand: '
+        f'low={bonus_low} vs full={bonus_full}'
+    )
+
+
+def test_all_seeing_eye_high_when_blitzkrieg_cavalry_combo_available():
+    """All Seeing Eye + Blitzkrieg + Cavalry is the premium combo: scout
+    the opponent's hand, become invader unblockably, charge with a
+    Cavalry that can't be blocked. The scorer should reflect that."""
+    action = {
+        'type': 'cast_spell',
+        'description': 'Spell: All Seeing Eye',
+        'params': {'spell_name': 'All Seeing Eye'},
+    }
+
+    cavalry = {'id': 1, 'family_name': 'Cavalry', 'field': 'military',
+               'suit': 'Hearts', 'cards': [{'value': 8}]}
+    game_combo = _game_with_hands(
+        [{'id': 10, 'rank': 'Q', 'suit': 'Hearts',
+          'part_of_figure': False, 'part_of_battle_move': False},
+         {'id': 11, 'rank': 'Q', 'suit': 'Diamonds',
+          'part_of_figure': False, 'part_of_battle_move': False}]
+    )
+    game_combo['players'][0]['figures'] = [cavalry]
+
+    game_no_combo = _game_with_hands([])
+
+    bonus_combo = _modifier_bonus(action, [], own_figures=[cavalry],
+                                  game_dict=game_combo, ai_player_id=1)
+    bonus_no = _modifier_bonus(action, [], own_figures=[],
+                               game_dict=game_no_combo, ai_player_id=1)
+    assert bonus_combo > bonus_no + 1.5, (
+        f'Cavalry+Blitzkrieg combo should boost All Seeing Eye well above '
+        f'baseline: combo={bonus_combo} vs baseline={bonus_no}'
+    )
+
+
+def test_all_seeing_eye_reduced_when_battle_imminent():
+    """Once advancing_figure_id is set, the matchup is locked. All
+    Seeing Eye becomes wasted information — its bonus should drop
+    well below the combo case."""
+    action = {
+        'type': 'cast_spell',
+        'description': 'Spell: All Seeing Eye',
+        'params': {'spell_name': 'All Seeing Eye'},
+    }
+
+    game = _game_with_hands([])
+    game['advancing_figure_id'] = 99  # battle is being set up
+
+    bonus_imminent = _modifier_bonus(action, [], game_dict=game, ai_player_id=1)
+
+    game_clear = _game_with_hands([])
+    bonus_clear = _modifier_bonus(action, [], game_dict=game_clear, ai_player_id=1)
+
+    assert bonus_imminent < bonus_clear, (
+        f'All Seeing Eye should score lower when battle is imminent: '
+        f'imminent={bonus_imminent} vs clear={bonus_clear}'
+    )
+
+
+def test_blitzkrieg_softened_to_2_5():
+    """Blitzkrieg's base bonus is +2.5 (down from a previous +3.5),
+    leaving room for contextual spells to compete."""
+    action = {
+        'type': 'cast_spell',
+        'description': 'Cast Blitzkrieg',
+        'params': {'spell_name': 'Blitzkrieg'},
+    }
+    assert _modifier_bonus(action, []) == 2.5
+
+
+def test_change_cards_power_is_expected_value(monkeypatch):
+    """change_cards target power must be discounted by completion_probability.
+
+    Regression: previously change_cards inherited the raw recipe rank-sum
+    power of a half-built dream target (e.g. 30+) and used the full value
+    in offensive_value. That dominated real builds. The planner should now
+    convert it to expected value: recipe_power * completion_probability.
+    """
+    half_built_dream = {
+        'family_name': 'Dream Knight',
+        'name': 'Dream Knight',
+        'field': 'military',
+        'suit': 'Hearts',
+        'card_state': 'build_possible_with_probability',
+        'completion_probability': 0.4,
+        'resource_blocked': False,
+        # Two missing main cards K(13), A(14) — recipe power = 27.
+        'missing_main': {'K_Hearts': 1, 'A_Hearts': 1},
+        'missing_side': {},
+        'number_value_assumed': 0,
+    }
+    _stub_planner(monkeypatch, [half_built_dream])
+
+    game = _game_with_figures([], [])
+
+    actions = [
+        # An actually buildable Castle (power=13 from the description).
+        {'id': 1, 'type': 'build_figure',
+         'description': 'Build Himalaya King [power=13]',
+         'params': {'family_name': 'Himalaya King', 'suit': 'Spades',
+                    'field': 'castle', 'name': 'Himalaya King'}},
+        # change_cards targeting the dream knight.
+        {'id': 2, 'type': 'change_cards',
+         'description': 'Change cards', 'params': {}},
+    ]
+
+    plans = generate_strategy_plans(game, 1, 'normal_turn', actions, max_plans=2)
+
+    # Build must outrank change_cards: power 13 + 2 (build bias) beats
+    # change_cards expected value 27 * 0.4 ≈ 10.8 (no build bias, lower feasibility).
+    assert plans[0]['seed_action_id'] == 1, (
+        f'build_figure should win over change_cards with discounted expected '
+        f"power; plans={plans}"
     )

@@ -480,7 +480,14 @@ class GameScreen(Screen):
 
         # ── Finished game: read-only mode — skip polling and notifications ──
         if self.state.game.game_over:
-            self.state.game.game_over_shown = True  # suppress game-over dialogue
+            pending_game_over = getattr(self.state.game, 'pending_game_over', None)
+            if pending_game_over and not getattr(self.state.game, 'game_over_shown', False):
+                subscreen = self.subscreens.get(self.state.subscreen) if self.state.subscreen in self.subscreens else None
+                subscreen_dialogue_open = bool(getattr(subscreen, 'dialogue_box', None))
+                if not subscreen_dialogue_open:
+                    self.check_game_over()
+            else:
+                self.state.game.game_over_shown = True  # suppress loaded finished games without a result payload
             self.check_conquer_battle_ended()
             if not self.state.game:
                 return  # conquer ended — game cleared
@@ -3586,6 +3593,7 @@ class GameScreen(Screen):
         """Show a game-over dialogue with the result and gold awarded."""
         if self.state.game.game_over_shown:
             return
+        self.state.game.game_over = True
         self.state.game.game_over_shown = True
         self.state.game.pending_game_over = game_over_info
 
@@ -5242,7 +5250,7 @@ class GameScreen(Screen):
                 # case without a pending_game_over payload), navigate away
                 # immediately.
                 elif (response == 'ok' and self.state.game and
-                      self.state.game.game_over and self._active_dialogue_type == 'game_over'):
+                      self._active_dialogue_type == 'game_over'):
                     pending = getattr(self.state.game, 'pending_game_over', None)
                     is_duel = (getattr(self.state.game, 'mode', None) != 'conquer')
                     self.dialogue_box = None

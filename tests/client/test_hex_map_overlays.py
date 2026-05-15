@@ -33,6 +33,7 @@ def _new_map(lands, zoom=2.5):
     window = pygame.Surface((800, 600))
     hm = HexMap(lands, window)
     hm.zoom = zoom
+    hm._centre_camera()
     return hm
 
 
@@ -192,7 +193,7 @@ class TestProgressiveDisclosure:
 
 class TestKingdomBadge:
 
-    def test_badge_drawn_only_when_zoomed_out(self, monkeypatch):
+    def test_badge_drawn_at_all_zoom_levels(self, monkeypatch):
         owner = {'user_id': 7, 'username': 'rex'}
         lands = [
             _make_land(col=0, row=0, land_id=1, owner=owner, kingdom_id=4,
@@ -202,9 +203,6 @@ class TestKingdomBadge:
         ]
         from game.components import badge_cosmetics
         from config import settings
-        # Zoomed out (below OWNER_NAME_MIN_ZOOM) → cluster badge drawn.
-        hm = _new_map(lands, zoom=1.0)
-        called = {'n': 0}
         original = badge_cosmetics.render_badge_with_subtitle
 
         def spy(*a, **kw):
@@ -212,14 +210,13 @@ class TestKingdomBadge:
             return original(*a, **kw)
 
         monkeypatch.setattr(badge_cosmetics, 'render_badge_with_subtitle', spy)
-        hm._draw_kingdom_badges(60)
-        assert called['n'] >= 1
 
-        # Zoomed in past the cluster-name threshold → no cluster badge.
-        hm2 = _new_map(lands, zoom=settings.HEX_MAP_OWNER_NAME_MIN_ZOOM + 0.5)
-        called['n'] = 0
-        hm2._draw_kingdom_badges(60)
-        assert called['n'] == 0
+        # Badges are drawn at all zoom levels when sz > 8.
+        for zoom in (0.25, 1.0, settings.HEX_MAP_OWNER_NAME_MIN_ZOOM + 0.5, 4.0):
+            called = {'n': 0}
+            hm = _new_map(lands, zoom=zoom)
+            hm._draw_kingdom_badges(60)
+            assert called['n'] >= 1, f'badge not drawn at zoom={zoom}'
 
 
 # ─────────────────────────── owner chip ────────────────────────────

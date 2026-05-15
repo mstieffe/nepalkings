@@ -573,3 +573,14 @@ def test_battle_shop_prefers_combine_over_buy():
         _base_game_dict(), 1, 'battle_shop', actions, _rng(),
     )
     assert chosen['type'] == 'combine_battle_moves'
+
+
+# ── Tuning constants ────────────────────────────────────────────────
+
+def test_normal_turn_decisiveness_constants():
+    """The normal_turn handler is the most strategic decision point;
+    its softmax must be biased toward the top-scoring plan so the AI
+    doesn't sample weak alternatives like change_cards over a clear
+    build line. Sanity check the tuned constants."""
+    assert duel_strategy.NORMAL_TURN_TEMPERATURE <= 0.2
+    assert duel_strategy.NORMAL_TURN_TOP_K <= 3

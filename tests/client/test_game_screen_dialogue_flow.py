@@ -173,6 +173,112 @@ class TestGameScreenDialogueFlow:
         assert shown_dialogues[0]['title'] == 'Queued'
         assert game_screen._active_dialogue_type == 'queued_type'
 
+    def test_duel_game_over_acknowledgement_opens_rewards_without_model_flag(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        pending = {
+            'winner_player_id': 1,
+            'loser_player_id': 2,
+            'loser_rewards': {'gold': 80},
+        }
+        game_screen.state = SimpleNamespace(
+            game=_DummyGame(
+                mode='duel',
+                player_id=2,
+                game_over=False,
+                pending_game_over=pending,
+                infinite_hammer_active=False,
+            )
+        )
+        game_screen.dialogue_box = _DummyDialogueBox('ok')
+        game_screen._active_dialogue_type = 'game_over'
+        game_screen.pending_notifications = []
+        game_screen._ensure_duel_screen_game = lambda: True
+
+        reward_payloads = []
+
+        def capture_rewards(payload):
+            reward_payloads.append(payload)
+            game_screen.dialogue_box = object()
+            game_screen._active_dialogue_type = 'game_over_rewards'
+
+        game_screen._show_game_over_rewards_dialogue = capture_rewards
+        game_screen._on_game_over_acknowledged = lambda: (_ for _ in ()).throw(
+            AssertionError('Game-over result should open rewards before navigating')
+        )
+        game_screen.show_next_queued_notification = lambda: (_ for _ in ()).throw(
+            AssertionError('Game-over result should not fall through to generic dialogue handling')
+        )
+
+        GameScreen.handle_events(game_screen, [])
+
+        assert reward_payloads == [pending]
+        assert game_screen._active_dialogue_type == 'game_over_rewards'
+
+    def test_finished_duel_with_pending_rewards_is_not_suppressed(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        pending = {'winner_player_id': 1, 'loser_player_id': 2}
+        game = _DummyGame(
+            game_id=7,
+            player_id=2,
+            mode='duel',
+            game_over=True,
+            game_over_shown=False,
+            pending_game_over=pending,
+            cached_figures_data={2: [object()]},
+            players=[{'id': 2}],
+            _figures_data_version=0,
+        )
+        game_screen.state = SimpleNamespace(game=game, subscreen='field')
+        game_screen._current_game_key = (7, 2)
+        game_screen.previous_subscreen = 'field'
+        game_screen.subscreens = {}
+        game_screen.display_elements = []
+        game_screen.main_hand = SimpleNamespace(update=lambda _game: None, deselect_all_cards=lambda: None)
+        game_screen.side_hand = SimpleNamespace(update=lambda _game: None, deselect_all_cards=lambda: None)
+        game_screen._try_handle_finished_conquer_game = lambda: False
+        game_screen.check_conquer_battle_ended = lambda: None
+
+        checked = []
+        game_screen.check_game_over = lambda: checked.append(True)
+
+        GameScreen.update_game(game_screen)
+
+        assert checked == [True]
+        assert game.game_over_shown is False
+
+    def test_finished_duel_waits_for_battle_dialogue_before_rewards(self):
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game = _DummyGame(
+            game_id=7,
+            player_id=2,
+            mode='duel',
+            game_over=True,
+            game_over_shown=False,
+            pending_game_over={'winner_player_id': 1, 'loser_player_id': 2},
+            cached_figures_data={2: [object()]},
+            players=[{'id': 2}],
+            _figures_data_version=0,
+        )
+        game_screen.state = SimpleNamespace(game=game, subscreen='battle')
+        game_screen._current_game_key = (7, 2)
+        game_screen.previous_subscreen = 'battle'
+        game_screen.subscreens = {'battle': SimpleNamespace(dialogue_box=object())}
+        game_screen.display_elements = []
+        game_screen.main_hand = SimpleNamespace(update=lambda _game: None, deselect_all_cards=lambda: None)
+        game_screen.side_hand = SimpleNamespace(update=lambda _game: None, deselect_all_cards=lambda: None)
+        game_screen._try_handle_finished_conquer_game = lambda: False
+        game_screen.check_conquer_battle_ended = lambda: None
+        game_screen.check_game_over = lambda: (_ for _ in ()).throw(
+            AssertionError('Game-over dialogue should wait for the battle result dialogue')
+        )
+
+        GameScreen.update_game(game_screen)
+
+        assert game.game_over_shown is False
+
     def test_conquer_game_start_pending_prelude_target_sets_selection_state(self):
         GameScreen = _game_screen_class()
         game_screen = GameScreen.__new__(GameScreen)

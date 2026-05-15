@@ -21,8 +21,8 @@ from ai import strategy_planner
 logger = logging.getLogger(__name__)
 
 # ── Tuning constants ────────────────────────────────────────────────
-NORMAL_TURN_TEMPERATURE = 0.5
-NORMAL_TURN_TOP_K = 5
+NORMAL_TURN_TEMPERATURE = 0.15
+NORMAL_TURN_TOP_K = 3
 DEFENDER_TEMPERATURE = 0.3
 DEFENDER_TOP_K = 3
 BATTLE_ROUND_TEMPERATURE = 0.05  # near-greedy

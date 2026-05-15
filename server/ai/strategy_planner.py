@@ -197,18 +197,47 @@ def _estimate_target_figure_for_action(
             est_power = _extract_power_from_action_description(action)
             if est_power is None:
                 est_power = _estimate_recipe_power(target)
+            # A legal build_figure action means the recipe is buildable RIGHT
+            # NOW (action_enum only emits it when cards/resources are met).
+            # Override completion_probability so stale draw-rate estimates
+            # can't drag the feasibility down.
+            is_build_now = target.get('card_state') == 'build_now'
+            completion_prob = (
+                1.0 if is_build_now
+                else float(target.get('completion_probability', 0.0))
+            )
             return {
                 'figure_id': None,
                 'name': target.get('name'),
                 'field': target.get('field'),
                 'suit': target.get('suit'),
-                'state': target.get('card_state'),
+                'state': 'build_now' if is_build_now else target.get('card_state'),
                 'power_estimate': est_power,
-                'completion_probability': target.get('completion_probability', 0.0),
+                'completion_probability': completion_prob,
                 'resource_blocked': target.get('resource_blocked', False),
                 'assumed_main_draws_per_turn': target.get('assumed_main_draws_per_turn'),
                 'assumed_side_draws_per_turn': target.get('assumed_side_draws_per_turn'),
             }
+
+        # Buildable figure not in top_targets cache: construct a synthetic
+        # target from the action params so build_figure isn't penalized by
+        # falling through to top_targets[0] (whose completion_probability
+        # can be ~0 for impossible/blocked recipes).
+        est_power = _extract_power_from_action_description(action)
+        if est_power is None:
+            est_power = 10
+        return {
+            'figure_id': None,
+            'name': params.get('name') or family_name or 'figure',
+            'field': str(params.get('field') or '').lower(),
+            'suit': suit,
+            'state': 'build_now',
+            'power_estimate': est_power,
+            'completion_probability': 1.0,
+            'resource_blocked': False,
+            'assumed_main_draws_per_turn': None,
+            'assumed_side_draws_per_turn': None,
+        }
 
     # For change_cards: pick the target figure with the highest
     # (probability * power) product — this steers the single change_cards
@@ -221,14 +250,23 @@ def _estimate_target_figure_for_action(
                 * _estimate_recipe_power(t)
             ),
         )
+        # The change_cards plan is a *bet* on completing this target later.
+        # Discount the headline recipe power by the completion probability
+        # so the planner compares expected future value (not raw potential)
+        # against immediate builds.  Without this, partially-built dream
+        # targets (e.g. a Cavalry missing two key cards) report rank-sum
+        # power ≈ 30 which crowds out a real Castle/Farm we can build now.
+        recipe_pow = _estimate_recipe_power(best)
+        completion_p = float(best.get('completion_probability', 0.0))
+        expected_pow = recipe_pow * completion_p
         return {
             'figure_id': None,
             'name': best.get('name'),
             'field': best.get('field'),
             'suit': best.get('suit'),
             'state': best.get('card_state'),
-            'power_estimate': _estimate_recipe_power(best),
-            'completion_probability': best.get('completion_probability', 0.0),
+            'power_estimate': expected_pow,
+            'completion_probability': completion_p,
             'resource_blocked': best.get('resource_blocked', False),
             'assumed_main_draws_per_turn': best.get('assumed_main_draws_per_turn'),
             'assumed_side_draws_per_turn': best.get('assumed_side_draws_per_turn'),
@@ -297,6 +335,11 @@ def _action_feasibility(action: dict[str, Any], target: dict[str, Any] | None) -
             return 0.0
         if target.get('resource_blocked'):
             return 0.05
+        # A legal build_figure action is buildable now — clamp feasibility
+        # to a high floor so the risk_penalty doesn't sabotage builds even
+        # when the recipe's completion estimator returned a stale value.
+        if target.get('state') == 'build_now':
+            return 1.0
         return float(target.get('completion_probability', 0.0))
 
     if t in ('change_cards', 'change_side_cards'):
@@ -346,11 +389,37 @@ def _modifier_bonus(
             if fig and fig.get('checkmate'):
                 bonus -= 8.0
 
+        # ── Defender advance penalty ──
+        # When AI is the defender (opponent is the invader), the opponent
+        # MUST advance on their final turn or auto-lose.  Wasting turns
+        # advancing toward them throws away that built-in advantage AND
+        # exposes our figure to a battle we didn't pick.  Apply a soft
+        # penalty so the AI prefers building / spells / changing cards.
+        if game_dict and ai_player_id is not None:
+            is_invader = game_dict.get('invader_player_id') == ai_player_id
+            if not is_invader:
+                penalty = 3.0
+                opp = next(
+                    (p for p in game_dict.get('players', []) or []
+                     if p.get('id') != ai_player_id),
+                    None,
+                )
+                if opp and int(opp.get('turns_left') or 0) >= 2:
+                    penalty += 1.5
+                bonus -= min(penalty, 5.0)
+
     # ── (2) Same-suit build promotion ──
     # Building a figure whose suit matches existing figures increases
     # support bonus potential in battle.  Estimate the support bonus
     # the new figure would receive from existing same-suit allies.
     if action_type == 'build_figure':
+        # Structural bias toward actually materializing the figure now,
+        # instead of cycling cards in search of a theoretically stronger
+        # future target.  Without this small nudge, change_cards plans —
+        # which sum *missing* rank values into their power estimate — can
+        # narrowly outscore real, available builds.
+        bonus += 2.0
+
         params = action.get('params', {}) or {}
         build_suit = params.get('suit')
         build_field = params.get('field', '').lower()
@@ -370,10 +439,98 @@ def _modifier_bonus(
         target_fid = params.get('target_figure_id')
 
         # ── Tactical spells: rule-derived structural advantage ──
-        if 'Blitzkrieg' in desc:
-            bonus += 3.5
-        if 'Infinite Hammer' in desc:
+        # Softer than before so context-dependent spells (greed, enchantments,
+        # All Seeing Eye combos) can compete when they're the right call.
+        if 'Blitzkrieg' in desc or spell_name == 'Blitzkrieg':
+            bonus += 2.5
+        if 'Infinite Hammer' in desc or spell_name == 'Infinite Hammer':
+            bonus += 1.5
+
+        # ── Greed spells: contextual hand-replenishment value ──
+        ai_player_dict = None
+        if game_dict and ai_player_id is not None:
+            ai_player_dict = next(
+                (p for p in game_dict.get('players', []) or []
+                 if p.get('id') == ai_player_id),
+                None,
+            )
+
+        free_main_count = 0
+        free_side_count = 0
+        free_main_battle_count = 0
+        if ai_player_dict:
+            for c in ai_player_dict.get('main_hand', []) or []:
+                if c.get('part_of_figure') or c.get('part_of_battle_move'):
+                    continue
+                free_main_count += 1
+                if c.get('rank') in ('K', 'A', 'Q', 'J', '7', '8', '9', '10'):
+                    free_main_battle_count += 1
+            for c in ai_player_dict.get('side_hand', []) or []:
+                if c.get('part_of_figure') or c.get('part_of_battle_move'):
+                    continue
+                free_side_count += 1
+
+        if spell_name == 'Fill up to 10':
+            if free_main_count < 7:
+                bonus += 2.0
+            elif free_main_count < 10:
+                bonus += 1.0
+
+        if spell_name == 'Draw 2 MainCards':
+            if free_main_count < 8:
+                bonus += 1.5
+
+        if spell_name == 'Draw 2 SideCards':
+            if free_side_count < 4:
+                bonus += 1.5
+
+        if spell_name == 'Forced Deal':
+            bonus += 1.5
+
+        if spell_name == 'Dump Cards':
+            # Last-resort hand reset — only valuable when we have no real
+            # battle cards (kings/aces/queens/jacks/7–10) in main hand.
+            if free_main_battle_count == 0:
+                bonus += 1.5
+
+        if spell_name == 'Ceasefire':
             bonus += 2.0
+
+        # ── All Seeing Eye: combo enabler, not standalone scout ──
+        # Most useful when the AI can combine with Blitzkrieg + Cavalry:
+        # reveal opponent's hand, force an unblockable advance, and pick
+        # the weakest target.  Once a battle is already locked in
+        # (advancing_figure_id set), the matchup can't change — the spell
+        # becomes wasted information, so reduce the bonus.
+        if spell_name == 'All Seeing Eye':
+            battle_imminent = bool(game_dict and game_dict.get('advancing_figure_id'))
+            has_cavalry = any(
+                (f.get('family_name') or '') == 'Cavalry'
+                and not f.get('cannot_attack')
+                for f in own_figures
+            )
+            # Has 2× same-color Q in free main hand → can cast Blitzkrieg
+            q_red = q_black = 0
+            if ai_player_dict:
+                for c in ai_player_dict.get('main_hand', []) or []:
+                    if c.get('part_of_figure') or c.get('part_of_battle_move'):
+                        continue
+                    if c.get('rank') != 'Q':
+                        continue
+                    if c.get('suit') in ('Hearts', 'Diamonds'):
+                        q_red += 1
+                    elif c.get('suit') in ('Clubs', 'Spades'):
+                        q_black += 1
+            has_blitzkrieg = q_red >= 2 or q_black >= 2
+
+            if battle_imminent:
+                # Matchup locked — All Seeing Eye reveals less actionable info.
+                bonus += 0.2
+            elif has_cavalry and has_blitzkrieg:
+                # The premium combo: scout, blitz, charge unblockable cavalry.
+                bonus += 3.0
+            else:
+                bonus += 0.5
 
         # ── (4) Peasant War / Civil War: state-dependent bonus ──
         # Base value is 2.5, but increases when the opponent's military

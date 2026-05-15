@@ -1442,27 +1442,20 @@ class HexMap:
         """
         if sz <= 8:
             return
-        if self.zoom >= settings.HEX_MAP_OWNER_NAME_MIN_ZOOM:
-            return
-
-        # At minimum zoom the map is very cluttered; only show the badge for
-        # the kingdom the mouse is currently hovering over.
-        hover_group_key = None
-        if self.zoom <= settings.HEX_MAP_ZOOM_MIN:
-            ht = self.hovered_tile
-            if ht is None or not ht.owner_user_id:
-                return
-            if ht.kingdom_id is not None:
-                hover_group_key = ('kingdom', ht.kingdom_id)
-            elif ht.kingdom_component_id is not None:
-                hover_group_key = ('component', ht.owner_user_id, ht.kingdom_component_id)
-            else:
-                return
 
         vp = self.viewport_rect
-        font = self._label_font
+        # Scale badge font proportionally to the hex size so the badge
+        # remains legible at all zoom levels (zoomed in and zoomed out).
+        scaled_font_size = max(
+            10,
+            min(
+                int(settings.HEX_LABEL_FONT_SIZE * 2.0),
+                int(settings.HEX_LABEL_FONT_SIZE * sz / settings.HEX_SIZE),
+            ),
+        )
+        font = settings.get_font(scaled_font_size)
         subtitle_font = settings.get_font(
-            max(8, int(font.get_height() * 0.68)), bold=True)
+            max(8, int(scaled_font_size * 0.68)), bold=True)
         offset_y = sz * settings.HEX_GROUP_BADGE_OFFSET_Y
         gap_px = max(1, int(sz * settings.HEX_GROUP_BADGE_GAP_FACTOR))
         subtitle_h = subtitle_font.get_height()
@@ -1474,8 +1467,6 @@ class HexMap:
             pygame.time.get_ticks())
 
         for badge_data in self._kingdom_badges():
-            if hover_group_key is not None and badge_data.get('group_key') != hover_group_key:
-                continue
             cx_w, cy_w = badge_data['center_x'], badge_data['center_y']
             scx, scy = self.world_to_screen(cx_w, cy_w)
             # Keep cluster rendering scoped to visible map area.
