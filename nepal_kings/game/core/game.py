@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 from utils import http_compat as requests
+import sys as _sys
 import threading
 import pygame
 from config import settings
@@ -1048,12 +1049,79 @@ class Game:
         # No need to block here — the next poll cycle will pick them up
 
     def _start_turn_async(self):
-        """Fire _handle_start_turn in a background thread."""
+        """Fire _handle_start_turn in a background thread (desktop) or via
+        non-blocking async XHR (web). On emscripten the prior
+        ``threading.Thread`` path silently fell back to a synchronous
+        ``requests.post`` that blocked the main loop on every turn change —
+        causing a regular ~2s hitch during conquer battles where turns flip
+        between player and AI on each poll cycle.
+        """
+        if _sys.platform == "emscripten":
+            self._start_async_start_turn_web()
+            return
         try:
             t = threading.Thread(target=self._handle_start_turn, daemon=True)
             t.start()
         except RuntimeError:
-            self._handle_start_turn()  # web fallback: run synchronously
+            self._handle_start_turn()  # fallback: run synchronously
+
+    def _start_async_start_turn_web(self):
+        """Web-only: fire start_turn POST asynchronously, drain on main thread."""
+        try:
+            from utils.http_compat import start_async_post_json
+        except Exception as e:
+            logger.error(f"[START_TURN] async helper unavailable: {e}")
+            return
+        payload = {'game_id': self.game_id, 'player_id': self.player_id}
+        if getattr(self, '_pending_start_turn_rids', None) is None:
+            self._pending_start_turn_rids = []
+        try:
+            rid = start_async_post_json(
+                f'{settings.SERVER_URL}/games/start_turn', payload)
+            self._pending_start_turn_rids.append(rid)
+        except Exception as e:
+            logger.error(f"[START_TURN] async POST failed to start: {e}")
+
+    def drain_pending_start_turn(self):
+        """Apply any completed start_turn responses (web async path).
+
+        Safe to call every frame; cheap when nothing is pending.
+        Desktop path uses real threads and does not need this drain.
+        """
+        rids = getattr(self, '_pending_start_turn_rids', None)
+        if not rids:
+            return
+        try:
+            from utils.http_compat import check_async
+        except Exception:
+            return
+        still = []
+        for rid in rids:
+            try:
+                resp = check_async(rid)
+            except Exception as e:
+                logger.debug(f"[START_TURN] async check error: {e}")
+                resp = None
+            if resp is None:
+                still.append(rid)
+                continue
+            if resp.status_code != 200:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:200] if hasattr(resp, 'text') else ''
+                logger.error(f"[START_TURN] Failed with status {resp.status_code}: {body}")
+                continue
+            try:
+                data = resp.json()
+            except Exception as e:
+                logger.error(f"[START_TURN] bad JSON: {e}")
+                continue
+            try:
+                self._apply_start_turn_response(data)
+            except Exception as e:
+                logger.error(f"[START_TURN] apply error: {e}")
+        self._pending_start_turn_rids = still
 
     def _handle_start_turn(self):
         """Called when turn changes to current player. Checks and handles auto-fill."""
@@ -1076,70 +1144,75 @@ class Game:
             
             data = response.json()
             logger.debug(f"[START_TURN] Response: {data}")
-            if data.get('success'):
-                auto_fill = data.get('auto_fill')
-                if auto_fill:
-                    # Store for dialogue display
-                    logger.debug(f"[START_TURN] Auto-fill needed: {auto_fill}")
-                    self.pending_auto_fill = auto_fill
-                else:
-                    logger.debug(f"[START_TURN] No auto-fill needed")
-                
-                # Store opponent turn summary for dialogue display
-                # But suppress it if an advance notification is pending (advance has its own notification)
-                # Also suppress after battle/fold resolution (result dialogue already shown)
-                # Exception: never suppress notifications that directly affect the player
-                # (e.g. Forced Deal card swap, Dump Cards, Poison on player's figure, Explosion)
-                # In conquer mode, suppress all non-game_start turn summaries
-                opponent_turn_summary = data.get('opponent_turn_summary')
-                action_data = opponent_turn_summary.get('action', {}) if opponent_turn_summary and isinstance(opponent_turn_summary.get('action'), dict) else {}
-                affects_player = action_data.get('affects_player', False)
-                action_type = opponent_turn_summary.get('action') if opponent_turn_summary else None
-                
-                # In conquer mode, suppress only truly empty/unknown turn summaries.
-                # Allow spell casts, counter-advances, and player-affecting actions through.
-                action_type_str = action_data.get('type', '') if isinstance(action_data, dict) else ''
-                is_meaningful = (affects_player
-                                 or action_type == 'game_start'
-                                 or action_type_str in ('spell', 'counter_advance', 'advance'))
-                if self.mode == 'conquer' and not is_meaningful:
-                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — conquer mode (action_type={action_type_str})")
-                    self.pending_opponent_turn_summary = None
-                elif affects_player and opponent_turn_summary:
-                    # Always show notifications that directly affect the player's state
-                    logger.debug(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
-                    self.pending_opponent_turn_summary = opponent_turn_summary
-                elif self.suppress_next_turn_summary:
-                    self.suppress_next_turn_summary = False
-                    # Fully suppress the post-battle/fold turn summary — the
-                    # round-start notifications (victory/defeat, ceasefire, side
-                    # cards) already cover what the player needs to know.
-                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
-                    self.pending_opponent_turn_summary = None
-                elif (self.pending_advance_notification or
-                      (self.advancing_figure_id and
-                       self.advancing_player_id != self.player_id)):
-                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — advance notification pending or opponent advance active")
-                elif self.pending_battle_ready:
-                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
-                elif self.pending_fold_result:
-                    logger.debug(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
-                elif opponent_turn_summary:
-                    # Deduplicate: skip if this exact log was already shown
-                    summary_log_id = opponent_turn_summary.get('log_id')
-                    if summary_log_id and summary_log_id == self._last_shown_summary_log_id:
-                        logger.debug(f"[START_TURN] Skipping duplicate opponent turn summary (log_id={summary_log_id})")
-                        self.pending_opponent_turn_summary = None
-                    else:
-                        logger.debug(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
-                        self.pending_opponent_turn_summary = opponent_turn_summary
-                        if summary_log_id:
-                            self._last_shown_summary_log_id = summary_log_id
-                else:
-                    logger.debug(f"[START_TURN] No opponent turn summary")
-                    self.pending_opponent_turn_summary = None
+            self._apply_start_turn_response(data)
         except Exception as e:
             logger.error(f"Error in start_turn: {str(e)}")
+
+    def _apply_start_turn_response(self, data):
+        """Apply the parsed JSON body returned by ``/games/start_turn``."""
+        if not data.get('success'):
+            return
+        auto_fill = data.get('auto_fill')
+        if auto_fill:
+            # Store for dialogue display
+            logger.debug(f"[START_TURN] Auto-fill needed: {auto_fill}")
+            self.pending_auto_fill = auto_fill
+        else:
+            logger.debug(f"[START_TURN] No auto-fill needed")
+
+        # Store opponent turn summary for dialogue display
+        # But suppress it if an advance notification is pending (advance has its own notification)
+        # Also suppress after battle/fold resolution (result dialogue already shown)
+        # Exception: never suppress notifications that directly affect the player
+        # (e.g. Forced Deal card swap, Dump Cards, Poison on player's figure, Explosion)
+        # In conquer mode, suppress all non-game_start turn summaries
+        opponent_turn_summary = data.get('opponent_turn_summary')
+        action_data = opponent_turn_summary.get('action', {}) if opponent_turn_summary and isinstance(opponent_turn_summary.get('action'), dict) else {}
+        affects_player = action_data.get('affects_player', False)
+        action_type = opponent_turn_summary.get('action') if opponent_turn_summary else None
+
+        # In conquer mode, suppress only truly empty/unknown turn summaries.
+        # Allow spell casts, counter-advances, and player-affecting actions through.
+        action_type_str = action_data.get('type', '') if isinstance(action_data, dict) else ''
+        is_meaningful = (affects_player
+                         or action_type == 'game_start'
+                         or action_type_str in ('spell', 'counter_advance', 'advance'))
+        if self.mode == 'conquer' and not is_meaningful:
+            logger.debug(f"[START_TURN] Suppressing opponent turn summary — conquer mode (action_type={action_type_str})")
+            self.pending_opponent_turn_summary = None
+        elif affects_player and opponent_turn_summary:
+            # Always show notifications that directly affect the player's state
+            logger.debug(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
+            self.pending_opponent_turn_summary = opponent_turn_summary
+        elif self.suppress_next_turn_summary:
+            self.suppress_next_turn_summary = False
+            # Fully suppress the post-battle/fold turn summary — the
+            # round-start notifications (victory/defeat, ceasefire, side
+            # cards) already cover what the player needs to know.
+            logger.debug(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
+            self.pending_opponent_turn_summary = None
+        elif (self.pending_advance_notification or
+              (self.advancing_figure_id and
+               self.advancing_player_id != self.player_id)):
+            logger.debug(f"[START_TURN] Suppressing opponent turn summary — advance notification pending or opponent advance active")
+        elif self.pending_battle_ready:
+            logger.debug(f"[START_TURN] Suppressing opponent turn summary — battle ready pending")
+        elif self.pending_fold_result:
+            logger.debug(f"[START_TURN] Suppressing opponent turn summary — fold result pending")
+        elif opponent_turn_summary:
+            # Deduplicate: skip if this exact log was already shown
+            summary_log_id = opponent_turn_summary.get('log_id')
+            if summary_log_id and summary_log_id == self._last_shown_summary_log_id:
+                logger.debug(f"[START_TURN] Skipping duplicate opponent turn summary (log_id={summary_log_id})")
+                self.pending_opponent_turn_summary = None
+            else:
+                logger.debug(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
+                self.pending_opponent_turn_summary = opponent_turn_summary
+                if summary_log_id:
+                    self._last_shown_summary_log_id = summary_log_id
+        else:
+            logger.debug(f"[START_TURN] No opponent turn summary")
+            self.pending_opponent_turn_summary = None
 
     def get_player_username(self, player_id):
         """Fetch the username of a player given their player_id."""

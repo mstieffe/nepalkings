@@ -439,6 +439,15 @@ class GameScreen(Screen):
         # Check if game exists (may be None after logout)
         if not self.state.game:
             return
+
+        # Drain any in-flight async start_turn responses (web path).
+        # Cheap no-op on desktop and when nothing is pending; without this
+        # the conquer battle UI would either block on a sync POST or never
+        # see the response.
+        try:
+            self.state.game.drain_pending_start_turn()
+        except Exception:
+            pass
         
         # Detect game or user switch — reset stale state
         current_id = getattr(self.state.game, 'game_id', None)

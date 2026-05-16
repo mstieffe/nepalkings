@@ -6196,6 +6196,13 @@ class ConquerGameScreen(GameScreen):
 
         self._drain_battle_state_poller()
         self._request_battle_state_poll(force=False)
+        # Drain any in-flight async start_turn responses every frame so that
+        # auto-fill / opponent-turn summaries land as soon as the XHR returns,
+        # not only on the next 2s update_game tick.
+        try:
+            self.state.game.drain_pending_start_turn()
+        except Exception:
+            pass
 
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:

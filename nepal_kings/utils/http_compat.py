@@ -223,6 +223,32 @@ if _sys.platform == "emscripten":
         _embed.js(js)
         return rid
 
+    def start_async_post_json(url, payload=None):
+        """Fire an async POST XHR with a JSON body; return request-id."""
+        global _async_id_counter
+        _async_id_counter += 1
+        rid = _async_id_counter
+        full_url = _js_escape(url)
+        body_str = _json.dumps(payload or {})
+        body_js = "'" + _js_escape(body_str) + "'"
+        auth_js = ""
+        if _auth_token:
+            auth_js = f"x.setRequestHeader('Authorization','Bearer {_js_escape(_auth_token)}');"
+        js = (
+            f"(function(){{"
+            f"window._axr=window._axr||{{}};"
+            f"var x=new XMLHttpRequest();"
+            f"x.open('POST','{full_url}',true);"
+            f"x.setRequestHeader('Content-Type','application/json');"
+            f"{auth_js}"
+            f"x.onload=function(){{window._axr[{rid}]={{s:x.status,t:x.responseText||''}};}};"
+            f"x.onerror=function(){{window._axr[{rid}]={{s:0,t:'network error'}};}};"
+            f"x.send({body_js});"
+            f"}})()"
+        )
+        _embed.js(js)
+        return rid
+
     def check_async(rid):
         """Check if async request *rid* finished.  Returns _Response or None."""
         js = (
