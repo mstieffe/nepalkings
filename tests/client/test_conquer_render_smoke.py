@@ -1601,7 +1601,6 @@ def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):
     step are hidden, and spell_purged tactics whose discarded_step_index is
     still in the future are replayed as available."""
     from game.screens.conquer_game_screen import ConquerGameScreen
-    from utils import game_service
 
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.state = SimpleNamespace(game=SimpleNamespace(
@@ -1613,6 +1612,7 @@ def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):
     screen._conquer_timeline_panel = SimpleNamespace(
         currently_resolved_step_index=lambda *a, **kw: 1,
     )
+    screen._request_battle_state_poll = lambda force=False: None
 
     fake_state = {
         'player_tactics': [
@@ -1631,8 +1631,11 @@ def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):
         'opponent_tactics': [],
         'conquer_resolution_step': 3,
     }
-    monkeypatch.setattr(game_service, 'get_battle_state',
-                        lambda *a, **kw: fake_state)
+    screen._conquer_tactic_cache = fake_state['player_tactics']
+    screen._conquer_opponent_tactic_cache = []
+    screen._conquer_tactic_cache_key = (
+        ConquerGameScreen._battle_state_cache_key(screen)
+    )
 
     visible = screen._current_conquer_tactics()
     visible_ids = {t['id'] for t in visible}
@@ -1643,6 +1646,35 @@ def test_current_conquer_tactics_filters_by_displayed_step(monkeypatch):
     # 'spell_purged' status so live actions cannot fire on them.
     assert replayed['status'] == 'spell_purged'
     assert replayed.get('_render_ghost') is True
+
+
+def test_current_conquer_tactics_uses_cached_state_without_sync_fetch(monkeypatch):
+    from game.screens.conquer_game_screen import ConquerGameScreen
+    from utils import game_service
+
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(game=SimpleNamespace(
+        game_id=42, player_id=7, conquer_tactics=[],
+        battle_turn_player_id=7, battle_round=1,
+        _game_data_version=4, conquer_resolution_step=0,
+        last_battle_result=None,
+    ))
+    screen._is_tactics_hand_game = lambda: True
+    screen._conquer_timeline_panel = None
+    cached = [{'id': 9, 'status': 'available', 'family_name': 'Dagger'}]
+    screen._conquer_tactic_cache = cached
+    screen._conquer_opponent_tactic_cache = []
+    screen._conquer_tactic_cache_key = (
+        ConquerGameScreen._battle_state_cache_key(screen)
+    )
+    screen._request_battle_state_poll = lambda force=False: None
+    monkeypatch.setattr(
+        game_service,
+        'get_battle_state',
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError('sync fetch')),
+    )
+
+    assert screen._current_conquer_tactics() == cached
 
 
 def test_timeline_panel_currently_resolved_step_index():

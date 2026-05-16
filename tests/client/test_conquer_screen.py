@@ -252,6 +252,10 @@ class TestConquerConfirmData:
         import pygame
         state = _make_state()
         screen = ConquerScreen(state)
+        screen._land = {
+            'tier': 2,
+            'kingdom_bonuses': {'loot_chance': 0.10},
+        }
         screen._config = {
             'figures': [{
                 'id': 1,
@@ -278,14 +282,65 @@ class TestConquerConfirmData:
         with patch('game.components.cards.card_img.CardImg', _FakeCardImg):
             msg, image_groups, after_msg = screen._build_confirm_data()
 
-        assert 'starting this conquer battle' in msg
+        assert 'committed to this conquer battle' in msg
         assert [group['key'] for group in image_groups] == ['loot_risk']
         group = image_groups[0]
         assert group['icon'] == 'lock'
         assert group['badge_icon'] == 'lock'
         assert len(group['items']) == 4
-        assert 'defending kingdom may loot cards' in group['description']
-        assert 'No conquer cards are consumed automatically' in after_msg
+        assert 'Locked now:' in group['description']
+        assert 'Loot risk:' in group['description']
+        assert 'defender loots 3 of these 4 cards' in group['description']
+        assert 'Tier 2 quota' in group['description']
+        assert 'Defensive Looting adds a 10% extra roll' in group['description']
+        assert 'does not consume cards by itself' in after_msg
+
+    def test_battle_button_label_shows_cooldown_and_map(self, monkeypatch):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._config = {
+            'figures': [{'id': 1, 'has_deficit': False}],
+            'battle_moves': [{'id': 1}, {'id': 2}, {'id': 3}],
+        }
+        screen._cooldown_remaining = 125
+        screen._cooldown_synced_at_ms = 1000
+        screen._maps_available = 2
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 1000)
+
+        assert screen._battle_button_label() == 'Cooldown 2m 05s'
+
+    def test_cooldown_click_offers_map_before_battle_confirm(self, monkeypatch):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        screen._config = {
+            'figures': [{'id': 1, 'has_deficit': False}],
+            'battle_moves': [{'id': 1}, {'id': 2}, {'id': 3}],
+        }
+        screen._cooldown_remaining = 65
+        screen._cooldown_synced_at_ms = 1000
+        screen._maps_available = 1
+        monkeypatch.setattr('pygame.time.get_ticks', lambda: 1000)
+
+        screen._on_battle_click()
+
+        assert screen._pending_map_confirm is True
+        assert screen._pending_battle_confirm is False
+
+    def test_use_map_response_opens_battle_confirm(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        state.action = {'status': 'use map'}
+        screen._pending_map_confirm = True
+
+        with patch.object(screen, '_open_battle_confirm') as mock_confirm, \
+                patch.object(screen, '_start_battle') as mock_start:
+            screen.handle_events([])
+
+        mock_confirm.assert_called_once_with(use_map=True)
+        mock_start.assert_not_called()
 
 
 class TestConquerScreenLayout:

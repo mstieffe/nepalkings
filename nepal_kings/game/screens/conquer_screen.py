@@ -9,6 +9,7 @@ from game.screens._menu_base import MenuScreenMixin
 from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.prelude_spell_screen import PreludeSpellScreen
+from game.screens.conquer_loot_summary import build_loot_risk_description
 from game.core.card_source import CollectionCardSource
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.core.kingdom_game_proxy import KingdomGameProxy
@@ -141,6 +142,10 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._config = None        # serialised LandConfig
         self._loading = False
         self._error = None
+        self._cooldown_remaining = 0
+        self._cooldown_synced_at_ms = 0
+        self._maps_available = 0
+        self._land_cooldown_remaining = 0
 
         # ── Subscreen state ─────────────────────────────────────────
         self._active_subscreen = None   # 'build_figure' | 'battle_shop' | None
@@ -185,6 +190,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._move_detail_box = None
         self._config_version = 0       # incremented on config change
         self._pending_battle_confirm = False
+        self._pending_battle_confirm_use_map = False
         self._pending_map_confirm = False
         self._pending_leave_confirm = False
         self._pending_prelude_spell = None   # spell name pending confirmation
@@ -251,9 +257,16 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._config = None
         self._loading = False
         self._error = None
+        self._cooldown_remaining = 0
+        self._cooldown_synced_at_ms = 0
+        self._maps_available = 0
+        self._land_cooldown_remaining = 0
         self._active_subscreen = None
         self._subscreen_obj = None
         self._game_proxy = None
+        self._pending_battle_confirm = False
+        self._pending_battle_confirm_use_map = False
+        self._pending_map_confirm = False
         self._figure_objects = []
         self._figure_icons = {}
         self._figure_detail_box = None
@@ -533,6 +546,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             data = resp.json()
             self._config = data.get('config')
             self._land = data.get('land')
+            self._set_cooldown_state(data)
             self._loading = False
             self._rebuild_figure_objects()
             self._refresh_collection()
@@ -541,6 +555,61 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self._error = 'Connection error'
             logger.error(f'Conquer config load error: {e}')
             self._loading = False
+
+    def _set_cooldown_state(self, data):
+        """Store server cooldown/map metadata for local countdown display."""
+        data = data or {}
+        try:
+            self._cooldown_remaining = max(
+                0, int(data.get('conquer_cooldown_remaining',
+                                data.get('cooldown_remaining', 0)) or 0))
+        except (TypeError, ValueError):
+            self._cooldown_remaining = 0
+        try:
+            user_maps = 0
+            if getattr(self.state, 'user_dict', None):
+                user_maps = self.state.user_dict.get('maps', 0)
+            self._maps_available = max(
+                0, int(data.get('maps_available', user_maps) or 0))
+        except (TypeError, ValueError):
+            self._maps_available = 0
+        try:
+            self._land_cooldown_remaining = max(
+                0, int(data.get('land_conquer_cooldown_remaining', 0) or 0))
+        except (TypeError, ValueError):
+            self._land_cooldown_remaining = 0
+        self._cooldown_synced_at_ms = pygame.time.get_ticks()
+        if getattr(self.state, 'user_dict', None) is not None:
+            self.state.user_dict['maps'] = self._maps_available
+
+    @staticmethod
+    def _format_duration(seconds):
+        seconds = max(0, int(seconds or 0))
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        if hours:
+            return f'{hours}h {minutes:02d}m'
+        if minutes:
+            return f'{minutes}m {secs:02d}s'
+        return f'{secs}s'
+
+    def _current_cooldown_remaining(self):
+        base = max(0, int(getattr(self, '_cooldown_remaining', 0) or 0))
+        synced_at = int(getattr(self, '_cooldown_synced_at_ms', 0) or 0)
+        if base <= 0 or synced_at <= 0:
+            return base
+        elapsed = max(0, (pygame.time.get_ticks() - synced_at) // 1000)
+        return max(0, base - elapsed)
+
+    def _battle_button_label(self):
+        if not self._is_battle_ready():
+            return 'To Battle!'
+        remaining = self._current_cooldown_remaining()
+        if remaining <= 0:
+            return 'To Battle!'
+        text = self._format_duration(remaining)
+        return f'Cooldown {text}'
 
     # ── Server actions ──────────────────────────────────────────────
 
@@ -1082,8 +1151,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         # To Battle — enabled only when ready
         ready = self._is_battle_ready()
-        battle_clr = (200, 170, 0) if ready else (80, 80, 80)
-        self._draw_button(self._btn_battle, 'To Battle!', battle_clr)
+        cooldown = self._current_cooldown_remaining() if ready else 0
+        if ready and cooldown > 0:
+            battle_clr = (178, 130, 36) if self._maps_available > 0 else (92, 82, 68)
+        else:
+            battle_clr = (200, 170, 0) if ready else (80, 80, 80)
+        self._draw_button(self._btn_battle, self._battle_button_label(), battle_clr)
 
         self._draw_close_x_button()
 
@@ -1383,6 +1456,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         c = tuple(min(v + 30, 255) for v in color) if hovered else color
         pygame.draw.rect(self.window, c, rect, border_radius=4)
         pygame.draw.rect(self.window, (200, 180, 140), rect, 1, border_radius=4)
+        text = self._fit_text(text, self._btn_font, rect.w - 10)
         txt = self._btn_font.render(text, True, (255, 255, 255))
         self.window.blit(txt, txt.get_rect(center=rect.center))
 
@@ -1607,11 +1681,13 @@ class ConquerScreen(MenuScreenMixin, Screen):
         from game.components.cards.card_img import CardImg
 
         at_risk_cards = []
+        at_risk_card_specs = []
 
         def add_card(target, suit, rank):
             if suit and rank:
                 ci = CardImg(self.window, suit, rank)
                 target.append(ci.front_img)
+                at_risk_card_specs.append({'suit': suit, 'rank': rank})
 
         # Every committed card is locked and at loot risk; none are consumed
         # automatically in conquer mode.
@@ -1640,36 +1716,71 @@ class ConquerScreen(MenuScreenMixin, Screen):
         if at_risk_cards:
             image_groups.append({
                 'key': 'loot_risk',
-                'title': 'Locked and at loot risk',
-                'description': 'All committed cards stay locked during the attack. If you lose, the defending kingdom may loot cards based on the land tier and its loot skill; every unlooted card returns.',
+                'title': 'Committed cards',
+                'description': build_loot_risk_description(
+                    self._land or {}, at_risk_card_specs, mode='conquer'),
                 'icon': 'lock',
                 'badge_icon': 'lock',
                 'items': at_risk_cards,
             })
 
-        msg = 'Review the locked cards and loot risk before starting this conquer battle.'
+        msg = 'Review the cards committed to this conquer battle.'
         if not image_groups:
             msg = 'No cards are used in this configuration.'
 
         after_msg = None
         if at_risk_cards:
-            after_msg = 'No conquer cards are consumed automatically. A failed attack only loses cards that are selected as loot; all other committed cards return.'
+            after_msg = 'Starting the battle does not consume cards by itself. Only cards selected as loot after a failed attack are lost.'
 
         return msg, image_groups, after_msg
+
+    def _open_battle_confirm(self, use_map=False):
+        msg, image_groups, after_msg = self._build_confirm_data()
+        self._pending_battle_confirm = True
+        self._pending_battle_confirm_use_map = bool(use_map)
+        self.dialogue_box = DialogueBox(
+            self.window,
+            msg,
+            actions=['Confirm', 'Cancel'],
+            title='To Battle!',
+            image_groups=image_groups,
+            message_after_images=after_msg,
+        )
+
+    def _show_cooldown_dialogue(self, remaining=None):
+        remaining = self._current_cooldown_remaining() if remaining is None else remaining
+        remaining = max(0, int(remaining or 0))
+        cd_text = self._format_duration(remaining)
+        maps_available = int(getattr(self, '_maps_available', 0) or 0)
+        self._cooldown_remaining = remaining
+        self._cooldown_synced_at_ms = pygame.time.get_ticks()
+        if maps_available > 0:
+            self._pending_map_confirm = True
+            self.dialogue_box = DialogueBox(
+                self.window,
+                f'Conquer cooldown: {cd_text} remaining.\n'
+                f'Use 1 map to start this battle now? '
+                f'You have {maps_available}.',
+                actions=['Use Map', 'Cancel'],
+                title='Conquer Cooldown',
+            )
+        else:
+            self.dialogue_box = DialogueBox(
+                self.window,
+                f'Conquer cooldown: {cd_text} remaining.\n'
+                'You do not have a map to bypass it.',
+                actions=['OK'],
+                title='Conquer Cooldown',
+            )
 
     def _on_battle_click(self):
         """Handle click on 'To Battle!' — validate or confirm."""
         if self._is_battle_ready():
-            msg, image_groups, after_msg = self._build_confirm_data()
-            self._pending_battle_confirm = True
-            self.dialogue_box = DialogueBox(
-                self.window,
-                msg,
-                actions=['Confirm', 'Cancel'],
-                title='To Battle!',
-                image_groups=image_groups,
-                message_after_images=after_msg,
-            )
+            remaining = self._current_cooldown_remaining()
+            if remaining > 0:
+                self._show_cooldown_dialogue(remaining)
+                return
+            self._open_battle_confirm(use_map=False)
         else:
             problems = self._get_battle_problems()
             msg = '\n'.join(f'\u2022 {p}' for p in problems)
@@ -1723,6 +1834,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
     def _start_battle(self, use_map=False):
         """Call start_battle endpoint and transition to the game screen."""
         try:
+            if not use_map:
+                remaining = self._current_cooldown_remaining()
+                if remaining > 0:
+                    self._show_cooldown_dialogue(remaining)
+                    return
             payload = {'land_id': self._land_id}
             if use_map:
                 payload['use_map'] = True
@@ -1738,6 +1854,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 # Update local maps count if a map was consumed.
                 if data.get('map_consumed') and self.state.user_dict is not None:
                     self.state.user_dict['maps'] = int(data.get('maps', 0))
+                    self._maps_available = int(data.get('maps', 0))
                 # Fetch and create a real Game object for the game screen
                 try:
                     game_dict = fetch_game(game_id)
@@ -1753,32 +1870,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 return
             # Cooldown branch: offer to consume a map.
             if data.get('code') == 'cooldown':
-                maps_available = int(data.get('maps_available') or 0)
-                remaining = int(data.get('cooldown_remaining') or 0)
-                hours = remaining // 3600
-                minutes = (remaining % 3600) // 60
-                if hours > 0:
-                    cd_text = f'{hours}h {minutes}m'
-                else:
-                    cd_text = f'{minutes}m'
-                if maps_available > 0:
-                    self._pending_map_confirm = True
-                    self.dialogue_box = DialogueBox(
-                        self.window,
-                        f'Conquer is on cooldown ({cd_text} remaining).\n'
-                        f'Use 1 map to bypass? (You have {maps_available}.)',
-                        actions=['Use Map', 'Cancel'],
-                        title='Conquer on Cooldown',
-                    )
-                else:
-                    self.dialogue_box = DialogueBox(
-                        self.window,
-                        f'Conquer is on cooldown ({cd_text} remaining) '
-                        f'and you have no maps to bypass it.',
-                        actions=['OK'],
-                        title='Conquer on Cooldown',
-                    )
+                self._set_cooldown_state(data)
+                self._show_cooldown_dialogue(data.get('cooldown_remaining') or 0)
                 return
+            if data.get('code') == 'no_cooldown':
+                self._set_cooldown_state(data)
+                self._start_battle(use_map=False)
+                return
+            if data.get('code') == 'no_maps':
+                self._set_cooldown_state(data)
             self._error = (
                 data.get('message')
                 or data.get('error')
@@ -1823,16 +1923,18 @@ class ConquerScreen(MenuScreenMixin, Screen):
         # Handle battle confirm / info dialogue response
         response = self.state.action.get('status')
         if response and self._pending_battle_confirm:
+            use_map = bool(getattr(self, '_pending_battle_confirm_use_map', False))
             self._pending_battle_confirm = False
+            self._pending_battle_confirm_use_map = False
             self.reset_action()
             if response == 'confirm':
-                self._start_battle()
+                self._start_battle(use_map=use_map)
             return
         if response and self._pending_map_confirm:
             self._pending_map_confirm = False
             self.reset_action()
             if response == 'use map':
-                self._start_battle(use_map=True)
+                self._open_battle_confirm(use_map=True)
             return
         if response and self._pending_leave_confirm:
             self._pending_leave_confirm = False
@@ -1852,6 +1954,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return
         if response in ('ok', 'cancel'):
             self._pending_battle_confirm = False
+            self._pending_battle_confirm_use_map = False
             self._pending_leave_confirm = False
             self._pending_prelude_spell = None
             self._pending_prelude_clear = False

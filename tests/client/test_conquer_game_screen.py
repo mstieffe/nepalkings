@@ -1965,7 +1965,7 @@ class TestTacticsHandRouting:
         ConquerGameScreen, screen = self._make_screen(
             battle_confirmed=True,
             battle_turn_player_id=42,
-            battle_round=2,
+            battle_round=1,
         )
         you = {
             'id': 11,
@@ -2005,7 +2005,7 @@ class TestTacticsHandRouting:
         assert opp_step.completed is True
         assert 'You played Dagger' in you_step.info_body
         assert 'Defender played Shield' in opp_step.info_body
-        # Round 2 is the active one; the player's side is awaiting input.
+        # Round 2 is the active one; battle_round is zero-indexed.
         round2_player = steps[2]
         assert round2_player.active is True
         assert round2_player.completed is False
@@ -2143,6 +2143,17 @@ class TestTacticsHandRouting:
         assert animation['move']['id'] == 7
         assert animation['source'] == source_rect
         assert animation['target'].width > 0
+        from config import settings
+        from game.components.conquer_layout import compute_conquer_layout
+        layout = compute_conquer_layout(
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            mode='battle',
+        )
+        second_round = pygame.Rect(*layout.round_ledger.round_card_rects[1])
+        first_round = pygame.Rect(*layout.round_ledger.round_card_rects[0])
+        assert second_round.collidepoint(animation['target'].center)
+        assert not first_round.collidepoint(animation['target'].center)
         assert animation['started_at'] == 1234
 
     def test_tactics_hand_dismantle_uses_conquer_tactic_endpoint(self, monkeypatch):

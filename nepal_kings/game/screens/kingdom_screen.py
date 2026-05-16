@@ -229,6 +229,17 @@ class KingdomScreen(MenuScreenMixin, Screen):
         except Exception as e:  # noqa: BLE001 — surface any failure verbatim
             return {'data': None, 'status_code': 0, 'error': str(e) or 'Connection error'}
 
+    @staticmethod
+    def _transform_map_async_response(resp):
+        """Convert a web async-XHR response into the threaded worker shape."""
+        try:
+            if resp.status_code != 200:
+                return {'data': None, 'status_code': resp.status_code,
+                        'error': 'Failed to load kingdom map'}
+            return {'data': resp.json(), 'status_code': 200, 'error': None}
+        except Exception as e:  # noqa: BLE001
+            return {'data': None, 'status_code': 0, 'error': str(e) or 'Connection error'}
+
     def _load_map(self):
         """Kick off a non-blocking kingdom map fetch.
 
@@ -237,7 +248,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
         interactive (the result is applied once the poller returns).
         """
         if self._map_poller is None:
-            self._map_poller = BackgroundPoller(self._fetch_map_data)
+            self._map_poller = BackgroundPoller(
+                self._fetch_map_data,
+                async_get_url=f'{settings.SERVER_URL}/kingdom/map',
+                async_transform=self._transform_map_async_response,
+            )
         # If a previous request is already in flight, don't queue another.
         if self._map_poller.busy:
             return
@@ -355,7 +370,20 @@ class KingdomScreen(MenuScreenMixin, Screen):
         after the map itself finishes loading.
         """
         if self._activity_poller is None:
-            self._activity_poller = BackgroundPoller(self._fetch_activity_data)
+            base = settings.SERVER_URL
+            self._activity_poller = BackgroundPoller(
+                self._fetch_activity_data,
+                async_requests=[
+                    {'key': 'notifications',
+                     'url': f'{base}/kingdom/notifications'},
+                    {'key': 'attack_history',
+                     'url': f'{base}/kingdom/attack_history',
+                     'params': {'per_page': 50}},
+                    {'key': 'conversations',
+                     'url': f'{base}/kingdom/messages/conversations'},
+                ],
+                async_transform=self._transform_activity_async_responses,
+            )
         if self._activity_poller.busy:
             return
         self._activity_poller.poll()
@@ -387,6 +415,33 @@ class KingdomScreen(MenuScreenMixin, Screen):
             resp = requests.get(
                 f'{base}/kingdom/messages/conversations', timeout=10)
             if resp.status_code == 200:
+                data = resp.json()
+                out['conversations'] = data.get('conversations', [])
+                out['unread_count'] = data.get('unread_count', 0)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f'Failed to load kingdom conversations: {e}')
+        return out
+
+    @staticmethod
+    def _transform_activity_async_responses(responses):
+        """Convert web async activity responses into the worker result shape."""
+        out = {'notifications': [], 'attack_history': [],
+               'conversations': [], 'unread_count': 0}
+        try:
+            resp = responses.get('notifications') if isinstance(responses, dict) else None
+            if resp and resp.status_code == 200:
+                out['notifications'] = resp.json().get('notifications', [])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f'Failed to load notifications: {e}')
+        try:
+            resp = responses.get('attack_history') if isinstance(responses, dict) else None
+            if resp and resp.status_code == 200:
+                out['attack_history'] = resp.json().get('history', [])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f'Failed to load attack history: {e}')
+        try:
+            resp = responses.get('conversations') if isinstance(responses, dict) else None
+            if resp and resp.status_code == 200:
                 data = resp.json()
                 out['conversations'] = data.get('conversations', [])
                 out['unread_count'] = data.get('unread_count', 0)

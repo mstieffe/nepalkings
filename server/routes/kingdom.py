@@ -825,6 +825,122 @@ def kingdom_config_shield_purchase(kingdom_id):
 
 # ── GET /kingdom/map ────────────────────────────────────────────────────────
 
+def _bulk_defence_incomplete_by_land(land_ids, user_id):
+    """Return ``land_id -> incomplete`` for the user's defence configs.
+
+    ``check_defence_incomplete`` is intentionally thorough, but calling it
+    once per owned land makes the full kingdom map pay an N+1 query cost.
+    This mirrors the same rules with the configs, figures, and move counts
+    loaded in batches for the map endpoint.
+    """
+    land_ids = [int(lid) for lid in (land_ids or []) if lid is not None]
+    if not land_ids:
+        return {}
+
+    from kingdom_service import check_land_config_deficit
+    from game_service.figure_rule_helpers import (
+        config_strategy_modifiers,
+        figure_can_counter_advance,
+        modifiers_require_village,
+    )
+
+    incomplete_by_land = {land_id: True for land_id in land_ids}
+    cfgs = LandConfig.query.filter(
+        LandConfig.user_id == user_id,
+        LandConfig.config_type == 'defence',
+        LandConfig.land_id.in_(land_ids),
+        db.or_(LandConfig.status == 'active', LandConfig.status.is_(None)),
+    ).order_by(LandConfig.id.asc()).all()
+    cfg_by_land = {}
+    for cfg in cfgs:
+        cfg_by_land.setdefault(int(cfg.land_id), cfg)
+    if not cfg_by_land:
+        return incomplete_by_land
+
+    cfg_ids = [cfg.id for cfg in cfg_by_land.values()]
+    figures_by_config = {cfg_id: [] for cfg_id in cfg_ids}
+    for fig in LandConfigFigure.query.filter(
+            LandConfigFigure.config_id.in_(cfg_ids)).all():
+        figures_by_config.setdefault(fig.config_id, []).append(fig)
+
+    move_counts = dict(
+        db.session.query(
+            LandConfigBattleMove.config_id,
+            db.func.count(LandConfigBattleMove.id),
+        )
+        .filter(LandConfigBattleMove.config_id.in_(cfg_ids))
+        .group_by(LandConfigBattleMove.config_id)
+        .all()
+    )
+
+    for land_id, cfg in cfg_by_land.items():
+        figures = figures_by_config.get(cfg.id) or []
+        if not figures:
+            continue
+
+        deficit_map = {
+            fig.id: check_land_config_deficit(fig, figures)
+            for fig in figures
+        }
+        if not any(not deficit_map.get(fig.id, False) for fig in figures):
+            continue
+
+        if int(move_counts.get(cfg.id) or 0) < 3:
+            continue
+
+        has_battle_fig = (cfg.battle_figure_id is not None)
+        has_counter_spell = (cfg.counter_spell_name is not None)
+        if has_battle_fig == has_counter_spell:
+            continue
+
+        figures_by_id = {fig.id: fig for fig in figures}
+        if has_battle_fig:
+            battle_fig = figures_by_id.get(cfg.battle_figure_id)
+            if not battle_fig:
+                continue
+            modifiers = config_strategy_modifiers(cfg)
+            require_village = modifiers_require_village(modifiers)
+            if not figure_can_counter_advance(
+                    battle_fig,
+                    require_village=require_village,
+                    deficit=deficit_map.get(battle_fig.id, False)):
+                continue
+
+            is_civil_war = any(
+                mod.get('type') == 'Civil War'
+                for mod in modifiers
+                if isinstance(mod, dict)
+            )
+            if is_civil_war:
+                battle_fig_2 = figures_by_id.get(cfg.battle_figure_id_2)
+                if not battle_fig_2 or battle_fig_2.id == battle_fig.id:
+                    continue
+                if not figure_can_counter_advance(
+                        battle_fig_2,
+                        require_village=require_village,
+                        deficit=deficit_map.get(battle_fig_2.id, False)):
+                    continue
+                if battle_fig.color != battle_fig_2.color:
+                    continue
+            elif cfg.battle_figure_id_2:
+                continue
+
+        figure_ids = set(figures_by_id)
+        prelude_data = cfg.prelude_spell_data if isinstance(cfg.prelude_spell_data, dict) else {}
+        if cfg.prelude_spell_name == 'Health Boost':
+            target_id = prelude_data.get('target_figure_id')
+            if not target_id or target_id not in figure_ids:
+                continue
+        if cfg.counter_spell_name == 'Health Boost':
+            target_id = cfg.counter_spell_target_figure_id
+            if not target_id or target_id not in figure_ids:
+                continue
+
+        incomplete_by_land[land_id] = False
+
+    return incomplete_by_land
+
+
 @kingdom.route('/map', methods=['GET'])
 @require_token
 def get_kingdom_map():
@@ -833,7 +949,7 @@ def get_kingdom_map():
     Response includes per-land data (tier, gold rate, suit bonus, owner)
     and aggregate stats for the requesting user.
     """
-    from kingdom_service import (check_defence_incomplete, compute_owned_land_components,
+    from kingdom_service import (compute_owned_land_components,
                                  describe_kingdom_bonuses, effective_gold_rate_for_lands,
                                  kingdom_shield_block_reason, kingdom_skill_bonuses,
                                  reconcile_all_kingdoms, serialize_kingdom_config,
@@ -844,6 +960,7 @@ def get_kingdom_map():
         return jsonify({'error': 'User not found'}), 404
 
     reconcile_all_kingdoms(commit=True)
+    now = _utcnow()
     lands = Land.query.order_by(Land.row, Land.col).all()
     kingdom_ids = {land.kingdom_id for land in lands if land.kingdom_id}
     kingdoms_by_id = {
@@ -862,6 +979,10 @@ def get_kingdom_map():
     my_total_gold_rate = 0.0
     my_lands_count = 0
     lands_data = []
+    my_land_ids = [land.id for land in lands if land.owner_user_id == user.id]
+    defence_incomplete_by_land = _bulk_defence_incomplete_by_land(my_land_ids, user.id)
+    skill_bonuses_by_kingdom = {}
+    shield_status_by_kingdom = {}
 
     for land in lands:
         is_mine = (land.owner_user_id == user.id)
@@ -883,10 +1004,17 @@ def get_kingdom_map():
         shield_remaining = 0
         shield_reason = None
         if persistent_kingdom:
-            shield_remaining, _shield_kingdom, shield_reason = kingdom_shield_block_reason(
-                land, now=_utcnow())
+            if persistent_kingdom.id not in shield_status_by_kingdom:
+                shield_status_by_kingdom[persistent_kingdom.id] = kingdom_shield_block_reason(
+                    land, now=now)
+            shield_remaining, _shield_kingdom, shield_reason = shield_status_by_kingdom[
+                persistent_kingdom.id]
         legacy_bonuses = dict(land_dict.get('kingdom_bonuses') or {})
-        legacy_bonuses.update(kingdom_skill_bonuses(persistent_kingdom))
+        if persistent_kingdom:
+            if persistent_kingdom.id not in skill_bonuses_by_kingdom:
+                skill_bonuses_by_kingdom[persistent_kingdom.id] = kingdom_skill_bonuses(
+                    persistent_kingdom)
+            legacy_bonuses.update(skill_bonuses_by_kingdom[persistent_kingdom.id])
         land_dict['kingdom_id'] = land.kingdom_id
         land_dict['kingdom_name'] = (
             persistent_kingdom.name or f'Kingdom #{persistent_kingdom.id}'
@@ -915,18 +1043,18 @@ def get_kingdom_map():
         if land.conquer_cooldown_until:
             land_cooldown_remaining = max(
                 0,
-                int((land.conquer_cooldown_until - _utcnow()).total_seconds()),
+                int((land.conquer_cooldown_until - now).total_seconds()),
             )
         land_dict['conquer_cooldown_remaining'] = land_cooldown_remaining
         if is_mine:
-            land_dict['defence_incomplete'] = check_defence_incomplete(
-                land.id, user.id)
+            land_dict['defence_incomplete'] = defence_incomplete_by_land.get(
+                land.id, True)
         lands_data.append(land_dict)
 
     # Conquer cooldown
     cooldown_remaining = 0
     if user.last_conquer_at:
-        elapsed = (_utcnow() - user.last_conquer_at).total_seconds()
+        elapsed = (now - user.last_conquer_at).total_seconds()
         remaining = config.CONQUER_COOLDOWN_SECONDS - elapsed
         cooldown_remaining = max(0, int(remaining))
 
@@ -1715,6 +1843,27 @@ def get_conquer_config():
     if land.owner_user_id == g.user_id:
         return jsonify({'error': 'Cannot conquer your own land'}), 400
 
+    user = db.session.get(User, g.user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    from kingdom_service import conquer_cooldown_seconds_for_target
+
+    now = _utcnow()
+    cooldown_remaining = 0
+    effective_cooldown = conquer_cooldown_seconds_for_target(user.id, land)
+    if user.last_conquer_at:
+        elapsed = (now - user.last_conquer_at).total_seconds()
+        if elapsed < effective_cooldown:
+            cooldown_remaining = int(effective_cooldown - elapsed)
+
+    land_cooldown_remaining = 0
+    if land.conquer_cooldown_until:
+        land_cooldown_remaining = max(
+            0,
+            int((land.conquer_cooldown_until - now).total_seconds()),
+        )
+
     cfg = _get_or_create_conquer_config(g.user_id, land_id)
     db.session.commit()
 
@@ -1722,6 +1871,9 @@ def get_conquer_config():
         'success': True,
         'config': _serialize_config_with_deficit(cfg),
         'land': _serialize_land_context(land),
+        'conquer_cooldown_remaining': cooldown_remaining,
+        'maps_available': int(user.maps or 0),
+        'land_conquer_cooldown_remaining': land_cooldown_remaining,
     })
 
 

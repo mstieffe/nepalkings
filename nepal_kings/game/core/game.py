@@ -204,6 +204,8 @@ class Game:
         # Conquer per-round 60s timer (unix timestamp) — None when no timer.
         self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
         self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        self.conquer_resolution_step = int(game_dict.get('conquer_resolution_step', 0) or 0)
+        self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         # Per-player gamble usage (tactics_hand conquer): {pid: {count, rounds}}.
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
 
@@ -765,6 +767,8 @@ class Game:
         self.battle_skipped_rounds = game_dict.get('battle_skipped_rounds') or {}
         self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
         self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        self.conquer_resolution_step = int(game_dict.get('conquer_resolution_step', 0) or 0)
+        self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
         self._sync_battle_moves_phase_from_server()
 
@@ -986,6 +990,8 @@ class Game:
         # Conquer per-round 60s move deadline (unix ts) — None if no timer.
         self.conquer_round_deadline_ts = game_dict.get('conquer_round_deadline_ts')
         self.conquer_round_timeout_sec = game_dict.get('conquer_round_timeout_sec')
+        self.conquer_resolution_step = int(game_dict.get('conquer_resolution_step', 0) or 0)
+        self.conquer_tactics = game_dict.get('conquer_tactics', []) or []
         self.battle_gamble_counts = game_dict.get('battle_gamble_counts') or {}
         self._sync_battle_moves_phase_from_server()
         

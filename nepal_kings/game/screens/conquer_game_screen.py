@@ -48,6 +48,7 @@ from game.screens.field_screen import FieldScreen
 from game.screens.game_screen import GameScreen
 from game.screens.screen import Screen
 from utils import battle_shop_service, game_service
+from utils.background_poller import BackgroundPoller
 from utils.utils import GameButton
 
 
@@ -68,6 +69,7 @@ class ConquerGameScreen(GameScreen):
     # When in moves phase and the user navigates away from the battle shop,
     # snap them back after this many ms.
     BATTLE_SHOP_SNAPBACK_MS = 2000
+    BATTLE_STATE_POLL_MS = 850
 
     def __init__(self, state, progress_callback=None):
         Screen.__init__(self, state)
@@ -199,6 +201,10 @@ class ConquerGameScreen(GameScreen):
         self._conquer_tactic_cache = []
         self._conquer_opponent_tactic_cache_key = None
         self._conquer_opponent_tactic_cache = []
+        self._battle_state_poller = None
+        self._battle_state_poller_key = None
+        self._battle_state_pending_key = None
+        self._battle_state_last_poll_ms = 0
         self._conquer_battle_move_cache_key = None
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
@@ -245,6 +251,9 @@ class ConquerGameScreen(GameScreen):
                     self._reset_game_screen_state()
                 self._current_game_key = current_key
                 self._game_poller = None
+                self._battle_state_poller = None
+                self._battle_state_poller_key = None
+                self._battle_state_pending_key = None
                 if getattr(self.state.game, 'state', None) != 'finished':
                     self.state.game.game_over = False
                     self.state.game.pending_game_over = None
@@ -253,17 +262,10 @@ class ConquerGameScreen(GameScreen):
         if self.state.game and getattr(self.state.game, '_conquer_game_entered', False) is False:
             self.state.subscreen = 'field'
             self.state.game._conquer_game_entered = True
-        # Cold-load priming: pull a tactics snapshot up front so the
-        # round ledger / timeline have authoritative played-this-round
-        # data on the very first draw after a reload mid-battle. Without
-        # this the ledger briefly falls back to ``battle.opp_played``
-        # (which can be stale or empty) until ``_current_conquer_tactics``
-        # is next invoked from draw().
+        # Cold-load priming: request a tactics snapshot up front so the
+        # round ledger / timeline catch up without a blocking render fetch.
         if self.state.game and self._is_tactics_hand_game():
-            try:
-                self._current_conquer_tactics()
-            except Exception:
-                pass
+            self._request_battle_state_poll(force=True)
 
     # ------------------------------------------------------------------ setup
     def initialize_buttons(self):
@@ -615,7 +617,7 @@ class ConquerGameScreen(GameScreen):
             return base_steps
 
         player_slots, opponent_slots = self._conquer_lane_played_tactics()
-        current_round = int(getattr(game, 'battle_round', 0) or 0) - 1
+        current_round = int(getattr(game, 'battle_round', 0) or 0)
         opponent_name = getattr(game, 'opponent_name', None) or 'Opponent'
         finished = bool(getattr(game, 'last_battle_result', None))
         turn_pid = getattr(game, 'battle_turn_player_id', None)
@@ -1246,7 +1248,7 @@ class ConquerGameScreen(GameScreen):
 
     def _active_round_player_slot_rect(self):
         game = self.state.game
-        round_idx = int(getattr(game, 'battle_round', 0) or 0) - 1 if game else -1
+        round_idx = int(getattr(game, 'battle_round', 0) or 0) if game else -1
         if round_idx not in (0, 1, 2):
             return None
         layout = compute_conquer_layout(
@@ -2234,6 +2236,8 @@ class ConquerGameScreen(GameScreen):
                 self.make_dialogue_box(message, actions=['ok'], icon='info', title='Error')
             self._conquer_tactic_cache_key = None  # force refetch
             self._conquer_battle_move_cache_key = None  # force refetch
+            if getattr(self, '_battle_state_poller', None) is not None:
+                self._request_battle_state_poll(force=True)
             return
         # Show a banner reflecting the action that was just submitted; the
         # rail's auto-glow will highlight any newly-arrived moves once the
@@ -2265,12 +2269,22 @@ class ConquerGameScreen(GameScreen):
         self._tactics_rail.reset_after_action()
         self._conquer_tactic_cache_key = None  # force refetch
         self._conquer_battle_move_cache_key = None  # force refetch
+        if getattr(self, '_battle_state_poller', None) is not None:
+            self._request_battle_state_poll(force=True)
 
     def _reset_game_screen_state(self):
         """Reset shared and conquer-only state when entering a different game."""
         super()._reset_game_screen_state()
         self.reset_conquer_panel_state()
         self._tactic_flight_animation = None
+        self._battle_state_poller = None
+        self._battle_state_poller_key = None
+        self._battle_state_pending_key = None
+        self._battle_state_last_poll_ms = 0
+        self._conquer_tactic_cache_key = None
+        self._conquer_tactic_cache = []
+        self._conquer_opponent_tactic_cache_key = None
+        self._conquer_opponent_tactic_cache = []
         self._withdraw_dialogue_open = False
         if self.state.game and getattr(self.state.game, 'state', None) != 'finished':
             self.state.game.game_over = False
@@ -2908,6 +2922,187 @@ class ConquerGameScreen(GameScreen):
             self._conquer_move_panel_empty_font = font
         return font
 
+    @staticmethod
+    def _fetch_battle_state_data(game_id, player_id):
+        """Threaded desktop worker for the conquer battle-state snapshot."""
+        return game_service.get_battle_state(game_id, player_id)
+
+    @staticmethod
+    def _transform_battle_state_async_response(resp):
+        """Convert a web async-XHR response into a battle-state dict."""
+        try:
+            return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            return {'success': False, 'message': str(exc) or 'Battle state error'}
+
+    def _battle_state_key(self):
+        game = getattr(self.state, 'game', None)
+        if not game:
+            return None
+        game_id = getattr(game, 'game_id', None)
+        player_id = getattr(game, 'player_id', None)
+        if not game_id or not player_id:
+            return None
+        return (game_id, player_id)
+
+    def _battle_state_cache_key(self):
+        game = getattr(self.state, 'game', None)
+        key = self._battle_state_key()
+        if not game or not key:
+            return None
+        return (
+            'tactics',
+            key[0],
+            key[1],
+            getattr(game, 'battle_turn_player_id', None),
+            getattr(game, 'battle_round', None),
+            bool(getattr(game, 'last_battle_result', None)),
+            int(getattr(self, '_conquer_resolution_step_server',
+                        getattr(game, 'conquer_resolution_step', 0)) or 0),
+        )
+
+    def _ensure_battle_state_poller(self):
+        key = self._battle_state_key()
+        if not key:
+            return None
+        if (getattr(self, '_battle_state_poller', None) is None
+                or key != getattr(self, '_battle_state_poller_key', None)):
+            game_id, player_id = key
+            self._battle_state_poller = BackgroundPoller(
+                self._fetch_battle_state_data,
+                args=(game_id, player_id),
+                async_get_url=f'{settings.SERVER_URL}/games/get_battle_state',
+                async_get_params={'game_id': game_id, 'player_id': player_id},
+                async_transform=self._transform_battle_state_async_response,
+            )
+            self._battle_state_poller_key = key
+            self._battle_state_pending_key = None
+            self._battle_state_last_poll_ms = 0
+        return self._battle_state_poller
+
+    def _apply_battle_state_result(self, result):
+        if not isinstance(result, dict) or result.get('success') is False:
+            return
+        game = getattr(self.state, 'game', None)
+        if not game:
+            return
+
+        tactics = result.get('player_tactics') or result.get('player_moves') or []
+        opponent_tactics = result.get('opponent_tactics') or result.get('opponent_moves') or []
+        self._conquer_tactic_cache = [
+            dict(move) for move in tactics if isinstance(move, dict)
+        ]
+        self._conquer_opponent_tactic_cache = [
+            dict(move) for move in opponent_tactics if isinstance(move, dict)
+        ]
+
+        if 'battle_round' in result:
+            try:
+                game.battle_round = result.get('battle_round')
+            except Exception:
+                pass
+        if 'battle_turn_player_id' in result:
+            try:
+                game.battle_turn_player_id = result.get('battle_turn_player_id')
+            except Exception:
+                pass
+        if 'invader_player_id' in result:
+            try:
+                game.invader_player_id = result.get('invader_player_id')
+            except Exception:
+                pass
+        if 'battle_skipped_rounds' in result:
+            try:
+                game.battle_skipped_rounds = result.get('battle_skipped_rounds') or {}
+            except Exception:
+                pass
+        if 'conquer_resolution_step' in result:
+            try:
+                step = int(result.get('conquer_resolution_step') or 0)
+                self._conquer_resolution_step_server = step
+                setattr(game, 'conquer_resolution_step', step)
+            except Exception:
+                pass
+
+        self._conquer_tactic_cache_key = self._battle_state_cache_key()
+        self._conquer_opponent_tactic_cache_key = self._conquer_tactic_cache_key
+        self._battle_state_pending_key = None
+
+        if result.get('conquer_result') and not getattr(
+                self.state.game, '_conquer_result_dialogue_shown', False):
+            try:
+                self._handle_conquer_result_response(result)
+            except Exception:
+                pass
+
+    def _seed_battle_state_cache_from_game(self):
+        """Use the game snapshot as a temporary cache until async poll returns."""
+        if getattr(self, '_conquer_tactic_cache', None):
+            return
+        game = getattr(self.state, 'game', None)
+        player_id = getattr(game, 'player_id', None) if game else None
+        tactics = getattr(game, 'conquer_tactics', None) if game else None
+        if not player_id or not isinstance(tactics, list):
+            return
+
+        player_tactics = []
+        opponent_tactics = []
+        for tactic in tactics:
+            if not isinstance(tactic, dict):
+                continue
+            if tactic.get('player_id') == player_id:
+                player_tactics.append(dict(tactic))
+                continue
+            if tactic.get('status') == 'played' or tactic.get('played_round') is not None:
+                opponent_tactics.append(dict(tactic))
+            else:
+                opponent_tactics.append({
+                    'id': tactic.get('id'),
+                    'player_id': tactic.get('player_id'),
+                    'status': tactic.get('status'),
+                    'played_round': None,
+                })
+        if player_tactics or opponent_tactics:
+            self._conquer_tactic_cache = player_tactics
+            self._conquer_opponent_tactic_cache = opponent_tactics
+            self._conquer_tactic_cache_key = self._battle_state_cache_key()
+            self._conquer_opponent_tactic_cache_key = self._conquer_tactic_cache_key
+
+    def _drain_battle_state_poller(self):
+        poller = getattr(self, '_battle_state_poller', None)
+        if poller is None or not poller.has_result():
+            return False
+        self._apply_battle_state_result(poller.result)
+        return True
+
+    def _request_battle_state_poll(self, force=False):
+        if not self._is_tactics_hand_game():
+            return
+        poller = self._ensure_battle_state_poller()
+        if poller is None:
+            return
+        self._drain_battle_state_poller()
+        if poller.busy:
+            return
+        now = pygame.time.get_ticks()
+        due = (
+            now - int(getattr(self, '_battle_state_last_poll_ms', 0) or 0)
+            >= self.BATTLE_STATE_POLL_MS
+        )
+        cache_empty = (
+            not getattr(self, '_conquer_tactic_cache', None)
+            and not getattr(self, '_conquer_opponent_tactic_cache', None)
+        )
+        desired_key = self._battle_state_cache_key()
+        stale = desired_key != getattr(self, '_conquer_tactic_cache_key', None)
+        if not (force or due or cache_empty or stale):
+            return
+        self._battle_state_last_poll_ms = now
+        self._battle_state_pending_key = desired_key
+        key = self._battle_state_key()
+        if key:
+            poller.poll(args=key)
+
     def _current_conquer_tactics(self):
         game = self.state.game
         if not game:
@@ -2921,48 +3116,13 @@ class ConquerGameScreen(GameScreen):
             return self._filter_conquer_tactics_by_displayed_step(
                 list(getattr(game, 'conquer_tactics', []) or []))
 
-        cache_key = (
-            'tactics',
-            game_id,
-            player_id,
-            getattr(game, '_game_data_version', 0),
-            getattr(game, 'battle_turn_player_id', None),
-            getattr(game, 'battle_round', None),
-        )
-        if cache_key == getattr(self, '_conquer_tactic_cache_key', None):
-            return self._filter_conquer_tactics_by_displayed_step(
-                list(getattr(self, '_conquer_tactic_cache', []) or []))
-        try:
-            result = game_service.get_battle_state(game_id, player_id)
-            tactics = result.get('player_tactics') or result.get('player_moves') or []
-            opponent_tactics = result.get('opponent_tactics') or result.get('opponent_moves') or []
-            if 'battle_skipped_rounds' in result:
-                try:
-                    game.battle_skipped_rounds = result.get('battle_skipped_rounds') or {}
-                except Exception:
-                    pass
-            self._conquer_resolution_step_server = int(
-                result.get('conquer_resolution_step') or 0)
-            # If the server reports the game as already finished, route to
-            # the shared result dialogue immediately so reconnecting players
-            # see the outcome instead of an empty/stale battle screen.
-            if result.get('conquer_result') and not getattr(
-                    self.state.game, '_conquer_result_dialogue_shown', False):
-                try:
-                    self._handle_conquer_result_response(result)
-                except Exception:
-                    pass
-        except Exception:
-            tactics = list(getattr(self, '_conquer_tactic_cache', []) or [])
-            opponent_tactics = list(getattr(self, '_conquer_opponent_tactic_cache', []) or [])
-        self._conquer_tactic_cache_key = cache_key
-        self._conquer_tactic_cache = [dict(move) for move in tactics]
-        self._conquer_opponent_tactic_cache_key = cache_key
-        self._conquer_opponent_tactic_cache = [
-            dict(move) for move in opponent_tactics if isinstance(move, dict)
-        ]
+        self._seed_battle_state_cache_from_game()
+        self._request_battle_state_poll(force=False)
+        cache_key = self._battle_state_cache_key()
+        if cache_key != getattr(self, '_conquer_tactic_cache_key', None):
+            self._request_battle_state_poll(force=True)
         return self._filter_conquer_tactics_by_displayed_step(
-            list(self._conquer_tactic_cache))
+            list(getattr(self, '_conquer_tactic_cache', []) or []))
 
     def _displayed_conquer_step(self):
         """Resolution step the client is currently displaying.
@@ -3044,14 +3204,7 @@ class ConquerGameScreen(GameScreen):
                 if isinstance(move, dict)
             ]
 
-        cache_key = (
-            'tactics',
-            game_id,
-            player_id,
-            getattr(game, '_game_data_version', 0),
-            getattr(game, 'battle_turn_player_id', None),
-            getattr(game, 'battle_round', None),
-        )
+        cache_key = self._battle_state_cache_key()
         if cache_key != getattr(self, '_conquer_opponent_tactic_cache_key', None):
             self._current_conquer_tactics()
         return list(getattr(self, '_conquer_opponent_tactic_cache', []) or [])
@@ -6040,6 +6193,9 @@ class ConquerGameScreen(GameScreen):
 
         if not self.state.game:
             return
+
+        self._drain_battle_state_poller()
+        self._request_battle_state_poll(force=False)
 
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:

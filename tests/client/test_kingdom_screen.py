@@ -757,3 +757,57 @@ class TestKingdomInfoBarHeader:
 
         assert any(text == 'Collect All: 1 main' for text, _ in captured_nav)
         assert screen._collect_all_enabled is True
+
+
+def test_kingdom_map_uses_async_get_poller_on_web_path(monkeypatch):
+    from game.screens import kingdom_screen as module
+
+    created = {}
+
+    class _Poller:
+        def __init__(self, func, **kwargs):
+            created['func'] = func
+            created['kwargs'] = kwargs
+            self.busy = False
+
+        def poll(self):
+            created['polled'] = True
+
+    monkeypatch.setattr(module, 'BackgroundPoller', _Poller)
+    screen = module.KingdomScreen.__new__(module.KingdomScreen)
+    screen._map_poller = None
+    screen._hex_map = None
+    screen._loading = False
+    screen._error = 'old'
+
+    module.KingdomScreen._load_map(screen)
+
+    assert created['kwargs']['async_get_url'].endswith('/kingdom/map')
+    assert callable(created['kwargs']['async_transform'])
+    assert created['polled'] is True
+
+
+def test_kingdom_activity_uses_parallel_async_requests(monkeypatch):
+    from game.screens import kingdom_screen as module
+
+    created = {}
+
+    class _Poller:
+        def __init__(self, func, **kwargs):
+            created['func'] = func
+            created['kwargs'] = kwargs
+            self.busy = False
+
+        def poll(self):
+            created['polled'] = True
+
+    monkeypatch.setattr(module, 'BackgroundPoller', _Poller)
+    screen = module.KingdomScreen.__new__(module.KingdomScreen)
+    screen._activity_poller = None
+
+    module.KingdomScreen._load_activity(screen)
+
+    keys = [spec['key'] for spec in created['kwargs']['async_requests']]
+    assert keys == ['notifications', 'attack_history', 'conversations']
+    assert callable(created['kwargs']['async_transform'])
+    assert created['polled'] is True

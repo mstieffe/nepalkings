@@ -333,6 +333,10 @@ class TestDefenceConfirmData:
         import pygame
         state = _make_state()
         screen = DefenceScreen(state)
+        screen._land = {
+            'tier': 2,
+            'kingdom_bonuses': {'loot_chance': 0.15},
+        }
         screen._config = _make_config(
             figures=[{
                 'id': 1,
@@ -359,14 +363,18 @@ class TestDefenceConfirmData:
         with patch('game.components.cards.card_img.CardImg', _FakeCardImg):
             msg, image_groups, after_msg = screen._build_confirm_data()
 
-        assert 'saving this defence' in msg
+        assert 'committed to this defence' in msg
         assert [group['key'] for group in image_groups] == ['loot_risk']
         group = image_groups[0]
         assert group['icon'] == 'lock'
         assert group['badge_icon'] == 'lock'
         assert len(group['items']) == 4
-        assert 'attacker may loot cards' in group['description']
-        assert 'No defence cards are consumed automatically' in after_msg
+        assert 'Locked now:' in group['description']
+        assert 'Loot risk:' in group['description']
+        assert 'attacker loots 3 of these 4 cards' in group['description']
+        assert 'Tier 2 quota' in group['description']
+        assert 'does not increase losses from these defence cards' in group['description']
+        assert 'does not consume cards by itself' in after_msg
 
 
 class TestPreludeSpellIcons:

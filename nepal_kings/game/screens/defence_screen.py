@@ -9,6 +9,7 @@ from game.screens._menu_base import MenuScreenMixin
 from game.screens.build_figure_screen import BuildFigureScreen
 from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.prelude_spell_screen import PreludeSpellScreen
+from game.screens.conquer_loot_summary import build_loot_risk_description
 from game.core.card_source import CollectionCardSource
 from game.core.figure_buffs import apply_buffs_allies_to_icon_map
 from game.core.kingdom_game_proxy import KingdomGameProxy
@@ -2004,11 +2005,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
         from game.components.cards.card_img import CardImg
 
         at_risk_cards = []
+        at_risk_card_specs = []
 
         def add_card(target, suit, rank):
             if suit and rank:
                 ci = CardImg(self.window, suit, rank)
                 target.append(ci.front_img)
+                at_risk_card_specs.append({'suit': suit, 'rank': rank})
 
         # Every committed card is locked and at loot risk; conquer no longer
         # consumes non-looted cards when a land falls.
@@ -2039,21 +2042,22 @@ class DefenceScreen(MenuScreenMixin, Screen):
         if at_risk_cards:
             image_groups.append({
                 'key': 'loot_risk',
-                'title': 'Locked and at loot risk',
-                'description': 'All committed defence cards stay locked while the land is yours. If the land falls, the attacker may loot cards based on land tier; every unlooted card returns.',
+                'title': 'Committed cards',
+                'description': build_loot_risk_description(
+                    self._land or {}, at_risk_card_specs, mode='defence'),
                 'icon': 'lock',
                 'badge_icon': 'lock',
                 'items': at_risk_cards,
             })
 
-        msg = 'Review the locked cards and loot risk before saving this defence.'
+        msg = 'Review the cards committed to this defence.'
         if not image_groups:
             msg = 'No cards are used in this configuration.'
 
         after_msg_parts = []
         if at_risk_cards:
             after_msg_parts.append(
-                'No defence cards are consumed automatically. If this defence loses, only cards selected as loot are lost; all others return.'
+                'Saving the defence does not consume cards by itself. Only cards selected as loot after the land falls are lost.'
             )
         after_msg = ' '.join(after_msg_parts) if after_msg_parts else None
 

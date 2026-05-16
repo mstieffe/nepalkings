@@ -3,6 +3,7 @@
 """Tests for kingdom conquer endpoints (Phase 11)."""
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from models import db as _db, User, Land, CollectionCard, LandConfig, LandConfigFigure, LandConfigBattleMove
 
 
@@ -44,6 +45,26 @@ class TestGetConquerConfig:
         assert data['config']['config_type'] == 'conquer'
         assert data['config']['figures'] == []
         assert data['config']['battle_moves'] == []
+        assert data['conquer_cooldown_remaining'] == 0
+        assert data['maps_available'] == int(u1.maps or 0)
+        assert data['land_conquer_cooldown_remaining'] == 0
+
+    def test_config_returns_cooldown_and_maps(self, client, db, two_users,
+                                              auth_headers_user1):
+        u1, u2 = two_users
+        u1.maps = 2
+        u1.last_conquer_at = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=10)
+        )
+        land = _add_land(db, owner_id=u2.id)
+        db.session.commit()
+
+        rv = client.get(f'/kingdom/conquer/config?land_id={land.id}',
+                        headers=auth_headers_user1)
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['maps_available'] == 2
+        assert data['conquer_cooldown_remaining'] > 0
 
     def test_returns_existing_config(self, client, db, two_users, auth_headers_user1):
         u1, u2 = two_users
