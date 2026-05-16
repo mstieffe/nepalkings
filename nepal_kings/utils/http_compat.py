@@ -68,12 +68,23 @@ if _sys.platform == "emscripten":
     class _Response:
         """Mimics ``requests.Response``."""
 
+        __slots__ = ('status_code', 'text', '_json_cache', '_json_parsed')
+
         def __init__(self, status_code, text):
             self.status_code = status_code
             self.text = text
+            self._json_cache = None
+            self._json_parsed = False
 
         def json(self):
-            return _json.loads(self.text) if self.text else {}
+            # Cache parsed JSON — multiple call sites (poller phase-1
+            # transition + final assembly) used to re-parse the same body,
+            # which is non-trivial on pygbag/emscripten for large figure
+            # payloads.
+            if not self._json_parsed:
+                self._json_cache = _json.loads(self.text) if self.text else {}
+                self._json_parsed = True
+            return self._json_cache
 
         def raise_for_status(self):
             if self.status_code >= 400:

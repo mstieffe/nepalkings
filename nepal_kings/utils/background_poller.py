@@ -303,6 +303,25 @@ class BackgroundPoller:
         if not game_resp or game_resp.status_code != 200:
             return None
 
+        # ── Fast short-circuit ──────────────────────────────────────────
+        # If every response body matches the previously-applied poll, skip
+        # parsing + apply entirely. apply_server_data(None) is a no-op, so
+        # this avoids the per-2s render stutter when nothing on the server
+        # actually changed (the common case for the human player while
+        # waiting for the opponent to move).
+        try:
+            sig = tuple(
+                (key, getattr(r.get(key), 'text', None) or '')
+                for key in sorted(r.keys())
+            )
+        except Exception:
+            sig = None
+        if sig is not None and sig == getattr(self, '_prev_response_sig', None):
+            self._async_responses = {}
+            return None
+        if sig is not None:
+            self._prev_response_sig = sig
+
         game_dict = game_resp.json().get('game')
         if not game_dict:
             return None
