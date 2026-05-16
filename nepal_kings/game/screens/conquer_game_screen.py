@@ -6322,6 +6322,15 @@ class ConquerGameScreen(GameScreen):
         subscreen = self.subscreens.get(self.state.subscreen)
         if active_step is not None and not active_step.interactive:
             if not (subscreen and getattr(subscreen, 'dialogue_box', None)):
+                can_inspect_field = (
+                    self.state.subscreen == 'field'
+                    and subscreen is not None
+                    and callable(getattr(
+                        subscreen, '_is_tactics_hand_battle_field_view_only', None))
+                    and subscreen._is_tactics_hand_battle_field_view_only()
+                )
+                if can_inspect_field:
+                    subscreen.handle_events(events)
                 return
 
         # Field-required actions are handled by FieldScreen, but the player may

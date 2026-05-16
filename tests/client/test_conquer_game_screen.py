@@ -89,6 +89,72 @@ def test_conquer_support_link_targets_marker_midpoint():
     assert opp_endpoint[0] < 200
 
 
+def test_field_icon_click_refreshes_hover_from_event_pos():
+    from game.screens.field_screen import FieldScreen
+
+    screen = FieldScreen.__new__(FieldScreen)
+    opened = []
+    icon = SimpleNamespace(
+        hovered=False,
+        clicked=False,
+        is_visible=True,
+        rect_frame=pygame.Rect(40, 40, 30, 30),
+        figure=SimpleNamespace(id=5, name='Gorkha Soldier'),
+    )
+    screen.figure_icons = [icon]
+    screen.figure_detail_box = None
+    screen.dialogue_box = None
+    screen.scroll_text_list_shifter = None
+    screen._close_rect = pygame.Rect(999, 999, 1, 1)
+    screen._on_done = None
+    screen._sync_field_compartments_layout = lambda: None
+    screen._is_tactics_hand_battle_field_view_only = lambda: True
+    screen._force_immediate_redraw = lambda: None
+    screen._open_tactics_hand_battle_detail = lambda clicked: opened.append(clicked)
+
+    event = pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=icon.rect_frame.center)
+
+    FieldScreen.handle_events(screen, [event])
+
+    assert opened == [icon]
+    assert icon.clicked is True
+
+
+def test_passive_timeline_still_allows_field_inspection_clicks():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    handled = []
+    field = SimpleNamespace(
+        dialogue_box=None,
+        _is_tactics_hand_battle_field_view_only=lambda: True,
+        handle_events=lambda events: handled.extend(events),
+    )
+    screen.state = SimpleNamespace(
+        game=SimpleNamespace(mode='conquer'),
+        subscreen='field',
+    )
+    screen.subscreens = {'field': field}
+    screen.dialogue_box = None
+    screen.need_to_respond_to_spell = False
+    screen.waiting_for_counter_response = False
+    screen._ensure_conquer_screen_game = lambda: True
+    screen._handle_conquer_command_events = lambda events: False
+    screen._handle_collapsed_header_events = lambda events: False
+    screen._is_tactics_hand_game = lambda: True
+    screen._round_ledger = SimpleNamespace(handle_event=lambda event: None)
+    screen._tactics_rail = SimpleNamespace(handle_event=lambda event: False)
+    screen._conquer_nav_buttons = lambda: []
+    screen._normalize_conquer_subscreen = lambda: None
+    screen.active_conquer_timeline_step = lambda: SimpleNamespace(interactive=False)
+
+    event = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(50, 50))
+
+    ConquerGameScreen.handle_events(screen, [event])
+
+    assert handled == [event]
+
+
 def test_conquer_explosion_missing_target_gets_ghost_rect_and_animation():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)

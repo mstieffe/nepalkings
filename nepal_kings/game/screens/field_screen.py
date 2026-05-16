@@ -172,14 +172,20 @@ class FieldScreen(SubScreen):
             self._last_conquer_spell_replay_key = current_spell_replay_key
             self.load_figures()
 
-    def update_hover_state(self):
-        """Update hover state for figure icons. Called only on mouse motion."""
+    def update_hover_state(self, pos=None):
+        """Update hover state for figure icons from the current cursor or event pos."""
         self._sync_field_compartments_layout()
         # Update hover state: only one figure can be hovered at a time
         # Check in reverse order (topmost figures get priority)
         hovered_icon = None
         for icon in reversed(self.figure_icons):
-            if icon.collide() and hovered_icon is None:
+            if pos is not None and hasattr(icon, 'rect_frame'):
+                hit = icon.rect_frame.collidepoint(pos)
+            elif callable(getattr(icon, 'collide', None)):
+                hit = icon.collide()
+            else:
+                hit = bool(getattr(icon, 'hovered', False))
+            if hit and hovered_icon is None:
                 icon.hovered = True
                 hovered_icon = icon
             else:
@@ -788,11 +794,13 @@ class FieldScreen(SubScreen):
         """Handle events for interacting with the field."""
         super().handle_events(events)
         
-        # Update hover state only on mouse motion to improve performance
+        # Update hover state on pointer movement and click/touch events. Web
+        # clients can deliver a click without a preceding motion event, and a
+        # background figure refresh may otherwise leave stale hover state.
         for event in events:
-            if event.type == pygame.MOUSEMOTION:
-                self.update_hover_state()
-                break
+            if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN,
+                              pygame.MOUSEBUTTONUP):
+                self.update_hover_state(getattr(event, 'pos', None))
         
         # Handle dialogue box events first (before target selection mode check)
         # This ensures auto-closing dialogues work even during target selection

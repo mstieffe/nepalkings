@@ -341,7 +341,7 @@ class Game:
         self.chat_messages = server_data.get('chats', self.chat_messages)
         self.cached_active_spells = server_data.get('active_spells', self.cached_active_spells)
         new_figures = server_data.get('figures', self.cached_figures_data)
-        if new_figures is not self.cached_figures_data:
+        if new_figures != self.cached_figures_data:
             self.cached_figures_data = new_figures
             self._figures_data_version += 1
 

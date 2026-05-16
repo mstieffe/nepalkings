@@ -66,6 +66,55 @@ def _mk_user_dict():
 
 
 class TestGameBattleStateTransitions:
+    def test_apply_server_data_does_not_bump_figure_version_for_equal_payload(self):
+        from game.core.game import Game
+
+        game = Game(_mk_game_dict(), _mk_user_dict(), lightweight=True)
+        figures = {
+            113: [{'id': 501, 'name': 'Gorkha Soldier', 'cards': []}],
+            114: [{'id': 601, 'name': 'Hidden Defender', 'cards': []}],
+        }
+        game.cached_figures_data = figures
+        game._figures_data_version = 7
+
+        game.apply_server_data({
+            'game': _mk_game_dict(),
+            'logs': [],
+            'chats': [],
+            'active_spells': [],
+            'figures': {
+                113: [{'id': 501, 'name': 'Gorkha Soldier', 'cards': []}],
+                114: [{'id': 601, 'name': 'Hidden Defender', 'cards': []}],
+            },
+        })
+
+        assert game._figures_data_version == 7
+        assert game.cached_figures_data is figures
+
+    def test_apply_server_data_bumps_figure_version_for_changed_payload(self):
+        from game.core.game import Game
+
+        game = Game(_mk_game_dict(), _mk_user_dict(), lightweight=True)
+        game.cached_figures_data = {
+            113: [{'id': 501, 'name': 'Gorkha Soldier', 'cards': []}],
+            114: [],
+        }
+        game._figures_data_version = 7
+
+        game.apply_server_data({
+            'game': _mk_game_dict(),
+            'logs': [],
+            'chats': [],
+            'active_spells': [],
+            'figures': {
+                113: [{'id': 501, 'name': 'Gorkha Soldier', 'cards': []}],
+                114: [{'id': 601, 'name': 'Hidden Defender', 'cards': []}],
+            },
+        })
+
+        assert game._figures_data_version == 8
+        assert game.cached_figures_data[114][0]['id'] == 601
+
     def test_battle_skipped_rounds_follow_server_snapshots(self):
         from game.core.game import Game
 
