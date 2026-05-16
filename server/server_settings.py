@@ -61,7 +61,7 @@ DEFAULT_GAME_LIMIT = DEFAULT_GAME_STAKE  # Default point threshold to win
 MAX_GAME_LIMIT = 100
 
 # New player starting gold
-INITIAL_GOLD = 1000
+INITIAL_GOLD = 2000
 
 # Auth token settings: TOKEN_EXPIRY_SECONDS now lives in config/security.py
 # and is re-exported above. Set a fixed SECRET_KEY env var in production
