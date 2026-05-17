@@ -1055,7 +1055,7 @@ def test_active_tactics_hand_battle_skips_broad_game_poll():
     game = SimpleNamespace(
         mode='conquer',
         conquer_move_model='tactics_hand',
-        battle_confirmed=True,
+        battle_confirmed=False,
         battle_turn_player_id=1,
         battle_round=1,
         last_battle_result=None,
@@ -1068,6 +1068,52 @@ def test_active_tactics_hand_battle_skips_broad_game_poll():
     ConquerGameScreen.update(screen, [])
 
     assert calls == []
+
+
+def test_lane_context_fast_key_tracks_tactic_cache_payload():
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        game_id=7,
+        player_id=1,
+        _game_data_version=1,
+        _figures_data_version=1,
+        conquer_tactics=[],
+        battle_turn_player_id=1,
+        battle_round=1,
+        last_battle_result=None,
+        advancing_player_id=1,
+        advancing_figure_id=10,
+        advancing_figure_id_2=None,
+        defending_figure_id=20,
+        defending_figure_id_2=None,
+        land_suit_bonus_suit=None,
+        land_suit_bonus_value=None,
+        conquer_resolution_step=0,
+    )
+    ConquerGameScreen, screen = _base_conquer_screen(game)
+    screen.subscreens['field'] = SimpleNamespace(figures=[])
+    screen._conquer_tactic_cache_key = ('tactics', 7, 1, 1, 1, False, 0)
+    screen._conquer_opponent_tactic_cache_key = screen._conquer_tactic_cache_key
+    screen._conquer_tactic_cache = [
+        {'id': 1, 'player_id': 1, 'status': 'played', 'played_round': 0},
+    ]
+    screen._conquer_opponent_tactic_cache = []
+
+    first = ConquerGameScreen._conquer_lane_context_fast_key(screen)
+
+    screen._conquer_tactic_cache = [
+        {
+            'id': 1,
+            'player_id': 1,
+            'status': 'played',
+            'played_round': 0,
+            'call_figure_id': 30,
+        },
+    ]
+    second = ConquerGameScreen._conquer_lane_context_fast_key(screen)
+
+    assert second != first
 
 
 def test_conquer_result_state_still_allows_broad_game_poll():

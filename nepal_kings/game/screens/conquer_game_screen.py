@@ -404,7 +404,7 @@ class ConquerGameScreen(GameScreen):
             return False
         if getattr(game, 'last_battle_result', None) or getattr(game, 'game_over', False):
             return False
-        return bool(getattr(game, 'battle_confirmed', False)) and self._is_battle_phase_active()
+        return self._is_battle_phase_active()
 
     def _conquer_nav_buttons(self):
         if self._is_tactics_hand_game():
@@ -3664,8 +3664,34 @@ class ConquerGameScreen(GameScreen):
             getattr(game, 'land_suit_bonus_value', None),
             getattr(self, '_conquer_tactic_cache_key', None),
             getattr(self, '_conquer_opponent_tactic_cache_key', None),
+            self._conquer_tactic_cache_signature(
+                getattr(self, '_conquer_tactic_cache', None)),
+            self._conquer_tactic_cache_signature(
+                getattr(self, '_conquer_opponent_tactic_cache', None)),
             displayed_step,
         )
+
+    @staticmethod
+    def _conquer_tactic_cache_signature(tactics):
+        rows = []
+        for tactic in tactics or []:
+            if not isinstance(tactic, dict):
+                continue
+            rows.append((
+                tactic.get('id'),
+                tactic.get('player_id'),
+                tactic.get('status'),
+                tactic.get('played_round'),
+                tactic.get('call_figure_id'),
+                tactic.get('family_name'),
+                tactic.get('suit'),
+                tactic.get('suit_b'),
+                tactic.get('rank'),
+                tactic.get('value'),
+                tactic.get('revealed_step_index'),
+                tactic.get('discarded_step_index'),
+            ))
+        return tuple(rows)
 
     def _conquer_lane_context(self):
         fast_key = self._conquer_lane_context_fast_key()
