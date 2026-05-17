@@ -961,6 +961,72 @@ def test_field_support_ids_use_parent_cached_lane_context():
     assert calls == [False, True]
 
 
+def test_field_support_visibility_syncs_cached_icons_without_reload():
+    from game.screens.field_screen import FieldScreen
+
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=1,
+        both_battle_moves_ready=False,
+        last_battle_result=None,
+        game_id=7,
+        player_id=1,
+        _figures_data_version=1,
+    )
+    support_ids = {'20'}
+    parent = SimpleNamespace(
+        request_conquer_figure_confirmation=lambda *args, **kwargs: None,
+        _conquer_tactic_cache_key=('round', 1),
+        _conquer_opponent_tactic_cache_key=('round', 1),
+        conquer_active_support_figure_ids=lambda opponent_only=False: set(support_ids),
+    )
+    figure = SimpleNamespace(id=20, player_id=2, name='Support Soldier')
+    icon = SimpleNamespace(figure=figure, is_visible=False)
+    field = FieldScreen.__new__(FieldScreen)
+    field.game = game
+    field.state = SimpleNamespace(parent_screen=parent)
+    field.figure_icons = [icon]
+    field.cached_all_seeing_eye_status = False
+    field._last_tactics_hand_support_visibility_key = ()
+
+    FieldScreen._sync_tactics_hand_support_visibility(field)
+
+    assert icon.is_visible is True
+
+    support_ids.clear()
+    parent._conquer_tactic_cache_key = ('round', 2)
+    parent._conquer_opponent_tactic_cache_key = ('round', 2)
+    FieldScreen._sync_tactics_hand_support_visibility(field)
+
+    assert icon.is_visible is False
+
+
+def test_conquer_dim_flags_compare_normalized_figure_ids():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    support_icon = SimpleNamespace(
+        figure=SimpleNamespace(id=20),
+        conquer_battle_dimmed=True,
+    )
+    idle_icon = SimpleNamespace(
+        figure=SimpleNamespace(id=30),
+        conquer_battle_dimmed=False,
+    )
+    screen.subscreens = {
+        'field': SimpleNamespace(figure_icons=[support_icon, idle_icon]),
+    }
+    screen._is_battle_phase_active = lambda: True
+    screen._conquer_battle_involved_figure_ids = lambda: {'20'}
+
+    ConquerGameScreen._update_conquer_battle_dim_flags(screen)
+
+    assert support_icon.conquer_battle_dimmed is False
+    assert idle_icon.conquer_battle_dimmed is True
+
+
 class TestGameplayScreenRouting:
     def test_conquer_games_route_to_conquer_game_screen(self):
         from game.core.screen_routing import gameplay_screen_for

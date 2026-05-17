@@ -1028,7 +1028,8 @@ def test_conquer_duel_lane_uses_hovered_tactic_as_preview(monkeypatch):
     captured = {'diff': None}
 
     def capture_diff(_self, _rect, _player_figures, _opponent_figures,
-                     player_move=None, opponent_move=None, round_idx=0):
+                     player_move=None, opponent_move=None, round_idx=0,
+                     **_kwargs):
         captured['diff'] = (player_move, opponent_move, round_idx)
 
     monkeypatch.setattr(ConquerGameScreen, '_draw_conquer_lane_diff', capture_diff)

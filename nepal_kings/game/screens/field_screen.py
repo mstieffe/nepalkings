@@ -46,6 +46,7 @@ class FieldScreen(SubScreen):
         self._last_conquer_visual_ghost_key = ()
         self._loaded_conquer_visual_ghost_key = ()
         self._last_conquer_spell_replay_key = ()
+        self._last_tactics_hand_support_visibility_key = ()
         # Cache of (icon, x, y) tuples for the last full figure draw — used
         # by the conquer game screen to re-blit figures on top of the duel
         # lane so figure info boxes stay in the foreground.
@@ -149,6 +150,7 @@ class FieldScreen(SubScreen):
         self._last_conquer_visual_ghost_key = ()
         self._loaded_conquer_visual_ghost_key = ()
         self._last_conquer_spell_replay_key = ()
+        self._last_tactics_hand_support_visibility_key = ()
         self.dialogue_box = None
         self._reset_defender_selectable()
         logger.debug("[FieldScreen] State reset for game switch")
@@ -164,6 +166,7 @@ class FieldScreen(SubScreen):
         current_version = getattr(game, '_figures_data_version', 0)
         current_ghost_key = self._conquer_visual_ghost_key()
         current_spell_replay_key = self._conquer_spell_replay_visibility_key()
+        figures_reloaded = False
         if (current_version != self._last_figures_version
                 or current_ghost_key != self._last_conquer_visual_ghost_key
                 or current_spell_replay_key != self._last_conquer_spell_replay_key):
@@ -171,6 +174,8 @@ class FieldScreen(SubScreen):
             self._last_conquer_visual_ghost_key = current_ghost_key
             self._last_conquer_spell_replay_key = current_spell_replay_key
             self.load_figures()
+            figures_reloaded = True
+        self._sync_tactics_hand_support_visibility(force=figures_reloaded)
 
     def update_hover_state(self, pos=None):
         """Update hover state for figure icons from the current cursor or event pos."""
@@ -720,33 +725,19 @@ class FieldScreen(SubScreen):
             self.cached_all_seeing_eye_status = self.game.has_active_all_seeing_eye()
             self.last_all_seeing_eye_check = current_time
         
-        player_has_all_seeing_eye = self.cached_all_seeing_eye_status
         conquer_revealed_support_ids = self._tactics_hand_revealed_support_figure_ids()
 
         for category, compartments in self.categorized_figures.items():
             for field_type, figures in compartments.items():
                 for figure in figures:
                     figure_is_ghost = self._is_conquer_visual_ghost_figure(figure)
-                    figure_is_snapshot = self._is_conquer_timeline_snapshot_figure(figure)
                     # Determine which figures and resources to use based on category
                     figures_list = all_opponent_figures if category == 'opponent' else all_player_figures
                     resources = None if figure_is_ghost else (
                         opponent_resources_data if category == 'opponent' else resources_data)
                     
-                    # Determine visibility: 
-                    # - Own figures (category == 'self') are always visible
-                    # - Opponent figures are visible if:
-                    #   * They are Maharajas (always visible)
-                    #   * Current player cast All Seeing Eye (reveals opponent figures)
-                    force_visible_snapshot = (
-                        figure_is_snapshot
-                        and bool(getattr(figure, '_conquer_force_visible', False))
-                    )
-                    is_visible = (figure_is_ghost or force_visible_snapshot or category == 'self' or 
-                                  figure.name in ['Himalaya Maharaja', 'Djungle Maharaja'] or
-                                  (category == 'opponent' and player_has_all_seeing_eye) or
-                                  (category == 'opponent'
-                                   and getattr(figure, 'id', None) in conquer_revealed_support_ids))
+                    is_visible = self._tactics_hand_figure_visible(
+                        figure, category, conquer_revealed_support_ids)
                     
                     if figure.id not in self.icon_cache:
                         self.icon_cache[figure.id] = FieldFigureIcon(
@@ -1843,6 +1834,66 @@ class FieldScreen(SubScreen):
                 'distance_attack')
             if getattr(figure, key, False)
         }
+
+    def _tactics_hand_support_visibility_key(self):
+        game = self.game
+        if not game or getattr(game, 'mode', 'duel') != 'conquer':
+            return ()
+        parent = self._conquer_parent()
+        return (
+            getattr(game, 'game_id', None),
+            getattr(game, 'player_id', None),
+            getattr(game, '_figures_data_version', 0),
+            getattr(game, 'battle_turn_player_id', None),
+            getattr(game, 'battle_round', None),
+            bool(getattr(game, 'last_battle_result', None)),
+            bool(getattr(game, 'both_battle_moves_ready', False)),
+            getattr(game, 'advancing_player_id', None),
+            getattr(game, 'advancing_figure_id', None),
+            getattr(game, 'advancing_figure_id_2', None),
+            getattr(game, 'defending_figure_id', None),
+            getattr(game, 'defending_figure_id_2', None),
+            getattr(game, 'land_suit_bonus_suit', None),
+            getattr(game, 'land_suit_bonus_value', None),
+            getattr(parent, '_conquer_tactic_cache_key', None),
+            getattr(parent, '_conquer_opponent_tactic_cache_key', None),
+            bool(getattr(self, 'cached_all_seeing_eye_status', False)),
+        )
+
+    def _tactics_hand_figure_visible(self, figure, category, support_ids):
+        figure_is_ghost = self._is_conquer_visual_ghost_figure(figure)
+        figure_is_snapshot = self._is_conquer_timeline_snapshot_figure(figure)
+        force_visible_snapshot = (
+            figure_is_snapshot
+            and bool(getattr(figure, '_conquer_force_visible', False))
+        )
+        figure_id = getattr(figure, 'id', None)
+        support_id_keys = {str(fig_id) for fig_id in (support_ids or set())}
+        is_revealed_support = (
+            figure_id is not None and str(figure_id) in support_id_keys
+        )
+        return (figure_is_ghost or force_visible_snapshot or category == 'self' or
+                getattr(figure, 'name', None) in ['Himalaya Maharaja', 'Djungle Maharaja'] or
+                (category == 'opponent' and self.cached_all_seeing_eye_status) or
+                (category == 'opponent' and is_revealed_support))
+
+    def _sync_tactics_hand_support_visibility(self, *, force=False):
+        if not self._uses_unified_conquer_layout():
+            self._last_tactics_hand_support_visibility_key = ()
+            return
+        key = self._tactics_hand_support_visibility_key()
+        if not force and key == self._last_tactics_hand_support_visibility_key:
+            return
+        self._last_tactics_hand_support_visibility_key = key
+        support_ids = self._tactics_hand_revealed_support_figure_ids()
+        player_id = getattr(self.game, 'player_id', None) if self.game else None
+        for icon in getattr(self, 'figure_icons', []) or []:
+            figure = getattr(icon, 'figure', None)
+            if figure is None:
+                continue
+            category = 'self' if getattr(figure, 'player_id', None) == player_id else 'opponent'
+            icon.is_visible = self._tactics_hand_figure_visible(
+                figure, category, support_ids)
 
     def _conquer_battle_context_kind(self, figure):
         if not self._is_tactics_hand_battle_field_view_only() or figure is None:

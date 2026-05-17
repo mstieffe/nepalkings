@@ -3884,6 +3884,7 @@ class ConquerGameScreen(GameScreen):
         involved = self._conquer_battle_involved_figure_ids()
         field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
         icons = getattr(field, 'figure_icons', []) or []
+        involved_keys = {str(fig_id) for fig_id in involved if fig_id is not None}
         # Defensive guard against the "all-grey flicker": when the poller
         # just applied a new game state, ``advancing_figure_id`` /
         # ``defending_figure_id`` may already point at the new battle pair
@@ -3894,17 +3895,18 @@ class ConquerGameScreen(GameScreen):
         # producing a visible all-grey flash every poll cycle. If the
         # involved set is non-empty but none of the current icons match,
         # leave the existing dim flags alone for this frame.
-        if involved:
+        if involved_keys:
             current_ids = {getattr(getattr(icon, 'figure', None), 'id', None)
                            for icon in icons}
             current_ids.discard(None)
-            if current_ids and involved.isdisjoint(current_ids):
+            current_keys = {str(fig_id) for fig_id in current_ids}
+            if current_keys and involved_keys.isdisjoint(current_keys):
                 return
         for icon in icons:
             fig = getattr(icon, 'figure', None)
             fig_id = getattr(fig, 'id', None)
             icon.conquer_battle_dimmed = bool(
-                fig_id is not None and fig_id not in involved)
+                fig_id is not None and str(fig_id) not in involved_keys)
 
     def _apply_conquer_support_hover_visibility(self):
         """Force every opponent figure backing the currently-hovered
