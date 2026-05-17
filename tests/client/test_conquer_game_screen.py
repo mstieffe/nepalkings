@@ -1061,6 +1061,33 @@ class TestConquerGameShell:
         assert [move['id'] for move in opponent_tactics] == [2]
         assert opponent_tactics[0]['played_round'] is None
 
+    def test_lane_context_reuses_support_graph_for_same_snapshot(self):
+        ConquerGameScreen, screen = _base_conquer_screen(SimpleNamespace(mode='conquer'))
+        screen._conquer_lane_context_cache_key = None
+        screen._conquer_lane_context_cache = None
+        screen._conquer_tactic_power_cache_key = None
+        screen._conquer_tactic_power_cache = {}
+        screen._conquer_lane_context_key = lambda: ('battle', 1)
+        screen._conquer_lane_figures = lambda: (['player_fig'], ['opp_fig'])
+        screen._conquer_lane_played_tactics = lambda: ([None, None, None], [None, None, None])
+        calls = []
+
+        def support_entries(player_figures, opponent_figures, *, is_player, played_slots=None):
+            calls.append((tuple(player_figures), tuple(opponent_figures), is_player, played_slots is not None))
+            return [{'figure': SimpleNamespace(id=1 if is_player else 2)}]
+
+        screen._conquer_lane_support_entries = support_entries
+
+        first = ConquerGameScreen._conquer_lane_context(screen)
+        second = ConquerGameScreen._conquer_lane_context(screen)
+
+        assert first is second
+        assert len(calls) == 2
+        assert calls == [
+            (('player_fig',), ('opp_fig',), True, True),
+            (('player_fig',), ('opp_fig',), False, True),
+        ]
+
     def test_conquer_subscreen_origin_is_centered_below_header(self):
         from config import settings
 

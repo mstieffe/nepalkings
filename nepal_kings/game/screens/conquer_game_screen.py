@@ -209,6 +209,10 @@ class ConquerGameScreen(GameScreen):
         self._conquer_battle_move_cache = []
         self._conquer_battle_move_icon_caches = {}
         self._conquer_battle_move_manager = None
+        self._conquer_lane_context_cache_key = None
+        self._conquer_lane_context_cache = None
+        self._conquer_tactic_power_cache_key = None
+        self._conquer_tactic_power_cache = {}
         self._conquer_move_panel_title_font = settings.get_font(
             max(10, int(settings.FS_TINY * 0.80)), bold=True)
         self._conquer_move_panel_empty_font = settings.get_font(
@@ -769,7 +773,9 @@ class ConquerGameScreen(GameScreen):
         except Exception:
             return False
         try:
-            player_slots, opponent_slots = self._conquer_lane_played_tactics()
+            context = self._conquer_lane_context()
+            player_slots = context.get('player_slots') or []
+            opponent_slots = context.get('opponent_slots') or []
         except Exception:
             return False
         if len(player_slots) < 3 or len(opponent_slots) < 3:
@@ -2285,6 +2291,10 @@ class ConquerGameScreen(GameScreen):
         self._conquer_tactic_cache = []
         self._conquer_opponent_tactic_cache_key = None
         self._conquer_opponent_tactic_cache = []
+        self._conquer_lane_context_cache_key = None
+        self._conquer_lane_context_cache = None
+        self._conquer_tactic_power_cache_key = None
+        self._conquer_tactic_power_cache = {}
         self._withdraw_dialogue_open = False
         if self.state.game and getattr(self.state.game, 'state', None) != 'finished':
             self.state.game.game_over = False
@@ -3543,6 +3553,113 @@ class ConquerGameScreen(GameScreen):
             return advancing, defending
         return defending, advancing
 
+    def _conquer_lane_context_key(self):
+        game = self.state.game
+        if not game:
+            return None
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        figures = getattr(field, 'figures', []) or []
+
+        figure_rows = []
+        for figure in figures:
+            family = getattr(figure, 'family', None)
+            figure_rows.append((
+                getattr(figure, 'id', None),
+                getattr(figure, 'player_id', None),
+                getattr(figure, 'suit', None),
+                getattr(family, 'field', None),
+                bool(getattr(figure, 'has_deficit', False)),
+                bool(getattr(figure, '_conquer_timeline_snapshot', False)),
+            ))
+
+        def tactic_rows(tactics):
+            rows = []
+            for tactic in tactics or []:
+                if not isinstance(tactic, dict):
+                    continue
+                rows.append((
+                    tactic.get('id'),
+                    tactic.get('player_id'),
+                    tactic.get('status'),
+                    tactic.get('played_round'),
+                    tactic.get('call_figure_id'),
+                    tactic.get('family_name'),
+                    tactic.get('suit'),
+                    tactic.get('suit_b'),
+                    tactic.get('rank'),
+                    tactic.get('value'),
+                ))
+            return tuple(rows)
+
+        skipped = getattr(game, 'battle_skipped_rounds', None) or {}
+        skipped_rows = tuple(sorted(
+            (str(pid), tuple(rounds or []))
+            for pid, rounds in skipped.items()
+        )) if isinstance(skipped, dict) else ()
+
+        return (
+            getattr(game, 'game_id', None),
+            getattr(game, 'player_id', None),
+            getattr(game, '_game_data_version', 0),
+            getattr(game, '_figures_data_version', 0),
+            getattr(game, 'battle_turn_player_id', None),
+            getattr(game, 'battle_round', None),
+            bool(getattr(game, 'last_battle_result', None)),
+            getattr(game, 'advancing_player_id', None),
+            getattr(game, 'advancing_figure_id', None),
+            getattr(game, 'advancing_figure_id_2', None),
+            getattr(game, 'defending_figure_id', None),
+            getattr(game, 'defending_figure_id_2', None),
+            getattr(game, 'land_suit_bonus_suit', None),
+            getattr(game, 'land_suit_bonus_value', None),
+            skipped_rows,
+            tuple(figure_rows),
+            tactic_rows(self._current_conquer_tactics()),
+            tactic_rows(self._current_conquer_opponent_tactics()),
+        )
+
+    def _conquer_lane_context(self):
+        key = self._conquer_lane_context_key()
+        if key is None:
+            return {
+                'key': None,
+                'player_figures': [],
+                'opponent_figures': [],
+                'player_slots': [None, None, None],
+                'opponent_slots': [None, None, None],
+                'player_support': [],
+                'opponent_support': [],
+            }
+        if key == getattr(self, '_conquer_lane_context_cache_key', None):
+            cached = getattr(self, '_conquer_lane_context_cache', None)
+            if cached is not None:
+                return cached
+
+        player_figures, opponent_figures = self._conquer_lane_figures()
+        player_slots, opponent_slots = self._conquer_lane_played_tactics()
+        played_slots = (player_slots, opponent_slots)
+        player_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=True,
+            played_slots=played_slots)
+        opponent_support = self._conquer_lane_support_entries(
+            player_figures, opponent_figures, is_player=False,
+            played_slots=played_slots)
+        context = {
+            'key': key,
+            'player_figures': player_figures,
+            'opponent_figures': opponent_figures,
+            'player_slots': player_slots,
+            'opponent_slots': opponent_slots,
+            'player_support': player_support,
+            'opponent_support': opponent_support,
+        }
+        self._conquer_lane_context_cache_key = key
+        self._conquer_lane_context_cache = context
+        if key != getattr(self, '_conquer_tactic_power_cache_key', None):
+            self._conquer_tactic_power_cache_key = key
+            self._conquer_tactic_power_cache = {}
+        return context
+
     @staticmethod
     def _conquer_lane_figure_power(figure):
         getter = getattr(figure, 'get_value', None)
@@ -3710,15 +3827,14 @@ class ConquerGameScreen(GameScreen):
         """
         ids = set(self._conquer_lane_battle_figure_ids())
         try:
-            player_figs, opp_figs = self._conquer_lane_figures()
+            context = self._conquer_lane_context()
         except Exception:
             return ids
         for is_player in (True, False):
-            try:
-                entries = self._conquer_lane_support_entries(
-                    player_figs, opp_figs, is_player=is_player)
-            except Exception:
-                entries = []
+            entries = (
+                context.get('player_support') if is_player
+                else context.get('opponent_support')
+            ) or []
             for entry in entries or []:
                 fig = entry.get('figure')
                 fig_id = getattr(fig, 'id', None)
@@ -3868,7 +3984,8 @@ class ConquerGameScreen(GameScreen):
             return advancing_player_id != player_id
         return advancing_player_id == player_id
 
-    def _conquer_lane_support_entries(self, player_figures, opponent_figures, *, is_player):
+    def _conquer_lane_support_entries(self, player_figures, opponent_figures, *,
+                                      is_player, played_slots=None):
         game = self.state.game
         if not game:
             return []
@@ -4014,10 +4131,13 @@ class ConquerGameScreen(GameScreen):
         # Called figures: any figure referenced as call_figure_id on this
         # side's currently-played tactics (#1 — show called figures in the
         # support lane even when they are not "boosting" the lane sum).
-        try:
-            player_slots, opponent_slots = self._conquer_lane_played_tactics()
-        except Exception:
-            player_slots, opponent_slots = ([], [])
+        if played_slots is None:
+            try:
+                player_slots, opponent_slots = self._conquer_lane_played_tactics()
+            except Exception:
+                player_slots, opponent_slots = ([], [])
+        else:
+            player_slots, opponent_slots = played_slots
         side_slots = player_slots if is_player else opponent_slots
         for idx, move in enumerate(side_slots or []):
             if not isinstance(move, dict):
@@ -4161,7 +4281,9 @@ class ConquerGameScreen(GameScreen):
         if frame:
             self.window.blit(frame, frame.get_rect(center=center))
 
-    def _draw_conquer_lane_band(self, rect, label, figures, *, is_player):
+    def _draw_conquer_lane_band(self, rect, label, figures, *, is_player,
+                                support_entries=None,
+                                enemy_support_entries=None):
         band = pygame.Rect(rect).inflate(-6, -4)
         if band.width <= 0 or band.height <= 0:
             return
@@ -4177,12 +4299,19 @@ class ConquerGameScreen(GameScreen):
             self.window.blit(dash, dash.get_rect(center=band.center))
             return
 
-        # Compute full-power for each figure on this side.
-        player_figures, opponent_figures = self._conquer_lane_figures()
-        own_support = self._conquer_lane_support_entries(
-            player_figures, opponent_figures, is_player=is_player)
-        enemy_support = self._conquer_lane_support_entries(
-            player_figures, opponent_figures, is_player=not is_player)
+        # Compute full-power for each figure on this side.  The active
+        # battle renderer passes cached support entries because constructing
+        # them walks the whole field + tactics state and is expensive on web.
+        if support_entries is None or enemy_support_entries is None:
+            player_figures, opponent_figures = self._conquer_lane_figures()
+            if support_entries is None:
+                support_entries = self._conquer_lane_support_entries(
+                    player_figures, opponent_figures, is_player=is_player)
+            if enemy_support_entries is None:
+                enemy_support_entries = self._conquer_lane_support_entries(
+                    player_figures, opponent_figures, is_player=not is_player)
+        own_support = support_entries or []
+        enemy_support = enemy_support_entries or []
         side_blocked = any(e.get('kind') == 'blocks_bonus' for e in enemy_support)
 
         name_font = settings.get_font(max(11, int(settings.FS_TINY * 0.92)), bold=True)
@@ -5195,15 +5324,30 @@ class ConquerGameScreen(GameScreen):
         if not isinstance(move, dict):
             return 0
         try:
-            player_figures, opponent_figures = self._conquer_lane_figures()
+            context = self._conquer_lane_context()
+            cache_key = (
+                context.get('key'),
+                move.get('id'),
+                move.get('status'),
+                move.get('played_round'),
+                move.get('call_figure_id'),
+                move.get('family_name'),
+                move.get('suit'),
+                move.get('suit_b'),
+                move.get('rank'),
+                move.get('value'),
+            )
+            cache = getattr(self, '_conquer_tactic_power_cache', None)
+            if isinstance(cache, dict) and cache_key in cache:
+                return cache[cache_key]
+
             player_id = getattr(self.state.game, 'player_id', None)
             move_player_id = move.get('player_id')
             is_player = move_player_id is None or move_player_id == player_id
-            support_entries = self._conquer_lane_support_entries(
-                player_figures,
-                opponent_figures,
-                is_player=is_player,
-            )
+            support_entries = (
+                context.get('player_support') if is_player
+                else context.get('opponent_support')
+            ) or []
             # For unbound Call tactics, mirror legacy ``_get_panel_display_power``:
             # show the maximum potential combined power across eligible figures.
             family_to_field = {
@@ -5214,15 +5358,23 @@ class ConquerGameScreen(GameScreen):
             if (is_player
                     and not move.get('call_figure_id')
                     and move.get('family_name') in family_to_field):
-                best = self._conquer_best_call_figure_for_tactic(move)
+                best = self._conquer_best_call_figure_for_tactic(
+                    move, context=context, support_entries=support_entries)
                 if best is not None:
-                    return self._conquer_lane_call_effective_power(
+                    value = self._conquer_lane_call_effective_power(
                         move, best, support_entries)
-            return self._conquer_lane_move_effective_power(move, support_entries)
+                    if isinstance(cache, dict):
+                        cache[cache_key] = value
+                    return value
+            value = self._conquer_lane_move_effective_power(move, support_entries)
+            if isinstance(cache, dict):
+                cache[cache_key] = value
+            return value
         except Exception:
             return self._conquer_lane_move_power(move)
 
-    def _conquer_best_call_figure_for_tactic(self, move):
+    def _conquer_best_call_figure_for_tactic(self, move, *, context=None,
+                                            support_entries=None):
         if not isinstance(move, dict) or move.get('call_figure_id') is not None:
             return None
         family_to_field = {
@@ -5233,12 +5385,10 @@ class ConquerGameScreen(GameScreen):
         target_field = family_to_field.get(move.get('family_name'))
         if not target_field:
             return None
-        player_figures, opponent_figures = self._conquer_lane_figures()
-        support_entries = self._conquer_lane_support_entries(
-            player_figures,
-            opponent_figures,
-            is_player=True,
-        )
+        if context is None:
+            context = self._conquer_lane_context()
+        if support_entries is None:
+            support_entries = context.get('player_support') or []
         battle_ids = self._conquer_lane_battle_figure_ids()
         called_ids = {
             tactic.get('call_figure_id')
@@ -5423,13 +5573,13 @@ class ConquerGameScreen(GameScreen):
 
     def _conquer_lane_figure_diff(self):
         """Player figure total power minus opponent figure total power."""
-        player_figures, opponent_figures = self._conquer_lane_figures()
+        context = self._conquer_lane_context()
+        player_figures = context.get('player_figures') or []
+        opponent_figures = context.get('opponent_figures') or []
         if not player_figures and not opponent_figures:
             return 0
-        p_support = self._conquer_lane_support_entries(
-            player_figures, opponent_figures, is_player=True)
-        o_support = self._conquer_lane_support_entries(
-            player_figures, opponent_figures, is_player=False)
+        p_support = context.get('player_support') or []
+        o_support = context.get('opponent_support') or []
         p_total = sum(self._conquer_lane_figure_full_power(
             f, support_entries=p_support, enemy_support_entries=o_support,
             is_player=True) for f in player_figures)
@@ -5903,15 +6053,18 @@ class ConquerGameScreen(GameScreen):
         draw_rows(right_area, rows_right, align_right=True)
 
     def _draw_conquer_lane_diff(self, rect, player_figures, opponent_figures,
-                                player_move=None, opponent_move=None, round_idx=0):
+                                player_move=None, opponent_move=None, round_idx=0,
+                                player_support=None, opponent_support=None):
         band = pygame.Rect(rect).inflate(-12, -4)
         if band.width <= 0 or band.height <= 0:
             return
         pygame.draw.rect(self.window, (26, 25, 28, 176), band, border_radius=8)
-        player_support = self._conquer_lane_support_entries(
-            player_figures, opponent_figures, is_player=True)
-        opponent_support = self._conquer_lane_support_entries(
-            player_figures, opponent_figures, is_player=False)
+        if player_support is None:
+            player_support = self._conquer_lane_support_entries(
+                player_figures, opponent_figures, is_player=True)
+        if opponent_support is None:
+            opponent_support = self._conquer_lane_support_entries(
+                player_figures, opponent_figures, is_player=False)
         # Figures-only totals (no tactic / called bonus). This panel shows
         # the standing power of the battle figures themselves; the bottom
         # ledger's "BATTLE TOTAL" is the authoritative figures+tactics
@@ -5980,7 +6133,9 @@ class ConquerGameScreen(GameScreen):
         # Draw an empty duel-panel skeleton during pre-battle so the
         # spatial layout stays consistent (round 10 #10).
         battle_active = self._is_battle_phase_active()
-        player_figures, opponent_figures = self._conquer_lane_figures()
+        context = self._conquer_lane_context()
+        player_figures = context.get('player_figures') or []
+        opponent_figures = context.get('opponent_figures') or []
         if not battle_active and not player_figures and not opponent_figures:
             # No fighters yet at all — still draw an empty backdrop so the
             # lane is visible.
@@ -6011,17 +6166,16 @@ class ConquerGameScreen(GameScreen):
             backdrop = backdrop_cache[1]
         self.window.blit(backdrop, lane_rect.topleft)
 
-        player_slots, opponent_slots = self._conquer_lane_played_tactics()
+        player_slots = context.get('player_slots') or [None, None, None]
+        opponent_slots = context.get('opponent_slots') or [None, None, None]
         round_idx = self._conquer_lane_focus_round(player_slots, opponent_slots)
         player_move = player_slots[round_idx]
         opponent_move = opponent_slots[round_idx]
         preview_move = self._conquer_lane_preview_move(player_slots, round_idx)
         player_display_move = player_move if player_move is not None else preview_move
         player_move_is_preview = player_move is None and preview_move is not None
-        player_support = self._conquer_lane_support_entries(
-            player_figures, opponent_figures, is_player=True)
-        opponent_support = self._conquer_lane_support_entries(
-            player_figures, opponent_figures, is_player=False)
+        player_support = context.get('player_support') or []
+        opponent_support = context.get('opponent_support') or []
         self._conquer_support_badge_rects = []
         self._conquer_support_overflow_rects = []
         self._conquer_receipt_row_rects = []
@@ -6032,7 +6186,11 @@ class ConquerGameScreen(GameScreen):
         opp_band = self._conquer_lane_center_channel_rect(lane.opp_fighter_band, lane)
         diff_inner = self._conquer_lane_center_channel_rect(lane.diff_band, lane)
 
-        self._draw_conquer_lane_band(you_band, 'YOU', player_figures, is_player=True)
+        self._draw_conquer_lane_band(
+            you_band, 'YOU', player_figures, is_player=True,
+            support_entries=player_support,
+            enemy_support_entries=opponent_support,
+        )
         opponent = getattr(self.state.game, 'opponent_name', None) or 'OPPONENT'
         opponent_font = settings.get_font(max(10, int(settings.FS_TINY * 0.78)), bold=True)
         # Allow ~10 more characters of opponent name before truncating
@@ -6044,6 +6202,8 @@ class ConquerGameScreen(GameScreen):
             self._fit_text(opponent.upper(), opponent_font, opp_label_budget),
             opponent_figures,
             is_player=False,
+            support_entries=opponent_support,
+            enemy_support_entries=player_support,
         )
         self._draw_conquer_lane_diff(
             diff_inner,
@@ -6052,6 +6212,8 @@ class ConquerGameScreen(GameScreen):
             player_move=player_display_move,
             opponent_move=opponent_move,
             round_idx=round_idx,
+            player_support=player_support,
+            opponent_support=opponent_support,
         )
 
         # Support rails are drawn after the center channel so their

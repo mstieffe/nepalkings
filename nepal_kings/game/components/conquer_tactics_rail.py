@@ -227,15 +227,36 @@ class ConquerTacticsRail:
         return ''
 
     def _power(self, move: Dict[str, Any]) -> int:
+        cache_key = (
+            move.get('id'),
+            move.get('family_name'),
+            move.get('value'),
+            move.get('suit'),
+            move.get('suit_b'),
+            move.get('rank'),
+            move.get('status'),
+            move.get('played_round'),
+            move.get('call_figure_id'),
+        )
+        cache = getattr(self, '_power_cache', None)
+        if isinstance(cache, dict) and cache_key in cache:
+            return cache[cache_key]
         display_power = getattr(self._parent, '_conquer_tactic_display_power', None)
         if callable(display_power):
             try:
-                return int(display_power(move) or 0)
+                value = int(display_power(move) or 0)
+                if isinstance(cache, dict):
+                    cache[cache_key] = value
+                return value
             except Exception:
                 pass
         if move.get('family_name') == 'Block':
-            return 0
-        return int(move.get('value') or 0)
+            value = 0
+        else:
+            value = int(move.get('value') or 0)
+        if isinstance(cache, dict):
+            cache[cache_key] = value
+        return value
 
     @staticmethod
     def _fit_text(text: str, font, max_width: int) -> str:
@@ -892,6 +913,7 @@ class ConquerTacticsRail:
 
     # ------------------------------------------------------------------ draw
     def draw(self):
+        self._power_cache = {}
         layout = self._ensure_layout()
         rail = layout.tactics_rail
         rail_rect = pygame.Rect(*rail.rect)
