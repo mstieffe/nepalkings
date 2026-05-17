@@ -1030,6 +1030,37 @@ class TestConquerGameShell:
         assert screen.state.subscreen == 'field'
         assert ConquerGameScreen._conquer_nav_buttons(screen) == []
 
+    def test_tactics_hand_getters_do_not_start_polling(self):
+        game = SimpleNamespace(
+            mode='conquer',
+            conquer_move_model='tactics_hand',
+            game_id=44,
+            player_id=10,
+            battle_turn_player_id=10,
+            battle_round=1,
+            last_battle_result=None,
+            conquer_resolution_step=0,
+            conquer_tactics=[
+                {'id': 1, 'player_id': 10, 'family_name': 'Dagger', 'status': 'available'},
+                {'id': 2, 'player_id': 20, 'family_name': 'Wall', 'status': 'available'},
+            ],
+        )
+        ConquerGameScreen, screen = _base_conquer_screen(game)
+        screen._conquer_tactic_cache = []
+        screen._conquer_opponent_tactic_cache = []
+        screen._conquer_tactic_cache_key = None
+        screen._conquer_opponent_tactic_cache_key = None
+        calls = []
+        screen._request_battle_state_poll = lambda force=False: calls.append(force)
+
+        player_tactics = ConquerGameScreen._current_conquer_tactics(screen)
+        opponent_tactics = ConquerGameScreen._current_conquer_opponent_tactics(screen)
+
+        assert calls == []
+        assert [move['id'] for move in player_tactics] == [1]
+        assert [move['id'] for move in opponent_tactics] == [2]
+        assert opponent_tactics[0]['played_round'] is None
+
     def test_conquer_subscreen_origin_is_centered_below_header(self):
         from config import settings
 

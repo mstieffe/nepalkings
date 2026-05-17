@@ -3082,7 +3082,7 @@ class ConquerGameScreen(GameScreen):
         if poller is None:
             return
         self._drain_battle_state_poller()
-        if poller.busy:
+        if getattr(poller, '_busy', False):
             return
         now = pygame.time.get_ticks()
         due = (
@@ -3117,10 +3117,15 @@ class ConquerGameScreen(GameScreen):
                 list(getattr(game, 'conquer_tactics', []) or []))
 
         self._seed_battle_state_cache_from_game()
-        self._request_battle_state_poll(force=False)
         cache_key = self._battle_state_cache_key()
         if cache_key != getattr(self, '_conquer_tactic_cache_key', None):
-            self._request_battle_state_poll(force=True)
+            tactics = [
+                dict(tactic)
+                for tactic in (getattr(game, 'conquer_tactics', []) or [])
+                if isinstance(tactic, dict) and tactic.get('player_id') == player_id
+            ]
+            if tactics:
+                return self._filter_conquer_tactics_by_displayed_step(tactics)
         return self._filter_conquer_tactics_by_displayed_step(
             list(getattr(self, '_conquer_tactic_cache', []) or []))
 
@@ -3206,7 +3211,24 @@ class ConquerGameScreen(GameScreen):
 
         cache_key = self._battle_state_cache_key()
         if cache_key != getattr(self, '_conquer_opponent_tactic_cache_key', None):
-            self._current_conquer_tactics()
+            tactics = []
+            for tactic in (getattr(game, 'conquer_tactics', []) or []):
+                if not isinstance(tactic, dict):
+                    continue
+                if tactic.get('player_id') == player_id:
+                    continue
+                if (tactic.get('status') == 'played'
+                        or tactic.get('played_round') is not None):
+                    tactics.append(dict(tactic))
+                else:
+                    tactics.append({
+                        'id': tactic.get('id'),
+                        'player_id': tactic.get('player_id'),
+                        'status': tactic.get('status'),
+                        'played_round': None,
+                    })
+            if tactics:
+                return list(tactics)
         return list(getattr(self, '_conquer_opponent_tactic_cache', []) or [])
 
     def _current_conquer_battle_moves(self):
