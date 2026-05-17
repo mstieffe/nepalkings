@@ -1312,9 +1312,16 @@ class BattleScreen(SubScreen):
         current_key = (getattr(game, 'game_id', None),
                        getattr(game, 'player_id', None))
         needs_reload = current_key[0] and current_key != self._loaded_game_key
-        # Safety: reload if we're in battle phase but have no moves loaded
+        # Safety: reload if we're in battle phase but have no moves loaded.
+        # Rate-limited to once per 2 s to avoid hammering the server with
+        # synchronous XHR every frame when the server hasn't confirmed moves
+        # yet (e.g. conquer auto-confirm timing edge case on web).
         if not needs_reload and current_key[0] and not self.player_moves and getattr(game, 'in_battle_phase', False):
-            needs_reload = True
+            _now = pygame.time.get_ticks()
+            _last = getattr(self, '_safety_reload_timer', 0)
+            if _now - _last >= 2000:
+                self._safety_reload_timer = _now
+                needs_reload = True
         if needs_reload:
             self._load_battle_data()
             # (Re)create the background poller for this game
