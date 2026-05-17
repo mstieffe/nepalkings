@@ -1271,6 +1271,36 @@ class BattleScreen(SubScreen):
                 return True
         return False
 
+    # ─────────────────── battle-state poller ───────────────────
+
+    @staticmethod
+    def _battle_state_async_transform(resp):
+        """Convert a web async-XHR response into a battle-state dict."""
+        try:
+            if resp is None:
+                return {'success': False}
+            if getattr(resp, 'status_code', 200) != 200:
+                return {'success': False}
+            return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            return {'success': False, 'message': str(exc) or 'Battle state error'}
+
+    def _build_battle_state_poller(self, game_id, player_id):
+        """Build the per-second battle-state poller.
+
+        On desktop the threaded path calls the lambda (sync requests). On
+        web/emscripten the poller takes the ``async_get_url`` branch so the
+        XHR no longer blocks the pygbag main thread (which was producing
+        a visible per-second freeze while on the 'battle' subscreen).
+        """
+        return BackgroundPoller(
+            lambda gid, pid: game_service.get_battle_state(gid, pid),
+            args=(game_id, player_id),
+            async_get_url=f'{settings.SERVER_URL}/games/get_battle_state',
+            async_get_params={'game_id': game_id, 'player_id': player_id},
+            async_transform=self._battle_state_async_transform,
+        )
+
     # ────────────────────── update ─────────────────────────────
 
     def update(self, game):
@@ -1288,9 +1318,8 @@ class BattleScreen(SubScreen):
         if needs_reload:
             self._load_battle_data()
             # (Re)create the background poller for this game
-            self._battle_poller = BackgroundPoller(
-                lambda gid, pid: game_service.get_battle_state(gid, pid),
-                args=(current_key[0], game.player_id))
+            self._battle_poller = self._build_battle_state_poller(
+                current_key[0], game.player_id)
 
         # Safety: retry loading figures if we're in battle but figures are
         # still missing (can happen when cached_figures_data wasn't ready yet
@@ -1329,9 +1358,8 @@ class BattleScreen(SubScreen):
         if now - self._battle_poll_timer >= 1000:
             self._battle_poll_timer = now
             if self._battle_poller is None and game and game.game_id:
-                self._battle_poller = BackgroundPoller(
-                    lambda gid, pid: game_service.get_battle_state(gid, pid),
-                    args=(game.game_id, game.player_id))
+                self._battle_poller = self._build_battle_state_poller(
+                    game.game_id, game.player_id)
             if self._battle_poller and not self._battle_poller.busy:
                 self._battle_poller.poll(
                     args=(game.game_id, game.player_id))

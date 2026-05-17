@@ -148,6 +148,19 @@ class BackgroundPoller:
             return
         self._simple_rid = None
         try:
+            # Short-circuit: if the response body matches the previously
+            # delivered one, skip the transform + result-publish entirely
+            # so the caller's apply path is a no-op. This is the common
+            # case for polling endpoints like ``get_battle_state`` once a
+            # round is settled, and avoids per-poll JSON parsing + apply.
+            resp_text = getattr(resp, 'text', None)
+            if (resp_text is not None
+                    and resp_text == getattr(self, '_prev_simple_text', None)):
+                with self._lock:
+                    self._busy = False
+                return
+            if resp_text is not None:
+                self._prev_simple_text = resp_text
             if self._async_transform:
                 res = self._async_transform(resp)
             else:
