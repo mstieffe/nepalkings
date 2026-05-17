@@ -6233,7 +6233,6 @@ class ConquerGameScreen(GameScreen):
         if not self.state.game:
             return
 
-        self._drain_battle_state_poller()
         self._request_battle_state_poll(force=False)
         # Drain any in-flight async start_turn responses every frame so that
         # auto-fill / opponent-turn summaries land as soon as the XHR returns,

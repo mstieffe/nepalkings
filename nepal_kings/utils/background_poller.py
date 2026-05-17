@@ -4,7 +4,7 @@
 
 Desktop:  runs the callable in a daemon thread.
 Web/emscripten:  fires async XMLHttpRequests so the browser event-loop
-                 is never blocked.  Results are checked each frame.
+                 is never blocked.  Results are checked at a small cadence.
 
 Usage:
 
@@ -17,11 +17,13 @@ Usage:
 import sys as _sys
 import threading
 import logging
+import time as _time
 
 logger = logging.getLogger('nk.utils.poller')
 
 
 _IS_EMSCRIPTEN = _sys.platform == "emscripten"
+_ASYNC_CHECK_INTERVAL_MS = 100
 
 
 class BackgroundPoller:
@@ -49,6 +51,7 @@ class BackgroundPoller:
         self._async_requests = async_requests
         self._multi_rids = None
         self._multi_responses = None
+        self._next_async_check_ms = 0
 
     # ── public api ──────────────────────────────────────────────
 
@@ -132,9 +135,21 @@ class BackgroundPoller:
 
     # ── internals (async XHR, emscripten) ───────────────────────
 
+    def _reset_async_check_timer(self):
+        self._next_async_check_ms = 0
+
+    def _async_check_due(self):
+        """Throttle JS-bridge polling while an async XHR is in flight."""
+        now = int(_time.monotonic() * 1000)
+        if now < self._next_async_check_ms:
+            return False
+        self._next_async_check_ms = now + _ASYNC_CHECK_INTERVAL_MS
+        return True
+
     def _start_simple_async(self):
         """Fire a single async GET XHR for the configured URL."""
         from utils.http_compat import start_async_get
+        self._reset_async_check_timer()
         self._simple_rid = start_async_get(self._async_get_url,
                                            self._async_get_params)
 
@@ -142,6 +157,8 @@ class BackgroundPoller:
         """Check if the simple async GET finished."""
         from utils.http_compat import check_async
         if self._simple_rid is None:
+            return
+        if not self._async_check_due():
             return
         resp = check_async(self._simple_rid)
         if resp is None:
@@ -178,6 +195,7 @@ class BackgroundPoller:
         """Fire multiple async XHRs in parallel for the configured requests."""
         from utils.http_compat import start_async_get, start_async_post
         # Build the request specs, substituting {0}, {1}, ... with args
+        self._reset_async_check_timer()
         self._multi_rids = {}
         self._multi_responses = {}
         for spec in self._async_requests:
@@ -200,6 +218,8 @@ class BackgroundPoller:
         """Check if all multi-request async XHRs finished."""
         from utils.http_compat import check_async
         if self._multi_rids is None:
+            return
+        if not self._async_check_due():
             return
         still_pending = {}
         for key, rid in self._multi_rids.items():
@@ -239,6 +259,7 @@ class BackgroundPoller:
             return
 
         base = settings.SERVER_URL
+        self._reset_async_check_timer()
         self._pending_rids = {
             'game': start_async_get(f'{base}/games/get_game', {'game_id': game_id}),
             'logs': start_async_get(f'{base}/msg/get_log_entries', {'game_id': game_id}),
@@ -255,6 +276,8 @@ class BackgroundPoller:
         from config import settings
 
         if self._pending_rids is None:
+            return
+        if not self._async_check_due():
             return
 
         still_pending = {}
