@@ -398,6 +398,14 @@ class ConquerGameScreen(GameScreen):
             return True
         return getattr(game, 'battle_round', 0) in (1, 2, 3)
 
+    def _uses_lightweight_active_battle_polling(self):
+        game = self.state.game
+        if not game or not self._is_tactics_hand_game():
+            return False
+        if getattr(game, 'last_battle_result', None) or getattr(game, 'game_over', False):
+            return False
+        return bool(getattr(game, 'battle_confirmed', False)) and self._is_battle_phase_active()
+
     def _conquer_nav_buttons(self):
         if self._is_tactics_hand_game():
             return []
@@ -3095,7 +3103,8 @@ class ConquerGameScreen(GameScreen):
         poller = self._ensure_battle_state_poller()
         if poller is None:
             return
-        self._drain_battle_state_poller()
+        with perf_section('conquer.poll.battle_state_drain'):
+            self._drain_battle_state_poller()
         if getattr(poller, '_busy', False):
             return
         now = pygame.time.get_ticks()
@@ -3115,7 +3124,8 @@ class ConquerGameScreen(GameScreen):
         self._battle_state_pending_key = desired_key
         key = self._battle_state_key()
         if key:
-            poller.poll(args=key)
+            with perf_section('conquer.poll.battle_state_start'):
+                poller.poll(args=key)
 
     def _current_conquer_tactics(self):
         game = self.state.game
@@ -6538,19 +6548,23 @@ class ConquerGameScreen(GameScreen):
         if not self.state.game:
             return
 
-        self._request_battle_state_poll(force=False)
+        with perf_section('conquer.update.battle_state_poll'):
+            self._request_battle_state_poll(force=False)
         # Drain any in-flight async start_turn responses every frame so that
         # auto-fill / opponent-turn summaries land as soon as the XHR returns,
         # not only on the next 2s update_game tick.
-        try:
-            self.state.game.drain_pending_start_turn()
-        except Exception:
-            pass
+        with perf_section('conquer.update.start_turn_drain'):
+            try:
+                self.state.game.drain_pending_start_turn()
+            except Exception:
+                pass
 
         current_time = pygame.time.get_ticks()
         if current_time - self.last_update_time >= self.update_interval:
             self.last_update_time = current_time
-            self.update_game()
+            if not self._uses_lightweight_active_battle_polling():
+                with perf_section('conquer.update.full_game_poll'):
+                    self.update_game()
             self._check_battle_cycle_reset()
             self._refresh_conquer_tab_locks()
             self._sync_conquer_action_modes()
@@ -6558,12 +6572,14 @@ class ConquerGameScreen(GameScreen):
 
         subscreen = self.subscreens.get(self.state.subscreen)
         if subscreen:
-            subscreen.update(self.state.game)
-        self._sync_conquer_action_modes()
-        self._sync_pending_confirmation_state()
-        self._enforce_battle_shop_during_moves()
-        self._maybe_auto_trigger_finish_battle()
-        self._maybe_auto_advance_single_option_step()
+            with perf_section(f'conquer.update.subscreen.{self.state.subscreen}'):
+                subscreen.update(self.state.game)
+        with perf_section('conquer.update.bookkeeping'):
+            self._sync_conquer_action_modes()
+            self._sync_pending_confirmation_state()
+            self._enforce_battle_shop_during_moves()
+            self._maybe_auto_trigger_finish_battle()
+            self._maybe_auto_advance_single_option_step()
 
     # -------------------------------------------------------------- event input
     def handle_events(self, events):

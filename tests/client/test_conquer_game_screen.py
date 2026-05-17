@@ -1027,6 +1027,69 @@ def test_conquer_dim_flags_compare_normalized_figure_ids():
     assert idle_icon.conquer_battle_dimmed is True
 
 
+def _minimal_update_screen(game):
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(
+        screen='conquer_game',
+        subscreen='field',
+        game=game,
+    )
+    screen.subscreens = {'field': SimpleNamespace(update=lambda _game: None)}
+    screen.update_interval = 0
+    screen.last_update_time = 0
+    screen._refresh_conquer_tab_locks = lambda: None
+    screen._request_battle_state_poll = lambda force=False: None
+    screen._check_battle_cycle_reset = lambda: None
+    screen._sync_conquer_action_modes = lambda: None
+    screen._auto_route_conquer_once = lambda: None
+    screen._sync_pending_confirmation_state = lambda: None
+    screen._enforce_battle_shop_during_moves = lambda: None
+    screen._maybe_auto_trigger_finish_battle = lambda: None
+    screen._maybe_auto_advance_single_option_step = lambda: None
+    return ConquerGameScreen, screen
+
+
+def test_active_tactics_hand_battle_skips_broad_game_poll():
+    calls = []
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=1,
+        last_battle_result=None,
+        game_over=False,
+        drain_pending_start_turn=lambda: None,
+    )
+    ConquerGameScreen, screen = _minimal_update_screen(game)
+    screen.update_game = lambda: calls.append('full_poll')
+
+    ConquerGameScreen.update(screen, [])
+
+    assert calls == []
+
+
+def test_conquer_result_state_still_allows_broad_game_poll():
+    calls = []
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        battle_confirmed=True,
+        battle_turn_player_id=None,
+        battle_round=3,
+        last_battle_result={'winner': 1},
+        game_over=False,
+        drain_pending_start_turn=lambda: None,
+    )
+    ConquerGameScreen, screen = _minimal_update_screen(game)
+    screen.update_game = lambda: calls.append('full_poll')
+
+    ConquerGameScreen.update(screen, [])
+
+    assert calls == ['full_poll']
+
+
 class TestGameplayScreenRouting:
     def test_conquer_games_route_to_conquer_game_screen(self):
         from game.core.screen_routing import gameplay_screen_for
