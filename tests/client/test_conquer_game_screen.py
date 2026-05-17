@@ -936,6 +936,31 @@ def test_conquer_support_hover_tracks_all_source_figures(monkeypatch):
     assert field._conquer_hover_source_figure_id == 101
 
 
+def test_field_support_ids_use_parent_cached_lane_context():
+    from game.screens.field_screen import FieldScreen
+
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        both_battle_moves_ready=False,
+        last_battle_result=None,
+    )
+    calls = []
+    parent = SimpleNamespace(
+        request_conquer_figure_confirmation=lambda *args, **kwargs: None,
+        conquer_active_support_figure_ids=lambda opponent_only=False: calls.append(opponent_only) or ({20} if opponent_only else {10, 20}),
+    )
+    field = FieldScreen.__new__(FieldScreen)
+    field.game = game
+    field.state = SimpleNamespace(parent_screen=parent)
+
+    assert FieldScreen._tactics_hand_active_support_figure_ids(field) == {10, 20}
+    assert FieldScreen._tactics_hand_active_support_figure_ids(field, opponent_only=True) == {20}
+    assert calls == [False, True]
+
+
 class TestGameplayScreenRouting:
     def test_conquer_games_route_to_conquer_game_screen(self):
         from game.core.screen_routing import gameplay_screen_for
@@ -1074,7 +1099,10 @@ class TestConquerGameShell:
 
         def support_entries(player_figures, opponent_figures, *, is_player, played_slots=None):
             calls.append((tuple(player_figures), tuple(opponent_figures), is_player, played_slots is not None))
-            return [{'figure': SimpleNamespace(id=1 if is_player else 2)}]
+            return [{
+                'figure': SimpleNamespace(id=1 if is_player else 2),
+                'source_figure_ids': [10 if is_player else 20],
+            }]
 
         screen._conquer_lane_support_entries = support_entries
 
@@ -1087,6 +1115,9 @@ class TestConquerGameShell:
             (('player_fig',), ('opp_fig',), True, True),
             (('player_fig',), ('opp_fig',), False, True),
         ]
+        assert first['player_support_ids'] == {1, 10}
+        assert first['opponent_support_ids'] == {2, 20}
+        assert {1, 2, 10, 20}.issubset(first['involved_ids'])
 
     def test_conquer_subscreen_origin_is_centered_below_header(self):
         from config import settings

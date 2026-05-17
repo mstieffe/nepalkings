@@ -1730,6 +1730,12 @@ class FieldScreen(SubScreen):
         parent = self._conquer_parent()
         if parent is None:
             return set()
+        cached_getter = getattr(parent, 'conquer_active_support_figure_ids', None)
+        if callable(cached_getter):
+            try:
+                return set(cached_getter(opponent_only=opponent_only) or set())
+            except Exception:
+                return set()
         lane_figures = getattr(parent, '_conquer_lane_figures', None)
         support_entries = getattr(parent, '_conquer_lane_support_entries', None)
         if not callable(lane_figures) or not callable(support_entries):

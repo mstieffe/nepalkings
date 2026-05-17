@@ -3629,6 +3629,9 @@ class ConquerGameScreen(GameScreen):
                 'opponent_slots': [None, None, None],
                 'player_support': [],
                 'opponent_support': [],
+                'player_support_ids': set(),
+                'opponent_support_ids': set(),
+                'involved_ids': set(),
             }
         if key == getattr(self, '_conquer_lane_context_cache_key', None):
             cached = getattr(self, '_conquer_lane_context_cache', None)
@@ -3644,6 +3647,24 @@ class ConquerGameScreen(GameScreen):
         opponent_support = self._conquer_lane_support_entries(
             player_figures, opponent_figures, is_player=False,
             played_slots=played_slots)
+
+        def support_ids(entries):
+            ids = set()
+            for entry in entries or []:
+                figure = entry.get('figure') if isinstance(entry, dict) else None
+                fig_id = getattr(figure, 'id', None)
+                if fig_id is not None:
+                    ids.add(fig_id)
+                for source_id in (entry.get('source_figure_ids') or []) if isinstance(entry, dict) else []:
+                    if source_id is not None:
+                        ids.add(source_id)
+            return ids
+
+        player_support_ids = support_ids(player_support)
+        opponent_support_ids = support_ids(opponent_support)
+        involved_ids = set(self._conquer_lane_battle_figure_ids())
+        involved_ids.update(player_support_ids)
+        involved_ids.update(opponent_support_ids)
         context = {
             'key': key,
             'player_figures': player_figures,
@@ -3652,6 +3673,9 @@ class ConquerGameScreen(GameScreen):
             'opponent_slots': opponent_slots,
             'player_support': player_support,
             'opponent_support': opponent_support,
+            'player_support_ids': player_support_ids,
+            'opponent_support_ids': opponent_support_ids,
+            'involved_ids': involved_ids,
         }
         self._conquer_lane_context_cache_key = key
         self._conquer_lane_context_cache = context
@@ -3830,16 +3854,21 @@ class ConquerGameScreen(GameScreen):
             context = self._conquer_lane_context()
         except Exception:
             return ids
-        for is_player in (True, False):
-            entries = (
-                context.get('player_support') if is_player
-                else context.get('opponent_support')
-            ) or []
-            for entry in entries or []:
-                fig = entry.get('figure')
-                fig_id = getattr(fig, 'id', None)
-                if fig_id is not None:
-                    ids.add(fig_id)
+        involved = context.get('involved_ids')
+        if involved:
+            return set(involved)
+        return ids
+
+    def conquer_active_support_figure_ids(self, *, opponent_only=False):
+        """Return cached support-source figure ids for the active battle."""
+        try:
+            context = self._conquer_lane_context()
+        except Exception:
+            return set()
+        if opponent_only:
+            return set(context.get('opponent_support_ids') or set())
+        ids = set(context.get('player_support_ids') or set())
+        ids.update(context.get('opponent_support_ids') or set())
         return ids
 
     def _update_conquer_battle_dim_flags(self):
