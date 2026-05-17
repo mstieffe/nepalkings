@@ -1155,10 +1155,13 @@ class TestConquerGameShell:
     def test_lane_context_reuses_support_graph_for_same_snapshot(self):
         ConquerGameScreen, screen = _base_conquer_screen(SimpleNamespace(mode='conquer'))
         screen._conquer_lane_context_cache_key = None
+        screen._conquer_lane_context_fast_cache_key = None
         screen._conquer_lane_context_cache = None
         screen._conquer_tactic_power_cache_key = None
         screen._conquer_tactic_power_cache = {}
-        screen._conquer_lane_context_key = lambda: ('battle', 1)
+        key_calls = []
+        screen._conquer_lane_context_fast_key = lambda: ('fast', 1)
+        screen._conquer_lane_context_key = lambda: key_calls.append(True) or ('battle', 1)
         screen._conquer_lane_figures = lambda: (['player_fig'], ['opp_fig'])
         screen._conquer_lane_played_tactics = lambda: ([None, None, None], [None, None, None])
         calls = []
@@ -1176,6 +1179,7 @@ class TestConquerGameShell:
         second = ConquerGameScreen._conquer_lane_context(screen)
 
         assert first is second
+        assert len(key_calls) == 1
         assert len(calls) == 2
         assert calls == [
             (('player_fig',), ('opp_fig',), True, True),

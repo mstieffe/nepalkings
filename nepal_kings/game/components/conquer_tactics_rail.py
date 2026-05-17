@@ -124,6 +124,8 @@ class ConquerTacticsRail:
         # helpers stay in sync.
         self._dyn_top_strip_rect: Optional[pygame.Rect] = None
         self._dyn_hand_list_rect: Optional[pygame.Rect] = None
+        self._cached_render_key = None
+        self._cached_render_surface: Optional[pygame.Surface] = None
 
     # ------------------------------------------------------------------ data
     def _moves(self) -> List[Dict[str, Any]]:
@@ -912,20 +914,84 @@ class ConquerTacticsRail:
                 self._combine_partner_id = None
 
     # ------------------------------------------------------------------ draw
+    def _rail_render_cache_key(self, rail_rect: pygame.Rect, now: int):
+        if rail_rect.collidepoint(pygame.mouse.get_pos()):
+            return None
+        if self._drag_active or self._drag_origin_id is not None:
+            return None
+        if self._gamble_anim:
+            started = int(self._gamble_anim.get('started_at', 0) or 0)
+            duration = int(self._gamble_anim.get('duration', 0) or 0)
+            if now < started + duration:
+                return None
+        if any(int(expires or 0) > now for expires in self._new_move_glow_until.values()):
+            return None
+        if any(int(data.get('expires_at') or 0) > now for data in self._removed_ghosts.values()):
+            return None
+
+        game = getattr(self._parent.state, 'game', None)
+        moves_key = tuple(
+            sorted(
+                (
+                    move.get('id'),
+                    move.get('family_name'),
+                    move.get('suit'),
+                    move.get('rank'),
+                    move.get('value'),
+                    move.get('status'),
+                    move.get('played_round'),
+                    move.get('call_figure_id'),
+                    bool(move.get('_render_ghost')),
+                )
+                for move in self._moves()
+            )
+        )
+        banner_key = None
+        if self._result_banner:
+            banner_key = (
+                self._result_banner.get('text'),
+                self._result_banner.get('kind'),
+                bool(self._result_banner.get('expires_at')),
+            )
+        return (
+            rail_rect.x, rail_rect.y, rail_rect.w, rail_rect.h,
+            moves_key,
+            self._scroll,
+            self._selected_id,
+            self._combine_partner_id,
+            self._combine_pending,
+            tuple(sorted(self._collapsed_groups)),
+            tuple(sorted(self._expanded_groups)),
+            banner_key,
+            getattr(game, 'battle_confirmed', None),
+            getattr(game, 'battle_turn_player_id', None),
+            getattr(game, 'player_id', None),
+            getattr(game, 'battle_round', None),
+            repr(getattr(game, 'battle_gamble_counts', None)),
+        )
+
     def draw(self):
         self._power_cache = {}
         layout = self._ensure_layout()
         rail = layout.tactics_rail
         rail_rect = pygame.Rect(*rail.rect)
-        previous_clip = self.window.get_clip()
-        self.window.set_clip(rail_rect)
+        now = pygame.time.get_ticks()
 
         # Detect newly-added moves so we can glow them (#8c) and expire
         # the banner if its TTL has passed (#8a).
         self._detect_new_moves()
         if self._result_banner and self._result_banner.get('expires_at'):
-            if pygame.time.get_ticks() > self._result_banner['expires_at']:
+            if now > self._result_banner['expires_at']:
                 self._result_banner = None
+
+        cache_key = self._rail_render_cache_key(rail_rect, now)
+        if (cache_key is not None and self._cached_render_key == cache_key
+                and self._cached_render_surface is not None):
+            self.window.blit(self._cached_render_surface, rail_rect.topleft)
+            return
+
+        previous_clip = self.window.get_clip()
+        self.window.set_clip(rail_rect)
 
         bg = pygame.Surface(rail_rect.size, pygame.SRCALPHA)
         bg.fill(_BG_RGBA)
@@ -964,6 +1030,17 @@ class ConquerTacticsRail:
         self._draw_selected_detail(selected_detail_rect)
         self._draw_action_tray(pygame.Rect(*rail.action_tray_rect))
         self.window.set_clip(previous_clip)
+
+        if cache_key is not None:
+            try:
+                self._cached_render_surface = self.window.subsurface(rail_rect).copy()
+                self._cached_render_key = cache_key
+            except Exception:
+                self._cached_render_surface = None
+                self._cached_render_key = None
+        else:
+            self._cached_render_surface = None
+            self._cached_render_key = None
 
     def _measure_top_strip_height(self, width: int) -> int:
         """Compute the pixel height required to render the top strip.

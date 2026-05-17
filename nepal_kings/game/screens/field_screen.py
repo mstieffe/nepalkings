@@ -13,6 +13,7 @@ from game.components.figure_detail_box import FigureDetailBox
 from game.components.cards.card import Card
 from game.components.cards.card_img import CardImg
 from utils.figure_service import pickup_figure, upgrade_figure, fetch_figures
+from utils.perf_monitor import perf_section
 import logging
 
 logger = logging.getLogger('nk.screens.field')
@@ -47,6 +48,9 @@ class FieldScreen(SubScreen):
         self._loaded_conquer_visual_ghost_key = ()
         self._last_conquer_spell_replay_key = ()
         self._last_tactics_hand_support_visibility_key = ()
+        self._field_static_surface = None
+        self._field_static_surface_key = None
+        self._field_static_surface_pos = (0, 0)
         # Cache of (icon, x, y) tuples for the last full figure draw — used
         # by the conquer game screen to re-blit figures on top of the duel
         # lane so figure info boxes stay in the foreground.
@@ -68,6 +72,9 @@ class FieldScreen(SubScreen):
         
         # Version of cached figure data last processed by load_figures
         self._last_figures_version = -1
+        self._field_static_surface = None
+        self._field_static_surface_key = None
+        self._field_static_surface_pos = (0, 0)
         
         # Cache for opponent cards (for All Seeing Eye spell)
         self.opponent_card_cache = []  # List of pre-rotated card surfaces
@@ -3097,6 +3104,157 @@ class FieldScreen(SubScreen):
         # Redraw the field screen with updated icon states
         self.draw()
 
+    def _refresh_all_seeing_eye_status(self):
+        current_time = pygame.time.get_ticks()
+        if current_time - self.last_all_seeing_eye_check <= self.all_seeing_eye_check_interval:
+            return
+        try:
+            self.cached_all_seeing_eye_status = (
+                self.game.has_active_all_seeing_eye() if self.game else False)
+            self.cached_opponent_all_seeing_eye_status = (
+                self.game.has_opponent_cast_all_seeing_eye() if self.game else False)
+        except Exception:
+            self.cached_all_seeing_eye_status = False
+            self.cached_opponent_all_seeing_eye_status = False
+        self.last_all_seeing_eye_check = current_time
+
+    def _field_static_layer_key(self):
+        compartment_key = []
+        for player in ('self', 'opponent'):
+            for field in ('castle', 'village', 'military'):
+                rect = self.compartments[player][field]
+                compartment_key.append((player, field, rect.x, rect.y, rect.w, rect.h))
+        bounds = self._field_static_bounds()
+        return (
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            (bounds.x, bounds.y, bounds.w, bounds.h),
+            tuple(compartment_key),
+            bool(self.cached_all_seeing_eye_status),
+            bool(self.cached_opponent_all_seeing_eye_status),
+        )
+
+    def _field_static_bounds(self):
+        rects = [
+            self.compartments[player][field]
+            for player in ('self', 'opponent')
+            for field in ('castle', 'village', 'military')
+        ]
+        left = min(rect.left for rect in rects)
+        right = max(rect.right for rect in rects)
+        top = min(rect.top for rect in rects)
+        bottom = max(rect.bottom for rect in rects)
+        title_pad = max(settings.FIELD_BOARD_TITLE_FONT_SIZE * 2,
+                        abs(settings.FIELD_BOARD_TITLE_Y_OFFSET) * 2)
+        bounds = pygame.Rect(left, top - title_pad, right - left, bottom - top + title_pad)
+        bounds.left = max(0, bounds.left)
+        bounds.top = max(0, bounds.top)
+        bounds.right = min(settings.SCREEN_WIDTH, bounds.right)
+        bounds.bottom = min(settings.SCREEN_HEIGHT, bounds.bottom)
+        return bounds
+
+    def _draw_field_static_layer(self):
+        self._refresh_all_seeing_eye_status()
+        cache_key = self._field_static_layer_key()
+        if self._field_static_surface_key != cache_key or self._field_static_surface is None:
+            bounds = self._field_static_bounds()
+            surface = pygame.Surface(bounds.size, pygame.SRCALPHA)
+            fill_color = (*settings.FIELD_FILL_COLOR[:3], settings.FIELD_TRANSPARENCY)
+            border_color = (*settings.FIELD_BORDER_COLOR[:3], settings.FIELD_TRANSPARENCY)
+
+            for player in ('self', 'opponent'):
+                for field in ('castle', 'village', 'military'):
+                    compartment = self.compartments[player][field]
+                    local_compartment = compartment.move(-bounds.x, -bounds.y)
+                    pygame.draw.rect(surface, fill_color, local_compartment)
+                    if field in self.slot_icons:
+                        slot_icon = self.slot_icons[field]
+                        icon_rect = slot_icon.get_rect()
+                        icon_rect.centerx = compartment.centerx
+                        icon_rect.top = compartment.top + int(compartment.height * 0.018)
+                        icon_rect.move_ip(-bounds.x, -bounds.y)
+                        surface.blit(slot_icon, icon_rect)
+
+            for player in ('self', 'opponent'):
+                castle_comp = self.compartments[player]['castle']
+                village_comp = self.compartments[player]['village']
+                military_comp = self.compartments[player]['military']
+                left = min(castle_comp.left, village_comp.left, military_comp.left)
+                right = max(castle_comp.right, village_comp.right, military_comp.right)
+                top = castle_comp.top
+                bottom = castle_comp.bottom
+                width = right - left
+                height = bottom - top
+                if width <= 0 or height <= 0:
+                    continue
+                group_rect = pygame.Rect(left - bounds.x, top - bounds.y, width, height)
+                pygame.draw.rect(surface, border_color, group_rect, settings.FIELD_BORDER_WIDTH)
+                comp_positions = sorted([
+                    (castle_comp.left, castle_comp.width),
+                    (village_comp.left, village_comp.width),
+                    (military_comp.left, military_comp.width),
+                ], key=lambda item: item[0])
+                for i in range(len(comp_positions) - 1):
+                    divider_x = comp_positions[i][0] + comp_positions[i][1]
+                    pygame.draw.line(
+                        surface,
+                        border_color,
+                        (divider_x - bounds.x, top - bounds.y),
+                        (divider_x - bounds.x, bottom - bounds.y),
+                        settings.FIELD_BORDER_WIDTH,
+                    )
+
+            for player in ('self', 'opponent'):
+                castle_comp = self.compartments[player]['castle']
+                village_comp = self.compartments[player]['village']
+                military_comp = self.compartments[player]['military']
+                left = min(castle_comp.left, village_comp.left, military_comp.left)
+                right = max(castle_comp.right, village_comp.right, military_comp.right)
+                title_text_str = 'YOU' if player == 'self' else 'OPPONENT'
+                title_text = self.board_title_font.render(
+                    title_text_str, True, settings.FIELD_BOARD_TITLE_COLOR)
+                title_rect = title_text.get_rect()
+                if player == 'self':
+                    title_rect.left = left
+                else:
+                    title_rect.right = right
+                title_rect.bottom = castle_comp.top + settings.FIELD_BOARD_TITLE_Y_OFFSET
+                title_rect.move_ip(-bounds.x, -bounds.y)
+
+                show_eye_icon = (
+                    self.cached_all_seeing_eye_status if player == 'opponent'
+                    else self.cached_opponent_all_seeing_eye_status
+                )
+                if show_eye_icon:
+                    eye_rect = self.all_seeing_eye_icon.get_rect()
+                    if player == 'self':
+                        eye_rect.left = title_rect.right + 5
+                    else:
+                        eye_rect.right = title_rect.left - 5
+                    eye_rect.centery = title_rect.centery
+                    surface.blit(self.all_seeing_eye_icon, eye_rect)
+                surface.blit(title_text, title_rect)
+
+            for player in ('self', 'opponent'):
+                for field in ('castle', 'village', 'military'):
+                    compartment = self.compartments[player][field]
+                    title_text = self.field_title_font.render(
+                        field.upper(), True, settings.FIELD_TITLE_COLOR)
+                    title_rect = title_text.get_rect()
+                    if player == 'self':
+                        title_rect.left = compartment.left + settings.FIELD_TITLE_PADDING
+                    else:
+                        title_rect.right = compartment.right - settings.FIELD_TITLE_PADDING
+                    title_rect.top = compartment.top + settings.FIELD_TITLE_PADDING
+                    title_rect.move_ip(-bounds.x, -bounds.y)
+                    surface.blit(title_text, title_rect)
+
+            self._field_static_surface = surface
+            self._field_static_surface_key = cache_key
+            self._field_static_surface_pos = bounds.topleft
+
+        self.window.blit(self._field_static_surface, self._field_static_surface_pos)
+
     def draw(self):
         """Draw the screen, including the field background and figure icons."""
         self._sync_field_compartments_layout()
@@ -3110,150 +3268,9 @@ class FieldScreen(SubScreen):
             return
 
         if self.figures or True:  # Always draw compartments even without figures
-            # First pass: Draw all compartment fills and slot icon backgrounds
-            for player in ['self', 'opponent']:
-                for field in ['castle', 'village', 'military']:
-                    compartment = self.compartments[player][field]
-                    
-                    # Create a new surface with per-pixel alpha for the fill
-                    compartment_surface = pygame.Surface((compartment.width, compartment.height), pygame.SRCALPHA)
-                    
-                    # Draw the filled rectangle with transparency
-                    fill_color = (*settings.FIELD_FILL_COLOR[:3], settings.FIELD_TRANSPARENCY)
-                    pygame.draw.rect(compartment_surface, fill_color, compartment_surface.get_rect())
-                    
-                    # Draw slot icon as background (upper part of compartment)
-                    if field in self.slot_icons:
-                        slot_icon = self.slot_icons[field]
-                        # Position in upper portion of compartment
-                        icon_rect = slot_icon.get_rect()
-                        icon_rect.centerx = compartment.width // 2
-                        icon_rect.top = int(compartment.height * 0.018)
-                        compartment_surface.blit(slot_icon, icon_rect)
-                    
-                    # Blit the fill onto the main window
-                    self.window.blit(compartment_surface, compartment.topleft)
-            
-            # Second pass: Draw borders (to avoid double-thick borders between compartments)
-            border_color = (*settings.FIELD_BORDER_COLOR[:3], settings.FIELD_TRANSPARENCY)
-            for player in ['self', 'opponent']:
-                # Get the three compartments for this player
-                castle_comp = self.compartments[player]['castle']
-                village_comp = self.compartments[player]['village']
-                military_comp = self.compartments[player]['military']
-                
-                # Calculate the bounding box for all three compartments
-                # Use min/max to handle different arrangements (self vs opponent)
-                left = min(castle_comp.left, village_comp.left, military_comp.left)
-                right = max(castle_comp.right, village_comp.right, military_comp.right)
-                top = castle_comp.top
-                bottom = castle_comp.bottom
-                width = right - left
-                height = bottom - top
-                
-                # Safety check: ensure valid dimensions
-                if width <= 0 or height <= 0:
-                    continue
-                
-                # Create surface for borders
-                border_surface = pygame.Surface((width, height), pygame.SRCALPHA)
-                
-                # Draw outer border (full rectangle)
-                pygame.draw.rect(border_surface, border_color, border_surface.get_rect(), settings.FIELD_BORDER_WIDTH)
-                
-                # Draw vertical dividers between compartments
-                # Get sorted x-positions of all compartments
-                comp_positions = sorted([
-                    (castle_comp.left, castle_comp.width),
-                    (village_comp.left, village_comp.width),
-                    (military_comp.left, military_comp.width)
-                ], key=lambda x: x[0])
-                
-                # Draw dividers between adjacent compartments
-                for i in range(len(comp_positions) - 1):
-                    divider_x = comp_positions[i][0] + comp_positions[i][1] - left
-                    pygame.draw.line(border_surface, border_color, 
-                                   (divider_x, 0), (divider_x, height), 
-                                   settings.FIELD_BORDER_WIDTH)
-                
-                # Blit the border surface
-                self.window.blit(border_surface, (left, top))
-            
-            # Draw board titles ("YOU" / "OPPONENT") - YOU on left, OPPONENT on right
-            for player in ['self', 'opponent']:
-                # Get the bounding box for all compartments
-                castle_comp = self.compartments[player]['castle']
-                village_comp = self.compartments[player]['village']
-                military_comp = self.compartments[player]['military']
-                
-                left = min(castle_comp.left, village_comp.left, military_comp.left)
-                right = max(castle_comp.right, village_comp.right, military_comp.right)
-                
-                # Determine title text
-                title_text_str = "YOU" if player == 'self' else "OPPONENT"
-                title_text = self.board_title_font.render(title_text_str, True, settings.FIELD_BOARD_TITLE_COLOR)
-                title_rect = title_text.get_rect()
-                
-                # Check if All Seeing Eye is active for this player (cached for performance)
-                # For opponent's side: show icon if current player has it active
-                # For self's side: show icon if opponent has it active
-                current_time = pygame.time.get_ticks()
-                if current_time - self.last_all_seeing_eye_check > self.all_seeing_eye_check_interval:
-                    self.cached_all_seeing_eye_status = self.game.has_active_all_seeing_eye()
-                    self.cached_opponent_all_seeing_eye_status = self.game.has_opponent_cast_all_seeing_eye()
-                    self.last_all_seeing_eye_check = current_time
-                
-                show_eye_icon = False
-                if player == 'opponent':
-                    show_eye_icon = self.cached_all_seeing_eye_status
-                else:  # player == 'self'
-                    show_eye_icon = self.cached_opponent_all_seeing_eye_status
-                
-                # Position: YOU on left side, OPPONENT on right side
-                if player == 'self':
-                    title_rect.left = left
-                else:
-                    title_rect.right = right
-                
-                title_rect.bottom = castle_comp.top + settings.FIELD_BOARD_TITLE_Y_OFFSET
-                
-                # Draw All Seeing Eye icon if active
-                # For "YOU": icon to the right of text
-                # For "OPPONENT": icon to the left of text
-                if show_eye_icon:
-                    eye_rect = self.all_seeing_eye_icon.get_rect()
-                    if player == 'self':
-                        # Icon to the right of "YOU"
-                        eye_rect.left = title_rect.right + 5
-                    else:
-                        # Icon to the left of "OPPONENT"
-                        eye_rect.right = title_rect.left - 5
-                    eye_rect.centery = title_rect.centery
-                    self.window.blit(self.all_seeing_eye_icon, eye_rect)
-                
-                # Draw title
-                self.window.blit(title_text, title_rect)
-            
-            # Third pass: Draw titles for each compartment
-            for player in ['self', 'opponent']:
-                for field in ['castle', 'village', 'military']:
-                    compartment = self.compartments[player][field]
-                    
-                    # Render title text
-                    title_text = self.field_title_font.render(field.upper(), True, settings.FIELD_TITLE_COLOR)
-                    title_rect = title_text.get_rect()
-                    
-                    # Position: left-aligned for self, right-aligned for opponent
-                    if player == 'self':
-                        title_rect.left = compartment.left + settings.FIELD_TITLE_PADDING
-                    else:
-                        title_rect.right = compartment.right - settings.FIELD_TITLE_PADDING
-                    
-                    title_rect.top = compartment.top + settings.FIELD_TITLE_PADDING
-                    
-                    # Draw title
-                    self.window.blit(title_text, title_rect)
-            
+            with perf_section('field.static_layer'):
+                self._draw_field_static_layer()
+
             # Fourth pass: Draw figures
             # Collect all icon positions across compartments, then draw in
             # z-order layers so that a selected/hovered info box always

@@ -49,6 +49,7 @@ from game.screens.game_screen import GameScreen
 from game.screens.screen import Screen
 from utils import battle_shop_service, game_service
 from utils.background_poller import BackgroundPoller
+from utils.perf_monitor import perf_section
 from utils.utils import GameButton
 
 
@@ -211,6 +212,9 @@ class ConquerGameScreen(GameScreen):
         self._conquer_battle_move_manager = None
         self._conquer_lane_context_cache_key = None
         self._conquer_lane_context_cache = None
+        self._conquer_duel_lane_render_cache_key = None
+        self._conquer_duel_lane_render_cache_surface = None
+        self._conquer_duel_lane_render_cache_rect = None
         self._conquer_tactic_power_cache_key = None
         self._conquer_tactic_power_cache = {}
         self._conquer_move_panel_title_font = settings.get_font(
@@ -3618,7 +3622,47 @@ class ConquerGameScreen(GameScreen):
             tactic_rows(self._current_conquer_opponent_tactics()),
         )
 
+    def _conquer_lane_context_fast_key(self):
+        game = self.state.game
+        if not game:
+            return None
+        field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
+        figures = getattr(field, 'figures', None)
+        tactics = getattr(game, 'conquer_tactics', None)
+        try:
+            displayed_step = self._displayed_conquer_step()
+        except Exception:
+            displayed_step = None
+        return (
+            getattr(game, 'game_id', None),
+            getattr(game, 'player_id', None),
+            getattr(game, '_game_data_version', 0),
+            getattr(game, '_figures_data_version', 0),
+            id(figures),
+            len(figures or []),
+            id(tactics),
+            len(tactics or []),
+            getattr(game, 'battle_turn_player_id', None),
+            getattr(game, 'battle_round', None),
+            bool(getattr(game, 'last_battle_result', None)),
+            getattr(game, 'advancing_player_id', None),
+            getattr(game, 'advancing_figure_id', None),
+            getattr(game, 'advancing_figure_id_2', None),
+            getattr(game, 'defending_figure_id', None),
+            getattr(game, 'defending_figure_id_2', None),
+            getattr(game, 'land_suit_bonus_suit', None),
+            getattr(game, 'land_suit_bonus_value', None),
+            getattr(self, '_conquer_tactic_cache_key', None),
+            getattr(self, '_conquer_opponent_tactic_cache_key', None),
+            displayed_step,
+        )
+
     def _conquer_lane_context(self):
+        fast_key = self._conquer_lane_context_fast_key()
+        if fast_key == getattr(self, '_conquer_lane_context_fast_cache_key', None):
+            cached = getattr(self, '_conquer_lane_context_cache', None)
+            if cached is not None:
+                return cached
         key = self._conquer_lane_context_key()
         if key is None:
             return {
@@ -3678,6 +3722,7 @@ class ConquerGameScreen(GameScreen):
             'involved_ids': involved_ids,
         }
         self._conquer_lane_context_cache_key = key
+        self._conquer_lane_context_fast_cache_key = fast_key
         self._conquer_lane_context_cache = context
         if key != getattr(self, '_conquer_tactic_power_cache_key', None):
             self._conquer_tactic_power_cache_key = key
@@ -6307,25 +6352,86 @@ class ConquerGameScreen(GameScreen):
             self.window.blit(surf, surf.get_rect(center=box.center))
             return
 
+    def _conquer_duel_lane_render_key(self):
+        rect = getattr(self, '_conquer_duel_lane_last_rect', None)
+        if rect is not None and rect.collidepoint(pygame.mouse.get_pos()):
+            return None
+        if getattr(self, '_tactic_flight_animation', None):
+            return None
+        try:
+            layout = self._conquer_layout()
+            layout_key = tuple(layout.duel_lane_rect)
+        except Exception:
+            layout_key = None
+        try:
+            context_key = self._conquer_lane_context_fast_key()
+        except Exception:
+            context_key = self._conquer_lane_context_key()
+        return (
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+            layout_key,
+            context_key,
+            getattr(self, '_conquer_support_hover_figure_id', None),
+            getattr(self, '_conquer_support_hover_side', None),
+            getattr(self, '_conquer_support_hover_kind', None),
+        )
+
+    def _draw_conquer_duel_lane_cached(self):
+        cache_key = self._conquer_duel_lane_render_key()
+        cached_rect = getattr(self, '_conquer_duel_lane_render_cache_rect', None)
+        if (cache_key is not None
+                and getattr(self, '_conquer_duel_lane_render_cache_key', None) == cache_key
+                and getattr(self, '_conquer_duel_lane_render_cache_surface', None) is not None
+                and cached_rect is not None):
+            self.window.blit(
+                getattr(self, '_conquer_duel_lane_render_cache_surface'),
+                cached_rect.topleft)
+            return
+
+        self._draw_conquer_duel_lane()
+        cache_key = self._conquer_duel_lane_render_key()
+        lane_rect = getattr(self, '_conquer_duel_lane_last_rect', None)
+        if cache_key is None or lane_rect is None:
+            self._conquer_duel_lane_render_cache_key = None
+            self._conquer_duel_lane_render_cache_surface = None
+            self._conquer_duel_lane_render_cache_rect = None
+            return
+        try:
+            rect = pygame.Rect(lane_rect)
+            self._conquer_duel_lane_render_cache_surface = (
+                self.window.subsurface(rect).copy())
+            self._conquer_duel_lane_render_cache_rect = rect
+            self._conquer_duel_lane_render_cache_key = cache_key
+        except Exception:
+            self._conquer_duel_lane_render_cache_key = None
+            self._conquer_duel_lane_render_cache_surface = None
+            self._conquer_duel_lane_render_cache_rect = None
+
     def render(self):
-        self.window.fill(settings.BACKGROUND_COLOR)
+        with perf_section('conquer.fill'):
+            self.window.fill(settings.BACKGROUND_COLOR)
         if not self._ensure_conquer_screen_game() or not self.state.game:
             return
 
-        self._normalize_conquer_subscreen()
-        if self._is_tactics_hand_game():
-            self._update_conquer_support_hover_state()
-            self._update_conquer_battle_dim_flags()
-            self._apply_conquer_support_hover_visibility()
-            self._sync_conquer_timeline_hover_state()
+        with perf_section('conquer.prep'):
+            self._normalize_conquer_subscreen()
+            if self._is_tactics_hand_game():
+                self._update_conquer_support_hover_state()
+                self._update_conquer_battle_dim_flags()
+                self._apply_conquer_support_hover_visibility()
+                self._sync_conquer_timeline_hover_state()
 
         subscreen = self.subscreens.get(self.state.subscreen)
         if subscreen:
-            subscreen.draw()
+            with perf_section(f'conquer.subscreen.{self.state.subscreen}'):
+                subscreen.draw()
         # Restore any temporarily-flipped opponent icons after the subscreen
         # render so subsequent code paths see unmodified visibility.
-        self._restore_conquer_support_hover_visibility()
-        self._draw_conquer_duel_lane()
+        with perf_section('conquer.restore_hover'):
+            self._restore_conquer_support_hover_visibility()
+        with perf_section('conquer.duel_lane'):
+            self._draw_conquer_duel_lane_cached()
         # Re-draw field figure icons (and their info boxes) above the duel
         # lane so figures always stay in the foreground. Limit the redraw
         # to icons that actually intersect the duel lane (performance).
@@ -6333,83 +6439,89 @@ class ConquerGameScreen(GameScreen):
             overlay = getattr(subscreen, 'draw_figures_overlay', None)
             if callable(overlay):
                 try:
-                    clip = getattr(self, '_conquer_duel_lane_last_rect', None)
-                    subscreen._figure_overlay_clip_rect = clip
-                    overlay()
+                    with perf_section('conquer.figure_overlay'):
+                        clip = getattr(self, '_conquer_duel_lane_last_rect', None)
+                        subscreen._figure_overlay_clip_rect = clip
+                        overlay()
                 except Exception:
                     pass
 
-        use_collapsed_header = self._should_use_collapsed_conquer_header()
-        if use_collapsed_header:
-            self._draw_conquer_collapsed_header()
-            if self._is_conquer_timeline_overlay_open():
-                overlay_rect = self._conquer_timeline_expanded_rect or \
-                    self._conquer_timeline_overlay_rect()
-                panel = self._conquer_timeline_panel
-                if hasattr(panel, 'draw_within'):
-                    reserve_w = self._conquer_timeline_overlay_right_reserve()
-                    panel.draw_within(self, pygame.Rect(overlay_rect), reserve_w)
-                else:
-                    panel.draw(self)
-                # The overlay paints over the timeline row, which means the
-                # collapse chevron and round countdown drawn by
-                # ``_draw_conquer_collapsed_header`` get covered. Re-draw the
-                # countdown label and chevron toggle on top of the overlay
-                # so the user can always read the timer and collapse the
-                # panel.
-                self._redraw_collapsed_header_chrome_over_overlay(
-                    pygame.Rect(overlay_rect))
-        else:
-            self._conquer_timeline_hover_open = False
-            self._conquer_timeline_expanded_rect = None
-            self._conquer_timeline_panel.draw(self)
+        with perf_section('conquer.timeline_header'):
+            use_collapsed_header = self._should_use_collapsed_conquer_header()
+            if use_collapsed_header:
+                self._draw_conquer_collapsed_header()
+                if self._is_conquer_timeline_overlay_open():
+                    overlay_rect = self._conquer_timeline_expanded_rect or \
+                        self._conquer_timeline_overlay_rect()
+                    panel = self._conquer_timeline_panel
+                    if hasattr(panel, 'draw_within'):
+                        reserve_w = self._conquer_timeline_overlay_right_reserve()
+                        panel.draw_within(self, pygame.Rect(overlay_rect), reserve_w)
+                    else:
+                        panel.draw(self)
+                    # The overlay paints over the timeline row, which means the
+                    # collapse chevron and round countdown drawn by
+                    # ``_draw_conquer_collapsed_header`` get covered. Re-draw the
+                    # countdown label and chevron toggle on top of the overlay
+                    # so the user can always read the timer and collapse the
+                    # panel.
+                    self._redraw_collapsed_header_chrome_over_overlay(
+                        pygame.Rect(overlay_rect))
+            else:
+                self._conquer_timeline_hover_open = False
+                self._conquer_timeline_expanded_rect = None
+                self._conquer_timeline_panel.draw(self)
 
-        for button in self._conquer_nav_buttons():
-            button.draw()
-        for button in self._conquer_nav_buttons():
-            if hasattr(button, 'draw_hover_text'):
-                button.draw_hover_text()
-        self._draw_tab_state()
+        with perf_section('conquer.nav'):
+            for button in self._conquer_nav_buttons():
+                button.draw()
+            for button in self._conquer_nav_buttons():
+                if hasattr(button, 'draw_hover_text'):
+                    button.draw_hover_text()
+            self._draw_tab_state()
         # Tactics-hand games show the persistent rail + ledger instead of
         # the small 10-icon HUD panel used by legacy battle_move conquer.
-        if self._is_tactics_hand_game():
-            self._tactics_rail.draw()
-            self._round_ledger.draw()
-            self._draw_tactic_flight_animation()
-        else:
-            self._draw_conquer_battle_moves_panel()
+        with perf_section('conquer.rail_ledger'):
+            if self._is_tactics_hand_game():
+                self._tactics_rail.draw()
+                self._round_ledger.draw()
+                self._draw_tactic_flight_animation()
+            else:
+                self._draw_conquer_battle_moves_panel()
 
         # Spell / round visual effects layer (projectiles, impacts, banners).
         # Runs after rails so animations float above HUD chrome.
         try:
-            self._pump_conquer_spell_animations()
-            self._draw_conquer_spell_target_ghosts()
-            self._conquer_effects.draw()
+            with perf_section('conquer.effects'):
+                self._pump_conquer_spell_animations()
+                self._draw_conquer_spell_target_ghosts()
+                self._conquer_effects.draw()
         except Exception:
             pass
 
         # Shared top-level overlays used by the conquer flow.
-        if (self.state.subscreen in ('field', 'battle') and subscreen and
-                getattr(subscreen, 'figure_detail_box', None)):
-            subscreen.figure_detail_box.draw()
-        if (self.state.subscreen in ('battle_shop', 'battle') and subscreen and
-                getattr(subscreen, 'battle_move_detail_box', None)):
-            subscreen.battle_move_detail_box.draw()
-        if self.state.subscreen == 'field' and subscreen and getattr(subscreen, 'dialogue_box', None):
-            subscreen.dialogue_box.draw()
+        with perf_section('conquer.overlays'):
+            if (self.state.subscreen in ('field', 'battle') and subscreen and
+                    getattr(subscreen, 'figure_detail_box', None)):
+                subscreen.figure_detail_box.draw()
+            if (self.state.subscreen in ('battle_shop', 'battle') and subscreen and
+                    getattr(subscreen, 'battle_move_detail_box', None)):
+                subscreen.battle_move_detail_box.draw()
+            if self.state.subscreen == 'field' and subscreen and getattr(subscreen, 'dialogue_box', None):
+                subscreen.dialogue_box.draw()
 
-        if self.waiting_for_counter_response:
-            self._draw_counter_spell_waiting_prompt()
+            if self.waiting_for_counter_response:
+                self._draw_counter_spell_waiting_prompt()
 
-        if self.counter_spell_selector:
-            self.counter_spell_selector.draw()
+            if self.counter_spell_selector:
+                self.counter_spell_selector.draw()
 
-        if self.dialogue_box:
-            self.dialogue_box.draw()
+            if self.dialogue_box:
+                self.dialogue_box.draw()
 
-        if (not use_collapsed_header) or self._is_conquer_timeline_overlay_open() \
-                or self._is_tactics_hand_game():
-            self._conquer_timeline_panel.draw_hover_tooltips(self)
+            if (not use_collapsed_header) or self._is_conquer_timeline_overlay_open() \
+                    or self._is_tactics_hand_game():
+                self._conquer_timeline_panel.draw_hover_tooltips(self)
 
     # ----------------------------------------------------------------- update
     def update(self, events):

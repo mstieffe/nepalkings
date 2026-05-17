@@ -409,6 +409,28 @@ if __name__ == '__main__':
         except Exception:
             pass
 
+        try:
+            _web_cfg = _embed.js("""(function(){
+                var p=new URLSearchParams(window.location.search);
+                return {
+                    perf: p.get('nk_perf')==='1'
+                        || window.localStorage.getItem('NK_PERF')==='1',
+                    fixture: p.get('nk_perf_fixture')
+                        || window.localStorage.getItem('NK_PERF_FIXTURE')
+                        || '',
+                    server_url: p.get('server_url')
+                        || window.localStorage.getItem('NK_SERVER_URL')
+                        || ''
+                };
+            })()""")
+            if _web_cfg.get('server_url'):
+                os.environ['SERVER_URL'] = str(_web_cfg.get('server_url')).rstrip('/')
+            if _web_cfg.get('perf'):
+                os.environ['NK_PERF'] = '1'
+            if _web_cfg.get('fixture'):
+                os.environ['NK_PERF_FIXTURE'] = str(_web_cfg.get('fixture'))
+        except Exception:
+            pass
         os.environ['NK_SCREEN_WIDTH']  = str(_w)
         os.environ['NK_SCREEN_HEIGHT'] = str(_h)
         os.environ.setdefault('SERVER_URL', _DEFAULT_SERVER_URL)
