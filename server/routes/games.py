@@ -6109,8 +6109,14 @@ def get_battle_state():
 
         payload = {
             'success': True,
+            'battle_confirmed': bool(game.battle_confirmed),
             'battle_round': game.battle_round,
             'battle_turn_player_id': game.battle_turn_player_id,
+            'advancing_player_id': game.advancing_player_id,
+            'advancing_figure_id': game.advancing_figure_id,
+            'advancing_figure_id_2': game.advancing_figure_id_2,
+            'defending_figure_id': game.defending_figure_id,
+            'defending_figure_id_2': game.defending_figure_id_2,
             'invader_player_id': game.invader_player_id,
             'player_moves': player_tactics,
             'opponent_moves': opponent_tactics,

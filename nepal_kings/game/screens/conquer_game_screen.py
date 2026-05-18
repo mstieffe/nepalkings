@@ -554,7 +554,7 @@ class ConquerGameScreen(GameScreen):
             phase = 'Pre-battle'
         if turn_pid is None:
             who = 'Preparing'
-        elif turn_pid == player_id:
+        elif self._ids_equal(turn_pid, player_id):
             who = 'Your move'
         else:
             who = 'Opponent move'
@@ -580,7 +580,7 @@ class ConquerGameScreen(GameScreen):
             turn = 'Resolved'
         elif turn_pid is None:
             turn = 'Preparing'
-        elif turn_pid == player_id:
+        elif self._ids_equal(turn_pid, player_id):
             turn = 'Your turn'
         else:
             turn = 'Opponent turn'
@@ -614,7 +614,7 @@ class ConquerGameScreen(GameScreen):
         turn_pid = getattr(game, 'battle_turn_player_id', None)
         player_id = getattr(game, 'player_id', None)
         round_label = min(int(round_no) + 1, 3) if turn_pid is not None else 1
-        if turn_pid == player_id:
+        if self._ids_equal(turn_pid, player_id):
             return f'Round {round_label}: your tactic action is pending.'
         if turn_pid is not None:
             return f'Round {round_label}: waiting for the opponent tactic.'
@@ -654,7 +654,7 @@ class ConquerGameScreen(GameScreen):
             # ---- player step --------------------------------------
             you_active = (
                 is_current and not you_played
-                and (turn_pid == player_id or turn_pid is None)
+                and (self._ids_equal(turn_pid, player_id) or turn_pid is None)
             )
             if you_played:
                 you_body = f'You played {you_label}.'
@@ -689,7 +689,7 @@ class ConquerGameScreen(GameScreen):
             # ---- opponent step ------------------------------------
             opp_active = (
                 is_current and not opp_played
-                and turn_pid is not None and turn_pid != player_id
+                and turn_pid is not None and not self._ids_equal(turn_pid, player_id)
             )
             if opp_played:
                 opp_body = f'{opponent_name} played {opp_label}.'
@@ -905,6 +905,9 @@ class ConquerGameScreen(GameScreen):
         The timeline ``Next`` button can still skip the hold by calling
         :meth:`_fire_pending_single_option` directly.
         """
+        if self._is_battle_phase_active():
+            self._auto_single_option_pending = None
+            return
         if self.dialogue_box is not None:
             self._auto_single_option_pending = None
             return
@@ -1642,7 +1645,10 @@ class ConquerGameScreen(GameScreen):
 
         phases = self._conquer_prelude_step_phases()
         specs = []
-        prebattle = not bool(getattr(game, 'battle_confirmed', False))
+        prebattle = not (
+            bool(getattr(game, 'battle_confirmed', False))
+            or self._is_battle_phase_active()
+        )
         if not prebattle:
             return specs
         for step_kind, spells in self._conquer_prelude_spell_groups():
@@ -1680,7 +1686,7 @@ class ConquerGameScreen(GameScreen):
         phases = self._conquer_prelude_step_phases()
         tracked = set()
         revealed = set()
-        reveal_all = bool(getattr(game, 'battle_confirmed', False))
+        reveal_all = bool(getattr(game, 'battle_confirmed', False)) or self._is_battle_phase_active()
         for step_kind, spells in self._conquer_prelude_spell_groups():
             phase = phases.get(step_kind, 'completed' if reveal_all else 'pending')
             for spell in spells or []:
@@ -2813,11 +2819,24 @@ class ConquerGameScreen(GameScreen):
         if not field:
             return
 
+        if self._is_battle_phase_active():
+            if getattr(field, 'defender_selection_mode', False):
+                field.defender_selection_mode = False
+                if hasattr(field, '_reset_defender_selectable'):
+                    field._reset_defender_selectable()
+            if getattr(field, 'conquer_own_defender_mode', False):
+                field.conquer_own_defender_mode = False
+                if hasattr(field, '_reset_defender_selectable'):
+                    field._reset_defender_selectable()
+            self._auto_single_option_pending = None
+            return
+
         civil_war_second_defender = bool(getattr(game, 'civil_war_defender_second', False))
         try:
             own_civil_war_second_defender = bool(
                 civil_war_second_defender
-                and getattr(game, 'advancing_player_id', None) != getattr(game, 'player_id', None)
+                and not self._ids_equal(getattr(game, 'advancing_player_id', None),
+                                        getattr(game, 'player_id', None))
                 and self._is_current_player_conquer_attacker()
             )
         except Exception:
@@ -3028,11 +3047,30 @@ class ConquerGameScreen(GameScreen):
                 game.battle_turn_player_id = result.get('battle_turn_player_id')
             except Exception:
                 pass
+        if 'battle_confirmed' in result:
+            try:
+                game.battle_confirmed = bool(result.get('battle_confirmed'))
+            except Exception:
+                pass
+        elif (getattr(game, 'battle_turn_player_id', None) is not None
+              or bool(result.get('battle_complete'))):
+            try:
+                game.battle_confirmed = True
+            except Exception:
+                pass
         if 'invader_player_id' in result:
             try:
                 game.invader_player_id = result.get('invader_player_id')
             except Exception:
                 pass
+        for attr in (
+                'advancing_player_id', 'advancing_figure_id', 'advancing_figure_id_2',
+                'defending_figure_id', 'defending_figure_id_2'):
+            if attr in result:
+                try:
+                    setattr(game, attr, result.get(attr))
+                except Exception:
+                    pass
         if 'battle_skipped_rounds' in result:
             try:
                 game.battle_skipped_rounds = result.get('battle_skipped_rounds') or {}
@@ -3072,7 +3110,7 @@ class ConquerGameScreen(GameScreen):
         for tactic in tactics:
             if not isinstance(tactic, dict):
                 continue
-            if tactic.get('player_id') == player_id:
+            if self._ids_equal(tactic.get('player_id'), player_id):
                 player_tactics.append(dict(tactic))
                 continue
             if tactic.get('status') == 'played' or tactic.get('played_round') is not None:
@@ -3146,7 +3184,7 @@ class ConquerGameScreen(GameScreen):
             tactics = [
                 dict(tactic)
                 for tactic in (getattr(game, 'conquer_tactics', []) or [])
-                if isinstance(tactic, dict) and tactic.get('player_id') == player_id
+                if isinstance(tactic, dict) and self._ids_equal(tactic.get('player_id'), player_id)
             ]
             if tactics:
                 return self._filter_conquer_tactics_by_displayed_step(tactics)
@@ -3239,7 +3277,7 @@ class ConquerGameScreen(GameScreen):
             for tactic in (getattr(game, 'conquer_tactics', []) or []):
                 if not isinstance(tactic, dict):
                     continue
-                if tactic.get('player_id') == player_id:
+                if self._ids_equal(tactic.get('player_id'), player_id):
                     continue
                 if (tactic.get('status') == 'played'
                         or tactic.get('played_round') is not None):
@@ -3531,6 +3569,16 @@ class ConquerGameScreen(GameScreen):
             clipped = clipped[:-1]
         return clipped + '...' if clipped else '...'
 
+    @staticmethod
+    def _id_key(value):
+        return None if value is None else str(value)
+
+    @classmethod
+    def _ids_equal(cls, left, right):
+        left_key = cls._id_key(left)
+        right_key = cls._id_key(right)
+        return left_key is not None and left_key == right_key
+
     def _conquer_lane_figures(self):
         game = self.state.game
         field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
@@ -3563,7 +3611,8 @@ class ConquerGameScreen(GameScreen):
             getattr(game, 'defending_figure_id', None),
             getattr(game, 'defending_figure_id_2', None),
         )
-        if getattr(game, 'advancing_player_id', None) == getattr(game, 'player_id', None):
+        if self._ids_equal(getattr(game, 'advancing_player_id', None),
+                           getattr(game, 'player_id', None)):
             return advancing, defending
         return defending, advancing
 
@@ -3856,7 +3905,7 @@ class ConquerGameScreen(GameScreen):
         if game is not None:
             for player in getattr(game, 'players', []) or []:
                 pid = player.get('id') if isinstance(player, dict) else getattr(player, 'id', None)
-                if pid is not None and pid != player_id:
+                if pid is not None and not self._ids_equal(pid, player_id):
                     opponent_ids.append(pid)
             skipped = getattr(game, 'battle_skipped_rounds', None) or {}
             for raw_pid in skipped.keys():
@@ -4093,8 +4142,8 @@ class ConquerGameScreen(GameScreen):
         if player_id is None or advancing_player_id is None:
             return False
         if is_player:
-            return advancing_player_id != player_id
-        return advancing_player_id == player_id
+            return not self._ids_equal(advancing_player_id, player_id)
+        return self._ids_equal(advancing_player_id, player_id)
 
     def _conquer_lane_support_entries(self, player_figures, opponent_figures, *,
                                       is_player, played_slots=None):
@@ -4102,7 +4151,11 @@ class ConquerGameScreen(GameScreen):
         if not game:
             return []
         player_id = getattr(game, 'player_id', None)
-        side_player_id = player_id if is_player else getattr(game, 'opponent_id', None)
+        opponent = getattr(game, 'opponent_player', None)
+        opponent_id = getattr(game, 'opponent_id', None)
+        if opponent_id is None and isinstance(opponent, dict):
+            opponent_id = opponent.get('id')
+        side_player_id = player_id if is_player else opponent_id
         if side_player_id is None:
             battle_figs = player_figures if is_player else opponent_figures
             if battle_figs:
@@ -4113,6 +4166,9 @@ class ConquerGameScreen(GameScreen):
         own_targets = player_figures if is_player else opponent_figures
         enemy_targets = opponent_figures if is_player else player_figures
         battle_ids = self._conquer_lane_battle_figure_ids()
+        battle_id_keys = {
+            self._id_key(fig_id) for fig_id in battle_ids if fig_id is not None
+        }
         entries = []
         seen = set()
 
@@ -4151,10 +4207,10 @@ class ConquerGameScreen(GameScreen):
             })
 
         for figure in self._conquer_lane_all_figures():
-            if getattr(figure, 'player_id', None) != side_player_id:
+            if not self._ids_equal(getattr(figure, 'player_id', None), side_player_id):
                 continue
             fig_id = getattr(figure, 'id', None)
-            in_battle = fig_id in battle_ids
+            in_battle = self._id_key(fig_id) in battle_id_keys
             if getattr(figure, 'has_deficit', False):
                 continue
             suit = getattr(figure, 'suit', None)

@@ -173,9 +173,10 @@ class ConquerTacticsRail:
         game = getattr(self._parent.state, 'game', None)
         if not game:
             return False
-        if getattr(game, 'battle_turn_player_id', None) is None:
+        turn_player_id = getattr(game, 'battle_turn_player_id', None)
+        if turn_player_id is None:
             return False
-        return getattr(game, 'battle_turn_player_id', None) == getattr(game, 'player_id', None)
+        return str(turn_player_id) == str(getattr(game, 'player_id', None))
 
     GAMBLE_PER_BATTLE_LIMIT = 3
 

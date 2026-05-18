@@ -405,7 +405,10 @@ class FieldScreen(SubScreen):
                     categorized_figures['opponent']['military'].append(figure)
 
             for figure in visual_ghosts:
-                side = 'self' if figure.player_id == self.game.player_id else 'opponent'
+                side = 'self' if self._same_id(
+                    getattr(figure, 'player_id', None),
+                    getattr(self.game, 'player_id', None),
+                ) else 'opponent'
                 field = getattr(getattr(figure, 'family', None), 'field', None)
                 if field in categorized_figures[side]:
                     categorized_figures[side][field].append(figure)
@@ -1849,6 +1852,10 @@ class FieldScreen(SubScreen):
             if fig_id is not None
         ))
 
+    @staticmethod
+    def _same_id(left, right):
+        return left is not None and right is not None and str(left) == str(right)
+
     def _tactics_hand_support_visibility_key(self, *, support_key=None):
         game = self.game
         if not game or getattr(game, 'mode', 'duel') != 'conquer':
@@ -1909,7 +1916,8 @@ class FieldScreen(SubScreen):
             figure = getattr(icon, 'figure', None)
             if figure is None:
                 continue
-            category = 'self' if getattr(figure, 'player_id', None) == player_id else 'opponent'
+            category = 'self' if self._same_id(
+                getattr(figure, 'player_id', None), player_id) else 'opponent'
             icon.is_visible = self._tactics_hand_figure_visible(
                 figure, category, support_ids)
 

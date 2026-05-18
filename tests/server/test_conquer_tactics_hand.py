@@ -95,6 +95,28 @@ def test_get_battle_state_hides_opponent_unplayed_conquer_tactics(app, db):
     assert 'value' not in hidden
 
 
+def test_get_battle_state_includes_active_battle_identity_fields(app, db):
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+
+    resp = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': attacker_player.id},
+        headers=_auth_headers(app, attacker),
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    payload = resp.get_json()
+    assert payload['battle_confirmed'] is True
+    assert payload['battle_round'] == 0
+    assert payload['battle_turn_player_id'] == attacker_player.id
+    assert payload['advancing_player_id'] == attacker_player.id
+    assert payload['advancing_figure_id'] == game.advancing_figure_id
+    assert payload['defending_figure_id'] == game.defending_figure_id
+
+
 def test_play_conquer_tactic_marks_played_and_advances_round(app, db):
     client, attacker, defender, game, attacker_player, defender_player = (
         _start_player_owned_conquer(app, db)

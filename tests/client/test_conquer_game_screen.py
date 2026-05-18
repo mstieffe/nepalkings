@@ -1067,6 +1067,133 @@ def test_conquer_dim_flags_compare_normalized_figure_ids():
     assert idle_icon.conquer_battle_dimmed is True
 
 
+def test_battle_state_poll_infers_confirmed_from_active_turn():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        battle_confirmed=False,
+        battle_turn_player_id=None,
+        battle_round=0,
+        conquer_resolution_step=0,
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    ConquerGameScreen._apply_battle_state_result(screen, {
+        'success': True,
+        'battle_round': 0,
+        'battle_turn_player_id': 1,
+        'player_tactics': [],
+        'opponent_tactics': [],
+    })
+
+    assert game.battle_confirmed is True
+    assert game.battle_turn_player_id == 1
+
+
+def test_active_battle_clears_stale_single_option_auto_action():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        battle_turn_player_id=1,
+        battle_round=0,
+        last_battle_result=None,
+        action_in_progress=False,
+    )
+    field = SimpleNamespace(
+        defender_selection_mode=True,
+        selectable_defender_figure_ids=lambda: [22],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen.subscreens = {'field': field}
+    screen.dialogue_box = None
+    screen._auto_single_option_pending = (('defender', 22), 0)
+
+    ConquerGameScreen._maybe_auto_advance_single_option_step(screen)
+
+    assert screen._auto_single_option_pending is None
+
+
+def test_active_battle_sync_clears_stale_defender_modes():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        battle_turn_player_id=1,
+        battle_round=0,
+        last_battle_result=None,
+    )
+    reset_calls = []
+    field = SimpleNamespace(
+        defender_selection_mode=True,
+        conquer_own_defender_mode=True,
+        _reset_defender_selectable=lambda: reset_calls.append(True),
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen.subscreens = {'field': field}
+    screen._auto_single_option_pending = (('defender', 22), 0)
+
+    ConquerGameScreen._sync_conquer_action_modes(screen)
+
+    assert field.defender_selection_mode is False
+    assert field.conquer_own_defender_mode is False
+    assert screen._auto_single_option_pending is None
+    assert len(reset_calls) == 2
+
+
+def test_lane_context_support_ids_normalize_live_payload_ids():
+    ConquerGameScreen = _conquer_screen_class()
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        game_id=9,
+        player_id='1',
+        opponent_player={'id': 2},
+        battle_turn_player_id=1,
+        battle_round=0,
+        last_battle_result=None,
+        advancing_player_id=1,
+        advancing_figure_id='100',
+        advancing_figure_id_2=None,
+        defending_figure_id='200',
+        defending_figure_id_2=None,
+        land_suit_bonus_suit=None,
+        land_suit_bonus_value=None,
+        battle_skipped_rounds={},
+        conquer_tactics=[],
+        conquer_resolution_step=0,
+        _game_data_version=1,
+        _figures_data_version=1,
+    )
+    ConquerGameScreen, screen = _base_conquer_screen(game)
+
+    def figure(fig_id, player_id, field):
+        return SimpleNamespace(
+            id=fig_id,
+            player_id=player_id,
+            suit='red',
+            name=f'Figure {fig_id}',
+            family=SimpleNamespace(field=field),
+            has_deficit=False,
+            value=3,
+        )
+
+    screen.subscreens['field'].figures = [
+        figure(100, 1, 'military'),
+        figure(101, 1, 'castle'),
+        figure(200, 2, 'military'),
+        figure(201, 2, 'castle'),
+    ]
+    screen._conquer_lane_context_cache_key = None
+    screen._conquer_lane_context_fast_cache_key = None
+    screen._conquer_lane_context_cache = None
+
+    context = ConquerGameScreen._conquer_lane_context(screen)
+
+    assert context['player_support_ids'] == {101}
+    assert context['opponent_support_ids'] == {201}
+    assert {str(fig_id) for fig_id in context['involved_ids']} == {
+        '100', '101', '200', '201'}
+
+
 def _minimal_update_screen(game):
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
