@@ -132,6 +132,33 @@ def test_no_prelude_steps_show_empty_frames_when_attacker_can_act():
     assert by_kind['attacker'].active
 
 
+def test_game_start_pending_holds_overview_until_prelude_snapshot_arrives():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    game = _make_game(
+        turn=True,
+        pending_forced_advance=True,
+        _game_start_pending=True,
+    )
+    screen = SimpleNamespace(
+        state=_make_state(game),
+        subscreens={},
+        _conquer_acknowledged_step_kinds={'overview'},
+        _conquer_timeline_step_started_at={},
+    )
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+
+    steps = panel.derive_display_steps(screen)
+    by_kind = {s.kind: s for s in steps}
+
+    assert by_kind['overview'].active
+    assert not by_kind['prelude_own'].active
+    assert not by_kind['prelude_own'].completed
+    assert not by_kind['prelude_opp'].active
+    assert not by_kind['prelude_opp'].completed
+    assert not by_kind['attacker'].active
+
+
 def test_own_prelude_uses_spell_assets_instead_of_no_spell_text():
     from game.screens.conquer_flow import derive_conquer_timeline
 

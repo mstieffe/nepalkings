@@ -2,8 +2,8 @@
 # See LICENSE file in the project root for full license information.
 """Focused coverage for the conquer tactics-hand model."""
 
-from models import (BattleMove, CollectionCard, ConquerTactic, Figure, Game,
-                    MainCard, Player)
+from models import (ActiveSpell, BattleMove, CollectionCard, ConquerTactic,
+                    Figure, Game, MainCard, Player)
 
 from tests.server.test_land_battle import (
     _auth_headers,
@@ -115,6 +115,83 @@ def test_get_battle_state_includes_active_battle_identity_fields(app, db):
     assert payload['advancing_player_id'] == attacker_player.id
     assert payload['advancing_figure_id'] == game.advancing_figure_id
     assert payload['defending_figure_id'] == game.defending_figure_id
+
+
+def test_get_battle_state_includes_timer_and_active_spells(app, db):
+    from routes.games import CONQUER_ROUND_TIMEOUT_SEC, _conquer_round_deadlines
+
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+    _conquer_round_deadlines.pop(game.id, None)
+
+    spell = ActiveSpell(
+        game_id=game.id,
+        player_id=defender_player.id,
+        spell_name='Poison',
+        spell_type='enchantment',
+        spell_family_name='Poison',
+        suit='Spades',
+        target_figure_id=game.advancing_figure_id,
+        cast_round=1,
+        duration=99,
+        is_active=True,
+        effect_data={
+            'counter_origin': True,
+            'counter_status': 'executed',
+            'target_figure_id': game.advancing_figure_id,
+            'power_modifier': -6,
+        },
+    )
+    db.session.add(spell)
+    db.session.commit()
+
+    resp = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': attacker_player.id},
+        headers=_auth_headers(app, attacker),
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    payload = resp.get_json()
+    assert payload['conquer_round_deadline_ts'] is not None
+    assert payload['conquer_round_timeout_sec'] == CONQUER_ROUND_TIMEOUT_SEC
+    assert payload['battle_modifier'] == game.battle_modifier
+    poison = next(s for s in payload['active_spells'] if s['spell_name'] == 'Poison')
+    assert poison['target_figure_id'] == game.advancing_figure_id
+    assert poison['effect_data']['power_modifier'] == -6
+
+
+def test_get_battle_state_triggers_expired_round_timeout(app, db, monkeypatch):
+    from routes.games import _conquer_round_deadlines, _conquer_timeout_last_check
+    import ai.ai_worker as ai_worker
+
+    monkeypatch.setattr(ai_worker, 'trigger_ai_if_needed', lambda *args, **kwargs: None)
+    client, attacker, _defender, game, attacker_player, defender_player = (
+        _start_player_owned_conquer(app, db)
+    )
+    _force_active_battle(db, game, attacker_player, defender_player)
+    _conquer_round_deadlines[game.id] = (0, 0.0)
+    _conquer_timeout_last_check.pop(game.id, None)
+
+    resp = client.get(
+        '/games/get_battle_state',
+        query_string={'game_id': game.id, 'player_id': attacker_player.id},
+        headers=_auth_headers(app, attacker),
+    )
+
+    assert resp.status_code == 200, resp.get_json()
+    payload = resp.get_json()
+    db.session.refresh(game)
+    played = ConquerTactic.query.filter_by(
+        game_id=game.id, status='played', played_round=0).all()
+    assert {t.player_id for t in played} >= {
+        attacker_player.id, defender_player.id
+    }
+    assert payload['battle_round'] == 1
+    assert game.battle_round == 1
+    assert payload['conquer_round_deadline_ts'] is not None
 
 
 def test_play_conquer_tactic_marks_played_and_advances_round(app, db):

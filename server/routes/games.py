@@ -220,6 +220,20 @@ def _check_conquer_round_timeout(game):
         logger.exception('Failed to retrigger AI after conquer round timeout')
 
 
+def _conquer_spell_visible_in_live_state(spell):
+    if getattr(spell, 'is_active', False):
+        return True
+    effect_data = spell.effect_data if isinstance(spell.effect_data, dict) else {}
+    if not effect_data.get('prelude_origin'):
+        return False
+    return bool(
+        effect_data.get('prelude_status')
+        or effect_data.get('prelude_pending_target')
+        or effect_data.get('target_figure_snapshot')
+        or effect_data.get('destroyed_figure_snapshot')
+    )
+
+
 def _get_tactic_card(tactic, *, secondary=False):
     card_id = tactic.card_id_b if secondary else tactic.card_id
     card_type = (tactic.card_type_b if secondary else tactic.card_type) or 'main'
@@ -6087,6 +6101,10 @@ def get_battle_state():
         return jsonify({'success': False, 'message': 'Player not found in this game'}), 403
 
     if _is_tactics_hand_conquer(game):
+        _ensure_conquer_round_deadline(game)
+        _check_conquer_round_timeout(game)
+        deadline = _conquer_round_deadline_for(game)
+
         all_tactics = ConquerTactic.query.filter_by(game_id=game_id).order_by(
             ConquerTactic.sort_order.asc(), ConquerTactic.id.asc()).all()
 
@@ -6125,6 +6143,14 @@ def get_battle_state():
             'battle_skipped_rounds': game.battle_skipped_rounds or {},
             'battle_complete': _battle_all_rounds_complete(game),
             'conquer_resolution_step': int(getattr(game, 'conquer_resolution_step', 0) or 0),
+            'conquer_round_deadline_ts': deadline,
+            'conquer_round_timeout_sec': CONQUER_ROUND_TIMEOUT_SEC if deadline is not None else None,
+            'battle_modifier': game.battle_modifier,
+            'active_spells': [
+                spell.serialize()
+                for spell in ActiveSpell.query.filter_by(game_id=game_id).all()
+                if _conquer_spell_visible_in_live_state(spell)
+            ],
         }
         # When the conquer game has already finished (e.g. the client
         # reconnected after the resolve flow completed), surface the

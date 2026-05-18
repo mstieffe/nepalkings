@@ -474,6 +474,20 @@ class ConquerTimelinePanel:
             screen._conquer_timeline_step_started_at = timers
 
         game = getattr(getattr(screen, 'state', None), 'game', None)
+        if self._awaiting_game_start_prelude_snapshot(game):
+            for idx, step in enumerate(steps):
+                if idx == 0 and step.kind == 'overview':
+                    step.active = True
+                    step.completed = False
+                    step.interactive = False
+                    step.primary_action = None
+                else:
+                    step.active = False
+                    step.completed = False
+                    step.interactive = False
+                    step.primary_action = None
+            return steps
+
         if game and (
             getattr(game, 'state', None) == 'finished'
             or getattr(game, 'game_over', False)
@@ -516,6 +530,21 @@ class ConquerTimelinePanel:
                 later.completed = False
             return steps
         return steps
+
+    @staticmethod
+    def _awaiting_game_start_prelude_snapshot(game):
+        if game is None or getattr(game, 'mode', None) != 'conquer':
+            return False
+        if not getattr(game, '_game_start_pending', False):
+            return False
+        if (getattr(game, 'state', None) == 'finished'
+                or getattr(game, 'game_over', False)
+                or getattr(game, 'last_battle_result', None)):
+            return False
+        if (getattr(game, 'battle_turn_player_id', None) is not None
+                or int(getattr(game, 'battle_round', 0) or 0) >= 1):
+            return False
+        return True
 
     @staticmethod
     def _step_needs_hold(step):

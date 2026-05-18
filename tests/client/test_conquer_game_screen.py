@@ -334,6 +334,88 @@ def test_conquer_health_boost_missing_target_uses_snapshot_anchor():
     assert effects.spawned[0][3]['floating_text'] == '+ Health'
 
 
+def test_conquer_counter_poison_timeline_step_spawns_target_animation():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+
+    active_spell = {
+        'id': 501,
+        'player_id': 20,
+        'spell_name': 'Poison',
+        'target_figure_id': 77,
+        'effect_data': {
+            'counter_origin': True,
+            'counter_status': 'executed',
+            'target_figure_id': 77,
+            'target_figure_snapshot': {
+                'id': 77,
+                'player_id': 10,
+                'name': 'Advancing Guard',
+                'family_name': 'Guard',
+                'field': 'military',
+                'suit': 'Hearts',
+            },
+            'power_modifier': -6,
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        cached_active_spells=[active_spell],
+        battle_modifier=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_lane_figure_rects = [{
+        'figure': SimpleNamespace(id=77),
+        'rect': pygame.Rect(300, 240, 48, 64),
+    }]
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    screen._conquer_collapsed_header_rect = pygame.Rect(0, 0, 160, 48)
+    screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='counter',
+                icon_payload='Poison',
+                owner='Rival',
+                active=True,
+                completed=False,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.spawned = []
+
+        def clear(self):
+            pass
+
+        def spawn_spell_cast(self, spell_name, anchor, target_id, **kwargs):
+            self.spawned.append((spell_name, pygame.Rect(anchor), target_id, kwargs))
+
+        def spawn_banner(self, *args, **kwargs):
+            self.spawned.append(('banner', args, kwargs))
+
+    effects = _Effects()
+    screen._conquer_timeline_panel = _Panel()
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert effects.spawned
+    assert effects.spawned[0][0] == 'Poison'
+    assert effects.spawned[0][2] == 77
+    assert effects.spawned[0][3]['floating_text'] == '-6 power'
+
+
 def test_conquer_health_boost_refires_when_pending_target_resolves():
     """When a pending-target Health Boost first becomes active without a
     resolved target_figure_id, the pump should only emit a banner.  Once
@@ -700,6 +782,55 @@ def test_conquer_prelude_enchantment_hidden_until_step_active():
     FieldScreen._filter_conquer_timeline_enchantments(field, [figure, boosted])
     assert figure.active_enchantments
     assert boosted.active_enchantments
+
+
+def test_conquer_counter_poison_enchantment_hidden_until_counter_step_active():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    spell = {
+        'id': 501,
+        'player_id': 20,
+        'spell_name': 'Poison',
+        'target_figure_id': 77,
+        'effect_data': {
+            'counter_origin': True,
+            'counter_status': 'executed',
+            'target_figure_id': 77,
+            'power_modifier': -6,
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        battle_turn_player_id=None,
+        cached_active_spells=[spell],
+        battle_modifier=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    class _Panel:
+        def __init__(self, counter_active):
+            self._counter_active = counter_active
+
+        def derive_display_steps(self, _screen):
+            return [
+                SimpleNamespace(kind='attacker', active=not self._counter_active,
+                                completed=False, icon_payload=None, owner=''),
+                SimpleNamespace(kind='counter', active=self._counter_active,
+                                completed=False, icon_payload='Poison', owner='Rival'),
+            ]
+
+    screen._conquer_timeline_panel = _Panel(counter_active=False)
+    hidden = ConquerGameScreen.conquer_prelude_enchantment_visibility(screen)
+    assert ('Poison', 77) in hidden['tracked']
+    assert ('Poison', 77) not in hidden['revealed']
+
+    screen._conquer_timeline_panel = _Panel(counter_active=True)
+    revealed = ConquerGameScreen.conquer_prelude_enchantment_visibility(screen)
+    assert ('Poison', 77) in revealed['revealed']
 
 
 def test_conquer_explosion_pending_snapshot_is_normal_field_figure(monkeypatch):
@@ -1088,6 +1219,45 @@ def test_battle_state_poll_infers_confirmed_from_active_turn():
 
     assert game.battle_confirmed is True
     assert game.battle_turn_player_id == 1
+
+
+def test_battle_state_poll_applies_timer_and_active_spells():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    game = SimpleNamespace(
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=0,
+        conquer_resolution_step=0,
+        cached_active_spells=[],
+        _figures_data_version=3,
+        battle_modifier=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    active_spell = {
+        'id': 9,
+        'spell_name': 'Poison',
+        'target_figure_id': 44,
+        'effect_data': {'power_modifier': -6},
+    }
+    ConquerGameScreen._apply_battle_state_result(screen, {
+        'success': True,
+        'battle_round': 0,
+        'battle_turn_player_id': 1,
+        'player_tactics': [],
+        'opponent_tactics': [],
+        'conquer_round_deadline_ts': 1234.5,
+        'conquer_round_timeout_sec': 60,
+        'active_spells': [active_spell],
+        'battle_modifier': [{'type': 'Blitzkrieg'}],
+    })
+
+    assert game.conquer_round_deadline_ts == 1234.5
+    assert game.conquer_round_timeout_sec == 60
+    assert game.cached_active_spells == [active_spell]
+    assert game.battle_modifier == [{'type': 'Blitzkrieg'}]
+    assert game._figures_data_version == 4
 
 
 def test_active_battle_clears_stale_single_option_auto_action():

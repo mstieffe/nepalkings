@@ -1507,8 +1507,7 @@ class ConquerGameScreen(GameScreen):
         current_phase = {}
         for step in steps:
             kind = getattr(step, 'kind', '')
-            if kind not in ('prelude_own', 'prelude_opp'):
-                # Only prelude steps carry spell-cast animations today.
+            if kind not in ('prelude_own', 'prelude_opp', 'counter'):
                 continue
             payload = getattr(step, 'icon_payload', None)
             if not isinstance(payload, str) or not payload:
@@ -1562,7 +1561,7 @@ class ConquerGameScreen(GameScreen):
                     # prelude like Health Boost).  Re-fire now that the
                     # target id is known so the real animation plays.
                     _kind, sp_name, _owner = key
-                    spell_info = self._resolve_prelude_spell_info(_kind, sp_name)
+                    spell_info = self._resolve_spell_step_info(_kind, sp_name)
                     if self._prelude_spell_target_id(spell_info) is not None:
                         self._fire_spell_step_animation(key, anchor)
             self._spell_step_phase = dict(current_phase)
@@ -1585,7 +1584,7 @@ class ConquerGameScreen(GameScreen):
         kind, spell_name, _owner = step_key
         if spell_name not in ('Poison', 'Health Boost', 'Explosion'):
             return
-        spell_info = self._resolve_prelude_spell_info(kind, spell_name)
+        spell_info = self._resolve_spell_step_info(kind, spell_name)
         target_id = self._prelude_spell_target_id(spell_info)
         fired_set = getattr(self, '_spell_anim_target_fired', None)
         if fired_set is None:
@@ -1702,6 +1701,20 @@ class ConquerGameScreen(GameScreen):
                 tracked.add(key)
                 if reveal_all or phase in ('active', 'completed'):
                     revealed.add(key)
+        counter_phase = phases.get('counter', 'completed' if reveal_all else 'pending')
+        for spell in self._conquer_counter_spells():
+            if not isinstance(spell, dict):
+                continue
+            spell_name = spell.get('spell_name')
+            if spell_name not in self.FIELD_REPLAY_ENCHANTMENT_SPELLS:
+                continue
+            target_id = self._prelude_spell_target_id(spell)
+            if target_id is None:
+                continue
+            key = (spell_name, target_id)
+            tracked.add(key)
+            if reveal_all or counter_phase in ('active', 'completed'):
+                revealed.add(key)
         return {'tracked': tracked, 'revealed': revealed}
 
     def _conquer_prelude_spell_groups(self):
@@ -1744,6 +1757,16 @@ class ConquerGameScreen(GameScreen):
             seen.add(key)
         return (('prelude_own', groups['prelude_own']),
                 ('prelude_opp', groups['prelude_opp']))
+
+    def _conquer_counter_spells(self):
+        game = getattr(self.state, 'game', None)
+        if game is None:
+            return []
+        try:
+            from game.screens.conquer_flow import _counter_spells
+            return list(_counter_spells(game) or [])
+        except Exception:
+            return []
 
     def _conquer_prelude_spell_key(self, step_kind, spell):
         effect_data = spell.get('effect_data') if isinstance(spell, dict) else {}
@@ -1815,7 +1838,7 @@ class ConquerGameScreen(GameScreen):
                 break
         for idx, step in enumerate(steps):
             kind = getattr(step, 'kind', '')
-            if kind not in ('prelude_own', 'prelude_opp'):
+            if kind not in ('prelude_own', 'prelude_opp', 'counter'):
                 continue
             if active_idx is not None and idx > active_idx:
                 phases[kind] = 'pending'
@@ -1850,7 +1873,7 @@ class ConquerGameScreen(GameScreen):
 
         for step in steps or []:
             kind = getattr(step, 'kind', '')
-            if kind not in ('prelude_own', 'prelude_opp'):
+            if kind not in ('prelude_own', 'prelude_opp', 'counter'):
                 continue
             spell_name = getattr(step, 'icon_payload', None)
             if spell_name not in ('Poison', 'Health Boost', 'Explosion'):
@@ -1859,7 +1882,7 @@ class ConquerGameScreen(GameScreen):
             phase = current_phase.get((kind, spell_name, owner), 'pending')
             if phase not in ('pending', 'active'):
                 continue
-            spell_info = self._resolve_prelude_spell_info(kind, spell_name)
+            spell_info = self._resolve_spell_step_info(kind, spell_name)
             target_id = self._prelude_spell_target_id(spell_info)
             if target_id is None:
                 continue
@@ -1903,6 +1926,19 @@ class ConquerGameScreen(GameScreen):
             if (spell.get('spell_name') or '') == spell_name:
                 return spell
         return None
+
+    def _resolve_counter_spell_info(self, spell_name):
+        for spell in self._conquer_counter_spells():
+            if not isinstance(spell, dict):
+                continue
+            if (spell.get('spell_name') or '') == spell_name:
+                return spell
+        return None
+
+    def _resolve_spell_step_info(self, step_kind, spell_name):
+        if step_kind == 'counter':
+            return self._resolve_counter_spell_info(spell_name)
+        return self._resolve_prelude_spell_info(step_kind, spell_name)
 
     @staticmethod
     def _prelude_spell_target_id(spell_info):
@@ -3074,6 +3110,31 @@ class ConquerGameScreen(GameScreen):
         if 'battle_skipped_rounds' in result:
             try:
                 game.battle_skipped_rounds = result.get('battle_skipped_rounds') or {}
+            except Exception:
+                pass
+        if 'conquer_round_deadline_ts' in result:
+            try:
+                game.conquer_round_deadline_ts = result.get('conquer_round_deadline_ts')
+            except Exception:
+                pass
+        if 'conquer_round_timeout_sec' in result:
+            try:
+                game.conquer_round_timeout_sec = result.get('conquer_round_timeout_sec')
+            except Exception:
+                pass
+        if 'active_spells' in result:
+            try:
+                previous_spells = getattr(game, 'cached_active_spells', None)
+                active_spells = result.get('active_spells') or []
+                game.cached_active_spells = active_spells
+                if previous_spells != active_spells:
+                    game._figures_data_version = int(
+                        getattr(game, '_figures_data_version', 0) or 0) + 1
+            except Exception:
+                pass
+        if 'battle_modifier' in result:
+            try:
+                game.battle_modifier = result.get('battle_modifier')
             except Exception:
                 pass
         if 'conquer_resolution_step' in result:

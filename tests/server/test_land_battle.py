@@ -1819,11 +1819,27 @@ class TestConquerCounterSpells:
             ).first()
             assert spell is not None
             assert spell.target_figure_id == atk_fig.id
+            assert spell.is_active is True
+            assert (spell.effect_data or {}).get('power_modifier') == -6
             assert (spell.effect_data or {}).get('counter_status') == 'executed'
 
             db.session.refresh(game)
             assert game.turn_player_id == atk_player.id
             assert game.defending_figure_id is None
+
+            from routes.games import _compute_server_total_diff
+            def_fig = Figure.query.filter_by(
+                game_id=game.id, player_id=def_player.id).first()
+            game.defending_figure_id = def_fig.id
+            game.battle_confirmed = True
+            db.session.commit()
+
+            with_poison = _compute_server_total_diff(game)
+            spell.is_active = False
+            db.session.commit()
+            without_poison = _compute_server_total_diff(game)
+
+            assert without_poison - with_poison == 6
 
     def test_counter_health_boost_uses_configured_target(self, app, db):
         with app.app_context():
