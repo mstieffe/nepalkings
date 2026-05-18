@@ -1842,11 +1842,20 @@ class FieldScreen(SubScreen):
             if getattr(figure, key, False)
         }
 
-    def _tactics_hand_support_visibility_key(self):
+    def _tactics_hand_revealed_support_figure_key(self):
+        support_ids = self._tactics_hand_revealed_support_figure_ids()
+        return tuple(sorted(
+            str(fig_id) for fig_id in (support_ids or set())
+            if fig_id is not None
+        ))
+
+    def _tactics_hand_support_visibility_key(self, *, support_key=None):
         game = self.game
         if not game or getattr(game, 'mode', 'duel') != 'conquer':
             return ()
         parent = self._conquer_parent()
+        if support_key is None:
+            support_key = self._tactics_hand_revealed_support_figure_key()
         return (
             getattr(game, 'game_id', None),
             getattr(game, 'player_id', None),
@@ -1864,6 +1873,7 @@ class FieldScreen(SubScreen):
             getattr(game, 'land_suit_bonus_value', None),
             getattr(parent, '_conquer_tactic_cache_key', None),
             getattr(parent, '_conquer_opponent_tactic_cache_key', None),
+            support_key,
             bool(getattr(self, 'cached_all_seeing_eye_status', False)),
         )
 
@@ -1888,11 +1898,12 @@ class FieldScreen(SubScreen):
         if not self._uses_unified_conquer_layout():
             self._last_tactics_hand_support_visibility_key = ()
             return
-        key = self._tactics_hand_support_visibility_key()
+        support_key = self._tactics_hand_revealed_support_figure_key()
+        key = self._tactics_hand_support_visibility_key(support_key=support_key)
         if not force and key == self._last_tactics_hand_support_visibility_key:
             return
         self._last_tactics_hand_support_visibility_key = key
-        support_ids = self._tactics_hand_revealed_support_figure_ids()
+        support_ids = set(support_key)
         player_id = getattr(self.game, 'player_id', None) if self.game else None
         for icon in getattr(self, 'figure_icons', []) or []:
             figure = getattr(icon, 'figure', None)

@@ -1727,6 +1727,54 @@ def test_timeline_panel_reveals_all_steps_on_zero_indexed_first_battle_round():
     assert panel.currently_resolved_step_index(screen) == 3
 
 
+def test_timeline_panel_reveals_all_steps_when_active_round_not_confirmed():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((10, 10)))
+    screen = SimpleNamespace(
+        _conquer_resolution_step_server=3,
+        state=SimpleNamespace(game=SimpleNamespace(
+            conquer_resolution_step=3,
+            battle_confirmed=False,
+            battle_turn_player_id=None,
+            battle_round=1,
+        )),
+    )
+    panel.derive_display_steps = lambda _screen: [
+        TimelineStep(kind='overview', title='Overview', active=True),
+        TimelineStep(kind='prelude_own', title='Prelude'),
+    ]
+
+    assert panel.currently_resolved_step_index(screen) == 3
+
+
+def test_timeline_sequence_gates_skip_active_round_without_confirmed_flag():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+    screen = SimpleNamespace(
+        _conquer_acknowledged_step_kinds=set(),
+        _conquer_timeline_step_started_at={},
+        state=SimpleNamespace(game=SimpleNamespace(
+            battle_confirmed=False,
+            battle_turn_player_id=None,
+            battle_round=1,
+            game_over=False,
+            last_battle_result=None,
+        )),
+    )
+    steps = [
+        TimelineStep(kind='overview', title='Overview', completed=True),
+        TimelineStep(kind='prelude_own', title='Prelude', completed=True),
+        TimelineStep(kind='attacker', title='Attack'),
+    ]
+
+    assert panel._apply_sequence_gates(screen, steps) is steps
+    assert screen._conquer_timeline_step_started_at == {}
+
+
 def test_timeline_panel_step_gated_by_completed_prelude_bubbles():
     """Before battle proper starts, displayed step is gated by the number
     of completed-or-active prelude bubbles the user has seen."""

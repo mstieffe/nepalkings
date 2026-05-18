@@ -1004,6 +1004,46 @@ def test_field_support_visibility_syncs_cached_icons_without_reload():
     assert icon.is_visible is False
 
 
+def test_field_support_visibility_key_tracks_support_ids_without_cache_key_change():
+    from game.screens.field_screen import FieldScreen
+
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=1,
+        both_battle_moves_ready=False,
+        last_battle_result=None,
+        game_id=7,
+        player_id=1,
+        _figures_data_version=1,
+    )
+    support_ids = set()
+    parent = SimpleNamespace(
+        request_conquer_figure_confirmation=lambda *args, **kwargs: None,
+        _conquer_tactic_cache_key=('same',),
+        _conquer_opponent_tactic_cache_key=('same',),
+        conquer_active_support_figure_ids=lambda opponent_only=False: set(support_ids),
+    )
+    figure = SimpleNamespace(id=20, player_id=2, name='Support Soldier')
+    icon = SimpleNamespace(figure=figure, is_visible=False)
+    field = FieldScreen.__new__(FieldScreen)
+    field.game = game
+    field.state = SimpleNamespace(parent_screen=parent)
+    field.figure_icons = [icon]
+    field.cached_all_seeing_eye_status = False
+    field._last_tactics_hand_support_visibility_key = ()
+
+    FieldScreen._sync_tactics_hand_support_visibility(field)
+    assert icon.is_visible is False
+
+    support_ids.add('20')
+    FieldScreen._sync_tactics_hand_support_visibility(field)
+
+    assert icon.is_visible is True
+
+
 def test_conquer_dim_flags_compare_normalized_figure_ids():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)

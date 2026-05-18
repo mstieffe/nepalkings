@@ -128,14 +128,13 @@ class ConquerTimelinePanel:
         # Track the latest server step we have seen for parity.
         self._last_seen_server_step = max(self._last_seen_server_step, server_step)
         # Once the battle proper has started, reveal everything — spell
-        # timeline beats are by definition all in the past. Tactics-hand
-        # battle rounds are zero-indexed, so the reliable battle-start signal
-        # is an assigned battle-turn player, not ``battle_round >= 1``.
-        if game is not None and bool(getattr(game, 'battle_confirmed', False)) \
-            and (
-                getattr(game, 'battle_turn_player_id', None) is not None
-                or int(getattr(game, 'battle_round', 0) or 0) >= 1
-            ):
+        # timeline beats are by definition all in the past. Live snapshots can
+        # carry active round/turn fields even when ``battle_confirmed`` is
+        # false or absent, so key off the active battle fields directly.
+        if game is not None and (
+            getattr(game, 'battle_turn_player_id', None) is not None
+            or int(getattr(game, 'battle_round', 0) or 0) >= 1
+        ):
             return max(0, server_step - int(self._displayed_step_offset or 0))
         # Count completed-or-active spell timeline bubbles seen so far. Each
         # acts as a gate that permits one additional resolution step to surface.
@@ -479,6 +478,7 @@ class ConquerTimelinePanel:
             getattr(game, 'state', None) == 'finished'
             or getattr(game, 'game_over', False)
             or getattr(game, 'battle_turn_player_id', None) is not None
+            or int(getattr(game, 'battle_round', 0) or 0) >= 1
             or getattr(game, 'last_battle_result', None)):
             return steps
 
