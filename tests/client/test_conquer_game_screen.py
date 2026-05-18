@@ -416,6 +416,273 @@ def test_conquer_counter_poison_timeline_step_spawns_target_animation():
     assert effects.spawned[0][3]['floating_text'] == '-6 power'
 
 
+def test_conquer_card_prelude_spell_flies_to_tactics_rail():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+
+    spell = {
+        'spell_name': 'Dump Cards',
+        'effect_data': {
+            'caster_dumped': 4,
+            'opponent_dumped': 3,
+            'drawn_cards': [{'rank': '7', 'suit': 'Hearts'}],
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[spell],
+        conquer_opp_prelude_spells=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_lane_figure_rects = []
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    rail_rect = pygame.Rect(640, 120, 180, 320)
+    screen._tactics_rail = SimpleNamespace(_dyn_hand_list_rect=rail_rect)
+    screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='prelude_own',
+                icon_payload='Dump Cards',
+                owner='you',
+                active=True,
+                completed=False,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.to_rect = []
+
+        def clear(self):
+            pass
+
+        def spawn_spell_to_rect(self, spell_name, anchor, target_rect, **kwargs):
+            self.to_rect.append((spell_name, pygame.Rect(anchor), pygame.Rect(target_rect), kwargs))
+
+        def spawn_banner(self, *args, **kwargs):
+            pass
+
+    effects = _Effects()
+    screen._conquer_timeline_panel = _Panel()
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert effects.to_rect
+    assert effects.to_rect[0][0] == 'Dump Cards'
+    assert effects.to_rect[0][2] == rail_rect
+    assert effects.to_rect[0][3]['floating_text'] == 'redraw'
+
+
+def test_conquer_card_counter_spell_flies_to_tactics_rail():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+
+    active_spell = {
+        'id': 502,
+        'player_id': 20,
+        'spell_name': 'Forced Deal',
+        'effect_data': {
+            'counter_origin': True,
+            'cards_given': [{'rank': '8', 'suit': 'Clubs'}],
+            'cards_received': [{'rank': '9', 'suit': 'Spades'}],
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        cached_active_spells=[active_spell],
+        battle_modifier=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_lane_figure_rects = []
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    rail_rect = pygame.Rect(640, 120, 180, 320)
+    screen._tactics_rail = SimpleNamespace(_dyn_hand_list_rect=rail_rect)
+    screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='counter',
+                icon_payload='Forced Deal',
+                owner='Rival',
+                active=True,
+                completed=False,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.to_rect = []
+
+        def clear(self):
+            pass
+
+        def spawn_spell_to_rect(self, spell_name, anchor, target_rect, **kwargs):
+            self.to_rect.append((spell_name, pygame.Rect(target_rect), kwargs))
+
+        def spawn_banner(self, *args, **kwargs):
+            pass
+
+    effects = _Effects()
+    screen._conquer_timeline_panel = _Panel()
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert effects.to_rect == [('Forced Deal', rail_rect, {'floating_text': 'swap'})]
+
+
+def test_conquer_modifier_prelude_spawns_banner_and_duel_lane_pulse():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+
+    spell = {'spell_name': 'Civil War', 'effect_data': {'battle_modifier_added': 'Civil War'}}
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        conquer_own_prelude_spells=[spell],
+        conquer_opp_prelude_spells=[],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_lane_figure_rects = []
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    lane_rect = pygame.Rect(180, 130, 420, 240)
+    screen._conquer_duel_lane_last_rect = lane_rect
+    screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='prelude_own',
+                icon_payload='Civil War',
+                owner='you',
+                active=True,
+                completed=False,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.banners = []
+            self.pulses = []
+
+        def clear(self):
+            pass
+
+        def spawn_banner(self, text, color, **kwargs):
+            self.banners.append((text, color, kwargs))
+
+        def spawn_rect_pulse(self, target_rect, color, **kwargs):
+            self.pulses.append((pygame.Rect(target_rect), color, kwargs))
+
+    effects = _Effects()
+    screen._conquer_timeline_panel = _Panel()
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert effects.banners[0][0] == 'Civil War'
+    assert effects.pulses[0][0] == lane_rect
+
+
+def test_conquer_modifier_counter_spawns_banner_and_duel_lane_pulse():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+
+    active_spell = {
+        'id': 503,
+        'player_id': 20,
+        'spell_name': 'Blitzkrieg',
+        'effect_data': {
+            'counter_origin': True,
+            'battle_modifier_added': 'Blitzkrieg',
+        },
+    }
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        cached_active_spells=[active_spell],
+        battle_modifier=[{'type': 'Blitzkrieg', 'caster_id': 20, 'spell_id': 503}],
+    )
+    screen.state = SimpleNamespace(game=game)
+    screen._conquer_lane_figure_rects = []
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    lane_rect = pygame.Rect(180, 130, 420, 240)
+    screen._conquer_duel_lane_last_rect = lane_rect
+    screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='counter',
+                icon_payload='Blitzkrieg',
+                owner='Rival',
+                active=True,
+                completed=False,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.banners = []
+            self.pulses = []
+
+        def clear(self):
+            pass
+
+        def spawn_banner(self, text, color, **kwargs):
+            self.banners.append((text, color, kwargs))
+
+        def spawn_rect_pulse(self, target_rect, color, **kwargs):
+            self.pulses.append((pygame.Rect(target_rect), color, kwargs))
+
+    effects = _Effects()
+    screen._conquer_timeline_panel = _Panel()
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert effects.banners[0][0] == 'Blitzkrieg'
+    assert effects.pulses[0][0] == lane_rect
+
+
 def test_conquer_health_boost_refires_when_pending_target_resolves():
     """When a pending-target Health Boost first becomes active without a
     resolved target_figure_id, the pump should only emit a banner.  Once
@@ -1362,6 +1629,75 @@ def test_lane_context_support_ids_normalize_live_payload_ids():
     assert context['opponent_support_ids'] == {201}
     assert {str(fig_id) for fig_id in context['involved_ids']} == {
         '100', '101', '200', '201'}
+
+
+def test_pre_battle_hides_automated_defence_battle_figure_from_duel_lane():
+    ConquerGameScreen = _conquer_screen_class()
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        game_id=10,
+        player_id=1,
+        opponent_player={'id': 2},
+        battle_turn_player_id=None,
+        battle_round=0,
+        last_battle_result=None,
+        advancing_player_id=1,
+        advancing_figure_id=200,
+        advancing_figure_id_2=None,
+        defending_figure_id=None,
+        defending_figure_id_2=None,
+        land_suit_bonus_suit=None,
+        land_suit_bonus_value=None,
+        battle_skipped_rounds={},
+        conquer_tactics=[],
+        conquer_resolution_step=0,
+        _game_data_version=1,
+        _figures_data_version=1,
+    )
+    ConquerGameScreen, screen = _base_conquer_screen(game)
+    screen.subscreens['field'].figures = [SimpleNamespace(
+        id=200,
+        player_id=2,
+        suit='red',
+        name='Automated Guard',
+        family=SimpleNamespace(field='military'),
+        has_deficit=False,
+        value=4,
+    )]
+    screen._current_conquer_tactics = lambda: []
+    screen._current_conquer_opponent_tactics = lambda: []
+
+    context = ConquerGameScreen._conquer_lane_context(screen)
+
+    assert context['player_figures'] == []
+    assert context['opponent_figures'] == []
+    assert context['involved_ids'] == set()
+
+
+def test_duel_lane_does_not_mirror_opponent_figure_as_player_fighter():
+    game = SimpleNamespace(
+        mode='conquer',
+        conquer_move_model='tactics_hand',
+        player_id=1,
+        opponent_player={'id': 2},
+        battle_turn_player_id=1,
+        battle_round=1,
+        last_battle_result=None,
+        advancing_player_id=1,
+        advancing_figure_id=200,
+        advancing_figure_id_2=None,
+        defending_figure_id=None,
+        defending_figure_id_2=None,
+    )
+    ConquerGameScreen, screen = _base_conquer_screen(game)
+    opponent_figure = SimpleNamespace(id=200, player_id=2)
+    screen.subscreens['field'].figures = [opponent_figure]
+
+    player_figures, opponent_figures = ConquerGameScreen._conquer_lane_figures(screen)
+
+    assert player_figures == []
+    assert opponent_figures == []
 
 
 def _minimal_update_screen(game):
@@ -2588,6 +2924,25 @@ class TestTacticsHandRouting:
         assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is True
         assert screen._conquer_timeline_expanded_rect == (
             ConquerGameScreen._conquer_timeline_overlay_rect(screen))
+
+    def test_battle_start_keeps_timeline_expanded_until_user_collapses(self):
+        ConquerGameScreen, screen = self._make_screen()
+        ConquerGameScreen._sync_conquer_timeline_hover_state(screen)
+        assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is False
+
+        screen.state.game.battle_turn_player_id = 42
+        screen.state.game.battle_round = 1
+        ConquerGameScreen._sync_conquer_timeline_hover_state(screen)
+
+        assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is True
+        assert screen._conquer_timeline_expanded_rect == (
+            ConquerGameScreen._conquer_timeline_overlay_rect(screen))
+
+        ConquerGameScreen._toggle_conquer_timeline_overlay(screen)
+        ConquerGameScreen._sync_conquer_timeline_hover_state(screen)
+
+        assert ConquerGameScreen._is_conquer_timeline_overlay_open(screen) is False
+        assert screen._conquer_timeline_expanded_rect is None
 
     def test_expanded_timeline_uses_prebattle_content_layout(self):
         from config import settings

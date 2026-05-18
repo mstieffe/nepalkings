@@ -89,3 +89,10 @@ SUB_SCREEN_TITLE_CORNER_R = int(0.006 * SCREEN_HEIGHT)
 MINI_CARD_WIDTH = int(0.02 * SCREEN_WIDTH * _UI_SCALE)
 MINI_CARD_HEIGHT = int(0.04 * SCREEN_HEIGHT * _UI_SCALE)
 
+# ── Touch ergonomics (mobile web) ─────────────────────────────────────────
+# Extra hit-area padding (per side, in px) added to interactive elements on
+# mobile.  Collision rectangles are inflated by this amount so small controls
+# stay tappable after the canvas is CSS-downscaled — element visuals are not
+# moved, so layouts are unaffected.  Resolves to 0 (no-op) on desktop.
+TOUCH_HIT_PAD = int(0.013 * SCREEN_HEIGHT) if _IS_MOBILE else 0
+

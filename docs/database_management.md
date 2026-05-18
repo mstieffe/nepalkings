@@ -35,6 +35,23 @@ DROP_TABLES_ON_STARTUP = True  # Change this line
 ```
 Then start the server normally. **Remember to change it back to False afterwards!**
 
+## Local Gameplay Test Account
+
+For development testing, create or refresh a high-gold human account with the
+maintenance helper instead of adding a public server endpoint or committing a
+plaintext password.
+
+From the repository root:
+```bash
+NK_TEST_ACCOUNT_PASSWORD='merkeltonien' .venv/bin/python scripts/debug/upsert_test_account.py --username KingMerk --gold 100000
+```
+
+The helper is idempotent: rerunning it updates `KingMerk` back to `100000` gold
+and hashes the password through the normal `User` model path. By default it
+refuses to run when `FLASK_ENV`/`ENV` is not a development-style environment;
+pass `--allow-non-dev` only if you intentionally need to update a non-local
+database.
+
 ## Why Do SQLite Lock Errors Occur?
 
 SQLite database locking errors typically happen because:

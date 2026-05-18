@@ -422,7 +422,10 @@ class BattleMoveDetailBox:
         for i, (action_id, label) in enumerate(actions):
             btn_y = start_y + i * (btn_h + btn_gap)
             btn_x = cx - btn_w // 2
-            btn = ConfirmButton(self.window, btn_x, btn_y, label, width=btn_w, height=btn_h)
+            # hit_pad=0: these action buttons are stacked only btn_gap apart,
+            # so a padded hit area would overlap the neighbouring button.
+            btn = ConfirmButton(self.window, btn_x, btn_y, label,
+                                 width=btn_w, height=btn_h, hit_pad=0)
             if action_id == 'gamble' and self.gamble_disabled:
                 btn.disabled = True
             if action_id == 'use' and self.use_disabled:

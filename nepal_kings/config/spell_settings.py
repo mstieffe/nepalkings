@@ -62,7 +62,7 @@ SPELL_TYPE_LABEL_FONT_SIZE = int(FS_TINY * 1.1) if _IS_MOBILE else int(FS_BODY *
 SPELL_TYPE_LABEL_COLOR = (95, 42, 22)
 
 # FONT SETTINGS
-SPELL_ICON_FONT_SIZE = int(FS_TINY * 0.9) if _IS_MOBILE else int(FS_SMALL * 0.9)  # was int(0.018 * _FS)
+SPELL_ICON_FONT_SIZE = int(FS_TINY * 1.0) if _IS_MOBILE else int(FS_SMALL * 0.9)  # mobile bumped 0.9->1.0 for legibility after canvas downscale
 SPELL_ICON_FONT_BIG_SIZE = int(0.022 * SCREEN_HEIGHT)
 SPELL_ICON_CAPTION_COLOR = (95, 42, 22)
 

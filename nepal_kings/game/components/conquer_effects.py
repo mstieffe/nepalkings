@@ -73,6 +73,14 @@ SPELL_VISUAL_PRESETS: Dict[str, Tuple[Tuple[int, int, int], Tuple[int, int, int]
     'Poison':       ((148, 76, 196), (96, 200, 132), 'P'),
     'Health Boost': ((110, 220, 140), (255, 240, 180), '+'),
     'Explosion':    ((255, 168, 56),  (255, 240, 200), '!'),
+    'Draw 2 MainCards': ((80, 185, 230), (220, 245, 255), '2'),
+    'Draw 2 SideCards': ((80, 185, 230), (220, 245, 255), '2'),
+    'Fill up to 10': ((80, 185, 230), (220, 245, 255), '10'),
+    'Dump Cards': ((230, 140, 78), (255, 225, 170), 'R'),
+    'Forced Deal': ((225, 188, 88), (255, 245, 190), 'S'),
+    'Peasant War': ((214, 178, 92), (255, 230, 160), 'P'),
+    'Civil War': ((214, 118, 108), (255, 215, 190), 'C'),
+    'Blitzkrieg': ((255, 196, 86), (255, 245, 190), 'B'),
 }
 
 
@@ -139,6 +147,27 @@ class ConquerEffectsLayer:
         if rect is None:
             return None
         return pygame.Rect(rect)
+
+    @staticmethod
+    def _resolve_static_rect(rect: Any) -> Optional[pygame.Rect]:
+        if rect is None:
+            return None
+        try:
+            return pygame.Rect(rect)
+        except Exception:
+            return None
+
+    def _projectile_target_rect(self, projectile: Dict[str, Any]) -> Optional[pygame.Rect]:
+        rect = self._resolve_static_rect(projectile.get('target_rect'))
+        if rect is not None:
+            return rect
+        return self._resolve_target(projectile.get('target_id'))
+
+    def _effect_target_rect(self, effect: Dict[str, Any]) -> Optional[pygame.Rect]:
+        rect = self._resolve_static_rect(effect.get('target_rect'))
+        if rect is not None:
+            return rect
+        return self._resolve_target(effect.get('target_id'))
 
     def clear(self) -> None:
         """Drop all active animations (e.g. on screen leave / game change)."""
@@ -210,6 +239,70 @@ class ConquerEffectsLayer:
                 'started_at': now + self.PROJECTILE_MS - 60,
                 'duration': self.FLOATING_TEXT_MS,
             })
+        return token
+
+    def spawn_spell_to_rect(self, spell_name: str,
+                            source_rect: Optional[pygame.Rect],
+                            target_rect: Optional[pygame.Rect],
+                            *,
+                            floating_text: Optional[str] = None) -> int:
+        """Trigger a spell glyph flying to a fixed UI rectangle."""
+        target_rect = self._resolve_static_rect(target_rect)
+        primary, secondary, label = spell_preset(spell_name)
+        if target_rect is None:
+            self.spawn_banner(f'{spell_name} cast', primary, duration_ms=self.BANNER_MS)
+            return 0
+        if source_rect is None:
+            w = self.window.get_width()
+            source_rect = pygame.Rect(w // 2 - 24, 8, 48, 36)
+        token = self._new_token()
+        now = self._ms()
+        self._projectiles.append({
+            'token': token,
+            'spell': spell_name,
+            'label': label,
+            'primary': primary,
+            'secondary': secondary,
+            'source': pygame.Rect(source_rect),
+            'target_id': None,
+            'target_rect': pygame.Rect(target_rect),
+            'started_at': now,
+            'duration': self.PROJECTILE_MS,
+        })
+        if floating_text:
+            self._floats.append({
+                'text': floating_text,
+                'color': primary,
+                'target_id': None,
+                'target_rect': pygame.Rect(target_rect),
+                'started_at': now + self.PROJECTILE_MS - 60,
+                'duration': self.FLOATING_TEXT_MS,
+            })
+        return token
+
+    def spawn_rect_pulse(self, target_rect: Optional[pygame.Rect],
+                         color: Tuple[int, int, int],
+                         *,
+                         secondary: Optional[Tuple[int, int, int]] = None,
+                         duration_ms: Optional[int] = None,
+                         delay_ms: int = 0,
+                         scale: float = 1.0) -> int:
+        """Draw the same radial impact pulse around a fixed UI rectangle."""
+        target_rect = self._resolve_static_rect(target_rect)
+        token = self._new_token()
+        if target_rect is None:
+            return token
+        self._impacts.append({
+            'token': token,
+            'spell': '',
+            'primary': color,
+            'secondary': secondary or color,
+            'target_id': None,
+            'target_rect': pygame.Rect(target_rect),
+            'started_at': self._ms() + max(0, int(delay_ms)),
+            'duration': int(duration_ms or self.IMPACT_MS),
+            'scale': float(scale or 1.0),
+        })
         return token
 
     def spawn_explosion(self, source_rect: Optional[pygame.Rect],
@@ -344,7 +437,7 @@ class ConquerEffectsLayer:
             t = (now - start) / dur
             if t < 0:
                 continue
-            target_rect = self._resolve_target(p['target_id'])
+            target_rect = self._projectile_target_rect(p)
             if target_rect is None:
                 finished.append(p)
                 continue
@@ -356,6 +449,7 @@ class ConquerEffectsLayer:
                     'primary': p['primary'],
                     'secondary': p['secondary'],
                     'target_id': p['target_id'],
+                    'target_rect': pygame.Rect(target_rect) if p.get('target_rect') is not None else None,
                     'started_at': now,
                     'duration': self.IMPACT_MS,
                     'scale': 1.0,
@@ -382,7 +476,9 @@ class ConquerEffectsLayer:
         label = p['label']
         # Trail (older positions, fading).
         source = p['source']
-        target_rect = self._resolve_target(p['target_id'])
+        target_rect = self._projectile_target_rect(p)
+        if target_rect is None:
+            return
         for k in range(1, 5):
             t2 = max(0.0, t - 0.04 * k)
             eased2 = ease_in_out(t2)
@@ -427,7 +523,7 @@ class ConquerEffectsLayer:
             if t >= 1.0:
                 finished.append(im)
                 continue
-            target_rect = self._resolve_target(im['target_id'])
+            target_rect = self._effect_target_rect(im)
             if target_rect is None:
                 finished.append(im)
                 continue
@@ -501,7 +597,7 @@ class ConquerEffectsLayer:
             if t >= 1.0:
                 finished.append(f)
                 continue
-            target_rect = self._resolve_target(f['target_id'])
+            target_rect = self._effect_target_rect(f)
             if target_rect is None:
                 finished.append(f)
                 continue

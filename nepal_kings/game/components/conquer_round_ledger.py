@@ -261,6 +261,59 @@ class ConquerRoundLedger:
             return total + self._round_diff(move, opp)
         return total + self._power(move)
 
+    @staticmethod
+    def _same_id(left, right) -> bool:
+        if left is None or right is None:
+            return False
+        return str(left) == str(right)
+
+    def _resolved_total_status(self, last_result, total_diff: int):
+        if not isinstance(last_result, dict):
+            return None
+        game = self._game()
+        player_id = getattr(game, 'player_id', None) if game else None
+
+        outcome = str(last_result.get('outcome') or '').lower()
+        if outcome == 'win':
+            return _WIN_GREEN, 'WIN'
+        if outcome in ('loss', 'lose'):
+            return _LOSE_RED, 'LOSE'
+        if outcome in ('draw', 'tie'):
+            return _TIE_GREY, 'TIE'
+
+        conquer_result = last_result.get('conquer_result')
+        if conquer_result == 'draw':
+            return _TIE_GREY, 'TIE'
+
+        winner_id = (
+            last_result.get('winner_player_id')
+            or last_result.get('winner')
+            or last_result.get('fold_winner_id')
+        )
+        if winner_id is None and conquer_result in ('attacker_won', 'defender_won'):
+            attacker_id = (
+                last_result.get('conquer_attacker_player_id')
+                or getattr(game, 'conquer_attacker_player_id', None)
+                or getattr(game, 'invader_player_id', None)
+            )
+            defender_id = (
+                last_result.get('conquer_defender_player_id')
+                or getattr(game, 'conquer_defender_player_id', None)
+            )
+            winner_id = attacker_id if conquer_result == 'attacker_won' else defender_id
+
+        if winner_id is not None and player_id is not None:
+            return ((_WIN_GREEN, 'WIN')
+                    if self._same_id(winner_id, player_id)
+                    else (_LOSE_RED, 'LOSE'))
+        if winner_id is not None:
+            return _WIN_GREEN, 'WIN'
+        if total_diff > 0:
+            return _WIN_GREEN, f'{total_diff:+d}'
+        if total_diff < 0:
+            return _LOSE_RED, f'{total_diff:+d}'
+        return _TEXT_SECONDARY, 'DONE'
+
     def _update_round_reveal_animations(self, you_per, opp_per):
         now = pygame.time.get_ticks()
         for idx, (you, opp) in enumerate(zip(you_per, opp_per)):
@@ -574,16 +627,7 @@ class ConquerRoundLedger:
         last_result = getattr(game, 'last_battle_result', None) if game else None
 
         if last_result:
-            outcome = last_result.get('outcome') if isinstance(last_result, dict) else None
-            if outcome == 'win':
-                col = _WIN_GREEN
-                label = 'WIN'
-            elif outcome == 'loss':
-                col = _LOSE_RED
-                label = 'LOSE'
-            else:
-                col = _TIE_GREY
-                label = 'TIE'
+            col, label = self._resolved_total_status(last_result, total_diff)
         else:
             if ghost_preview:
                 col = _GHOST_BLUE

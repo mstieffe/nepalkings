@@ -455,6 +455,10 @@ if __name__ == '__main__':
         from utils.web_keyboard import init as _init_kb
         _init_kb()
 
+        # ── Haptic feedback support (Vibration API) ───────────────
+        from utils import haptics as _haptics
+        _haptics.init()
+
         from nepal_kings import Client
 
         async def _web_main():

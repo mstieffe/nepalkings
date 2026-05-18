@@ -3,15 +3,22 @@
 from config import settings
 import pygame
 from game.core.input_state import get_pressed as _get_pressed
+from utils import haptics
 
 
 class ConfirmButton:
-    def __init__(self, window, x=0, y=0, text="", width=None, height=None, disabled=False):
+    def __init__(self, window, x=0, y=0, text="", width=None, height=None, disabled=False,
+                 hit_pad=None):
         self.window = window
         self.x = x
         self.y = y
         self.text = text
         self.disabled = disabled
+
+        # Extra touch hit-area padding per side.  Defaults to the global
+        # mobile pad; callers that stack confirm buttons tightly should
+        # pass ``hit_pad=0`` so neighbouring hit areas don't overlap.
+        self.hit_pad = settings.TOUCH_HIT_PAD if hit_pad is None else hit_pad
 
         # Fonts
         self.font = settings.get_font(settings.CONFIRM_BUTTON_FONT_SIZE)
@@ -57,7 +64,9 @@ class ConfirmButton:
             self.glow_images[colour] = pygame.transform.smoothscale(g, (glow_w, glow_h))
 
     def collide(self):
-        return self.rect.collidepoint(pygame.mouse.get_pos())
+        pad = self.hit_pad
+        hit = self.rect.inflate(2 * pad, 2 * pad) if pad else self.rect
+        return hit.collidepoint(pygame.mouse.get_pos())
 
     def draw(self):
         # ---- Disabled state: greyscale, no glow ----
@@ -111,3 +120,4 @@ class ConfirmButton:
         else:
             self.hovered = False
             self.clicked = False
+        haptics.tap_edge(self)

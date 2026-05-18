@@ -4,6 +4,7 @@ from config import settings
 import pygame
 import textwrap
 from game.core.input_state import get_pressed as _get_pressed
+from utils import haptics
 
 
 # ── Themed button for the dialogue box ─────────────────────────────
@@ -55,6 +56,7 @@ class _DlgButton:
         else:
             self.hovered = self.collide()
             self.clicked = self.hovered and _get_pressed()[0]
+        haptics.tap_edge(self)
 
     def get_text_color(self):
         if self.disabled:

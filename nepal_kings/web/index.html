@@ -256,11 +256,22 @@ function show_infobox() {
             margin: auto;
             position: fixed;
             inset: 0;
-            /* 16:9 letterbox — dvh with vh fallback */
+            /* Inset the canvas from the device safe area so game UI
+               (edge sidebar, corner buttons, hand cards) clears the
+               notch, home indicator and rounded corners.  Resolves to
+               0 on devices/browsers without insets. */
+            inset: env(safe-area-inset-top, 0px)    env(safe-area-inset-right, 0px)
+                   env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+            /* 16:9 letterbox — plain fallback (vh, then dvh) */
             width:  min(100vw, calc(100vh  * 16/9)) !important;
             height: min(100vh, calc(100vw  *  9/16)) !important;
             width:  min(100vw, calc(100dvh * 16/9)) !important;
             height: min(100dvh,calc(100vw  *  9/16)) !important;
+            /* 16:9 letterbox sized within the safe area (preferred) */
+            width:  min(calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)),
+                        calc((100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) * 16 / 9)) !important;
+            height: min(calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)),
+                        calc((100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)) * 9 / 16)) !important;
         }
 
         /* hide pygbag chrome */

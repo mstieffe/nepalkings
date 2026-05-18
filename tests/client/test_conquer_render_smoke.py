@@ -691,6 +691,52 @@ def test_round_ledger_draws_hover_preview_ghost_math():
     assert _rect_has_non_background_pixel(window, layout.total_circle_rect)
 
 
+def test_round_ledger_derives_conquer_result_labels_without_false_tie():
+    from config import settings
+    from game.components.conquer_round_ledger import ConquerRoundLedger
+
+    window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
+    game = SimpleNamespace(
+        mode='conquer',
+        player_id=1,
+        invader_player_id=1,
+        battle_round=3,
+        battle_turn_player_id=None,
+        last_battle_result=None,
+    )
+    ledger = ConquerRoundLedger(_ConquerUiParent(window, game, []))
+
+    assert ledger._resolved_total_status({
+        'conquer_result': 'attacker_won',
+        'winner_player_id': 1,
+    }, 0)[1] == 'WIN'
+    assert ledger._resolved_total_status({
+        'conquer_result': 'defender_won',
+        'winner_player_id': 2,
+    }, 0)[1] == 'LOSE'
+    assert ledger._resolved_total_status({
+        'winner_name': 'Attacker',
+        'loser_name': 'Defender',
+    }, 0)[1] == 'DONE'
+
+
+def test_conquer_effects_rect_projectile_keeps_target_for_impact():
+    from game.components.conquer_effects import ConquerEffectsLayer
+
+    window = pygame.Surface((900, 620), pygame.SRCALPHA)
+    layer = ConquerEffectsLayer(window, lambda _target_id: None)
+    source = pygame.Rect(20, 20, 48, 36)
+    target = pygame.Rect(640, 120, 180, 320)
+
+    layer.spawn_spell_to_rect('Dump Cards', source, target, floating_text='redraw')
+    started_at = layer._projectiles[0]['started_at']
+    layer._draw_projectiles(started_at + layer.PROJECTILE_MS + 1)
+
+    assert not layer._projectiles
+    assert layer._impacts
+    assert layer._impacts[0]['target_rect'] == target
+
+
 def test_round_ledger_uses_revealed_opponent_tactics_and_icons(monkeypatch):
     from config import settings
     from game.components import conquer_round_ledger as ledger_module

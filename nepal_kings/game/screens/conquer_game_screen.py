@@ -63,6 +63,30 @@ class ConquerGameScreen(GameScreen):
     TACTIC_FLIGHT_MS = 450
     FIELD_REPLAY_ENCHANTMENT_SPELLS = ('Poison', 'Health Boost')
     FIELD_REPLAY_TARGETED_SPELLS = ('Poison', 'Health Boost', 'Explosion')
+    CONQUER_CARD_EFFECT_SPELLS = (
+        'Draw 2 MainCards',
+        'Draw 2 SideCards',
+        'Fill up to 10',
+        'Dump Cards',
+        'Forced Deal',
+    )
+    CONQUER_CARD_EFFECT_KEYS = (
+        'drawn_cards',
+        'cards_drawn',
+        'cards_given',
+        'cards_received',
+        'caster_gave',
+        'caster_received',
+        'opponent_gave',
+        'opponent_received',
+        'caster_dumped',
+        'opponent_dumped',
+        'caster_dumped_cards',
+        'opponent_dumped_cards',
+        'opponent_drawn_cards',
+        'main_cards_filled',
+        'side_cards_filled',
+    )
     # If the player does not press the "Finish Battle" header button within
     # this many milliseconds of it becoming available, auto-trigger the
     # resolution so a lingering tab does not stall the conquer game.
@@ -189,6 +213,7 @@ class ConquerGameScreen(GameScreen):
         self._conquer_timeline_expanded_rect = None
         self._conquer_timeline_toggle_rect = None
         self._conquer_collapsed_header_rect = None
+        self._conquer_timeline_last_layout_mode = None
         # Tracks when the "Finish Battle" header button first became available
         # so we can auto-trigger after a short timeout if the user does not
         # click it.  Reset whenever the button is unavailable again.
@@ -477,14 +502,21 @@ class ConquerGameScreen(GameScreen):
         # in sync with the current header layout.
         if not self._should_use_collapsed_conquer_header():
             self._close_conquer_timeline_overlay()
+            self._conquer_timeline_last_layout_mode = self._conquer_layout_mode()
             return
-        if self._conquer_layout_mode() == 'pre_battle':
+        mode = self._conquer_layout_mode()
+        if mode == 'pre_battle':
             self._close_conquer_timeline_overlay()
+            self._conquer_timeline_last_layout_mode = mode
             return
+        previous_mode = getattr(self, '_conquer_timeline_last_layout_mode', None)
+        if mode == 'battle' and previous_mode != 'battle':
+            self._conquer_timeline_hover_open = True
         if getattr(self, '_conquer_timeline_hover_open', False):
             self._conquer_timeline_expanded_rect = self._conquer_timeline_overlay_rect()
         else:
             self._conquer_timeline_expanded_rect = None
+        self._conquer_timeline_last_layout_mode = mode
 
     def _conquer_header_layout(self):
         mode = self._conquer_layout_mode()
@@ -1582,9 +1614,17 @@ class ConquerGameScreen(GameScreen):
     def _fire_spell_step_animation(self, step_key, anchor_rect):
         """Spawn the appropriate effect for a transitioned spell step."""
         kind, spell_name, _owner = step_key
-        if spell_name not in ('Poison', 'Health Boost', 'Explosion'):
+        if not spell_name:
             return
         spell_info = self._resolve_spell_step_info(kind, spell_name)
+        if self._is_conquer_card_effect_spell(spell_name, spell_info):
+            self._spawn_conquer_card_spell_animation(spell_name, anchor_rect, spell_info)
+            return
+        if self._is_conquer_battle_modifier_spell(spell_name, spell_info):
+            self._spawn_conquer_modifier_spell_animation(spell_name, anchor_rect)
+            return
+        if spell_name not in ('Poison', 'Health Boost', 'Explosion'):
+            return
         target_id = self._prelude_spell_target_id(spell_info)
         fired_set = getattr(self, '_spell_anim_target_fired', None)
         if fired_set is None:
@@ -1627,6 +1667,121 @@ class ConquerGameScreen(GameScreen):
         else:
             effects.spawn_spell_cast(spell_name, anchor_rect, target_id,
                                      floating_text=ftext)
+
+    @staticmethod
+    def _spell_effect_data(spell_info):
+        if not isinstance(spell_info, dict):
+            return {}
+        data = spell_info.get('effect_data')
+        return data if isinstance(data, dict) else {}
+
+    def _is_conquer_card_effect_spell(self, spell_name, spell_info=None):
+        if spell_name in self.CONQUER_CARD_EFFECT_SPELLS:
+            return True
+        effect_data = self._spell_effect_data(spell_info)
+        return any(key in effect_data for key in self.CONQUER_CARD_EFFECT_KEYS)
+
+    def _is_conquer_battle_modifier_spell(self, spell_name, spell_info=None):
+        if self._is_battle_modifier_spell(spell_name):
+            return True
+        effect_data = self._spell_effect_data(spell_info)
+        return bool(
+            effect_data.get('battle_modifier_added')
+            or effect_data.get('battle_modifier_origin')
+        )
+
+    def _conquer_tactics_rail_target_rect(self):
+        rail = getattr(self, '_tactics_rail', None)
+        if rail is not None:
+            for attr in ('_dyn_hand_list_rect', '_dyn_top_strip_rect'):
+                rect = getattr(rail, attr, None)
+                if rect is not None:
+                    try:
+                        return pygame.Rect(rect)
+                    except Exception:
+                        pass
+            rect_fn = getattr(rail, 'rect', None)
+            if callable(rect_fn):
+                try:
+                    return pygame.Rect(rect_fn())
+                except Exception:
+                    pass
+        try:
+            layout = compute_conquer_layout(
+                settings.SCREEN_WIDTH,
+                settings.SCREEN_HEIGHT,
+                mode=self._conquer_effective_layout_mode(),
+            )
+            return pygame.Rect(*layout.tactics_rail.rect)
+        except Exception:
+            return None
+
+    def _conquer_duel_lane_target_rect(self):
+        rect = getattr(self, '_conquer_duel_lane_last_rect', None)
+        if rect is not None:
+            try:
+                return pygame.Rect(rect)
+            except Exception:
+                pass
+        try:
+            layout = compute_conquer_layout(
+                settings.SCREEN_WIDTH,
+                settings.SCREEN_HEIGHT,
+                mode=self._conquer_effective_layout_mode(),
+            )
+            return pygame.Rect(layout.battlefield.duel_lane.rect)
+        except Exception:
+            return None
+
+    def _card_spell_floating_text(self, spell_name, spell_info=None):
+        effect_data = self._spell_effect_data(spell_info)
+        if spell_name in ('Draw 2 MainCards', 'Draw 2 SideCards', 'Fill up to 10'):
+            count = effect_data.get('cards_drawn')
+            if count is None:
+                cards = effect_data.get('drawn_cards')
+                count = len(cards) if isinstance(cards, list) else None
+            return f'+{count} cards' if count else '+cards'
+        if spell_name == 'Forced Deal':
+            return 'swap'
+        if spell_name == 'Dump Cards':
+            return 'redraw'
+        return 'cards'
+
+    def _spawn_conquer_card_spell_animation(self, spell_name, anchor_rect, spell_info=None):
+        effects = getattr(self, '_conquer_effects', None)
+        if effects is None:
+            return
+        target_rect = self._conquer_tactics_rail_target_rect()
+        if target_rect is None:
+            spawn_banner = getattr(effects, 'spawn_banner', None)
+            if callable(spawn_banner):
+                spawn_banner(spell_name, (80, 185, 230), duration_ms=900)
+            return
+        floating_text = self._card_spell_floating_text(spell_name, spell_info)
+        spawn_to_rect = getattr(effects, 'spawn_spell_to_rect', None)
+        if callable(spawn_to_rect):
+            spawn_to_rect(spell_name, anchor_rect, target_rect,
+                          floating_text=floating_text)
+            return
+        spawn_banner = getattr(effects, 'spawn_banner', None)
+        if callable(spawn_banner):
+            spawn_banner(spell_name, (80, 185, 230), duration_ms=900,
+                         anchor_rect=target_rect)
+
+    def _spawn_conquer_modifier_spell_animation(self, spell_name, anchor_rect=None):
+        effects = getattr(self, '_conquer_effects', None)
+        if effects is None:
+            return
+        target_rect = self._conquer_duel_lane_target_rect()
+        color = (255, 196, 86) if spell_name == 'Blitzkrieg' else (214, 178, 92)
+        spawn_banner = getattr(effects, 'spawn_banner', None)
+        if callable(spawn_banner):
+            spawn_banner(spell_name, color, duration_ms=1100,
+                         anchor_rect=anchor_rect or target_rect)
+        spawn_pulse = getattr(effects, 'spawn_rect_pulse', None)
+        if callable(spawn_pulse):
+            spawn_pulse(target_rect, color, secondary=(255, 240, 170),
+                        duration_ms=820, scale=0.9)
 
     def conquer_field_visual_ghost_specs(self):
         """Return destroyed Explosion victims that should occupy field slots.
@@ -3644,7 +3799,7 @@ class ConquerGameScreen(GameScreen):
         game = self.state.game
         field = self.subscreens.get('field') if hasattr(self, 'subscreens') else None
         figures = getattr(field, 'figures', []) or []
-        if not game or not figures:
+        if not game or not figures or not self._is_battle_phase_active():
             return [], []
 
         by_id = {str(getattr(fig, 'id', None)): fig for fig in figures}
@@ -3672,10 +3827,34 @@ class ConquerGameScreen(GameScreen):
             getattr(game, 'defending_figure_id', None),
             getattr(game, 'defending_figure_id_2', None),
         )
+        player_id = getattr(game, 'player_id', None)
+        opponent = getattr(game, 'opponent_player', None)
+        opponent_id = getattr(game, 'opponent_id', None)
+        if opponent_id is None and isinstance(opponent, dict):
+            opponent_id = opponent.get('id')
+
+        def owned_by_player(fig):
+            owner_id = getattr(fig, 'player_id', None)
+            return (owner_id is None or player_id is None
+                    or self._ids_equal(owner_id, player_id))
+
+        def owned_by_opponent(fig):
+            owner_id = getattr(fig, 'player_id', None)
+            if owner_id is None:
+                return True
+            if opponent_id is not None:
+                return self._ids_equal(owner_id, opponent_id)
+            return player_id is None or not self._ids_equal(owner_id, player_id)
+
         if self._ids_equal(getattr(game, 'advancing_player_id', None),
                            getattr(game, 'player_id', None)):
-            return advancing, defending
-        return defending, advancing
+            player_figures, opponent_figures = advancing, defending
+        else:
+            player_figures, opponent_figures = defending, advancing
+        return (
+            [fig for fig in player_figures if owned_by_player(fig)],
+            [fig for fig in opponent_figures if owned_by_opponent(fig)],
+        )
 
     def _conquer_lane_context_key(self):
         game = self.state.game
@@ -4021,7 +4200,7 @@ class ConquerGameScreen(GameScreen):
 
     def _conquer_lane_battle_figure_ids(self):
         game = self.state.game
-        if not game:
+        if not game or not self._is_battle_phase_active():
             return set()
         ids = set()
         for attr in (

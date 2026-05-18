@@ -5,6 +5,7 @@ from config import settings
 import pygame
 from pygame.locals import *
 from game.core.input_state import get_pressed as _get_pressed
+from utils import haptics
 
 def get_opp_color(color):
     if color == "offensive":
@@ -108,6 +109,10 @@ class GameButton:
         self.rect_symbol_big.center = (self.x+ symbol_width_diff // 2, self.y + symbol_width_diff // 2)
         self.rect_glow_big.center = (self.x - self.glow_shift+ symbol_width_diff // 2, self.y - self.glow_shift + symbol_width_diff // 2)
 
+        # Clickable footprint = the full visible stone, not the smaller
+        # symbol — so taps anywhere on the button art register.
+        self.rect_hit = self.image_stone.get_rect(topleft=self.rect_stone.topleft)
+
         # Initialize button states
         self.clicked = False
         self.hovered = False
@@ -119,8 +124,7 @@ class GameButton:
         self._is_active_state = True  # tracked during draw for tooltip dot colour
 
     def collide(self):
-        mx, my = pygame.mouse.get_pos()
-        return self.rect_symbol.collidepoint((mx, my))
+        return self.rect_hit.collidepoint(pygame.mouse.get_pos())
 
     def draw(self):
         # Depending on the state of the game and mouse interaction, blit the appropriate image
@@ -226,6 +230,8 @@ class GameButton:
             else:
                 self.clicked = False
 
+            haptics.tap_edge(self)
+
 
 class Button:
     def __init__(self, window, x=0, y=0, text="", width=None, height=None):
@@ -277,8 +283,10 @@ class Button:
         }
 
     def collide(self):
-        """Check if the mouse is over the button."""
-        return self.rect.collidepoint(pygame.mouse.get_pos())
+        """Check if the mouse is over the button (mobile: padded hit area)."""
+        pad = settings.TOUCH_HIT_PAD
+        hit = self.rect.inflate(2 * pad, 2 * pad) if pad else self.rect
+        return hit.collidepoint(pygame.mouse.get_pos())
 
     def draw(self):
         """Draw the button, including the background, glow, and text."""
@@ -331,6 +339,7 @@ class Button:
         else:
             self.hovered = self.collide()
             self.clicked = self.hovered and _get_pressed()[0]
+        haptics.tap_edge(self)
 
 
 class SubScreenButton:
@@ -409,14 +418,21 @@ class SubScreenButton:
                                             (self.rect.width * 1.4, self.rect.height * 1.4)),
             "orange": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'orange.png'), 
                                              (self.rect.width * 1.4, self.rect.height * 1.4)),
-            "black": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'black.png'), 
-                                             (self.rect.width * 1.4, self.rect.height * 1.4)),                
+            "black": pygame.transform.scale(pygame.image.load(settings.MENU_BUTTON_GLOW_DIR + 'black.png'),
+                                             (self.rect.width * 1.4, self.rect.height * 1.4)),
         }
 
 
     def collide(self):
-        """Check if the mouse is over the button."""
-        return self.rect.collidepoint(pygame.mouse.get_pos())
+        """Check if the mouse is over the button.
+
+        On mobile the hit area is padded vertically only — sub-screen
+        tabs sit in a tight horizontal row, so widening would let
+        neighbouring tabs' hit areas overlap.
+        """
+        pad = settings.TOUCH_HIT_PAD
+        hit = self.rect.inflate(0, 2 * pad) if pad else self.rect
+        return hit.collidepoint(pygame.mouse.get_pos())
 
     def draw(self):
         """Draw the button, including the background, glow, and text."""
@@ -476,6 +492,7 @@ class SubScreenButton:
         else:
             self.hovered = self.collide()
             self.clicked = self.hovered and _get_pressed()[0]
+        haptics.tap_edge(self)
 
 
 class ColorTogglePill:
@@ -511,11 +528,16 @@ class ColorTogglePill:
 
     # ---- interface -----
     def collide(self):
-        return self.rect.collidepoint(pygame.mouse.get_pos())
+        # Mobile: pad the hit area vertically only — toggle pills sit in
+        # a tight horizontal pair, so widening would overlap neighbours.
+        pad = settings.TOUCH_HIT_PAD
+        hit = self.rect.inflate(0, 2 * pad) if pad else self.rect
+        return hit.collidepoint(pygame.mouse.get_pos())
 
     def update(self):
         self.hovered = self.collide()
         self.clicked = self.hovered and _get_pressed()[0]
+        haptics.tap_edge(self)
 
     def draw(self):
         r = self.corner_r
@@ -641,9 +663,10 @@ class InputField:
         self.cursor_pos = 0
 
     def collide(self):
-        """Check if the mouse is over the input field."""
-        mx, my = pygame.mouse.get_pos()
-        return self.rect.collidepoint((mx, my))
+        """Check if the mouse is over the input field (mobile: padded hit area)."""
+        pad = settings.TOUCH_HIT_PAD
+        hit = self.rect.inflate(2 * pad, 2 * pad) if pad else self.rect
+        return hit.collidepoint(pygame.mouse.get_pos())
 
     def activate(self):
         """Activate the input field, setting it as the active field."""
