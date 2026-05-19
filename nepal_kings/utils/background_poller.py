@@ -193,7 +193,7 @@ class BackgroundPoller:
 
     def _start_multi_async(self, args):
         """Fire multiple async XHRs in parallel for the configured requests."""
-        from utils.http_compat import start_async_get, start_async_post
+        from utils import http_compat
         # Build the request specs, substituting {0}, {1}, ... with args
         self._reset_async_check_timer()
         self._multi_rids = {}
@@ -202,17 +202,22 @@ class BackgroundPoller:
             key = spec['key']
             url = spec['url']
             method = spec.get('method', 'GET')
-            if method == 'POST':
+            if method == 'POST_JSON':
+                payload = spec.get('json', spec.get('data', {}))
+                resolved = {k: (args[v] if isinstance(v, int) and isinstance(args, (list, tuple)) and v < len(args) else v)
+                            for k, v in payload.items()}
+                self._multi_rids[key] = http_compat.start_async_post_json(url, resolved)
+            elif method == 'POST':
                 data = spec.get('data', {})
                 # Substitute args into data values
                 resolved = {k: (args[v] if isinstance(v, int) and isinstance(args, (list, tuple)) and v < len(args) else v)
                             for k, v in data.items()}
-                self._multi_rids[key] = start_async_post(url, resolved)
+                self._multi_rids[key] = http_compat.start_async_post(url, resolved)
             else:
                 params = spec.get('params', {})
                 resolved = {k: (args[v] if isinstance(v, int) and isinstance(args, (list, tuple)) and v < len(args) else v)
                             for k, v in params.items()}
-                self._multi_rids[key] = start_async_get(url, resolved)
+                self._multi_rids[key] = http_compat.start_async_get(url, resolved)
 
     def _check_multi_async(self):
         """Check if all multi-request async XHRs finished."""

@@ -167,6 +167,16 @@ class TestHexMapTileLayout:
         expected_y_offset = math.sqrt(3) / 2 * size
         assert abs(col1.cy - col0.cy - expected_y_offset) < 0.01
 
+    def test_scaled_icon_cache_is_bounded(self):
+        from game.components.hex_map import HexMap
+        import pygame
+        window = pygame.display.get_surface()
+        hm = HexMap([_make_land(0, 0)], window)
+        raw = pygame.Surface((10, 10), pygame.SRCALPHA)
+        for idx in range(120):
+            hm._get_scaled_icon(('test', idx), raw, 8 + idx % 3)
+        assert len(hm._scaled_icon_cache) <= 96
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  Camera transforms

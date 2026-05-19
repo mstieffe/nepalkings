@@ -9,6 +9,7 @@ from game.screens._menu_base import MenuScreenMixin
 from game.components.hex_map import HexMap
 from game.components.land_detail_box import LandDetailBox
 from game.components.floating_text import FloatingText, FloatingTextLayer
+from game.components.loading_indicator import draw_loading_indicator
 from config import settings
 from utils import http_compat as requests
 from utils.background_poller import BackgroundPoller
@@ -101,6 +102,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._map_data = None         # raw server response
         self._cooldown = 0            # conquer cooldown seconds
         self._loading = False
+        self._loading_started_at_ms = 0
+        self._loading_message = 'Loading kingdom map...'
         self._error = None
 
         # ── Attack notifications ────────────────────────────────────
@@ -260,6 +263,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
         # keep the existing map interactive in the background.
         if self._hex_map is None:
             self._loading = True
+            self._loading_started_at_ms = pygame.time.get_ticks()
+            self._loading_message = 'Loading kingdom map...'
         self._error = None
         self._map_poller.poll()
 
@@ -483,9 +488,14 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._draw_activity_panel()
 
         if self._loading:
-            txt = self._info_font.render('Loading kingdom map...', True,
-                                         settings.KINGDOM_INFO_CLR)
-            self.window.blit(txt, txt.get_rect(center=self._map_frame_rect.center))
+            draw_loading_indicator(
+                self.window,
+                self._map_frame_rect,
+                self._loading_message,
+                started_at_ms=self._loading_started_at_ms,
+                font=self._info_font,
+                small_font=self._info_font,
+            )
         elif self._error:
             txt = self._info_font.render(self._error, True, (200, 80, 80))
             self.window.blit(txt, txt.get_rect(center=self._map_frame_rect.center))

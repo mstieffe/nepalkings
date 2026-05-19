@@ -109,6 +109,44 @@ class TestDefenceScreenInit:
         screen = DefenceScreen(state)
         assert hasattr(screen, '_tiny_font')
 
+    def test_update_starts_background_config_load(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        with patch.object(screen, '_load_config') as sync_load, \
+                patch.object(screen, '_start_config_load') as async_load:
+            screen.update([])
+        assert screen._land_id == 7
+        sync_load.assert_not_called()
+        async_load.assert_called_once()
+
+    def test_field_slot_background_is_cached(self, monkeypatch):
+        from game.screens import defence_screen as module
+        from game.screens.defence_screen import DefenceScreen
+        import pygame
+        state = _make_state()
+        screen = DefenceScreen(state)
+        raw = pygame.Surface((12, 12), pygame.SRCALPHA)
+        load_calls = []
+        scale_calls = []
+
+        def fake_load(path):
+            load_calls.append(path)
+            return raw
+
+        def fake_smoothscale(source, size):
+            scale_calls.append(size)
+            return pygame.Surface(size, pygame.SRCALPHA)
+
+        monkeypatch.setattr(module.pygame.image, 'load', fake_load)
+        monkeypatch.setattr(module.pygame.transform, 'smoothscale', fake_smoothscale)
+        rect = pygame.Rect(0, 0, 80, 90)
+        first = screen._field_slot_background('castle', rect)
+        second = screen._field_slot_background('castle', rect)
+        assert first is second
+        assert len(load_calls) == 1
+        assert len(scale_calls) == 1
+
     def test_draw_land_header_handles_kingdom_effects(self):
         from game.screens.defence_screen import DefenceScreen
         state = _make_state()

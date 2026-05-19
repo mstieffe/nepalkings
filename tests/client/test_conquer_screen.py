@@ -76,6 +76,17 @@ class TestConquerScreenInit:
         screen.update([])
         assert screen._land_id == 42
 
+    def test_update_starts_background_config_load(self):
+        from game.screens.conquer_screen import ConquerScreen
+        state = _make_state()
+        screen = ConquerScreen(state)
+        with patch.object(screen, '_load_config') as sync_load, \
+                patch.object(screen, '_start_config_load') as async_load:
+            screen.update([])
+        assert screen._land_id == 42
+        sync_load.assert_not_called()
+        async_load.assert_called_once()
+
 
 class TestBattleReadiness:
 

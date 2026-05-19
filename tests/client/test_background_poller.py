@@ -35,3 +35,30 @@ def test_web_async_result_checks_are_throttled(monkeypatch):
     current_time[0] = 0.100
     assert poller.has_result() is False
     assert calls == [123, 123]
+
+
+def test_web_multi_request_can_start_json_post(monkeypatch):
+    from utils import background_poller as module
+    from utils import http_compat
+
+    captured = []
+    monkeypatch.setattr(module, '_IS_EMSCRIPTEN', True)
+    monkeypatch.setattr(http_compat, 'start_async_get', lambda url, params=None: 2,
+                        raising=False)
+
+    def fake_post_json(url, payload=None):
+        captured.append((url, payload))
+        return 1
+
+    monkeypatch.setattr(http_compat, 'start_async_post_json', fake_post_json,
+                        raising=False)
+
+    poller = module.BackgroundPoller(
+        lambda: None,
+        async_requests=[
+            {'key': 'config', 'method': 'POST_JSON', 'url': '/draft/open',
+             'json': {'land_id': 0}},
+        ],
+    )
+    poller.poll(args=(7,))
+    assert captured == [('/draft/open', {'land_id': 7})]

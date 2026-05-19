@@ -32,11 +32,13 @@ from game.components.battle_moves.battle_move_manager import BattleMoveManager
 from game.components.battle_moves.battle_move_icon_renderer import draw_battle_move_icon
 from game.components.battle_moves.battle_move_detail_box import BattleMoveDetailBox
 from game.components.spells.spell_manager import SpellManager
+from game.components.loading_indicator import draw_loading_indicator
 from game.core.game import Game
 from game.core.screen_routing import gameplay_screen_for
 from utils.game_service import fetch_game
 from config import settings
 from utils import http_compat as requests
+from utils.background_poller import BackgroundPoller
 from utils import collection_service
 import logging
 
@@ -141,7 +143,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._land = None          # server dict
         self._config = None        # serialised LandConfig
         self._loading = False
+        self._loading_started_at_ms = 0
+        self._loading_message = 'Loading conquer config...'
         self._error = None
+        self._config_poller = None
+        self._config_poller_land_id = None
         self._cooldown_remaining = 0
         self._cooldown_synced_at_ms = 0
         self._maps_available = 0
@@ -256,7 +262,11 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._land = None
         self._config = None
         self._loading = False
+        self._loading_started_at_ms = 0
+        self._loading_message = 'Loading conquer config...'
         self._error = None
+        self._config_poller = None
+        self._config_poller_land_id = None
         self._cooldown_remaining = 0
         self._cooldown_synced_at_ms = 0
         self._maps_available = 0
@@ -528,9 +538,102 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
     # ── Data loading ────────────────────────────────────────────────
 
+    @staticmethod
+    def _response_json(response):
+        try:
+            return response.json()
+        except Exception:
+            return {}
+
+    @classmethod
+    def _transform_config_bundle_async(cls, responses):
+        config_resp = (responses or {}).get('config')
+        if config_resp is None:
+            return {'error': 'Connection error'}
+        if getattr(config_resp, 'status_code', 0) != 200:
+            err = cls._response_json(config_resp)
+            return {'error': err.get('error', err.get('message', 'Failed to load conquer config'))}
+        result = {'config_data': cls._response_json(config_resp), 'collection_data': {}}
+        collection_resp = (responses or {}).get('collection')
+        if collection_resp is not None and getattr(collection_resp, 'status_code', 0) == 200:
+            result['collection_data'] = cls._response_json(collection_resp)
+        return result
+
+    def _fetch_config_bundle(self, land_id):
+        try:
+            resp = requests.get(
+                f'{settings.SERVER_URL}/kingdom/conquer/config',
+                params={'land_id': land_id},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                err = self._response_json(resp)
+                return {'error': err.get('error', err.get('message', 'Failed to load conquer config'))}
+            collection_data = {}
+            try:
+                collection_data = collection_service.fetch_collection_cards()
+            except Exception as e:
+                logger.error(f'Collection fetch error: {e}')
+            return {
+                'config_data': resp.json(),
+                'collection_data': collection_data,
+            }
+        except Exception as e:
+            logger.error(f'Conquer config load error: {e}')
+            return {'error': 'Connection error'}
+
+    def _start_config_load(self):
+        if not self._land_id:
+            return
+        if self._config_poller is None:
+            base = settings.SERVER_URL
+            self._config_poller = BackgroundPoller(
+                self._fetch_config_bundle,
+                async_requests=[
+                    {'key': 'config', 'url': f'{base}/kingdom/conquer/config',
+                     'params': {'land_id': 0}},
+                    {'key': 'collection', 'url': f'{base}/collection/cards'},
+                ],
+                async_transform=self._transform_config_bundle_async,
+            )
+        if self._config_poller.busy:
+            return
+        self._loading = True
+        self._loading_started_at_ms = pygame.time.get_ticks()
+        self._loading_message = 'Fetching conquer config...'
+        self._error = None
+        self._config_poller_land_id = self._land_id
+        self._config_poller.poll(args=(self._land_id,))
+
+    def _drain_config_poller(self):
+        poller = self._config_poller
+        if poller is None or not poller.has_result():
+            return
+        result = poller.result or {}
+        expected_land_id = self._config_poller_land_id
+        self._config_poller_land_id = None
+        if expected_land_id != self._land_id:
+            self._loading = False
+            return
+        if result.get('error'):
+            self._error = result.get('error') or 'Connection error'
+            self._loading = False
+            return
+        data = result.get('config_data') or {}
+        self._loading_message = 'Building conquer figures...'
+        self._config = data.get('config')
+        self._land = data.get('land')
+        self._set_cooldown_state(data)
+        self._collection_cards = (result.get('collection_data') or {}).get('cards', [])
+        self._rebuild_figure_objects()
+        self._loading = False
+        logger.debug(f'Conquer config loaded for land {self._land_id}')
+
     def _load_config(self):
         """Fetch (or create) the conquer config from the server."""
         self._loading = True
+        self._loading_started_at_ms = pygame.time.get_ticks()
+        self._loading_message = 'Fetching conquer config...'
         self._error = None
         try:
             resp = requests.get(
@@ -1070,8 +1173,15 @@ class ConquerScreen(MenuScreenMixin, Screen):
         _draw_panel(self.window, box_rect)
 
         if self._loading:
-            txt = self._label_font.render('Loading conquer config…', True, (200, 185, 150))
-            self.window.blit(txt, txt.get_rect(center=(_SW // 2, _SH // 2)))
+            draw_loading_indicator(
+                self.window,
+                box_rect,
+                self._loading_message,
+                started_at_ms=self._loading_started_at_ms,
+                title='Conquer Setup',
+                font=self._label_font,
+                small_font=self._small_font,
+            )
             self._draw_menu_overlay()
             return
 
@@ -1908,10 +2018,14 @@ class ConquerScreen(MenuScreenMixin, Screen):
             self._land = None
             self._loading = False
             self._error = None
+            self._config_poller = None
+            self._config_poller_land_id = None
+
+        self._drain_config_poller()
 
         # Auto-load config if needed
         if self._land_id and not self._config and not self._loading and not self._error:
-            self._load_config()
+            self._start_config_load()
 
         # Update figure icon hover states
         for icon in self._figure_icons.values():

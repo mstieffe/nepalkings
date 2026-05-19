@@ -301,6 +301,9 @@ class HexMap:
         # every frame.
         self._suit_clusters_cache = None
         self._kingdom_badges_cache = None
+        self._minimap_static_cache_key = None
+        self._minimap_static_cache = None
+        self._minimap_data_version = 0
         self._build_tiles(lands_data)
 
         # Pre-load suit icons as raw surfaces and scale lazily per size.
@@ -381,6 +384,11 @@ class HexMap:
         else:
             scaled = pygame.transform.smoothscale(raw_icon, (icon_sz, icon_sz))
         self._scaled_icon_cache[k] = scaled
+        if len(self._scaled_icon_cache) > 96:
+            try:
+                self._scaled_icon_cache.pop(next(iter(self._scaled_icon_cache)))
+            except Exception:
+                self._scaled_icon_cache.clear()
         return scaled
 
     def _cached_text(self, text, font_px, color, *, bold=False):
@@ -434,6 +442,9 @@ class HexMap:
         # Data changed — drop derived caches.
         self._suit_clusters_cache = None
         self._kingdom_badges_cache = None
+        self._minimap_static_cache_key = None
+        self._minimap_static_cache = None
+        self._minimap_data_version = getattr(self, '_minimap_data_version', 0) + 1
 
     def _precompute_conquest_outcomes(self):
         """Pre-compute whether each non-player tile would expand an existing kingdom
@@ -1931,15 +1942,10 @@ class HexMap:
             mm_x = settings.SCREEN_WIDTH - mm_w - margin
             mm_y = settings.SCREEN_HEIGHT - mm_h - margin
 
-        # Background
-        mm_surf = pygame.Surface((mm_w, mm_h), pygame.SRCALPHA)
-        mm_surf.fill(settings.MINIMAP_BG_CLR)
-
-        # Compute world bounds
-        min_wx = min(t.cx for t in self.tiles) - self._size
-        max_wx = max(t.cx for t in self.tiles) + self._size
-        min_wy = min(t.cy for t in self.tiles) - self._size
-        max_wy = max(t.cy for t in self.tiles) + self._size
+        min_wx = self._world_min_x
+        max_wx = self._world_max_x
+        min_wy = self._world_min_y
+        max_wy = self._world_max_y
         world_w = max_wx - min_wx
         world_h = max_wy - min_wy
         if world_w == 0 or world_h == 0:
@@ -1949,58 +1955,68 @@ class HexMap:
         off_x = (mm_w - world_w * scale) / 2
         off_y = (mm_h - world_h * scale) / 2
 
-        # Draw hex dots.  Owned tiles use the kingdom's owner accent so the
-        # player can quickly locate every kingdom on the minimap; neutral
-        # tiles fall back to the suit/tier fill.
-        mine_centers = []
-        for tile in self.tiles:
-            tx = off_x + (tile.cx - min_wx) * scale
-            ty = off_y + (tile.cy - min_wy) * scale
-            dot_r = max(2, int(self._size * scale * 0.5))
-            if tile.owner_user_id:
-                accent = self._tile_owner_color(tile, kind='accent')
-                clr = accent or _tile_fill_color(tile)
-                border = settings.HEX_MINE_BORDER if tile.is_mine else (40, 40, 40)
-            else:
-                clr = _tile_fill_color(tile)
-                border = _tile_border_color(tile)
-            if tile.is_mine:
-                pygame.draw.circle(mm_surf, settings.HEX_MINE_BORDER,
-                                   (int(tx), int(ty)), dot_r + 2)
-                border = (255, 245, 190)
-                mine_centers.append((tx, ty))
-            pygame.draw.circle(mm_surf, clr, (int(tx), int(ty)), dot_r)
-            pygame.draw.circle(mm_surf, border, (int(tx), int(ty)), dot_r, 1)
+        static_key = (
+            mm_w, mm_h, round(scale, 6), round(off_x, 3), round(off_y, 3),
+            round(min_wx, 3), round(min_wy, 3),
+            getattr(self, '_minimap_data_version', 0),
+        )
+        if static_key != getattr(self, '_minimap_static_cache_key', None):
+            mm_surf = pygame.Surface((mm_w, mm_h), pygame.SRCALPHA)
+            mm_surf.fill(settings.MINIMAP_BG_CLR)
+            mine_centers = []
+            for tile in self.tiles:
+                tx = off_x + (tile.cx - min_wx) * scale
+                ty = off_y + (tile.cy - min_wy) * scale
+                dot_r = max(2, int(self._size * scale * 0.5))
+                if tile.owner_user_id:
+                    accent = self._tile_owner_color(tile, kind='accent')
+                    clr = accent or _tile_fill_color(tile)
+                    border = settings.HEX_MINE_BORDER if tile.is_mine else (40, 40, 40)
+                else:
+                    clr = _tile_fill_color(tile)
+                    border = _tile_border_color(tile)
+                if tile.is_mine:
+                    pygame.draw.circle(mm_surf, settings.HEX_MINE_BORDER,
+                                       (int(tx), int(ty)), dot_r + 2)
+                    border = (255, 245, 190)
+                    mine_centers.append((tx, ty))
+                pygame.draw.circle(mm_surf, clr, (int(tx), int(ty)), dot_r)
+                pygame.draw.circle(mm_surf, border, (int(tx), int(ty)), dot_r, 1)
 
-        # Player sigil marker at the centroid of owned tiles so the player
-        # can locate their kingdom even on a crowded minimap.
-        if mine_centers:
-            cx = sum(p[0] for p in mine_centers) / len(mine_centers)
-            cy = sum(p[1] for p in mine_centers) / len(mine_centers)
-            marker_r = max(3, int(min(mm_w, mm_h) * 0.025))
-            # Try the player's sigil first; fall back to a diamond.
-            mine_tile = next((t for t in self.tiles if t.is_mine), None)
-            sigil_key = (self._owner_style_key(mine_tile, 'sigil_key')
-                         if mine_tile is not None else None)
-            sigil_surf = None
-            if sigil_key and sigil_key != 'sigil_none':
-                sigil_surf = sigil_cosmetics.render_sigil(
-                    sigil_key, marker_r * 4,
-                    settings.HEX_MINE_BORDER_HIGHLIGHT)
-            if sigil_surf is not None:
-                rect = sigil_surf.get_rect(center=(int(cx), int(cy)))
-                mm_surf.blit(sigil_surf, rect)
-            else:
-                pts = [
-                    (cx, cy - marker_r * 1.4),
-                    (cx + marker_r, cy),
-                    (cx, cy + marker_r * 1.4),
-                    (cx - marker_r, cy),
-                ]
-                pygame.draw.polygon(mm_surf, (40, 30, 10), pts)
-                pygame.draw.polygon(mm_surf,
-                                    settings.HEX_MINE_BORDER_HIGHLIGHT,
-                                    pts, 1)
+            if mine_centers:
+                cx = sum(p[0] for p in mine_centers) / len(mine_centers)
+                cy = sum(p[1] for p in mine_centers) / len(mine_centers)
+                marker_r = max(3, int(min(mm_w, mm_h) * 0.025))
+                mine_tile = next((t for t in self.tiles if t.is_mine), None)
+                sigil_key = (self._owner_style_key(mine_tile, 'sigil_key')
+                             if mine_tile is not None else None)
+                sigil_surf = None
+                if sigil_key and sigil_key != 'sigil_none':
+                    sigil_surf = sigil_cosmetics.render_sigil(
+                        sigil_key, marker_r * 4,
+                        settings.HEX_MINE_BORDER_HIGHLIGHT)
+                if sigil_surf is not None:
+                    rect = sigil_surf.get_rect(center=(int(cx), int(cy)))
+                    mm_surf.blit(sigil_surf, rect)
+                else:
+                    pts = [
+                        (cx, cy - marker_r * 1.4),
+                        (cx + marker_r, cy),
+                        (cx, cy + marker_r * 1.4),
+                        (cx - marker_r, cy),
+                    ]
+                    pygame.draw.polygon(mm_surf, (40, 30, 10), pts)
+                    pygame.draw.polygon(mm_surf,
+                                        settings.HEX_MINE_BORDER_HIGHLIGHT,
+                                        pts, 1)
+
+            pygame.draw.rect(mm_surf, settings.MINIMAP_BORDER_CLR,
+                             mm_surf.get_rect(), settings.MINIMAP_BORDER_W)
+            self._minimap_static_cache_key = static_key
+            self._minimap_static_cache = mm_surf
+            mm_surf = mm_surf.copy()
+        else:
+            mm_surf = self._minimap_static_cache.copy()
 
         # Draw viewport rectangle
         vp_left = off_x + (self.camera_x - min_wx) * scale
@@ -2009,10 +2025,6 @@ class HexMap:
         vp_h = self.viewport_rect.h / self.zoom * scale
         vp_rect = pygame.Rect(int(vp_left), int(vp_top), int(vp_w), int(vp_h))
         pygame.draw.rect(mm_surf, settings.MINIMAP_VIEWPORT_CLR, vp_rect, 1)
-
-        # Border
-        pygame.draw.rect(mm_surf, settings.MINIMAP_BORDER_CLR,
-                         mm_surf.get_rect(), settings.MINIMAP_BORDER_W)
 
         self.window.blit(mm_surf, (mm_x, mm_y))
         self._minimap_rect = pygame.Rect(mm_x, mm_y, mm_w, mm_h)
