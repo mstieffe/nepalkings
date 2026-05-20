@@ -895,7 +895,7 @@ def test_blitzkrieg_modifier_spell_appears_in_counter_slot_after_attacker():
             'id': 45,
             'player_id': 1,
             'spell_name': 'Blitzkrieg',
-            'effect_data': {'prelude_origin': True},
+            'effect_data': {'counter_origin': True},
         }],
     )
 
@@ -911,6 +911,46 @@ def test_blitzkrieg_modifier_spell_appears_in_counter_slot_after_attacker():
     assert 'Blitzkrieg' in counter.info_headline
     assert 'counter-advance is blocked' in counter.info_body
     assert counter.info_assets[0] == {'kind': 'spell', 'name': 'Blitzkrieg'}
+
+
+def test_blitzkrieg_prelude_spell_does_not_duplicate_in_counter_slot():
+    """A Blitzkrieg cast as a prelude is shown in the prelude slot only.
+
+    The battle modifier it registers must not surface it a second time in
+    the counter slot.
+    """
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    attacker = _make_figure(10, 'Own Attacker', player_id=1)
+    field = SimpleNamespace(
+        figures=[attacker],
+        icon_cache={},
+        _pending_advance_figure=None,
+        figure_pending_defender_selection=None,
+        figure_pending_own_defender_selection=None,
+    )
+    game = _make_game(
+        opponent_name='Rival',
+        advancing_figure_id=10,
+        advancing_player_id=1,
+        battle_modifier=[{'type': 'Blitzkrieg', 'caster_id': 1, 'spell_id': 45}],
+        conquer_own_prelude_spells=[{'spell_name': 'Blitzkrieg'}],
+        cached_active_spells=[{
+            'id': 45,
+            'player_id': 1,
+            'spell_name': 'Blitzkrieg',
+            'effect_data': {'prelude_origin': True},
+        }],
+    )
+
+    steps = derive_conquer_timeline(game, _make_state(game), field, None)
+    by_kind = {s.kind: s for s in steps}
+
+    prelude = by_kind['prelude_own']
+    assert prelude.icon_kind == 'spell'
+    assert prelude.icon_payload == 'Blitzkrieg'
+
+    assert 'counter' not in by_kind
 
 
 def test_blitzkrieg_counter_slot_falls_back_to_battle_modifier_without_spell_row():

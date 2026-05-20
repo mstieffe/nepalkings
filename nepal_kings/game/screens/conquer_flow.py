@@ -512,6 +512,37 @@ def _counter_spells(game: Any) -> List[dict]:
     out = []
     seen = set()
 
+    # Battle-modifier spells (e.g., Blitzkrieg) can be cast either as a
+    # prelude or as a counter.  When cast in prelude they still register
+    # a battle modifier, which would otherwise also surface them in the
+    # counter slot — producing a duplicate alongside the prelude slot.
+    # Collect (player_id, spell_name) pairs from the prelude snapshots so
+    # we can suppress that duplicate while still showing genuine
+    # counter-cast spells.
+    own_player_id = _get(game, 'player_id')
+    prelude_keys: set = set()
+    for snap in _own_prelude_spells(game) or []:
+        if isinstance(snap, dict) and snap.get('spell_name'):
+            prelude_keys.add((own_player_id, snap.get('spell_name')))
+    for snap in _opp_prelude_spells(game) or []:
+        if isinstance(snap, dict) and snap.get('spell_name'):
+            prelude_keys.add(('opp', snap.get('spell_name')))
+
+    def _prelude_player_key(player_id: Any) -> Any:
+        if own_player_id is not None and player_id is not None and player_id == own_player_id:
+            return own_player_id
+        return 'opp'
+
+    def is_prelude_cast(spell: dict) -> bool:
+        spell_name = spell.get('spell_name')
+        if not spell_name:
+            return False
+        effect_data = _spell_effect_data(spell)
+        if effect_data.get('prelude_origin') or effect_data.get('prelude_status'):
+            return True
+        key = (_prelude_player_key(spell.get('player_id')), spell_name)
+        return key in prelude_keys
+
     def marker(spell: dict) -> Tuple[Any, Any, Any]:
         return (spell.get('id'), spell.get('player_id'), spell.get('spell_name'))
 
@@ -545,6 +576,8 @@ def _counter_spells(game: Any) -> List[dict]:
         if not isinstance(spell, dict):
             continue
         effect_data = _spell_effect_data(spell)
+        if is_prelude_cast(spell):
+            continue
         counter_modifier = matching_counter_modifier(spell)
         if (effect_data.get('counter_origin')
                 or effect_data.get('battle_modifier_added') in _COUNTER_TIMELINE_MODIFIER_SPELLS
@@ -565,6 +598,11 @@ def _counter_spells(game: Any) -> List[dict]:
             or _get(game, 'invader_player_id')
             or _get(game, 'advancing_player_id')
         )
+        # If a matching prelude snapshot exists for this modifier, the
+        # modifier was added by the prelude spell — already represented in
+        # the prelude slot, so don't re-surface it as a counter step.
+        if (_prelude_player_key(caster_id), modifier_type) in prelude_keys:
+            continue
         already_present = any(
             spell.get('spell_name') == modifier_type
             and (spell_id is None or spell.get('id') is None or str(spell.get('id')) == str(spell_id))
