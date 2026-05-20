@@ -123,6 +123,13 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._last_seen_level = None
         self._loot_gained_rect = None
         self._loot_lost_rect = None
+        # Touch-drag scroll tracking (mobile). When the user puts a finger
+        # down inside a scrollable area we track vertical movement and steal
+        # the subsequent MOUSEBUTTONUP click if the gesture turned into a
+        # drag, so a swipe doesn't accidentally trigger a button underneath.
+        self._touch_scroll_target = None  # None | 'content' | 'cosmetics' | 'skills' | ('cosmetic_section', key)
+        self._touch_scroll_last_y = 0
+        self._touch_scroll_moved = 0
 
     def _load_icon(self, rel_path):
         try:
@@ -940,16 +947,31 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 return
             if event.type == MOUSEWHEEL:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                # Use precise_y so fractional trackpad deltas (which truncate
+                # to 0 with int()) still produce a real scroll.
+                wheel_y = getattr(event, 'precise_y', None)
+                if wheel_y is None or wheel_y == 0:
+                    wheel_y = getattr(event, 'y', 0)
                 for cosmetic_type, area in self._cosmetic_scroll_areas.items():
                     if area.collidepoint(pos):
-                        if self._scroll_cosmetic_section(cosmetic_type, getattr(event, 'y', 0)):
+                        if self._scroll_cosmetic_section(cosmetic_type, wheel_y):
                             return
                         break
                 if self._content_scroll_area and self._content_scroll_area.collidepoint(pos):
-                    self._scroll_config_content(getattr(event, 'y', 0))
+                    self._scroll_config_content(wheel_y)
                     return
                 continue
+            if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                if self._begin_touch_scroll(event.pos):
+                    continue
+            if event.type == MOUSEMOTION and self._touch_scroll_target is not None:
+                self._update_touch_scroll(event.pos)
+                continue
             if event.type != MOUSEBUTTONUP or event.button != 1:
+                continue
+            # If the gesture turned into a real swipe, swallow the click so
+            # we don't trigger a button underneath the user's finger.
+            if self._end_touch_scroll():
                 continue
             if not self._box_rect.collidepoint(event.pos):
                 self.state.screen = 'kingdom'
@@ -1068,7 +1090,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         if max_scroll <= 0:
             return False
         current = int(self._cosmetic_scroll.get(cosmetic_type, 0) or 0)
-        new_scroll = max(0, min(max_scroll, current - int(wheel_y or 0) * item_h))
+        new_scroll = max(0, min(max_scroll, current - int(round(float(wheel_y or 0) * item_h))))
         self._cosmetic_scroll[cosmetic_type] = new_scroll
         return new_scroll != current
 
@@ -1081,7 +1103,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return False
         step = max(54, int(0.070 * settings.SCREEN_HEIGHT))
         current = int(getattr(self, '_cosmetics_panel_scroll', 0) or 0)
-        new_scroll = max(0, min(max_scroll, current - int(wheel_y or 0) * step))
+        new_scroll = max(0, min(max_scroll, current - int(round(float(wheel_y or 0) * step))))
         self._cosmetics_panel_scroll = new_scroll
         return new_scroll != current
 
@@ -1094,7 +1116,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             return False
         step = max(60, int(0.080 * settings.SCREEN_HEIGHT))
         current = int(getattr(self, '_content_scroll', 0) or 0)
-        new_scroll = max(0, min(max_scroll, current - int(wheel_y or 0) * step))
+        new_scroll = max(0, min(max_scroll, current - int(round(float(wheel_y or 0) * step))))
         self._content_scroll = new_scroll
         return new_scroll != current
 
@@ -1123,8 +1145,74 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         step = max(1, int(settings.KINGDOM_CONFIG_SKILL_ROW_H))
         max_scroll = max(0, int(self._skills_content_h or 0) - area.h)
         current = int(self._skills_scroll or 0)
-        current -= int(wheel_y or 0) * step
+        current -= int(round(float(wheel_y or 0) * step))
         self._skills_scroll = max(0, min(max_scroll, current))
+
+    # ── Touch-drag scrolling (mobile) ────────────────────────────────
+    def _begin_touch_scroll(self, pos):
+        """Start tracking a touch-drag if *pos* falls inside a scrollable
+        region.  Returns True when we claimed the gesture."""
+        for cosmetic_type, area in self._cosmetic_scroll_areas.items():
+            if area and area.collidepoint(pos):
+                self._touch_scroll_target = ('cosmetic_section', cosmetic_type)
+                self._touch_scroll_last_y = pos[1]
+                self._touch_scroll_moved = 0
+                return True
+        if self._content_scroll_area and self._content_scroll_area.collidepoint(pos):
+            self._touch_scroll_target = 'content'
+            self._touch_scroll_last_y = pos[1]
+            self._touch_scroll_moved = 0
+            return True
+        return False
+
+    def _update_touch_scroll(self, pos):
+        if self._touch_scroll_target is None:
+            return
+        dy = pos[1] - self._touch_scroll_last_y
+        if dy == 0:
+            return
+        self._touch_scroll_last_y = pos[1]
+        self._touch_scroll_moved += abs(dy)
+        target = self._touch_scroll_target
+        if isinstance(target, tuple) and target[0] == 'cosmetic_section':
+            self._drag_cosmetic_section(target[1], dy)
+        elif target == 'content':
+            self._drag_config_content(dy)
+
+    def _end_touch_scroll(self):
+        """Reset touch-drag state. Returns True if the gesture was a real
+        swipe (so the caller should swallow the trailing click)."""
+        was_swipe = (
+            self._touch_scroll_target is not None
+            and self._touch_scroll_moved > max(6, int(0.012 * settings.SCREEN_HEIGHT))
+        )
+        self._touch_scroll_target = None
+        self._touch_scroll_last_y = 0
+        self._touch_scroll_moved = 0
+        return was_swipe
+
+    def _drag_cosmetic_section(self, cosmetic_type, dy):
+        unlocked = set((self._kingdom or {}).get('unlocked_cosmetics') or [])
+        items = self._catalog_items(cosmetic_type, unlocked=unlocked)
+        area = self._cosmetic_scroll_areas.get(cosmetic_type)
+        if not area:
+            return
+        item_h = max(30, min(38, int(0.038 * settings.SCREEN_HEIGHT)))
+        max_scroll = max(0, len(items) * item_h - area.h)
+        if max_scroll <= 0:
+            return
+        current = int(self._cosmetic_scroll.get(cosmetic_type, 0) or 0)
+        self._cosmetic_scroll[cosmetic_type] = max(0, min(max_scroll, current - dy))
+
+    def _drag_config_content(self, dy):
+        area = self._content_scroll_area
+        if not area:
+            return
+        max_scroll = max(0, int(self._content_content_h or 0) - area.h)
+        if max_scroll <= 0:
+            return
+        current = int(getattr(self, '_content_scroll', 0) or 0)
+        self._content_scroll = max(0, min(max_scroll, current - dy))
 
     def update(self, events=None):
         super().update()

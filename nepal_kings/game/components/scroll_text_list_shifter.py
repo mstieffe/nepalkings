@@ -713,11 +713,17 @@ class ScrollTextListShifter:
             elif event.type == pygame.MOUSEWHEEL and can_scroll:
                 # Some systems use MOUSEWHEEL instead of button 4/5
                 if self._clip_rect and self._clip_rect.collidepoint(pygame.mouse.get_pos()):
-                    if event.y > 0:  # scroll up
-                        self._content_scroll_y = min(0, self._content_scroll_y + self._content_scroll_speed)
-                    elif event.y < 0:  # scroll down
-                        self._content_scroll_y = max(-self._max_scroll(),
-                                                     self._content_scroll_y - self._content_scroll_speed)
+                    # Prefer precise_y so fractional trackpad deltas still scroll.
+                    wheel_y = getattr(event, 'precise_y', None)
+                    if wheel_y is None or wheel_y == 0:
+                        wheel_y = getattr(event, 'y', 0)
+                    if wheel_y:
+                        delta = int(round(float(wheel_y) * self._content_scroll_speed))
+                        if delta == 0:
+                            delta = 1 if wheel_y > 0 else -1
+                        self._content_scroll_y = max(
+                            -self._max_scroll(),
+                            min(0, self._content_scroll_y + delta))
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_LEFT:
                     self.shift_up()

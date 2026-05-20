@@ -256,6 +256,15 @@ function show_infobox() {
             margin: auto;
             position: fixed;
             inset: 0;
+            /* Prevent the browser from claiming single-finger pans/pinches
+               as scroll/zoom gestures, so touchmove events reach the game
+               loop as MOUSEMOTION (needed for map panning and touch-drag
+               scrolling on mobile). */
+            touch-action: none;
+            -ms-touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+            overscroll-behavior: contain;
             /* Inset the canvas from the device safe area so game UI
                (edge sidebar, corner buttons, hand cards) clears the
                notch, home indicator and rounded corners.  Resolves to

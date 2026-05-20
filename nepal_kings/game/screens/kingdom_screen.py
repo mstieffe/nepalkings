@@ -1299,7 +1299,17 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
             if event.type == MOUSEWHEEL:
                 if self._activity_rect.collidepoint(pygame.mouse.get_pos()):
-                    self._scroll_activity_tab(-getattr(event, 'y', 0))
+                    # Prefer precise_y so a slow trackpad swipe (which yields
+                    # fractional deltas that int() would truncate to 0) still
+                    # nudges the activity list one row at a time.
+                    raw = getattr(event, 'precise_y', None)
+                    if raw is None or raw == 0:
+                        raw = getattr(event, 'y', 0)
+                    delta_rows = -float(raw or 0)
+                    rows = int(delta_rows) if abs(delta_rows) >= 1 \
+                        else (1 if delta_rows > 0 else -1 if delta_rows < 0 else 0)
+                    if rows:
+                        self._scroll_activity_tab(rows)
                     continue
 
             if event.type == MOUSEBUTTONUP and event.button == 1:
@@ -1623,7 +1633,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
                     self._message_compose['text'] = self._thread['text']
             return True
         if event.type == MOUSEWHEEL:
-            self._thread['scroll'] = max(0, self._thread.get('scroll', 0) - event.y)
+            raw = getattr(event, 'precise_y', None)
+            if raw is None or raw == 0:
+                raw = getattr(event, 'y', 0)
+            self._thread['scroll'] = max(
+                0, self._thread.get('scroll', 0) - int(round(float(raw or 0))))
             return True
         if event.type == MOUSEBUTTONUP and event.button == 1:
             if self._thread_close_rect and self._thread_close_rect.collidepoint(event.pos):
