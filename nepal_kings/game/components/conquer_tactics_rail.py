@@ -357,6 +357,25 @@ class ConquerTacticsRail:
     def rect(self) -> pygame.Rect:
         return pygame.Rect(*self._ensure_layout().tactics_rail.rect)
 
+    @staticmethod
+    def _touch_rect(rect: Optional[pygame.Rect],
+                    min_w: Optional[int] = None,
+                    min_h: Optional[int] = None) -> Optional[pygame.Rect]:
+        if rect is None or settings.TOUCH_TARGET_MIN <= 0:
+            return rect
+        min_w = min_w or settings.TOUCH_TARGET_MIN
+        min_h = min_h or settings.TOUCH_TARGET_MIN
+        grow_w = max(0, min_w - rect.width)
+        grow_h = max(0, min_h - rect.height)
+        return rect.inflate(grow_w, grow_h)
+
+    @classmethod
+    def _touch_collide(cls, rect: Optional[pygame.Rect], pos,
+                       min_w: Optional[int] = None,
+                       min_h: Optional[int] = None) -> bool:
+        hit = cls._touch_rect(rect, min_w=min_w, min_h=min_h)
+        return bool(hit and hit.collidepoint(pos))
+
     # ------------------------------------------------------------------ public
     def consume_pending_action(self) -> Optional[Dict[str, Any]]:
         """Return and clear the latest queued action (one-shot)."""
@@ -736,22 +755,24 @@ class ConquerTacticsRail:
                 self._result_banner = None
                 return True
         # Scroll buttons
-        if self._scroll_up_rect and self._scroll_up_rect.collidepoint(pos):
+        if self._touch_collide(self._scroll_up_rect, pos,
+                               settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
             self._scroll = max(0, self._scroll - 1)
             self._clamp_scroll()
             return True
-        if self._scroll_down_rect and self._scroll_down_rect.collidepoint(pos):
+        if self._touch_collide(self._scroll_down_rect, pos,
+                               settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
             self._scroll += 1
             self._clamp_scroll()
             return True
         # Action buttons
         for key, rect in self._action_button_rects.items():
-            if rect.collidepoint(pos):
+            if self._touch_collide(rect, pos):
                 self._trigger_action(key)
                 return True
         # Cell selection
         for i, (rect, mid) in enumerate(zip(self._cell_rects, self._cell_move_ids)):
-            if rect.collidepoint(pos):
+            if self._touch_collide(rect, pos):
                 kind = (self._cell_kinds[i]
                         if i < len(self._cell_kinds) else 'move')
                 if kind == 'collapsed':
@@ -762,7 +783,8 @@ class ConquerTacticsRail:
                     return True
                 toggle_rect = (self._cell_group_toggle_rects[i]
                                if i < len(self._cell_group_toggle_rects) else None)
-                if toggle_rect is not None and toggle_rect.collidepoint(pos):
+                if self._touch_collide(toggle_rect, pos,
+                                       settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     group = (self._cell_groups[i]
                              if i < len(self._cell_groups) else None)
                     if group:
@@ -1841,7 +1863,8 @@ class ConquerTacticsRail:
         bw = min(natural_w, max(60, max_total // n))
         total_w = bw * n + gap * (n - 1)
         start_x = rect.left + max(0, (rect.width - total_w) // 2)
-        bh = min(rect.height - 4, 30)
+        target_h = max(30, settings.TOUCH_COMPACT_MIN)
+        bh = min(rect.height - 4, target_h)
         by = rect.top + (rect.height - bh) // 2
         try:
             mx, my = pygame.mouse.get_pos()

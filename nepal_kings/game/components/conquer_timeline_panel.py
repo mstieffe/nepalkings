@@ -986,6 +986,8 @@ class ConquerTimelinePanel:
         # Body
         assets = tuple(getattr(step, 'info_assets', ()) or ())
         btn_h = max(28, int(settings.SCREEN_HEIGHT * 0.030))
+        if settings.TOUCH_TARGET_MIN > 0:
+            btn_h = max(btn_h, int(settings.SCREEN_HEIGHT * 0.085))
         button_top = rect.bottom - btn_h - _INFO_PAD
         asset_bottom = button_top - 8
         min_asset_h = min(92, max(44, rect.height // 3)) if assets else 0
@@ -1239,6 +1241,8 @@ class ConquerTimelinePanel:
     def _draw_active_buttons(self, screen, rect, step):
         pending = getattr(screen, '_conquer_pending_confirmation', None)
         btn_h = max(28, int(settings.SCREEN_HEIGHT * 0.030))
+        if settings.TOUCH_TARGET_MIN > 0:
+            btn_h = max(btn_h, int(settings.SCREEN_HEIGHT * 0.085))
         btn_w = max(96, int(rect.width * 0.30))
         btn_y = rect.bottom - btn_h - _INFO_PAD
         x_left = rect.left + _INFO_PAD

@@ -373,7 +373,13 @@ class ConquerRoundLedger:
             return None
         if self._total_circle_rect is None:
             return None
-        if not self._total_circle_rect.collidepoint(event.pos):
+        hit_rect = self._total_circle_rect
+        if settings.TOUCH_TARGET_MIN > 0:
+            hit_rect = hit_rect.inflate(
+                max(0, settings.TOUCH_TARGET_MIN - hit_rect.width),
+                max(0, settings.TOUCH_TARGET_MIN - hit_rect.height),
+            )
+        if not hit_rect.collidepoint(event.pos):
             return None
         game = self._game()
         if not game or not getattr(game, 'last_battle_result', None):

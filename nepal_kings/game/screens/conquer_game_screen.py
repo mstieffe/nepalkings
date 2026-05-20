@@ -3001,7 +3001,13 @@ class ConquerGameScreen(GameScreen):
             if event.type != MOUSEBUTTONDOWN or event.button != 1:
                 continue
             for action, rect in rects.items():
-                if rect and rect.collidepoint(event.pos):
+                hit_rect = pygame.Rect(rect) if rect else None
+                if hit_rect is not None and settings.TOUCH_TARGET_MIN > 0:
+                    hit_rect = hit_rect.inflate(
+                        max(0, settings.TOUCH_TARGET_MIN - hit_rect.width),
+                        max(0, settings.TOUCH_TARGET_MIN - hit_rect.height),
+                    )
+                if hit_rect and hit_rect.collidepoint(event.pos):
                     return self._handle_conquer_objective_action(action)
         return False
 

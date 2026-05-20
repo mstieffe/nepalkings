@@ -64,6 +64,24 @@ def _draw_panel(window, rect, corner_r=None):
                      settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
 
 
+def _mobile_hit_rect(rect, min_w=None, min_h=None):
+    """Return a touch-friendly hit rect while leaving visuals unchanged."""
+    if rect is None or settings.TOUCH_TARGET_MIN <= 0:
+        return rect
+    min_w = min_w or settings.TOUCH_TARGET_MIN
+    min_h = min_h or settings.TOUCH_TARGET_MIN
+    grow_w = max(0, min_w - rect.w)
+    grow_h = max(0, min_h - rect.h)
+    hit = rect.inflate(grow_w, grow_h)
+    hit.clamp_ip(pygame.Rect(0, 0, _SW, _SH))
+    return hit
+
+
+def _mobile_collide(rect, pos, min_w=None, min_h=None):
+    hit = _mobile_hit_rect(rect, min_w=min_w, min_h=min_h)
+    return bool(hit and hit.collidepoint(pos))
+
+
 def _strip_duel_only_skill_description(text):
     return strip_duel_only_skill_description(
         text,
@@ -229,7 +247,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._init_resource_icons()
 
         # ── Edit icon (for section title buttons) ───────────────────
-        _icon_sz = int(0.025 * _SH)
+        _icon_sz = max(int(0.025 * _SH), settings.TOUCH_ICON_MIN)
         self._edit_icon = pygame.transform.smoothscale(
             pygame.image.load('img/dialogue_box/icons/edit.png').convert_alpha(),
             (_icon_sz, _icon_sz),
@@ -383,6 +401,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         # Unified X-button size for all icon types
         self._x_btn_sz = max(int(0.016 * _SW), 16)
+        if settings.TOUCH_TARGET_MIN > 0:
+            self._x_btn_sz = max(self._x_btn_sz, int(0.045 * _SH))
 
     def _init_resource_icons(self):
         """Load resource icons for the info panel."""
@@ -436,7 +456,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
         # To Battle — lower right of box
         battle_w = int(0.20 * _SW)
-        battle_h = int(0.055 * _SH)
+        battle_h = max(int(0.055 * _SH), settings.TOUCH_TARGET_MIN)
         self._btn_battle = pygame.Rect(
             _BOX_X + _BOX_W - _BOX_PAD - battle_w,
             _BOX_BOTTOM - _BOX_PAD - battle_h,
@@ -527,7 +547,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._divider_h1_y = None
 
         # X close button (top-right of box)
-        _xsz = int(0.028 * _SH)
+        _xsz = max(int(0.028 * _SH), settings.TOUCH_COMPACT_MIN)
         _xmargin = int(0.012 * _SW)
         self._btn_close_rect = pygame.Rect(
             _BOX_X + _BOX_W - _xsz - _xmargin,
@@ -969,7 +989,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
         return {'produces': produces, 'requires': requires}
 
     def _info_button_rect(self, panel_rect):
-        size = max(int(0.022 * _SH), 18)
+        size = max(int(0.022 * _SH), 18, settings.TOUCH_ICON_MIN)
         margin_x = int(0.008 * _SW)
         margin_y = int(0.010 * _SH)
         return pygame.Rect(
@@ -1068,7 +1088,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return False
         pos = event.pos
         for key, rect in self._info_button_rects.items():
-            if rect and rect.collidepoint(pos):
+            if _mobile_collide(rect, pos, settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                 self._active_info_key = None if self._active_info_key == key else key
                 return True
         if self._active_info_key:
@@ -1389,7 +1409,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
             if cfg_fig:
                 xbtn = pygame.Rect(int(fr_left + frame_w - _xbs - 2), int(fr_top + 2), _xbs, _xbs)
                 x_hovered = xbtn.collidepoint(mouse_pos)
-                if frame_rect.collidepoint(mouse_pos) or x_hovered:
+                if settings.TOUCH_TARGET_MIN > 0 or frame_rect.collidepoint(mouse_pos) or x_hovered:
                     bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                     bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
                     tc = (255, 255, 255) if x_hovered else (200, 180, 180)
@@ -1456,7 +1476,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 xsz = self._x_btn_sz
                 xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
                 x_hovered = xrect.collidepoint(mouse_pos)
-                if is_hovered or x_hovered:
+                if settings.TOUCH_TARGET_MIN > 0 or is_hovered or x_hovered:
                     bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                     bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
                     tc = (255, 255, 255) if x_hovered else (200, 180, 180)
@@ -1517,7 +1537,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 _xbs = self._x_btn_sz
                 xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
                 x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
-                if rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
+                if settings.TOUCH_TARGET_MIN > 0 or rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
                     self._prelude_x_rect = xrect
                     bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                     bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
@@ -2140,7 +2160,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 pos = event.pos
 
                 # X close button
-                if self._btn_close_rect and self._btn_close_rect.collidepoint(pos):
+                if _mobile_collide(self._btn_close_rect, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     self._try_leave_screen()
                     return
 
@@ -2148,7 +2169,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
                     continue
 
                 # Remove buttons must win over icon/detail clicks.
-                if self._prelude_x_rect and self._prelude_x_rect.collidepoint(pos):
+                if _mobile_collide(self._prelude_x_rect, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     current_spell = self._config.get('prelude_spell_name')
                     if current_spell:
                         self._pending_prelude_clear = True
@@ -2163,7 +2185,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 figure_removed = False
                 for fig in self._config.get('figures', []):
                     xrect = fig.get('_remove_rect')
-                    if xrect and xrect.collidepoint(pos):
+                    if _mobile_collide(xrect, pos,
+                                       settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                         self._server_remove_figure(fig['id'])
                         figure_removed = True
                         break
@@ -2172,7 +2195,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
 
                 move_removed = False
                 for ri, xrect in self._move_remove_rects.items():
-                    if xrect.collidepoint(pos):
+                    if _mobile_collide(xrect, pos,
+                                       settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                         moves = self._config.get('battle_moves', [])
                         for m in moves:
                             if m['round_index'] == ri:
@@ -2197,23 +2221,26 @@ class ConquerScreen(MenuScreenMixin, Screen):
                         break
 
                 # Build Figure button
-                if self._btn_build and self._btn_build.collidepoint(pos):
+                if _mobile_collide(self._btn_build, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     self._open_build_figure()
                     continue
 
                 # Buy Move button
-                if self._btn_buy_move and self._btn_buy_move.collidepoint(pos):
+                if _mobile_collide(self._btn_buy_move, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     self._open_battle_shop()
                     continue
 
                 # Prelude spell: edit button or empty slot click
-                if ((self._btn_prelude_edit and self._btn_prelude_edit.collidepoint(pos))
-                        or (self._prelude_spell_rect and self._prelude_spell_rect.collidepoint(pos))):
+                if (_mobile_collide(self._btn_prelude_edit, pos,
+                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN)
+                        or _mobile_collide(self._prelude_spell_rect, pos)):
                     self._open_prelude_spell_screen()
                     continue
 
                 # To Battle
-                if self._btn_battle and self._btn_battle.collidepoint(pos):
+                if _mobile_collide(self._btn_battle, pos):
                     self._on_battle_click()
                     continue
 

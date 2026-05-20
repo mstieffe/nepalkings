@@ -29,6 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple
 
+from config.screen_settings import _IS_MOBILE
+
 
 Rect = Tuple[int, int, int, int]  # (x, y, w, h) in pixels (post-snap)
 
@@ -41,22 +43,22 @@ _MARGIN_X_PCT = 0.025
 _MARGIN_BOTTOM_PCT = 0.0333
 
 # Header modes
-_HEADER_PRE_BATTLE_H_PCT = 0.20
-_STATUS_STRIP_H_PCT = 0.05
-_LOG_STRIP_H_PCT = 0.06
+_HEADER_PRE_BATTLE_H_PCT = 0.235 if _IS_MOBILE else 0.20
+_STATUS_STRIP_H_PCT = 0.060 if _IS_MOBILE else 0.05
+_LOG_STRIP_H_PCT = 0.065 if _IS_MOBILE else 0.06
 # Persistent two-row header: a constant top row sits above a mini-timeline
 # row in every mode. Top row height is fixed; the timeline row absorbs the
 # remainder of the existing header band so content positioning is unchanged.
-_TOP_ROW_H_PCT = 0.05
+_TOP_ROW_H_PCT = 0.064 if _IS_MOBILE else 0.05
 
 # Vertical layout
 _HEADER_TO_CONTENT_GAP_H_PCT = 0.0185   # gap between header and content
 _CONTENT_TO_LEDGER_GAP_H_PCT = 0.0167
-_LEDGER_H_PCT = 0.1685                  # ledger band height (pre+battle modes)
+_LEDGER_H_PCT = 0.190 if _IS_MOBILE else 0.1685  # ledger band height (pre+battle modes)
 
 # Tactics rail (LEFT) — battlefield (RIGHT)
 _RAIL_X_PCT = 0.025
-_RAIL_W_PCT = 0.135
+_RAIL_W_PCT = 0.160 if _IS_MOBILE else 0.135
 _RAIL_TO_FIELD_GAP_W_PCT = 0.0125
 _FIELD_X_PCT = _RAIL_X_PCT + _RAIL_W_PCT + _RAIL_TO_FIELD_GAP_W_PCT
 _FIELD_W_PCT = 1.0 - _FIELD_X_PCT - _MARGIN_X_PCT
@@ -73,9 +75,9 @@ _FIELD_LANE_W_FRAC = 0.295
 _RAIL_INNER_PAD_X_PCT = 0.00833
 _RAIL_INNER_PAD_Y_PCT = 0.015
 _RAIL_TOP_STRIP_H_PCT = 0.059
-_RAIL_DETAIL_H_PCT = 0.065
-_RAIL_ACTION_TRAY_H_PCT = 0.063
-_RAIL_CELL_H_PCT = 0.085
+_RAIL_DETAIL_H_PCT = 0.070 if _IS_MOBILE else 0.065
+_RAIL_ACTION_TRAY_H_PCT = 0.075 if _IS_MOBILE else 0.063
+_RAIL_CELL_H_PCT = 0.090 if _IS_MOBILE else 0.085
 _RAIL_CELLS_VISIBLE = 5
 
 # Ledger inner layout

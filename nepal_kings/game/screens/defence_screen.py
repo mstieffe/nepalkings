@@ -61,6 +61,24 @@ def _draw_panel(window, rect, corner_r=None):
                      settings.SUB_SCREEN_PANEL_BORDER_W, border_radius=r)
 
 
+def _mobile_hit_rect(rect, min_w=None, min_h=None):
+    """Return a touch-friendly hit rect while leaving visuals unchanged."""
+    if rect is None or settings.TOUCH_TARGET_MIN <= 0:
+        return rect
+    min_w = min_w or settings.TOUCH_TARGET_MIN
+    min_h = min_h or settings.TOUCH_TARGET_MIN
+    grow_w = max(0, min_w - rect.w)
+    grow_h = max(0, min_h - rect.h)
+    hit = rect.inflate(grow_w, grow_h)
+    hit.clamp_ip(pygame.Rect(0, 0, _SW, _SH))
+    return hit
+
+
+def _mobile_collide(rect, pos, min_w=None, min_h=None):
+    hit = _mobile_hit_rect(rect, min_w=min_w, min_h=min_h)
+    return bool(hit and hit.collidepoint(pos))
+
+
 def _strip_duel_only_skill_description(text):
     return strip_duel_only_skill_description(
         text,
@@ -250,7 +268,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._init_resource_icons()
 
         # ── Edit icon (for section title buttons) ───────────────────
-        _icon_sz = int(0.025 * _SH)
+        _icon_sz = max(int(0.025 * _SH), settings.TOUCH_ICON_MIN)
         self._edit_icon = pygame.transform.smoothscale(
             pygame.image.load('img/dialogue_box/icons/edit.png').convert_alpha(),
             (_icon_sz, _icon_sz),
@@ -420,6 +438,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         # Unified X-button size for all icon types
         self._x_btn_sz = max(int(0.016 * _SW), 16)
+        if settings.TOUCH_TARGET_MIN > 0:
+            self._x_btn_sz = max(self._x_btn_sz, int(0.045 * _SH))
 
     def _init_resource_icons(self):
         """Load resource icons for inline display."""
@@ -475,13 +495,14 @@ class DefenceScreen(MenuScreenMixin, Screen):
         slot_row_w = int(sw * 2.0) * 2 + int(sw * 1.3)
         slot_row_h = int(sw * 1.45)
         header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
-        ag_btn_h = int(0.035 * _SH)
+        mobile_ui = settings.TOUCH_TARGET_MIN > 0
+        ag_btn_h = max(int(0.035 * _SH), int(0.054 * _SH)) if mobile_ui else int(0.035 * _SH)
         battle_controls_gap = int(0.018 * _SH)
         fsz = self._mod_frame_size
 
         # Save Defence button (bottom-right of box)
         save_w = int(0.20 * _SW)
-        save_h = int(0.055 * _SH)
+        save_h = max(int(0.055 * _SH), settings.TOUCH_TARGET_MIN)
         self._btn_save = pygame.Rect(
             _BOX_X + _BOX_W - _BOX_PAD - save_w,
             _BOX_BOTTOM - _BOX_PAD - save_h,
@@ -491,7 +512,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
         right_content_bottom = self._btn_save.y - panel_gap
         right_content_h = max(1, right_content_bottom - content_top)
         available_panel_h = max(1, right_content_h - 2 * panel_gap)
-        battle_plan_min_h = header_h + slot_row_h + battle_controls_gap + ag_btn_h + panel_pad_y
+        battle_plan_min_h = header_h + slot_row_h + panel_pad_y
+        if not mobile_ui:
+            battle_plan_min_h += battle_controls_gap + ag_btn_h
         prelude_min_h = header_h + fsz + panel_pad_y
         counter_min_h = header_h + fsz + panel_pad_y
 
@@ -538,30 +561,59 @@ class DefenceScreen(MenuScreenMixin, Screen):
             slot_row_h,
         )
 
-        # Auto-gamble controls — footer row below battle moves.
-        agw = int(0.12 * _SW)
-        ag_y = min(
-            self._move_slots_rect.bottom + battle_controls_gap,
-            self._battle_plan_rect.bottom - panel_pad_y - ag_btn_h,
-        )
-        ag_x = self._battle_plan_rect.x + panel_pad
+        # Auto-gamble controls. On mobile, keep them in the Battle Plan
+        # header so they no longer sit on top of the round slots.
+        ag_ctrl_gap = max(3, int(0.004 * _SW))
+        if mobile_ui:
+            agw = max(int(0.085 * _SW), self._small_font.size('Auto: OFF')[0] + 12)
+            ag_ctrl_w = max(int(0.052 * _SH), 24)
+            val_w = max(int(0.070 * _SW), self._value_font.size('20')[0] + 12)
+            total_w = agw + ag_ctrl_w * 2 + val_w + ag_ctrl_gap * 3
+            info_rect = self._info_button_rects.get('battle_plan')
+            right_limit = (info_rect.left - int(0.010 * _SW)) if info_rect else (self._battle_plan_rect.right - panel_pad)
+            ag_x = max(self._btn_buy_move.right + int(0.010 * _SW),
+                       right_limit - total_w)
+            ag_y = self._moves_title_pos[1]
+        else:
+            agw = int(0.12 * _SW)
+            ag_y = min(
+                self._move_slots_rect.bottom + battle_controls_gap,
+                self._battle_plan_rect.bottom - panel_pad_y - ag_btn_h,
+            )
+            ag_x = self._battle_plan_rect.x + panel_pad
+            ag_ctrl_w = int(0.024 * _SW)
+            val_w = int(0.04 * _SW)
         self._btn_auto_gamble = pygame.Rect(ag_x, ag_y, agw, ag_btn_h)
 
-        # Threshold controls ("Below") in the same footer row.
-        ag_ctrl_w = int(0.024 * _SW)
-        ag_ctrl_gap = int(0.004 * _SW)
-        below_label_w = self._res_font.size('Below:')[0] + int(0.006 * _SW)
-        ag_ctrl_x = self._btn_auto_gamble.right + int(0.014 * _SW) + below_label_w
-        ag_ctrl_y = ag_y
-        self._btn_auto_gamble_dec = pygame.Rect(ag_ctrl_x, ag_ctrl_y, ag_ctrl_w, ag_btn_h)
-        self._btn_auto_gamble_inc = pygame.Rect(ag_ctrl_x + ag_ctrl_w + int(0.04 * _SW), ag_ctrl_y,
-                                                ag_ctrl_w, ag_btn_h)
-        self._auto_gamble_threshold_rect = pygame.Rect(
-            self._btn_auto_gamble_dec.right + ag_ctrl_gap,
-            ag_ctrl_y,
-            max(1, self._btn_auto_gamble_inc.x - self._btn_auto_gamble_dec.right - (2 * ag_ctrl_gap)),
-            ag_btn_h,
-        )
+        if mobile_ui:
+            ag_ctrl_x = self._btn_auto_gamble.right + ag_ctrl_gap
+            ag_ctrl_y = ag_y
+            self._btn_auto_gamble_dec = pygame.Rect(ag_ctrl_x, ag_ctrl_y, ag_ctrl_w, ag_btn_h)
+            self._auto_gamble_threshold_rect = pygame.Rect(
+                self._btn_auto_gamble_dec.right + ag_ctrl_gap,
+                ag_ctrl_y,
+                val_w,
+                ag_btn_h,
+            )
+            self._btn_auto_gamble_inc = pygame.Rect(
+                self._auto_gamble_threshold_rect.right + ag_ctrl_gap,
+                ag_ctrl_y,
+                ag_ctrl_w,
+                ag_btn_h,
+            )
+        else:
+            below_label_w = self._res_font.size('Below:')[0] + int(0.006 * _SW)
+            ag_ctrl_x = self._btn_auto_gamble.right + int(0.014 * _SW) + below_label_w
+            ag_ctrl_y = ag_y
+            self._btn_auto_gamble_dec = pygame.Rect(ag_ctrl_x, ag_ctrl_y, ag_ctrl_w, ag_btn_h)
+            self._btn_auto_gamble_inc = pygame.Rect(ag_ctrl_x + ag_ctrl_w + int(0.04 * _SW), ag_ctrl_y,
+                                                    ag_ctrl_w, ag_btn_h)
+            self._auto_gamble_threshold_rect = pygame.Rect(
+                self._btn_auto_gamble_dec.right + ag_ctrl_gap,
+                ag_ctrl_y,
+                max(1, self._btn_auto_gamble_inc.x - self._btn_auto_gamble_dec.right - (2 * ag_ctrl_gap)),
+                ag_btn_h,
+            )
 
         # ── Prelude Spell panel (single spell icon slot + edit button) ──
         prelude_header_y = self._prelude_panel_rect.y + int(0.010 * _SH)
@@ -627,7 +679,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._divider_h2_y = None
 
         # X close button (top-right of box)
-        _xsz = int(0.028 * _SH)
+        _xsz = max(int(0.028 * _SH), settings.TOUCH_COMPACT_MIN)
         _xmargin = int(0.012 * _SW)
         self._btn_close_rect = pygame.Rect(
             _BOX_X + _BOX_W - _xsz - _xmargin,
@@ -1255,7 +1307,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                                                                top=specs_y + specs_surf.get_height() + 3))
 
     def _info_button_rect(self, panel_rect):
-        size = max(int(0.022 * _SH), 18)
+        size = max(int(0.022 * _SH), 18, settings.TOUCH_ICON_MIN)
         margin_x = int(0.008 * _SW)
         margin_y = int(0.010 * _SH)
         return pygame.Rect(
@@ -1354,7 +1406,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return False
         pos = event.pos
         for key, rect in self._info_button_rects.items():
-            if rect and rect.collidepoint(pos):
+            if _mobile_collide(rect, pos, settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                 self._active_info_key = None if self._active_info_key == key else key
                 return True
         if self._active_info_key:
@@ -1743,7 +1795,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if cfg_fig:
                 xbtn = pygame.Rect(int(fr_left + frame_w - _xbs - 2), int(fr_top + 2), _xbs, _xbs)
                 x_hovered = xbtn.collidepoint(mouse_pos)
-                if frame_rect.collidepoint(mouse_pos) or x_hovered:
+                if settings.TOUCH_TARGET_MIN > 0 or frame_rect.collidepoint(mouse_pos) or x_hovered:
                     bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                     bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
                     tc = (255, 255, 255) if x_hovered else (200, 180, 180)
@@ -1817,7 +1869,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 xsz = self._x_btn_sz
                 xrect = pygame.Rect(cx + int(sw * 0.35), cy - int(sw * 0.65), xsz, xsz)
                 x_hovered = xrect.collidepoint(mouse_pos)
-                if is_hovered or x_hovered:
+                if settings.TOUCH_TARGET_MIN > 0 or is_hovered or x_hovered:
                     bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                     bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
                     tc = (255, 255, 255) if x_hovered else (200, 180, 180)
@@ -1881,7 +1933,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 _xbs = self._x_btn_sz
                 xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
                 x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
-                if rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
+                if settings.TOUCH_TARGET_MIN > 0 or rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
                     self._prelude_x_rect = xrect
                     bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                     bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
@@ -1990,7 +2042,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 _xbs = self._x_btn_sz
                 xrect = pygame.Rect(cs_rect.right - _xbs - 2, cs_rect.y + 2, _xbs, _xbs)
                 x_hovered = xrect.collidepoint(mx_mouse, my_mouse)
-                if cs_rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
+                if settings.TOUCH_TARGET_MIN > 0 or cs_rect.collidepoint(mx_mouse, my_mouse) or x_hovered:
                     self._counter_x_rect = xrect
                     bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                     bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
@@ -2058,7 +2110,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             _xbs = self._x_btn_sz
             xrect = pygame.Rect(rect.right - _xbs - 2, rect.y + 2, _xbs, _xbs)
             x_hovered = xrect.collidepoint(mx, my_mouse)
-            if rect.collidepoint(mx, my_mouse) or x_hovered:
+            if settings.TOUCH_TARGET_MIN > 0 or rect.collidepoint(mx, my_mouse) or x_hovered:
                 setattr(self, x_attr, xrect)
                 bg = (180, 60, 60) if x_hovered else (120, 40, 40)
                 bdr = (220, 120, 120) if x_hovered else (160, 80, 80)
@@ -2076,7 +2128,9 @@ class DefenceScreen(MenuScreenMixin, Screen):
     def _draw_auto_gamble(self):
         enabled = self._config.get('auto_gamble', False)
         threshold = self._get_auto_gamble_threshold()
-        label = 'Auto-Gamble: ON' if enabled else 'Auto-Gamble: OFF'
+        mobile_ui = settings.TOUCH_TARGET_MIN > 0
+        label = ('Auto: ON' if enabled else 'Auto: OFF') if mobile_ui else (
+            'Auto-Gamble: ON' if enabled else 'Auto-Gamble: OFF')
         clr = (100, 220, 100) if enabled else (130, 130, 130)
 
         rect = self._btn_auto_gamble
@@ -2096,13 +2150,14 @@ class DefenceScreen(MenuScreenMixin, Screen):
         inc_rect = self._btn_auto_gamble_inc
         val_rect = self._auto_gamble_threshold_rect
 
-        label_clr = (180, 180, 120) if enabled else (120, 120, 120)
-        threshold_label = self._res_font.render('Below:', True, label_clr)
-        label_x = dec_rect.x - threshold_label.get_width() - int(0.006 * _SW)
-        self.window.blit(threshold_label, threshold_label.get_rect(
-            left=label_x,
-            centery=val_rect.centery,
-        ))
+        if not mobile_ui:
+            label_clr = (180, 180, 120) if enabled else (120, 120, 120)
+            threshold_label = self._res_font.render('Below:', True, label_clr)
+            label_x = dec_rect.x - threshold_label.get_width() - int(0.006 * _SW)
+            self.window.blit(threshold_label, threshold_label.get_rect(
+                left=label_x,
+                centery=val_rect.centery,
+            ))
 
         for btn_rect, symbol in ((dec_rect, '-'), (inc_rect, '+')):
             hovered = btn_rect.collidepoint(mx, my_mouse)
@@ -2967,7 +3022,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 pos = event.pos
 
                 # X close button
-                if self._btn_close_rect and self._btn_close_rect.collidepoint(pos):
+                if _mobile_collide(self._btn_close_rect, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     self._try_leave_screen()
                     return
 
@@ -2975,7 +3031,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     continue
 
                 # Remove buttons must win over icon/detail clicks.
-                if self._prelude_x_rect and self._prelude_x_rect.collidepoint(pos):
+                if _mobile_collide(self._prelude_x_rect, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     current_spell = self._config.get('prelude_spell_name')
                     if current_spell:
                         self._pending_prelude_clear = True
@@ -2987,13 +3044,16 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         )
                     continue
 
-                if ((self._battle_figure_x_rect and self._battle_figure_x_rect.collidepoint(pos))
-                        or (self._battle_figure_x_rect_2 and self._battle_figure_x_rect_2.collidepoint(pos))):
+                if (_mobile_collide(self._battle_figure_x_rect, pos,
+                                    settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN)
+                        or _mobile_collide(self._battle_figure_x_rect_2, pos,
+                                           settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN)):
                     self._pending_civil_war_battle_fig_1 = None
                     self._server_clear_battle_figure()
                     continue
 
-                if self._counter_x_rect and self._counter_x_rect.collidepoint(pos):
+                if _mobile_collide(self._counter_x_rect, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     current_spell = self._config.get('counter_spell_name')
                     if current_spell:
                         self._pending_counter_clear = True
@@ -3008,7 +3068,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 figure_removed = False
                 for fig in self._config.get('figures', []):
                     xrect = fig.get('_remove_rect')
-                    if xrect and xrect.collidepoint(pos):
+                    if _mobile_collide(xrect, pos,
+                                       settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                         self._server_remove_figure(fig['id'])
                         figure_removed = True
                         break
@@ -3017,7 +3078,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 move_removed = False
                 for ri, xrect in self._move_remove_rects.items():
-                    if xrect.collidepoint(pos):
+                    if _mobile_collide(xrect, pos,
+                                       settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                         moves = self._config.get('battle_moves', [])
                         for m in moves:
                             if m['round_index'] == ri:
@@ -3042,20 +3104,23 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         break
 
                 # Build Figure button
-                if self._btn_build and self._btn_build.collidepoint(pos):
+                if _mobile_collide(self._btn_build, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     self._open_build_figure()
                     continue
 
                 # Buy Move button
-                if self._btn_buy_move and self._btn_buy_move.collidepoint(pos):
+                if _mobile_collide(self._btn_buy_move, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     self._open_battle_shop()
                     continue
 
                 # Prelude spell: edit button opens spell picker; Health Boost slot picks target
-                if self._btn_prelude_edit and self._btn_prelude_edit.collidepoint(pos):
+                if _mobile_collide(self._btn_prelude_edit, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     self._open_prelude_spell_screen()
                     continue
-                if self._prelude_spell_rect and self._prelude_spell_rect.collidepoint(pos):
+                if _mobile_collide(self._prelude_spell_rect, pos):
                     if self._config.get('prelude_spell_name') == 'Health Boost':
                         self._begin_spell_target_selection('prelude')
                     else:
@@ -3064,11 +3129,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 # Counter action: battle figure slot click
                 battle_slot_clicked = (
-                    self._battle_figure_rect and self._battle_figure_rect.collidepoint(pos)
+                    _mobile_collide(self._battle_figure_rect, pos)
                 ) or (
                     self._civil_war_battle_strategy()
                     and self._battle_figure_rect_2
-                    and self._battle_figure_rect_2.collidepoint(pos)
+                    and _mobile_collide(self._battle_figure_rect_2, pos)
                 )
                 if battle_slot_clicked:
                     civil_war_incomplete = (
@@ -3085,10 +3150,11 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     continue
 
                 # Counter action: edit button opens picker; Health Boost slot picks target
-                if self._btn_counter_edit and self._btn_counter_edit.collidepoint(pos):
+                if _mobile_collide(self._btn_counter_edit, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     self._open_counter_spell_screen()
                     continue
-                if self._counter_spell_rect and self._counter_spell_rect.collidepoint(pos):
+                if _mobile_collide(self._counter_spell_rect, pos):
                     if self._config.get('counter_spell_name') == 'Health Boost':
                         self._begin_spell_target_selection('counter')
                     else:
@@ -3097,7 +3163,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
                 # Threshold controls first so they keep working even if layout
                 # changes make them overlap with the auto-gamble toggle rect.
-                if self._btn_auto_gamble_dec and self._btn_auto_gamble_dec.collidepoint(pos):
+                if _mobile_collide(self._btn_auto_gamble_dec, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     current = self._get_auto_gamble_threshold()
                     target = max(_AUTO_GAMBLE_THRESHOLD_MIN, current - 1)
                     if target != current:
@@ -3106,7 +3173,8 @@ class DefenceScreen(MenuScreenMixin, Screen):
                         self._config['auto_gamble_threshold'] = current
                     continue
 
-                if self._btn_auto_gamble_inc and self._btn_auto_gamble_inc.collidepoint(pos):
+                if _mobile_collide(self._btn_auto_gamble_inc, pos,
+                                   settings.TOUCH_COMPACT_MIN, settings.TOUCH_COMPACT_MIN):
                     current = self._get_auto_gamble_threshold()
                     target = min(_AUTO_GAMBLE_THRESHOLD_MAX, current + 1)
                     if target != current:
@@ -3116,13 +3184,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     continue
 
                 # Auto-gamble toggle
-                if self._btn_auto_gamble and self._btn_auto_gamble.collidepoint(pos):
+                if _mobile_collide(self._btn_auto_gamble, pos):
                     current = self._config.get('auto_gamble', False)
                     self._server_set_auto_gamble(not current)
                     continue
 
                 # Save Defence button
-                if self._btn_save and self._btn_save.collidepoint(pos):
+                if _mobile_collide(self._btn_save, pos):
                     self._on_save_click()
                     continue
 

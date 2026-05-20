@@ -92,7 +92,13 @@ MINI_CARD_HEIGHT = int(0.04 * SCREEN_HEIGHT * _UI_SCALE)
 # ── Touch ergonomics (mobile web) ─────────────────────────────────────────
 # Extra hit-area padding (per side, in px) added to interactive elements on
 # mobile.  Collision rectangles are inflated by this amount so small controls
-# stay tappable after the canvas is CSS-downscaled — element visuals are not
-# moved, so layouts are unaffected.  Resolves to 0 (no-op) on desktop.
-TOUCH_HIT_PAD = int(0.013 * SCREEN_HEIGHT) if _IS_MOBILE else 0
+# stay tappable after the canvas is CSS-downscaled; visuals can remain compact
+# where the screen is already dense.
+TOUCH_HIT_PAD = int(0.017 * SCREEN_HEIGHT) if _IS_MOBILE else 0
 
+# Mobile visual size floors.  The 854x480 mobile canvas is usually CSS-scaled
+# down to roughly 0.9x in landscape browsers, so a ~50px internal control lands
+# close to the familiar 44px touch target once displayed.
+TOUCH_TARGET_MIN = max(44, int(0.105 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
+TOUCH_COMPACT_MIN = max(30, int(0.070 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
+TOUCH_ICON_MIN = max(28, int(0.067 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
