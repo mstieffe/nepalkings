@@ -102,12 +102,12 @@ class ConquerTimelinePanel:
         """Return the resolution step the client should currently mirror.
 
         At game start the tactics hand must reflect the player's configured
-        battle moves — i.e. resolution step 0.  As each prelude/spell timeline
-        bubble becomes ``active`` or ``completed`` (the user has seen it on
-        screen for the first time), we permit one additional ``conquer_
-        resolution_step`` to be revealed.  This produces the user-requested
-        "transition for each change" while keeping the existing greyed-old /
-        coloured-new visual treatment in the tactics rail.
+        battle moves — i.e. resolution step 0.  As each card-effect spell
+        timeline bubble's animation *reaches the tactics rail*, we permit one
+        additional ``conquer_resolution_step`` to be revealed.  Gating on the
+        animation impact (rather than on the bubble merely lighting up) keeps
+        the rail's spell-driven mutation in lockstep with the projectile so
+        the change does not appear before the effect visibly lands.
 
         We cap at the server's authoritative step so that prelude bubbles
         that do not mutate tactics (Health Boost, Poison targeting figures,
@@ -127,29 +127,57 @@ class ConquerTimelinePanel:
             server_step = int(self._last_seen_server_step or 0)
         # Track the latest server step we have seen for parity.
         self._last_seen_server_step = max(self._last_seen_server_step, server_step)
-        # Once the battle proper has started, reveal everything — spell
-        # timeline beats are by definition all in the past. Live snapshots can
+        # Once the battle proper has started, the prelude replay is finished
+        # and every prelude beat is in the past — so the rail mirrors the
+        # server step directly.  Counter spells, however, resolve mid-battle
+        # and animate towards the rail; their tactics mutation is withheld
+        # until the projectile lands by subtracting any in-flight counter
+        # beats (``conquer_unlanded_spell_step_count``).  Live snapshots can
         # carry active round/turn fields even when ``battle_confirmed`` is
         # false or absent, so key off the active battle fields directly.
         if game is not None and (
             getattr(game, 'battle_turn_player_id', None) is not None
             or int(getattr(game, 'battle_round', 0) or 0) >= 1
         ):
-            return max(0, server_step - int(self._displayed_step_offset or 0))
-        # Count completed-or-active spell timeline bubbles seen so far. Each
-        # acts as a gate that permits one additional resolution step to surface.
-        # ``derive_display_steps`` is cached on a 20Hz cadence, so this loop
-        # is cheap even though it runs many times per frame.
+            gated = server_step
+            unlanded_fn = getattr(
+                screen, 'conquer_unlanded_spell_step_count', None)
+            if (screen is not None and callable(unlanded_fn)
+                    and getattr(screen, '_spell_anim_seeded', False)):
+                try:
+                    steps = self.derive_display_steps(screen)
+                    unlanded = int(unlanded_fn(steps))
+                except Exception:
+                    unlanded = 0
+                gated = max(0, server_step - unlanded)
+            return max(0, gated - int(self._displayed_step_offset or 0))
+        # Count the spell timeline bubbles that gate the resolution step.
+        # The screen's ``conquer_revealed_spell_step_count`` only tallies
+        # *card-effect* spells (the ones that mutate the tactics rail) and
+        # only once each spell's animation has reached the rail — so the
+        # rail's spell-driven mutation surfaces exactly when the projectile
+        # lands, not the instant the bubble lights up.  Before the spell
+        # animation system has seeded (first frame, or a minimal test
+        # screen), fall back to counting completed-or-active bubbles.
         spell_steps_seen = 0
         if screen is not None:
             try:
                 steps = self.derive_display_steps(screen)
             except Exception:
                 steps = []
-            for step in steps:
-                if getattr(step, 'kind', '') in ('prelude_own', 'prelude_opp', 'counter'):
-                    if getattr(step, 'completed', False) or getattr(step, 'active', False):
-                        spell_steps_seen += 1
+            counter = getattr(screen, 'conquer_revealed_spell_step_count', None)
+            if callable(counter) and getattr(screen, '_spell_anim_seeded', False):
+                try:
+                    spell_steps_seen = int(counter(steps))
+                except Exception:
+                    spell_steps_seen = 0
+            else:
+                for step in steps:
+                    if getattr(step, 'kind', '') in (
+                            'prelude_own', 'prelude_opp', 'counter'):
+                        if (getattr(step, 'completed', False)
+                                or getattr(step, 'active', False)):
+                            spell_steps_seen += 1
         gated = min(server_step, spell_steps_seen)
         return max(0, gated - int(self._displayed_step_offset or 0))
 

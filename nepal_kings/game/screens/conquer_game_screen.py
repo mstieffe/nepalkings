@@ -265,6 +265,13 @@ class ConquerGameScreen(GameScreen):
         # enable disappearance / round-change diffs.
         self._seen_active_spell_anim_ids: set = set()
         self._prev_visible_figure_rects = {}
+        # Maps a spell ``step_key`` -> ms timestamp at which the spell's
+        # card animation reaches the tactics rail.  The rail withholds that
+        # spell's resolution-step mutation until this moment so the effect
+        # becomes visible exactly when the animation lands (see
+        # ``conquer_revealed_spell_step_count`` and the timeline panel's
+        # ``currently_resolved_step_index``).
+        self._conquer_spell_anim_impact_ms: dict = {}
         self._recent_spell_timeline_names = []
         self._last_announced_battle_round = 0
         self._round_transition_until_ms = 0
@@ -1520,6 +1527,7 @@ class ConquerGameScreen(GameScreen):
             self._spell_step_phase = {}
             self._spell_anim_seeded = False
             self._spell_anim_target_fired = set()
+            self._conquer_spell_anim_impact_ms = {}
             self._last_announced_battle_round = 0
             self._prev_visible_figure_rects = {}
             self._last_seen_figure_rects = {}
@@ -1575,6 +1583,16 @@ class ConquerGameScreen(GameScreen):
             for key, phase in current_phase.items():
                 if phase == 'active':
                     self._fire_spell_step_animation(key, anchor)
+            # Card-effect spells that already completed before the screen
+            # mounted get no replay animation — mark their tactics-rail
+            # mutation as landed immediately so it stays revealed.
+            for key, phase in current_phase.items():
+                if (phase in ('active', 'completed')
+                        and key not in self._conquer_spell_anim_impact_ms):
+                    s_kind, s_name, _s_owner = key
+                    s_info = self._resolve_spell_step_info(s_kind, s_name)
+                    if self._is_conquer_card_effect_spell(s_name, s_info):
+                        self._conquer_spell_anim_impact_ms[key] = 0
             self._spell_step_phase = dict(current_phase)
             self._spell_anim_seeded = True
         else:
@@ -1618,7 +1636,10 @@ class ConquerGameScreen(GameScreen):
             return
         spell_info = self._resolve_spell_step_info(kind, spell_name)
         if self._is_conquer_card_effect_spell(spell_name, spell_info):
-            self._spawn_conquer_card_spell_animation(spell_name, anchor_rect, spell_info)
+            impact_ms = self._spawn_conquer_card_spell_animation(
+                spell_name, anchor_rect, spell_info)
+            if impact_ms is not None:
+                self._conquer_spell_anim_impact_ms[step_key] = int(impact_ms)
             return
         if self._is_conquer_battle_modifier_spell(spell_name, spell_info):
             self._spawn_conquer_modifier_spell_animation(spell_name, anchor_rect)
@@ -1748,25 +1769,36 @@ class ConquerGameScreen(GameScreen):
         return 'cards'
 
     def _spawn_conquer_card_spell_animation(self, spell_name, anchor_rect, spell_info=None):
+        """Spawn the card-effect spell animation aimed at the tactics rail.
+
+        Returns the ms timestamp at which the animation reaches the rail —
+        callers gate the spell's resolution-step mutation on this so the
+        effect appears exactly when the projectile lands.  Banner-only
+        fallbacks (no rail rect / no projectile helper) return ``now`` so
+        the reveal is not stalled.
+        """
+        now = pygame.time.get_ticks()
         effects = getattr(self, '_conquer_effects', None)
         if effects is None:
-            return
+            return now
         target_rect = self._conquer_tactics_rail_target_rect()
         if target_rect is None:
             spawn_banner = getattr(effects, 'spawn_banner', None)
             if callable(spawn_banner):
                 spawn_banner(spell_name, (80, 185, 230), duration_ms=900)
-            return
+            return now
         floating_text = self._card_spell_floating_text(spell_name, spell_info)
         spawn_to_rect = getattr(effects, 'spawn_spell_to_rect', None)
         if callable(spawn_to_rect):
             spawn_to_rect(spell_name, anchor_rect, target_rect,
                           floating_text=floating_text)
-            return
+            projectile_ms = int(getattr(effects, 'PROJECTILE_MS', 420) or 0)
+            return now + projectile_ms
         spawn_banner = getattr(effects, 'spawn_banner', None)
         if callable(spawn_banner):
             spawn_banner(spell_name, (80, 185, 230), duration_ms=900,
                          anchor_rect=target_rect)
+        return now
 
     def _spawn_conquer_modifier_spell_animation(self, spell_name, anchor_rect=None):
         effects = getattr(self, '_conquer_effects', None)
@@ -3107,6 +3139,107 @@ class ConquerGameScreen(GameScreen):
             if step.active:
                 return step
         return None
+
+    def conquer_revealed_spell_step_count(self, steps=None):
+        """Count card-effect spell timeline beats whose rail animation landed.
+
+        Walks the timeline in order and tallies each prelude/counter spell
+        bubble that (a) mutates the tactics rail (a *card-effect* spell such
+        as Draw 2 / Forced Deal / Dump Cards / Fill up to 10) and (b) has had
+        its animation reach the rail.  Figure/modifier spells are skipped —
+        they never mutate tactics and must not advance the gate.  Because the
+        beats are sequenced, the walk stops at the first card-effect spell
+        whose animation has not landed yet, so a later beat never surfaces
+        before each preceding one is shown on screen.
+
+        Used by :meth:`ConquerTimelinePanel.currently_resolved_step_index` to
+        keep the rail's spell-driven mutations in lockstep with the
+        animations instead of revealing them the instant a bubble lights up.
+        """
+        if steps is None:
+            panel = getattr(self, '_conquer_timeline_panel', None)
+            if panel is None:
+                return 0
+            try:
+                steps = panel.derive_display_steps(self)
+            except Exception:
+                return 0
+        impacts = getattr(self, '_conquer_spell_anim_impact_ms', None) or {}
+        now = pygame.time.get_ticks()
+        count = 0
+        for step in steps or []:
+            if getattr(step, 'kind', '') not in (
+                    'prelude_own', 'prelude_opp', 'counter'):
+                continue
+            if not (getattr(step, 'completed', False)
+                    or getattr(step, 'active', False)):
+                continue
+            payload = getattr(step, 'icon_payload', None)
+            if not isinstance(payload, str) or not payload:
+                continue
+            try:
+                spell_info = self._resolve_spell_step_info(step.kind, payload)
+            except Exception:
+                spell_info = None
+            if not self._is_conquer_card_effect_spell(payload, spell_info):
+                # Figure / battle-modifier spell — never touches the rail.
+                continue
+            key = (step.kind, payload, getattr(step, 'owner', '') or '')
+            impact = impacts.get(key)
+            if impact is None:
+                # Animation has not been fired yet (it spawns later this
+                # frame); hold here until its impact time is recorded.
+                break
+            if now < int(impact):
+                # Projectile still in flight — hold this and every later beat.
+                break
+            count += 1
+        return count
+
+    def conquer_unlanded_spell_step_count(self, steps=None, kinds=('counter',)):
+        """Count card-effect spell beats whose rail animation has not landed.
+
+        During the battle phase the prelude replay is finished, so the rail
+        mirrors the server's ``conquer_resolution_step`` directly — except for
+        counter spells, which resolve mid-battle and animate towards the rail.
+        Subtracting this count from the server step withholds each counter
+        spell's tactics mutation until its projectile reaches the rail.
+
+        ``kinds`` selects which spell beats are impact-gated (defaults to
+        counter spells, the only spell beats that resolve during battle).
+        """
+        if steps is None:
+            panel = getattr(self, '_conquer_timeline_panel', None)
+            if panel is None:
+                return 0
+            try:
+                steps = panel.derive_display_steps(self)
+            except Exception:
+                return 0
+        impacts = getattr(self, '_conquer_spell_anim_impact_ms', None) or {}
+        now = pygame.time.get_ticks()
+        pending = 0
+        for step in steps or []:
+            if getattr(step, 'kind', '') not in kinds:
+                continue
+            if not (getattr(step, 'completed', False)
+                    or getattr(step, 'active', False)):
+                continue
+            payload = getattr(step, 'icon_payload', None)
+            if not isinstance(payload, str) or not payload:
+                continue
+            try:
+                spell_info = self._resolve_spell_step_info(step.kind, payload)
+            except Exception:
+                spell_info = None
+            if not self._is_conquer_card_effect_spell(payload, spell_info):
+                # Figure / battle-modifier spell — never touches the rail.
+                continue
+            key = (step.kind, payload, getattr(step, 'owner', '') or '')
+            impact = impacts.get(key)
+            if impact is None or now < int(impact):
+                pending += 1
+        return pending
 
     # ------------------------------------------------------------------- draw
     def _conquer_status_text(self):

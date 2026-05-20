@@ -1903,3 +1903,205 @@ def test_timeline_panel_counter_spell_bubble_reveals_counter_tactic_mutation():
     ]
 
     assert panel.currently_resolved_step_index(screen) == 3
+
+
+def _card_spell_step(kind, spell_name, *, owner='', active=False, completed=False):
+    from game.screens.conquer_flow import TimelineStep
+    return TimelineStep(
+        kind=kind, title=spell_name, owner=owner,
+        icon_kind='spell', icon_payload=spell_name,
+        active=active, completed=completed,
+    )
+
+
+def _revealed_count(steps, impacts):
+    """Invoke the real ConquerGameScreen helper against a minimal stub."""
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    fake = SimpleNamespace(
+        _conquer_spell_anim_impact_ms=impacts,
+        _resolve_spell_step_info=lambda kind, name: {},
+        _is_conquer_card_effect_spell=(
+            lambda name, info=None: name in ConquerGameScreen.CONQUER_CARD_EFFECT_SPELLS),
+    )
+    return ConquerGameScreen.conquer_revealed_spell_step_count(fake, steps)
+
+
+def test_conquer_revealed_spell_step_count_gates_on_animation_impact():
+    """A card-effect spell beat counts only once its animation has landed."""
+    steps = [
+        _card_spell_step('prelude_own', 'Draw 2 MainCards', active=True),
+        _card_spell_step('prelude_opp', 'Forced Deal'),
+    ]
+    draw_key = ('prelude_own', 'Draw 2 MainCards', '')
+
+    # Projectile still in flight (impact far in the future) -> nothing yet.
+    assert _revealed_count(steps, {draw_key: 10 ** 9}) == 0
+    # Animation landed (impact in the past) -> the beat surfaces.
+    assert _revealed_count(steps, {draw_key: 0}) == 1
+    # No impact record at all -> animation has not fired; hold.
+    assert _revealed_count(steps, {}) == 0
+
+
+def test_conquer_revealed_spell_step_count_skips_figure_spells():
+    """Figure-targeting spells (Poison) never advance the rail gate.
+
+    A Poison bubble going active before a card spell must not unlock the
+    card spell's tactics mutation early.
+    """
+    steps = [
+        _card_spell_step('prelude_own', 'Poison', active=True, completed=True),
+        _card_spell_step('prelude_opp', 'Draw 2 MainCards', active=True),
+    ]
+    draw_key = ('prelude_opp', 'Draw 2 MainCards', '')
+
+    # Poison is skipped; Draw 2 not landed yet -> count stays 0.
+    assert _revealed_count(steps, {}) == 0
+    # Poison still skipped; Draw 2 landed -> only the card spell counts.
+    assert _revealed_count(steps, {draw_key: 0}) == 1
+
+
+def test_conquer_revealed_spell_step_count_is_sequenced():
+    """A later beat never surfaces before an earlier one has landed."""
+    steps = [
+        _card_spell_step('prelude_own', 'Draw 2 MainCards', completed=True),
+        _card_spell_step('prelude_opp', 'Forced Deal', active=True),
+    ]
+    draw_key = ('prelude_own', 'Draw 2 MainCards', '')
+    deal_key = ('prelude_opp', 'Forced Deal', '')
+
+    # Second beat landed but first still in flight -> hold at 0.
+    assert _revealed_count(steps, {draw_key: 10 ** 9, deal_key: 0}) == 0
+    # Both landed -> both surface.
+    assert _revealed_count(steps, {draw_key: 0, deal_key: 0}) == 2
+
+
+def test_timeline_panel_gates_resolution_step_on_animation_impact():
+    """Once seeded, the panel defers to the screen's impact-gated count."""
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((10, 10)))
+    screen = SimpleNamespace(
+        _conquer_resolution_step_server=3,
+        _spell_anim_seeded=True,
+        conquer_revealed_spell_step_count=lambda _steps: 1,
+        state=SimpleNamespace(game=SimpleNamespace(
+            conquer_resolution_step=3,
+            battle_confirmed=False,
+            battle_round=0,
+        )),
+    )
+    panel.derive_display_steps = lambda _screen: []
+    # min(server_step=3, impact-gated count=1) -> 1.
+    assert panel.currently_resolved_step_index(screen) == 1
+
+    screen.conquer_revealed_spell_step_count = lambda _steps: 9
+    # Capped by the authoritative server step.
+    assert panel.currently_resolved_step_index(screen) == 3
+
+
+def test_timeline_panel_falls_back_to_bubble_count_before_seed():
+    """Before the spell animation system seeds, the legacy count is used."""
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+    from game.screens.conquer_flow import TimelineStep
+
+    panel = ConquerTimelinePanel(pygame.Surface((10, 10)))
+    screen = SimpleNamespace(
+        _conquer_resolution_step_server=3,
+        _spell_anim_seeded=False,
+        # Present but must be ignored while unseeded.
+        conquer_revealed_spell_step_count=lambda _steps: 0,
+        state=SimpleNamespace(game=SimpleNamespace(
+            conquer_resolution_step=3,
+            battle_confirmed=False,
+            battle_round=0,
+        )),
+    )
+    panel.derive_display_steps = lambda _screen: [
+        TimelineStep(kind='overview', title='Overview', completed=True),
+        TimelineStep(kind='prelude_own', title='Spell A', completed=True),
+        TimelineStep(kind='prelude_opp', title='Spell B', active=True),
+        TimelineStep(kind='prelude_opp', title='Spell C'),
+    ]
+    # Fallback path counts completed/active bubbles directly -> 2.
+    assert panel.currently_resolved_step_index(screen) == 2
+
+
+def _unlanded_count(steps, impacts):
+    """Invoke the real battle-phase counter-spell gate against a stub."""
+    from game.screens.conquer_game_screen import ConquerGameScreen
+
+    fake = SimpleNamespace(
+        _conquer_spell_anim_impact_ms=impacts,
+        _resolve_spell_step_info=lambda kind, name: {},
+        _is_conquer_card_effect_spell=(
+            lambda name, info=None: name in ConquerGameScreen.CONQUER_CARD_EFFECT_SPELLS),
+    )
+    return ConquerGameScreen.conquer_unlanded_spell_step_count(fake, steps)
+
+
+def test_conquer_unlanded_spell_step_count_tracks_in_flight_counters():
+    """Counter spells gate; prelude beats are ignored by the battle helper."""
+    steps = [
+        _card_spell_step('prelude_own', 'Draw 2 MainCards', completed=True),
+        _card_spell_step('counter', 'Dump Cards', completed=True),
+    ]
+    counter_key = ('counter', 'Dump Cards', '')
+
+    # Prelude beats are not counted; counter still in flight -> 1 pending.
+    assert _unlanded_count(steps, {counter_key: 10 ** 9}) == 1
+    # Counter animation landed -> nothing pending.
+    assert _unlanded_count(steps, {counter_key: 0}) == 0
+    # No impact record yet (animation not fired) -> still pending.
+    assert _unlanded_count(steps, {}) == 1
+
+
+def test_conquer_unlanded_spell_step_count_skips_modifier_counters():
+    """Battle-modifier counter spells never touch the rail, so never gate."""
+    steps = [_card_spell_step('counter', 'Blitzkrieg', completed=True)]
+    assert _unlanded_count(steps, {}) == 0
+
+
+def test_timeline_panel_battle_phase_gates_counter_spell_on_impact():
+    """During battle, an in-flight counter spell holds back its mutation."""
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((10, 10)))
+    screen = SimpleNamespace(
+        _conquer_resolution_step_server=4,
+        _spell_anim_seeded=True,
+        conquer_unlanded_spell_step_count=lambda _steps: 1,
+        state=SimpleNamespace(game=SimpleNamespace(
+            conquer_resolution_step=4,
+            battle_confirmed=True,
+            battle_turn_player_id=7,
+            battle_round=1,
+        )),
+    )
+    panel.derive_display_steps = lambda _screen: []
+    # server_step 4 minus 1 in-flight counter -> 3.
+    assert panel.currently_resolved_step_index(screen) == 3
+
+    # Counter animation landed -> full server step revealed.
+    screen.conquer_unlanded_spell_step_count = lambda _steps: 0
+    assert panel.currently_resolved_step_index(screen) == 4
+
+
+def test_timeline_panel_battle_phase_reveals_all_when_unseeded():
+    """Before the spell animation system seeds, battle phase reveals all."""
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    panel = ConquerTimelinePanel(pygame.Surface((10, 10)))
+    screen = SimpleNamespace(
+        _conquer_resolution_step_server=4,
+        _spell_anim_seeded=False,
+        conquer_unlanded_spell_step_count=lambda _steps: 2,
+        state=SimpleNamespace(game=SimpleNamespace(
+            conquer_resolution_step=4,
+            battle_confirmed=True,
+            battle_turn_player_id=7,
+            battle_round=1,
+        )),
+    )
+    panel.derive_display_steps = lambda _screen: []
+    assert panel.currently_resolved_step_index(screen) == 4

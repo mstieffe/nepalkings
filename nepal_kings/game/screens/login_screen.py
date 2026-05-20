@@ -37,6 +37,15 @@ _LABEL_GAP        = int(0.006 * _SH)
 _LOADING_CLR = (200, 185, 150)
 
 
+def _response_error_message(resp, fallback):
+    """Return the server-provided error message when the response has one."""
+    try:
+        message = resp.json().get('message')
+    except Exception:
+        return fallback
+    return message or fallback
+
+
 class LoginScreen(Screen):
     # Class-level cache: greyscale background loaded once, shared
     _bg_cache = None
@@ -302,9 +311,11 @@ class LoginScreen(Screen):
             if resp.status_code == 401:
                 response_data = {'success': False, 'message': 'Login failed. Username or password incorrect'}
             elif resp.status_code == 409:
-                response_data = {'success': False, 'message': 'Registration failed. Username already exists.'}
+                fallback = 'Registration failed. Username already exists.'
+                response_data = {'success': False, 'message': _response_error_message(resp, fallback)}
             elif resp.status_code >= 400:
-                response_data = {'success': False, 'message': f'Request failed ({resp.status_code}). Please try again.'}
+                fallback = f'Request failed ({resp.status_code}). Please try again.'
+                response_data = {'success': False, 'message': _response_error_message(resp, fallback)}
             else:
                 response_data = resp.json()
         except Exception:
