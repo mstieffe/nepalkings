@@ -686,6 +686,11 @@ class FieldFigureIcon(FigureIcon):
         # frame based on the current battle moves).
         self.conquer_battle_dimmed = False
 
+        # Optional per-screen cap for the combined name/info label.  Mobile
+        # conquer columns set this so labels stay inside their own lane instead
+        # of covering neighbouring UI.
+        self.max_info_width = None
+
         # Blocks-bonus: when True the support bonus is negated (shown as red strikethrough)
         self.battle_bonus_blocked = False
 
@@ -701,6 +706,26 @@ class FieldFigureIcon(FigureIcon):
         # Initialize glow effects and images (with larger glows for castle figures)
         self.load_glow_effects()
         self._initialize_images(self.family, x, y)
+
+    @staticmethod
+    def _fit_text_to_width(text, font, max_width):
+        text = str(text or '')
+        if max_width is None or max_width <= 0:
+            return text
+        if font.size(text)[0] <= max_width:
+            return text
+        ellipsis = '...'
+        if font.size(ellipsis)[0] > max_width:
+            return ''
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            candidate = text[:mid].rstrip() + ellipsis
+            if font.size(candidate)[0] <= max_width:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo].rstrip() + ellipsis
 
     def load_glow_effects(self) -> None:
         """
@@ -949,14 +974,24 @@ class FieldFigureIcon(FigureIcon):
             # For non-visible figures: big only when hovered and not pressing
             is_big_state = self.hovered and not is_mouse_pressed
 
-        # Use appropriate font based on state
-        font = self.font_big if is_big_state else self.font
-        text_surface = font.render(text, True, settings.SUIT_ICON_CAPTION_COLOR)
-
         # Scale spacing and padding based on state
         scale_factor = self.icon_scale_factor if is_big_state else 1.0
         padding = int(settings.FIGURE_NAME_PADDING * scale_factor)
         element_spacing = int(4 * scale_factor)  # Spacing between icons in info row
+        max_info_width = getattr(self, 'max_info_width', None)
+        try:
+            max_info_width = int(max_info_width) if max_info_width else None
+        except (TypeError, ValueError):
+            max_info_width = None
+        max_content_width = (
+            max(1, max_info_width - 2 * padding)
+            if max_info_width else None
+        )
+
+        # Use appropriate font based on state
+        font = self.font_big if is_big_state else self.font
+        text = self._fit_text_to_width(text, font, max_content_width)
+        text_surface = font.render(text, True, settings.SUIT_ICON_CAPTION_COLOR)
         
         # Calculate default icon size for enchantments (based on suit icon sizing)
         base_size = int(settings.FIELD_FIGURE_CARD_HEIGHT * 0.8)
@@ -1090,6 +1125,8 @@ class FieldFigureIcon(FigureIcon):
             
             # Calculate box width
             box_width = max(text_surface.get_width(), info_row_width) + 2 * padding
+            if max_info_width:
+                box_width = min(box_width, max_info_width)
         else:
             # For hidden figures, determine what to show.
             # Village figures: hide skills (would reveal identity);
@@ -1133,6 +1170,8 @@ class FieldFigureIcon(FigureIcon):
                     hidden_info_row_width += len(enchantment_icons) * default_icon_size + (len(enchantment_icons) - 1) * element_spacing
                 
                 box_width = max(text_surface.get_width(), hidden_info_row_width) + 2 * padding
+                if max_info_width:
+                    box_width = min(box_width, max_info_width)
                 info_padding = int(padding * settings.FIGURE_NAME_INFO_PADDING_SCALE)
                 info_height = max(
                     _cb_size if _show_card_backs else 0,
@@ -1143,6 +1182,8 @@ class FieldFigureIcon(FigureIcon):
             else:
                 # No skills, enchantments, or card backs — only show name
                 box_width = text_surface.get_width() + 2 * padding
+                if max_info_width:
+                    box_width = min(box_width, max_info_width)
                 info_height = 0
         
         # Calculate y-offset for the info box
@@ -1240,6 +1281,9 @@ class FieldFigureIcon(FigureIcon):
             
             # Start from left side of the row
             current_x = self.x - info_row_width // 2
+            old_clip = self.window.get_clip()
+            if info_height > 0:
+                self.window.set_clip(info_bg_rect)
             
             # Draw power
             power_y = info_center_y - power_surface.get_height() // 2
@@ -1341,6 +1385,7 @@ class FieldFigureIcon(FigureIcon):
                     icon_y = info_center_y - enchant_icon.get_height() // 2
                     self.window.blit(enchant_icon, (current_x, icon_y))
                     current_x += enchant_icon.get_width()
+            self.window.set_clip(old_clip)
         
         # Draw info row for hidden figures (card backs, skills, enchantments)
         elif not self.is_visible and info_height > 0:
@@ -1378,6 +1423,8 @@ class FieldFigureIcon(FigureIcon):
 
             # Start from left side of the row
             current_x = self.x - hidden_info_row_width // 2
+            old_clip = self.window.get_clip()
+            self.window.set_clip(info_bg_rect)
 
             # Draw card-back icons
             if _show_card_backs:
@@ -1422,6 +1469,7 @@ class FieldFigureIcon(FigureIcon):
                     icon_y = info_center_y - enchant_icon.get_height() // 2
                     self.window.blit(enchant_icon, (current_x, icon_y))
                     current_x += enchant_icon.get_width()
+            self.window.set_clip(old_clip)
 
     def update(self) -> None:
         """

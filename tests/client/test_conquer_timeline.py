@@ -159,6 +159,60 @@ def test_game_start_pending_holds_overview_until_prelude_snapshot_arrives():
     assert not by_kind['attacker'].active
 
 
+def test_game_start_unchecked_holds_overview_before_pending_flag():
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    game = _make_game(
+        turn=True,
+        pending_forced_advance=True,
+        _game_start_pending=False,
+        game_start_notification_checked=False,
+    )
+    screen = SimpleNamespace(
+        state=_make_state(game),
+        subscreens={},
+        _conquer_acknowledged_step_kinds={'overview'},
+        _conquer_timeline_step_started_at={},
+    )
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+
+    steps = panel.derive_display_steps(screen)
+    by_kind = {s.kind: s for s in steps}
+
+    assert by_kind['overview'].active
+    assert not by_kind['prelude_own'].active
+    assert not by_kind['prelude_own'].completed
+    assert not by_kind['attacker'].active
+
+
+def test_timeline_cache_updates_when_prelude_snapshot_arrives(monkeypatch):
+    from game.components.conquer_timeline_panel import ConquerTimelinePanel
+
+    game = _make_game(
+        turn=True,
+        pending_forced_advance=True,
+    )
+    screen = SimpleNamespace(
+        state=_make_state(game),
+        subscreens={},
+        _conquer_acknowledged_step_kinds={'overview'},
+        _conquer_timeline_step_started_at={},
+    )
+    panel = ConquerTimelinePanel.__new__(ConquerTimelinePanel)
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: 1234)
+
+    first_steps = panel.derive_display_steps(screen)
+    assert {s.kind: s for s in first_steps}['prelude_own'].icon_kind == 'none'
+
+    game.conquer_own_prelude_spells = [{'spell_name': 'Draw 2 MainCards'}]
+    second_steps = panel.derive_display_steps(screen)
+    by_kind = {s.kind: s for s in second_steps}
+
+    assert by_kind['prelude_own'].icon_kind == 'spell'
+    assert by_kind['prelude_own'].active
+    assert not by_kind['attacker'].active
+
+
 def test_own_prelude_uses_spell_assets_instead_of_no_spell_text():
     from game.screens.conquer_flow import derive_conquer_timeline
 

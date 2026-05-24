@@ -3361,6 +3361,13 @@ class FieldScreen(SubScreen):
                             if figure.id not in self.icon_cache:
                                 continue
                             icon = self.icon_cache[figure.id]
+                            if settings.TOUCH_TARGET_MIN > 0:
+                                icon.max_info_width = max(
+                                    42,
+                                    int(compartment.width - 2 * settings.FIELD_BORDER_WIDTH - 4),
+                                )
+                            else:
+                                icon.max_info_width = None
                             icon_x = compartment.centerx
                             icon_y = icon_y_start + i * icon_spacing
                             

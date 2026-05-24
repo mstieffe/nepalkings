@@ -462,6 +462,7 @@ class ConquerTimelinePanel:
         # within-frame calls reuse the same result while still allowing
         # the hold-timer to advance at a smooth 20Hz cadence.
         game = getattr(getattr(screen, 'state', None), 'game', None)
+        state = getattr(screen, 'state', None)
         ticks = pygame.time.get_ticks() if game is not None else 0
         cache_key = (
             id(screen),
@@ -469,6 +470,7 @@ class ConquerTimelinePanel:
             getattr(game, 'battle_round', None) if game else None,
             getattr(game, 'battle_confirmed', None) if game else None,
             getattr(game, 'battle_turn_player_id', None) if game else None,
+            self._game_start_cache_marker(game, state),
             getattr(screen, '_conquer_resolution_step_server', None),
             ticks // 50,  # 20Hz cadence for hold-timer progress
         )
@@ -563,8 +565,6 @@ class ConquerTimelinePanel:
     def _awaiting_game_start_prelude_snapshot(game):
         if game is None or getattr(game, 'mode', None) != 'conquer':
             return False
-        if not getattr(game, '_game_start_pending', False):
-            return False
         if (getattr(game, 'state', None) == 'finished'
                 or getattr(game, 'game_over', False)
                 or getattr(game, 'last_battle_result', None)):
@@ -572,7 +572,79 @@ class ConquerTimelinePanel:
         if (getattr(game, 'battle_turn_player_id', None) is not None
                 or int(getattr(game, 'battle_round', 0) or 0) >= 1):
             return False
-        return True
+        summary = getattr(game, 'pending_opponent_turn_summary', None)
+        if (isinstance(summary, dict)
+                and summary.get('action') == 'game_start'
+                and summary.get('mode') == 'conquer'):
+            return True
+        if getattr(game, '_game_start_pending', False):
+            return True
+        return not getattr(game, 'game_start_notification_checked', True)
+
+    @staticmethod
+    def _prelude_spells_cache_marker(spells):
+        if not isinstance(spells, (list, tuple)):
+            return ()
+        marker = []
+        for spell in spells:
+            if not isinstance(spell, dict):
+                continue
+            effect_data = spell.get('effect_data')
+            prelude_status = (
+                effect_data.get('prelude_status')
+                if isinstance(effect_data, dict) else None
+            )
+            prelude_pending = (
+                effect_data.get('prelude_pending_target')
+                if isinstance(effect_data, dict) else None
+            )
+            marker.append((
+                spell.get('id'),
+                spell.get('spell_id'),
+                spell.get('spell_name'),
+                spell.get('target_figure_id'),
+                prelude_status,
+                prelude_pending,
+            ))
+        return tuple(marker)
+
+    @staticmethod
+    def _pending_prelude_cache_marker(pending):
+        if isinstance(pending, dict):
+            return (
+                pending.get('spell_id'),
+                pending.get('spell_name'),
+                pending.get('target_scope'),
+                tuple(pending.get('valid_target_ids') or ()),
+            )
+        return bool(pending)
+
+    @classmethod
+    def _game_start_cache_marker(cls, game, state):
+        if game is None:
+            return None
+        summary = getattr(game, 'pending_opponent_turn_summary', None)
+        summary_marker = None
+        if isinstance(summary, dict):
+            summary_marker = (
+                summary.get('action'),
+                summary.get('mode'),
+                id(summary),
+            )
+        return (
+            bool(getattr(game, '_game_start_pending', False)),
+            bool(getattr(game, 'game_start_notification_checked', True)),
+            summary_marker,
+            cls._pending_prelude_cache_marker(
+                getattr(state, 'pending_conquer_prelude_target', None)
+                if state is not None else None),
+            cls._pending_prelude_cache_marker(
+                getattr(game, 'pending_conquer_prelude_target', False)),
+            cls._prelude_spells_cache_marker(
+                getattr(game, 'conquer_own_prelude_spells', None)),
+            cls._prelude_spells_cache_marker(
+                getattr(game, 'conquer_opp_prelude_spells', None)),
+        )
 
     @staticmethod
     def _step_needs_hold(step):

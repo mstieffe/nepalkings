@@ -1763,6 +1763,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 icon = self._figure_icons.get(fig.id)
                 if not icon:
                     continue
+                if settings.TOUCH_TARGET_MIN > 0:
+                    icon.max_info_width = max(48, rect.w - 6)
+                else:
+                    icon.max_info_width = None
                 icon_y = icon_y_start + i * icon_spacing
                 icon_positions[fig.id] = (icon_x, icon_y)
                 if icon.hovered:

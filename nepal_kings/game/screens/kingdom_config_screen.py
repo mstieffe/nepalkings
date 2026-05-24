@@ -964,7 +964,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             if event.type == MOUSEBUTTONDOWN and event.button == 1:
                 if self._begin_touch_scroll(event.pos):
                     continue
-            if event.type == MOUSEMOTION and self._touch_scroll_target is not None:
+            if (event.type == MOUSEMOTION
+                    and getattr(self, '_touch_scroll_target', None) is not None):
                 self._update_touch_scroll(event.pos)
                 continue
             if event.type != MOUSEBUTTONUP or event.button != 1:
@@ -1182,9 +1183,11 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
     def _end_touch_scroll(self):
         """Reset touch-drag state. Returns True if the gesture was a real
         swipe (so the caller should swallow the trailing click)."""
+        target = getattr(self, '_touch_scroll_target', None)
+        moved = getattr(self, '_touch_scroll_moved', 0)
         was_swipe = (
-            self._touch_scroll_target is not None
-            and self._touch_scroll_moved > max(6, int(0.012 * settings.SCREEN_HEIGHT))
+            target is not None
+            and moved > max(6, int(0.012 * settings.SCREEN_HEIGHT))
         )
         self._touch_scroll_target = None
         self._touch_scroll_last_y = 0

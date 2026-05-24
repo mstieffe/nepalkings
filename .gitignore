@@ -1,4 +1,5 @@
 # ── Build artifacts ────────────────────────────────────────────────
+/artifacts/
 nepal_kings/build/
 nepal_kings/dist/
 *.app
