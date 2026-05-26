@@ -941,6 +941,124 @@ def _bulk_defence_incomplete_by_land(land_ids, user_id):
     return incomplete_by_land
 
 
+def _compute_top_kingdoms(components_by_user, lands, kingdoms_by_id, my_user_id):
+    """Compute the server-wide top-3 leaderboards for the kingdom map.
+
+    Returns a dict with:
+      - ``top_largest_kingdoms``: top 3 connected kingdom-components by size.
+      - ``top_greatest_realms``: top 3 players by total owned-lands count.
+      - ``my_largest_rank`` / ``my_largest_size``: requester's rank/size in (A).
+      - ``my_realm_rank``   / ``my_realm_size``  : requester's rank/size in (B).
+
+    Each leaderboard entry carries the data the client needs to find the
+    matching badge group on the map (kingdom_id and component_id) and to pan
+    the camera (land_ids).
+    """
+    flat_components = []
+    total_by_user = {}
+    for owner_id, comps in components_by_user.items():
+        user_total = 0
+        for comp in comps:
+            size = int(comp.get('size') or 0)
+            user_total += size
+            flat_components.append({
+                'user_id': owner_id,
+                'component_id': comp.get('component_id'),
+                'land_ids': list(comp.get('land_ids') or []),
+                'size': size,
+            })
+        total_by_user[owner_id] = user_total
+
+    flat_components.sort(key=lambda c: (-c['size'], str(c.get('component_id') or '')))
+    realm_ranking = sorted(total_by_user.items(), key=lambda kv: (-kv[1], kv[0]))
+
+    land_by_id = {land.id: land for land in lands}
+
+    def _kingdom_id_for_land_ids(land_ids):
+        for lid in land_ids:
+            land = land_by_id.get(lid)
+            if land and land.kingdom_id:
+                return land.kingdom_id
+        return None
+
+    user_ids_needed = set()
+    for entry in flat_components[:3]:
+        user_ids_needed.add(entry['user_id'])
+    for uid, _ in realm_ranking[:3]:
+        user_ids_needed.add(uid)
+    user_ids_needed.add(my_user_id)
+
+    usernames_by_id = {}
+    if user_ids_needed:
+        for row in User.query.filter(User.id.in_(user_ids_needed)).all():
+            usernames_by_id[row.id] = row.username
+
+    def _component_name(entry):
+        kid = _kingdom_id_for_land_ids(entry['land_ids'])
+        if kid:
+            k = kingdoms_by_id.get(kid)
+            if k and getattr(k, 'name', None):
+                return k.name
+        return usernames_by_id.get(entry['user_id']) or 'Kingdom'
+
+    top_largest = []
+    for rank, entry in enumerate(flat_components[:3], start=1):
+        top_largest.append({
+            'rank': rank,
+            'user_id': entry['user_id'],
+            'username': usernames_by_id.get(entry['user_id']) or 'Player',
+            'kingdom_id': _kingdom_id_for_land_ids(entry['land_ids']),
+            'kingdom_component_id': entry['component_id'],
+            'name': _component_name(entry),
+            'size': entry['size'],
+            'land_ids': entry['land_ids'],
+        })
+
+    top_realms = []
+    for rank, (uid, total_size) in enumerate(realm_ranking[:3], start=1):
+        user_comps = components_by_user.get(uid) or []
+        largest_comp = max(user_comps, key=lambda c: int(c.get('size') or 0),
+                           default=None)
+        largest_land_ids = (list(largest_comp.get('land_ids') or [])
+                            if largest_comp else [])
+        top_realms.append({
+            'rank': rank,
+            'user_id': uid,
+            'username': usernames_by_id.get(uid) or 'Player',
+            'total_lands': total_size,
+            'largest_component_id': (largest_comp.get('component_id')
+                                     if largest_comp else None),
+            'largest_kingdom_id': _kingdom_id_for_land_ids(largest_land_ids),
+            'largest_land_ids': largest_land_ids,
+        })
+
+    my_components = components_by_user.get(my_user_id) or []
+    my_largest_size = max(
+        (int(c.get('size') or 0) for c in my_components), default=0)
+    my_realm_size = int(total_by_user.get(my_user_id) or 0)
+
+    my_largest_rank = None
+    for i, entry in enumerate(flat_components, start=1):
+        if entry['user_id'] == my_user_id and entry['size'] == my_largest_size:
+            my_largest_rank = i
+            break
+
+    my_realm_rank = None
+    for i, (uid, _size) in enumerate(realm_ranking, start=1):
+        if uid == my_user_id:
+            my_realm_rank = i
+            break
+
+    return {
+        'top_largest_kingdoms': top_largest,
+        'top_greatest_realms': top_realms,
+        'my_largest_rank': my_largest_rank,
+        'my_largest_size': my_largest_size,
+        'my_realm_rank': my_realm_rank,
+        'my_realm_size': my_realm_size,
+    }
+
+
 @kingdom.route('/map', methods=['GET'])
 @require_token
 def get_kingdom_map():
@@ -966,7 +1084,7 @@ def get_kingdom_map():
     kingdoms_by_id = {
         row.id: row for row in KingdomModel.query.filter(KingdomModel.id.in_(kingdom_ids)).all()
     } if kingdom_ids else {}
-    component_info_by_land, _ = compute_owned_land_components(lands)
+    component_info_by_land, components_by_user = compute_owned_land_components(lands)
     my_kingdom = summarize_user_kingdom(user.id, lands)
     my_persistent_kingdoms = [
         serialize_kingdom_config(row)
@@ -1058,6 +1176,12 @@ def get_kingdom_map():
         remaining = config.CONQUER_COOLDOWN_SECONDS - elapsed
         cooldown_remaining = max(0, int(remaining))
 
+    # Server-wide leaderboards: largest single connected kingdom and greatest
+    # total realm (sum of all owned lands per player).  Top-3 of each drives
+    # the on-map crowns + the leaderboard panel.
+    leaderboards = _compute_top_kingdoms(
+        components_by_user, lands, kingdoms_by_id, user.id)
+
     return jsonify({
         'lands': lands_data,
         'my_total_gold_rate': round(my_total_gold_rate, 1),
@@ -1066,6 +1190,7 @@ def get_kingdom_map():
         'my_kingdom': my_kingdom,
         'my_kingdoms': my_persistent_kingdoms,
         'conquer_cooldown_remaining': cooldown_remaining,
+        **leaderboards,
     })
 
 

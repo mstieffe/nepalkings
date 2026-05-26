@@ -304,6 +304,10 @@ class HexMap:
         self._minimap_static_cache_key = None
         self._minimap_static_cache = None
         self._minimap_data_version = 0
+        # Crown leaderboards (set via set_leaderboards from KingdomScreen).
+        self._gold_crown_groups = set()
+        self._silver_wreath_users = set()
+        self._crown_icon_cache = {}
         self._build_tiles(lands_data)
 
         # Pre-load suit icons as raw surfaces and scale lazily per size.
@@ -422,6 +426,18 @@ class HexMap:
         neighbour = self._tile_by_coord.get(coord)
         return bool(neighbour and tile.owner_user_id and
                     neighbour.owner_user_id == tile.owner_user_id)
+
+    def _tile_in_hovered_component(self, tile):
+        """True if *tile* shares the hovered tile's connected kingdom component."""
+        h = self.hovered_tile
+        if h is None or tile is h:
+            return False
+        h_comp = getattr(h, 'kingdom_component_id', None)
+        if h_comp is None:
+            return False
+        if getattr(tile, 'kingdom_component_id', None) != h_comp:
+            return False
+        return getattr(tile, 'owner_user_id', None) == getattr(h, 'owner_user_id', None)
 
     # ── Grid construction ───────────────────────────────────────────
 
@@ -802,10 +818,27 @@ class HexMap:
         # Fill colour follows suit-bonus colour; tier controls intensity.
         fill = list(_tile_fill_color(tile))
 
-        # Hover brighten
-        if tile is self.hovered_tile:
-            b = settings.HEX_HOVER_BRIGHTEN
-            fill = [min(255, c + b) for c in fill]
+        # Hover brighten — tiered: the hovered tile gets the full boost,
+        # every other tile in the same connected kingdom-component gets a
+        # softer boost so the kingdom reads as one unit at a glance.  The
+        # fill brighten is only one of two layers — both the hovered tile
+        # and its kingdom siblings also get a warm-white overlay polygon
+        # painted on top of the surface skin so the highlight stays
+        # visible through opaque cosmetics.  ``hover_overlay_alpha``
+        # selects which layer applies and at what intensity.
+        hover_overlay_alpha = 0
+        if self.hovered_tile is not None:
+            if tile is self.hovered_tile:
+                b = settings.HEX_HOVER_BRIGHTEN
+                fill = [min(255, c + b) for c in fill]
+                hover_overlay_alpha = int(getattr(
+                    settings, 'HEX_HOVER_TILE_OVERLAY_ALPHA', 95))
+            elif self._tile_in_hovered_component(tile):
+                b = getattr(settings, 'HEX_HOVER_BRIGHTEN_KINGDOM',
+                            max(8, settings.HEX_HOVER_BRIGHTEN // 2))
+                fill = [min(255, c + b) for c in fill]
+                hover_overlay_alpha = int(getattr(
+                    settings, 'HEX_HOVER_KINGDOM_OVERLAY_ALPHA', 55))
 
         if tile.is_mine:
             xs = [p[0] for p in corners]
@@ -880,6 +913,23 @@ class HexMap:
                                              (int(scx) - sz_int, int(scy) - sz_int))
                         except Exception:
                             pass
+
+        # Warm-white hover wash painted on top of fill + surface skin so the
+        # highlight reads clearly even through opaque cosmetics (parchment,
+        # stone, snow).  Both the hovered tile and its kingdom siblings get
+        # this layer — the hovered tile uses a stronger alpha so it still
+        # reads as the focal point.
+        if hover_overlay_alpha > 0:
+            xs = [p[0] for p in corners]
+            ys = [p[1] for p in corners]
+            min_x = int(min(xs)) - 1
+            min_y = int(min(ys)) - 1
+            ow = int(max(xs)) - min_x + 2
+            oh = int(max(ys)) - min_y + 2
+            ovl = pygame.Surface((ow, oh), pygame.SRCALPHA)
+            local = [(p[0] - min_x, p[1] - min_y) for p in corners]
+            pygame.draw.polygon(ovl, (255, 248, 220, hover_overlay_alpha), local)
+            self.window.blit(ovl, (min_x, min_y))
 
     def _draw_hex_border(self, tile, corners):
         """Draw selection and border cosmetics after all hex fills."""
@@ -1417,6 +1467,7 @@ class HexMap:
                 'tiles': [],
                 'name': None,
                 'kingdom_id': tile.kingdom_id,
+                'owner_user_id': tile.owner_user_id,
                 'owner_username': tile.owner_username,
                 'badge_keys': {},
                 'suit_keys': {},
@@ -1479,6 +1530,7 @@ class HexMap:
                 'sigil_key': sigil_key,
                 'representative_tile': tiles[0],
                 'group_key': gk,
+                'owner_user_id': group.get('owner_user_id'),
             })
         self._kingdom_badges_cache = badges
         return badges
@@ -1558,6 +1610,39 @@ class HexMap:
             self.window.blit(shadow,
                              (br.x + shadow_dx, br.y + shadow_dy))
             self.window.blit(badge_surf, br)
+
+            # Crown overlays: gold for top-3 largest single kingdom, silver
+            # wreath for top-3 greatest total realm. Crowns straddle the
+            # badge's top edge so they read as a decoration on the badge.
+            gold = badge_data.get('group_key') in self._gold_crown_groups
+            silver = badge_data.get('owner_user_id') in self._silver_wreath_users
+            if gold or silver:
+                crown_sz = max(14, int(br.h * 0.9))
+                crown_y = br.y - crown_sz * 0.55
+                if gold and silver:
+                    gold_icon = self._render_crown_icon('gold', crown_sz)
+                    silver_icon = self._render_crown_icon('silver', crown_sz)
+                    spacing = max(2, crown_sz // 6)
+                    total_w = (gold_icon.get_width()
+                               + silver_icon.get_width() + spacing)
+                    start_x = br.centerx - total_w // 2
+                    self.window.blit(gold_icon, (int(start_x), int(crown_y)))
+                    self.window.blit(
+                        silver_icon,
+                        (int(start_x + gold_icon.get_width() + spacing),
+                         int(crown_y)))
+                elif gold:
+                    gold_icon = self._render_crown_icon('gold', crown_sz)
+                    self.window.blit(
+                        gold_icon,
+                        gold_icon.get_rect(center=(br.centerx,
+                                                   int(crown_y + crown_sz / 2))))
+                else:
+                    silver_icon = self._render_crown_icon('silver', crown_sz)
+                    self.window.blit(
+                        silver_icon,
+                        silver_icon.get_rect(center=(br.centerx,
+                                                     int(crown_y + crown_sz / 2))))
 
             # Kingdom sigil glyph drawn above the suit cluster icon as the
             # cluster's identity marker.  Tinted with the kingdom's owner
@@ -2076,6 +2161,166 @@ class HexMap:
         )
         self.selected_tile = selected
         return selected
+
+    def focus_on_kingdom(self, *, kingdom_id=None, component_id=None, user_id=None):
+        """Pan the camera to a kingdom-component identified by id(s).
+
+        Accepts any combination of ``kingdom_id`` (persistent kingdom), or
+        ``component_id`` + ``user_id`` (transient connected component).
+        Returns the selected tile if a match was found, else ``None``.
+        """
+        matches = []
+        for tile in self.tiles:
+            if kingdom_id is not None and getattr(tile, 'kingdom_id', None) == kingdom_id:
+                matches.append(tile)
+                continue
+            if (component_id is not None
+                    and getattr(tile, 'kingdom_component_id', None) == component_id
+                    and (user_id is None
+                         or getattr(tile, 'owner_user_id', None) == user_id)):
+                matches.append(tile)
+        if not matches:
+            return None
+        land_ids = [t.land_id for t in matches]
+        return self.focus_lands(land_ids)
+
+    def set_leaderboards(self, top_largest=None, top_realms=None):
+        """Register the server-wide top-3 leaderboards for crown overlays.
+
+        ``top_largest`` entries earn a gold crown on the matching badge group.
+        ``top_realms`` entries earn a silver wreath on every badge owned by
+        that user. Stores compact lookup sets so the per-frame badge render
+        does a single hash check per group.
+        """
+        gold_groups = set()
+        for entry in (top_largest or []):
+            kid = entry.get('kingdom_id') if isinstance(entry, dict) else None
+            cid = entry.get('kingdom_component_id') if isinstance(entry, dict) else None
+            uid = entry.get('user_id') if isinstance(entry, dict) else None
+            if kid is not None:
+                gold_groups.add(('kingdom', kid))
+            if cid is not None and uid is not None:
+                gold_groups.add(('component', uid, cid))
+        self._gold_crown_groups = gold_groups
+        self._silver_wreath_users = {
+            entry.get('user_id') for entry in (top_realms or [])
+            if isinstance(entry, dict) and entry.get('user_id') is not None
+        }
+        # Invalidate the badge cache so crown decoration appears next frame.
+        self._kingdom_badges_cache = None
+
+    def _render_crown_icon(self, kind, size):
+        """Procedurally render a small crown icon for the badge overlay.
+
+        ``kind`` is 'gold' (largest single kingdom) or 'silver' (greatest
+        total realm). Results are cached per (kind, size).
+        """
+        s = max(10, int(size))
+        key = (kind, s)
+        cached = self._crown_icon_cache.get(key)
+        if cached is not None:
+            return cached
+        surf = pygame.Surface((s, s), pygame.SRCALPHA)
+        if kind == 'gold':
+            rim = (130, 92, 18)
+            body = (240, 196, 60)
+            highlight = (255, 232, 140)
+            gem = (224, 60, 80)
+            band_h = max(3, int(s * 0.30))
+            band_y = int(s * 0.55)
+            band_rect = pygame.Rect(1, band_y, s - 2, band_h)
+            pygame.draw.rect(surf, rim, band_rect, border_radius=2)
+            pygame.draw.rect(surf, body,
+                             band_rect.inflate(-2, -2), border_radius=2)
+            pygame.draw.line(surf, highlight,
+                             (band_rect.x + 1, band_rect.y + 1),
+                             (band_rect.right - 1, band_rect.y + 1), 1)
+            pts_w = s / 5.0
+            for i in range(5):
+                xc = (i + 0.5) * pts_w
+                tall = i in (0, 2, 4)
+                tip_h = s * (0.32 if tall else 0.22)
+                tip_y = band_y - tip_h
+                spike = [
+                    (xc - pts_w * 0.36, band_y),
+                    (xc + pts_w * 0.36, band_y),
+                    (xc, tip_y),
+                ]
+                pygame.draw.polygon(surf, rim, spike)
+                inner = [
+                    (xc - pts_w * 0.24, band_y - 1),
+                    (xc + pts_w * 0.24, band_y - 1),
+                    (xc, tip_y + 1),
+                ]
+                pygame.draw.polygon(surf, body, inner)
+                if tall:
+                    gem_r = max(1, int(s * 0.055))
+                    pygame.draw.circle(
+                        surf, gem,
+                        (int(xc), int(tip_y + s * 0.05)), gem_r)
+        else:
+            leaf_dark = (110, 120, 134)
+            leaf_clr = (210, 218, 230)
+            leaf_hi = (244, 248, 255)
+            ribbon = (212, 90, 110)
+            ribbon_dark = (148, 56, 72)
+            cx_w = s / 2.0
+            cy_w = s * 0.58
+            outer_r = s * 0.40
+            leaf_count = 6
+            leaf_w = max(2, int(s * 0.16))
+            leaf_h = max(2, int(s * 0.085))
+            for side in (-1, 1):
+                for i in range(leaf_count):
+                    t = (i + 1) / float(leaf_count + 1)
+                    angle = math.pi * (-0.5) + side * (math.pi * 0.55) * (t - 0.5)
+                    lx = cx_w + outer_r * math.sin(angle)
+                    ly = cy_w - outer_r * math.cos(angle)
+                    leaf = pygame.Surface((leaf_w * 2, leaf_h * 2),
+                                          pygame.SRCALPHA)
+                    pygame.draw.ellipse(leaf, leaf_dark,
+                                        (0, 0, leaf_w * 2, leaf_h * 2))
+                    pygame.draw.ellipse(leaf, leaf_clr,
+                                        (1, 1, leaf_w * 2 - 2, leaf_h * 2 - 2))
+                    pygame.draw.ellipse(leaf, leaf_hi,
+                                        (2, 2, max(1, leaf_w - 2),
+                                         max(1, leaf_h - 2)))
+                    rot_deg = -math.degrees(angle) + (90 if side > 0 else -90)
+                    rot = pygame.transform.rotate(leaf, rot_deg)
+                    surf.blit(rot, rot.get_rect(center=(int(lx), int(ly))))
+            # Ribbon knot at the wreath base.
+            knot_r = max(2, int(s * 0.085))
+            knot_cx = int(cx_w)
+            knot_cy = int(cy_w + outer_r * 0.78)
+            pygame.draw.circle(surf, ribbon_dark, (knot_cx, knot_cy),
+                               knot_r + 1)
+            pygame.draw.circle(surf, ribbon, (knot_cx, knot_cy), knot_r)
+            # Ribbon tails.
+            tail_w = max(1, int(s * 0.04))
+            pygame.draw.line(surf, ribbon_dark,
+                             (knot_cx, knot_cy + knot_r),
+                             (knot_cx - max(2, int(s * 0.08)),
+                              knot_cy + max(3, int(s * 0.18))),
+                             tail_w + 1)
+            pygame.draw.line(surf, ribbon_dark,
+                             (knot_cx, knot_cy + knot_r),
+                             (knot_cx + max(2, int(s * 0.08)),
+                              knot_cy + max(3, int(s * 0.18))),
+                             tail_w + 1)
+            pygame.draw.line(surf, ribbon,
+                             (knot_cx, knot_cy + knot_r),
+                             (knot_cx - max(2, int(s * 0.08)),
+                              knot_cy + max(3, int(s * 0.18))),
+                             tail_w)
+            pygame.draw.line(surf, ribbon,
+                             (knot_cx, knot_cy + knot_r),
+                             (knot_cx + max(2, int(s * 0.08)),
+                              knot_cy + max(3, int(s * 0.18))),
+                             tail_w)
+        if len(self._crown_icon_cache) > 24:
+            self._crown_icon_cache.pop(next(iter(self._crown_icon_cache)))
+        self._crown_icon_cache[key] = surf
+        return surf
 
     def handle_minimap_click(self, sx, sy):
         """If (sx, sy) is inside the minimap, jump camera there. Returns True if handled."""

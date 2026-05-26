@@ -8,8 +8,10 @@ from game.screens.screen import Screen
 from game.screens._menu_base import MenuScreenMixin
 from game.components.hex_map import HexMap
 from game.components.land_detail_box import LandDetailBox
+from game.components.leaderboard_panel import LeaderboardPanel
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.components.loading_indicator import draw_loading_indicator
+from game.components import sigil_cosmetics
 from config import settings
 from utils import http_compat as requests
 from utils.background_poller import BackgroundPoller
@@ -197,6 +199,39 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._map_poller: BackgroundPoller | None = None
         self._activity_poller: BackgroundPoller | None = None
 
+        # ── Leaderboard panel (top-left of map viewport) ────────────
+        # Sized similarly to the minimap so the two widgets balance the
+        # corners of the map frame.  Position is finalised in
+        # ``_apply_map_response`` once the map viewport rect is known.
+        self._leaderboard_panel = LeaderboardPanel(
+            self.window,
+            rect=None,
+            on_focus=self._on_leaderboard_focus,
+            render_crown_icon=self._render_panel_crown_icon,
+        )
+
+        # ── Kingdom selector chip (in header, drives map focus + config) ─
+        # ``self._kingdom_chip_index`` tracks which of the player's
+        # persistent kingdoms is currently focused on the map.  Stored on
+        # the screen rather than on state so refocusing on re-entry is
+        # deterministic.
+        self._kingdom_chip_index = 0
+        self._kingdom_chip_rect = None
+        self._kingdom_chip_prev_rect = None
+        self._kingdom_chip_next_rect = None
+        self._kingdom_chip_gear_rect = None
+        self._kingdom_chip_font = settings.get_font(settings.FS_SMALL, bold=True)
+        self._kingdom_chip_small_font = settings.get_font(settings.FS_TINY)
+        # Reuse the same edit icon as the defence/conquer config screens so
+        # the affordance is consistent across kingdom-config entry points.
+        try:
+            self._kingdom_chip_edit_icon = pygame.image.load(
+                'img/dialogue_box/icons/edit.png').convert_alpha()
+        except Exception:
+            self._kingdom_chip_edit_icon = None
+        self._kingdom_chip_edit_icon_scaled = None
+        self._kingdom_chip_edit_icon_scaled_sz = 0
+
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def on_enter(self):
@@ -302,6 +337,36 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._map_viewport_rect.bottom - mm_h - settings.MINIMAP_MARGIN,
         )
 
+        # Mirror the minimap geometry at the top-left of the map viewport
+        # for the leaderboard panel.  Twice the minimap height fits the
+        # two sections with a "you: rank" footer.
+        lb_w = mm_w
+        lb_h = int(mm_h * 2.1)
+        lb_x = self._map_viewport_rect.x + settings.MINIMAP_MARGIN
+        lb_y = self._map_viewport_rect.y + settings.MINIMAP_MARGIN
+        self._leaderboard_panel.set_rect((lb_x, lb_y, lb_w, lb_h))
+        self._leaderboard_panel.set_my_user_id(self._current_user_id())
+        self._leaderboard_panel.set_data(
+            top_largest=data.get('top_largest_kingdoms') or [],
+            top_realms=data.get('top_greatest_realms') or [],
+            my_largest_rank=data.get('my_largest_rank'),
+            my_largest_size=data.get('my_largest_size') or 0,
+            my_realm_rank=data.get('my_realm_rank'),
+            my_realm_size=data.get('my_realm_size') or 0,
+        )
+
+        # Wire the same leaderboard into the hex map so the on-map kingdom
+        # name badges get gold / silver crown decorations.
+        if hasattr(self._hex_map, 'set_leaderboards'):
+            self._hex_map.set_leaderboards(
+                data.get('top_largest_kingdoms') or [],
+                data.get('top_greatest_realms') or [],
+            )
+
+        # Clamp the kingdom selector chip index so swapping kingdoms while
+        # the screen is open never points past the new list.
+        self._clamp_kingdom_chip_index()
+
         # On enter/reload, focus on the center of the player's largest
         # connected kingdom so the map opens where most owned lands are.
         self._focus_largest_kingdom_component()
@@ -343,6 +408,120 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
         # Backward-compatible fallback for older HexMap instances.
         return self._hex_map.focus_land(best_land_ids[0])
+
+    # ── Leaderboard ↔ Hex map bridge ───────────────────────────────
+
+    def _render_panel_crown_icon(self, kind, size):
+        """Delegate to the HexMap's procedural crown so panel + map icons match.
+
+        Returns ``None`` before the hex map is built — the leaderboard panel
+        handles that case by leaving the icon slot empty.
+        """
+        if self._hex_map is None or not hasattr(self._hex_map, '_render_crown_icon'):
+            return None
+        return self._hex_map._render_crown_icon(kind, size)
+
+    def _on_leaderboard_focus(self, entry):
+        """Pan the hex map to the kingdom referenced by a clicked panel row."""
+        if not self._hex_map or not isinstance(entry, dict):
+            return
+        # Largest-kingdom rows carry the matching component's land_ids;
+        # greatest-realm rows carry the user's largest component land_ids.
+        land_ids = (entry.get('land_ids')
+                    or entry.get('largest_land_ids')
+                    or [])
+        if land_ids and hasattr(self._hex_map, 'focus_lands'):
+            self._hex_map.focus_lands(land_ids)
+            return
+        kid = entry.get('kingdom_id') or entry.get('largest_kingdom_id')
+        cid = (entry.get('kingdom_component_id')
+               or entry.get('largest_component_id'))
+        if hasattr(self._hex_map, 'focus_on_kingdom'):
+            self._hex_map.focus_on_kingdom(
+                kingdom_id=kid,
+                component_id=cid,
+                user_id=entry.get('user_id'),
+            )
+
+    # ── Kingdom selector chip ──────────────────────────────────────
+
+    def _kingdoms_list(self):
+        if not isinstance(self._map_data, dict):
+            return []
+        return self._map_data.get('my_kingdoms') or []
+
+    def _clamp_kingdom_chip_index(self):
+        kingdoms = self._kingdoms_list()
+        if not kingdoms:
+            self._kingdom_chip_index = 0
+            return
+        self._kingdom_chip_index = max(
+            0, min(self._kingdom_chip_index, len(kingdoms) - 1))
+
+    def _current_chip_kingdom(self):
+        kingdoms = self._kingdoms_list()
+        if not kingdoms:
+            return None
+        idx = max(0, min(self._kingdom_chip_index, len(kingdoms) - 1))
+        return kingdoms[idx]
+
+    def _cycle_kingdom_chip(self, delta):
+        kingdoms = self._kingdoms_list()
+        n = len(kingdoms)
+        if n <= 1:
+            return
+        self._kingdom_chip_index = (self._kingdom_chip_index + delta) % n
+        # Pan the map to the newly-selected kingdom.
+        self._focus_kingdom_on_map(kingdoms[self._kingdom_chip_index])
+
+    def _focus_kingdom_on_map(self, kingdom):
+        """Pan the hex map onto the lands of a given persistent kingdom."""
+        if not (self._hex_map and isinstance(kingdom, dict)):
+            return
+        kid = kingdom.get('id')
+        if kid is None:
+            return
+        land_ids = [t.land_id for t in self._hex_map.tiles
+                    if getattr(t, 'kingdom_id', None) == kid]
+        if land_ids and hasattr(self._hex_map, 'focus_lands'):
+            self._hex_map.focus_lands(land_ids)
+        elif hasattr(self._hex_map, 'focus_on_kingdom'):
+            self._hex_map.focus_on_kingdom(kingdom_id=kid)
+
+    def _open_chip_config(self):
+        """Open the kingdom config screen for the currently-focused chip kingdom."""
+        kingdom = self._current_chip_kingdom()
+        if not kingdom:
+            return
+        self.state.kingdom_config_land_id = None
+        self.state.kingdom_config_id = kingdom.get('id')
+        self.state.screen = 'kingdom_config'
+
+    def _handle_kingdom_chip_click(self, pos):
+        """Route a click on the chip to prev / next cycle, name tap, or gear."""
+        chip_rect = getattr(self, '_kingdom_chip_rect', None)
+        if not chip_rect or not chip_rect.collidepoint(pos):
+            return False
+        gear_rect = getattr(self, '_kingdom_chip_gear_rect', None)
+        if gear_rect and gear_rect.collidepoint(pos):
+            self._open_chip_config()
+            return True
+        prev_rect = getattr(self, '_kingdom_chip_prev_rect', None)
+        if prev_rect and prev_rect.collidepoint(pos):
+            self._cycle_kingdom_chip(-1)
+            return True
+        next_rect = getattr(self, '_kingdom_chip_next_rect', None)
+        if next_rect and next_rect.collidepoint(pos):
+            self._cycle_kingdom_chip(+1)
+            return True
+        # Tap on the body of the chip cycles to the next kingdom when the
+        # player has more than one; otherwise it re-focuses the map on it.
+        kingdoms = self._kingdoms_list()
+        if len(kingdoms) > 1:
+            self._cycle_kingdom_chip(+1)
+        else:
+            self._focus_kingdom_on_map(self._current_chip_kingdom())
+        return True
 
     def _visible_notifications(self):
         """Return notification rows that should still appear in Alerts."""
@@ -503,6 +682,13 @@ class KingdomScreen(MenuScreenMixin, Screen):
             self._hex_map.set_viewport(self._map_viewport_rect)
             self._hex_map.render()
             self._draw_nav_buttons()
+            # Leaderboard panel sits on top of the hex map at the top-left
+            # of the viewport so it mirrors the minimap (bottom-right).
+            self._leaderboard_panel.render()
+
+        # Kingdom selector chip lives inside the header — always drawn so
+        # it stays available even while the map is loading.
+        self._draw_kingdom_chip()
 
         self._draw_close_x_button()
 
@@ -1068,6 +1254,176 @@ class KingdomScreen(MenuScreenMixin, Screen):
             base = 'Kingdom land'
         return f'{rel}  ·  {base}' if rel else base
 
+    def _draw_kingdom_chip(self):
+        """Draw the kingdom selector chip on the left side of the header.
+
+        Shows the currently-focused kingdom's sigil + name + prev/next
+        chevrons + a gear icon that jumps to the kingdom config screen.
+        """
+        # Reset click targets each frame.
+        self._kingdom_chip_rect = None
+        self._kingdom_chip_prev_rect = None
+        self._kingdom_chip_next_rect = None
+        self._kingdom_chip_gear_rect = None
+
+        kingdoms = self._kingdoms_list()
+        if not kingdoms:
+            return
+        self._clamp_kingdom_chip_index()
+        kingdom = self._current_chip_kingdom()
+        if not kingdom:
+            return
+
+        font = self._kingdom_chip_font
+        small_font = self._kingdom_chip_small_font
+        name = str(kingdom.get('name') or f'Kingdom #{kingdom.get("id")}')
+
+        # Geometry inside the header (left-aligned).
+        chip_h = max(int(0.038 * _SH), font.get_height() + 8)
+        sigil_sz = max(14, int(chip_h * 0.78))
+        chevron_w = max(14, int(chip_h * 0.55))
+        gear_sz = max(16, int(chip_h * 0.75))
+        pad_x = max(6, int(0.006 * _SW))
+
+        # Truncate name to fit a reasonable budget.
+        max_name_w = int(0.13 * _SW)
+        truncated = name
+        if font.size(truncated)[0] > max_name_w:
+            while truncated and font.size(truncated + '…')[0] > max_name_w:
+                truncated = truncated[:-1]
+            truncated = (truncated + '…') if truncated else '…'
+        name_surf = font.render(truncated, True, settings.KINGDOM_INFO_CLR)
+        position_label = f'{self._kingdom_chip_index + 1}/{len(kingdoms)}'
+        pos_surf = small_font.render(position_label, True,
+                                     settings.KINGDOM_ACTIVITY_DIM_CLR)
+
+        chip_w = (pad_x + sigil_sz + 6 + chevron_w + 4 + name_surf.get_width()
+                  + 6 + pos_surf.get_width() + 4 + chevron_w + 6 + gear_sz
+                  + pad_x)
+
+        # Anchor the chip just to the right of the box's left pad, vertically
+        # aligned with the info bar.
+        chip_x = self._header_rect.x + 6
+        chip_y = self._header_rect.y + max(
+            0, (self._header_rect.h - chip_h) // 2)
+        chip_rect = pygame.Rect(chip_x, chip_y, chip_w, chip_h)
+        self._kingdom_chip_rect = chip_rect
+
+        # Background pill.
+        bg = pygame.Surface((chip_rect.w, chip_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(bg, (20, 18, 14, 200), bg.get_rect(),
+                         border_radius=chip_h // 2)
+        pygame.draw.rect(bg, settings.KINGDOM_MAP_FRAME_BORDER, bg.get_rect(),
+                         1, border_radius=chip_h // 2)
+        self.window.blit(bg, chip_rect.topleft)
+
+        cursor_x = chip_x + pad_x
+
+        # Sigil glyph tinted with the kingdom's accent.
+        style = kingdom.get('style') or {}
+        sigil_key = style.get('sigil_key') or (
+            settings.HEX_DEFAULT_OWNER_STYLE.get('sigil_key'))
+        color_key = style.get('color_key') or (
+            settings.HEX_DEFAULT_OWNER_STYLE.get('color_key'))
+        palette_entry = (settings.KINGDOM_COLOR_PALETTE.get(color_key)
+                         if color_key else None)
+        accent = ((palette_entry or {}).get('accent_rgb')
+                  or settings.HEX_MINE_BORDER_HIGHLIGHT)
+        sigil_surf = None
+        if sigil_key and sigil_key != 'sigil_none':
+            try:
+                sigil_surf = sigil_cosmetics.render_sigil(
+                    sigil_key, sigil_sz, accent)
+            except Exception:
+                sigil_surf = None
+        sigil_y = chip_y + (chip_h - sigil_sz) // 2
+        if sigil_surf is not None:
+            self.window.blit(sigil_surf, (cursor_x, sigil_y))
+        else:
+            pygame.draw.circle(self.window, accent,
+                               (cursor_x + sigil_sz // 2,
+                                sigil_y + sigil_sz // 2),
+                               sigil_sz // 2)
+            pygame.draw.circle(self.window, (24, 18, 6),
+                               (cursor_x + sigil_sz // 2,
+                                sigil_y + sigil_sz // 2),
+                               sigil_sz // 2, 1)
+        cursor_x += sigil_sz + 6
+
+        # Prev chevron.
+        prev_rect = pygame.Rect(cursor_x, chip_y + 2, chevron_w, chip_h - 4)
+        if len(kingdoms) > 1:
+            self._kingdom_chip_prev_rect = prev_rect
+            self._draw_chip_chevron(prev_rect, '‹')
+        cursor_x += chevron_w + 4
+
+        # Name.
+        self.window.blit(name_surf,
+                         name_surf.get_rect(midleft=(cursor_x, chip_rect.centery)))
+        cursor_x += name_surf.get_width() + 6
+
+        # Position label (e.g. "2/4").
+        self.window.blit(pos_surf,
+                         pos_surf.get_rect(midleft=(cursor_x, chip_rect.centery)))
+        cursor_x += pos_surf.get_width() + 4
+
+        # Next chevron.
+        next_rect = pygame.Rect(cursor_x, chip_y + 2, chevron_w, chip_h - 4)
+        if len(kingdoms) > 1:
+            self._kingdom_chip_next_rect = next_rect
+            self._draw_chip_chevron(next_rect, '›')
+        cursor_x += chevron_w + 6
+
+        # Edit icon (same asset used by defence/conquer config) to open
+        # kingdom_config for the currently-focused kingdom.
+        gear_rect = pygame.Rect(cursor_x, chip_y + (chip_h - gear_sz) // 2,
+                                gear_sz, gear_sz)
+        self._kingdom_chip_gear_rect = gear_rect
+        self._draw_chip_edit_icon(gear_rect)
+
+    def _draw_chip_chevron(self, rect, glyph):
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mouse_pos)
+        clr = (255, 230, 150) if hovered else (200, 188, 158)
+        font = self._kingdom_chip_font
+        surf = font.render(glyph, True, clr)
+        self.window.blit(surf, surf.get_rect(center=rect.center))
+
+    def _draw_chip_edit_icon(self, rect):
+        """Render the kingdom-config edit affordance using the shared icon.
+
+        Matches the defence / conquer screens' section-title edit button
+        (asset ``img/dialogue_box/icons/edit.png`` plus a yellow hover
+        glow), so the same visual means "open config for this thing"
+        across the kingdom flow.
+        """
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mouse_pos)
+        if hovered:
+            glow = pygame.Surface((rect.w + 6, rect.h + 6), pygame.SRCALPHA)
+            glow.fill((255, 255, 200, 50))
+            self.window.blit(glow, (rect.x - 3, rect.y - 3))
+        if self._kingdom_chip_edit_icon is not None:
+            # Cache the scaled icon per chip height so we don't smoothscale
+            # every frame.
+            if (self._kingdom_chip_edit_icon_scaled is None
+                    or self._kingdom_chip_edit_icon_scaled_sz != rect.w):
+                self._kingdom_chip_edit_icon_scaled = (
+                    pygame.transform.smoothscale(
+                        self._kingdom_chip_edit_icon, (rect.w, rect.h)))
+                self._kingdom_chip_edit_icon_scaled_sz = rect.w
+            self.window.blit(self._kingdom_chip_edit_icon_scaled,
+                             rect.topleft)
+            return
+        # Fallback if the asset failed to load: simple pencil tip.
+        clr = (245, 224, 158) if hovered else (210, 196, 152)
+        cx, cy = rect.center
+        r = int(rect.w * 0.36)
+        pygame.draw.line(self.window, clr,
+                         (cx - r, cy + r), (cx + r, cy - r), 2)
+        pygame.draw.line(self.window, clr,
+                         (cx + r - 1, cy - r + 1), (cx + r + 2, cy - r - 2), 2)
+
     def _draw_info_bar(self):
         """Draw production rate / lands count bar at top of box, below title."""
         # Reset clickable rect each frame
@@ -1316,6 +1672,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 if self._handle_activity_click(event.pos):
                     continue
 
+                # Kingdom selector chip (header) — prev/next + gear-to-config.
+                if self._handle_kingdom_chip_click(event.pos):
+                    continue
+
+                # Leaderboard panel (top-left of map viewport).  Must be
+                # handled before the hex map so a row click doesn't also
+                # trigger map pan/click logic underneath.
+                lb = getattr(self, '_leaderboard_panel', None)
+                if lb is not None and lb.contains_point(event.pos):
+                    lb.handle_event(event)
+                    continue
+
                 # Collect All gold button (info bar)
                 if (self._collect_all_rect
                     and getattr(self, '_collect_all_enabled', False)
@@ -1340,8 +1708,19 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 if self._hex_map and self._hex_map.handle_minimap_click(*event.pos):
                     continue
 
-            # Hex map events (pan, zoom wheel, click)
+            # Hex map events (pan, zoom wheel, click) — gated so the
+            # leaderboard panel and chip swallow clicks that land on them.
             if self._hex_map and not self._detail_box:
+                if event.type == MOUSEBUTTONDOWN and event.button == 1:
+                    lb = getattr(self, '_leaderboard_panel', None)
+                    chip_rect = getattr(self, '_kingdom_chip_rect', None)
+                    blocked = (
+                        (lb is not None and lb.contains_point(event.pos))
+                        or (chip_rect is not None
+                            and chip_rect.collidepoint(event.pos))
+                    )
+                    if blocked:
+                        continue
                 clicked_tile = self._hex_map.handle_event(event)
                 if clicked_tile:
                     self._open_detail(clicked_tile)

@@ -32,6 +32,14 @@ HEX_TIER_BORDER = {
 HEX_EMPTY_BORDER    = (90, 90, 90)         # unclaimed border
 HEX_MINE_BORDER     = (250, 221, 0)        # gold border for own lands
 HEX_HOVER_BRIGHTEN  = 35                   # added to each RGB channel on hover
+HEX_HOVER_BRIGHTEN_KINGDOM = 28            # softer fill boost for the rest of
+                                           # the hovered tile's connected kingdom
+HEX_HOVER_TILE_OVERLAY_ALPHA = 80          # warm-white wash for the hovered
+                                           # tile (stronger than siblings, so
+                                           # the focal point stays obvious)
+HEX_HOVER_KINGDOM_OVERLAY_ALPHA = 40       # warm-white wash for the rest of
+                                           # the hovered tile's kingdom so the
+                                           # highlight reads through cosmetics
 HEX_SELECT_BORDER   = (255, 255, 255)      # white border for selected hex
 
 # Suit-bonus semantic colours.  Hearts/Diamonds are green; Spades/Clubs are
@@ -485,6 +493,12 @@ MINIMAP_BG_CLR      = (20, 20, 20, 180)
 MINIMAP_BORDER_CLR  = (180, 160, 130)
 MINIMAP_BORDER_W    = 1
 MINIMAP_VIEWPORT_CLR = (255, 255, 255, 120)
+
+# ── Leaderboard panel (top-left of map viewport) ───────────────────
+# Width matches the minimap so the two anchored corners read as siblings;
+# height fits two 3-row sections plus optional "You: #N" lines.
+LEADERBOARD_PANEL_W = int(0.155 * SCREEN_WIDTH)
+LEADERBOARD_PANEL_H = int(0.22 * SCREEN_HEIGHT)
 
 # ── Info panel (top of screen) ──────────────────────────────────────
 KINGDOM_INFO_FONT_SIZE  = FS_BODY
