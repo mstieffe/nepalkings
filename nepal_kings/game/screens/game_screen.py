@@ -676,7 +676,7 @@ class GameScreen(Screen):
         if self.state.game:
             self.state.game.pending_advance_notification = False
             self.state.game.pending_own_advance_notification = False
-            self.state.game.pending_opponent_turn_summary = None
+            self._clear_opponent_turn_summaries(self.state.game)
             self.state.game.pending_conquer_prelude_target = False
         
         # ── Reset ALL subscreens ──
@@ -1289,13 +1289,15 @@ class GameScreen(Screen):
 
     def check_opponent_turn_notification(self):
         """Check for opponent turn summary and show dialogue if needed."""
-        if not self.state.game or not self.state.game.pending_opponent_turn_summary:
+        if not self.state.game or not self._has_opponent_turn_summary_pending(self.state.game):
             return
         if self.state.game.game_over or self.state.game.pending_game_over:
-            self.state.game.pending_opponent_turn_summary = None
+            self._clear_opponent_turn_summaries(self.state.game)
             return
         
-        summary = self.state.game.pending_opponent_turn_summary
+        summary = self._pop_opponent_turn_summary(self.state.game)
+        if not summary:
+            return
         opponent_name = summary.get('opponent_name', 'Opponent')
         action = summary.get('action')
         
@@ -1511,7 +1513,6 @@ class GameScreen(Screen):
                         'event_key': f'prelude_target:{pending_prelude_target.get("spell_id") or spell_name}',
                     })
 
-                self.state.game.pending_opponent_turn_summary = None
                 return
 
             # ── Duel mode game start ──
@@ -1583,8 +1584,6 @@ class GameScreen(Screen):
                 # Safety: clear flag even if maharaja wasn't found
                 self.state.game._game_start_pending = False
             
-            # Clear the notification
-            self.state.game.pending_opponent_turn_summary = None
             return
         
         # Check if action is missing, None, or the string 'unknown'
@@ -1768,8 +1767,31 @@ class GameScreen(Screen):
                 'message_after_images': message_after if not action_type == 'explosion' else None
             })
         
-        # Clear the notification
-        self.state.game.pending_opponent_turn_summary = None
+    @staticmethod
+    def _has_opponent_turn_summary_pending(game):
+        return bool(
+            getattr(game, 'pending_opponent_turn_summary', None)
+            or getattr(game, 'pending_opponent_turn_summaries', None)
+        )
+
+    @staticmethod
+    def _pop_opponent_turn_summary(game):
+        popper = getattr(game, 'pop_pending_opponent_turn_summary', None)
+        if callable(popper):
+            return popper()
+        summary = getattr(game, 'pending_opponent_turn_summary', None)
+        game.pending_opponent_turn_summary = None
+        return summary
+
+    @staticmethod
+    def _clear_opponent_turn_summaries(game):
+        clearer = getattr(game, 'clear_pending_opponent_turn_summaries', None)
+        if callable(clearer):
+            clearer()
+            return
+        game.pending_opponent_turn_summary = None
+        if hasattr(game, 'pending_opponent_turn_summaries'):
+            game.pending_opponent_turn_summaries = []
     
     def check_ceasefire_ended_notification(self):
         """Check if ceasefire ended and show notification if needed."""
@@ -1928,7 +1950,7 @@ class GameScreen(Screen):
         # to be shown before prompting the player to advance.
         if self.state.game.mode == 'conquer' and (
             self.state.game._game_start_pending
-            or self.state.game.pending_opponent_turn_summary
+            or self._has_opponent_turn_summary_pending(self.state.game)
             or getattr(self.state.game, 'pending_conquer_prelude_target', False)
         ):
             return
@@ -4496,7 +4518,7 @@ class GameScreen(Screen):
             if self.state.game.turn:
                 self.state.game._start_turn_async()
                 # Clear stale opponent turn summary — we already show our own spell notification
-                self.state.game.pending_opponent_turn_summary = None
+                self._clear_opponent_turn_summaries(self.state.game)
             
             # Show spell effect result
             spell_effect = result.get('spell_effect', {})
@@ -4726,7 +4748,7 @@ class GameScreen(Screen):
             if self.state.game.turn:
                 self.state.game._start_turn_async()
                 # Clear stale opponent turn summary — we already show our own spell notification
-                self.state.game.pending_opponent_turn_summary = None
+                self._clear_opponent_turn_summaries(self.state.game)
             
             # Show result
             effect = result.get('effect', 'Spell countered!')
@@ -5069,9 +5091,20 @@ class GameScreen(Screen):
             {'id': 'resource_panel', 'rect': self._duel_panel_rect(self.resource_scroll), 'subscreen': 'field', 'title': 'Resource Panel',
              'body': 'Resources show what your figures produce and consume. A deficit in one resource stops all figures requiring that resource from functioning. Now start playing!',
              'button_label': 'Play'},
+            {'id': 'battle_shop_select_moves', 'rects': self._duel_battle_shop_family_rects(), 'subscreen': 'battle_shop', 'title': 'Choose Battle Moves',
+             'body': 'Before battle, select move families here, choose matching cards in the list, and buy up to 3 battle moves for the fight.'},
+            {'id': 'battle_shop_ready', 'rects': self._duel_battle_shop_ready_rects(), 'subscreen': 'battle_shop', 'title': 'Ready For Battle',
+             'body': 'These slots are the moves you carry into combat. Ready appears when enough moves are chosen and locks your battle plan.'},
+            {'id': 'battle_move_panel', 'rects': self._duel_battle_move_panel_rects(), 'subscreen': 'battle', 'title': 'Play Battle Moves',
+             'body': 'In battle, click one of your move icons to open its actions. Each player plays one move per round for 3 rounds.'},
+            {'id': 'battle_move_actions', 'rects': self._duel_battle_move_action_rects(), 'subscreen': 'battle', 'title': 'Move Actions',
+             'body': 'Use plays the move. Gamble sacrifices it for 2 random moves. Daggers can combine with same-colour daggers, and Double Daggers can dismantle.',
+             'requires_seen': 'battle_move_panel'},
         ]
         for step in steps:
             if step['id'] in seen:
+                continue
+            if step.get('requires_seen') and step['requires_seen'] not in seen:
                 continue
             if step.get('rect') is None and not step.get('rects') and not step.get('button'):
                 continue
@@ -5092,6 +5125,103 @@ class GameScreen(Screen):
     def _duel_panel_rect(panel):
         rect = getattr(panel, 'rect', None)
         return rect.copy() if rect else None
+
+    def _duel_active_subscreen(self, name):
+        if getattr(self.state, 'subscreen', None) != name:
+            return None
+        return (getattr(self, 'subscreens', {}) or {}).get(name)
+
+    def _duel_battle_shop_family_rects(self):
+        game = getattr(self.state, 'game', None)
+        if not game or not getattr(game, 'battle_moves_phase', False):
+            return []
+        shop = self._duel_active_subscreen('battle_shop')
+        if not shop:
+            return []
+        rects = []
+        for button in getattr(shop, 'move_family_buttons', []) or []:
+            x = int(getattr(button, 'x', 0))
+            y = int(getattr(button, 'y', 0))
+            icon = getattr(button, 'icon_img_big', None) or getattr(button, 'icon_img', None)
+            frame = getattr(button, 'frame_img_big', None) or getattr(button, 'frame_img', None)
+            glow = getattr(button, 'glow_gold_big', None) or getattr(button, 'glow_white_big', None)
+            caption = getattr(button, 'text_surface_big', None) or getattr(button, 'text_surface', None)
+            width = max([surf.get_width() for surf in (icon, frame, glow, caption) if surf] or [settings.BATTLE_MOVE_ICON_WIDTH])
+            icon_height = max([surf.get_height() for surf in (icon, frame, glow) if surf] or [settings.BATTLE_MOVE_ICON_HEIGHT])
+            caption_height = caption.get_height() if caption else 0
+            height = icon_height + caption_height + 24
+            rects.append(pygame.Rect(x - width // 2, y - icon_height // 2 - 4, width, height))
+        return rects
+
+    def _duel_battle_shop_slot_rects(self, shop):
+        sw = settings.BATTLE_SHOP_SLOT_WIDTH
+        sh = settings.BATTLE_SHOP_SLOT_HEIGHT
+        max_moves = settings.BATTLE_SHOP_MAX_MOVES
+        delta_x = settings.BATTLE_SHOP_SLOT_DELTA_X
+        box_cx = shop._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
+        total_span = (max_moves - 1) * delta_x + sw
+        slot_start_x = box_cx - total_span // 2
+        sy = shop._sy(settings.BATTLE_SHOP_SLOT_Y)
+        rects = []
+        for i in range(max_moves):
+            sx = slot_start_x + i * delta_x
+            cx = sx + sw // 2
+            cy = sy + sh // 2
+            rects.append(pygame.Rect(cx - sw, cy - sh, sw * 2, sh * 2))
+        return rects
+
+    def _duel_battle_shop_ready_rects(self):
+        game = getattr(self.state, 'game', None)
+        if not game or not getattr(game, 'battle_moves_phase', False):
+            return []
+        shop = self._duel_active_subscreen('battle_shop')
+        if not shop:
+            return []
+        rects = self._duel_battle_shop_slot_rects(shop)
+        ready_rect = getattr(getattr(shop, 'ready_button', None), 'rect', None)
+        if ready_rect:
+            rects.append(ready_rect.copy())
+        return rects
+
+    def _duel_battle_move_panel_rects(self):
+        game = getattr(self.state, 'game', None)
+        if not game or not getattr(game, 'battle_confirmed', False):
+            return []
+        battle = self._duel_active_subscreen('battle')
+        if not battle or getattr(battle, 'battle_move_detail_box', None):
+            return []
+        moves = [
+            (i, move) for i, move in enumerate(getattr(battle, 'player_moves', []) or [])
+            if not battle._is_move_used(i)
+        ]
+        icon_size = settings.BATTLE_PANEL_ICON_SIZE
+        rects = []
+        for slot, _move in enumerate(moves[:settings.BATTLE_SHOP_MAX_MOVES]):
+            cx, cy = battle._battle_panel_icon_center(slot)
+            rects.append(pygame.Rect(cx - icon_size // 2 - 6, cy - icon_size // 2 - 6,
+                                     icon_size + 12, icon_size + 12))
+        if rects:
+            return rects
+        panel_rect = battle._battle_panel_rect() if hasattr(battle, '_battle_panel_rect') else None
+        return [panel_rect] if panel_rect else []
+
+    def _duel_battle_move_action_rects(self):
+        game = getattr(self.state, 'game', None)
+        if not game or not getattr(game, 'battle_confirmed', False):
+            return []
+        battle = self._duel_active_subscreen('battle')
+        detail_box = getattr(battle, 'battle_move_detail_box', None) if battle else None
+        if not detail_box:
+            return []
+        rects = []
+        for _action_id, button in getattr(detail_box, 'action_buttons', []) or []:
+            rect = getattr(button, 'rect', None)
+            if rect:
+                rects.append(rect.copy())
+        if rects:
+            return rects
+        box_rect = getattr(detail_box, 'border_rect', None) or getattr(detail_box, 'rect', None)
+        return [box_rect.copy()] if box_rect else []
 
     def _duel_step_rects(self, step):
         if not step:
@@ -5143,7 +5273,8 @@ class GameScreen(Screen):
         for step_id in (
             'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
             'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
-            'role_indicator', 'resource_panel',
+            'role_indicator', 'resource_panel', 'battle_shop_select_moves',
+            'battle_shop_ready', 'battle_move_panel', 'battle_move_actions',
         ):
             self._mark_duel_coach_seen(step_id)
 

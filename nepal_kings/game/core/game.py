@@ -98,8 +98,9 @@ class Game:
         # Auto-fill notification (cleared after showing dialogue)
         self.pending_auto_fill = None
         
-        # Opponent turn summary notification (cleared after showing dialogue)
+        # Opponent turn summaries (shown as turn-dialogue notifications in FIFO order)
         self.pending_opponent_turn_summary = None
+        self.pending_opponent_turn_summaries = []
         self._last_shown_summary_log_id = None  # dedup stale notifications
 
         # Conquer startup lock: invader must resolve pending prelude target.
@@ -556,8 +557,7 @@ class Game:
             and self.advancing_figure_id != self._last_advance_notified_id):
             self.pending_advance_notification = True
             self._last_advance_notified_id = self.advancing_figure_id
-            # Advance notification replaces the normal opponent turn summary
-            self.pending_opponent_turn_summary = None
+            # Advance has its own notification; do not drop already queued turn summaries.
         # Civil War fallback: advance was detected on an earlier poll when it
         # wasn't our turn (invader was picking second figure).  Now the turn
         # just came to us — fire the advance notification we missed.
@@ -570,7 +570,7 @@ class Game:
               self.advancing_figure_id != self._last_advance_notified_id):
             self.pending_advance_notification = True
             self._last_advance_notified_id = self.advancing_figure_id
-            self.pending_opponent_turn_summary = None
+            # Advance has its own notification; do not drop already queued turn summaries.
         
         # Sync local in-battle flag from server state.
         # If a client misses a cleanup path after battle resolution, a stale
@@ -1179,18 +1179,16 @@ class Game:
                          or action_type_str in ('spell', 'counter_advance', 'advance'))
         if self.mode == 'conquer' and not is_meaningful:
             logger.debug(f"[START_TURN] Suppressing opponent turn summary — conquer mode (action_type={action_type_str})")
-            self.pending_opponent_turn_summary = None
         elif affects_player and opponent_turn_summary:
             # Always show notifications that directly affect the player's state
             logger.debug(f"[START_TURN] Opponent turn summary affects player — showing regardless of other state")
-            self.pending_opponent_turn_summary = opponent_turn_summary
+            self._queue_opponent_turn_summary(opponent_turn_summary)
         elif self.suppress_next_turn_summary:
             self.suppress_next_turn_summary = False
             # Fully suppress the post-battle/fold turn summary — the
             # round-start notifications (victory/defeat, ceasefire, side
             # cards) already cover what the player needs to know.
             logger.debug(f"[START_TURN] Suppressing opponent turn summary — post-battle/fold")
-            self.pending_opponent_turn_summary = None
         elif (self.pending_advance_notification or
               (self.advancing_figure_id and
                self.advancing_player_id != self.player_id)):
@@ -1204,15 +1202,57 @@ class Game:
             summary_log_id = opponent_turn_summary.get('log_id')
             if summary_log_id and summary_log_id == self._last_shown_summary_log_id:
                 logger.debug(f"[START_TURN] Skipping duplicate opponent turn summary (log_id={summary_log_id})")
-                self.pending_opponent_turn_summary = None
             else:
                 logger.debug(f"[START_TURN] Opponent turn summary received - action: {opponent_turn_summary.get('action')}")
-                self.pending_opponent_turn_summary = opponent_turn_summary
-                if summary_log_id:
-                    self._last_shown_summary_log_id = summary_log_id
+                self._queue_opponent_turn_summary(opponent_turn_summary)
         else:
             logger.debug(f"[START_TURN] No opponent turn summary")
-            self.pending_opponent_turn_summary = None
+
+    def _queue_opponent_turn_summary(self, summary):
+        """Queue a turn summary without overwriting an older unseen one."""
+        if not summary:
+            return
+        queue = getattr(self, 'pending_opponent_turn_summaries', None)
+        if queue is None:
+            queue = []
+            self.pending_opponent_turn_summaries = queue
+
+        pending = getattr(self, 'pending_opponent_turn_summary', None)
+        if pending and not queue:
+            queue.append(pending)
+
+        summary_log_id = summary.get('log_id') if isinstance(summary, dict) else None
+        if summary_log_id:
+            if summary_log_id == self._last_shown_summary_log_id:
+                return
+            for queued in queue:
+                if isinstance(queued, dict) and queued.get('log_id') == summary_log_id:
+                    return
+            if isinstance(pending, dict) and pending.get('log_id') == summary_log_id:
+                return
+
+        queue.append(summary)
+        self.pending_opponent_turn_summary = queue[0] if queue else None
+
+    def pop_pending_opponent_turn_summary(self):
+        """Pop the next queued opponent turn summary, preserving legacy single-value state."""
+        queue = getattr(self, 'pending_opponent_turn_summaries', None)
+        if queue:
+            summary = queue.pop(0)
+        else:
+            summary = getattr(self, 'pending_opponent_turn_summary', None)
+
+        self.pending_opponent_turn_summary = queue[0] if queue else None
+        if isinstance(summary, dict):
+            summary_log_id = summary.get('log_id')
+            if summary_log_id:
+                self._last_shown_summary_log_id = summary_log_id
+        return summary
+
+    def clear_pending_opponent_turn_summaries(self):
+        """Clear queued and legacy opponent-turn summaries."""
+        self.pending_opponent_turn_summaries = []
+        self.pending_opponent_turn_summary = None
 
     def get_player_username(self, player_id):
         """Fetch the username of a player given their player_id."""

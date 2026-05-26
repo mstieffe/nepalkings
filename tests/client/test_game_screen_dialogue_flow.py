@@ -144,6 +144,105 @@ class TestGameScreenDialogueFlow:
         assert "It's your turn now!" in payload['message_after_images']
         assert game_screen.state.game.pending_opponent_turn_summary is None
 
+    def test_opponent_turn_summary_queue_preserves_fast_responses(self):
+        from game.core.game import Game
+
+        game = Game.__new__(Game)
+        game.pending_opponent_turn_summary = None
+        game.pending_opponent_turn_summaries = []
+        game._last_shown_summary_log_id = None
+        game.mode = 'duel'
+        game.suppress_next_turn_summary = False
+        game.pending_advance_notification = False
+        game.advancing_figure_id = None
+        game.advancing_player_id = None
+        game.player_id = 1
+        game.pending_battle_ready = False
+        game.pending_fold_result = False
+
+        first = {
+            'opponent_name': 'Rival',
+            'log_id': 101,
+            'action': {'type': 'build', 'message': 'Rival built a figure'},
+        }
+        second = {
+            'opponent_name': 'Rival',
+            'log_id': 102,
+            'action': {'type': 'card_change', 'message': 'Rival changed cards'},
+        }
+
+        Game._apply_start_turn_response(game, {'success': True, 'opponent_turn_summary': first})
+        Game._apply_start_turn_response(game, {'success': True, 'opponent_turn_summary': second})
+        Game._apply_start_turn_response(game, {'success': True})
+
+        assert [s['log_id'] for s in game.pending_opponent_turn_summaries] == [101, 102]
+        assert game.pending_opponent_turn_summary['log_id'] == 101
+        assert Game.pop_pending_opponent_turn_summary(game)['log_id'] == 101
+        assert game.pending_opponent_turn_summary['log_id'] == 102
+        assert Game.pop_pending_opponent_turn_summary(game)['log_id'] == 102
+        assert game.pending_opponent_turn_summary is None
+
+    def test_first_battle_shop_coach_targets_move_selection(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game = SimpleNamespace(
+            mode='duel',
+            turn=True,
+            game_over=False,
+            pending_game_over=False,
+            pending_forced_advance=False,
+            pending_defender_selection=False,
+            battle_moves_phase=True,
+            battle_confirmed=True,
+            is_battle_active=lambda: True,
+        )
+        base_button = SimpleNamespace(rect_hit=pygame.Rect(10, 10, 20, 20))
+        family_button = SimpleNamespace(x=120, y=90)
+        shop = SimpleNamespace(
+            dialogue_box=None,
+            move_family_buttons=[family_button],
+            ready_button=SimpleNamespace(rect=pygame.Rect(250, 260, 80, 32)),
+            _sx=lambda value: value,
+            _sy=lambda value: value,
+        )
+        game_screen.state = SimpleNamespace(
+            game=game,
+            subscreen='battle_shop',
+            user_dict={'onboarding': {
+                'duel_hints_seen': [
+                    'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
+                    'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
+                    'role_indicator', 'resource_panel',
+                ],
+                'completed_steps': [],
+            }},
+        )
+        game_screen.dialogue_box = None
+        game_screen.pending_notifications = []
+        game_screen.subscreens = {'battle_shop': shop}
+        game_screen.counter_spell_selector = None
+        game_screen.need_to_respond_to_spell = False
+        game_screen.waiting_for_counter_response = False
+        game_screen.main_hand = SimpleNamespace(buttons=[])
+        game_screen.side_hand = SimpleNamespace(buttons=[])
+        game_screen.field_button = base_button
+        game_screen.build_button = base_button
+        game_screen.cast_spell_button = base_button
+        game_screen.battle_shop_button = base_button
+        game_screen.battle_button = base_button
+        game_screen.turn_button = base_button
+        game_screen.ceasefire_button = base_button
+        game_screen.invader_button = base_button
+        game_screen.scoreboard_scroll = SimpleNamespace(rect=pygame.Rect(30, 30, 80, 40))
+        game_screen.resource_scroll = SimpleNamespace(rect=pygame.Rect(30, 80, 80, 40))
+
+        step = GameScreen._current_duel_coach_step(game_screen)
+
+        assert step['id'] == 'battle_shop_select_moves'
+        assert step['rects']
+
     def test_ceasefire_active_notification_is_suppressed_during_duel_coach(self):
         import pygame
 
