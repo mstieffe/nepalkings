@@ -2806,9 +2806,14 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _handle_icon_events(self, event):
         """Guard shared menu icons so they cannot bypass draft handling."""
+        if getattr(self, '_onboarding_guide_open', False):
+            return MenuScreenMixin._handle_icon_events(self, event)
         if hasattr(self, '_logout_dialogue') and self._logout_dialogue:
             return MenuScreenMixin._handle_icon_events(self, event)
         if event.type == pygame.MOUSEBUTTONUP:
+            if self._icon_guide.collide():
+                self._open_onboarding_guide()
+                return True
             if self._icon_settings.collide():
                 self._pending_nav = 'settings'
                 self._try_leave_screen()

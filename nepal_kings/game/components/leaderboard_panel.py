@@ -75,11 +75,11 @@ class LeaderboardPanel:
             row_h = max(self._row_font.get_height() + 4,
                         int(r.h * 0.085))
 
-            # Section A: Largest Kingdom
+            # Section A: Largest Kingdom → kingdom_{gold,silver,bronce}.
             self._draw_section_title('Largest Kingdom', r, y)
             y += self._title_font.get_height() + 2
             y = self._draw_rows(self._top_largest, r, y, row_h,
-                                crown_kind='gold',
+                                category='kingdom',
                                 size_field='size')
 
             if self._my_largest_rank is not None and self._my_largest_rank > 3:
@@ -89,11 +89,11 @@ class LeaderboardPanel:
 
             y += section_gap
 
-            # Section B: Greatest Realm
+            # Section B: Greatest Realm → lands_{gold,silver,bronce}.
             self._draw_section_title('Greatest Realm', r, y)
             y += self._title_font.get_height() + 2
             y = self._draw_rows(self._top_realms, r, y, row_h,
-                                crown_kind='silver',
+                                category='lands',
                                 size_field='total_lands')
 
             if self._my_realm_rank is not None and self._my_realm_rank > 3:
@@ -108,7 +108,7 @@ class LeaderboardPanel:
                                        settings.KINGDOM_INFO_CLR)
         self.window.blit(surf, (panel_rect.x + 8, y))
 
-    def _draw_rows(self, rows, panel_rect, y, row_h, crown_kind, size_field):
+    def _draw_rows(self, rows, panel_rect, y, row_h, category, size_field):
         if not rows:
             empty = self._small_font.render('— no data —', True,
                                             settings.KINGDOM_ACTIVITY_DIM_CLR)
@@ -117,12 +117,12 @@ class LeaderboardPanel:
         for entry in rows[:3]:
             rect = pygame.Rect(panel_rect.x + 4, y,
                                panel_rect.w - 8, row_h - 2)
-            self._draw_row(rect, entry, crown_kind, size_field)
+            self._draw_row(rect, entry, category, size_field)
             self._row_rects.append((rect, entry))
             y += row_h
         return y
 
-    def _draw_row(self, rect, entry, crown_kind, size_field):
+    def _draw_row(self, rect, entry, category, size_field):
         mouse_pos = pygame.mouse.get_pos()
         is_me = (self._my_user_id is not None
                  and entry.get('user_id') == self._my_user_id)
@@ -133,15 +133,20 @@ class LeaderboardPanel:
         pygame.draw.rect(bg_surf, bg, bg_surf.get_rect(), border_radius=4)
         self.window.blit(bg_surf, rect.topleft)
 
-        # Crown icon (mini) on the left.
+        # Ranking icon: matches the on-map crown for this entry exactly
+        # (``kingdom_{tier}`` or ``lands_{tier}`` per the row's rank).
+        rank = entry.get('rank') if isinstance(entry, dict) else None
         crown_sz = max(12, rect.h - 4)
         x = rect.x + 4
-        if self._render_crown_icon is not None:
-            icon = self._render_crown_icon(crown_kind, crown_sz)
+        if (self._render_crown_icon is not None
+                and rank in (1, 2, 3)):
+            icon = self._render_crown_icon(category, rank, crown_sz)
             if icon is not None:
                 self.window.blit(
                     icon, icon.get_rect(midleft=(x, rect.centery)))
                 x += icon.get_width() + 4
+            else:
+                x += crown_sz + 4
         else:
             x += crown_sz + 4
 

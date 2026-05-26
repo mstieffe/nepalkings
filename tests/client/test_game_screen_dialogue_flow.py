@@ -144,6 +144,111 @@ class TestGameScreenDialogueFlow:
         assert "It's your turn now!" in payload['message_after_images']
         assert game_screen.state.game.pending_opponent_turn_summary is None
 
+    def test_ceasefire_active_notification_is_suppressed_during_duel_coach(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game = SimpleNamespace(
+            mode='duel',
+            turn=True,
+            game_over=False,
+            pending_game_over=False,
+            ceasefire_active=True,
+            pending_ceasefire_active_notification=True,
+            current_round=1,
+            _ceasefire_active_displayed_round=None,
+            _ceasefire_notified_round=None,
+            _ceasefire_notified_state=None,
+            battle_modifier=[],
+            is_battle_active=lambda: False,
+        )
+        button = SimpleNamespace(rect_hit=pygame.Rect(10, 10, 20, 20))
+        game_screen.state = SimpleNamespace(
+            game=game,
+            subscreen='field',
+            user_dict={'onboarding': {'duel_hints_seen': [], 'completed_steps': []}},
+        )
+        game_screen.dialogue_box = None
+        game_screen.pending_notifications = []
+        game_screen.subscreens = {'field': SimpleNamespace(dialogue_box=None)}
+        game_screen.counter_spell_selector = None
+        game_screen.need_to_respond_to_spell = False
+        game_screen.waiting_for_counter_response = False
+        game_screen.main_hand = SimpleNamespace(buttons=[])
+        game_screen.side_hand = SimpleNamespace(buttons=[])
+        game_screen.field_button = button
+        game_screen.build_button = button
+        game_screen.cast_spell_button = button
+        game_screen.battle_shop_button = button
+        game_screen.battle_button = button
+        game_screen.turn_button = button
+        game_screen.ceasefire_button = button
+        game_screen.invader_button = button
+        game_screen.scoreboard_scroll = SimpleNamespace(rect=pygame.Rect(30, 30, 80, 40))
+        game_screen.resource_scroll = SimpleNamespace(rect=pygame.Rect(30, 80, 80, 40))
+
+        captured_notifications = []
+        game_screen.queue_or_show_notification = captured_notifications.append
+
+        GameScreen.check_ceasefire_active_notification(game_screen)
+
+        assert captured_notifications == []
+        assert game.pending_ceasefire_active_notification is False
+        assert game._ceasefire_active_displayed_round == 1
+
+    def test_final_duel_coach_step_invites_player_to_play(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game = SimpleNamespace(
+            mode='duel',
+            turn=True,
+            game_over=False,
+            pending_game_over=False,
+            pending_forced_advance=False,
+            pending_defender_selection=False,
+            is_battle_active=lambda: False,
+        )
+        button = SimpleNamespace(rect_hit=pygame.Rect(10, 10, 20, 20))
+        game_screen.state = SimpleNamespace(
+            game=game,
+            subscreen='field',
+            user_dict={'onboarding': {
+                'duel_hints_seen': [
+                    'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
+                    'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
+                    'role_indicator',
+                ],
+                'completed_steps': [],
+            }},
+        )
+        game_screen.dialogue_box = None
+        game_screen.pending_notifications = []
+        game_screen.subscreens = {'field': SimpleNamespace(dialogue_box=None)}
+        game_screen.counter_spell_selector = None
+        game_screen.need_to_respond_to_spell = False
+        game_screen.waiting_for_counter_response = False
+        game_screen.main_hand = SimpleNamespace(buttons=[])
+        game_screen.side_hand = SimpleNamespace(buttons=[])
+        game_screen.field_button = button
+        game_screen.build_button = button
+        game_screen.cast_spell_button = button
+        game_screen.battle_shop_button = button
+        game_screen.battle_button = button
+        game_screen.turn_button = button
+        game_screen.ceasefire_button = button
+        game_screen.invader_button = button
+        game_screen.scoreboard_scroll = SimpleNamespace(rect=pygame.Rect(30, 30, 80, 40))
+        game_screen.resource_scroll = SimpleNamespace(rect=pygame.Rect(30, 80, 80, 40))
+
+        step = GameScreen._current_duel_coach_step(game_screen)
+
+        assert step['id'] == 'resource_panel'
+        assert 'Now start playing!' in step['body']
+        assert step['button_label'] == 'Play'
+
     def test_acknowledgement_advances_to_next_queued_dialogue(self):
         GameScreen = _game_screen_class()
         game_screen = GameScreen.__new__(GameScreen)

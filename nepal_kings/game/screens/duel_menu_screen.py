@@ -146,12 +146,17 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         self._draw_badge(self.button_new, self.state.badge_new_challenges)
 
         self._draw_menu_overlay()
+        self._draw_menu_coach(self._current_duel_menu_coach_step())
 
     def update(self, events):
         super().update()
         self._update_icon_buttons()
 
     def handle_events(self, events):
+        coach_step = self._current_duel_menu_coach_step()
+        if self._handle_menu_coach_events(events, coach_step):
+            return
+
         super().handle_events(events)
         for event in events:
             if self._handle_icon_events(event):
@@ -167,6 +172,7 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
 
     def handle_button_clicks(self):
         if self.button_new.collide():
+            self._mark_menu_coach_seen('new_game')
             # Mark current challenges as seen
             self.state.badge_new_challenges = 0
             try:
@@ -194,3 +200,22 @@ class DuelMenuScreen(MenuScreenMixin, Screen):
         elif self.button_back.collide():
             self.state.screen = 'game_menu'
             logger.debug("Back button clicked")
+
+    def _first_duel_incomplete(self):
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        completed = set(onboarding.get('completed_steps') or [])
+        return bool(onboarding and 'finish_first_duel' not in completed)
+
+    def _current_duel_menu_coach_step(self):
+        if not self._menu_coach_allowed_common() or not self._first_duel_incomplete():
+            return None
+        if 'new_game' in self._menu_coach_seen():
+            return None
+        return {
+            'id': 'new_game',
+            'rect': self.button_new.rect,
+            'title': 'Create A Duel',
+            'body': 'Click New Game yourself. The next screen prepares a gentle AI challenge for your first run.',
+            'action': 'click',
+            'mark_on_click': True,
+        }

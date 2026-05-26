@@ -155,6 +155,9 @@ def sell_card():
     for card in free_cards:
         db.session.delete(card)
     user.gold += gold_earned
+    from onboarding_service import mark_step, record_gold_earned
+    mark_step(user, 'sell_first_card')
+    record_gold_earned(user, gold_earned)
     db.session.commit()
 
     return jsonify({
@@ -252,6 +255,8 @@ def open_booster():
             value=card['value'],
         )
         db.session.add(cc)
+    from onboarding_service import mark_step
+    mark_step(user, 'open_first_main_booster')
     db.session.commit()
 
     return jsonify({
@@ -287,6 +292,8 @@ def open_booster_side():
             value=card['value'],
         )
         db.session.add(cc)
+    from onboarding_service import mark_step
+    mark_step(user, 'open_first_side_booster')
     db.session.commit()
 
     return jsonify({
@@ -352,6 +359,8 @@ def convert_card():
     for _ in range(quantity):
         db.session.add(CollectionCard(
             user_id=user.id, suit=target_suit, rank=rank, value=value))
+    from onboarding_service import mark_step
+    mark_step(user, 'trade_first_card')
     db.session.commit()
 
     return jsonify({

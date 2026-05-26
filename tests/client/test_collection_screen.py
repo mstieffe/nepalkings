@@ -2,6 +2,7 @@
 # See LICENSE file in the project root for full license information.
 """Unit tests for the client-side collection screen logic."""
 import pytest
+from types import SimpleNamespace
 
 
 class TestSellPriceCalculation:
@@ -243,6 +244,67 @@ class TestCollectionService:
         assert hasattr(collection_service, 'buy_booster_side')
         assert hasattr(collection_service, 'open_booster')
         assert hasattr(collection_service, 'open_booster_side')
+
+
+class TestCollectionCoach:
+    """Verify post-duel collection tour step selection."""
+
+    def _screen(self, completed=None, seen=None):
+        import pygame
+        from game.screens.collection_screen import CollectionScreen
+
+        screen = object.__new__(CollectionScreen)
+        screen.state = SimpleNamespace(user_dict={'onboarding': {
+            'completed_steps': list(completed or []),
+            'menu_hints_seen': list(seen or []),
+        }})
+        screen._onboarding_guide_open = False
+        screen._welcome_present_dialogue = None
+        screen.dialogue_box = None
+        screen._booster_poller = None
+        screen._reveal_overlay = None
+        screen._sell_dialogue = None
+        screen._trade_dialogue = None
+        screen._profile_dialogue = None
+        screen._btn_open_main_rect = pygame.Rect(10, 20, 80, 32)
+        screen._btn_open_side_rect = pygame.Rect(10, 70, 80, 32)
+        screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
+        return screen
+
+    def test_coach_requires_main_then_side_then_home(self):
+        screen = self._screen(completed=['finish_first_duel'])
+        assert screen._current_collection_coach_step()['id'] == 'collection_open_main_booster'
+
+        screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')
+        assert screen._current_collection_coach_step()['id'] == 'collection_open_side_booster'
+
+        screen.state.user_dict['onboarding']['completed_steps'].append('open_first_side_booster')
+        assert screen._current_collection_coach_step()['id'] == 'collection_return_home'
+
+    def test_open_booster_result_marks_local_onboarding_step(self, monkeypatch):
+        from game.screens.collection_screen import CollectionScreen
+        from game.components import booster_reveal
+
+        screen = object.__new__(CollectionScreen)
+        screen.window = None
+        screen.state = SimpleNamespace(user_dict={'onboarding': {'completed_steps': []}})
+        screen._boosters = 1
+        screen._boosters_side = 1
+        screen._cards = {}
+        monkeypatch.setattr(
+            booster_reveal,
+            'BoosterRevealOverlay',
+            lambda window, cards, pack_type='main': SimpleNamespace(cards=cards, pack_type=pack_type),
+        )
+
+        screen._apply_open_booster_result('main', {
+            'booster_packs': 0,
+            'cards': [{'suit': 'Hearts', 'rank': '7'}],
+        })
+
+        assert 'open_first_main_booster' in screen.state.user_dict['onboarding']['completed_steps']
+        assert screen.state.user_dict['booster_packs'] == 0
+        assert screen._cards[('Hearts', '7')] == 1
 
 
 class TestConvertRatio:

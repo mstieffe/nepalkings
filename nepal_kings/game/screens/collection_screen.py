@@ -455,6 +455,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
 
         # Icon buttons + messages overlay
         self._draw_menu_overlay()
+        self._draw_menu_coach(self._current_collection_coach_step())
 
     def _draw_collection_stats(self):
         """Draw a compact owned/missing/locked summary strip."""
@@ -1433,16 +1434,59 @@ class CollectionScreen(MenuScreenMixin, Screen):
             self._boosters = result.get('booster_packs', self._boosters)
             if self.state.user_dict:
                 self.state.user_dict['booster_packs'] = self._boosters
+            self._mark_onboarding_step_completed_local('open_first_main_booster')
         else:
             self._boosters_side = result.get('booster_packs_side', self._boosters_side)
             if self.state.user_dict:
                 self.state.user_dict['booster_packs_side'] = self._boosters_side
+            self._mark_onboarding_step_completed_local('open_first_side_booster')
         drawn_cards = result.get('cards', [])
         for c in drawn_cards:
             key = (c['suit'], c['rank'])
             self._cards[key] = self._cards.get(key, 0) + 1
         from game.components.booster_reveal import BoosterRevealOverlay
         self._reveal_overlay = BoosterRevealOverlay(self.window, drawn_cards, pack_type=pack_type)
+
+    def _current_collection_coach_step(self):
+        if not self._menu_coach_allowed_common():
+            return None
+        if (self._booster_poller or self._reveal_overlay or self._sell_dialogue
+                or self._trade_dialogue or self._profile_dialogue):
+            return None
+        completed = self._onboarding_completed_steps()
+        if 'finish_first_duel' not in completed:
+            return None
+        if 'open_first_main_booster' not in completed:
+            return {
+                'id': 'collection_open_main_booster',
+                'rect': self._btn_open_main_rect,
+                'title': 'Open A Main Booster',
+                'body': 'Main cards build core figures, spells, and battle moves. Click Open on the main pack panel, then confirm the booster reveal.',
+                'action': 'click',
+                'mark_on_click': True,
+                'max_lines': 5,
+            }
+        if 'open_first_side_booster' not in completed:
+            return {
+                'id': 'collection_open_side_booster',
+                'rect': self._btn_open_side_rect,
+                'title': 'Open A Side Booster',
+                'body': 'Side cards unlock more advanced figures and effects. Open one side booster so your collection has both card families.',
+                'action': 'click',
+                'mark_on_click': True,
+                'max_lines': 5,
+            }
+        if 'collection_return_home' not in self._menu_coach_seen():
+            return {
+                'id': 'collection_return_home',
+                'rect': self._icon_home.rect,
+                'title': 'Back To The Menu',
+                'body': 'Good. Your packs became cards. Return to the main menu and the tour will continue with kingdom play.',
+                'action': 'click',
+                'mark_on_click': True,
+                'max_lines': 5,
+            }
+        return None
 
     def _open_booster_sync_result(self, pack_type):
         try:
@@ -1535,6 +1579,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if action == 'open':
             func = self._open_booster_sync_result
             endpoint = 'open_booster' if pack_type == 'main' else 'open_booster_side'
+            self._draw_menu_coach(self._current_collection_coach_step())
             self.state.set_msg('Opening booster pack...')
         else:
             func = self._buy_booster_sync_result
@@ -1664,6 +1709,10 @@ class CollectionScreen(MenuScreenMixin, Screen):
         if self.dialogue_box:
             return
         if self._booster_poller:
+            return
+
+        coach_step = self._current_collection_coach_step()
+        if self._handle_menu_coach_events(events, coach_step):
             return
 
         for event in events:

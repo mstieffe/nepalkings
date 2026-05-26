@@ -277,6 +277,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
         self._max_scroll_col2 = max(0, content2 - viewport_h)
         self._scroll_col1 = min(self._scroll_col1, self._max_scroll_col1)
         self._scroll_col2 = min(self._scroll_col2, self._max_scroll_col2)
+        self._ensure_beginner_duel_defaults()
 
     # ── Scroll helpers ────────────────────────────────────────────
 
@@ -338,6 +339,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
 
         self._draw_close_x_button()
         self._draw_menu_overlay()
+        self._draw_menu_coach(self._current_beginner_duel_coach_step())
 
     def _draw_scrollable_list(self, buttons, col_x, scroll, col_key):
         if not buttons:
@@ -414,6 +416,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
                          (_BOX_X + int(0.01 * _SW), _CONFIG_Y),
                          (_BOX_X + _BOX_W - int(0.01 * _SW), _CONFIG_Y), 1)
 
+        self._ensure_beginner_duel_defaults()
+
         if self._selected_opponent:
             header = self._panel_font.render(
                 f"Challenge: {self._selected_opponent['username']}",
@@ -425,9 +429,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self._draw_expected_rewards()
             self._draw_send_button()
         else:
-            hint = self._panel_font.render(
-                "Select an opponent to configure a challenge",
-                True, (140, 140, 140))
+            hint_text = "Preparing beginner AI duel..." if self._first_duel_incomplete() else "Select an opponent to configure a challenge"
+            hint = self._panel_font.render(hint_text, True, (140, 140, 140))
             self.window.blit(hint, (_COL1_X, _CONFIG_Y + int(0.038 * _SH)))
 
     def _draw_close_x_button(self):
@@ -555,6 +558,8 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self._rebuild_challenge_buttons()
         # ──────────────────────────────────────────────────────
 
+            self._ensure_beginner_duel_defaults()
+
         # Only update hover/click for visible buttons
         for btn in self.challenge_buttons + self.open_challenge_buttons:
             if btn.rect.bottom >= self._list_top and btn.rect.top <= self._list_bottom:
@@ -571,6 +576,10 @@ class NewGameScreen(MenuScreenMixin, Screen):
     # ── Events ────────────────────────────────────────────────────
 
     def handle_events(self, events):
+        coach_step = self._current_beginner_duel_coach_step()
+        if self._handle_menu_coach_events(events, coach_step):
+            return
+
         super().handle_events(events)
 
         _box_rect = pygame.Rect(_BOX_X, _BOX_Y, _BOX_W, _BOX_H)
@@ -721,6 +730,54 @@ class NewGameScreen(MenuScreenMixin, Screen):
                 self.game_limit_field.deactivate()
                 return
 
+    def _first_duel_incomplete(self):
+        onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+        completed = set(onboarding.get('completed_steps') or [])
+        return bool(onboarding and 'finish_first_duel' not in completed)
+
+    def _beginner_duel_sent(self):
+        return 'send_first_duel_challenge' in self._menu_coach_seen()
+
+    def _beginner_ai_opponent(self):
+        ai_opponents = [u for u in self.possible_opponents if u.get('is_ai')]
+        if not ai_opponents:
+            return None
+        return next((u for u in ai_opponents if 'Strategos' in u.get('username', '')), ai_opponents[0])
+
+    def _ensure_beginner_duel_defaults(self):
+        if (not self._first_duel_incomplete()
+                or self._beginner_duel_sent()
+                or self._selected_opponent):
+            return
+        opponent = self._beginner_ai_opponent()
+        if not opponent:
+            return
+        self._selected_opponent = opponent
+        self.stake_field.content = '10'
+        self.stake_field.cursor_pos = len(self.stake_field.content)
+        self.game_limit_field.content = '15'
+        self.game_limit_field.cursor_pos = len(self.game_limit_field.content)
+        self._game_limit_synced = False
+        self.stake_field.deactivate()
+        self.game_limit_field.deactivate()
+
+    def _current_beginner_duel_coach_step(self):
+        if not self._menu_coach_allowed_common() or not self._first_duel_incomplete():
+            return None
+        self._ensure_beginner_duel_defaults()
+        if not self._selected_opponent:
+            return None
+        if self._beginner_duel_sent():
+            return None
+        return {
+            'id': 'send_first_duel_challenge',
+            'rect': self.send_button.rect,
+            'title': 'Send The Challenge',
+            'body': 'AI Strategos and beginner settings are ready. Click Send Challenge to start your first duel setup.',
+            'action': 'click',
+            'mark_on_click': False,
+        }
+
     def _handle_config_field_event(self, event):
         previous_stake = self.stake_field.content
         previous_limit = self.game_limit_field.content
@@ -832,8 +889,12 @@ class NewGameScreen(MenuScreenMixin, Screen):
             return
 
         opponent_name = self._selected_opponent['username']
-        self.handle_create_challenge(opponent_name, stake, game_limit)
-        self._selected_opponent = None
+        response = self.handle_create_challenge(opponent_name, stake, game_limit)
+        if response and response.get('success'):
+            if self._first_duel_incomplete() and self._selected_opponent.get('is_ai'):
+                self._mark_menu_coach_seen('beginner_duel')
+                self._mark_menu_coach_seen('send_first_duel_challenge')
+            self._selected_opponent = None
 
     # ── Actions ───────────────────────────────────────────────────
 
@@ -845,6 +906,7 @@ class NewGameScreen(MenuScreenMixin, Screen):
             self.state.set_msg(f"Challenge sent to {opponent_name}")
         else:
             self.state.set_msg(response.get('message', 'Failed to create challenge'))
+        return response
 
     def handle_create_game(self, challenge):
         response = create_game(challenge['id'])

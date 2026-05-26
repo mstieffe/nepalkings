@@ -305,8 +305,12 @@ class HexMap:
         self._minimap_static_cache = None
         self._minimap_data_version = 0
         # Crown leaderboards (set via set_leaderboards from KingdomScreen).
-        self._gold_crown_groups = set()
-        self._silver_wreath_users = set()
+        # Crown leaderboards: group_key -> rank (1/2/3) for the largest
+        # single connected kingdom; user_id -> rank for the greatest total
+        # realm.  Populated via ``set_leaderboards``; empty dicts by default
+        # so the badge renderer's ``.get(...)`` calls are always safe.
+        self._gold_crown_groups = {}
+        self._silver_wreath_users = {}
         self._crown_icon_cache = {}
         self._build_tiles(lands_data)
 
@@ -1600,8 +1604,40 @@ class HexMap:
                     shimmer_phase=shimmer_phase,
                 )
 
-            # Anchor the badge below the suit cluster icon.
-            label_y = scy + offset_y + cluster_icon_sz * 0.55 + gap_px
+            # Look up crowns for this badge group BEFORE positioning the
+            # badge so we can carve out a full crown row above the name.
+            kingdom_rank = self._gold_crown_groups.get(
+                badge_data.get('group_key'))
+            lands_rank = self._silver_wreath_users.get(
+                badge_data.get('owner_user_id'))
+            crown_icons = []
+            if kingdom_rank in (1, 2, 3):
+                ico = self._render_crown_icon(
+                    'kingdom', kingdom_rank,
+                    max(14, int(badge_surf.get_height() * 1.05)))
+                if ico is not None:
+                    crown_icons.append(ico)
+            if lands_rank in (1, 2, 3):
+                ico = self._render_crown_icon(
+                    'lands', lands_rank,
+                    max(14, int(badge_surf.get_height() * 1.05)))
+                if ico is not None:
+                    crown_icons.append(ico)
+
+            crown_row_h = 0
+            crown_row_gap = 0
+            if crown_icons:
+                crown_row_h = max(ic.get_height() for ic in crown_icons)
+                # Small breathing space between the crown row and the name
+                # pill so the two read as stacked rows of one nameplate.
+                crown_row_gap = max(2, int(self.zoom * 2))
+
+            # Anchor the badge below the suit cluster icon.  When a crown
+            # row applies, shift the name pill DOWN by the crown-row
+            # footprint so the crowns occupy a dedicated row above the
+            # name (and clear the suit cluster icon above).
+            base_label_y = scy + offset_y + cluster_icon_sz * 0.55 + gap_px
+            label_y = base_label_y + (crown_row_h + crown_row_gap) / 2
             br = badge_surf.get_rect(center=(int(scx), int(label_y)))
 
             shadow_dx, shadow_dy = settings.HEX_GROUP_BADGE_SHADOW_OFFSET
@@ -1611,38 +1647,18 @@ class HexMap:
                              (br.x + shadow_dx, br.y + shadow_dy))
             self.window.blit(badge_surf, br)
 
-            # Crown overlays: gold for top-3 largest single kingdom, silver
-            # wreath for top-3 greatest total realm. Crowns straddle the
-            # badge's top edge so they read as a decoration on the badge.
-            gold = badge_data.get('group_key') in self._gold_crown_groups
-            silver = badge_data.get('owner_user_id') in self._silver_wreath_users
-            if gold or silver:
-                crown_sz = max(14, int(br.h * 0.9))
-                crown_y = br.y - crown_sz * 0.55
-                if gold and silver:
-                    gold_icon = self._render_crown_icon('gold', crown_sz)
-                    silver_icon = self._render_crown_icon('silver', crown_sz)
-                    spacing = max(2, crown_sz // 6)
-                    total_w = (gold_icon.get_width()
-                               + silver_icon.get_width() + spacing)
-                    start_x = br.centerx - total_w // 2
-                    self.window.blit(gold_icon, (int(start_x), int(crown_y)))
-                    self.window.blit(
-                        silver_icon,
-                        (int(start_x + gold_icon.get_width() + spacing),
-                         int(crown_y)))
-                elif gold:
-                    gold_icon = self._render_crown_icon('gold', crown_sz)
-                    self.window.blit(
-                        gold_icon,
-                        gold_icon.get_rect(center=(br.centerx,
-                                                   int(crown_y + crown_sz / 2))))
-                else:
-                    silver_icon = self._render_crown_icon('silver', crown_sz)
-                    self.window.blit(
-                        silver_icon,
-                        silver_icon.get_rect(center=(br.centerx,
-                                                     int(crown_y + crown_sz / 2))))
+            # Crown row sits directly above the name pill, centred on x.
+            # Multiple crowns stack horizontally with a small gap.
+            if crown_icons:
+                crown_gap = max(2, int(self.zoom * 3))
+                total_w = (sum(ic.get_width() for ic in crown_icons)
+                           + crown_gap * max(0, len(crown_icons) - 1))
+                row_top = br.y - crown_row_gap - crown_row_h
+                cur_x = br.centerx - total_w // 2
+                for ic in crown_icons:
+                    iy = row_top + (crown_row_h - ic.get_height()) // 2
+                    self.window.blit(ic, (int(cur_x), int(iy)))
+                    cur_x += ic.get_width() + crown_gap
 
             # Kingdom sigil glyph drawn above the suit cluster icon as the
             # cluster's identity marker.  Tinted with the kingdom's owner
@@ -2187,140 +2203,105 @@ class HexMap:
     def set_leaderboards(self, top_largest=None, top_realms=None):
         """Register the server-wide top-3 leaderboards for crown overlays.
 
-        ``top_largest`` entries earn a gold crown on the matching badge group.
-        ``top_realms`` entries earn a silver wreath on every badge owned by
-        that user. Stores compact lookup sets so the per-frame badge render
-        does a single hash check per group.
+        ``top_largest`` entries decorate the matching badge group with a
+        ``kingdom_{tier}`` icon (largest single connected kingdom).
+        ``top_realms`` entries decorate every badge owned by that user with
+        a ``lands_{tier}`` icon (greatest total realm).  The dicts map the
+        match key to the rank (1, 2 or 3) so the correct icon tier
+        (gold/silver/bronce) can be selected at draw time.
         """
-        gold_groups = set()
+        kingdom_ranks = {}
         for entry in (top_largest or []):
-            kid = entry.get('kingdom_id') if isinstance(entry, dict) else None
-            cid = entry.get('kingdom_component_id') if isinstance(entry, dict) else None
-            uid = entry.get('user_id') if isinstance(entry, dict) else None
+            if not isinstance(entry, dict):
+                continue
+            rank = entry.get('rank')
+            if rank not in (1, 2, 3):
+                continue
+            kid = entry.get('kingdom_id')
+            cid = entry.get('kingdom_component_id')
+            uid = entry.get('user_id')
             if kid is not None:
-                gold_groups.add(('kingdom', kid))
+                kingdom_ranks[('kingdom', kid)] = rank
             if cid is not None and uid is not None:
-                gold_groups.add(('component', uid, cid))
-        self._gold_crown_groups = gold_groups
-        self._silver_wreath_users = {
-            entry.get('user_id') for entry in (top_realms or [])
-            if isinstance(entry, dict) and entry.get('user_id') is not None
-        }
+                kingdom_ranks[('component', uid, cid)] = rank
+
+        lands_ranks = {}
+        for entry in (top_realms or []):
+            if not isinstance(entry, dict):
+                continue
+            rank = entry.get('rank')
+            uid = entry.get('user_id')
+            if uid is not None and rank in (1, 2, 3):
+                lands_ranks[uid] = rank
+
+        # Names kept (``_gold_crown_groups``, ``_silver_wreath_users``) for
+        # backward-compat with existing callers; semantics are now
+        # ``group_key -> rank`` and ``user_id -> rank`` respectively.
+        self._gold_crown_groups = kingdom_ranks
+        self._silver_wreath_users = lands_ranks
         # Invalidate the badge cache so crown decoration appears next frame.
         self._kingdom_badges_cache = None
 
-    def _render_crown_icon(self, kind, size):
-        """Procedurally render a small crown icon for the badge overlay.
+    _CROWN_TIER_BY_RANK = {1: 'gold', 2: 'silver', 3: 'bronce'}
 
-        ``kind`` is 'gold' (largest single kingdom) or 'silver' (greatest
-        total realm). Results are cached per (kind, size).
+    def _render_crown_icon(self, category, rank_or_size, size=None):
+        """Return a ranking icon surface (cached per category + rank + size).
+
+        Two call forms are supported so the leaderboard panel and the badge
+        renderer share one entry point:
+
+        - ``_render_crown_icon('kingdom', 1, 24)`` or
+          ``_render_crown_icon('lands', 3, 18)`` — explicit rank.
+        - ``_render_crown_icon('gold', 24)`` (legacy two-arg form, kept for
+          the leaderboard panel's section header) treats the first arg as a
+          tier name and returns the rank-1 ``kingdom`` icon of that tier so
+          existing call sites keep working.
         """
-        s = max(10, int(size))
-        key = (kind, s)
+        # Legacy two-arg signature: (tier, size).
+        if size is None:
+            tier = category if category in ('gold', 'silver', 'bronce') else 'gold'
+            return self._load_ranking_icon('kingdom', tier, int(rank_or_size))
+
+        rank = int(rank_or_size)
+        tier = self._CROWN_TIER_BY_RANK.get(rank)
+        if tier is None:
+            return None
+        cat = category if category in ('kingdom', 'lands') else 'kingdom'
+        return self._load_ranking_icon(cat, tier, int(size))
+
+    def _load_ranking_icon(self, category, tier, size):
+        """Load + cache one of ``img/kingdom/ranking/{category}_{tier}.png``."""
+        s = max(8, int(size))
+        key = (category, tier, s)
         cached = self._crown_icon_cache.get(key)
         if cached is not None:
             return cached
-        surf = pygame.Surface((s, s), pygame.SRCALPHA)
-        if kind == 'gold':
-            rim = (130, 92, 18)
-            body = (240, 196, 60)
-            highlight = (255, 232, 140)
-            gem = (224, 60, 80)
-            band_h = max(3, int(s * 0.30))
-            band_y = int(s * 0.55)
-            band_rect = pygame.Rect(1, band_y, s - 2, band_h)
-            pygame.draw.rect(surf, rim, band_rect, border_radius=2)
-            pygame.draw.rect(surf, body,
-                             band_rect.inflate(-2, -2), border_radius=2)
-            pygame.draw.line(surf, highlight,
-                             (band_rect.x + 1, band_rect.y + 1),
-                             (band_rect.right - 1, band_rect.y + 1), 1)
-            pts_w = s / 5.0
-            for i in range(5):
-                xc = (i + 0.5) * pts_w
-                tall = i in (0, 2, 4)
-                tip_h = s * (0.32 if tall else 0.22)
-                tip_y = band_y - tip_h
-                spike = [
-                    (xc - pts_w * 0.36, band_y),
-                    (xc + pts_w * 0.36, band_y),
-                    (xc, tip_y),
-                ]
-                pygame.draw.polygon(surf, rim, spike)
-                inner = [
-                    (xc - pts_w * 0.24, band_y - 1),
-                    (xc + pts_w * 0.24, band_y - 1),
-                    (xc, tip_y + 1),
-                ]
-                pygame.draw.polygon(surf, body, inner)
-                if tall:
-                    gem_r = max(1, int(s * 0.055))
-                    pygame.draw.circle(
-                        surf, gem,
-                        (int(xc), int(tip_y + s * 0.05)), gem_r)
-        else:
-            leaf_dark = (110, 120, 134)
-            leaf_clr = (210, 218, 230)
-            leaf_hi = (244, 248, 255)
-            ribbon = (212, 90, 110)
-            ribbon_dark = (148, 56, 72)
-            cx_w = s / 2.0
-            cy_w = s * 0.58
-            outer_r = s * 0.40
-            leaf_count = 6
-            leaf_w = max(2, int(s * 0.16))
-            leaf_h = max(2, int(s * 0.085))
-            for side in (-1, 1):
-                for i in range(leaf_count):
-                    t = (i + 1) / float(leaf_count + 1)
-                    angle = math.pi * (-0.5) + side * (math.pi * 0.55) * (t - 0.5)
-                    lx = cx_w + outer_r * math.sin(angle)
-                    ly = cy_w - outer_r * math.cos(angle)
-                    leaf = pygame.Surface((leaf_w * 2, leaf_h * 2),
-                                          pygame.SRCALPHA)
-                    pygame.draw.ellipse(leaf, leaf_dark,
-                                        (0, 0, leaf_w * 2, leaf_h * 2))
-                    pygame.draw.ellipse(leaf, leaf_clr,
-                                        (1, 1, leaf_w * 2 - 2, leaf_h * 2 - 2))
-                    pygame.draw.ellipse(leaf, leaf_hi,
-                                        (2, 2, max(1, leaf_w - 2),
-                                         max(1, leaf_h - 2)))
-                    rot_deg = -math.degrees(angle) + (90 if side > 0 else -90)
-                    rot = pygame.transform.rotate(leaf, rot_deg)
-                    surf.blit(rot, rot.get_rect(center=(int(lx), int(ly))))
-            # Ribbon knot at the wreath base.
-            knot_r = max(2, int(s * 0.085))
-            knot_cx = int(cx_w)
-            knot_cy = int(cy_w + outer_r * 0.78)
-            pygame.draw.circle(surf, ribbon_dark, (knot_cx, knot_cy),
-                               knot_r + 1)
-            pygame.draw.circle(surf, ribbon, (knot_cx, knot_cy), knot_r)
-            # Ribbon tails.
-            tail_w = max(1, int(s * 0.04))
-            pygame.draw.line(surf, ribbon_dark,
-                             (knot_cx, knot_cy + knot_r),
-                             (knot_cx - max(2, int(s * 0.08)),
-                              knot_cy + max(3, int(s * 0.18))),
-                             tail_w + 1)
-            pygame.draw.line(surf, ribbon_dark,
-                             (knot_cx, knot_cy + knot_r),
-                             (knot_cx + max(2, int(s * 0.08)),
-                              knot_cy + max(3, int(s * 0.18))),
-                             tail_w + 1)
-            pygame.draw.line(surf, ribbon,
-                             (knot_cx, knot_cy + knot_r),
-                             (knot_cx - max(2, int(s * 0.08)),
-                              knot_cy + max(3, int(s * 0.18))),
-                             tail_w)
-            pygame.draw.line(surf, ribbon,
-                             (knot_cx, knot_cy + knot_r),
-                             (knot_cx + max(2, int(s * 0.08)),
-                              knot_cy + max(3, int(s * 0.18))),
-                             tail_w)
-        if len(self._crown_icon_cache) > 24:
+
+        # Lazy raw-asset load.  Failures fall back to ``None`` so callers
+        # gracefully skip the icon rather than crashing the map render.
+        raw_cache = getattr(self, '_crown_icon_raw_cache', None)
+        if raw_cache is None:
+            raw_cache = {}
+            self._crown_icon_raw_cache = raw_cache
+        raw_key = (category, tier)
+        raw = raw_cache.get(raw_key)
+        if raw is None and raw_key not in raw_cache:
+            path = os.path.join('img', 'kingdom', 'ranking',
+                                f'{category}_{tier}.png')
+            try:
+                raw = pygame.image.load(path).convert_alpha()
+            except Exception:
+                raw = None
+                logger.warning(f'Could not load ranking icon: {path}')
+            raw_cache[raw_key] = raw
+        if raw is None:
+            return None
+
+        scaled = pygame.transform.smoothscale(raw, (s, s))
+        if len(self._crown_icon_cache) > 32:
             self._crown_icon_cache.pop(next(iter(self._crown_icon_cache)))
-        self._crown_icon_cache[key] = surf
-        return surf
+        self._crown_icon_cache[key] = scaled
+        return scaled
 
     def handle_minimap_click(self, sx, sy):
         """If (sx, sy) is inside the minimap, jump camera there. Returns True if handled."""

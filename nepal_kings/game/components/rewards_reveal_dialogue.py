@@ -60,13 +60,14 @@ class _ChestItem:
     """One reveal slot — wooden chest that turns into a reward icon on click."""
 
     __slots__ = (
-        'kind', 'label', 'item_icon', 'frame_size',
+        'kind', 'label', 'description', 'item_icon', 'frame_size',
         'rect', 'revealed', 'reveal_started_at',
     )
 
-    def __init__(self, kind, label, item_icon, frame_size):
+    def __init__(self, kind, label, description, item_icon, frame_size):
         self.kind = kind
         self.label = label
+        self.description = description
         self.item_icon = item_icon  # already-scaled pygame.Surface (or None)
         self.frame_size = frame_size  # int — bounding box per slot
         self.rect = pygame.Rect(0, 0, frame_size, frame_size)
@@ -100,7 +101,8 @@ class RewardsRevealDialogueBox:
 
     def __init__(self, window, title, icon, summary_lines, items,
                  footer_when_done="All loot collected!",
-                 summary_image=None):
+                 summary_image=None,
+                 hint_text=None):
         """
         :param summary_lines: list[str] — always-visible text shown above the
             chest row (e.g. "Stake winnings: +90 gold" or "Stake lost: -45 gold").
@@ -127,6 +129,7 @@ class RewardsRevealDialogueBox:
         self.title_font = settings.get_font(
             settings.FONT_SIZE_TITLE_DIALOGUE_BOX, bold=True)
         self.caption_font = settings.get_font(settings.FS_TINY)
+        self.description_font = settings.get_font(settings.FS_SMALL)
 
         # Icon (title decoration on either side, like DialogueBox)
         self.icon = None
@@ -155,10 +158,12 @@ class RewardsRevealDialogueBox:
         for it in items or []:
             kind = it.get('kind')
             label = it.get('label', '')
+            description = it.get('description', '')
             icon_surf = it.get('icon') or _load_reward_icon(kind)
             scaled = self._scale_to_frame(icon_surf, int(frame_size * 0.84)) \
                 if icon_surf else None
-            self.items.append(_ChestItem(kind, label, scaled, frame_size))
+            self.items.append(_ChestItem(kind, label, description, scaled, frame_size))
+        self._last_revealed_item = None
 
         # ── wrap text ─────────────────────────────────────────────────
         _max_text_w = settings.DIALOGUE_BOX_WIDTH - int(0.08 * _SW)
@@ -168,7 +173,7 @@ class RewardsRevealDialogueBox:
             _max_text_w,
         )
         self.hint_surface = self.caption_font.render(
-            "Click each chest to reveal your loot",
+            hint_text or "Click each chest to reveal your loot",
             True,
             settings.DIALOGUE_BOX_MSG_TEXT_CLR,
         )
@@ -196,9 +201,19 @@ class RewardsRevealDialogueBox:
             chest_block_h += self.caption_font.get_height() + int(0.004 * _SH)
             chest_block_h += int(0.006 * _SH)  # hint text gap above chests
             chest_block_h += self.caption_font.get_height()
+        description_h = 0
+        if any(item.description for item in self.items):
+            desc_max_w = settings.DIALOGUE_BOX_WIDTH - int(0.10 * _SW)
+            max_desc_lines = 1
+            for item in self.items:
+                lines = self._wrap_text(item.description, self.description_font, desc_max_w)
+                max_desc_lines = max(max_desc_lines, len(lines))
+            desc_line_h = self.description_font.get_height() + int(0.004 * _SH)
+            description_h = int(0.018 * _SH) + max_desc_lines * desc_line_h
         self._chest_gap_x = gap_x
         self._chest_gap_y = gap_y
         self._chest_block_h = chest_block_h
+        self._description_h = description_h
 
         title_h = (self.title_font.get_height() + int(0.016 * _SH)) if self.title else 0
         sep_extra = int(0.018 * _SH) if self.title else 0
@@ -215,7 +230,7 @@ class RewardsRevealDialogueBox:
             _pad_top + title_h + sep_extra +
             summary_img_h +
             summary_h + (block_gap if (summary_h or summary_img_h) else 0) +
-            chest_block_h + (block_gap if footer_h else 0) +
+            chest_block_h + description_h + (block_gap if footer_h else 0) +
             footer_h + btn_h + int(0.010 * _SH)
         )
 
@@ -251,6 +266,7 @@ class RewardsRevealDialogueBox:
                                      width=_btn_w, height=settings.DIALOGUE_BOX_BTN_H)
 
         # Position chest rects (recomputed once now; centres on x).
+        self._description_top = None
         self._layout_chest_positions()
 
     # ── helpers ─────────────────────────────────────────────────────
@@ -344,6 +360,9 @@ class RewardsRevealDialogueBox:
                 item.rect = pygame.Rect(ix, current_y, frame, frame)
                 ix += frame + gap_x
             current_y += frame + gap_y
+        if self._description_h:
+            caption_h = self.caption_font.get_height() + int(0.004 * _SH)
+            self._description_top = current_y - gap_y + caption_h + int(0.018 * _SH)
 
     # ── draw ────────────────────────────────────────────────────────
     def draw(self):
@@ -406,6 +425,8 @@ class RewardsRevealDialogueBox:
         for row in self._chest_rows:
             for item in row:
                 self._draw_chest_or_item(item, mouse_pos, now)
+
+        self._draw_revealed_item_description(now)
 
         # Footer message — only once all revealed
         if self.footer_surfaces and self._all_revealed(now):
@@ -481,6 +502,31 @@ class RewardsRevealDialogueBox:
             + cap.get_height() // 2
         self.window.blit(cap, cap.get_rect(center=(item.rect.centerx, cy)))
 
+    def _description_item(self, now_ms):
+        if (self._last_revealed_item is not None
+                and self._last_revealed_item.reveal_progress(now_ms) >= 1.0
+                and self._last_revealed_item.description):
+            return self._last_revealed_item
+        for item in reversed(self.items):
+            if item.reveal_progress(now_ms) >= 1.0 and item.description:
+                return item
+        return None
+
+    def _draw_revealed_item_description(self, now_ms):
+        if not self._description_h or self._description_top is None:
+            return
+        item = self._description_item(now_ms)
+        if item is None:
+            return
+        max_w = settings.DIALOGUE_BOX_WIDTH - int(0.10 * settings.SCREEN_WIDTH)
+        lines = self._wrap_text(item.description, self.description_font, max_w)
+        line_h = self.description_font.get_height() + int(0.004 * settings.SCREEN_HEIGHT)
+        y = self._description_top
+        for line in lines:
+            surf = self.description_font.render(line, True, settings.DIALOGUE_BOX_MSG_TEXT_CLR)
+            self.window.blit(surf, surf.get_rect(center=(self.rect.centerx, y)))
+            y += line_h
+
     # ── interaction ─────────────────────────────────────────────────
     def _all_revealed(self, now_ms):
         for item in self.items:
@@ -513,6 +559,7 @@ class RewardsRevealDialogueBox:
                         continue
                     if item.rect.collidepoint(event.pos):
                         item.reveal_started_at = now
+                        self._last_revealed_item = item
                         break  # one click → one chest
         return None
 

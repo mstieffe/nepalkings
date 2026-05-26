@@ -83,17 +83,18 @@ class User(db.Model):
     booster_packs = db.Column(db.Integer, nullable=False, default=0)
     booster_packs_side = db.Column(db.Integer, nullable=False, default=0)
     maps = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    onboarding_state = db.Column(db.JSON, nullable=True)
     last_conquer_at = db.Column(db.DateTime, nullable=True)
     challenges_issued = db.relationship('Challenge', backref='challenger', lazy=True,
                                         foreign_keys='Challenge.challenger_id')
     challenges_received = db.relationship('Challenge', backref='challenged', lazy=True,
                                           foreign_keys='Challenge.challenged_id')
 
-    def serialize(self):
+    def serialize(self, include_onboarding=True):
         is_online = self.is_ai  # AI users are always "online"
         if not is_online and self.last_active:
             is_online = (_utcnow() - self.last_active).total_seconds() < 60
-        return {
+        data = {
             'id': self.id,
             'username': self.username,
             'gold': self.gold,
@@ -106,6 +107,13 @@ class User(db.Model):
             'challenges_issued': [challenge.serialize() for challenge in self.challenges_issued],
             'challenges_received': [challenge.serialize() for challenge in self.challenges_received]
         }
+        if include_onboarding:
+            try:
+                from onboarding_service import serialize_onboarding_state
+                data['onboarding'] = serialize_onboarding_state(self)
+            except Exception:
+                data['onboarding'] = self.onboarding_state or {}
+        return data
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)

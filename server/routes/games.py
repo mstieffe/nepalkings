@@ -1259,6 +1259,18 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
     reward_expectations = _duel_reward_expectations(game_limit)
     winner_rewards = _award_duel_rewards(winner_user, reward_draws['winner'])
     loser_rewards = _award_duel_rewards(loser_user, reward_draws['loser'])
+    try:
+        from onboarding_service import mark_step, record_gold_earned
+        if winner_user:
+            mark_step(winner_user, 'finish_first_duel')
+            record_gold_earned(
+                winner_user,
+                gold_awarded + int(winner_rewards.get('gold') or 0))
+        if loser_user:
+            mark_step(loser_user, 'finish_first_duel')
+            record_gold_earned(loser_user, int(loser_rewards.get('gold') or 0))
+    except Exception:
+        logger.exception("Failed to update duel onboarding progress")
     # Legacy payload shape preserved for older clients that only display
     # booster pack rewards.
     winner_boosters = {
@@ -7481,6 +7493,14 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     )
     db.session.add(log)
     db.session.flush()
+    try:
+        from onboarding_service import mark_step
+        if attacker_user:
+            mark_step(attacker_user, 'finish_first_conquer_battle')
+        if defender_user and not is_ai_land:
+            mark_step(defender_user, 'finish_first_conquer_battle')
+    except Exception:
+        logger.exception("Failed to update conquer onboarding progress")
 
     if attacker_won:
         gained_kingdom_id = land.kingdom_id if land else None

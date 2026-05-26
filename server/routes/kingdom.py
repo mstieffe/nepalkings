@@ -199,6 +199,19 @@ def collect_kingdom_production_route(kingdom_id):
 
     result = collect_kingdom_production(
         kingdom_row, user, item_keys=requested_keys, now=_utcnow())
+    try:
+        collected_gold = int(result.get('collected_gold', result.get('collected') or 0) or 0)
+        collected_any = any(int(result.get(key) or 0) > 0 for key in (
+            'collected_gold', 'collected', 'collected_main_boosters',
+            'collected_side_boosters', 'collected_maps',
+        ))
+        if collected_any:
+            from onboarding_service import increment_counter, mark_step, record_gold_earned
+            mark_step(user, 'collect_first_kingdom_production')
+            increment_counter(user, 'kingdom_production_collections')
+            record_gold_earned(user, collected_gold)
+    except Exception:
+        logger.exception("Failed to update production onboarding progress")
     db.session.commit()
 
     return jsonify({
@@ -257,6 +270,14 @@ def collect_production_all_route():
             'vault_cap': int(result.get('vault_cap') or 0),
             'production': result.get('production') or {},
         })
+    try:
+        if total_gold or total_main or total_side or total_maps:
+            from onboarding_service import increment_counter, mark_step, record_gold_earned
+            mark_step(user, 'collect_first_kingdom_production')
+            increment_counter(user, 'kingdom_production_collections')
+            record_gold_earned(user, total_gold)
+    except Exception:
+        logger.exception("Failed to update production-all onboarding progress")
     db.session.commit()
 
     return jsonify({
@@ -662,6 +683,11 @@ def kingdom_config_cosmetic_purchase(kingdom_id):
     user.gold -= price
     db.session.add(KingdomCosmeticUnlock(
         kingdom_id=kingdom_row.id, cosmetic_key=cosmetic_key))
+    try:
+        from onboarding_service import mark_step
+        mark_step(user, 'buy_first_cosmetic')
+    except Exception:
+        logger.exception("Failed to update cosmetic onboarding progress")
     style_field = _COSMETIC_STYLE_FIELDS.get(item.get('type'))
     if style_field:
         setattr(kingdom_row, style_field, cosmetic_key)
@@ -2647,6 +2673,12 @@ def defence_draft_save():
                         'message': 'Defence draft is incomplete'}), 400
 
     active = _promote_defence_draft(draft)
+    try:
+        user = db.session.get(User, g.user_id)
+        from onboarding_service import mark_step
+        mark_step(user, 'save_first_defence_config')
+    except Exception:
+        logger.exception("Failed to update defence onboarding progress")
     db.session.commit()
     return jsonify({
         'success': True,

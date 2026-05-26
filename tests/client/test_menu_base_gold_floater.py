@@ -15,6 +15,15 @@ def _screen_with_gold(gold=100):
     return screen, calls
 
 
+def _ensure_pygame_display():
+    import pygame
+
+    if not pygame.display.get_init():
+        pygame.display.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+
+
 def test_gold_gain_spawns_top_bar_floater():
     screen, calls = _screen_with_gold(100)
 
@@ -64,6 +73,71 @@ def test_override_next_gold_floater_position_uses_custom_anchor_once():
     assert screen._last_seen_gold == 150
 
 
+def test_onboarding_reward_floaters_use_collect_animation_labels():
+    _ensure_pygame_display()
+    from game.components.floating_text import FloatingTextLayer
+    from config import settings
+
+    screen, _ = _screen_with_gold(100)
+    screen._onboarding_reward_floaters = FloatingTextLayer()
+
+    screen._spawn_onboarding_reward_floaters({
+        'gold': 50,
+        'booster_packs': 1,
+        'booster_packs_side': 2,
+        'maps': 3,
+    }, (200, 300))
+
+    items = screen._onboarding_reward_floaters._items
+    assert [item._text for item in items] == [
+        '+50g',
+        '+1 Main Pack',
+        '+2 Side Packs',
+        '+3 Maps',
+    ]
+    assert [item._delay_ms for item in items] == [
+        0,
+        settings.COLLECT_FLOAT_STAGGER_MS,
+        settings.COLLECT_FLOAT_STAGGER_MS * 2,
+        settings.COLLECT_FLOAT_STAGGER_MS * 3,
+    ]
+
+
+def test_onboarding_guide_claim_spawns_reward_floaters(monkeypatch):
+    import pygame
+    from game.screens import _menu_base
+
+    screen, _ = _screen_with_gold(100)
+    messages = []
+    screen.state.set_msg = lambda message: messages.append(message)
+    guide_rect = screen._onboarding_guide_rect()
+    claim_rect = pygame.Rect(guide_rect.x + 20, guide_rect.y + 20, 96, 34)
+    screen._onboarding_guide_close_rect = pygame.Rect(0, 0, 1, 1)
+    screen._onboarding_guide_buttons = [(claim_rect, ('claim', 'first_duel'))]
+    spawned = []
+    screen._spawn_onboarding_reward_floaters = (
+        lambda reward, pos: spawned.append((dict(reward), pos))
+    )
+    claimed = []
+    monkeypatch.setattr(_menu_base.onboarding_service, 'claim_reward', lambda reward_id: (
+        claimed.append(reward_id) or {
+            'reward': {'gold': 50, 'maps': 1},
+            'balances': {'gold': 150, 'maps': 1},
+            'onboarding': {'completed_steps': ['first_duel']},
+            'reward_label': 'Reward claimed',
+        }
+    ))
+
+    event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=claim_rect.center)
+
+    assert screen._handle_onboarding_guide_events([event]) is True
+    assert claimed == ['first_duel']
+    assert screen.state.user_dict['gold'] == 150
+    assert screen._suppress_next_gold_gain_floater is True
+    assert spawned == [({'gold': 50, 'maps': 1}, claim_rect.center)]
+    assert messages == ['Reward claimed']
+
+
 def test_current_gold_amount_handles_missing_or_invalid_values():
     screen, _ = _screen_with_gold(100)
 
@@ -72,3 +146,214 @@ def test_current_gold_amount_handles_missing_or_invalid_values():
 
     screen.state.user_dict = None
     assert screen._current_gold_amount() == 0
+
+
+def test_onboarding_payload_preserves_local_hint_progress():
+    screen, _ = _screen_with_gold(100)
+    screen.state.user_dict['onboarding'] = {
+        'menu_hints_seen': ['duel'],
+        'duel_hints_seen': ['build'],
+    }
+
+    screen._apply_onboarding_payload({
+        'onboarding': {
+            'menu_hints_seen': [],
+            'duel_hints_seen': ['field'],
+            'welcome_pending': False,
+        }
+    })
+
+    onboarding = screen.state.user_dict['onboarding']
+    assert onboarding['menu_hints_seen'] == ['duel']
+    assert onboarding['duel_hints_seen'] == ['field', 'build']
+
+
+def test_main_menu_area_coach_starts_with_user_item_display():
+    import pygame
+    from game.screens.game_menu_screen import GameMenuScreen
+
+    screen = object.__new__(GameMenuScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'welcome_pending': False,
+        'completed_steps': [],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._user_item_display_rect = pygame.Rect(8, 10, 180, 36)
+    screen.button_duel = SimpleNamespace(rect=pygame.Rect(20, 80, 120, 44))
+    screen.button_kingdom = SimpleNamespace(rect=pygame.Rect(20, 130, 120, 44))
+    screen.button_collection = SimpleNamespace(rect=pygame.Rect(20, 180, 120, 44))
+    screen.button_rankings = SimpleNamespace(rect=pygame.Rect(20, 230, 120, 44))
+    screen._icon_home = SimpleNamespace(rect=pygame.Rect(760, 20, 42, 42))
+    screen._icon_guide = SimpleNamespace(rect=pygame.Rect(760, 70, 42, 42))
+
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'user_items'
+    assert step['rect'] == screen._user_item_display_rect
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['user_items']
+    assert screen._current_area_coach_step()['id'] == 'duel'
+
+
+def test_main_menu_post_duel_coach_routes_to_collection_then_kingdom():
+    import pygame
+    from game.screens.game_menu_screen import GameMenuScreen
+
+    screen = object.__new__(GameMenuScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'welcome_pending': False,
+        'completed_steps': ['finish_first_duel'],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen.button_collection = SimpleNamespace(rect=pygame.Rect(20, 180, 120, 44))
+    screen.button_kingdom = SimpleNamespace(rect=pygame.Rect(20, 130, 120, 44))
+
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'post_duel_collection'
+    assert step['rect'] == screen.button_collection.rect
+
+    screen.state.user_dict['onboarding']['completed_steps'].extend([
+        'open_first_main_booster', 'open_first_side_booster'
+    ])
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'post_boosters_kingdom'
+    assert step['rect'] == screen.button_kingdom.rect
+
+
+def test_kingdom_coach_progresses_from_map_to_conquer_button():
+    import pygame
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': [
+            'finish_first_duel', 'open_first_main_booster', 'open_first_side_booster'
+        ],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._thread = None
+    screen._new_msg_picker = None
+    screen._detail_box = None
+    screen._hex_map = object()
+    screen._loading = False
+    screen._error = None
+    screen._map_viewport_rect = pygame.Rect(50, 60, 300, 220)
+
+    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_map_intro'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_map_intro']
+    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_select_land'
+
+    conquer_rect = pygame.Rect(120, 180, 140, 34)
+    screen._detail_box = SimpleNamespace(
+        _buttons=[('conquer', SimpleNamespace(rect=conquer_rect, disabled=False))]
+    )
+    step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'kingdom_conquer_button'
+    assert step['rect'] == conquer_rect
+
+
+def test_conquer_coach_highlights_edit_controls_in_order():
+    import pygame
+    from game.screens.conquer_screen import ConquerScreen
+
+    screen = object.__new__(ConquerScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': [
+            'finish_first_duel', 'open_first_main_booster', 'open_first_side_booster'
+        ],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._loading = False
+    screen._error = None
+    screen._config = {'land_id': 1}
+    screen._layout_built = True
+    screen._active_subscreen = None
+    screen._figure_detail_box = None
+    screen._move_detail_box = None
+    screen._active_info_key = None
+    screen._field_rects = {'castle': pygame.Rect(20, 80, 120, 80)}
+    screen._res_rect = pygame.Rect(20, 170, 120, 40)
+    screen._btn_build = pygame.Rect(150, 80, 34, 34)
+    screen._battle_plan_rect = pygame.Rect(260, 80, 180, 120)
+    screen._btn_buy_move = pygame.Rect(450, 80, 34, 34)
+    screen._prelude_panel_rect = pygame.Rect(260, 220, 180, 120)
+    screen._btn_prelude_edit = pygame.Rect(450, 220, 34, 34)
+    screen._prelude_spell_rect = pygame.Rect(300, 260, 42, 42)
+    screen._btn_battle = pygame.Rect(520, 380, 140, 42)
+
+    expected = [
+        'conquer_config_field',
+        'conquer_config_build_edit',
+        'conquer_config_battle_plan',
+        'conquer_config_prelude',
+        'conquer_config_to_battle',
+    ]
+    seen = []
+    for step_id in expected:
+        screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
+        step = screen._current_conquer_coach_step()
+        assert step['id'] == step_id
+        if step_id == 'conquer_config_to_battle':
+            assert step['button_label'] == 'Got it!'
+        seen.append(step_id)
+
+
+def test_menu_coach_next_step_blocks_everything_except_next():
+    import pygame
+
+    screen, _ = _screen_with_gold(100)
+    marked = []
+    after = []
+    screen._menu_coach_buttons = [(pygame.Rect(10, 10, 80, 32), ('next', 'duel'))]
+    screen._mark_menu_coach_seen = lambda step_id: marked.append(step_id)
+    screen._after_menu_coach_next = lambda step_id: after.append(step_id)
+    step = {'id': 'duel', 'rect': pygame.Rect(100, 100, 80, 40), 'title': 'Duel', 'body': 'Body'}
+
+    target_click = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(120, 120))
+    assert screen._handle_menu_coach_events([target_click], step) is True
+    assert marked == []
+
+    next_click = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(30, 20))
+    assert screen._handle_menu_coach_events([next_click], step) is True
+    assert marked == ['duel']
+    assert after == ['duel']
+
+
+def test_menu_coach_click_step_allows_only_target_click():
+    import pygame
+
+    screen, _ = _screen_with_gold(100)
+    marked = []
+    screen._menu_coach_buttons = []
+    screen._mark_menu_coach_seen = lambda step_id: marked.append(step_id)
+    step = {
+        'id': 'start_first_duel',
+        'rect': pygame.Rect(100, 100, 80, 40),
+        'title': 'Duel',
+        'body': 'Body',
+        'action': 'click',
+    }
+
+    outside = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(20, 20))
+    assert screen._handle_menu_coach_events([outside], step) is True
+    assert marked == []
+
+    inside = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(120, 120))
+    assert screen._handle_menu_coach_events([inside], step) is False
+    assert marked == ['start_first_duel']
+
+    step['mark_on_click'] = False
+    assert screen._handle_menu_coach_events([inside], step) is False
+    assert marked == ['start_first_duel']

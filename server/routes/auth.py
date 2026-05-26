@@ -195,7 +195,7 @@ def get_users():
         current_username = request.args.get('username')
         users = User.query.filter(User.username != current_username).all()
 
-        serialized_users = [user.serialize() for user in users]
+        serialized_users = [user.serialize(include_onboarding=False) for user in users]
 
         return jsonify({'users': serialized_users})
     except Exception as e:
@@ -267,6 +267,11 @@ def register():
             booster_packs_side=settings.STARTER_BOOSTER_PACKS_SIDE,
             maps=settings.STARTER_MAPS,
         )
+        try:
+            from onboarding_service import set_initial_onboarding
+            set_initial_onboarding(user)
+        except Exception:
+            logger.exception("Failed to initialize onboarding for new user")
         db.session.add(user)
         db.session.commit()
 

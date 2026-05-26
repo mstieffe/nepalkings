@@ -411,15 +411,20 @@ class KingdomScreen(MenuScreenMixin, Screen):
 
     # ── Leaderboard ↔ Hex map bridge ───────────────────────────────
 
-    def _render_panel_crown_icon(self, kind, size):
+    def _render_panel_crown_icon(self, category, rank_or_size, size=None):
         """Delegate to the HexMap's procedural crown so panel + map icons match.
 
-        Returns ``None`` before the hex map is built — the leaderboard panel
-        handles that case by leaving the icon slot empty.
+        Mirrors HexMap._render_crown_icon's two call forms: ``(category, rank,
+        size)`` for the per-row leaderboard crowns and the legacy ``(tier,
+        size)`` shape kept for section-header icons.  Returns ``None`` before
+        the hex map is built — the leaderboard panel handles that case by
+        leaving the icon slot empty.
         """
         if self._hex_map is None or not hasattr(self._hex_map, '_render_crown_icon'):
             return None
-        return self._hex_map._render_crown_icon(kind, size)
+        if size is None:
+            return self._hex_map._render_crown_icon(category, rank_or_size)
+        return self._hex_map._render_crown_icon(category, rank_or_size, size)
 
     def _on_leaderboard_focus(self, entry):
         """Pan the hex map to the kingdom referenced by a clicked panel row."""
@@ -708,6 +713,66 @@ class KingdomScreen(MenuScreenMixin, Screen):
         self._floating_text.draw(self.window)
 
         self._draw_menu_overlay()
+        self._draw_menu_coach(self._current_kingdom_coach_step())
+
+    def _kingdom_coach_ready(self):
+        completed = self._onboarding_completed_steps()
+        return (
+            'finish_first_duel' in completed
+            and 'open_first_main_booster' in completed
+            and 'open_first_side_booster' in completed
+        )
+
+    def _detail_conquer_button_rect(self):
+        detail_box = getattr(self, '_detail_box', None)
+        if not detail_box:
+            return None
+        for action, btn in getattr(detail_box, '_buttons', []) or []:
+            if action == 'conquer' and not getattr(btn, 'disabled', False):
+                return getattr(btn, 'rect', None)
+        return None
+
+    def _current_kingdom_coach_step(self):
+        if not self._menu_coach_allowed_common() or not self._kingdom_coach_ready():
+            return None
+        if self._thread or self._new_msg_picker:
+            return None
+        seen = self._menu_coach_seen()
+        conquer_button_rect = self._detail_conquer_button_rect()
+        if conquer_button_rect and 'kingdom_conquer_button' not in seen:
+            return {
+                'id': 'kingdom_conquer_button',
+                'rect': conquer_button_rect,
+                'title': 'Open Conquer Setup',
+                'body': 'This land can be challenged. Click Conquer to open the setup screen where you choose figures, moves, and a prelude spell.',
+                'action': 'click',
+                'mark_on_click': True,
+                'max_lines': 5,
+            }
+        if self._detail_box:
+            return None
+        if not self._hex_map or self._loading or self._error:
+            return None
+        if 'kingdom_map_intro' not in seen:
+            return {
+                'id': 'kingdom_map_intro',
+                'rect': self._map_viewport_rect,
+                'title': 'Kingdom Map',
+                'body': 'Each hex is land. Your owned lands produce resources; other lands can be scouted and challenged through the land detail view.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        if 'kingdom_select_land' not in seen:
+            return {
+                'id': 'kingdom_select_land',
+                'rect': self._map_viewport_rect,
+                'title': 'Choose A Land',
+                'body': 'Click a land you do not own to inspect it. The tour will continue once the detail view shows an available Conquer action.',
+                'action': 'click',
+                'mark_on_click': False,
+                'max_lines': 5,
+            }
+        return None
 
     def _draw_close_x_button(self):
         r = self._btn_close_rect
@@ -1604,6 +1669,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def handle_events(self, events):
         super().handle_events(events)
 
+        coach_step = self._current_kingdom_coach_step()
+        if self._handle_menu_coach_events(events, coach_step):
+            return
+
         for event in events:
             # Icon buttons (settings, home, logout) — highest priority
             if self._handle_icon_events(event):
@@ -2449,6 +2518,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             on_close=lambda: setattr(self, '_detail_box', None),
             conquest_outcome=conquest_outcome,
         )
+        if self._kingdom_coach_ready() and self._detail_conquer_button_rect():
+            self._mark_menu_coach_seen('kingdom_select_land')
 
     def _on_conquer(self, tile):
         """Transition to the conquer screen for this land."""

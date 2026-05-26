@@ -9,10 +9,12 @@ Provides:
   ListButton       – programmatically drawn list-item button (no image assets)
 """
 
+import os
 import pygame
 from config import settings
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.core.input_state import get_pressed as _get_pressed
+from utils import onboarding_service
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -64,8 +66,12 @@ class _MenuIconButton:
         self.glow_black      = shared['glow_black']
         self.glow_yellow_big = shared['glow_yellow_big']
 
-        raw_active  = pygame.image.load(_sym_path + symbol_name + '_active.png').convert_alpha()
-        raw_passive = pygame.image.load(_sym_path + symbol_name + '_passive.png').convert_alpha()
+        active_path = _sym_path + symbol_name + '_active.png'
+        passive_path = _sym_path + symbol_name + '_passive.png'
+        if not os.path.exists(passive_path):
+            passive_path = active_path
+        raw_active  = pygame.image.load(active_path).convert_alpha()
+        raw_passive = pygame.image.load(passive_path).convert_alpha()
         self.sym_active     = pygame.transform.smoothscale(raw_active,  (_sym_sz,  _sym_sz))
         self.sym_passive    = pygame.transform.smoothscale(raw_passive, (_sym_sz,  _sym_sz))
         self.sym_active_big = pygame.transform.smoothscale(raw_active,  (_sym_big, _sym_big))
@@ -218,19 +224,42 @@ class MenuScreenMixin:
         self._gold_font = settings.get_font(settings.GAME_MENU_GOLD_FONT_SIZE)
         self._gold_floaters = FloatingTextLayer()
         self._gold_floaters_last_tick = pygame.time.get_ticks()
+        self._onboarding_reward_floaters = FloatingTextLayer()
+        self._onboarding_reward_floaters_last_tick = pygame.time.get_ticks()
         self._last_seen_gold = self._current_gold_amount()
         # Optional one-shot controls for the next automatic top-bar gold
         # floater. Screens that show their own collect animation can suppress
         # or re-anchor the shared HUD floater to avoid duplicates.
         self._suppress_next_gold_gain_floater = False
         self._next_gold_gain_floater_pos = None
+        self._onboarding_guide_open = False
+        self._onboarding_guide_buttons = []
+        self._onboarding_guide_font = settings.get_font(max(16, int(0.020 * _SH)))
+        self._onboarding_guide_small_font = settings.get_font(max(14, int(0.017 * _SH)))
+        self._onboarding_guide_title_font = settings.get_font(max(24, int(0.034 * _SH)), bold=True)
+        self._onboarding_guide_section_font = settings.get_font(max(18, int(0.023 * _SH)), bold=True)
+        self._onboarding_guide_badge_font = settings.get_font(max(16, int(0.020 * _SH)), bold=True)
+        self._onboarding_guide_icon_cache = {}
+        self._onboarding_guide_item_rects = {}
+        self._onboarding_guide_section_header_rects = {}
+        self._onboarding_guide_close_rect = pygame.Rect(0, 0, 0, 0)
+        self._user_item_display_rect = pygame.Rect(0, 0, 0, 0)
+        self._menu_coach_buttons = []
+        self._menu_coach_step = None
+        self._menu_coach_font = settings.get_font(max(14, int(0.018 * _SH)))
+        self._menu_coach_title_font = settings.get_font(max(16, int(0.024 * _SH)), bold=True)
+        self._menu_chrome_username = self._current_menu_username()
 
-        # Icon buttons (top-right): home at top, settings at bottom, logout just above settings
+        # Icon buttons (top-right): home and guide at top, settings at
+        # bottom, logout just above settings.
         stone_sz = settings.GAME_MENU_ICON_STONE_SZ
         home_x   = _SW - settings.GAME_MENU_ICON_RIGHT_MARGIN - stone_sz
         home_y   = settings.GAME_MENU_ICON_TOP_Y
 
         self._icon_home   = _MenuIconButton(self.window, home_x,   home_y,   'home',   'home')
+        guide_gap = getattr(settings, 'GAME_MENU_ICON_LOGOUT_GAP_Y', int(0.006 * _SH))
+        guide_y = home_y + stone_sz + guide_gap
+        self._icon_guide = _MenuIconButton(self.window, home_x, guide_y, 'guide', 'guide')
 
         # Settings icon (bottom-right)
         settings_x = _SW - settings.GAME_MENU_ICON_RIGHT_MARGIN - stone_sz
@@ -243,12 +272,14 @@ class MenuScreenMixin:
         logout_y = settings_y - stone_sz - logout_gap
         self._icon_logout = _MenuIconButton(self.window, logout_x, logout_y, 'logout', 'logout')
 
-        self._icon_buttons = [self._icon_settings, self._icon_home, self._icon_logout]
+        self._icon_buttons = [self._icon_settings, self._icon_home,
+                              self._icon_guide, self._icon_logout]
 
     # ── draw helpers ────────────────────────────────────────────────
 
     def _draw_menu_chrome(self):
         """Draw background + gold display + booster pack display.  Call FIRST in render()."""
+        self._sync_menu_user_context()
         self.window.blit(self._bg, (0, 0))
         self._draw_gold()
         self._draw_booster_packs()
@@ -260,8 +291,12 @@ class MenuScreenMixin:
             self.dialogue_box.draw()
         for ib in self._icon_buttons:
             ib.draw()
+        self._draw_onboarding_guide_badge()
         self._draw_gold_floaters()
         self._draw_logout_dialogue()
+        if self._onboarding_guide_open:
+            self._draw_onboarding_guide()
+        self._draw_onboarding_reward_floaters()
 
     def _draw_gold(self):
         """Gold + booster pack icons in one horizontal box (upper-left)."""
@@ -301,6 +336,7 @@ class MenuScreenMixin:
 
         bw = pad_x * 2 + total_w
         bh = pad_y * 2 + row_h
+        self._user_item_display_rect = pygame.Rect(mx, my, bw, bh)
 
         # Draw box background
         box = pygame.Surface((bw, bh), pygame.SRCALPHA)
@@ -388,6 +424,50 @@ class MenuScreenMixin:
         layer.update(max(0, now - last_tick))
         layer.draw(self.window)
 
+    def _spawn_onboarding_reward_floaters(self, reward, start_pos):
+        layer = getattr(self, '_onboarding_reward_floaters', None)
+        if layer is None or not start_pos:
+            return
+        font_size = getattr(settings, 'COLLECT_FLOAT_FONT_SIZE', settings.GAME_MENU_GOLD_FONT_SIZE)
+        font = settings.get_font(font_size, bold=True)
+        fallback_color = settings.GAME_MENU_GOLD_TEXT_CLR
+        gold_color = getattr(settings, 'COLLECT_FLOAT_GOLD_CLR', fallback_color)
+        item_color = getattr(settings, 'COLLECT_FLOAT_XP_CLR', fallback_color)
+        entries = [
+            ('gold', '+{amount}g', gold_color),
+            ('booster_packs', '+{amount} Main Pack{suffix}', item_color),
+            ('booster_packs_side', '+{amount} Side Pack{suffix}', item_color),
+            ('maps', '+{amount} Map{suffix}', item_color),
+        ]
+        delay_step = int(getattr(settings, 'COLLECT_FLOAT_STAGGER_MS', 80))
+        delay_ms = 0
+        for key, template, color in entries:
+            amount = int((reward or {}).get(key) or 0)
+            if amount <= 0:
+                continue
+            suffix = '' if amount == 1 else 's'
+            text = template.format(amount=amount, suffix=suffix)
+            layer.add(FloatingText(
+                text,
+                start_pos,
+                color=color,
+                duration_ms=getattr(settings, 'COLLECT_FLOAT_DURATION_MS', 900),
+                rise_px=getattr(settings, 'COLLECT_FLOAT_RISE_PX', int(0.07 * _SH)),
+                font=font,
+                delay_ms=delay_ms,
+            ))
+            delay_ms += delay_step
+
+    def _draw_onboarding_reward_floaters(self):
+        layer = getattr(self, '_onboarding_reward_floaters', None)
+        if layer is None:
+            return
+        now = pygame.time.get_ticks()
+        last_tick = getattr(self, '_onboarding_reward_floaters_last_tick', now)
+        self._onboarding_reward_floaters_last_tick = now
+        layer.update(max(0, now - last_tick))
+        layer.draw(self.window)
+
     def _draw_booster_packs(self):
         """No-op — boosters are now drawn inside _draw_gold."""
         pass
@@ -400,11 +480,18 @@ class MenuScreenMixin:
 
     def _handle_icon_events(self, event):
         """Handle MOUSEBUTTONUP for icon buttons.  Returns True if handled."""
+        self._sync_menu_user_context()
+        if getattr(self, '_onboarding_guide_open', False):
+            self._handle_onboarding_guide_events([event])
+            return True
         # If logout dialogue is active, route all events to it
         if hasattr(self, '_logout_dialogue') and self._logout_dialogue:
             self._update_logout_dialogue([event])
             return True
         if event.type == pygame.MOUSEBUTTONUP:
+            if self._icon_guide.collide():
+                self._open_onboarding_guide()
+                return True
             if self._icon_settings.collide():
                 self.state.screen = 'settings'
                 return True
@@ -441,6 +528,14 @@ class MenuScreenMixin:
             self.state._notified_accepted_challenges = set()
             self.state._pending_accepted_challenge = None
             self.state.set_msg('Logged out')
+            self._menu_chrome_username = None
+            self._onboarding_guide_open = False
+            if hasattr(self, '_welcome_present_dialogue'):
+                self._welcome_present_dialogue = None
+            if hasattr(self, '_welcome_dialogue_opened'):
+                self._welcome_dialogue_opened = False
+            if hasattr(self, '_badge_poller'):
+                self._badge_poller = None
         elif response is not None:  # 'no' or any other response
             self._logout_dialogue = None
         return True
@@ -449,3 +544,610 @@ class MenuScreenMixin:
         """Draw the logout confirmation dialogue if active."""
         if hasattr(self, '_logout_dialogue') and self._logout_dialogue:
             self._logout_dialogue.draw()
+
+    # ── onboarding guide modal ─────────────────────────────────────
+
+    def _onboarding(self):
+        ud = getattr(self.state, 'user_dict', None) or {}
+        return ud.get('onboarding') or {}
+
+    def _current_menu_username(self):
+        ud = getattr(self.state, 'user_dict', None) or {}
+        return ud.get('username')
+
+    def _sync_menu_user_context(self):
+        username = self._current_menu_username()
+        if getattr(self, '_menu_chrome_username', None) == username:
+            return
+        self._menu_chrome_username = username
+        self._onboarding_guide_open = False
+        self._onboarding_guide_buttons = []
+        self._onboarding_guide_item_rects = {}
+        self._onboarding_guide_section_header_rects = {}
+        if hasattr(self, '_onboarding_reward_floaters'):
+            self._onboarding_reward_floaters.clear()
+            self._onboarding_reward_floaters_last_tick = pygame.time.get_ticks()
+        self._menu_coach_buttons = []
+        self._menu_coach_step = None
+        if hasattr(self, '_welcome_present_dialogue'):
+            self._welcome_present_dialogue = None
+        if hasattr(self, '_welcome_dialogue_opened'):
+            self._welcome_dialogue_opened = False
+        if hasattr(self, '_welcome_dialogue_username'):
+            self._welcome_dialogue_username = username
+        if hasattr(self, '_badge_poller'):
+            self._badge_poller = None
+        if hasattr(self, '_badge_timer'):
+            self._badge_timer = 0
+
+    def _apply_onboarding_payload(self, data):
+        self._sync_menu_user_context()
+        if not data or not getattr(self.state, 'user_dict', None):
+            return
+        onboarding = data.get('onboarding')
+        if onboarding is not None:
+            self.state.user_dict['onboarding'] = self._merge_onboarding_state(onboarding)
+        balances = data.get('balances') or {}
+        for key in ('gold', 'booster_packs', 'booster_packs_side', 'maps'):
+            if key in balances:
+                self.state.user_dict[key] = balances[key]
+
+    def _merge_onboarding_state(self, incoming):
+        if not isinstance(incoming, dict):
+            return incoming
+        current = self._onboarding()
+        if not isinstance(current, dict):
+            return incoming
+        merged = dict(incoming)
+        for key in ('duel_hints_seen', 'menu_hints_seen'):
+            values = list(merged.get(key) or [])
+            for value in current.get(key) or []:
+                if value not in values:
+                    values.append(value)
+            if values:
+                merged[key] = values
+        return merged
+
+    def _open_onboarding_guide(self):
+        self._onboarding_guide_open = True
+        try:
+            data = onboarding_service.fetch_onboarding()
+            self._apply_onboarding_payload(data)
+        except Exception:
+            if getattr(self.state, 'set_msg', None):
+                self.state.set_msg('Guide could not refresh')
+
+    def _onboarding_guide_badge_count(self):
+        onboarding = self._onboarding()
+        if not onboarding:
+            return 0
+        count = int(onboarding.get('pending_reward_count') or 0)
+        if onboarding.get('welcome_pending'):
+            count += 1
+        return count
+
+    def _onboarding_guide_rect(self):
+        top = max(int(0.12 * _SH), settings.GAME_MENU_GOLD_MARGIN_Y
+                  + settings.GAME_MENU_GOLD_ICON_SZ
+                  + settings.GAME_MENU_GOLD_BOX_PAD_Y * 2
+                  + int(0.035 * _SH))
+        height = min(int(0.74 * _SH), _SH - top - int(0.075 * _SH))
+        return pygame.Rect(int(0.10 * _SW), top, int(0.80 * _SW), height)
+
+    def _draw_onboarding_guide_badge(self):
+        count = self._onboarding_guide_badge_count()
+        if count <= 0 or not hasattr(self, '_icon_guide'):
+            return
+        r = max(9, int(0.014 * _SH))
+        cx = self._icon_guide.rect.right - r
+        cy = self._icon_guide.rect.top + r
+        pygame.draw.circle(self.window, (210, 40, 40), (cx, cy), r)
+        pygame.draw.circle(self.window, (255, 255, 255), (cx, cy), r, 1)
+        txt = self._onboarding_guide_badge_font.render(str(min(count, 99)), True, (255, 255, 255))
+        self.window.blit(txt, txt.get_rect(center=(cx, cy)))
+
+    def _draw_onboarding_guide(self):
+        onboarding = self._onboarding()
+        self._onboarding_guide_buttons = []
+        self._onboarding_guide_item_rects = {}
+        self._onboarding_guide_section_header_rects = {}
+
+        overlay = pygame.Surface((_SW, _SH), pygame.SRCALPHA)
+        overlay.fill(settings.DIALOGUE_BOX_OVERLAY_CLR)
+        self.window.blit(overlay, (0, 0))
+
+        rect = self._onboarding_guide_rect()
+        panel = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(panel, settings.DIALOGUE_BOX_BG_CLR,
+                         panel.get_rect(), border_radius=settings.DIALOGUE_BOX_CORNER_R)
+        pygame.draw.rect(panel, settings.DIALOGUE_BOX_BORDER_CLR,
+                         panel.get_rect(), settings.DIALOGUE_BOX_BORDER_WIDTH,
+                         border_radius=settings.DIALOGUE_BOX_CORNER_R)
+        self.window.blit(panel, rect.topleft)
+
+        title = self._onboarding_guide_title_font.render('Guide', True, settings.TITLE_TEXT_COLOR)
+        self.window.blit(title, (rect.x + 20, rect.y + 16))
+
+        close_sz = max(24, int(0.032 * _SH))
+        self._onboarding_guide_close_rect = pygame.Rect(
+            rect.right - close_sz - 16,
+            rect.y + 16,
+            close_sz,
+            close_sz,
+        )
+        self._draw_onboarding_guide_close_x()
+
+        pending = self._onboarding_guide_badge_count()
+        if pending:
+            ready = self._onboarding_guide_small_font.render(
+                f'{pending} new item' + ('' if pending == 1 else 's'),
+                True,
+                (245, 220, 120),
+            )
+            right_limit = self._onboarding_guide_close_rect.left - 12
+            self.window.blit(ready, (right_limit - ready.get_width(), rect.y + 24))
+
+        intro = 'Learn the main areas, take a beginner duel, then claim rewards as real milestones unlock.'
+        intro_surf = self._onboarding_guide_small_font.render(
+            self._fit_text(intro, self._onboarding_guide_small_font, rect.w - 44),
+            True,
+            settings.DIALOGUE_BOX_MSG_TEXT_CLR,
+        )
+        intro_y = rect.y + 18 + title.get_height() + 10
+        self.window.blit(intro_surf, (rect.x + 22, intro_y))
+
+        area_top = intro_y + intro_surf.get_height() + int(0.026 * _SH)
+        area_h = max(84, int(0.108 * _SH))
+        self._draw_onboarding_area_overview(
+            pygame.Rect(rect.x + 22, area_top, rect.w - 44, area_h))
+
+        top = area_top + area_h + int(0.020 * _SH)
+        gap = int(0.018 * _SW)
+        col_w = (rect.w - 44 - gap) // 2
+        col_h = rect.bottom - top - 22
+        left = pygame.Rect(rect.x + 22, top, col_w, col_h)
+        right = pygame.Rect(left.right + gap, top, col_w, col_h)
+        self._draw_onboarding_guide_section(
+            'Checklist',
+            onboarding.get('core_steps') or [],
+            left,
+        )
+        self._draw_onboarding_guide_section(
+            'Early Goals',
+            onboarding.get('early_goals') or [],
+            right,
+        )
+
+    def _draw_onboarding_guide_close_x(self):
+        r = self._onboarding_guide_close_rect
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = r.collidepoint(mouse_pos)
+        bg_clr = (80, 50, 25, 220) if hovered else (55, 35, 18, 200)
+        border_clr = (180, 160, 120) if hovered else (120, 100, 70)
+        txt_clr = (255, 240, 200) if hovered else (200, 180, 140)
+        surf = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, bg_clr, surf.get_rect(), border_radius=4)
+        pygame.draw.rect(surf, border_clr, surf.get_rect(), 1, border_radius=4)
+        self.window.blit(surf, r.topleft)
+        txt = self._onboarding_guide_section_font.render('X', True, txt_clr)
+        self.window.blit(txt, txt.get_rect(center=r.center))
+
+    def _draw_onboarding_area_overview(self, rect):
+        header = self._onboarding_guide_section_font.render(
+            'Where To Go', True, settings.SUB_SCREEN_HEADER_CLR)
+        self.window.blit(header, (rect.x, rect.y))
+        items = [
+            ('Duel', 'Play full duels against other players.'),
+            ('Kingdom', 'Conquer lands and collect production.'),
+            ('Collection', 'Open boosters, trade, and sell cards.'),
+            ('Rankings', 'Compare progress with other players.'),
+        ]
+        gap = int(0.010 * _SW)
+        top = rect.y + header.get_height() + 8
+        row_h = max(46, rect.bottom - top)
+        card_w = (rect.w - gap * (len(items) - 1)) // len(items)
+        x = rect.x
+        for title, body in items:
+            card = pygame.Rect(x, top, card_w, row_h)
+            bg = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
+            bg.fill((24, 22, 19, 150))
+            self.window.blit(bg, card.topleft)
+            pygame.draw.rect(self.window, (112, 96, 66), card, 1, border_radius=5)
+            title_surf = self._onboarding_guide_font.render(title, True, (235, 222, 184))
+            self.window.blit(title_surf, (card.x + 10, card.y + 7))
+            body = self._fit_text(body, self._onboarding_guide_small_font, card.w - 20)
+            body_surf = self._onboarding_guide_small_font.render(body, True, (170, 160, 135))
+            self.window.blit(body_surf, (card.x + 10, card.bottom - body_surf.get_height() - 7))
+            x += card_w + gap
+
+    def _draw_onboarding_guide_section(self, title, items, rect):
+        header = self._onboarding_guide_section_font.render(
+            title, True, settings.SUB_SCREEN_HEADER_CLR)
+        header_rect = header.get_rect(topleft=(rect.x, rect.y))
+        self.window.blit(header, header_rect)
+        self._onboarding_guide_section_header_rects[title.lower().replace(' ', '_')] = header_rect.inflate(8, 6)
+        y = rect.y + header.get_height() + 8
+        visible = [item for item in items if item.get('claimable')]
+        visible += [item for item in items if not item.get('completed') and item not in visible]
+        visible += [item for item in items if item.get('completed') and item not in visible]
+        if not visible:
+            empty = self._onboarding_guide_font.render(
+                'All set for now.', True, (170, 160, 135))
+            self.window.blit(empty, (rect.x + 6, y + 6))
+            return
+
+        row_h = max(42, min(64, int(0.060 * _SH)))
+        gap = 6
+        for item in visible:
+            if y + row_h > rect.bottom:
+                more = self._onboarding_guide_small_font.render(
+                    'More goals continue as you play.',
+                    True,
+                    (170, 160, 135),
+                )
+                self.window.blit(more, (rect.x + 6, max(rect.y, rect.bottom - more.get_height())))
+                return
+            row = pygame.Rect(rect.x, y, rect.w, row_h)
+            item_id = item.get('id')
+            if item_id:
+                self._onboarding_guide_item_rects[item_id] = row.copy()
+            bg = pygame.Surface((row.w, row.h), pygame.SRCALPHA)
+            fill = (34, 29, 23, 178) if item.get('claimable') else (24, 22, 19, 138)
+            bg.fill(fill)
+            self.window.blit(bg, row.topleft)
+            border = (215, 184, 92) if item.get('claimable') else (112, 96, 66)
+            pygame.draw.rect(self.window, border, row, 1, border_radius=5)
+
+            dot = pygame.Rect(row.x + 8, row.y + row_h // 2 - 5, 10, 10)
+            dot_clr = (96, 190, 105) if item.get('completed') else (105, 100, 86)
+            pygame.draw.ellipse(self.window, dot_clr, dot)
+            title_max_w = row.w - 132
+            title = self._fit_text(item.get('title') or '', self._onboarding_guide_font, title_max_w)
+            title_surf = self._onboarding_guide_font.render(title, True, (235, 222, 184))
+            self.window.blit(title_surf, (row.x + 26, row.y + 6))
+
+            desc_max_w = row.w - 138
+            desc = self._fit_text(item.get('description') or '', self._onboarding_guide_small_font, desc_max_w)
+            desc_surf = self._onboarding_guide_small_font.render(desc, True, (170, 160, 135))
+            self.window.blit(desc_surf, (row.x + 26, row.y + row_h - desc_surf.get_height() - 6))
+
+            if item.get('claimable'):
+                claim_w = max(68, self._onboarding_guide_small_font.size('Claim')[0] + 22)
+                claim_h = max(28, self._onboarding_guide_small_font.get_height() + 8)
+                claim_rect = pygame.Rect(row.right - claim_w - 12, row.y + (row_h - claim_h) // 2,
+                                         claim_w, claim_h)
+                self._draw_onboarding_guide_button(claim_rect, 'Claim', ('claim', item.get('id')))
+                self._draw_onboarding_reward_icons(item.get('reward') or {}, claim_rect.left - 10, row.y + row_h // 2)
+            elif item.get('claimed'):
+                claimed = self._onboarding_guide_small_font.render('claimed', True, (120, 190, 125))
+                self.window.blit(claimed, (row.right - claimed.get_width() - 10,
+                                           row.y + row_h // 2 - claimed.get_height() // 2))
+            else:
+                self._draw_onboarding_reward_icons(item.get('reward') or {}, row.right - 88, row.y + row_h // 2)
+            y += row_h + gap
+
+    def _draw_onboarding_reward_icons(self, reward, right_x, center_y):
+        pairs = []
+        for key in ('gold', 'booster_packs', 'booster_packs_side', 'maps'):
+            amount = int((reward or {}).get(key) or 0)
+            if amount > 0:
+                pairs.append((key, amount))
+        if not pairs:
+            return
+        icon_sz = max(14, min(24, int(0.024 * _SH)))
+        gap = 4
+        rendered = []
+        total_w = 0
+        for key, amount in pairs:
+            icon = self._onboarding_reward_icon(key, icon_sz)
+            txt = self._onboarding_guide_small_font.render(f'+{amount}', True, (236, 220, 160))
+            rendered.append((icon, txt))
+            total_w += icon_sz + 2 + txt.get_width() + gap
+        total_w -= gap
+        x = right_x - total_w
+        for icon, txt in rendered:
+            self.window.blit(icon, (x, center_y - icon_sz // 2))
+            x += icon_sz + 2
+            self.window.blit(txt, (x, center_y - txt.get_height() // 2))
+            x += txt.get_width() + gap
+
+    def _onboarding_reward_icon(self, key, size):
+        cache_key = (key, size)
+        cached = self._onboarding_guide_icon_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        source_by_key = {
+            'gold': self._gold_icon,
+            'booster_packs': self._booster_icon,
+            'booster_packs_side': self._booster_side_icon,
+            'maps': self._map_icon,
+        }
+        surf = pygame.transform.smoothscale(source_by_key[key], (size, size))
+        self._onboarding_guide_icon_cache[cache_key] = surf
+        return surf
+
+    def _draw_onboarding_guide_button(self, rect, label, action):
+        mx, my = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mx, my)
+        bg = (92, 70, 32) if hovered else (58, 45, 28)
+        bdr = (235, 204, 105) if hovered else (150, 126, 74)
+        pygame.draw.rect(self.window, bg, rect, border_radius=4)
+        pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
+        txt = self._onboarding_guide_small_font.render(label, True, (245, 232, 190))
+        self.window.blit(txt, txt.get_rect(center=rect.center))
+        self._onboarding_guide_buttons.append((rect.copy(), action))
+
+    def _handle_onboarding_guide_events(self, events):
+        for event in events:
+            if event.type != pygame.MOUSEBUTTONUP or getattr(event, 'button', 0) != 1:
+                continue
+            pos = getattr(event, 'pos', pygame.mouse.get_pos())
+            if self._onboarding_guide_close_rect.collidepoint(pos):
+                self._onboarding_guide_open = False
+                return True
+            if not self._onboarding_guide_rect().collidepoint(pos):
+                self._onboarding_guide_open = False
+                return True
+            for rect, action in list(self._onboarding_guide_buttons):
+                if not rect.collidepoint(pos):
+                    continue
+                kind, value = action
+                try:
+                    if kind == 'claim':
+                        data = onboarding_service.claim_reward(value)
+                        reward = data.get('reward') or {}
+                        if int(reward.get('gold') or 0):
+                            self._suppress_next_gold_floater()
+                        self._apply_onboarding_payload(data)
+                        self._spawn_onboarding_reward_floaters(reward, rect.center)
+                        if getattr(self.state, 'set_msg', None):
+                            self.state.set_msg(data.get('reward_label') or 'Reward claimed')
+                except Exception:
+                    if getattr(self.state, 'set_msg', None):
+                        self.state.set_msg('Guide action failed')
+                return True
+        return False
+
+    # ── lightweight menu coach cards ──────────────────────────────
+
+    def _menu_coach_allowed_common(self):
+        if not self._onboarding():
+            return False
+        if getattr(self, '_onboarding_guide_open', False):
+            return False
+        if getattr(self, '_logout_dialogue', None):
+            return False
+        if getattr(self, '_welcome_present_dialogue', None):
+            return False
+        if getattr(self, 'dialogue_box', None):
+            return False
+        return True
+
+    def _menu_coach_seen(self):
+        onboarding = self._onboarding()
+        return set(onboarding.get('menu_hints_seen') or [])
+
+    def _onboarding_completed_steps(self):
+        return set((self._onboarding() or {}).get('completed_steps') or [])
+
+    def _mark_onboarding_step_completed_local(self, step_id):
+        if not step_id:
+            return
+        ud = getattr(self.state, 'user_dict', None)
+        if not ud:
+            return
+        onboarding = dict(ud.get('onboarding') or {})
+        completed = list(onboarding.get('completed_steps') or [])
+        if step_id not in completed:
+            completed.append(step_id)
+        onboarding['completed_steps'] = completed
+        ud['onboarding'] = onboarding
+
+    def _mark_menu_coach_seen(self, step_id):
+        if not step_id:
+            return
+        try:
+            data = onboarding_service.mark_tip(f'menu:{step_id}')
+            self._apply_onboarding_payload(data)
+            return
+        except Exception:
+            pass
+        ud = getattr(self.state, 'user_dict', None)
+        if not ud:
+            return
+        onboarding = dict(ud.get('onboarding') or {})
+        seen = list(onboarding.get('menu_hints_seen') or [])
+        if step_id not in seen:
+            seen.append(step_id)
+        onboarding['menu_hints_seen'] = seen
+        ud['onboarding'] = onboarding
+
+    def _wrap_menu_coach_lines(self, text, max_width, max_lines=5):
+        words = str(text or '').split()
+        lines = []
+        current = ''
+        for word in words:
+            candidate = word if not current else f'{current} {word}'
+            if self._menu_coach_font.size(candidate)[0] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines[:max_lines]
+
+    def _draw_menu_coach_button(self, rect, label, action):
+        mx, my = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mx, my)
+        bg = (96, 70, 34) if hovered else (58, 45, 28)
+        bdr = (235, 204, 105) if hovered else (150, 126, 74)
+        pygame.draw.rect(self.window, bg, rect, border_radius=4)
+        pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
+        txt = self._menu_coach_font.render(label, True, (245, 232, 190))
+        self.window.blit(txt, txt.get_rect(center=rect.center))
+        self._menu_coach_buttons.append((rect.copy(), action))
+
+    def _menu_coach_target_rects(self, step):
+        rects = step.get('rects') if step else None
+        if rects:
+            return [pygame.Rect(rect) for rect in rects]
+        return [pygame.Rect(step['rect'])]
+
+    def _menu_coach_target_bounds(self, step):
+        rects = self._menu_coach_target_rects(step)
+        bounds = rects[0].copy()
+        for rect in rects[1:]:
+            bounds.union_ip(rect)
+        return bounds
+
+    def _draw_menu_coach(self, step):
+        self._menu_coach_buttons = []
+        self._menu_coach_step = step
+        if not step:
+            return
+        targets = [rect.inflate(14, 14) for rect in self._menu_coach_target_rects(step)]
+        pulse = 2 + int((pygame.time.get_ticks() // 280) % 2)
+        for target_rect in targets:
+            pygame.draw.rect(self.window, (250, 218, 92), target_rect, pulse, border_radius=8)
+        target = self._menu_coach_target_bounds(step).inflate(14, 14)
+
+        card_w = min(420, max(320, int(0.36 * _SW)), _SW - 16)
+        body_lines = self._wrap_menu_coach_lines(
+            step['body'], card_w - 28, max_lines=step.get('max_lines', 5))
+        title_h = self._menu_coach_title_font.get_height()
+        body_line_h = self._menu_coach_font.get_height() + 3
+        button_h = max(30, self._menu_coach_font.get_height() + 10)
+        draws_next = step.get('action', 'next') == 'next'
+        button_space = button_h + 16 if draws_next else 8
+        card_h = max(152, 22 + title_h + 10 + len(body_lines) * body_line_h + button_space)
+        gap = 14
+        if target.right + gap + card_w < _SW:
+            card_x = target.right + gap
+        else:
+            card_x = max(8, target.left - gap - card_w)
+        card_y = max(8, min(target.centery - card_h // 2, _SH - card_h - 8))
+        card = pygame.Rect(card_x, card_y, card_w, card_h)
+        surf = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (24, 20, 16, 235), surf.get_rect(), border_radius=8)
+        self.window.blit(surf, card.topleft)
+        pygame.draw.rect(self.window, (220, 185, 88), card, 2, border_radius=8)
+
+        title_text = self._fit_text(step['title'], self._menu_coach_title_font, card.w - 24)
+        title = self._menu_coach_title_font.render(title_text, True, (248, 232, 180))
+        self.window.blit(title, (card.x + 12, card.y + 10))
+        y = card.y + 10 + title_h + 10
+        for line in body_lines:
+            line_surf = self._menu_coach_font.render(line, True, (214, 204, 174))
+            self.window.blit(line_surf, (card.x + 12, y))
+            y += body_line_h
+
+        if draws_next:
+            label = step.get('button_label') or 'Next'
+            button_w = max(76, self._menu_coach_font.size(label)[0] + 28)
+            next_rect = pygame.Rect(card.right - button_w - 14, card.bottom - button_h - 12,
+                                    button_w, button_h)
+            self._draw_menu_coach_button(next_rect, label, ('next', step['id']))
+
+    def _menu_coach_blocking_event_types(self):
+        event_types = {
+            pygame.MOUSEBUTTONDOWN,
+            pygame.MOUSEBUTTONUP,
+            pygame.MOUSEWHEEL,
+            pygame.KEYDOWN,
+            pygame.KEYUP,
+        }
+        text_input = getattr(pygame, 'TEXTINPUT', None)
+        if text_input is not None:
+            event_types.add(text_input)
+        return event_types
+
+    def _handle_menu_coach_events(self, events, step=None):
+        step = step or getattr(self, '_menu_coach_step', None)
+        if not step:
+            return False
+        action = step.get('action', 'next')
+        block_types = self._menu_coach_blocking_event_types()
+        target_rects = self._menu_coach_target_rects(step)
+        for event in events:
+            if event.type == pygame.QUIT:
+                continue
+            if event.type not in block_types:
+                continue
+            if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                if action == 'click':
+                    if any(rect.collidepoint(pos) for rect in target_rects):
+                        if step.get('mark_on_click', True):
+                            self._mark_menu_coach_seen(step.get('id'))
+                        return False
+                    return True
+                for rect, button_action in list(self._menu_coach_buttons):
+                    if not rect.collidepoint(pos):
+                        continue
+                    kind, step_id = button_action
+                    if kind == 'next':
+                        self._mark_menu_coach_seen(step_id)
+                        self._after_menu_coach_next(step_id)
+                    return True
+                return True
+            if action == 'click' and event.type == pygame.MOUSEBUTTONDOWN:
+                pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                if any(rect.collidepoint(pos) for rect in target_rects):
+                    return False
+            return True
+        return False
+
+    def _after_menu_coach_next(self, step_id):
+        pass
+
+    def _current_onboarding_guide_coach_step(self):
+        if not getattr(self, '_onboarding_guide_open', False):
+            return None
+        onboarding = self._onboarding()
+        if not onboarding:
+            return None
+        completed = set(onboarding.get('completed_steps') or [])
+        if 'finish_first_duel' in completed:
+            return None
+        seen = self._menu_coach_seen()
+        if 'guide_achievements' not in seen:
+            checklist = self._onboarding_guide_section_header_rects.get('checklist')
+            early_goals = self._onboarding_guide_section_header_rects.get('early_goals')
+            target_rects = [rect for rect in (checklist, early_goals) if rect]
+            guide_rect = self._onboarding_guide_rect().inflate(-18, -18)
+            return {
+                'id': 'guide_achievements',
+                'rect': guide_rect,
+                'rects': target_rects or [guide_rect],
+                'title': 'Achievements & Rewards',
+                'body': 'Checklist and Early Goals track achievements that teach the game step by step. Finish goals here to unlock small rewards as you learn.',
+                'max_lines': 5,
+            }
+        if 'guide_first_duel_reward' not in seen:
+            row = self._onboarding_guide_item_rects.get('finish_first_duel')
+            if row is None:
+                row = self._onboarding_guide_rect().inflate(-40, -140)
+            return {
+                'id': 'guide_first_duel_reward',
+                'rect': row,
+                'title': 'Time For Your First Duel',
+                'body': 'Finish a duel against AI Strategos to claim this reward. Go back to the menu and start a Duel against the AI.',
+                'max_lines': 5,
+            }
+        return None
+
+    @staticmethod
+    def _fit_text(text, font, max_width):
+        text = str(text or '')
+        if font.size(text)[0] <= max_width:
+            return text
+        ell = '...'
+        max_width = max(0, max_width - font.size(ell)[0])
+        out = ''
+        for char in text:
+            if font.size(out + char)[0] > max_width:
+                break
+            out += char
+        return out.rstrip() + ell

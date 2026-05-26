@@ -1299,6 +1299,96 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._draw_info_popup()
 
         self._draw_menu_overlay()
+        self._draw_menu_coach(self._current_conquer_coach_step())
+
+    def _conquer_coach_ready(self):
+        completed = self._onboarding_completed_steps()
+        return (
+            'finish_first_duel' in completed
+            and 'open_first_main_booster' in completed
+            and 'open_first_side_booster' in completed
+        )
+
+    def _conquer_field_coach_rect(self):
+        rects = [rect for rect in getattr(self, '_field_rects', {}).values() if rect]
+        for rect in (getattr(self, '_res_rect', None), getattr(self, '_btn_build', None)):
+            if rect:
+                rects.append(rect)
+        if not rects:
+            return None
+        bounds = rects[0].copy()
+        for rect in rects[1:]:
+            bounds.union_ip(rect)
+        return bounds
+
+    def _conquer_combined_rect(self, *rects):
+        usable = [rect for rect in rects if rect]
+        if not usable:
+            return None
+        bounds = usable[0].copy()
+        for rect in usable[1:]:
+            bounds.union_ip(rect)
+        return bounds
+
+    def _current_conquer_coach_step(self):
+        if not self._menu_coach_allowed_common() or not self._conquer_coach_ready():
+            return None
+        if (self._loading or self._error or not self._config or not self._layout_built
+                or self._active_subscreen or self._figure_detail_box or self._move_detail_box
+                or self._active_info_key):
+            return None
+        seen = self._menu_coach_seen()
+        field_rect = self._conquer_field_coach_rect()
+        if field_rect and 'conquer_config_field' not in seen:
+            return {
+                'id': 'conquer_config_field',
+                'rect': field_rect,
+                'title': 'Conquer Field',
+                'body': 'Your field prepares the attack. Castle, village, and military figures shape the resources and strength you bring into conquest. Note that the number of kings in your castle is limitted by the tier of land you are conquering.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        if self._btn_build and 'conquer_config_build_edit' not in seen:
+            return {
+                'id': 'conquer_config_build_edit',
+                'rect': self._btn_build,
+                'title': 'Build Figures',
+                'body': 'Use this edit button to add or replace figures before the battle. Figures are the engine behind your conquer resources.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        battle_plan_rect = self._conquer_combined_rect(self._battle_plan_rect, self._btn_buy_move)
+        if battle_plan_rect and 'conquer_config_battle_plan' not in seen:
+            return {
+                'id': 'conquer_config_battle_plan',
+                'rect': battle_plan_rect,
+                'title': 'Battle Plan',
+                'body': 'This edit button opens battle move shopping. Moves let you plan how each conquest round should pressure the defender.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        prelude_rect = self._conquer_combined_rect(
+            self._prelude_panel_rect, self._btn_prelude_edit, self._prelude_spell_rect)
+        if prelude_rect and 'conquer_config_prelude' not in seen:
+            return {
+                'id': 'conquer_config_prelude',
+                'rect': prelude_rect,
+                'title': 'Prelude Spell',
+                'body': 'A prelude spell fires before the conquest begins. It is optional, but it can swing the opening state in your favour.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        if self._btn_battle and 'conquer_config_to_battle' not in seen:
+            return {
+                'id': 'conquer_config_to_battle',
+                'rect': self._btn_battle,
+                'title': 'To Battle',
+                'body': 'This starts the conquest when your setup is ready. Note that cards you submit to a conquer attempt are at risk for looting in case you lose. Go back to the collection screen to open more packs. The guided tour ends here - good look adventurer!',
+                'action': 'next',
+                'button_label': 'Got it!',
+                'max_lines': 5,
+            }
+        return None
 
     def _draw_field_compartments(self):
         """Draw the three field compartments with FieldFigureIcon rendering."""
@@ -2100,6 +2190,10 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return
 
         if self.dialogue_box:
+            return
+
+        coach_step = self._current_conquer_coach_step()
+        if self._handle_menu_coach_events(events, coach_step):
             return
 
         # If subscreen is active, delegate events

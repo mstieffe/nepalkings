@@ -12,7 +12,7 @@ import signal
 import sys
 
 import server_settings as settings
-from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection, kingdom
+from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection, kingdom, onboarding
 
 games.settings = settings
 challenges.settings = settings
@@ -21,6 +21,7 @@ msg.settings = settings
 figures.settings = settings
 spells.settings = settings
 battle_shop.settings = settings
+onboarding.settings = settings
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = settings.SECRET_KEY
@@ -144,6 +145,7 @@ with app.app_context():
                                      ensure_duel_game_limit_columns,
                                      ensure_game_ai_seed_column,
                                      ensure_kingdom_production_columns)
+        from onboarding_service import ensure_onboarding_state_column
         added_columns = ensure_kingdom_production_columns()
         if added_columns:
             logger.info("Kingdom production schema upgraded: added %s",
@@ -158,6 +160,8 @@ with app.app_context():
                         ', '.join(added_duel_columns))
         if ensure_game_ai_seed_column():
             logger.info("Game schema upgraded: added ai_seed column")
+        if ensure_onboarding_state_column():
+            logger.info("User schema upgraded: added onboarding_state column")
     except Exception as _kingdom_schema_err:  # pragma: no cover — safety net
         logger.exception("Kingdom production schema upgrade failed: %s", _kingdom_schema_err)
         db.session.rollback()
@@ -268,6 +272,7 @@ app.register_blueprint(spells, url_prefix='/spells')
 app.register_blueprint(battle_shop, url_prefix='/battle_shop')
 app.register_blueprint(collection, url_prefix='/collection')
 app.register_blueprint(kingdom, url_prefix='/kingdom')
+app.register_blueprint(onboarding, url_prefix='/onboarding')
 
 # ── Stricter rate limits for auth-sensitive endpoints ──
 limiter.limit(settings.RATE_LIMIT_LOGIN)(app.view_functions['auth.login'])
@@ -305,10 +310,12 @@ if __name__ == '__main__':
                                          ensure_duel_game_limit_columns,
                                          ensure_game_ai_seed_column,
                                          ensure_kingdom_production_columns)
+            from onboarding_service import ensure_onboarding_state_column
             ensure_kingdom_production_columns()
             ensure_conquer_tactics_schema()
             ensure_duel_game_limit_columns()
             ensure_game_ai_seed_column()
+            ensure_onboarding_state_column()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
         logger.error(f'Application failed to start: {e}')
