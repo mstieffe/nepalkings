@@ -1074,3 +1074,74 @@ class TestGameScreenDialogueFlow:
         }
 
         assert GameScreen._check_any_defender_selectable(game_screen) is True
+
+
+class TestGameScreenVictoryReviewRouting:
+    """The game_screen ack handlers must route to Victory Review the same
+    way battle_screen does, so auto-loss / checkmate / withdrawal paths also
+    trigger the review for human attackers."""
+
+    def test_handle_conquer_result_response_stashes_review(self):
+        GameScreen, game_screen, _notifications = _make_conquer_game_screen()
+        # Make _is_current_player_conquer_attacker return True
+        game_screen._is_current_player_conquer_attacker = lambda result=None: True
+
+        GameScreen._handle_conquer_result_response(game_screen, {
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'victory_review_available': True,
+            'victory_review_land_id': 7,
+            'victory_review_config_id': 999,
+            'conquer_attacker_player_id': 10,
+        })
+
+        review = getattr(game_screen.state.game, '_pending_victory_review', None)
+        assert review == {'available': True, 'land_id': 7, 'config_id': 999}
+
+    def test_handle_conquer_result_response_clears_review_for_defender(self):
+        GameScreen, game_screen, _notifications = _make_conquer_game_screen()
+        game_screen._is_current_player_conquer_attacker = lambda result=None: False
+
+        GameScreen._handle_conquer_result_response(game_screen, {
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'victory_review_available': True,
+            'victory_review_land_id': 7,
+            'conquer_attacker_player_id': 20,  # not us
+        })
+
+        review = getattr(game_screen.state.game, '_pending_victory_review', None)
+        assert review is None
+
+    def test_game_over_ack_routes_to_defence_when_review_pending(self):
+        GameScreen, game_screen, _notifications = _make_conquer_game_screen()
+        game_screen.state.game._pending_victory_review = {
+            'available': True, 'land_id': 7, 'config_id': 999,
+        }
+
+        GameScreen._on_game_over_acknowledged(game_screen)
+
+        assert game_screen.state.screen == 'defence'
+        assert game_screen.state.victory_review_game_id == 1  # from _DummyGame.game_id
+        assert game_screen.state.defence_land_id == 7
+        # Game state cleared so kingdom/defence screens start clean.
+        assert game_screen.state.game is None
+
+    def test_game_over_ack_routes_to_kingdom_without_review(self):
+        GameScreen, game_screen, _notifications = _make_conquer_game_screen()
+        game_screen.state.game._pending_victory_review = None
+
+        GameScreen._on_game_over_acknowledged(game_screen)
+
+        assert game_screen.state.screen == 'kingdom'
+        assert game_screen.state.game is None
+
+    def test_game_over_ack_routes_to_kingdom_when_review_unavailable(self):
+        GameScreen, game_screen, _notifications = _make_conquer_game_screen()
+        game_screen.state.game._pending_victory_review = {
+            'available': False, 'land_id': 7,
+        }
+
+        GameScreen._on_game_over_acknowledged(game_screen)
+
+        assert game_screen.state.screen == 'kingdom'

@@ -3471,6 +3471,20 @@ class GameScreen(Screen):
         attacker_won = bool(result.get('attacker_won'))
         conquer_result = result.get('conquer_result')
         is_attacker = self._is_current_player_conquer_attacker(result)
+
+        # Stash Victory Review handoff so the game-over ack handler can route
+        # the attacker to DefenceScreen after the result dialogue closes.
+        # Mirrors the path in battle_screen._handle_conquer_end so auto-loss
+        # outcomes (defender no figures, withdrawal, deficit, fold) also
+        # trigger the review.
+        if attacker_won and is_attacker:
+            game._pending_victory_review = {
+                'available': bool(result.get('victory_review_available')),
+                'land_id': result.get('victory_review_land_id'),
+                'config_id': result.get('victory_review_config_id'),
+            }
+        else:
+            game._pending_victory_review = None
         reason_text = self._auto_loss_reason_text(result)
         images = []
         after_messages = []
@@ -3657,6 +3671,15 @@ class GameScreen(Screen):
         if self.state.game.mode == 'conquer':
             winner_pid = game_over_info.get('winner_player_id')
             is_attacker = self._is_current_player_conquer_attacker(game_over_info)
+            # Stash Victory Review handoff for the checkmate-driven path.
+            if is_winner and is_attacker:
+                self.state.game._pending_victory_review = {
+                    'available': bool(game_over_info.get('victory_review_available')),
+                    'land_id': game_over_info.get('victory_review_land_id'),
+                    'config_id': game_over_info.get('victory_review_config_id'),
+                }
+            else:
+                self.state.game._pending_victory_review = None
             if winner_pid is None:
                 # Draw — land ownership unchanged and attack cards returned.
                 title = "Draw!"
@@ -3853,6 +3876,25 @@ class GameScreen(Screen):
     def _on_game_over_acknowledged(self, response=None):
         """Handle game-over dialogue acknowledgement — return to game menu or kingdom."""
         if self.state.game and self.state.game.mode == 'conquer':
+            # Victory Review hop: if the attacker just won and the server
+            # offered a defence review, route to DefenceScreen first.  The
+            # defence screen takes care of returning to kingdom afterwards.
+            pending_review = getattr(
+                self.state.game, '_pending_victory_review', None) or {}
+            if pending_review.get('available') and pending_review.get('land_id'):
+                game_id = (getattr(self.state.game, 'game_id', None)
+                           or getattr(self.state.game, 'id', None))
+                if game_id:
+                    logger.info(
+                        "[GAME_OVER] Conquer acknowledged — routing to "
+                        "Victory Review for land=%s",
+                        pending_review['land_id'])
+                    self.state.victory_review_game_id = game_id
+                    self.state.defence_land_id = pending_review['land_id']
+                    self.state.game._pending_victory_review = None
+                    self.state.game = None
+                    self.state.screen = 'defence'
+                    return
             logger.info("[GAME_OVER] Conquer game acknowledged — returning to kingdom")
             self.state.game = None
             self.state.screen = 'kingdom'
