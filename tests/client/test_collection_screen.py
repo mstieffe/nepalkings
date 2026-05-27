@@ -270,6 +270,43 @@ grid_h = (
     + 2
 )
 assert grid_h <= panel_h, (grid_h, panel_h)
+
+pack_margin_x = int(0.020 * settings.SCREEN_WIDTH)
+pack_gap = settings.COLLECTION_PACK_PANEL_GAP
+pack_w = (
+    collection_screen._BOX_W
+    - pack_margin_x * 2
+    - pack_gap * 2
+) // 3
+pack_x = collection_screen._BOX_X + pack_margin_x
+pack_rect = pygame.Rect(
+    pack_x, pack_y, pack_w, settings.COLLECTION_PACK_PANEL_H)
+icon_sz = min(9999, int(pack_rect.h * 0.32))
+title_x = (
+    pack_rect.x
+    + settings.COLLECTION_PACK_PANEL_PAD_X
+    + icon_sz
+    + int(0.008 * settings.SCREEN_WIDTH)
+)
+title_y = (
+    pack_rect.y
+    + settings.COLLECTION_PACK_PANEL_PAD_Y
+    - int(0.001 * settings.SCREEN_HEIGHT)
+)
+title_font = settings.get_font(settings.COLLECTION_PACK_PANEL_TITLE_FONT_SIZE, bold=True)
+detail_font = settings.get_font(settings.COLLECTION_PACK_PANEL_DETAIL_FONT_SIZE)
+title_surf = title_font.render('Main Pack', True, settings.COLLECTION_PACK_PANEL_TITLE_CLR)
+owned_surf = detail_font.render('Owned: 999', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+gap = max(4, int(0.006 * settings.SCREEN_WIDTH))
+max_row_w = pack_rect.right - settings.COLLECTION_PACK_PANEL_PAD_X - title_x
+assert title_surf.get_width() + gap + owned_surf.get_width() <= max_row_w
+row_bottom = title_y + max(title_surf.get_height(), owned_surf.get_height())
+button_top = (
+    pack_rect.bottom
+    - settings.COLLECTION_PACK_PANEL_PAD_Y
+    - settings.COLLECTION_PACK_PANEL_BTN_H
+)
+assert row_bottom + 2 <= button_top, (row_bottom, button_top)
 '''
         result = subprocess.run(
             [sys.executable, '-c', code],

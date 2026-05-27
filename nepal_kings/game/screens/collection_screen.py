@@ -521,11 +521,35 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self.window.blit(icon_img, (icon_x, icon_y))
 
         title_x = icon_x + icon_sz + int(0.008 * _SW)
-        title = self._pack_title_font.render(info['title'], True, settings.COLLECTION_PACK_PANEL_TITLE_CLR)
-        self.window.blit(title, (title_x, panel.y + pad_y - int(0.001 * _SH)))
-        count_text = self._pack_detail_font.render(
-            f'Owned: {count}', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
-        self.window.blit(count_text, (title_x, panel.y + pad_y + title.get_height() + int(0.004 * _SH)))
+        title_y = panel.y + pad_y - int(0.001 * _SH)
+        title = self._pack_title_font.render(
+            info['title'], True, settings.COLLECTION_PACK_PANEL_TITLE_CLR)
+        self.window.blit(title, (title_x, title_y))
+
+        if settings.TOUCH_TARGET_MIN > 0:
+            gap = max(4, int(0.006 * _SW))
+            max_row_w = panel.right - pad_x - title_x
+            owned_text = f'Owned: {count}'
+            count_surf = self._pack_detail_font.render(
+                owned_text, True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+            if title.get_width() + gap + count_surf.get_width() > max_row_w:
+                count_surf = self._pack_detail_font.render(
+                    f'x{count}', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+            if title.get_width() + gap + count_surf.get_width() <= max_row_w:
+                self.window.blit(
+                    count_surf,
+                    count_surf.get_rect(
+                        left=title_x + title.get_width() + gap,
+                        centery=title_y + title.get_height() // 2,
+                    ),
+                )
+        else:
+            count_text = self._pack_detail_font.render(
+                f'Owned: {count}', True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+            self.window.blit(
+                count_text,
+                (title_x, title_y + title.get_height() + int(0.004 * _SH)),
+            )
 
         btns = self._pack_button_rects[pack_type]
         self._draw_action_button(btns['open'], f'Open ({count})', count > 0)
