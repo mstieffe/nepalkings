@@ -143,6 +143,7 @@ class TestCollectionStats:
         assert stats['unique_total'] == 52
         assert stats['missing_total'] == 49
         assert stats['locked_total'] == 3
+        assert stats['available_total'] == 3
 
 
 class TestCollectionSettings:

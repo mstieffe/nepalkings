@@ -87,6 +87,7 @@ def _collection_stats(cards, locked=None):
         'unique_total': unique_total,
         'missing_total': max(0, unique_total - unique_owned),
         'locked_total': locked_total,
+        'available_total': max(0, owned_total - locked_total),
     }
 
 
@@ -468,8 +469,9 @@ class CollectionScreen(MenuScreenMixin, Screen):
         stats = _collection_stats(self._cards, self._locked)
         items = [
             ('Collection', f"{stats['unique_owned']}/{stats['unique_total']}"),
-            ('Total Cards', str(stats['owned_total'])),
+            ('Total', str(stats['owned_total'])),
             ('Locked', str(stats['locked_total'])),
+            ('Available', str(stats['available_total'])),
         ]
 
         rendered = []
@@ -567,8 +569,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
                     pygame.draw.rect(glow_surf, (250, 221, 0, 80), glow_surf.get_rect(), 2)
                     self.window.blit(glow_surf, (cx - 2, cy - 2))
                 self._draw_card_badge(cx, cy, cw, qty, locked)
-                if locked > 0:
-                    self._draw_lock_badge(cx, cy, cw, locked)
             else:
                 card.draw_front_bright(cx, cy)
                 self.window.blit(self._grey_overlay, (cx, cy))
@@ -589,14 +589,13 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self.window.blit(surf, (cx - 2, cy - 2))
 
     def _draw_card_badge(self, cx, cy, cw, qty, locked=0):
-        """Draw the ×N owned badge at the bottom-right of a card.
-
-        Locked copies are displayed separately by `_draw_lock_badge` so this
-        badge stays a simple, easily-readable count.
-        """
-        badge_text = f'×{qty}'
-        if locked >= qty and qty > 0:
-            bg_clr = (88, 80, 66, 220)   # all locked → muted
+        """Draw the available/owned badge at the bottom-right of a card."""
+        free = max(0, qty - locked)
+        badge_text = f'{free}/{qty}'
+        if free == 0 and qty > 0:
+            bg_clr = (88, 80, 66, 220)        # all locked → muted grey
+        elif locked > 0:
+            bg_clr = (120, 90, 30, 210)       # some locked → amber
         else:
             bg_clr = settings.COLLECTION_BADGE_BG_CLR
         badge_surf = self._badge_font.render(badge_text, True, settings.COLLECTION_BADGE_CLR)
@@ -610,76 +609,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self.window.blit(badge_surf,
                          (bx + settings.COLLECTION_BADGE_PAD_X,
                           by + settings.COLLECTION_BADGE_PAD_Y))
-
-    def _draw_lock_badge(self, cx, cy, cw, locked):
-        """Draw a clear padlock + count badge in the top-right corner."""
-        if locked <= 0:
-            return
-        text = str(locked)
-        text_surf = self._badge_font.render(text, True, (255, 240, 200))
-        icon_size = max(10, int(self._badge_font.get_height() * 0.95))
-        gap = max(2, int(0.0015 * _SW))
-        pad_x = settings.COLLECTION_BADGE_PAD_X
-        pad_y = settings.COLLECTION_BADGE_PAD_Y
-        bw = icon_size + gap + text_surf.get_width() + pad_x * 2
-        bh = max(icon_size, text_surf.get_height()) + pad_y * 2
-        bx = cx + cw - bw - 2
-        by = cy + 2
-        bg = pygame.Surface((bw, bh), pygame.SRCALPHA)
-        # High-contrast amber bg with a darker rim so it pops on any card art.
-        pygame.draw.rect(bg, (40, 28, 12, 235), bg.get_rect(), border_radius=4)
-        pygame.draw.rect(bg, (210, 170, 90, 230), bg.get_rect(), 1, border_radius=4)
-        self.window.blit(bg, (bx, by))
-        icon_x = bx + pad_x
-        icon_y = by + (bh - icon_size) // 2
-        self._draw_lock_icon(icon_x, icon_y, icon_size)
-        self.window.blit(text_surf,
-                         (icon_x + icon_size + gap,
-                          by + (bh - text_surf.get_height()) // 2))
-
-    def _draw_lock_icon(self, x, y, size):
-        """Draw a clear filled padlock glyph at (x, y) within `size` pixels."""
-        if size <= 0:
-            return
-        body_color = (250, 226, 150)
-        shackle_color = (235, 210, 130)
-        keyhole_color = (40, 28, 12)
-        # Body occupies the lower ~62% of the bounding box.
-        body_h = int(size * 0.62)
-        body_w = int(size * 0.78)
-        body_x = int(x + (size - body_w) / 2)
-        body_y = int(y + size - body_h)
-        body_rect = pygame.Rect(body_x, body_y, body_w, body_h)
-        radius = max(1, int(size * 0.10))
-        pygame.draw.rect(self.window, body_color, body_rect, border_radius=radius)
-        # Shackle: drawn as two short verticals + a top arc so it reads as a lock
-        # even at small sizes.
-        shackle_w = int(body_w * 0.62)
-        shackle_x = int(x + (size - shackle_w) / 2)
-        shackle_top = int(y + size * 0.04)
-        shackle_thick = max(2, int(size * 0.14))
-        shackle_h = body_y - shackle_top + shackle_thick // 2
-        # Top arc
-        arc_rect = pygame.Rect(shackle_x, shackle_top, shackle_w, shackle_h * 2)
-        pygame.draw.arc(self.window, shackle_color, arc_rect, 3.14159, 6.28318, shackle_thick)
-        # Side legs that extend down to the body
-        leg_top = shackle_top + shackle_h
-        pygame.draw.line(self.window, shackle_color,
-                         (shackle_x + shackle_thick // 2, leg_top),
-                         (shackle_x + shackle_thick // 2, body_y + 1), shackle_thick)
-        pygame.draw.line(self.window, shackle_color,
-                         (shackle_x + shackle_w - shackle_thick // 2, leg_top),
-                         (shackle_x + shackle_w - shackle_thick // 2, body_y + 1), shackle_thick)
-        # Keyhole
-        kh_r = max(1, int(body_w * 0.13))
-        kh_cx = body_rect.centerx
-        kh_cy = body_y + int(body_h * 0.42)
-        pygame.draw.circle(self.window, keyhole_color, (kh_cx, kh_cy), kh_r)
-        pygame.draw.rect(self.window, keyhole_color,
-                         pygame.Rect(kh_cx - max(1, kh_r // 2),
-                                     kh_cy,
-                                     max(2, kh_r),
-                                     max(2, int(body_h * 0.28))))
 
     def _draw_action_button(self, rect, text, enabled):
         """Draw one of the bottom action buttons."""
