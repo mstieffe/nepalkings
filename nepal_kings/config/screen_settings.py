@@ -96,9 +96,9 @@ MINI_CARD_HEIGHT = int(0.04 * SCREEN_HEIGHT * _UI_SCALE)
 # where the screen is already dense.
 TOUCH_HIT_PAD = int(0.017 * SCREEN_HEIGHT) if _IS_MOBILE else 0
 
-# Mobile visual size floors.  The 854x480 mobile canvas is usually CSS-scaled
-# down to roughly 0.9x in landscape browsers, so a ~50px internal control lands
-# close to the familiar 44px touch target once displayed.
-TOUCH_TARGET_MIN = max(44, int(0.105 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
+# Mobile visual size floors.  On small phones such as iPhone SE, the 854x480
+# mobile canvas is CSS-scaled down to about 0.78x in landscape, so the smallest
+# internal controls need a slightly higher floor to display near 44 CSS px.
+TOUCH_TARGET_MIN = max(58, int(0.105 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
 TOUCH_COMPACT_MIN = max(30, int(0.070 * SCREEN_HEIGHT)) if _IS_MOBILE else 0
 TOUCH_ICON_MIN = max(28, int(0.067 * SCREEN_HEIGHT)) if _IS_MOBILE else 0

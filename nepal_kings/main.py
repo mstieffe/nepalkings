@@ -56,6 +56,20 @@ _RESOLUTIONS = [
 ]
 
 _DEFAULT_W, _DEFAULT_H = 1920, 1080
+_WEB_ASPECT_RATIO = 16.0 / 9.0
+_MOBILE_WEB_RESOLUTIONS = [
+    (1280, 720, '1.4'),
+    (1024, 576, '1.5'),
+    ( 854, 480, '1.6'),
+]
+_DESKTOP_WEB_RESOLUTIONS = [
+    (1920, 1080),
+    (1600, 900),
+    (1366, 768),
+    (1280, 720),
+    (1024, 576),
+    ( 854, 480),
+]
 
 # ── Theme colours (match game palette) ─────────────────────────────
 _BG          = (30, 28, 24)
@@ -77,6 +91,33 @@ _SERVER_PRESETS = [
     ('http://localhost:5000',                     'Local (dev)'),
     ('https://nepalkings.pythonanywhere.com',     'PythonAnywhere'),
 ]
+
+
+# ── Web viewport helpers ───────────────────────────────────────────
+def _fit_16_9_rect(viewport_w, viewport_h):
+    """Return the largest 16:9 CSS rectangle inside the browser viewport."""
+    viewport_w = max(1, int(viewport_w))
+    viewport_h = max(1, int(viewport_h))
+    if viewport_w / viewport_h > _WEB_ASPECT_RATIO:
+        return int(viewport_h * _WEB_ASPECT_RATIO), viewport_h
+    return viewport_w, int(viewport_w / _WEB_ASPECT_RATIO)
+
+
+def _select_web_resolution(viewport_w, viewport_h, mobile=False):
+    """Return (canvas_w, canvas_h, ui_scale, fit_w, fit_h) for web startup."""
+    fit_w, fit_h = _fit_16_9_rect(viewport_w, viewport_h)
+    if mobile:
+        for resolution_w, resolution_h, ui_scale in _MOBILE_WEB_RESOLUTIONS:
+            if resolution_w <= fit_w and resolution_h <= fit_h:
+                return resolution_w, resolution_h, ui_scale, fit_w, fit_h
+        resolution_w, resolution_h, ui_scale = _MOBILE_WEB_RESOLUTIONS[-1]
+        return resolution_w, resolution_h, ui_scale, fit_w, fit_h
+
+    for resolution_w, resolution_h in _DESKTOP_WEB_RESOLUTIONS:
+        if resolution_w <= fit_w and resolution_h <= fit_h:
+            return resolution_w, resolution_h, None, fit_w, fit_h
+    resolution_w, resolution_h = _DESKTOP_WEB_RESOLUTIONS[-1]
+    return resolution_w, resolution_h, None, fit_w, fit_h
 
 
 # ── Persistence helpers ────────────────────────────────────────────
@@ -374,38 +415,11 @@ if __name__ == '__main__':
             })()""")
             _vw, _vh = int(_vp['w']), int(_vp['h'])
             _mobile = bool(_vp.get('mobile', False))
-            _ar = 16.0 / 9.0
-            # Fit a 16:9 rectangle inside the viewport
-            if _vw / max(_vh, 1) > _ar:
-                _fw, _fh = int(_vh * _ar), _vh
-            else:
-                _fw, _fh = _vw, int(_vw / _ar)
+            _w, _h, _ui_scale, _fw, _fh = _select_web_resolution(_vw, _vh, _mobile)
             if _mobile:
                 os.environ['NK_IS_MOBILE'] = '1'
-                # Tiered mobile resolutions with matching UI scale.
-                # Higher resolution for larger phones; scale keeps UI tappable.
-                _mobile_table = [
-                    (1280, 720, '1.4'),
-                    (1024, 576, '1.5'),
-                    ( 854, 480, '1.6'),
-                ]
-                for _rw, _rh, _us in _mobile_table:
-                    if _rw <= _fw and _rh <= _fh:
-                        _w, _h = _rw, _rh
-                        os.environ['NK_UI_SCALE'] = _us
-                        break
-                else:
-                    _w, _h = _mobile_table[-1][0], _mobile_table[-1][1]
-                    os.environ['NK_UI_SCALE'] = _mobile_table[-1][2]
-            else:
-                _table = [(1920, 1080), (1600, 900), (1366, 768),
-                          (1280, 720), (1024, 576), (854, 480)]
-                for _rw, _rh in _table:
-                    if _rw <= _fw and _rh <= _fh:
-                        _w, _h = _rw, _rh
-                        break
-                else:
-                    _w, _h = _table[-1]
+                if _ui_scale:
+                    os.environ['NK_UI_SCALE'] = _ui_scale
         except Exception:
             pass
 
