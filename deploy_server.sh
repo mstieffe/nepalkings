@@ -66,22 +66,38 @@ while IFS= read -r filepath; do
     [ -z "$filepath" ] && continue
     REMOTE_PATH="${PA_BASE}/${filepath}"
     UPLOAD_URL="https://${PA_HOST}/api/v0/user/${PA_USER}/files/path${REMOTE_PATH}"
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $CURL_TIMEOUT \
-        -X POST \
-        -H "Authorization: Token ${PA_API_TOKEN}" \
-        -F "content=@${filepath}" \
-        "$UPLOAD_URL")
+    HTTP_CODE=""
+    DELAY=3
+    for ATTEMPT in 1 2 3 4 5; do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" $CURL_TIMEOUT \
+            -X POST \
+            -H "Authorization: Token ${PA_API_TOKEN}" \
+            -F "content=@${filepath}" \
+            "$UPLOAD_URL")
+        if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            break
+        fi
+        if [ "$HTTP_CODE" = "429" ] && [ "$ATTEMPT" -lt 5 ]; then
+            echo "   ⏳ Rate limited: $filepath (retry $ATTEMPT/5 in ${DELAY}s)"
+            sleep "$DELAY"
+            DELAY=$((DELAY * 2))
+            continue
+        fi
+        break
+    done
     if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
         OK_COUNT=$((OK_COUNT + 1))
     else
         echo "   ⚠️  Failed: $filepath (HTTP $HTTP_CODE)"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
+    sleep 0.25
 done <<< "$FILES"
 
 echo "   Uploaded $OK_COUNT/$FILE_COUNT files"
 if [ "$FAIL_COUNT" -gt 0 ]; then
     echo "   ❌ $FAIL_COUNT files failed to upload"
+    exit 1
 fi
 
 # ── 3. Verify deploy ─────────────────────────────────────────────
