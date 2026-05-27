@@ -3064,6 +3064,7 @@ class TestTacticsHandRouting:
         round2_player = steps[2]
         assert round2_player.active is True
         assert round2_player.completed is False
+        assert round2_player.info_body == 'Pick a tactic to commit.'
 
     def test_collapsed_header_clears_stale_actions_and_exposes_withdraw(self):
         from config import settings
@@ -3124,6 +3125,54 @@ game.game_start_notification_checked = False
 screen._conquer_timeline_hover_open = False
 screen._conquer_timeline_last_layout_mode = None
 assert_next_button_clear('pre-battle inline')
+pygame.quit()
+''')
+
+    def test_mobile_battle_shop_ready_banner_clears_ready_button(self):
+        _run_mobile_geometry_check(r'''
+import pygame
+pygame.mouse.set_cursor = lambda *args, **kwargs: None
+from nepal_kings import Client
+
+client = Client()
+client._init_perf_conquer_fixture(lambda *_args, **_kwargs: None)
+client.state.screen = 'conquer_game'
+client.state.subscreen = 'battle_shop'
+screen = client.screens['conquer_game']
+game = client.state.game
+game.turn = True
+game.conquer_move_model = 'battle_move'
+game.battle_confirmed = True
+game.battle_moves_phase = True
+game.battle_turn_player_id = None
+game.in_battle_phase = False
+game.battle_round = 0
+for subscreen_obj in screen.subscreens.values():
+    if hasattr(subscreen_obj, 'game'):
+        subscreen_obj.game = game
+
+shop = screen.subscreens['battle_shop']
+shop.bought_moves = [
+    {'id': 901, 'card_id': 5901, 'round_index': 0,
+     'family_name': 'Call Military', 'suit': 'Hearts', 'rank': 'A',
+     'value': 3, 'card_type': 'main'},
+    {'id': 902, 'card_id': 5902, 'round_index': 1,
+     'family_name': 'Block', 'suit': 'Clubs', 'rank': 'Q',
+     'value': 2, 'card_type': 'main'},
+    {'id': 903, 'card_id': 5903, 'round_index': 2,
+     'family_name': 'Dagger', 'suit': 'Diamonds', 'rank': '9',
+     'value': 9, 'card_type': 'main'},
+]
+shop._loaded_game_key = (game.game_id, game.player_id)
+shop._loaded_bought_moves_key = shop._bought_moves_cache_key(game)
+
+screen.render()
+banner_rect = getattr(shop, '_phase_banner_rect', None)
+ready_rect = shop.ready_button.rect
+assert banner_rect is not None
+assert not banner_rect.colliderect(ready_rect), (
+    tuple(banner_rect), tuple(ready_rect))
+assert banner_rect.top >= ready_rect.bottom + 2 or banner_rect.bottom <= ready_rect.top - 2
 pygame.quit()
 ''')
 

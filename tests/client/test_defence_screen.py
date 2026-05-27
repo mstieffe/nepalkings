@@ -756,6 +756,7 @@ import pygame
 pygame.mouse.set_cursor = lambda *args, **kwargs: None
 pygame.init()
 pygame.display.set_mode((854, 480))
+from config import settings
 from game.screens.defence_screen import DefenceScreen
 
 state = SimpleNamespace(
@@ -814,6 +815,10 @@ for rect in controls:
         tuple(rect), tuple(screen._move_slots_rect))
 info = screen._info_button_rects['battle_plan']
 assert not screen._btn_auto_gamble_inc.colliderect(info)
+caption_x = screen._counter_spell_rect.right + int(0.012 * settings.SCREEN_WIDTH)
+caption_right = screen._counter_panel_rect.right - int(0.010 * settings.SCREEN_WIDTH)
+caption_w = max(0, caption_right - caption_x)
+assert screen._res_font.size('No counter')[0] <= caption_w
 pygame.quit()
 ''')
 

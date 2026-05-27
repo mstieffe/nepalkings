@@ -119,6 +119,7 @@ class BattleShopScreen(SubScreen):
         )
         self._config_ready_pressed = False
         self.phase_banner_font = settings.get_font(settings.BATTLE_SHOP_PHASE_BANNER_FONT_SIZE, bold=True)
+        self._phase_banner_rect = None
 
     def reset_state(self):
         """Reset all game-specific transient state.
@@ -1110,6 +1111,7 @@ class BattleShopScreen(SubScreen):
 
     def _draw_phase_banner(self):
         """Draw a banner indicating the mandatory battle-move selection phase."""
+        self._phase_banner_rect = None
         box_cx = self._sx(settings.BATTLE_SHOP_INFO_BOX_X + settings.BATTLE_SHOP_INFO_BOX_WIDTH // 2)
         count = len(self.bought_moves)
         max_m = settings.BATTLE_SHOP_MAX_MOVES
@@ -1129,11 +1131,40 @@ class BattleShopScreen(SubScreen):
             text = f"Select {remaining} more battle move{'s' if remaining > 1 else ''}!"
             color = settings.BATTLE_SHOP_PHASE_BANNER_COLOR
 
-        banner = self.phase_banner_font.render(text, True, color)
+        ready_visible = (
+            not self._waiting_for_opponent
+            and not self._is_locked
+            and count >= required
+            and self._can_ready_for_battle()
+        )
+        banner_font = self.phase_banner_font
+        if ready_visible and settings.TOUCH_TARGET_MIN > 0:
+            banner_font = settings.get_font(
+                max(11, int(settings.FS_SMALL * 0.92)),
+                bold=True,
+            )
+        banner = banner_font.render(text, True, color)
         banner_rect = banner.get_rect(
             centerx=box_cx,
             bottom=self._sy(settings.BATTLE_SHOP_INFO_BOX_Y + settings.BATTLE_SHOP_INFO_BOX_HEIGHT - int(0.02 * settings.SCREEN_HEIGHT)),
         )
+        ready_rect = getattr(getattr(self, 'ready_button', None), 'rect', None)
+        if ready_visible and ready_rect and banner_rect.colliderect(ready_rect):
+            gap = max(3, int(0.006 * settings.SCREEN_HEIGHT))
+            info_bottom = self._sy(
+                settings.BATTLE_SHOP_INFO_BOX_Y + settings.BATTLE_SHOP_INFO_BOX_HEIGHT
+            ) - gap
+            below = banner_rect.copy()
+            below.top = ready_rect.bottom + gap
+            if below.bottom <= info_bottom:
+                banner_rect = below
+            else:
+                above = banner_rect.copy()
+                above.bottom = ready_rect.top - gap
+                info_top = self._sy(settings.BATTLE_SHOP_INFO_BOX_Y) + gap
+                if above.top >= info_top:
+                    banner_rect = above
+        self._phase_banner_rect = banner_rect.copy()
         self.window.blit(banner, banner_rect)
 
     def _draw_bought_slots(self):

@@ -42,6 +42,7 @@ CONQUER_GAME_ALIASES = {
     "conquer_game_field": "field",
     "conquer_game_battle_shop": "battle_shop",
     "conquer_game_battle": "battle",
+    "conquer_game_battle_collapsed": "battle_collapsed",
 }
 
 KINGDOM_SCREEN_ALIASES = {
@@ -740,6 +741,8 @@ def populate_duel_game(client, screen, subscreen: str) -> None:
 
 
 def populate_conquer_game(client, subscreen: str):
+    requested_subscreen = subscreen
+    subscreen = "battle" if requested_subscreen == "battle_collapsed" else subscreen
     client._init_perf_conquer_fixture(progress_noop)
     client.state.screen = "conquer_game"
     client.state.subscreen = subscreen
@@ -814,6 +817,9 @@ def populate_conquer_game(client, subscreen: str):
                 battle.player_is_invader = True
                 battle._loaded_game_key = (game.game_id, game.player_id)
                 battle._load_battle_figures()
+        if requested_subscreen == "battle_collapsed":
+            screen._conquer_timeline_hover_open = False
+            screen._conquer_timeline_last_layout_mode = "battle"
     return screen
 
 
@@ -1157,7 +1163,8 @@ def main() -> int:
             "login,game_menu,duel_menu,new_game,load_game,rankings,"
             "settings,kingdom,kingdom_config,conquer,defence,collection,"
             "game_field,game_battle_shop,game_battle,"
-            "conquer_game_field,conquer_game_battle_shop,conquer_game_battle"
+            "conquer_game_field,conquer_game_battle_shop,conquer_game_battle,"
+            "conquer_game_battle_collapsed"
         ),
     )
     args = parser.parse_args()

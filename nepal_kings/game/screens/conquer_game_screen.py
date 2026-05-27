@@ -699,13 +699,13 @@ class ConquerGameScreen(GameScreen):
                 you_body = f'You played {you_label}.'
                 you_tone = 'good'
             elif you_active:
-                you_body = f'Round {idx + 1}: pick a tactic to commit your move.'
+                you_body = 'Pick a tactic to commit.'
                 you_tone = 'action'
             elif is_current:
-                you_body = f'Round {idx + 1}: waiting for {opponent_name}.'
+                you_body = f'Waiting for {opponent_name}.'
                 you_tone = 'waiting'
             else:
-                you_body = f'Round {idx + 1}: your move was not played.'
+                you_body = 'Your tactic was not played.'
                 you_tone = 'neutral'
             steps.append(TimelineStep(
                 kind=f'battle_round_{idx + 1}_player',
@@ -734,13 +734,13 @@ class ConquerGameScreen(GameScreen):
                 opp_body = f'{opponent_name} played {opp_label}.'
                 opp_tone = 'neutral'
             elif opp_active:
-                opp_body = f'Round {idx + 1}: {opponent_name} is choosing a tactic.'
+                opp_body = f'{opponent_name} is choosing a tactic.'
                 opp_tone = 'waiting'
             elif is_current:
-                opp_body = f'Round {idx + 1}: {opponent_name} will reply after you.'
+                opp_body = f'{opponent_name} will reply after you.'
                 opp_tone = 'neutral'
             else:
-                opp_body = f'Round {idx + 1}: {opponent_name} did not play.'
+                opp_body = f'{opponent_name} did not play.'
                 opp_tone = 'neutral'
             steps.append(TimelineStep(
                 kind=f'battle_round_{idx + 1}_opponent',

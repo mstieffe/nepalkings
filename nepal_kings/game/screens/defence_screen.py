@@ -2160,8 +2160,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
             pygame.draw.rect(empty_surf, (50, 45, 35, 180), empty_surf.get_rect(), border_radius=6)
             pygame.draw.rect(empty_surf, (100, 90, 70), empty_surf.get_rect(), 1, border_radius=6)
             self.window.blit(empty_surf, cs_rect.topleft)
+            empty_label = (
+                'No counter'
+                if settings.TOUCH_TARGET_MIN > 0
+                else 'No counter spell'
+            )
             lines = [
-                ('No counter spell', self._res_font, (140, 130, 110)),
+                (empty_label, self._res_font, (140, 130, 110)),
                 ('Optional', self._res_font, (110, 105, 95)),
             ]
             text_h = sum(font.get_height() for _, font, _ in lines) + 2
