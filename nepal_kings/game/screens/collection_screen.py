@@ -3,7 +3,11 @@
 import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
-from game.screens._menu_base import MenuScreenMixin
+from game.screens._menu_base import (
+    MenuScreenMixin,
+    menu_chrome_safe_top,
+    menu_chrome_safe_width,
+)
 from game.components.floating_text import FloatingText, FloatingTextLayer
 from game.components.cards.card_img import CardImg
 from game.components.dialogue_box import DialogueBox
@@ -20,8 +24,8 @@ _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 # ── Overall box ─────────────────────────────────────────────────────
 _BOX_PAD    = int(0.025 * _SH)
 _BOX_X      = int(0.04 * _SW)
-_BOX_Y      = int(0.10 * _SH)
-_BOX_W      = int(0.87 * _SW)
+_BOX_Y      = menu_chrome_safe_top(int(0.10 * _SH))
+_BOX_W      = menu_chrome_safe_width(_BOX_X, int(0.87 * _SW))
 _BOX_BOTTOM = int(0.92 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
 
@@ -748,16 +752,20 @@ class CollectionScreen(MenuScreenMixin, Screen):
             settings.COLLECTION_PACK_PANEL_TITLE_CLR)
         self.window.blit(title, (panel.x + pad_x, panel.y + pad_y))
 
-        if self._mode is None:
-            hint_text = 'Click a card to view its uses'
-        elif self._mode == 'sell':
-            hint_text = 'Click a card to sell copies'
-        else:
-            hint_text = 'Click a card to convert copies'
-        hint = self._pack_detail_font.render(
-            hint_text, True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
-        self.window.blit(hint, (panel.x + pad_x,
-                                panel.y + pad_y + title.get_height() + int(0.004 * _SH)))
+        if settings.TOUCH_TARGET_MIN <= 0:
+            if self._mode is None:
+                hint_text = 'Click a card to view its uses'
+            elif self._mode == 'sell':
+                hint_text = 'Click a card to sell copies'
+            else:
+                hint_text = 'Click a card to convert copies'
+            hint = self._pack_detail_font.render(
+                hint_text, True, settings.COLLECTION_PACK_PANEL_TEXT_CLR)
+            self.window.blit(
+                hint,
+                (panel.x + pad_x,
+                 panel.y + pad_y + title.get_height() + int(0.004 * _SH)),
+            )
 
         for mode_key, rect in self._mode_btn_rects.items():
             label = settings.COLLECTION_MODE_BTN_TEXT[mode_key]

@@ -121,7 +121,8 @@ DUEL_HINT_IDS = (
     'field', 'build', 'cast_spell', 'change_cards', 'battle_shop', 'battle',
     'scoreboard', 'turn_indicator', 'ceasefire_indicator', 'role_indicator',
     'resource_panel', 'battle_shop_select_moves', 'battle_shop_ready',
-    'battle_move_panel', 'battle_move_actions',
+    'battle_move_panel', 'battle_move_actions', 'battle_figure_diff',
+    'battle_rounds_panel', 'battle_total_diff',
 )
 MENU_HINT_IDS = (
     'user_items', 'duel', 'kingdom', 'collection', 'rankings', 'home', 'guide',

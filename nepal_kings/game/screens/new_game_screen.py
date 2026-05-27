@@ -3,7 +3,12 @@
 import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
-from game.screens._menu_base import MenuScreenMixin, ListButton
+from game.screens._menu_base import (
+    MenuScreenMixin,
+    ListButton,
+    menu_chrome_safe_top,
+    menu_chrome_safe_width,
+)
 from game.core.game import Game
 from game.core.screen_routing import gameplay_screen_for
 from config import settings
@@ -47,8 +52,8 @@ _RECV_TAG_TXT = (140, 210, 170)
 # ── Overall box ─────────────────────────────────────────────────────
 _BOX_PAD    = int(0.025 * _SH)
 _BOX_X      = int(0.04 * _SW)
-_BOX_Y      = int(0.12 * _SH)
-_BOX_W      = int(0.87 * _SW)
+_BOX_Y      = menu_chrome_safe_top(int(0.12 * _SH))
+_BOX_W      = menu_chrome_safe_width(_BOX_X, int(0.87 * _SW))
 _BOX_BOTTOM = int(0.90 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
 

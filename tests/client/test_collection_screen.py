@@ -154,6 +154,14 @@ class TestCollectionSettings:
         assert COLLECTION_CARD_W > 0
         assert COLLECTION_CARD_H > 0
 
+    def test_desktop_card_dimensions_keep_legacy_ratios(self):
+        from config.collection_settings import COLLECTION_CARD_H, COLLECTION_CARD_GAP_Y
+        from config.screen_settings import SCREEN_HEIGHT, _IS_MOBILE
+        if _IS_MOBILE:
+            pytest.skip('desktop ratio guard only applies outside mobile web')
+        assert COLLECTION_CARD_H == int(0.120 * SCREEN_HEIGHT)
+        assert COLLECTION_CARD_GAP_Y == int(0.010 * SCREEN_HEIGHT)
+
     def test_panel_bounds(self):
         from config.collection_settings import (
             COLLECTION_PANEL_X, COLLECTION_PANEL_Y,
@@ -191,6 +199,88 @@ class TestCollectionSettings:
         from config.collection_settings import COLLECTION_PACK_PREVIEWS
         assert set(COLLECTION_PACK_PREVIEWS['main']) == {'title'}
         assert set(COLLECTION_PACK_PREVIEWS['side']) == {'title'}
+
+    def test_mobile_collection_layout_clears_chrome_and_fits_grid(self):
+        """iPhone SE mobile canvas keeps the collection panel out of HUD chrome."""
+        import os
+        from pathlib import Path
+        import subprocess
+        import sys
+
+        root = Path(__file__).resolve().parents[2]
+        app_dir = root / 'nepal_kings'
+        env = os.environ.copy()
+        env.update({
+            'SDL_VIDEODRIVER': 'dummy',
+            'SDL_AUDIODRIVER': 'dummy',
+            'NK_SCREEN_WIDTH': '854',
+            'NK_SCREEN_HEIGHT': '480',
+            'NK_UI_SCALE': '1.6',
+            'NK_IS_MOBILE': '1',
+            'PYTHONPATH': str(app_dir),
+        })
+        code = r'''
+import pygame
+pygame.init()
+pygame.display.set_mode((1, 1))
+from config import settings
+from game.screens import collection_screen
+
+hud_bottom = (
+    settings.GAME_MENU_GOLD_MARGIN_Y
+    + 2 * settings.GAME_MENU_GOLD_BOX_PAD_Y
+    + max(settings.GAME_MENU_GOLD_ICON_SZ, settings.GAME_MENU_GOLD_FONT_SIZE)
+)
+rail_left = (
+    settings.SCREEN_WIDTH
+    - settings.GAME_MENU_ICON_RIGHT_MARGIN
+    - settings.GAME_MENU_ICON_STONE_SZ
+)
+assert collection_screen._BOX_Y >= hud_bottom + 6, (
+    collection_screen._BOX_Y, hud_bottom)
+assert collection_screen._BOX_X + collection_screen._BOX_W <= rail_left - 8, (
+    collection_screen._BOX_X + collection_screen._BOX_W, rail_left)
+
+title_h = settings.get_font(
+    settings.COLLECTION_TITLE_FONT_SIZE, bold=True).render(
+        'Collection', True, settings.COLLECTION_TITLE_CLR).get_height()
+pack_y = (
+    collection_screen._BOX_BOTTOM
+    - collection_screen._BOX_PAD
+    - settings.COLLECTION_PACK_PANEL_H
+)
+stats_top = (
+    collection_screen._BOX_Y
+    + collection_screen._BOX_PAD
+    + title_h
+    + int(0.012 * settings.SCREEN_HEIGHT)
+)
+panel_top = (
+    stats_top
+    + settings.COLLECTION_STATS_STRIP_H
+    + int(0.012 * settings.SCREEN_HEIGHT)
+)
+panel_bottom = pack_y - int(0.014 * settings.SCREEN_HEIGHT)
+panel_h = panel_bottom - panel_top
+grid_h = (
+    settings.COLLECTION_PANEL_PAD_Y
+    + int(0.035 * settings.SCREEN_HEIGHT)
+    + 4 * settings.COLLECTION_CARD_H
+    + 3 * settings.COLLECTION_CARD_GAP_Y
+    + 2
+)
+assert grid_h <= panel_h, (grid_h, panel_h)
+'''
+        result = subprocess.run(
+            [sys.executable, '-c', code],
+            cwd=app_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 class TestBoosterRevealLayout:

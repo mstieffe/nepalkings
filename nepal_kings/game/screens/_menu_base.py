@@ -171,6 +171,38 @@ class ListButton:
 _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 
 
+def menu_chrome_safe_top(default_y, extra_gap=None):
+    """Return a y-position that clears the persistent top-left item strip."""
+    if settings.TOUCH_TARGET_MIN <= 0:
+        return int(default_y)
+    row_h = max(settings.GAME_MENU_GOLD_ICON_SZ,
+                settings.GAME_MENU_GOLD_FONT_SIZE)
+    hud_bottom = (
+        settings.GAME_MENU_GOLD_MARGIN_Y
+        + 2 * settings.GAME_MENU_GOLD_BOX_PAD_Y
+        + row_h
+    )
+    gap = extra_gap if extra_gap is not None else max(6, int(0.012 * _SH))
+    return max(int(default_y), int(hud_bottom + gap))
+
+
+def menu_chrome_safe_width(x, default_w, extra_gap=None):
+    """Return a panel width that clears the persistent right-side icon rail."""
+    if settings.TOUCH_TARGET_MIN <= 0:
+        return int(default_w)
+    gap = extra_gap if extra_gap is not None else max(8, int(0.012 * _SW))
+    rail_left = (
+        _SW
+        - settings.GAME_MENU_ICON_RIGHT_MARGIN
+        - settings.GAME_MENU_ICON_STONE_SZ
+    )
+    max_right = rail_left - gap
+    min_w = max(1, int(0.50 * _SW))
+    if max_right <= x + min_w:
+        return int(default_w)
+    return max(1, min(int(default_w), int(max_right - x)))
+
+
 class MenuScreenMixin:
     """Mix into any Screen subclass to get the shared menu chrome.
 
@@ -246,6 +278,7 @@ class MenuScreenMixin:
         self._user_item_display_rect = pygame.Rect(0, 0, 0, 0)
         self._menu_coach_buttons = []
         self._menu_coach_step = None
+        self._menu_coach_pressed_button_action = None
         self._menu_coach_font = settings.get_font(max(14, int(0.018 * _SH)))
         self._menu_coach_title_font = settings.get_font(max(16, int(0.024 * _SH)), bold=True)
         self._menu_chrome_username = self._current_menu_username()
@@ -1075,6 +1108,18 @@ class MenuScreenMixin:
                 continue
             if event.type not in block_types:
                 continue
+            if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
+                pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                if action != 'click':
+                    self._menu_coach_pressed_button_action = None
+                    for rect, button_action in list(self._menu_coach_buttons):
+                        if rect.collidepoint(pos):
+                            self._menu_coach_pressed_button_action = button_action
+                            break
+                    return True
+                if any(rect.collidepoint(pos) for rect in target_rects):
+                    return False
+                return True
             if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
                 if action == 'click':
@@ -1083,19 +1128,19 @@ class MenuScreenMixin:
                             self._mark_menu_coach_seen(step.get('id'))
                         return False
                     return True
+                pressed_action = getattr(self, '_menu_coach_pressed_button_action', None)
+                self._menu_coach_pressed_button_action = None
                 for rect, button_action in list(self._menu_coach_buttons):
                     if not rect.collidepoint(pos):
                         continue
+                    if pressed_action and pressed_action != button_action:
+                        return True
                     kind, step_id = button_action
                     if kind == 'next':
                         self._mark_menu_coach_seen(step_id)
                         self._after_menu_coach_next(step_id)
                     return True
                 return True
-            if action == 'click' and event.type == pygame.MOUSEBUTTONDOWN:
-                pos = getattr(event, 'pos', pygame.mouse.get_pos())
-                if any(rect.collidepoint(pos) for rect in target_rects):
-                    return False
             return True
         return False
 

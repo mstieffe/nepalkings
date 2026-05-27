@@ -137,6 +137,7 @@ class GameScreen(Screen):
         self._duel_coach_title_font = settings.get_font(max(13, int(settings.FS_SMALL * 1.05)), bold=True)
         self._duel_coach_buttons = []
         self._duel_coach_step = None
+        self._duel_coach_pressed_button_action = None
 
     def on_enter(self):
         """Mark this screen as the active game parent for shared subscreens."""
@@ -5100,6 +5101,12 @@ class GameScreen(Screen):
             {'id': 'battle_move_actions', 'rects': self._duel_battle_move_action_rects(), 'subscreen': 'battle', 'title': 'Move Actions',
              'body': 'Use plays the move. Gamble sacrifices it for 2 random moves. Daggers can combine with same-colour daggers, and Double Daggers can dismantle.',
              'requires_seen': 'battle_move_panel'},
+            {'id': 'battle_figure_diff', 'rects': self._duel_battle_figure_diff_rects(), 'subscreen': 'battle', 'title': 'Figure Difference',
+             'body': 'This middle value compares the battling figures before battle moves are added. Positive is good for you; negative favours the opponent.'},
+            {'id': 'battle_rounds_panel', 'rects': self._duel_battle_rounds_panel_rects(), 'subscreen': 'battle', 'title': 'Battle Rounds',
+             'body': 'The rounds panel records the three battle move exchanges. Each column shows your move, the round difference, and the opponent move.'},
+            {'id': 'battle_total_diff', 'rects': self._duel_battle_total_diff_rects(), 'subscreen': 'battle', 'title': 'Total Difference',
+             'body': 'The total adds the figure difference and all finished round differences. At the end of battle, this decides who wins the fight.'},
         ]
         for step in steps:
             if step['id'] in seen:
@@ -5126,6 +5133,16 @@ class GameScreen(Screen):
         rect = getattr(panel, 'rect', None)
         return rect.copy() if rect else None
 
+    @staticmethod
+    def _duel_combined_bounds(rects):
+        usable = [pygame.Rect(rect) for rect in rects if rect]
+        if not usable:
+            return None
+        bounds = usable[0].copy()
+        for rect in usable[1:]:
+            bounds.union_ip(rect)
+        return bounds
+
     def _duel_active_subscreen(self, name):
         if getattr(self.state, 'subscreen', None) != name:
             return None
@@ -5151,7 +5168,8 @@ class GameScreen(Screen):
             caption_height = caption.get_height() if caption else 0
             height = icon_height + caption_height + 24
             rects.append(pygame.Rect(x - width // 2, y - icon_height // 2 - 4, width, height))
-        return rects
+        bounds = self._duel_combined_bounds(rects)
+        return [bounds] if bounds else []
 
     def _duel_battle_shop_slot_rects(self, shop):
         sw = settings.BATTLE_SHOP_SLOT_WIDTH
@@ -5168,7 +5186,8 @@ class GameScreen(Screen):
             cx = sx + sw // 2
             cy = sy + sh // 2
             rects.append(pygame.Rect(cx - sw, cy - sh, sw * 2, sh * 2))
-        return rects
+        bounds = self._duel_combined_bounds(rects)
+        return [bounds] if bounds else []
 
     def _duel_battle_shop_ready_rects(self):
         game = getattr(self.state, 'game', None)
@@ -5177,11 +5196,7 @@ class GameScreen(Screen):
         shop = self._duel_active_subscreen('battle_shop')
         if not shop:
             return []
-        rects = self._duel_battle_shop_slot_rects(shop)
-        ready_rect = getattr(getattr(shop, 'ready_button', None), 'rect', None)
-        if ready_rect:
-            rects.append(ready_rect.copy())
-        return rects
+        return self._duel_battle_shop_slot_rects(shop)
 
     def _duel_battle_move_panel_rects(self):
         game = getattr(self.state, 'game', None)
@@ -5190,18 +5205,6 @@ class GameScreen(Screen):
         battle = self._duel_active_subscreen('battle')
         if not battle or getattr(battle, 'battle_move_detail_box', None):
             return []
-        moves = [
-            (i, move) for i, move in enumerate(getattr(battle, 'player_moves', []) or [])
-            if not battle._is_move_used(i)
-        ]
-        icon_size = settings.BATTLE_PANEL_ICON_SIZE
-        rects = []
-        for slot, _move in enumerate(moves[:settings.BATTLE_SHOP_MAX_MOVES]):
-            cx, cy = battle._battle_panel_icon_center(slot)
-            rects.append(pygame.Rect(cx - icon_size // 2 - 6, cy - icon_size // 2 - 6,
-                                     icon_size + 12, icon_size + 12))
-        if rects:
-            return rects
         panel_rect = battle._battle_panel_rect() if hasattr(battle, '_battle_panel_rect') else None
         return [panel_rect] if panel_rect else []
 
@@ -5219,9 +5222,50 @@ class GameScreen(Screen):
             if rect:
                 rects.append(rect.copy())
         if rects:
-            return rects
+            bounds = self._duel_combined_bounds(rects)
+            return [bounds] if bounds else []
         box_rect = getattr(detail_box, 'border_rect', None) or getattr(detail_box, 'rect', None)
         return [box_rect.copy()] if box_rect else []
+
+    def _duel_battle_figure_diff_rects(self):
+        game = getattr(self.state, 'game', None)
+        if not game or not getattr(game, 'battle_confirmed', False):
+            return []
+        battle = self._duel_active_subscreen('battle')
+        if not battle or not hasattr(battle, '_figures_panel_rect'):
+            return []
+        panel = battle._figures_panel_rect()
+        gap = int(0.005 * settings.SCREEN_HEIGHT)
+        diff_margin_top = int(0.03 * settings.SCREEN_HEIGHT)
+        diff_margin_bot = int(0.01 * settings.SCREEN_HEIGHT)
+        diff_h_total = diff_margin_top + settings.FIGURES_DIFF_H + diff_margin_bot
+        panel_mid = panel.y + panel.h // 2
+        diff_area_top = panel_mid - diff_h_total // 2
+        diff_area_bot = panel_mid + diff_h_total // 2
+        return [pygame.Rect(panel.x, diff_area_top - gap, panel.w, diff_area_bot - diff_area_top + 2 * gap)]
+
+    def _duel_battle_rounds_panel_rects(self):
+        game = getattr(self.state, 'game', None)
+        if not game or not getattr(game, 'battle_confirmed', False):
+            return []
+        battle = self._duel_active_subscreen('battle')
+        if not battle or not hasattr(battle, '_rounds_panel_rect'):
+            return []
+        return [battle._rounds_panel_rect()]
+
+    def _duel_battle_total_diff_rects(self):
+        game = getattr(self.state, 'game', None)
+        if not game or not getattr(game, 'battle_confirmed', False):
+            return []
+        battle = self._duel_active_subscreen('battle')
+        if not battle:
+            return []
+        cx = battle._sx(settings.TOTAL_CIRCLE_X) if hasattr(battle, '_sx') else settings.TOTAL_CIRCLE_X
+        cy = battle._sy(settings.TOTAL_CIRCLE_Y) if hasattr(battle, '_sy') else settings.TOTAL_CIRCLE_Y
+        radius = settings.TOTAL_CIRCLE_RADIUS
+        pad = max(8, int(radius * 0.18))
+        return [pygame.Rect(cx - radius - pad, cy - radius - pad,
+                            2 * (radius + pad), 2 * (radius + pad))]
 
     def _duel_step_rects(self, step):
         if not step:
@@ -5275,6 +5319,7 @@ class GameScreen(Screen):
             'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
             'role_indicator', 'resource_panel', 'battle_shop_select_moves',
             'battle_shop_ready', 'battle_move_panel', 'battle_move_actions',
+            'battle_figure_diff', 'battle_rounds_panel', 'battle_total_diff',
         ):
             self._mark_duel_coach_seen(step_id)
 
@@ -5311,13 +5356,12 @@ class GameScreen(Screen):
         self._duel_coach_step = step
         if not step:
             return
-        target_rects = self._duel_step_rects(step)
-        if not target_rects:
+        target = self._duel_target_bounds(step)
+        if not target:
             return
         pulse = 2 + int((pygame.time.get_ticks() // 280) % 2)
-        for target_rect in target_rects:
-            pygame.draw.rect(self.window, (250, 218, 92), target_rect.inflate(14, 14), pulse, border_radius=8)
-        target = self._duel_target_bounds(step).inflate(14, 14)
+        target = target.inflate(14, 14)
+        pygame.draw.rect(self.window, (250, 218, 92), target, pulse, border_radius=8)
 
         card_w = min(390, max(330, int(0.31 * settings.SCREEN_WIDTH)))
         body_lines = self._wrap_duel_coach_lines(step['body'], card_w - 24)
@@ -5370,11 +5414,23 @@ class GameScreen(Screen):
                 continue
             if event.type not in block_types:
                 continue
+            if event.type == MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
+                pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                self._duel_coach_pressed_button_action = None
+                for rect, action in list(self._duel_coach_buttons):
+                    if rect.collidepoint(pos):
+                        self._duel_coach_pressed_button_action = action
+                        break
+                return True
             if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                pressed_action = getattr(self, '_duel_coach_pressed_button_action', None)
+                self._duel_coach_pressed_button_action = None
                 for rect, action in list(self._duel_coach_buttons):
                     if not rect.collidepoint(pos):
                         continue
+                    if pressed_action and pressed_action != action:
+                        return True
                     kind, step_id = action
                     if kind == 'next':
                         self._mark_duel_coach_seen(step_id)
@@ -5579,8 +5635,11 @@ class GameScreen(Screen):
         
         if block_subscreen_change:
             saved_subscreen = self.state.subscreen
-        
-        super().update()
+
+        coach_blocks_button_updates = self._duel_coach_has_pending_step()
+
+        if not coach_blocks_button_updates:
+            super().update()
         
         if block_subscreen_change:
             self.state.subscreen = saved_subscreen
@@ -5590,7 +5649,7 @@ class GameScreen(Screen):
             return
 
         # Handle click on locked battle button
-        if self.battle_button.locked and self.battle_button.locked_clicked:
+        if not coach_blocks_button_updates and self.battle_button.locked and self.battle_button.locked_clicked:
             self.battle_button.locked_clicked = False
             if not self.dialogue_box:
                 self.queue_or_show_notification({
@@ -5604,6 +5663,9 @@ class GameScreen(Screen):
         if current_time - self.last_update_time >= self.update_interval:
             self.last_update_time = current_time
             self.update_game()
+
+        if coach_blocks_button_updates:
+            return
 
         # Lightweight per-frame hover detection for card hands
         self.main_hand.update_hover()

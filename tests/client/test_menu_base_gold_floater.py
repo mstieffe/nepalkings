@@ -148,6 +148,96 @@ def test_current_gold_amount_handles_missing_or_invalid_values():
     assert screen._current_gold_amount() == 0
 
 
+def test_mobile_safe_top_clears_resource_strip(monkeypatch):
+    from game.screens import _menu_base
+
+    monkeypatch.setattr(_menu_base, '_SH', 480)
+    monkeypatch.setattr(_menu_base.settings, 'TOUCH_TARGET_MIN', 58)
+    monkeypatch.setattr(_menu_base.settings, 'GAME_MENU_GOLD_MARGIN_Y', 12)
+    monkeypatch.setattr(_menu_base.settings, 'GAME_MENU_GOLD_BOX_PAD_Y', 3)
+    monkeypatch.setattr(_menu_base.settings, 'GAME_MENU_GOLD_ICON_SZ', 34)
+    monkeypatch.setattr(_menu_base.settings, 'GAME_MENU_GOLD_FONT_SIZE', 27)
+
+    assert _menu_base.menu_chrome_safe_top(48, extra_gap=6) == 58
+    assert _menu_base.menu_chrome_safe_top(72, extra_gap=6) == 72
+
+
+def test_mobile_safe_width_clears_right_icon_rail(monkeypatch):
+    from game.screens import _menu_base
+
+    monkeypatch.setattr(_menu_base, '_SW', 854)
+    monkeypatch.setattr(_menu_base.settings, 'TOUCH_TARGET_MIN', 58)
+    monkeypatch.setattr(_menu_base.settings, 'GAME_MENU_ICON_RIGHT_MARGIN', 3)
+    monkeypatch.setattr(_menu_base.settings, 'GAME_MENU_ICON_STONE_SZ', 88)
+
+    assert _menu_base.menu_chrome_safe_width(34, 742, extra_gap=10) == 719
+    assert _menu_base.menu_chrome_safe_width(170, 512, extra_gap=10) == 512
+
+
+def test_mobile_subscreen_boxes_clear_persistent_menu_chrome():
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    app_dir = root / 'nepal_kings'
+    env = os.environ.copy()
+    env.update({
+        'SDL_VIDEODRIVER': 'dummy',
+        'SDL_AUDIODRIVER': 'dummy',
+        'NK_SCREEN_WIDTH': '854',
+        'NK_SCREEN_HEIGHT': '480',
+        'NK_UI_SCALE': '1.6',
+        'NK_IS_MOBILE': '1',
+        'PYTHONPATH': str(app_dir),
+    })
+    code = r'''
+import importlib
+import pygame
+pygame.init()
+pygame.display.set_mode((1, 1))
+from config import settings
+
+hud_bottom = (
+    settings.GAME_MENU_GOLD_MARGIN_Y
+    + 2 * settings.GAME_MENU_GOLD_BOX_PAD_Y
+    + max(settings.GAME_MENU_GOLD_ICON_SZ, settings.GAME_MENU_GOLD_FONT_SIZE)
+)
+rail_left = (
+    settings.SCREEN_WIDTH
+    - settings.GAME_MENU_ICON_RIGHT_MARGIN
+    - settings.GAME_MENU_ICON_STONE_SZ
+)
+modules = [
+    'game.screens.collection_screen',
+    'game.screens.ranking_screen',
+    'game.screens.load_game_screen',
+    'game.screens.new_game_screen',
+    'game.screens.settings_screen',
+    'game.screens.kingdom_screen',
+    'game.screens.kingdom_config_screen',
+    'game.screens.conquer_screen',
+    'game.screens.defence_screen',
+]
+for name in modules:
+    mod = importlib.import_module(name)
+    assert mod._BOX_Y >= hud_bottom + 6, (name, mod._BOX_Y, hud_bottom)
+    assert mod._BOX_X + mod._BOX_W <= rail_left - 8, (
+        name, mod._BOX_X + mod._BOX_W, rail_left)
+'''
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=app_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_onboarding_payload_preserves_local_hint_progress():
     screen, _ = _screen_with_gold(100)
     screen.state.user_dict['onboarding'] = {
@@ -323,6 +413,10 @@ def test_menu_coach_next_step_blocks_everything_except_next():
 
     target_click = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(120, 120))
     assert screen._handle_menu_coach_events([target_click], step) is True
+    assert marked == []
+
+    next_down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(30, 20))
+    assert screen._handle_menu_coach_events([next_down], step) is True
     assert marked == []
 
     next_click = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(30, 20))

@@ -200,9 +200,10 @@ class TestGameScreenDialogueFlow:
         )
         base_button = SimpleNamespace(rect_hit=pygame.Rect(10, 10, 20, 20))
         family_button = SimpleNamespace(x=120, y=90)
+        second_family_button = SimpleNamespace(x=220, y=90)
         shop = SimpleNamespace(
             dialogue_box=None,
-            move_family_buttons=[family_button],
+            move_family_buttons=[family_button, second_family_button],
             ready_button=SimpleNamespace(rect=pygame.Rect(250, 260, 80, 32)),
             _sx=lambda value: value,
             _sy=lambda value: value,
@@ -241,7 +242,113 @@ class TestGameScreenDialogueFlow:
         step = GameScreen._current_duel_coach_step(game_screen)
 
         assert step['id'] == 'battle_shop_select_moves'
-        assert step['rects']
+        assert len(step['rects']) == 1
+        assert step['rects'][0].left < family_button.x < step['rects'][0].right
+        assert step['rects'][0].left < second_family_button.x < step['rects'][0].right
+
+    def test_first_battle_screen_coach_explains_move_and_scoring_panels(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game = SimpleNamespace(
+            mode='duel',
+            turn=True,
+            game_over=False,
+            pending_game_over=False,
+            pending_forced_advance=False,
+            pending_defender_selection=False,
+            battle_moves_phase=False,
+            battle_confirmed=True,
+            is_battle_active=lambda: True,
+        )
+        button = SimpleNamespace(rect_hit=pygame.Rect(10, 10, 20, 20))
+        battle_panel = pygame.Rect(40, 220, 160, 90)
+        figures_panel = pygame.Rect(220, 110, 180, 280)
+        rounds_panel = pygame.Rect(420, 120, 220, 260)
+        battle = SimpleNamespace(
+            dialogue_box=None,
+            battle_move_detail_box=None,
+            _battle_panel_rect=lambda: battle_panel,
+            _figures_panel_rect=lambda: figures_panel,
+            _rounds_panel_rect=lambda: rounds_panel,
+            _sx=lambda value: value,
+            _sy=lambda value: value,
+        )
+        seen_before_battle = [
+            'field', 'build', 'cast_spell', 'change_cards', 'battle_shop',
+            'battle', 'scoreboard', 'turn_indicator', 'ceasefire_indicator',
+            'role_indicator', 'resource_panel', 'battle_shop_select_moves',
+            'battle_shop_ready',
+        ]
+        game_screen.state = SimpleNamespace(
+            game=game,
+            subscreen='battle',
+            user_dict={'onboarding': {
+                'duel_hints_seen': list(seen_before_battle),
+                'completed_steps': [],
+            }},
+        )
+        game_screen.dialogue_box = None
+        game_screen.pending_notifications = []
+        game_screen.subscreens = {'battle': battle}
+        game_screen.counter_spell_selector = None
+        game_screen.need_to_respond_to_spell = False
+        game_screen.waiting_for_counter_response = False
+        game_screen.main_hand = SimpleNamespace(buttons=[])
+        game_screen.side_hand = SimpleNamespace(buttons=[])
+        game_screen.field_button = button
+        game_screen.build_button = button
+        game_screen.cast_spell_button = button
+        game_screen.battle_shop_button = button
+        game_screen.battle_button = button
+        game_screen.turn_button = button
+        game_screen.ceasefire_button = button
+        game_screen.invader_button = button
+        game_screen.scoreboard_scroll = SimpleNamespace(rect=pygame.Rect(30, 30, 80, 40))
+        game_screen.resource_scroll = SimpleNamespace(rect=pygame.Rect(30, 80, 80, 40))
+
+        step = GameScreen._current_duel_coach_step(game_screen)
+        assert step['id'] == 'battle_move_panel'
+        assert step['rects'] == [battle_panel]
+
+        game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_move_panel')
+        step = GameScreen._current_duel_coach_step(game_screen)
+        assert step['id'] == 'battle_figure_diff'
+        assert len(step['rects']) == 1
+        assert step['rects'][0].colliderect(figures_panel)
+
+        game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_figure_diff')
+        step = GameScreen._current_duel_coach_step(game_screen)
+        assert step['id'] == 'battle_rounds_panel'
+        assert step['rects'] == [rounds_panel]
+
+        game_screen.state.user_dict['onboarding']['duel_hints_seen'].append('battle_rounds_panel')
+        step = GameScreen._current_duel_coach_step(game_screen)
+        assert step['id'] == 'battle_total_diff'
+        assert len(step['rects']) == 1
+
+    def test_duel_coach_next_button_consumes_press_release(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        marked = []
+        opened = []
+        game_screen._duel_coach_step = {'id': 'battle_move_panel'}
+        game_screen._duel_coach_buttons = [(pygame.Rect(10, 10, 80, 32), ('next', 'battle_move_panel'))]
+        game_screen._mark_duel_coach_seen = lambda step_id: marked.append(step_id)
+        game_screen._current_duel_coach_step = lambda: None
+        game_screen._open_duel_coach_step_subscreen = lambda step: opened.append(step)
+
+        down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(20, 20))
+        up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(20, 20))
+
+        assert GameScreen._handle_duel_coach_events(game_screen, [down]) is True
+        assert marked == []
+        assert GameScreen._handle_duel_coach_events(game_screen, [up]) is True
+        assert marked == ['battle_move_panel']
+        assert opened == [None]
 
     def test_ceasefire_active_notification_is_suppressed_during_duel_coach(self):
         import pygame

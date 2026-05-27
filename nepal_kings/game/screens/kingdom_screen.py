@@ -5,7 +5,11 @@
 import pygame
 from pygame.locals import *
 from game.screens.screen import Screen
-from game.screens._menu_base import MenuScreenMixin
+from game.screens._menu_base import (
+    MenuScreenMixin,
+    menu_chrome_safe_top,
+    menu_chrome_safe_width,
+)
 from game.components.hex_map import HexMap
 from game.components.land_detail_box import LandDetailBox
 from game.components.leaderboard_panel import LeaderboardPanel
@@ -24,8 +28,8 @@ _SW, _SH = settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT
 # ── Overall box ─────────────────────────────────────────────────────
 _BOX_PAD    = int(0.020 * _SH)
 _BOX_X      = int(0.04 * _SW)
-_BOX_Y      = int(0.10 * _SH)
-_BOX_W      = int(0.87 * _SW)
+_BOX_Y      = menu_chrome_safe_top(int(0.10 * _SH))
+_BOX_W      = menu_chrome_safe_width(_BOX_X, int(0.87 * _SW))
 _BOX_BOTTOM = int(0.92 * _SH)
 _BOX_H      = _BOX_BOTTOM - _BOX_Y
 

@@ -1,13 +1,13 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
-from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE
+from config.screen_settings import SCREEN_WIDTH, SCREEN_HEIGHT, _UI_SCALE, _IS_MOBILE
 from config.font_settings import FS_BODY, FS_HEADING, FS_SUBTITLE
 
 # ── Card grid layout ────────────────────────────────────────────────
 COLLECTION_CARD_W         = int(0.05 * SCREEN_WIDTH)
-COLLECTION_CARD_H         = int(0.120 * SCREEN_HEIGHT)
+COLLECTION_CARD_H         = int((0.113 if _IS_MOBILE else 0.120) * SCREEN_HEIGHT)
 COLLECTION_CARD_GAP_X     = int(0.007 * SCREEN_WIDTH)
-COLLECTION_CARD_GAP_Y     = int(0.010 * SCREEN_HEIGHT)
+COLLECTION_CARD_GAP_Y     = int((0.006 if _IS_MOBILE else 0.010) * SCREEN_HEIGHT)
 
 # ── Grid panel ──────────────────────────────────────────────────────
 COLLECTION_PANEL_X        = int(0.04 * SCREEN_WIDTH)
