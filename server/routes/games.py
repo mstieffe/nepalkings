@@ -1371,7 +1371,10 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         for _k in ('card_won_suit', 'card_won_rank',
                    'card_lost_suit', 'card_lost_rank',
                    'loot_lost_cards', 'consumed_cards',
-                   'cards_spent', 'is_ai_defender'):
+                   'cards_spent', 'is_ai_defender',
+                   'victory_review_available',
+                   'victory_review_config_id',
+                   'victory_review_land_id'):
             if _k in conquer_payload:
                 info[_k] = conquer_payload[_k]
 
@@ -6465,7 +6468,10 @@ def finish_battle():
                                'card_lost_suit', 'card_lost_rank',
                                'loot_lost_cards', 'consumed_cards',
                                'defence_consumed_cards', 'cards_spent',
-                               'is_ai_defender'):
+                               'is_ai_defender',
+                               'victory_review_available',
+                               'victory_review_config_id',
+                               'victory_review_land_id'):
                         if _k in conquer_payload:
                             already_response[_k] = conquer_payload[_k]
             except Exception:
@@ -6808,7 +6814,10 @@ def finish_battle():
                        'card_lost_suit', 'card_lost_rank',
                        'loot_lost_cards', 'consumed_cards',
                        'defence_consumed_cards', 'cards_spent',
-                       'is_ai_defender'):
+                       'is_ai_defender',
+                       'victory_review_available',
+                       'victory_review_config_id',
+                       'victory_review_land_id'):
                 if _k in conquer_payload:
                     response[_k] = conquer_payload[_k]
         return jsonify(response)

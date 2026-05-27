@@ -2984,6 +2984,32 @@ class TestAITemplateCardRewards:
             db.session.refresh(land)
             assert land.defence_config_id == cfg.id
 
+    def test_attacker_wins_live_payload_includes_victory_review_fields(self, app, db):
+        """Regression: the live conquer resolve payload must surface victory_review_*.
+
+        The finish_battle route copies only an allow-list of keys from the
+        resolve payload; adding new keys requires updating those lists, or
+        the client never sees them and the Victory Review never triggers.
+        """
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=True)
+
+            assert result['attacker_won'] is True
+            assert result.get('victory_review_available') is True
+            assert result.get('victory_review_config_id') == cfg.id
+            assert result.get('victory_review_land_id') == land.id
+
+    def test_defender_wins_omits_victory_review_fields(self, app, db):
+        with app.app_context():
+            result, user, land, game, cfg = self._start_battle_and_resolve(
+                app, db, attacker_wins=False)
+
+            assert result['attacker_won'] is False
+            # Defender wins → no review for the (non-existent) attacker victory.
+            assert result.get('victory_review_available') in (False, None)
+            assert result.get('victory_review_config_id') is None
+
 
 class TestConquerLootInboxRoutes:
     """Pending loot collection and lost-loot acknowledgement endpoints."""
