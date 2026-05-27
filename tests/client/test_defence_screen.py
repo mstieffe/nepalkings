@@ -1,9 +1,38 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 """Unit tests for DefenceScreen logic (Phase 12)."""
+import os
+from pathlib import Path
+import subprocess
+import sys
 import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+
+APP_DIR = Path(__file__).resolve().parents[2] / 'nepal_kings'
+
+
+def _run_mobile_geometry_check(code):
+    env = os.environ.copy()
+    env.update({
+        'SDL_VIDEODRIVER': 'dummy',
+        'SDL_AUDIODRIVER': 'dummy',
+        'NK_SCREEN_WIDTH': '854',
+        'NK_SCREEN_HEIGHT': '480',
+        'NK_IS_MOBILE': '1',
+        'NK_UI_SCALE': '1.6',
+    })
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=APP_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _make_state():
@@ -718,6 +747,75 @@ class TestDefenceScreenLayout:
         assert screen._prelude_panel_rect.contains(screen._prelude_spell_rect)
         assert screen._counter_panel_rect.contains(screen._battle_figure_rect)
         assert screen._counter_panel_rect.contains(screen._counter_spell_rect)
+
+    def test_mobile_right_panel_controls_do_not_overlap_on_iphone_se(self):
+        _run_mobile_geometry_check(r'''
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+import pygame
+pygame.mouse.set_cursor = lambda *args, **kwargs: None
+pygame.init()
+pygame.display.set_mode((854, 480))
+from game.screens.defence_screen import DefenceScreen
+
+state = SimpleNamespace(
+    screen='defence',
+    defence_land_id=7,
+    game=MagicMock(),
+    set_msg=MagicMock(),
+    action={},
+)
+screen = DefenceScreen(state)
+screen._land_id = 7
+screen._config = {
+    'figures': [],
+    'battle_moves': [],
+    'prelude_spell_name': None,
+    'battle_figure_id': None,
+    'battle_figure_id_2': None,
+    'counter_spell_name': None,
+    'counter_spell_card_ids': None,
+    'counter_spell_target_figure_id': None,
+    'auto_gamble': True,
+    'auto_gamble_threshold': 8,
+    'draft_dirty': False,
+}
+screen._build_layout()
+
+assert screen._battle_plan_rect.bottom < screen._prelude_panel_rect.top
+assert screen._prelude_panel_rect.bottom < screen._counter_panel_rect.top
+assert screen._counter_panel_rect.bottom <= screen._btn_save.top
+
+for child in (
+    screen._move_slots_rect,
+    screen._btn_auto_gamble,
+    screen._btn_auto_gamble_dec,
+    screen._auto_gamble_threshold_rect,
+    screen._btn_auto_gamble_inc,
+):
+    assert screen._battle_plan_rect.contains(child), (
+        tuple(screen._battle_plan_rect), tuple(child))
+
+for child in (screen._prelude_spell_rect,):
+    assert screen._prelude_panel_rect.contains(child), (
+        tuple(screen._prelude_panel_rect), tuple(child))
+for child in (screen._battle_figure_rect, screen._counter_spell_rect):
+    assert screen._counter_panel_rect.contains(child), (
+        tuple(screen._counter_panel_rect), tuple(child))
+
+controls = [
+    screen._btn_auto_gamble,
+    screen._btn_auto_gamble_dec,
+    screen._auto_gamble_threshold_rect,
+    screen._btn_auto_gamble_inc,
+]
+for rect in controls:
+    assert not rect.colliderect(screen._move_slots_rect), (
+        tuple(rect), tuple(screen._move_slots_rect))
+info = screen._info_button_rects['battle_plan']
+assert not screen._btn_auto_gamble_inc.colliderect(info)
+pygame.quit()
+''')
 
     def test_caption_text_fits_available_width(self):
         from game.screens.defence_screen import DefenceScreen

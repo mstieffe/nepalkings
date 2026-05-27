@@ -1042,6 +1042,12 @@ class ConquerTimelinePanel:
         self.window.blit(surf, rect.topleft)
         border = _TONE_COLOR.get(step.tone, _TONE_COLOR['neutral'])
         pygame.draw.rect(self.window, border, rect, 2, border_radius=8)
+        screen._conquer_timeline_info_rect = rect.copy()
+        screen._conquer_timeline_info_text_rect = None
+
+        if self._use_compact_info_layout(rect):
+            self._draw_compact_info_box(screen, rect, step, border)
+            return
 
         x = rect.left + _INFO_PAD
         y = rect.top + _INFO_PAD
@@ -1084,6 +1090,56 @@ class ConquerTimelinePanel:
 
         # Buttons (bottom row)
         self._draw_active_buttons(screen, rect, step)
+
+    def _use_compact_info_layout(self, rect):
+        btn_h = self._active_button_height()
+        min_full_h = (
+            _INFO_PAD * 2
+            + self.info_headline_font.get_height()
+            + 4
+            + self.info_body_font.get_height()
+            + 8
+            + btn_h
+        )
+        return rect.height < min_full_h
+
+    def _draw_compact_info_box(self, screen, rect, step, border):
+        """Short mobile timeline rows use a side-by-side text/action layout."""
+        button_rects = self._draw_active_buttons(
+            screen, rect, step, align_right=True)
+        text_right = rect.right - _INFO_PAD
+        if button_rects:
+            text_right = min(r.left for r in button_rects) - 10
+
+        x = rect.left + _INFO_PAD
+        y = rect.top + _INFO_PAD
+        text_w = max(0, text_right - x)
+        text_h = max(0, rect.height - 2 * _INFO_PAD)
+        text_rect = pygame.Rect(x, y, text_w, text_h)
+        screen._conquer_timeline_info_text_rect = text_rect.copy()
+
+        if text_w <= 0 or text_h <= 0:
+            countdown_ratio = self._step_countdown_ratio(screen, step)
+            if countdown_ratio is not None and not step.interactive:
+                self._draw_countdown(rect, countdown_ratio)
+            return
+
+        headline = step.info_headline or step.title
+        headline_text = self._fit(headline, self.info_headline_font, text_w)
+        headline_surf = self.info_headline_font.render(headline_text, True, border)
+        self.window.blit(headline_surf, (x, y))
+        cursor_y = y + headline_surf.get_height() + 3
+
+        body_h = self.info_body_font.get_height()
+        if step.info_body and cursor_y + body_h <= rect.bottom - _INFO_PAD:
+            body_text = self._fit(step.info_body, self.info_body_font, text_w)
+            body_surf = self.info_body_font.render(
+                body_text, True, (224, 214, 188))
+            self.window.blit(body_surf, (x, cursor_y))
+
+        countdown_ratio = self._step_countdown_ratio(screen, step)
+        if countdown_ratio is not None and not step.interactive:
+            self._draw_countdown(rect, countdown_ratio)
 
     def _draw_info_assets(self, screen, rect, start_y, bottom_limit, assets):
         layout = self._layout_info_asset_rects(rect, start_y, bottom_limit, assets)
@@ -1310,23 +1366,32 @@ class ConquerTimelinePanel:
             pygame.Rect(cx - size // 2, cy - size // 2, size, size),
             -math.pi / 2, end_angle, 2)
 
-    def _draw_active_buttons(self, screen, rect, step):
-        pending = getattr(screen, '_conquer_pending_confirmation', None)
+    def _active_button_height(self):
         btn_h = max(28, int(settings.SCREEN_HEIGHT * 0.030))
         if settings.TOUCH_TARGET_MIN > 0:
             btn_h = max(btn_h, int(settings.SCREEN_HEIGHT * 0.085))
+        return btn_h
+
+    def _draw_active_buttons(self, screen, rect, step, *, align_right=False):
+        pending = getattr(screen, '_conquer_pending_confirmation', None)
+        btn_h = self._active_button_height()
         btn_w = max(96, int(rect.width * 0.30))
         btn_y = rect.bottom - btn_h - _INFO_PAD
         x_left = rect.left + _INFO_PAD
+        if align_right:
+            x_left = rect.right - _INFO_PAD - btn_w
 
         if pending and step.kind in ('attacker', 'defender'):
+            total_w = btn_w * 2 + 10
+            if align_right:
+                x_left = rect.right - _INFO_PAD - total_w
             confirm_rect = pygame.Rect(x_left, btn_y, btn_w, btn_h)
             cancel_rect = pygame.Rect(x_left + btn_w + 10, btn_y, btn_w, btn_h)
             self._draw_rect_button(confirm_rect, 'Confirm', (77, 119, 71))
             self._draw_rect_button(cancel_rect, 'Cancel', (92, 75, 63))
             screen._conquer_objective_action_rects['confirm'] = confirm_rect
             screen._conquer_objective_action_rects['cancel'] = cancel_rect
-            return
+            return [confirm_rect, cancel_rect]
 
         if step.interactive:
             # Selection-based interaction (target on field) — no buttons,
@@ -1335,12 +1400,13 @@ class ConquerTimelinePanel:
                 'Use the field to select.',
                 True, (200, 195, 175))
             self.window.blit(hint, (x_left, btn_y + 4))
-            return
+            return []
 
         # Auto-advance: Next button to skip the countdown.
         next_rect = pygame.Rect(x_left, btn_y, btn_w, btn_h)
         self._draw_rect_button(next_rect, 'Next', (86, 106, 134))
         screen._conquer_objective_action_rects['next'] = next_rect
+        return [next_rect]
 
     # ------------------------------------------------------------ tooltips
 

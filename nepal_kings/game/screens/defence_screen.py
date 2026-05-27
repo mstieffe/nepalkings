@@ -517,12 +517,20 @@ class DefenceScreen(MenuScreenMixin, Screen):
         panel_gap = int(0.014 * _SH)
         panel_pad = int(0.010 * _SW)
         panel_pad_y = int(0.010 * _SH)
+        mobile_ui = settings.TOUCH_TARGET_MIN > 0
+        if mobile_ui:
+            panel_pad_y = max(1, int(0.004 * _SH))
         sw = self._move_slot_size
         slot_row_w = int(sw * 2.0) * 2 + int(sw * 1.3)
         slot_row_h = int(sw * 1.45)
-        header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
-        mobile_ui = settings.TOUCH_TARGET_MIN > 0
-        ag_btn_h = max(int(0.035 * _SH), int(0.054 * _SH)) if mobile_ui else int(0.035 * _SH)
+        if mobile_ui:
+            header_h = (
+                max(self._label_font.get_height(), self._small_font.get_height())
+                + max(8, int(0.020 * _SH))
+            )
+        else:
+            header_h = self._label_font.get_height() + self._res_font.get_height() + int(0.015 * _SH)
+        ag_btn_h = max(22, int(0.050 * _SH)) if mobile_ui else int(0.035 * _SH)
         battle_controls_gap = int(0.018 * _SH)
         fsz = self._mod_frame_size
 
@@ -612,14 +620,20 @@ class DefenceScreen(MenuScreenMixin, Screen):
         # header so they no longer sit on top of the round slots.
         ag_ctrl_gap = max(3, int(0.004 * _SW))
         if mobile_ui:
-            agw = max(int(0.085 * _SW), self._small_font.size('Auto: OFF')[0] + 12)
-            ag_ctrl_w = max(int(0.052 * _SH), 24)
-            val_w = max(int(0.070 * _SW), self._value_font.size('20')[0] + 12)
+            ag_ctrl_gap = max(2, int(0.002 * _SW))
+            agw = max(int(0.052 * _SW), self._small_font.size('Auto')[0] + 8)
+            ag_ctrl_w = max(int(0.050 * _SH), 24)
+            val_w = max(int(0.030 * _SW), self._value_font.size('20')[0] + 8)
             total_w = agw + ag_ctrl_w * 2 + val_w + ag_ctrl_gap * 3
             info_rect = self._info_button_rects.get('battle_plan')
             right_limit = (info_rect.left - int(0.010 * _SW)) if info_rect else (self._battle_plan_rect.right - panel_pad)
-            ag_x = max(self._btn_buy_move.right + int(0.010 * _SW),
-                       right_limit - total_w)
+            ag_x = right_limit - total_w
+            min_x = self._btn_buy_move.right + ag_ctrl_gap
+            if ag_x < min_x and min_x + total_w <= right_limit:
+                ag_x = min_x
+            if ag_x + total_w > right_limit:
+                ag_x = max(self._battle_plan_rect.x + panel_pad,
+                           right_limit - total_w)
             ag_y = self._moves_title_pos[1]
         else:
             agw = int(0.12 * _SW)
@@ -661,6 +675,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 max(1, self._btn_auto_gamble_inc.x - self._btn_auto_gamble_dec.right - (2 * ag_ctrl_gap)),
                 ag_btn_h,
             )
+
+        if mobile_ui:
+            min_slot_y = self._btn_auto_gamble.bottom + max(2, int(0.004 * _SH))
+            max_slot_y = self._battle_plan_rect.bottom - panel_pad_y - slot_row_h
+            if self._move_slots_rect.y < min_slot_y and max_slot_y >= min_slot_y:
+                self._move_slots_rect.y = min_slot_y
 
         # ── Prelude Spell panel (single spell icon slot + edit button) ──
         prelude_header_y = self._prelude_panel_rect.y + int(0.010 * _SH)
@@ -1574,24 +1594,25 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _draw_right_panels(self):
         """Draw structured panels behind the right-column controls."""
+        mobile_ui = settings.TOUCH_TARGET_MIN > 0
         self._draw_section_panel(
             self._battle_plan_rect,
             'Battle Plan',
-            description='Assign cards for battle rounds',
+            description=None if mobile_ui else 'Assign cards for battle rounds',
             icon_rect=self._btn_buy_move,
             title_pos=self._moves_title_pos,
         )
         self._draw_section_panel(
             self._prelude_panel_rect,
             'Prelude Spell',
-            description='Optional spell before battle',
+            description=None if mobile_ui else 'Optional spell before battle',
             icon_rect=self._btn_prelude_edit,
             title_pos=self._prelude_title_pos,
         )
         self._draw_section_panel(
             self._counter_panel_rect,
             'Defender Response',
-            description='Choose a battle figure or counter spell',
+            description=None if mobile_ui else 'Choose a battle figure or counter spell',
             icon_rect=self._btn_counter_edit,
             title_pos=self._counter_title_pos,
         )
@@ -2208,7 +2229,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
         enabled = self._config.get('auto_gamble', False)
         threshold = self._get_auto_gamble_threshold()
         mobile_ui = settings.TOUCH_TARGET_MIN > 0
-        label = ('Auto: ON' if enabled else 'Auto: OFF') if mobile_ui else (
+        label = 'Auto' if mobile_ui else (
             'Auto-Gamble: ON' if enabled else 'Auto-Gamble: OFF')
         clr = (100, 220, 100) if enabled else (130, 130, 130)
 

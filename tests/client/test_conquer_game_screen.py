@@ -2,9 +2,38 @@
 # See LICENSE file in the project root for full license information.
 """Regression tests for the dedicated conquer battle screen shell."""
 
+import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pygame
+
+
+APP_DIR = Path(__file__).resolve().parents[2] / 'nepal_kings'
+
+
+def _run_mobile_geometry_check(code):
+    env = os.environ.copy()
+    env.update({
+        'SDL_VIDEODRIVER': 'dummy',
+        'SDL_AUDIODRIVER': 'dummy',
+        'NK_SCREEN_WIDTH': '854',
+        'NK_SCREEN_HEIGHT': '480',
+        'NK_IS_MOBILE': '1',
+        'NK_UI_SCALE': '1.6',
+    })
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=APP_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _conquer_screen_class():
@@ -3056,6 +3085,47 @@ class TestTacticsHandRouting:
 
         assert 'next' not in screen._conquer_objective_action_rects
         assert 'withdraw' in screen._conquer_objective_action_rects
+
+    def test_mobile_timeline_next_button_clears_info_text_column(self):
+        _run_mobile_geometry_check(r'''
+import pygame
+pygame.mouse.set_cursor = lambda *args, **kwargs: None
+from nepal_kings import Client
+
+client = Client()
+client._init_perf_conquer_fixture(lambda *_args, **_kwargs: None)
+screen = client.screens['conquer_game']
+
+def assert_next_button_clear(label):
+    screen.render()
+    next_rect = screen._conquer_objective_action_rects.get('next')
+    info_rect = getattr(screen, '_conquer_timeline_info_rect', None)
+    text_rect = getattr(screen, '_conquer_timeline_info_text_rect', None)
+    assert next_rect is not None, label
+    assert info_rect is not None, label
+    assert text_rect is not None, label
+    assert info_rect.contains(next_rect), (label, tuple(info_rect), tuple(next_rect))
+    assert info_rect.contains(text_rect), (label, tuple(info_rect), tuple(text_rect))
+    assert next_rect.left >= text_rect.right + 8, (
+        label, tuple(text_rect), tuple(next_rect))
+    assert not next_rect.colliderect(text_rect), (
+        label, tuple(text_rect), tuple(next_rect))
+
+assert_next_button_clear('battle overlay')
+
+game = screen.state.game
+game.battle_turn_player_id = None
+game.battle_round = 0
+game.battle_confirmed = False
+game.battle_moves_phase = False
+game.in_battle_phase = False
+game._game_start_pending = True
+game.game_start_notification_checked = False
+screen._conquer_timeline_hover_open = False
+screen._conquer_timeline_last_layout_mode = None
+assert_next_button_clear('pre-battle inline')
+pygame.quit()
+''')
 
     def test_tactics_hand_gamble_uses_conquer_tactic_endpoint(self, monkeypatch):
         from game.components.conquer_tactics_rail import ACTION_GAMBLE

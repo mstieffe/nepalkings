@@ -748,12 +748,19 @@ def populate_conquer_game(client, subscreen: str):
     if game is not None:
         game.turn = True
         if subscreen == "battle_shop":
+            # The current tactics-hand conquer flow routes away from the
+            # legacy battle shop. Keep this screenshot pointed at a real
+            # populated shop by fixture-marking it as an older battle-move game.
+            game.conquer_move_model = "battle_move"
             game.battle_confirmed = True
             game.battle_moves_phase = True
             game.battle_turn_player_id = None
+            game.in_battle_phase = False
+            game.battle_round = 0
         elif subscreen == "battle":
             game.battle_confirmed = True
             game.battle_moves_phase = False
+            game.conquer_move_model = "tactics_hand"
             game.in_battle_phase = True
             game.battle_turn_player_id = game.player_id
             game.battle_round = 1
