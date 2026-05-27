@@ -2,10 +2,35 @@
 # See LICENSE file in the project root for full license information.
 """Tests for the persistent KingdomConfigScreen."""
 
+import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pygame
+
+
+APP_DIR = Path(__file__).resolve().parents[2] / 'nepal_kings'
+
+
+def _run_mobile_geometry_check(code):
+    env = os.environ.copy()
+    env.update({
+        'SDL_VIDEODRIVER': 'dummy',
+        'SDL_AUDIODRIVER': 'dummy',
+        'NK_SCREEN_WIDTH': '854',
+        'NK_SCREEN_HEIGHT': '480',
+        'NK_IS_MOBILE': '1',
+        'NK_UI_SCALE': '1.6',
+    })
+    subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=APP_DIR,
+        env=env,
+        check=True,
+    )
 
 
 class _Response:
@@ -370,6 +395,55 @@ class TestKingdomConfigInteractions:
         for action, _value, rect in screen._buttons:
             if action not in page_actions:
                 assert screen._content_scroll_area.contains(rect)
+
+    def test_iphone_se_cosmetics_and_shield_controls_do_not_overlap(self):
+        _run_mobile_geometry_check("""
+import pygame
+from config import settings
+from game.screens.kingdom_config_screen import _BOX_W
+
+pygame.font.init()
+left_w = min(settings.KINGDOM_CONFIG_LEFT_W, int(_BOX_W * 0.43))
+
+# Embedded cosmetic cards use the panel viewport width and drop the preview
+# on small mobile, leaving a full-width item list.
+card_w = left_w - 20
+assert card_w < int(0.42 * settings.SCREEN_WIDTH)
+list_w = card_w - 14 - 18
+row_w = list_w - 8
+compact = row_w < 235
+chip_w = 28 if compact else 32
+btn_w = 58 if compact else 66
+price_w = 54 if compact else 72
+gap = 6
+btn_x = row_w - gap - btn_w
+price_x = btn_x - gap - price_w
+label_x = 6 + chip_w + 6
+label_w = price_x - label_x - gap
+assert label_w >= 34
+assert label_x + label_w + gap <= price_x
+assert price_x + price_w + gap <= btn_x
+
+# Shield hour buttons and Buy Shield share one row without crossing.
+shield_w = left_w
+pad_x = 14
+btn_h = 30
+btn_y = settings.KINGDOM_CONFIG_SHIELD_H - 14 - btn_h
+content_y = 42
+buy_w = 96
+btn_gap = 6
+options = [6, 12, 24]
+inner_w = shield_w - pad_x * 2
+option_w = min(58, max(44, (inner_w - buy_w - btn_gap * len(options)) // len(options)))
+last_option_right = pad_x + len(options) * option_w + (len(options) - 1) * btn_gap
+buy_x = shield_w - pad_x - buy_w
+assert last_option_right + btn_gap <= buy_x
+
+body_font = settings.get_font(settings.FS_BODY)
+small_font = settings.get_font(settings.FS_SMALL)
+quote_bottom = content_y + body_font.get_height() + 4 + small_font.get_height()
+assert quote_bottom + 4 <= btn_y
+""")
 
     def test_paid_cosmetic_purchase_requires_confirmation(self, monkeypatch):
         KingdomConfigScreen, screen = _screen_base()

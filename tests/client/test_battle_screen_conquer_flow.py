@@ -533,3 +533,113 @@ class TestBattleScreenConquerFlow:
         assert handled[0]['conquer_result'] == 'defender_won'
         assert handled[0]['attacker_won'] is False
         assert screen._battle_result['conquer_result'] == 'defender_won'
+
+
+class TestBattleScreenVictoryReviewRouting:
+    """Attacker wins with victory_review_available should route to DefenceScreen."""
+
+    def _make_screen(self, game):
+        BattleScreen = _battle_screen_class()
+        screen = BattleScreen.__new__(BattleScreen)
+        screen._battle_result = None
+        screen.window = object()
+        screen.game = game
+        screen.state = SimpleNamespace(
+            screen='conquer_game', subscreen='battle', action={'status': None},
+        )
+        return BattleScreen, screen
+
+    def test_handle_stashes_pending_review_on_attacker_win(self, monkeypatch):
+        class _DummyCardImg:
+            def __init__(self, *_a, **_k):
+                self.front_img = None
+        monkeypatch.setattr('game.components.cards.card_img.CardImg', _DummyCardImg)
+
+        game = SimpleNamespace(
+            player_id=10,
+            invader=True,
+            game_over=False,
+            mode='conquer',
+            land_id=7,
+            last_battle_result={
+                'conquer_attacker_player_id': 10,
+                'conquer_defender_player_id': 20,
+            },
+        )
+        BattleScreen, screen = self._make_screen(game)
+        screen.make_dialogue_box = lambda message, **kwargs: None
+
+        BattleScreen._handle_conquer_end(screen, {
+            'conquer_result': 'attacker_won',
+            'attacker_won': True,
+            'victory_review_available': True,
+            'victory_review_land_id': 7,
+            'victory_review_config_id': 999,
+        })
+
+        assert game._pending_victory_review == {
+            'available': True, 'land_id': 7, 'config_id': 999,
+        }
+
+    def test_ack_routes_to_defence_when_review_pending(self):
+        game = SimpleNamespace(
+            game_id=42,
+            player_id=10,
+            invader=True,
+            game_over=False,
+            mode='conquer',
+            last_battle_result={'conquer_attacker_player_id': 10},
+            _pending_victory_review={
+                'available': True, 'land_id': 7, 'config_id': 999,
+            },
+            in_battle_phase=True,
+            battle_turns_left=3,
+        )
+        BattleScreen, screen = self._make_screen(game)
+
+        BattleScreen._on_conquer_end_acknowledged(screen, 'ok')
+
+        assert screen.state.screen == 'defence'
+        assert screen.state.victory_review_game_id == 42
+        assert screen.state.defence_land_id == 7
+        assert game._pending_victory_review is None
+        assert game._conquer_battle_ended is True
+
+    def test_ack_routes_to_field_when_no_review_pending(self):
+        game = SimpleNamespace(
+            game_id=42,
+            player_id=10,
+            invader=True,
+            game_over=False,
+            mode='conquer',
+            last_battle_result={'conquer_attacker_player_id': 10},
+            _pending_victory_review=None,
+            in_battle_phase=True,
+            battle_turns_left=3,
+        )
+        BattleScreen, screen = self._make_screen(game)
+
+        BattleScreen._on_conquer_end_acknowledged(screen, 'ok')
+
+        assert screen.state.screen == 'conquer_game'  # unchanged
+        assert screen.state.subscreen == 'field'
+        assert game._conquer_battle_ended is True
+
+    def test_ack_routes_to_field_when_review_unavailable_flag_false(self):
+        game = SimpleNamespace(
+            game_id=42,
+            player_id=10,
+            invader=True,
+            game_over=False,
+            mode='conquer',
+            last_battle_result={'conquer_attacker_player_id': 10},
+            _pending_victory_review={'available': False, 'land_id': 7},
+            in_battle_phase=True,
+            battle_turns_left=3,
+        )
+        BattleScreen, screen = self._make_screen(game)
+
+        BattleScreen._on_conquer_end_acknowledged(screen, 'ok')
+
+        assert screen.state.screen == 'conquer_game'
+        assert screen.state.subscreen == 'field'

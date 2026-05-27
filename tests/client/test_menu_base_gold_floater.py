@@ -138,6 +138,81 @@ def test_onboarding_guide_claim_spawns_reward_floaters(monkeypatch):
     assert messages == ['Reward claimed']
 
 
+def test_onboarding_guide_mouse_wheel_scrolls_achievement_viewport():
+    import pygame
+
+    screen, _ = _screen_with_gold(100)
+    screen._onboarding_guide_rect = lambda: pygame.Rect(0, 0, 400, 400)
+    screen._onboarding_guide_scroll = 0
+    screen._onboarding_guide_scroll_area = pygame.Rect(20, 40, 220, 100)
+    screen._onboarding_guide_content_h = 320
+    screen._onboarding_guide_scrollbar_rect = pygame.Rect(250, 40, 8, 100)
+
+    event = pygame.event.Event(pygame.MOUSEWHEEL, y=-1, precise_y=-1, pos=(40, 80))
+
+    assert screen._handle_onboarding_guide_events([event]) is True
+    assert screen._onboarding_guide_scroll > 0
+
+
+def test_onboarding_guide_touch_swipe_scrolls_without_claiming(monkeypatch):
+    import pygame
+    from game.screens import _menu_base
+
+    screen, _ = _screen_with_gold(100)
+    screen._onboarding_guide_rect = lambda: pygame.Rect(0, 0, 400, 400)
+    screen._onboarding_guide_scroll = 0
+    screen._onboarding_guide_scroll_area = pygame.Rect(20, 40, 220, 120)
+    screen._onboarding_guide_content_h = 420
+    screen._onboarding_guide_scrollbar_rect = pygame.Rect(250, 40, 8, 120)
+    screen._onboarding_guide_close_rect = pygame.Rect(360, 20, 24, 24)
+    claim_rect = pygame.Rect(40, 90, 80, 30)
+    screen._onboarding_guide_buttons = [(claim_rect, ('claim', 'first_duel'))]
+    claimed = []
+    monkeypatch.setattr(_menu_base.onboarding_service, 'claim_reward', lambda reward_id: claimed.append(reward_id))
+
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=claim_rect.center)
+    move = pygame.event.Event(pygame.MOUSEMOTION, pos=(claim_rect.centerx, claim_rect.centery - 60))
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(claim_rect.centerx, claim_rect.centery - 60))
+
+    assert screen._handle_onboarding_guide_events([down]) is True
+    assert screen._handle_onboarding_guide_events([move]) is True
+    assert screen._handle_onboarding_guide_events([up]) is True
+    assert screen._onboarding_guide_scroll > 0
+    assert claimed == []
+
+
+def test_onboarding_guide_touch_tap_can_still_claim(monkeypatch):
+    import pygame
+    from game.screens import _menu_base
+
+    screen, _ = _screen_with_gold(100)
+    screen.state.set_msg = lambda _message: None
+    screen._onboarding_guide_rect = lambda: pygame.Rect(0, 0, 400, 400)
+    screen._onboarding_guide_scroll = 0
+    screen._onboarding_guide_scroll_area = pygame.Rect(20, 40, 220, 120)
+    screen._onboarding_guide_content_h = 420
+    screen._onboarding_guide_scrollbar_rect = pygame.Rect(250, 40, 8, 120)
+    screen._onboarding_guide_close_rect = pygame.Rect(360, 20, 24, 24)
+    claim_rect = pygame.Rect(40, 90, 80, 30)
+    screen._onboarding_guide_buttons = [(claim_rect, ('claim', 'first_duel'))]
+    screen._spawn_onboarding_reward_floaters = lambda _reward, _pos: None
+    claimed = []
+    monkeypatch.setattr(_menu_base.onboarding_service, 'claim_reward', lambda reward_id: (
+        claimed.append(reward_id) or {
+            'reward': {},
+            'balances': {},
+            'onboarding': {'completed_steps': ['finish_first_duel']},
+        }
+    ))
+
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=claim_rect.center)
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=claim_rect.center)
+
+    assert screen._handle_onboarding_guide_events([down]) is True
+    assert screen._handle_onboarding_guide_events([up]) is True
+    assert claimed == ['first_duel']
+
+
 def test_current_gold_amount_handles_missing_or_invalid_values():
     screen, _ = _screen_with_gold(100)
 

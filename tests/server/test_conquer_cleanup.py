@@ -187,6 +187,145 @@ class TestOrphanLockSweep:
         assert refreshed.lock_ref_id is None
 
 
+class TestConquerRemoveFigureParity:
+    """``conquer_remove_figure`` must clear every figure reference, not just battle_figure_id."""
+
+    def test_clears_battle_figure_id_2_and_spell_targets(
+            self, client, db, two_users, auth_headers_user1):
+        from models import (Land, LandConfig, LandConfigFigure,
+                            CollectionCard)
+        u1, u2 = two_users
+        land = Land(col=10, row=10, owner_user_id=u2.id, tier=1,
+                    gold_rate=1.0, suit_bonus_suit='Hearts',
+                    suit_bonus_value=3)
+        db.session.add(land)
+        db.session.commit()
+
+        # Two unlocked cards we'll attach to the figure
+        c1 = CollectionCard(user_id=u1.id, suit='spades', rank='A',
+                            value=11, locked=False)
+        c2 = CollectionCard(user_id=u1.id, suit='spades', rank='K',
+                            value=10, locked=False)
+        db.session.add_all([c1, c2])
+        db.session.commit()
+
+        cfg = LandConfig(user_id=u1.id, config_type='conquer', land_id=land.id)
+        db.session.add(cfg)
+        db.session.flush()
+        fig = LandConfigFigure(
+            config_id=cfg.id, family_name='F', name='F', suit='spades',
+            color='spades', field='north', card_ids=[c1.id, c2.id],
+            card_roles=['key', 'support'],
+        )
+        db.session.add(fig)
+        db.session.flush()
+        for cc in (c1, c2):
+            cc.locked = True
+            cc.lock_type = 'conquer_figure'
+            cc.lock_ref_id = fig.id
+        # Wire all the references the parity fix should clear.
+        cfg.battle_figure_id_2 = fig.id
+        cfg.counter_spell_target_figure_id = fig.id
+        cfg.spell_target_figure_id = fig.id
+        cfg.prelude_spell_data = {'target_figure_id': fig.id, 'note': 'keep'}
+        db.session.commit()
+        cfg_id = cfg.id
+        fig_id = fig.id
+
+        resp = client.post('/kingdom/conquer/remove_figure',
+                           json={'figure_id': fig_id},
+                           headers=auth_headers_user1)
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json().get('success') is True
+
+        cfg2 = db.session.get(LandConfig, cfg_id)
+        assert cfg2.battle_figure_id is None
+        assert cfg2.battle_figure_id_2 is None
+        assert cfg2.counter_spell_target_figure_id is None
+        assert cfg2.spell_target_figure_id is None
+        # 'target_figure_id' is removed but unrelated keys are preserved.
+        prelude = cfg2.prelude_spell_data or {}
+        assert 'target_figure_id' not in prelude
+        assert prelude.get('note') == 'keep'
+
+        # Cards return to the player's collection.
+        for cid in (c1.id, c2.id):
+            cc = db.session.get(CollectionCard, cid)
+            assert cc.locked is False
+            assert cc.lock_type is None
+            assert cc.lock_ref_id is None
+
+
+class TestVictoryReviewAcknowledge:
+    """``/kingdom/conquer/acknowledge_victory_review`` is idempotent and attacker-only."""
+
+    def _mk_finished_conquer(self, db, attacker_user, defender_user):
+        from models import Game, Player
+        game = Game(state='finished', mode='conquer')
+        db.session.add(game)
+        db.session.flush()
+        atk_player = Player(user_id=attacker_user.id, game_id=game.id)
+        def_player = Player(user_id=defender_user.id, game_id=game.id)
+        db.session.add_all([atk_player, def_player])
+        db.session.flush()
+        game.last_battle_result = {
+            'conquer_resolved': True,
+            'conquer_attacker_user_id': attacker_user.id,
+            'conquer_attacker_player_id': atk_player.id,
+            'conquer_defender_user_id': defender_user.id,
+            'conquer_defender_player_id': def_player.id,
+            'victory_review_config_id': 0,
+            'victory_review_land_id': 0,
+        }
+        db.session.commit()
+        return game
+
+    def test_marks_reviewed_at(
+            self, client, db, two_users, auth_headers_user1):
+        u1, u2 = two_users
+        game = self._mk_finished_conquer(db, u1, u2)
+        gid = game.id
+
+        resp = client.post('/kingdom/conquer/acknowledge_victory_review',
+                           json={'game_id': gid},
+                           headers=auth_headers_user1)
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json().get('success') is True
+        from models import Game
+        assert db.session.get(Game, gid).victory_reviewed_at is not None
+
+    def test_idempotent(
+            self, client, db, two_users, auth_headers_user1):
+        u1, u2 = two_users
+        game = self._mk_finished_conquer(db, u1, u2)
+        gid = game.id
+
+        client.post('/kingdom/conquer/acknowledge_victory_review',
+                    json={'game_id': gid}, headers=auth_headers_user1)
+        from models import Game
+        first_ts = db.session.get(Game, gid).victory_reviewed_at
+
+        resp = client.post('/kingdom/conquer/acknowledge_victory_review',
+                           json={'game_id': gid},
+                           headers=auth_headers_user1)
+        assert resp.status_code == 200
+        # Idempotent: timestamp is not overwritten on a second call.
+        assert db.session.get(Game, gid).victory_reviewed_at == first_ts
+
+    def test_rejects_non_attacker(
+            self, client, db, two_users, auth_headers_user2):
+        u1, u2 = two_users
+        game = self._mk_finished_conquer(db, u1, u2)
+        gid = game.id
+
+        resp = client.post('/kingdom/conquer/acknowledge_victory_review',
+                           json={'game_id': gid},
+                           headers=auth_headers_user2)
+        assert resp.status_code == 403
+        from models import Game
+        assert db.session.get(Game, gid).victory_reviewed_at is None
+
+
 class TestBuildFigureDuplicateGuard:
     def test_conquer_build_rejects_duplicate_card_ids(
             self, client, db, two_users, auth_headers_user1):

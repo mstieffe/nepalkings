@@ -2296,6 +2296,17 @@ class BattleScreen(SubScreen):
         attacker_won = result.get('attacker_won', False)
         conquer_result = result.get('conquer_result', '')
         is_attacker = self._is_current_player_conquer_attacker(result)
+
+        # Stash Victory Review handoff so the ack callback can read it after
+        # the dialogue closes, independent of poll cache timing.
+        if self.game is not None and attacker_won and is_attacker:
+            self.game._pending_victory_review = {
+                'available': bool(result.get('victory_review_available')),
+                'land_id': result.get('victory_review_land_id'),
+                'config_id': result.get('victory_review_config_id'),
+            }
+        elif self.game is not None:
+            self.game._pending_victory_review = None
         images = []
 
         def _card_line(card):
@@ -2446,10 +2457,29 @@ class BattleScreen(SubScreen):
         return bool(getattr(game, 'invader', False))
 
     def _on_conquer_end_acknowledged(self, response):
-        """After conquer end dialogue, reset and route to kingdom screen."""
+        """After conquer end dialogue, reset and route to kingdom screen.
+
+        If the player just won as the attacker and a Victory Review is pending
+        for the new defence, route them to DefenceScreen in review mode first.
+        DefenceScreen will navigate to kingdom once the player confirms or
+        clears the defence.
+        """
         if self.game:
             self.game.in_battle_phase = False
             self.game.battle_turns_left = 0
+
+        pending_review = getattr(self.game, '_pending_victory_review', None) or {}
+        if pending_review.get('available') and pending_review.get('land_id'):
+            game_id = getattr(self.game, 'game_id', None) or getattr(self.game, 'id', None)
+            if game_id:
+                self._battle_result = None
+                self.state.victory_review_game_id = game_id
+                self.state.defence_land_id = pending_review['land_id']
+                self.game._conquer_battle_ended = True
+                self.game._pending_victory_review = None
+                self.state.screen = 'defence'
+                return
+
         self._battle_result = None
         self.state.subscreen = 'field'
         # Signal the game_screen to go back to kingdom

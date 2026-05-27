@@ -1863,8 +1863,13 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         style = self._kingdom.get('style') or {}
         current_key = style.get(f'{cosmetic_type}_key')
         unlocked = set(self._kingdom.get('unlocked_cosmetics') or [])
-        sort_rect = pygame.Rect(rect.right - 184, rect.y + 8, 84, 24)
-        filter_rect = pygame.Rect(rect.right - 94, rect.y + 8, 78, 24)
+        compact_mobile = settings.TOUCH_TARGET_MIN > 0 and rect.w < int(0.42 * _SW)
+        if compact_mobile:
+            sort_rect = pygame.Rect(rect.x + 14, rect.y + 36, 84, 24)
+            filter_rect = pygame.Rect(sort_rect.right + 8, rect.y + 36, 78, 24)
+        else:
+            sort_rect = pygame.Rect(rect.right - 184, rect.y + 8, 84, 24)
+            filter_rect = pygame.Rect(rect.right - 94, rect.y + 8, 78, 24)
         sort_label = self._fit_text(f"Sort {self._cosmetic_sort_label(cosmetic_type)}",
                                     self._small_font, sort_rect.w - 8)
         filter_label = self._fit_text(f"Show {self._cosmetic_filter_label(cosmetic_type)}",
@@ -1876,8 +1881,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             filter_rect, filter_label, 'cosmetic_filter', cosmetic_type,
             clip_rect=viewport_rect)
 
-        show_preview = rect.h >= 84
-        y = rect.y + (42 if show_preview else 36)
+        show_preview = rect.h >= 84 and not compact_mobile
+        y = rect.y + (64 if compact_mobile else (42 if show_preview else 36))
         if show_preview:
             preview_h = max(30, rect.bottom - y - 10)
             preview_w = min(92, max(58, int(preview_h * 1.35)))
@@ -1950,15 +1955,24 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         active = key == current_key
         bg = settings.KINGDOM_CONFIG_CARD_ACTIVE_BG if active else settings.KINGDOM_CONFIG_CARD_BG
         pygame.draw.rect(self.window, bg, row, border_radius=6)
-        chip = pygame.Rect(row.x + 6, row.y + 5, 32, row.h - 10)
+        compact = row.w < 235
+        chip_w = 28 if compact else 32
+        btn_w = 58 if compact else 66
+        price_w = 54 if compact else 72
+        gap = 6
+        chip = pygame.Rect(row.x + 6, row.y + 5, chip_w, row.h - 10)
         self._draw_cosmetic_chip(chip, cosmetic_type, key)
-        btn = pygame.Rect(row.right - 76, row.y + 5, 66, row.h - 10)
-        price_rect = pygame.Rect(btn.x - 78, row.y, 72, row.h)
+        btn = pygame.Rect(row.right - gap - btn_w, row.y + 5, btn_w, row.h - 10)
+        price_rect = pygame.Rect(btn.x - gap - price_w, row.y, price_w, row.h)
         name = item.get('name', key)
-        label_w = max(36, price_rect.x - chip.right - 12)
+        label_x = chip.right + 6
+        label_w = price_rect.x - label_x - gap
+        draw_price = label_w >= 34
+        if not draw_price:
+            label_w = btn.x - label_x - gap
         label_text = self._fit_text(name, self._small_font, label_w)
         label = self._small_font.render(label_text, True, settings.KINGDOM_CONFIG_TEXT_CLR)
-        self.window.blit(label, (chip.right + 6, row.y + 5))
+        self.window.blit(label, (label_x, row.y + 5))
 
         is_achievement = item.get('price_gold') is None
         price = int(item.get('price_gold') or 0)
@@ -1966,9 +1980,11 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             price_text = self._unlock_requirement_text(item)
         else:
             price_text = 'Free' if price <= 0 else f'{price}g'
-        price_surf = self._tiny_font.render(price_text, True,
-                                            settings.KINGDOM_CONFIG_DIM_CLR)
-        self.window.blit(price_surf, price_surf.get_rect(center=price_rect.center))
+        if draw_price:
+            price_surf = self._tiny_font.render(
+                self._fit_text(price_text, self._tiny_font, price_rect.w - 2),
+                True, settings.KINGDOM_CONFIG_DIM_CLR)
+            self.window.blit(price_surf, price_surf.get_rect(center=price_rect.center))
 
         if key in unlocked:
             action_text = 'Equipped' if active else 'Equip'
@@ -2011,34 +2027,52 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._draw_panel(rect, 'Kingdom Shield')
         if not self._kingdom:
             return
-        icon_sz = int(rect.h * 0.38)
+        mobile_ui = settings.TOUCH_TARGET_MIN > 0
+        pad_x = 14 if mobile_ui else 18
+        btn_h = 30
+        btn_y = rect.bottom - 14 - btn_h if mobile_ui else rect.bottom - 44
+        content_y = rect.y + 42 if mobile_ui else rect.y + 48
+        icon_sz = int(rect.h * (0.32 if mobile_ui else 0.38))
+        icon_sz = min(icon_sz, max(24, btn_y - content_y - 4))
         if self._shield_icon:
             icon = pygame.transform.smoothscale(self._shield_icon, (icon_sz, icon_sz))
-            self.window.blit(icon, (rect.x + 18, rect.y + 48))
+            self.window.blit(icon, (rect.x + pad_x, content_y))
         remaining = int(self._kingdom.get('shield_remaining', 0) or 0)
         status = 'No active shield'
         if remaining > 0:
             status = f'Protected for {remaining // 3600}h {(remaining % 3600) // 60}m'
+        text_x = rect.x + pad_x + icon_sz + 12
+        max_text_w = max(40, rect.right - pad_x - text_x)
+        status = self._fit_text(status, self._body_font, max_text_w)
         self.window.blit(self._body_font.render(status, True, settings.KINGDOM_CONFIG_TEXT_CLR),
-                         (rect.x + 18 + icon_sz + 14, rect.y + 48))
+                         (text_x, content_y))
         quote = self._quote or {}
         price = quote.get('price_gold', '—')
-        self.window.blit(self._small_font.render(f'Quote: {price} gold', True,
+        quote_y = content_y + self._body_font.get_height() + 4
+        quote_text = self._fit_text(f'Quote: {price} gold', self._small_font, max_text_w)
+        self.window.blit(self._small_font.render(quote_text, True,
                                                  settings.KINGDOM_CONFIG_DIM_CLR),
-                         (rect.x + 18 + icon_sz + 14, rect.y + 78))
+                         (text_x, quote_y))
         options = (self._data or {}).get('shield_options_hours') or [6, 12, 24]
-        x = rect.x + 18
-        y = rect.bottom - 44
+        x = rect.x + pad_x
+        y = btn_y
+        buy_w = 96 if mobile_ui else 104
+        inner_w = rect.w - pad_x * 2
+        btn_gap = 6 if mobile_ui else 8
+        if mobile_ui:
+            option_w = min(58, max(44, (inner_w - buy_w - btn_gap * len(options)) // len(options)))
+        else:
+            option_w = 58
         for hours in options:
-            btn = pygame.Rect(x, y, 58, 30)
+            btn = pygame.Rect(x, y, option_w, btn_h)
             text = f'{hours}h'
             self._draw_button(btn, text, 'select_hours', hours,
                               disabled=False)
             if hours == self._selected_hours:
                 pygame.draw.rect(self.window, settings.KINGDOM_CONFIG_GOOD_CLR, btn, 2,
                                  border_radius=7)
-            x += 66
-        buy_rect = pygame.Rect(rect.right - 124, y, 104, 30)
+            x += option_w + btn_gap
+        buy_rect = pygame.Rect(rect.right - pad_x - buy_w, y, buy_w, btn_h)
         self._draw_button(buy_rect, 'Buy Shield', 'buy_shield', None,
                           disabled=not quote or self._gold < int(quote.get('price_gold', 0) or 0))
 

@@ -2322,6 +2322,76 @@ class TestConquerFinishedIdempotency:
             assert data.get('conquer_result') == 'defender_won'
             assert data.get('attacker_won') is False
 
+    def _attach_victory_review(self, db, game, attacker, defender,
+                               atk_player, cfg_id=999, land_id=1):
+        """Stamp the cached fields a real attacker-win conquer would leave."""
+        game.last_battle_result = {
+            'conquer_resolved': True,
+            'conquer_attacker_user_id': attacker.id,
+            'conquer_attacker_player_id': atk_player.id,
+            'conquer_defender_user_id': defender.id,
+            'victory_review_config_id': cfg_id,
+            'victory_review_land_id': land_id,
+        }
+        db.session.commit()
+
+    def test_serialize_emits_victory_review_for_attacker_win(self, app, db):
+        with app.app_context():
+            from routes.games import _serialize_finished_conquer_result
+            from models import User, Game
+            client, atk_headers, game, atk_player = self._make_finished_conquer_game(
+                app, db, result='attacker_won')
+            attacker = db.session.get(User, atk_player.user_id)
+            def_player = [p for p in game.players if p.id != atk_player.id][0]
+            defender = db.session.get(User, def_player.user_id)
+            self._attach_victory_review(db, game, attacker, defender,
+                                        atk_player,
+                                        land_id=game.land_id)
+
+            payload = _serialize_finished_conquer_result(
+                db.session.get(Game, game.id))
+
+            assert payload['attacker_won'] is True
+            assert payload['victory_review_available'] is True
+            assert payload['victory_review_config_id'] == 999
+            assert payload['victory_review_land_id'] == game.land_id
+
+    def test_serialize_clears_review_after_ack(self, app, db):
+        with app.app_context():
+            from routes.games import _serialize_finished_conquer_result
+            from models import User, Game
+            from datetime import datetime, timezone
+            client, atk_headers, game, atk_player = self._make_finished_conquer_game(
+                app, db, result='attacker_won')
+            attacker = db.session.get(User, atk_player.user_id)
+            def_player = [p for p in game.players if p.id != atk_player.id][0]
+            defender = db.session.get(User, def_player.user_id)
+            self._attach_victory_review(db, game, attacker, defender, atk_player,
+                                        land_id=game.land_id)
+            # Simulate the ack endpoint stamping the timestamp.
+            game.victory_reviewed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.session.commit()
+
+            payload = _serialize_finished_conquer_result(
+                db.session.get(Game, game.id))
+
+            assert payload['victory_review_available'] is False
+            assert payload['victory_review_config_id'] is None
+            assert payload['victory_review_land_id'] is None
+
+    def test_serialize_omits_review_for_defender_win(self, app, db):
+        with app.app_context():
+            from routes.games import _serialize_finished_conquer_result
+            from models import Game
+            client, atk_headers, game, atk_player = self._make_finished_conquer_game(
+                app, db, result='defender_won')
+
+            payload = _serialize_finished_conquer_result(
+                db.session.get(Game, game.id))
+
+            assert payload['attacker_won'] is False
+            assert payload['victory_review_available'] is False
+
 
 class TestSuitBonus:
     """Tests for suit bonus application in conquer battles."""

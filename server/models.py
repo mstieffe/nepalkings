@@ -194,6 +194,12 @@ class Game(db.Model):
     auto_loss_reason = db.Column(db.String(50), nullable=True)
     auto_loss_detail = db.Column(db.String(200), nullable=True)  # e.g. figure name for deficit
 
+    # Set when the human attacker acknowledges the post-conquer Victory Review.
+    # While null on a finished attacker-won conquer game, the client re-prompts
+    # the review on next login so the player isn't silently committed to the
+    # auto-set defence.
+    victory_reviewed_at = db.Column(db.DateTime, nullable=True)
+
     # Figures currently resting (rest_after_attack skill — cannot act for one round after battle)
     resting_figure_ids = db.Column(db.JSON, nullable=True)  # list of figure IDs
 

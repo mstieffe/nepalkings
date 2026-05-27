@@ -275,6 +275,14 @@ class MenuScreenMixin:
         self._onboarding_guide_item_rects = {}
         self._onboarding_guide_section_header_rects = {}
         self._onboarding_guide_close_rect = pygame.Rect(0, 0, 0, 0)
+        self._onboarding_guide_scroll = 0
+        self._onboarding_guide_scroll_area = None
+        self._onboarding_guide_content_h = 0
+        self._onboarding_guide_scrollbar_rect = pygame.Rect(0, 0, 0, 0)
+        self._onboarding_guide_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+        self._onboarding_guide_touch_scrolling = False
+        self._onboarding_guide_touch_last_y = 0
+        self._onboarding_guide_touch_moved = 0
         self._user_item_display_rect = pygame.Rect(0, 0, 0, 0)
         self._menu_coach_buttons = []
         self._menu_coach_step = None
@@ -563,6 +571,7 @@ class MenuScreenMixin:
             self.state.set_msg('Logged out')
             self._menu_chrome_username = None
             self._onboarding_guide_open = False
+            self._reset_onboarding_guide_scroll()
             if hasattr(self, '_welcome_present_dialogue'):
                 self._welcome_present_dialogue = None
             if hasattr(self, '_welcome_dialogue_opened'):
@@ -597,6 +606,7 @@ class MenuScreenMixin:
         self._onboarding_guide_buttons = []
         self._onboarding_guide_item_rects = {}
         self._onboarding_guide_section_header_rects = {}
+        self._reset_onboarding_guide_scroll()
         if hasattr(self, '_onboarding_reward_floaters'):
             self._onboarding_reward_floaters.clear()
             self._onboarding_reward_floaters_last_tick = pygame.time.get_ticks()
@@ -643,6 +653,7 @@ class MenuScreenMixin:
 
     def _open_onboarding_guide(self):
         self._onboarding_guide_open = True
+        self._reset_onboarding_guide_scroll()
         try:
             data = onboarding_service.fetch_onboarding()
             self._apply_onboarding_payload(data)
@@ -658,6 +669,94 @@ class MenuScreenMixin:
         if onboarding.get('welcome_pending'):
             count += 1
         return count
+
+    def _reset_onboarding_guide_scroll(self):
+        self._onboarding_guide_scroll = 0
+        self._onboarding_guide_touch_scrolling = False
+        self._onboarding_guide_touch_last_y = 0
+        self._onboarding_guide_touch_moved = 0
+
+    def _onboarding_guide_row_metrics(self):
+        row_h = max(42, min(64, int(0.060 * _SH)))
+        return row_h, 6
+
+    @staticmethod
+    def _onboarding_guide_visible_items(items):
+        visible = [item for item in items if item.get('claimable')]
+        visible += [item for item in items if not item.get('completed') and item not in visible]
+        visible += [item for item in items if item.get('completed') and item not in visible]
+        return visible
+
+    def _onboarding_guide_rows_height(self, items):
+        visible = self._onboarding_guide_visible_items(items or [])
+        if not visible:
+            return self._onboarding_guide_font.get_height() + 12
+        row_h, gap = self._onboarding_guide_row_metrics()
+        return len(visible) * row_h + max(0, len(visible) - 1) * gap
+
+    def _max_onboarding_guide_scroll(self):
+        area = getattr(self, '_onboarding_guide_scroll_area', None)
+        if not area:
+            return 0
+        return max(0, int(getattr(self, '_onboarding_guide_content_h', 0) or 0) - area.h)
+
+    def _clamp_onboarding_guide_scroll(self):
+        self._onboarding_guide_scroll = max(
+            0,
+            min(int(getattr(self, '_onboarding_guide_scroll', 0) or 0),
+                self._max_onboarding_guide_scroll()),
+        )
+
+    def _scroll_onboarding_guide(self, wheel_y):
+        max_scroll = self._max_onboarding_guide_scroll()
+        if max_scroll <= 0:
+            return False
+        step = max(60, int(0.080 * _SH))
+        current = int(getattr(self, '_onboarding_guide_scroll', 0) or 0)
+        new_scroll = max(0, min(max_scroll, current - int(round(float(wheel_y or 0) * step))))
+        self._onboarding_guide_scroll = new_scroll
+        return new_scroll != current
+
+    def _drag_onboarding_guide(self, dy):
+        max_scroll = self._max_onboarding_guide_scroll()
+        if max_scroll <= 0:
+            return False
+        current = int(getattr(self, '_onboarding_guide_scroll', 0) or 0)
+        new_scroll = max(0, min(max_scroll, current - int(dy)))
+        self._onboarding_guide_scroll = new_scroll
+        return new_scroll != current
+
+    def _begin_onboarding_guide_touch_scroll(self, pos):
+        if self._max_onboarding_guide_scroll() <= 0:
+            return False
+        area = getattr(self, '_onboarding_guide_scroll_area', None)
+        track = getattr(self, '_onboarding_guide_scrollbar_rect', None)
+        if not ((area and area.collidepoint(pos)) or (track and track.collidepoint(pos))):
+            return False
+        self._onboarding_guide_touch_scrolling = True
+        self._onboarding_guide_touch_last_y = pos[1]
+        self._onboarding_guide_touch_moved = 0
+        return True
+
+    def _update_onboarding_guide_touch_scroll(self, pos):
+        if not getattr(self, '_onboarding_guide_touch_scrolling', False):
+            return False
+        dy = pos[1] - self._onboarding_guide_touch_last_y
+        if dy == 0:
+            return True
+        self._onboarding_guide_touch_last_y = pos[1]
+        self._onboarding_guide_touch_moved += abs(dy)
+        self._drag_onboarding_guide(dy)
+        return True
+
+    def _end_onboarding_guide_touch_scroll(self):
+        was_scrolling = getattr(self, '_onboarding_guide_touch_scrolling', False)
+        moved = getattr(self, '_onboarding_guide_touch_moved', 0)
+        was_swipe = was_scrolling and moved > max(6, int(0.012 * _SH))
+        self._onboarding_guide_touch_scrolling = False
+        self._onboarding_guide_touch_last_y = 0
+        self._onboarding_guide_touch_moved = 0
+        return was_swipe
 
     def _onboarding_guide_rect(self):
         top = max(int(0.12 * _SH), settings.GAME_MENU_GOLD_MARGIN_Y
@@ -736,20 +835,39 @@ class MenuScreenMixin:
 
         top = area_top + area_h + int(0.020 * _SH)
         gap = int(0.018 * _SW)
-        col_w = (rect.w - 44 - gap) // 2
-        col_h = rect.bottom - top - 22
+        scroll_gutter = max(10, int(0.010 * _SW))
+        columns_w = rect.w - 44 - scroll_gutter
+        col_w = (columns_w - gap) // 2
+        header_h = self._onboarding_guide_section_font.get_height() + 8
+        rows_viewport = pygame.Rect(rect.x + 22, top + header_h,
+                                    columns_w, rect.bottom - top - header_h - 22)
+        rows_viewport.h = max(42, rows_viewport.h)
+        content_h = max(
+            self._onboarding_guide_rows_height(onboarding.get('core_steps') or []),
+            self._onboarding_guide_rows_height(onboarding.get('early_goals') or []),
+        )
+        self._onboarding_guide_scroll_area = rows_viewport.copy()
+        self._onboarding_guide_content_h = content_h
+        self._clamp_onboarding_guide_scroll()
+        scroll = int(getattr(self, '_onboarding_guide_scroll', 0) or 0)
+        col_h = header_h + rows_viewport.h
         left = pygame.Rect(rect.x + 22, top, col_w, col_h)
         right = pygame.Rect(left.right + gap, top, col_w, col_h)
         self._draw_onboarding_guide_section(
             'Checklist',
             onboarding.get('core_steps') or [],
             left,
+            scroll_offset=scroll,
+            clip_rect=pygame.Rect(left.x, rows_viewport.y, left.w, rows_viewport.h),
         )
         self._draw_onboarding_guide_section(
             'Early Goals',
             onboarding.get('early_goals') or [],
             right,
+            scroll_offset=scroll,
+            clip_rect=pygame.Rect(right.x, rows_viewport.y, right.w, rows_viewport.h),
         )
+        self._draw_onboarding_guide_scrollbar(rows_viewport)
 
     def _draw_onboarding_guide_close_x(self):
         r = self._onboarding_guide_close_rect
@@ -793,37 +911,35 @@ class MenuScreenMixin:
             self.window.blit(body_surf, (card.x + 10, card.bottom - body_surf.get_height() - 7))
             x += card_w + gap
 
-    def _draw_onboarding_guide_section(self, title, items, rect):
+    def _draw_onboarding_guide_section(self, title, items, rect, scroll_offset=0, clip_rect=None):
         header = self._onboarding_guide_section_font.render(
             title, True, settings.SUB_SCREEN_HEADER_CLR)
         header_rect = header.get_rect(topleft=(rect.x, rect.y))
         self.window.blit(header, header_rect)
         self._onboarding_guide_section_header_rects[title.lower().replace(' ', '_')] = header_rect.inflate(8, 6)
-        y = rect.y + header.get_height() + 8
-        visible = [item for item in items if item.get('claimable')]
-        visible += [item for item in items if not item.get('completed') and item not in visible]
-        visible += [item for item in items if item.get('completed') and item not in visible]
+        y = rect.y + header.get_height() + 8 - int(scroll_offset or 0)
+        visible = self._onboarding_guide_visible_items(items or [])
+        old_clip = None
+        if clip_rect:
+            old_clip = self.window.get_clip()
+            self.window.set_clip(clip_rect)
         if not visible:
             empty = self._onboarding_guide_font.render(
                 'All set for now.', True, (170, 160, 135))
             self.window.blit(empty, (rect.x + 6, y + 6))
+            if old_clip is not None:
+                self.window.set_clip(old_clip)
             return
 
-        row_h = max(42, min(64, int(0.060 * _SH)))
-        gap = 6
+        row_h, gap = self._onboarding_guide_row_metrics()
         for item in visible:
-            if y + row_h > rect.bottom:
-                more = self._onboarding_guide_small_font.render(
-                    'More goals continue as you play.',
-                    True,
-                    (170, 160, 135),
-                )
-                self.window.blit(more, (rect.x + 6, max(rect.y, rect.bottom - more.get_height())))
-                return
             row = pygame.Rect(rect.x, y, rect.w, row_h)
+            if clip_rect and not row.colliderect(clip_rect):
+                y += row_h + gap
+                continue
             item_id = item.get('id')
             if item_id:
-                self._onboarding_guide_item_rects[item_id] = row.copy()
+                self._onboarding_guide_item_rects[item_id] = row.clip(clip_rect) if clip_rect else row.copy()
             bg = pygame.Surface((row.w, row.h), pygame.SRCALPHA)
             fill = (34, 29, 23, 178) if item.get('claimable') else (24, 22, 19, 138)
             bg.fill(fill)
@@ -849,7 +965,8 @@ class MenuScreenMixin:
                 claim_h = max(28, self._onboarding_guide_small_font.get_height() + 8)
                 claim_rect = pygame.Rect(row.right - claim_w - 12, row.y + (row_h - claim_h) // 2,
                                          claim_w, claim_h)
-                self._draw_onboarding_guide_button(claim_rect, 'Claim', ('claim', item.get('id')))
+                hit_rect = claim_rect.clip(clip_rect) if clip_rect else claim_rect.copy()
+                self._draw_onboarding_guide_button(claim_rect, 'Claim', ('claim', item.get('id')), hit_rect=hit_rect)
                 self._draw_onboarding_reward_icons(item.get('reward') or {}, claim_rect.left - 10, row.y + row_h // 2)
             elif item.get('claimed'):
                 claimed = self._onboarding_guide_small_font.render('claimed', True, (120, 190, 125))
@@ -858,6 +975,8 @@ class MenuScreenMixin:
             else:
                 self._draw_onboarding_reward_icons(item.get('reward') or {}, row.right - 88, row.y + row_h // 2)
             y += row_h + gap
+        if old_clip is not None:
+            self.window.set_clip(old_clip)
 
     def _draw_onboarding_reward_icons(self, reward, right_x, center_y):
         pairs = []
@@ -899,7 +1018,7 @@ class MenuScreenMixin:
         self._onboarding_guide_icon_cache[cache_key] = surf
         return surf
 
-    def _draw_onboarding_guide_button(self, rect, label, action):
+    def _draw_onboarding_guide_button(self, rect, label, action, hit_rect=None):
         mx, my = pygame.mouse.get_pos()
         hovered = rect.collidepoint(mx, my)
         bg = (92, 70, 32) if hovered else (58, 45, 28)
@@ -908,18 +1027,64 @@ class MenuScreenMixin:
         pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
         txt = self._onboarding_guide_small_font.render(label, True, (245, 232, 190))
         self.window.blit(txt, txt.get_rect(center=rect.center))
-        self._onboarding_guide_buttons.append((rect.copy(), action))
+        hit_rect = hit_rect or rect
+        if hit_rect.w > 0 and hit_rect.h > 0:
+            self._onboarding_guide_buttons.append((hit_rect.copy(), action))
+
+    def _draw_onboarding_guide_scrollbar(self, viewport):
+        max_scroll = self._max_onboarding_guide_scroll()
+        if max_scroll <= 0:
+            self._onboarding_guide_scrollbar_rect = pygame.Rect(0, 0, 0, 0)
+            self._onboarding_guide_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+            return
+        track_w = max(4, int(0.006 * _SW))
+        track = pygame.Rect(viewport.right + max(4, int(0.004 * _SW)),
+                            viewport.y, track_w, viewport.h)
+        content_h = max(viewport.h, int(getattr(self, '_onboarding_guide_content_h', 0) or 0))
+        thumb_h = max(28, int(track.h * (viewport.h / content_h)))
+        thumb_h = min(track.h, thumb_h)
+        ratio = self._onboarding_guide_scroll / max_scroll if max_scroll else 0
+        thumb_y = track.y + int((track.h - thumb_h) * ratio)
+        thumb = pygame.Rect(track.x, thumb_y, track.w, thumb_h)
+        self._onboarding_guide_scrollbar_rect = track
+        self._onboarding_guide_scrollbar_thumb_rect = thumb
+        pygame.draw.rect(self.window, (38, 34, 28, 160), track, border_radius=3)
+        pygame.draw.rect(self.window, (142, 120, 72), thumb, border_radius=3)
 
     def _handle_onboarding_guide_events(self, events):
         for event in events:
+            if event.type == pygame.MOUSEWHEEL:
+                pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                area = getattr(self, '_onboarding_guide_scroll_area', None)
+                track = getattr(self, '_onboarding_guide_scrollbar_rect', None)
+                if ((area and area.collidepoint(pos)) or
+                        (track and track.collidepoint(pos)) or
+                        self._onboarding_guide_rect().collidepoint(pos)):
+                    wheel_y = getattr(event, 'precise_y', None)
+                    if wheel_y is None or wheel_y == 0:
+                        wheel_y = getattr(event, 'y', 0)
+                    self._scroll_onboarding_guide(wheel_y)
+                return True
+            if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
+                pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                self._begin_onboarding_guide_touch_scroll(pos)
+                return True
+            if event.type == pygame.MOUSEMOTION:
+                if getattr(self, '_onboarding_guide_touch_scrolling', False):
+                    self._update_onboarding_guide_touch_scroll(getattr(event, 'pos', pygame.mouse.get_pos()))
+                return True
             if event.type != pygame.MOUSEBUTTONUP or getattr(event, 'button', 0) != 1:
                 continue
             pos = getattr(event, 'pos', pygame.mouse.get_pos())
+            if self._end_onboarding_guide_touch_scroll():
+                return True
             if self._onboarding_guide_close_rect.collidepoint(pos):
                 self._onboarding_guide_open = False
+                self._reset_onboarding_guide_scroll()
                 return True
             if not self._onboarding_guide_rect().collidepoint(pos):
                 self._onboarding_guide_open = False
+                self._reset_onboarding_guide_scroll()
                 return True
             for rect, action in list(self._onboarding_guide_buttons):
                 if not rect.collidepoint(pos):

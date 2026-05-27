@@ -7299,6 +7299,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     loot_gained_cards = []
     looted_lost_cards = []
     defence_consumed_cards = []
+    victory_review_config_id = None
 
     if attacker_won:
         # ── Attacker wins: loot from defender config/template by land tier ──
@@ -7357,6 +7358,7 @@ def _resolve_conquer_battle(game, winner, requesting_player):
                 _rekey_config_lock_types(atk_cfg, 'defence')
                 if land:
                     land.defence_config_id = atk_cfg.id
+                victory_review_config_id = atk_cfg.id
 
         # The old defender's config is removed.  Looted cards are deleted from
         # the loser and placed in the attacker's pending loot inbox; every
@@ -7552,10 +7554,26 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'card_won_suit': card_won_suit,
         'card_won_rank': card_won_rank,
         'is_ai_defender': bool(is_ai_land),
+        'victory_review_config_id': victory_review_config_id,
+        'victory_review_land_id': game.land_id if attacker_won else None,
     })
     if split_transfer_summary:
         merged_last_result['kingdom_split_transfer'] = split_transfer_summary
     game.last_battle_result = merged_last_result
+
+    # Only humans get a Victory Review. AI attackers have no client to drive it,
+    # so opportunistically stamp the ack timestamp so we don't reserve state for
+    # a review nobody will ever see.
+    if attacker_won and attacker_user and getattr(attacker_user, 'is_ai', False):
+        game.victory_reviewed_at = _utcnow()
+
+    victory_review_available = bool(
+        attacker_won
+        and victory_review_config_id
+        and attacker_user
+        and not getattr(attacker_user, 'is_ai', False)
+        and game.victory_reviewed_at is None
+    )
 
     return {
         'success': True,
@@ -7582,6 +7600,9 @@ def _resolve_conquer_battle(game, winner, requesting_player):
         'defence_consumed_cards': defence_consumed_cards,
         'cards_spent': cards_spent,
         'kingdom_split_transfer': split_transfer_summary,
+        'victory_review_available': victory_review_available,
+        'victory_review_config_id': victory_review_config_id if victory_review_available else None,
+        'victory_review_land_id': game.land_id if victory_review_available else None,
         'game': game.serialize(),
     }
 
@@ -7667,6 +7688,24 @@ def _serialize_finished_conquer_result(game):
         payload['auto_loss_reason'] = last_result.get('auto_loss_reason')
     if 'auto_loss_detail' in last_result:
         payload['auto_loss_detail'] = last_result.get('auto_loss_detail')
+
+    # Victory-review fields: re-emit until the attacker acknowledges.
+    cached_review_cfg = last_result.get('victory_review_config_id')
+    cached_review_land = last_result.get('victory_review_land_id')
+    attacker_user_id = last_result.get('conquer_attacker_user_id')
+    attacker_user_obj = (
+        db.session.get(User, attacker_user_id) if attacker_user_id else None
+    )
+    review_available = bool(
+        attacker_won
+        and cached_review_cfg
+        and attacker_user_obj is not None
+        and not getattr(attacker_user_obj, 'is_ai', False)
+        and game.victory_reviewed_at is None
+    )
+    payload['victory_review_available'] = review_available
+    payload['victory_review_config_id'] = cached_review_cfg if review_available else None
+    payload['victory_review_land_id'] = cached_review_land if review_available else None
 
     if conquer_result == 'draw':
         payload['outcome'] = 'draw'

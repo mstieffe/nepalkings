@@ -44,6 +44,18 @@ CONQUER_GAME_ALIASES = {
     "conquer_game_battle": "battle",
 }
 
+KINGDOM_SCREEN_ALIASES = {
+    "kingdom": "alerts",
+    "kingdom_alerts": "alerts",
+    "kingdom_history": "history",
+    "kingdom_messages": "messages",
+}
+
+KINGDOM_CONFIG_ALIASES = {
+    "kingdom_config": "top",
+    "kingdom_config_shield": "shield",
+}
+
 MAIN_RANKS = {"7", "8", "9", "10", "J", "Q", "K", "A"}
 RANK_VALUE = {
     "7": 7,
@@ -98,6 +110,223 @@ def fixture_land(*, owned: bool) -> dict:
             "+1 village shield",
         ],
         "kingdom_bonuses": {"loot_chance": 0.10},
+    }
+
+
+def fixture_kingdom_style() -> dict:
+    return {
+        "badge_key": "badge_plain",
+        "border_key": "border_simple_gold",
+        "surface_key": "surface_plain",
+        "color_key": "color_royal_gold",
+        "sigil_key": "sigil_mountain",
+    }
+
+
+def fixture_map_land(col: int, row: int, land_id: int, *, owned: bool,
+                     kingdom_id: int | None = None,
+                     kingdom_name: str | None = None) -> dict:
+    owner = {"id": 1, "user_id": 1, "username": "MobileUser"} if owned else {
+        "id": 2,
+        "user_id": 2,
+        "username": "RivalKing",
+    }
+    return {
+        "id": land_id,
+        "col": col,
+        "row": row,
+        "tier": 3 if owned else 2,
+        "gold_rate": 18 if owned else 9,
+        "suit_bonus_suit": "Hearts" if owned else "Spades",
+        "suit_bonus_value": 2 if owned else 1,
+        "owner": owner,
+        "owner_style": fixture_kingdom_style() if owned else {},
+        "is_mine": owned,
+        "defence_incomplete": False,
+        "kingdom_component_id": 401 if owned else 902,
+        "kingdom_component_size": 4 if owned else 2,
+        "kingdom_level": 7 if owned else 3,
+        "kingdom_tier_name": "Mountain Realm" if owned else "Border Duchy",
+        "kingdom_bonuses": {"gold_production": 0.10} if owned else {},
+        "kingdom_name": kingdom_name or ("Pocket Himalaya" if owned else "Rival Ridge"),
+        "kingdom_id": kingdom_id,
+        "kingdom_shield_remaining": 0,
+        "kingdom_shield_reason": None,
+        "kingdom_is_shielded": False,
+        "conquer_cooldown_remaining": 0,
+    }
+
+
+def humanize_key(key: str) -> str:
+    return " ".join(part.capitalize() for part in str(key).split("_") if part)
+
+
+def catalog_row(cosmetic_type: str, key: str, entry: dict,
+                *, index: int, default_key: str) -> dict:
+    row = dict(entry or {})
+    row["type"] = cosmetic_type
+    row["name"] = row.get("name") or humanize_key(
+        key.removeprefix(f"{cosmetic_type}_"))
+    row["rarity"] = row.get("rarity") or ("default" if key == default_key else "common")
+    if key == default_key:
+        row["price_gold"] = 0
+    elif cosmetic_type == "sigil" and index % 2:
+        row["price_gold"] = None
+        row["unlock_kind"] = "win_conquer_battles"
+        row["unlock_value"] = 10 + index
+    else:
+        row["price_gold"] = 120 + index * 75
+    return row
+
+
+def fixture_cosmetic_catalog() -> dict:
+    from config import settings
+
+    sources = [
+        ("badge", settings.HEX_BADGE_STYLES,
+         getattr(settings, "HEX_BADGE_DEFAULT_KEY", "badge_plain")),
+        ("border", settings.HEX_BORDER_SKINS, "border_simple_gold"),
+        ("surface", settings.HEX_SURFACE_SKINS, "surface_plain"),
+        ("color", settings.KINGDOM_COLOR_PALETTE, settings.KINGDOM_COLOR_DEFAULT_KEY),
+        ("sigil", settings.KINGDOM_SIGIL_STYLES, settings.KINGDOM_SIGIL_DEFAULT_KEY),
+    ]
+    catalog: dict[str, dict] = {}
+    for cosmetic_type, mapping, default_key in sources:
+        for index, (key, entry) in enumerate(mapping.items()):
+            catalog[key] = catalog_row(
+                cosmetic_type, key, entry, index=index, default_key=default_key)
+    return catalog
+
+
+def fixture_kingdom_config_payload() -> dict:
+    style = fixture_kingdom_style()
+    return {
+        "id": 4,
+        "name": "Pocket Himalaya",
+        "style": style,
+        "land_ids": [7, 8, 9, 10],
+        "lands_count": 4,
+        "unlocked_cosmetics": [
+            "badge_plain",
+            "badge_parchment_scroll",
+            "border_simple_gold",
+            "border_royal_blue",
+            "surface_plain",
+            "surface_parchment",
+            "color_royal_gold",
+            "color_crimson",
+            "sigil_none",
+            "sigil_mountain",
+        ],
+        "shield_remaining": 0,
+        "level": 7,
+        "level_max": 50,
+        "experience": 640,
+        "xp_into_level": 120,
+        "xp_for_next_level": 250,
+        "skill_points_total": 4,
+        "skill_points_spent": 2,
+        "skill_points_available": 2,
+        "raw_gold_rate": 18.0,
+        "effective_gold_rate": 21.0,
+        "gold_rate_per_hour": 21.0,
+        "pending_gold": 37.0,
+        "vault_cap": 80,
+        "vault_full": False,
+        "production_items": [
+            {
+                "key": "gold",
+                "kind": "gold",
+                "label": "Gold Vault",
+                "skill_key": "gold_vault",
+                "pending": 37.0,
+                "capacity": 80,
+                "progress_ratio": 0.46,
+                "collectable": True,
+            },
+            {
+                "key": "main_booster",
+                "kind": "booster",
+                "label": "Main Booster Pack",
+                "skill_key": "main_booster_production",
+                "enabled": True,
+                "pending": 1,
+                "capacity": 1,
+                "full": True,
+                "progress_ratio": 1.0,
+            },
+            {
+                "key": "side_booster",
+                "kind": "booster",
+                "label": "Side Booster Pack",
+                "skill_key": "side_booster_production",
+                "enabled": True,
+                "pending": 0,
+                "capacity": 1,
+                "seconds_remaining": 4800,
+                "progress_ratio": 0.58,
+            },
+            {
+                "key": "map",
+                "kind": "map",
+                "label": "Map",
+                "skill_key": "map_production",
+                "enabled": True,
+                "pending": 0,
+                "capacity": 1,
+                "seconds_remaining": 9400,
+                "progress_ratio": 0.34,
+            },
+        ],
+        "skills": {
+            "gold_production": {
+                "name": "Gold Production",
+                "description": "Boosts hourly gold from connected lands.",
+                "level": 1,
+                "max_level": 5,
+                "next_cost": 1,
+                "increments": {"1": 0.03, "2": 0.06},
+            },
+            "gold_vault": {
+                "name": "Gold Vault",
+                "description": "Raises the stored gold capacity.",
+                "level": 1,
+                "max_level": 5,
+                "next_cost": 1,
+                "effect_values": [100, 250, 500, 1000, 2000],
+            },
+            "main_booster_production": {
+                "name": "Main Booster Production",
+                "description": "Produces main booster packs over time.",
+                "level": 1,
+                "max_level": 5,
+                "next_cost": 2,
+                "effect_values": [96, 48, 24, 12, 6],
+            },
+            "side_booster_production": {
+                "name": "Side Booster Production",
+                "description": "Produces side booster packs over time.",
+                "level": 1,
+                "max_level": 5,
+                "next_cost": 2,
+                "effect_values": [96, 48, 24, 12, 6],
+            },
+        },
+        "loot_inbox": {
+            "gained": [{
+                "cards": [
+                    {"rank": "A", "suit": "Hearts"},
+                    {"rank": "10", "suit": "Clubs"},
+                ],
+            }],
+            "lost": [{
+                "cards": [
+                    {"rank": "7", "suit": "Spades"},
+                ],
+            }],
+            "gained_card_count": 2,
+            "lost_card_count": 1,
+        },
     }
 
 
@@ -581,6 +810,252 @@ def populate_conquer_game(client, subscreen: str):
     return screen
 
 
+def fixture_kingdom_map_data() -> dict:
+    lands = [
+        fixture_map_land(4, 4, 7, owned=True, kingdom_id=4,
+                         kingdom_name="Pocket Himalaya"),
+        fixture_map_land(5, 4, 8, owned=True, kingdom_id=4,
+                         kingdom_name="Pocket Himalaya"),
+        fixture_map_land(4, 5, 9, owned=True, kingdom_id=4,
+                         kingdom_name="Pocket Himalaya"),
+        fixture_map_land(5, 5, 10, owned=True, kingdom_id=4,
+                         kingdom_name="Pocket Himalaya"),
+        fixture_map_land(6, 4, 21, owned=False, kingdom_id=9,
+                         kingdom_name="Rival Ridge"),
+        fixture_map_land(6, 5, 22, owned=False, kingdom_id=9,
+                         kingdom_name="Rival Ridge"),
+        fixture_map_land(3, 4, 23, owned=False, kingdom_id=12,
+                         kingdom_name="Border Duchy"),
+        fixture_map_land(3, 5, 24, owned=False, kingdom_id=12,
+                         kingdom_name="Border Duchy"),
+    ]
+    largest = [
+        {
+            "rank": 1,
+            "name": "Pocket Himalaya",
+            "username": "MobileUser",
+            "user_id": 1,
+            "kingdom_id": 4,
+            "kingdom_component_id": 401,
+            "size": 4,
+            "land_ids": [7, 8, 9, 10],
+        },
+        {
+            "rank": 2,
+            "name": "Rival Ridge",
+            "username": "RivalKing",
+            "user_id": 2,
+            "kingdom_id": 9,
+            "kingdom_component_id": 902,
+            "size": 2,
+            "land_ids": [21, 22],
+        },
+    ]
+    realms = [
+        {
+            "rank": 1,
+            "username": "MobileUser",
+            "user_id": 1,
+            "total_lands": 4,
+            "largest_kingdom_id": 4,
+            "largest_component_id": 401,
+            "largest_land_ids": [7, 8, 9, 10],
+        },
+        {
+            "rank": 2,
+            "username": "RivalKing",
+            "user_id": 2,
+            "total_lands": 2,
+            "largest_kingdom_id": 9,
+            "largest_component_id": 902,
+            "largest_land_ids": [21, 22],
+        },
+    ]
+    return {
+        "lands": lands,
+        "conquer_cooldown_remaining": 0,
+        "my_kingdom": {
+            "components": [{"land_ids": [7, 8, 9, 10], "size": 4}],
+        },
+        "my_kingdoms": [{
+            "id": 4,
+            "name": "Pocket Himalaya",
+            "land_ids": [7, 8, 9, 10],
+            "lands_count": 4,
+            "pending_gold": 37.0,
+            "vault_cap": 80,
+            "production": {
+                "main_booster": {"pending": 1},
+                "side_booster": {"pending": 0},
+            },
+        }],
+        "my_lands_count": 4,
+        "my_total_gold_rate": 18.0,
+        "my_effective_gold_rate": 21.0,
+        "top_largest_kingdoms": largest,
+        "top_greatest_realms": realms,
+        "my_largest_rank": 1,
+        "my_largest_size": 4,
+        "my_realm_rank": 1,
+        "my_realm_size": 4,
+    }
+
+
+def populate_kingdom_screen(screen, tab: str) -> None:
+    old_load_activity = getattr(screen, "_load_activity", None)
+    screen._load_activity = lambda: None
+    try:
+        screen._apply_map_response({
+            "data": fixture_kingdom_map_data(),
+            "status_code": 200,
+            "error": None,
+        })
+    finally:
+        if old_load_activity is not None:
+            screen._load_activity = old_load_activity
+    screen._activity_poller = None
+    screen._loading = False
+    screen._error = None
+    screen._activity_tab = tab
+    screen._activity_scroll_offsets = {"alerts": 0, "history": 0, "messages": 0}
+    screen._notifications = [
+        {
+            "activity_title": "RivalKing conquered your land",
+            "activity_detail": "Loot lost: A of Hearts + 1 more",
+            "activity_tone": "bad",
+            "activity_land_label": "2h  -  Land (6, 4)",
+            "seen": False,
+            "land_id": 21,
+            "land_col": 6,
+            "land_row": 4,
+        },
+        {
+            "kind": "level_up",
+            "payload": {"new_level": 7, "sp_gained": 1,
+                        "kingdom_name": "Pocket Himalaya"},
+            "timestamp": "2026-05-27T08:15:00Z",
+            "seen": False,
+        },
+        {
+            "kind": "kingdoms_merged",
+            "payload": {
+                "absorbed_kingdom_name": "High Pass",
+                "absorbed_lands": 2,
+                "xp_awarded": 45,
+            },
+            "timestamp": "2026-05-27T07:30:00Z",
+            "seen": False,
+        },
+    ]
+    screen._attack_history = [
+        {
+            "attacker_user_id": 1,
+            "defender_user_id": 2,
+            "attacker_username": "MobileUser",
+            "defender_username": "RivalKing",
+            "result": "attacker_won",
+            "role": "attacker",
+            "loot_cards": [{"rank": "K", "suit": "Spades"}],
+            "land_id": 21,
+            "land_col": 6,
+            "land_row": 4,
+            "timestamp": "2026-05-27T06:30:00Z",
+        },
+        {
+            "attacker_user_id": 2,
+            "defender_user_id": 1,
+            "attacker_username": "RivalKing",
+            "defender_username": "MobileUser",
+            "result": "defender_won",
+            "role": "defender",
+            "loot_cards": [{"rank": "Q", "suit": "Hearts"}],
+            "land_id": 7,
+            "land_col": 4,
+            "land_row": 4,
+            "timestamp": "2026-05-26T19:10:00Z",
+        },
+    ]
+    screen._conversations = [
+        {
+            "other_user_id": 2,
+            "other_username": "RivalKing",
+            "last_message": "Nice shield timing. Rematch soon?",
+            "last_sender_user_id": 2,
+            "last_seen_by_recipient": False,
+            "last_timestamp": "2026-05-27T08:45:00Z",
+            "last_land_id": 21,
+            "last_land_col": 6,
+            "last_land_row": 4,
+            "unread_count": 2,
+            "is_ai": False,
+        },
+        {
+            "other_user_id": 5,
+            "other_username": "MountainGuide",
+            "last_message": "The pass is safe for now.",
+            "last_sender_user_id": 1,
+            "last_seen_by_recipient": True,
+            "last_timestamp": "2026-05-26T20:10:00Z",
+            "last_land_id": 7,
+            "last_land_col": 4,
+            "last_land_row": 4,
+            "unread_count": 0,
+            "is_ai": True,
+        },
+    ]
+    screen._messages = list(screen._conversations)
+    screen._message_unread_count = 2
+
+
+def populate_kingdom_config(screen, section: str) -> None:
+    kingdom = fixture_kingdom_config_payload()
+    screen.state.kingdom_config_id = kingdom["id"]
+    screen.state.kingdom_config_land_id = None
+    screen._data = {
+        "success": True,
+        "catalog": fixture_cosmetic_catalog(),
+        "gold": 1234,
+        "shield_options_hours": [6, 12, 24],
+        "selected_kingdom_id": kingdom["id"],
+        "kingdoms": [kingdom],
+        "rename_price_gold": 150,
+        "vault_default_cap": 50,
+    }
+    screen._catalog = screen._data["catalog"]
+    screen._kingdom = kingdom
+    screen._gold = 1234
+    screen._selected_hours = 6
+    screen._quote = {"price_gold": 108, "hours": 6}
+    screen._message = ""
+    screen._loading = False
+    screen._content_scroll = 0
+    if section == "shield":
+        layout = screen._layout_rects()
+        screen._content_scroll = max(0, layout["cosmetics_h"] + layout["gap"] - 20)
+
+
+def canonical_screen_name(screen_name: str) -> str:
+    if screen_name in KINGDOM_SCREEN_ALIASES:
+        return "kingdom"
+    if screen_name in KINGDOM_CONFIG_ALIASES:
+        return "kingdom_config"
+    if screen_name in DUEL_SCREEN_ALIASES:
+        return "game"
+    if screen_name in CONQUER_GAME_ALIASES:
+        return "conquer_game"
+    return screen_name
+
+
+def uses_fixture(screen_name: str) -> bool:
+    return (
+        screen_name in KINGDOM_SCREEN_ALIASES
+        or screen_name in KINGDOM_CONFIG_ALIASES
+        or screen_name in DUEL_SCREEN_ALIASES
+        or screen_name in CONQUER_GAME_ALIASES
+        or screen_name in {"conquer", "defence"}
+    )
+
+
 def prepare_screen(client, screen_name: str):
     if screen_name in CONQUER_GAME_ALIASES:
         return populate_conquer_game(client, CONQUER_GAME_ALIASES[screen_name])
@@ -588,6 +1063,16 @@ def prepare_screen(client, screen_name: str):
     if screen_name in DUEL_SCREEN_ALIASES:
         screen = client.screens["game"]
         populate_duel_game(client, screen, DUEL_SCREEN_ALIASES[screen_name])
+        return screen
+
+    if screen_name in KINGDOM_SCREEN_ALIASES:
+        screen = client.screens["kingdom"]
+        populate_kingdom_screen(screen, KINGDOM_SCREEN_ALIASES[screen_name])
+        return screen
+
+    if screen_name in KINGDOM_CONFIG_ALIASES:
+        screen = client.screens["kingdom_config"]
+        populate_kingdom_config(screen, KINGDOM_CONFIG_ALIASES[screen_name])
         return screen
 
     screen = client.screens.get(screen_name)
@@ -616,15 +1101,22 @@ def render_screens(width: int, height: int, ui_scale: str, screens: list[str]) -
 
     failures = 0
     for screen_name in screens:
-        if screen_name not in (*client.screens.keys(), *DUEL_SCREEN_ALIASES.keys(), *CONQUER_GAME_ALIASES.keys()):
+        actual_name = canonical_screen_name(screen_name)
+        known_names = (
+            *client.screens.keys(),
+            *DUEL_SCREEN_ALIASES.keys(),
+            *CONQUER_GAME_ALIASES.keys(),
+            *KINGDOM_SCREEN_ALIASES.keys(),
+            *KINGDOM_CONFIG_ALIASES.keys(),
+        )
+        if screen_name not in known_names:
             print(f"skip {screen_name}: screen not loaded")
             failures += 1
             continue
         try:
-            if screen_name not in DUEL_SCREEN_ALIASES and screen_name not in CONQUER_GAME_ALIASES:
-                client.state.screen = screen_name
-            screen = client.screens.get(screen_name)
-            if hasattr(screen, "on_enter"):
+            client.state.screen = actual_name
+            screen = client.screens.get(actual_name)
+            if screen is not None and not uses_fixture(screen_name) and hasattr(screen, "on_enter"):
                 try:
                     screen.on_enter()
                 except Exception:

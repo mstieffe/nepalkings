@@ -4,7 +4,7 @@
 
 from werkzeug.security import generate_password_hash
 
-from models import CollectionCard, Land, LandAttackLog, User
+from models import CollectionCard, Game, GameResult, Land, LandAttackLog, User
 
 
 def _add_cards(db, user_id, suit='Hearts', rank='10', value=10, count=1):
@@ -12,6 +12,24 @@ def _add_cards(db, user_id, suit='Hearts', rank='10', value=10, count=1):
         db.session.add(CollectionCard(
             user_id=user_id, suit=suit, rank=rank, value=value, locked=False))
     db.session.commit()
+
+
+def _add_game_result(db, winner, loser):
+    game = Game(state='finished', mode='duel')
+    db.session.add(game)
+    db.session.flush()
+    db.session.add(GameResult(
+        game_id=game.id,
+        winner_user_id=winner.id,
+        loser_user_id=loser.id,
+        winner_username=winner.username,
+        loser_username=loser.username,
+        winner_score=45,
+        loser_score=20,
+        stake=45,
+        gold_awarded=90,
+        rounds_played=3,
+    ))
 
 
 def _auth_headers(app, user):
@@ -91,12 +109,47 @@ def test_sell_card_marks_step_and_counts_gold_earned(client, db, two_users, auth
     assert data['onboarding']['counters']['gold_earned'] == 1000
 
 
-def test_conquer_five_lands_uses_attack_log_and_grants_maps(client, db):
+def test_duel_count_goals_use_game_results(client, db, two_users, auth_headers_user1):
+    u1, u2 = two_users
+    u1.gold = 0
+    u1.booster_packs = 0
+    u1.booster_packs_side = 0
+    for _ in range(10):
+        _add_game_result(db, u1, u2)
+    for _ in range(10):
+        _add_game_result(db, u2, u1)
+    db.session.commit()
+
+    state = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    goals = {g['id']: g for g in state['early_goals']}
+    assert goals['finish_10_duels']['claimable'] is True
+    assert goals['win_5_duels']['claimable'] is True
+    assert goals['win_10_duels']['claimable'] is True
+    assert goals['lose_5_duels']['claimable'] is True
+    assert goals['lose_10_duels']['claimable'] is True
+    assert state['facts']['duel_losses'] == 10
+
+    claimed_win = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                              json={'reward_id': 'win_10_duels'})
+    data_win = claimed_win.get_json()
+    assert claimed_win.status_code == 200
+    assert data_win['reward'] == {'booster_packs': 3}
+    assert data_win['balances']['booster_packs'] == 3
+
+    claimed_loss = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                               json={'reward_id': 'lose_10_duels'})
+    data_loss = claimed_loss.get_json()
+    assert claimed_loss.status_code == 200
+    assert data_loss['reward'] == {'booster_packs_side': 2}
+    assert data_loss['balances']['booster_packs_side'] == 2
+
+
+def test_conquer_lands_uses_attack_log_and_grants_gold_rewards(client, db):
     user = User(username='conqueror', password_hash=generate_password_hash('pass123'), gold=0)
     db.session.add(user)
     db.session.commit()
     headers = _auth_headers(client.application, user)
-    for idx in range(5):
+    for idx in range(25):
         land = Land(col=idx, row=0, tier=1, gold_rate=1.0,
                     suit_bonus_suit='Hearts', suit_bonus_value=1)
         db.session.add(land)
@@ -110,15 +163,59 @@ def test_conquer_five_lands_uses_attack_log_and_grants_maps(client, db):
     db.session.commit()
 
     state = client.get('/onboarding/state', headers=headers).get_json()['onboarding']
-    goal = next(g for g in state['early_goals'] if g['id'] == 'conquer_5_lands')
-    assert goal['claimable'] is True
+    goals = {g['id']: g for g in state['early_goals']}
+    assert goals['conquer_5_lands']['claimable'] is True
+    assert goals['conquer_10_lands']['claimable'] is True
+    assert goals['conquer_20_lands']['claimable'] is True
+    assert goals['conquer_25_lands']['claimable'] is True
+    assert goals['finish_10_conquer_battles']['claimable'] is True
+    assert goals['conquer_10_lands']['cosmetic_unlock_hint'] == 'sigil_tower'
+    assert 'cosmetic_unlock_hint' not in goals['conquer_20_lands']
+    assert goals['conquer_25_lands']['cosmetic_unlock_hint'] == 'sigil_serpent'
 
     claimed = client.post('/onboarding/claim_reward', headers=headers,
                           json={'reward_id': 'conquer_5_lands'})
     data = claimed.get_json()
     assert claimed.status_code == 200
-    assert data['reward'] == {'maps': 2}
-    assert data['balances']['maps'] == 2
+    assert data['reward'] == {'gold': 500}
+    assert data['balances']['gold'] == 500
+
+    claimed_20 = client.post('/onboarding/claim_reward', headers=headers,
+                             json={'reward_id': 'conquer_20_lands'})
+    data_20 = claimed_20.get_json()
+    assert claimed_20.status_code == 200
+    assert data_20['reward'] == {'gold': 2000}
+    assert data_20['balances']['gold'] == 2500
+
+    claimed_25 = client.post('/onboarding/claim_reward', headers=headers,
+                             json={'reward_id': 'conquer_25_lands'})
+    data_25 = claimed_25.get_json()
+    assert claimed_25.status_code == 200
+    assert data_25['reward'] == {'gold': 2500}
+    assert data_25['balances']['gold'] == 5000
+
+
+def test_earn_10000_gold_goal_is_claimable(client, db, two_users, auth_headers_user1):
+    u1, _ = two_users
+    u1.gold = 0
+    _add_cards(db, u1.id, count=1000)
+
+    sold = client.post('/collection/sell_card', headers=auth_headers_user1,
+                       json={'suit': 'Hearts', 'rank': '10', 'quantity': 1000})
+    assert sold.status_code == 200
+    assert sold.get_json()['gold_earned'] == 10000
+
+    state = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    goals = {g['id']: g for g in state['early_goals']}
+    assert goals['earn_1000_gold']['claimable'] is True
+    assert goals['earn_10000_gold']['claimable'] is True
+
+    claimed = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                          json={'reward_id': 'earn_10000_gold'})
+    data = claimed.get_json()
+    assert claimed.status_code == 200
+    assert data['reward'] == {'booster_packs': 10}
+    assert data['balances']['booster_packs'] == 10
 
 
 def test_skip_and_reset_do_not_clear_claimed_rewards(client, db, two_users, auth_headers_user1):

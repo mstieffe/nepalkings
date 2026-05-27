@@ -179,6 +179,15 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._config_poller = None
         self._config_poller_land_id = None
 
+        # ── Victory Review mode (post-conquer one-shot edit) ────────
+        # Set when the player is routed here right after a successful
+        # conquer.  Swaps title + Save chrome and adds a Clear All button.
+        self._victory_review_mode = False
+        self._victory_review_game_id = None
+        self._btn_clear_all = None
+        self._pending_clear_all_confirm = False
+        self._pending_victory_ack = False
+
         # ── Subscreen state ─────────────────────────────────────────
         self._active_subscreen = None
         self._subscreen_obj = None
@@ -342,6 +351,19 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._pending_leave_confirm = False
         self._pending_nav = None
         self._draft_dirty = False
+        # Pick up Victory Review handoff from battle_screen.  State field is
+        # consumed (cleared) so re-entering defence later does not re-trigger.
+        review_gid = getattr(self.state, 'victory_review_game_id', None)
+        if review_gid:
+            self._victory_review_mode = True
+            self._victory_review_game_id = review_gid
+            self.state.victory_review_game_id = None
+        else:
+            self._victory_review_mode = False
+            self._victory_review_game_id = None
+        self._btn_clear_all = None
+        self._pending_clear_all_confirm = False
+        self._pending_victory_ack = False
 
     # ── Asset init ────────────────────────────────────────────────────
 
@@ -504,14 +526,35 @@ class DefenceScreen(MenuScreenMixin, Screen):
         battle_controls_gap = int(0.018 * _SH)
         fsz = self._mod_frame_size
 
-        # Save Defence button (bottom-right of box)
-        save_w = int(0.20 * _SW)
+        # Save Defence / Confirm Defence button (bottom-right of box).
+        # In Victory Review mode the label is longer and we add a sibling
+        # "Clear All" button to its left without overlapping the dividers.
+        save_w = int(0.22 * _SW) if self._victory_review_mode else int(0.20 * _SW)
         save_h = max(int(0.055 * _SH), settings.TOUCH_TARGET_MIN)
         self._btn_save = pygame.Rect(
             _BOX_X + _BOX_W - _BOX_PAD - save_w,
             _BOX_BOTTOM - _BOX_PAD - save_h,
             save_w, save_h,
         )
+
+        if self._victory_review_mode:
+            clear_w = int(0.16 * _SW)
+            sibling_gap = int(0.012 * _SW)
+            clear_x = self._btn_save.x - sibling_gap - clear_w
+            # Never let the Clear All button intrude on the left field column.
+            min_clear_x = _BOX_X + _BOX_PAD + int(0.018 * _SW)
+            if clear_x < min_clear_x:
+                clear_x = min_clear_x
+                clear_w = max(int(0.12 * _SW),
+                              self._btn_save.x - sibling_gap - clear_x)
+            self._btn_clear_all = pygame.Rect(
+                clear_x,
+                self._btn_save.y,
+                clear_w,
+                save_h,
+            )
+        else:
+            self._btn_clear_all = None
 
         right_content_bottom = self._btn_save.y - panel_gap
         right_content_h = max(1, right_content_bottom - content_top)
@@ -906,6 +949,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 title='Logout'
             )
             return
+        if self._pending_victory_ack:
+            self._pending_victory_ack = False
+            game = getattr(self.state, 'game', None)
+            if game is not None:
+                game._conquer_battle_ended = False
+                self.state.game = None
         self.state.screen = target
 
     def _server_remove_figure(self, figure_id):
@@ -1281,8 +1330,21 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
     def _draw_land_header(self, land):
         """Draw compact header: title + integer land summary."""
-        title = 'Defence Setup'
-        t_surf = self._title_font.render(title, True, (100, 200, 255))
+        if self._victory_review_mode:
+            title = 'Victory! Review your new defence'
+            title_color = (235, 215, 145)  # warm gold
+        else:
+            title = 'Defence Setup'
+            title_color = (100, 200, 255)
+        # Constrain the title width so it never spills past the box on small
+        # screens (the Victory Review label is noticeably longer).
+        title_max_w = _BOX_W - 2 * _BOX_PAD
+        t_surf = self._title_font.render(title, True, title_color)
+        if t_surf.get_width() > title_max_w:
+            scale = title_max_w / max(1, t_surf.get_width())
+            new_h = max(1, int(t_surf.get_height() * scale))
+            new_w = max(1, int(t_surf.get_width() * scale))
+            t_surf = pygame.transform.smoothscale(t_surf, (new_w, new_h))
         self.window.blit(t_surf, t_surf.get_rect(centerx=_BOX_X + _BOX_W // 2,
                                                   top=_BOX_Y + _BOX_PAD))
 
@@ -1612,10 +1674,19 @@ class DefenceScreen(MenuScreenMixin, Screen):
         self._draw_counter_action()
         self._draw_resources()
 
-        # Save Defence button
+        # Save Defence / Confirm Defence button
         ready = self._is_defence_ready()
         save_clr = (100, 180, 80) if ready else (80, 80, 80)
-        self._draw_button(self._btn_save, 'Save Defence', save_clr)
+        save_label = 'Confirm Defence' if self._victory_review_mode else 'Save Defence'
+        self._draw_button(self._btn_save, save_label, save_clr)
+
+        # Victory Review: secondary Clear All action to return every figure
+        # to the player's collection before confirming.  Drawn in muted
+        # crimson so it reads as destructive without screaming at the player.
+        if self._victory_review_mode and self._btn_clear_all:
+            has_figs = bool((self._config or {}).get('figures'))
+            clear_clr = (170, 70, 70) if has_figs else (80, 80, 80)
+            self._draw_button(self._btn_clear_all, 'Clear All', clear_clr)
 
         # ── Divider lines ───────────────────────────────────────────
         div_clr = (90, 80, 60)
@@ -2254,15 +2325,21 @@ class DefenceScreen(MenuScreenMixin, Screen):
         return msg, image_groups, after_msg
 
     def _on_save_click(self):
-        """Handle click on Save Defence button."""
+        """Handle click on Save Defence / Confirm Defence button."""
+        confirm_title = 'Confirm Defence' if self._victory_review_mode else 'Save Defence'
+        cannot_title = 'Cannot Confirm Defence' if self._victory_review_mode else 'Cannot Save Defence'
         if not self._is_defence_ready():
             problems = self._get_defence_problems()
-            self._show_problem_dialogue('Cannot Save Defence', problems)
+            if self._victory_review_mode:
+                problems = list(problems) + [
+                    'Use Clear All to leave this land undefended for now.'
+                ]
+            self._show_problem_dialogue(cannot_title, problems)
             return
         validation = self._server_validate_draft()
         if not validation.get('success'):
             self._show_problem_dialogue(
-                'Cannot Save Defence',
+                cannot_title,
                 validation.get('problems') or [validation.get('message', 'Configuration is incomplete')],
             )
             return
@@ -2272,10 +2349,62 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self.window,
             msg,
             actions=['Confirm', 'Cancel'],
-            title='Save Defence',
+            title=confirm_title,
             image_groups=image_groups,
             message_after_images=after_msg,
         )
+
+    def _on_clear_all_click(self):
+        """Victory Review: confirm dialog before wiping draft + active defence."""
+        if not self._victory_review_mode:
+            return
+        figs = (self._config or {}).get('figures') or []
+        if not figs:
+            self.state.set_msg('Defence is already empty')
+            return
+        self._pending_clear_all_confirm = True
+        self.dialogue_box = DialogueBox(
+            self.window,
+            ("Return every figure on this land to your collection?\n\n"
+             "This land will be left undefended until you configure it."),
+            actions=['Clear All', 'Cancel'],
+            title='Leave this land undefended?',
+            icon='warning',
+        )
+
+    def _server_acknowledge_victory_review(self):
+        """POST /kingdom/conquer/acknowledge_victory_review. Idempotent on the server."""
+        gid = self._victory_review_game_id
+        if not gid:
+            return True
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/conquer/acknowledge_victory_review',
+                json={'game_id': gid},
+                timeout=10,
+            )
+            data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {}
+            if not data.get('success'):
+                logger.warning('Victory ack failed: %s', data.get('message'))
+                return False
+            return True
+        except Exception as e:
+            logger.error('Victory ack error: %s', e)
+            return False
+
+    def _server_clear_active_defence(self):
+        """POST /kingdom/defence/clear_active. Wipes both draft and active for this land."""
+        try:
+            resp = requests.post(
+                f'{settings.SERVER_URL}/kingdom/defence/clear_active',
+                json={'land_id': self._land_id},
+                timeout=15,
+            )
+            data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {}
+            return bool(data.get('success'))
+        except Exception as e:
+            logger.error('Clear active defence error: %s', e)
+            return False
 
     def _get_config_fig(self, figure_id):
         for fig in self._config.get('figures', []):
@@ -2871,6 +3000,24 @@ class DefenceScreen(MenuScreenMixin, Screen):
             if response == 'confirm':
                 self._pending_nav = self._pending_nav or 'kingdom'
                 if self._server_save_draft():
+                    if self._victory_review_mode:
+                        self._server_acknowledge_victory_review()
+                        self._victory_review_mode = False
+                        self._victory_review_game_id = None
+                        self._pending_victory_ack = True
+                    self._complete_pending_navigation()
+            return
+        if response and self._pending_clear_all_confirm:
+            self._pending_clear_all_confirm = False
+            self.reset_action()
+            if response == 'clear all':
+                if self._server_clear_active_defence():
+                    if self._victory_review_mode:
+                        self._server_acknowledge_victory_review()
+                        self._victory_review_mode = False
+                        self._victory_review_game_id = None
+                        self._pending_victory_ack = True
+                    self._pending_nav = self._pending_nav or 'kingdom'
                     self._complete_pending_navigation()
             return
         if response and self._pending_leave_confirm:
@@ -3202,9 +3349,15 @@ class DefenceScreen(MenuScreenMixin, Screen):
                     self._server_set_auto_gamble(not current)
                     continue
 
-                # Save Defence button
+                # Save Defence / Confirm Defence button
                 if _mobile_collide(self._btn_save, pos):
                     self._on_save_click()
+                    continue
+
+                # Victory Review: Clear All button
+                if (self._victory_review_mode and self._btn_clear_all
+                        and _mobile_collide(self._btn_clear_all, pos)):
+                    self._on_clear_all_click()
                     continue
 
                 # Click on filled battle move slot → open detail box

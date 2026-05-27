@@ -82,16 +82,52 @@ EARLY_GOALS = [
         'reward': {'gold': 75},
     },
     {
+        'id': 'win_5_duels',
+        'title': 'Win 5 duels',
+        'description': 'Build a winning rhythm in duel mode.',
+        'reward': {'booster_packs': 1},
+    },
+    {
+        'id': 'win_10_duels',
+        'title': 'Win 10 duels',
+        'description': 'Prove your duel strategy over repeated wins.',
+        'reward': {'booster_packs': 3},
+    },
+    {
         'id': 'finish_3_duels',
         'title': 'Finish 3 duels',
         'description': 'Get comfortable with the duel rhythm.',
         'reward': {'booster_packs_side': 1},
     },
     {
+        'id': 'finish_10_duels',
+        'title': 'Finish 10 duels',
+        'description': 'Keep playing through full matches.',
+        'reward': {'booster_packs_side': 2},
+    },
+    {
+        'id': 'lose_5_duels',
+        'title': 'Learn from 5 duel losses',
+        'description': 'Every finished duel teaches something useful.',
+        'reward': {'gold': 100},
+    },
+    {
+        'id': 'lose_10_duels',
+        'title': 'Learn from 10 duel losses',
+        'description': 'Stay in the fight and keep refining your deck.',
+        'reward': {'booster_packs_side': 2},
+    },
+    {
         'id': 'earn_1000_gold',
         'title': 'Earn 1000 gold',
         'description': 'Earn gold from play, production, and card sales.',
         'reward': {'booster_packs': 1},
+    },
+    {
+        'id': 'earn_10000_gold',
+        'title': 'Earn 10000 gold',
+        'description': 'Earn gold from play, production, and card sales.',
+        'reward': {'booster_packs': 10},
     },
     {
         'id': 'conquer_1_land',
@@ -106,11 +142,37 @@ EARLY_GOALS = [
         'reward': {'booster_packs_side': 1},
     },
     {
+        'id': 'finish_10_conquer_battles',
+        'title': 'Finish 10 conquer battles',
+        'description': 'Fight repeated battles across the kingdom map.',
+        'reward': {'gold': 1500},
+    },
+    {
         'id': 'conquer_5_lands',
         'title': 'Conquer 5 lands',
         'description': 'Also unlocks the 5-land conquest cosmetic achievement.',
-        'reward': {'maps': 2},
+        'reward': {'gold': 500},
         'cosmetic_unlock_hint': 'sigil_wolf',
+    },
+    {
+        'id': 'conquer_10_lands',
+        'title': 'Conquer 10 lands',
+        'description': 'Also unlocks the 10-land conquest cosmetic achievement.',
+        'reward': {'gold': 1000},
+        'cosmetic_unlock_hint': 'sigil_tower',
+    },
+    {
+        'id': 'conquer_20_lands',
+        'title': 'Conquer 20 lands',
+        'description': 'Push your kingdom farther across the map.',
+        'reward': {'gold': 2000},
+    },
+    {
+        'id': 'conquer_25_lands',
+        'title': 'Conquer 25 lands',
+        'description': 'Also unlocks the 25-land Serpent sigil achievement.',
+        'reward': {'gold': 2500},
+        'cosmetic_unlock_hint': 'sigil_serpent',
     },
 ]
 
@@ -307,6 +369,10 @@ def _duel_win_count(user_id):
     return GameResult.query.filter_by(winner_user_id=user_id).count()
 
 
+def _duel_loss_count(user_id):
+    return GameResult.query.filter_by(loser_user_id=user_id).count()
+
+
 def _conquer_battle_count(user_id):
     return LandAttackLog.query.filter(
         or_(LandAttackLog.attacker_user_id == user_id,
@@ -332,6 +398,7 @@ def _facts(user, state=None):
     user_id = user.id
     duel_finishes = _duel_result_count(user_id)
     duel_wins = _duel_win_count(user_id)
+    duel_losses = _duel_loss_count(user_id)
     conquer_battles = _conquer_battle_count(user_id)
     conquered_lands = _conquer_lands_count(user_id)
     production_collections = int(counters.get('kingdom_production_collections') or 0)
@@ -348,25 +415,47 @@ def _facts(user, state=None):
     early_completed = set()
     if duel_wins >= 1:
         early_completed.add('win_first_duel')
+    if duel_wins >= 5:
+        early_completed.add('win_5_duels')
+    if duel_wins >= 10:
+        early_completed.add('win_10_duels')
     if duel_finishes >= 3:
         early_completed.add('finish_3_duels')
-    if int(counters.get('gold_earned') or 0) >= 1000:
+    if duel_finishes >= 10:
+        early_completed.add('finish_10_duels')
+    if duel_losses >= 5:
+        early_completed.add('lose_5_duels')
+    if duel_losses >= 10:
+        early_completed.add('lose_10_duels')
+    gold_earned = int(counters.get('gold_earned') or 0)
+    if gold_earned >= 1000:
         early_completed.add('earn_1000_gold')
+    if gold_earned >= 10000:
+        early_completed.add('earn_10000_gold')
     if conquered_lands >= 1:
         early_completed.add('conquer_1_land')
     if production_collections >= 5:
         early_completed.add('collect_kingdom_production_5')
+    if conquer_battles >= 10:
+        early_completed.add('finish_10_conquer_battles')
     if conquered_lands >= 5:
         early_completed.add('conquer_5_lands')
+    if conquered_lands >= 10:
+        early_completed.add('conquer_10_lands')
+    if conquered_lands >= 20:
+        early_completed.add('conquer_20_lands')
+    if conquered_lands >= 25:
+        early_completed.add('conquer_25_lands')
 
     return {
         'completed_steps': completed,
         'early_completed': early_completed,
         'duel_finishes': duel_finishes,
         'duel_wins': duel_wins,
+        'duel_losses': duel_losses,
         'conquer_battles': conquer_battles,
         'conquered_lands': conquered_lands,
-        'gold_earned': int(counters.get('gold_earned') or 0),
+        'gold_earned': gold_earned,
         'kingdom_production_collections': production_collections,
     }
 

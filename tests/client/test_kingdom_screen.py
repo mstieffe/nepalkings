@@ -2,10 +2,35 @@
 # See LICENSE file in the project root for full license information.
 """Tests for KingdomScreen layout and activity-panel interactions."""
 
+import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pygame
+
+
+APP_DIR = Path(__file__).resolve().parents[2] / 'nepal_kings'
+
+
+def _run_mobile_geometry_check(code):
+    env = os.environ.copy()
+    env.update({
+        'SDL_VIDEODRIVER': 'dummy',
+        'SDL_AUDIODRIVER': 'dummy',
+        'NK_SCREEN_WIDTH': '854',
+        'NK_SCREEN_HEIGHT': '480',
+        'NK_IS_MOBILE': '1',
+        'NK_UI_SCALE': '1.6',
+    })
+    subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=APP_DIR,
+        env=env,
+        check=True,
+    )
 
 
 class _Response:
@@ -52,6 +77,21 @@ class TestKingdomLayout:
 
         assert map_viewport.top == map_frame.top + settings.KINGDOM_MAP_FRAME_PAD
         assert map_viewport.height == map_frame.height - 2 * settings.KINGDOM_MAP_FRAME_PAD
+
+    def test_iphone_se_activity_rows_have_separate_title_detail_and_land_lines(self):
+        _run_mobile_geometry_check("""
+import pygame
+from config import settings
+
+pygame.font.init()
+title_font = settings.get_font(settings.FS_TINY)
+small_font = settings.get_font(int(settings.FS_TINY * 0.86))
+row_h = settings.KINGDOM_ACTIVITY_ROW_H - 4
+title_y = 6
+detail_y = title_y + title_font.get_height() + 4
+land_y = row_h - small_font.get_height() - 5
+assert detail_y + small_font.get_height() + 3 <= land_y
+""")
 
 
 class _DummyHexMap:

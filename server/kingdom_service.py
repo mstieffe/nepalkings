@@ -151,6 +151,20 @@ def ensure_game_ai_seed_column():
     return True
 
 
+def ensure_game_victory_reviewed_at_column():
+    """Idempotently add the ``Game.victory_reviewed_at`` column on existing DBs."""
+    inspector = inspect(db.engine)
+    if 'game' not in inspector.get_table_names():
+        return False
+    existing = {col['name'] for col in inspector.get_columns('game')}
+    if 'victory_reviewed_at' in existing:
+        return False
+    datetime_type = 'TIMESTAMP' if db.engine.dialect.name.startswith('postgres') else 'DATETIME'
+    db.session.execute(text(f'ALTER TABLE game ADD COLUMN victory_reviewed_at {datetime_type}'))
+    db.session.commit()
+    return True
+
+
 def ensure_duel_game_limit_columns():
     """Idempotently add duel point-limit columns to existing databases."""
     inspector = inspect(db.engine)

@@ -144,6 +144,7 @@ with app.app_context():
         from kingdom_service import (ensure_conquer_tactics_schema,
                                      ensure_duel_game_limit_columns,
                                      ensure_game_ai_seed_column,
+                                     ensure_game_victory_reviewed_at_column,
                                      ensure_kingdom_production_columns)
         from onboarding_service import ensure_onboarding_state_column
         added_columns = ensure_kingdom_production_columns()
@@ -160,6 +161,8 @@ with app.app_context():
                         ', '.join(added_duel_columns))
         if ensure_game_ai_seed_column():
             logger.info("Game schema upgraded: added ai_seed column")
+        if ensure_game_victory_reviewed_at_column():
+            logger.info("Game schema upgraded: added victory_reviewed_at column")
         if ensure_onboarding_state_column():
             logger.info("User schema upgraded: added onboarding_state column")
     except Exception as _kingdom_schema_err:  # pragma: no cover — safety net
@@ -309,12 +312,14 @@ if __name__ == '__main__':
             from kingdom_service import (ensure_conquer_tactics_schema,
                                          ensure_duel_game_limit_columns,
                                          ensure_game_ai_seed_column,
+                                         ensure_game_victory_reviewed_at_column,
                                          ensure_kingdom_production_columns)
             from onboarding_service import ensure_onboarding_state_column
             ensure_kingdom_production_columns()
             ensure_conquer_tactics_schema()
             ensure_duel_game_limit_columns()
             ensure_game_ai_seed_column()
+            ensure_game_victory_reviewed_at_column()
             ensure_onboarding_state_column()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:

@@ -2205,9 +2205,19 @@ def conquer_remove_figure():
     if cfg.config_type != 'conquer':
         return jsonify({'success': False, 'message': 'Not a conquer config'}), 400
 
-    # If this figure is set as battle figure, clear that reference
+    # Clear battle figure references (parity with defence_remove_figure)
     if cfg.battle_figure_id == figure.id:
         cfg.battle_figure_id = None
+    if cfg.battle_figure_id_2 == figure.id:
+        cfg.battle_figure_id_2 = None
+    if cfg.counter_spell_target_figure_id == figure.id:
+        cfg.counter_spell_target_figure_id = None
+    if cfg.spell_target_figure_id == figure.id:
+        cfg.spell_target_figure_id = None
+    prelude_data = dict(cfg.prelude_spell_data or {}) if isinstance(cfg.prelude_spell_data, dict) else {}
+    if prelude_data.get('target_figure_id') == figure.id:
+        prelude_data.pop('target_figure_id', None)
+        cfg.prelude_spell_data = prelude_data or None
 
     # Unlock cards
     _unlock_collection_cards(figure.card_ids or [])
@@ -2224,6 +2234,40 @@ def conquer_remove_figure():
         'success': True,
         'config': _serialize_config_with_deficit(cfg),
     })
+
+
+# ── POST /kingdom/conquer/acknowledge_victory_review ─────────────────────────
+
+@kingdom.route('/conquer/acknowledge_victory_review', methods=['POST'])
+@require_token
+def conquer_acknowledge_victory_review():
+    """Mark a conquer game's Victory Review as acknowledged by the attacker.
+
+    Idempotent: re-acknowledging is a no-op.  After ack, the conquer result
+    payload stops advertising ``victory_review_available`` so the client does
+    not re-prompt on subsequent logins.
+
+    Expects JSON: { game_id }
+    """
+    data = request.json or {}
+    game_id = data.get('game_id')
+    if not game_id:
+        return jsonify({'success': False, 'message': 'game_id is required'}), 400
+
+    game = db.session.get(Game, game_id)
+    if not game or game.mode != 'conquer':
+        return jsonify({'success': False, 'message': 'Conquer game not found'}), 404
+
+    last_result = game.last_battle_result if isinstance(game.last_battle_result, dict) else {}
+    attacker_user_id = last_result.get('conquer_attacker_user_id')
+    if attacker_user_id != g.user_id:
+        return jsonify({'success': False, 'message': 'Not your conquer victory'}), 403
+
+    if game.victory_reviewed_at is None:
+        game.victory_reviewed_at = _utcnow()
+        db.session.commit()
+
+    return jsonify({'success': True, 'game_id': game.id})
 
 
 # ── POST /kingdom/conquer/buy_battle_move ────────────────────────────────────

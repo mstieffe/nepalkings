@@ -894,10 +894,17 @@ class KingdomScreen(MenuScreenMixin, Screen):
         old_clip = self.window.get_clip()
         self.window.set_clip(r)
         try:
-            title = self._activity_title_font.render('Kingdom Activity', True, settings.KINGDOM_INFO_CLR)
-            self.window.blit(title, (r.x + 10, r.y + 8))
-
             alert_rows = self._visible_notifications()
+            rows, empty = self._activity_rows_for_tab(self._activity_tab)
+            has_mark_read = (
+                (self._activity_tab == 'alerts' and rows)
+                or (self._activity_tab == 'messages' and self._message_unread_count)
+            )
+            title_label = 'Activity' if settings.TOUCH_TARGET_MIN > 0 and has_mark_read else 'Kingdom Activity'
+            title_max_w = r.w - (124 if has_mark_read else 20)
+            title_label = self._fit_text(title_label, self._activity_title_font, title_max_w)
+            title = self._activity_title_font.render(title_label, True, settings.KINGDOM_INFO_CLR)
+            self.window.blit(title, (r.x + 10, r.y + 8))
 
             msg_label = 'Messages'
             if self._message_unread_count:
@@ -921,7 +928,6 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 self.window.blit(lbl, lbl.get_rect(center=tr.center))
 
             content_top = self._activity_content_top()
-            rows, empty = self._activity_rows_for_tab(self._activity_tab)
             # "+ New message" button on the Messages tab, above the row list.
             if self._activity_tab == 'messages':
                 new_btn_h = 24
@@ -999,13 +1005,18 @@ class KingdomScreen(MenuScreenMixin, Screen):
         else:
             title_clr = (settings.KINGDOM_ACTIVITY_GOOD_CLR if good else settings.KINGDOM_ACTIVITY_BAD_CLR)
         title_surf = self._activity_font.render(title, True, title_clr)
-        detail_surf = self._activity_small_font.render(detail, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
-        self.window.blit(title_surf, (rect.x + 8, rect.y + 6))
-        self.window.blit(detail_surf, (rect.x + 8, rect.y + 26))
+        detail_surf = self._activity_small_font.render(
+            detail, True, settings.KINGDOM_ACTIVITY_TEXT_CLR)
+        title_y = rect.y + 6
+        detail_y = title_y + title_surf.get_height() + 4
+        self.window.blit(title_surf, (rect.x + 8, title_y))
 
         land = self._activity_small_font.render(self._activity_land_label(item), True,
                                                 settings.KINGDOM_ACTIVITY_DIM_CLR)
-        self.window.blit(land, (rect.x + 8, rect.bottom - land.get_height() - 5))
+        land_y = rect.bottom - land.get_height() - 5
+        if detail_y + detail_surf.get_height() + 3 <= land_y:
+            self.window.blit(detail_surf, (rect.x + 8, detail_y))
+        self.window.blit(land, (rect.x + 8, land_y))
 
     def _draw_wrapped_text(self, text, font, color, rect, line_gap=2):
         """Draw text wrapped inside rect and clipped to rect bounds."""
@@ -1567,9 +1578,35 @@ class KingdomScreen(MenuScreenMixin, Screen):
         bw = text_w + px * 2
         bh = text_h + py * 2
 
+        mobile_ui = settings.TOUCH_TARGET_MIN > 0
+        info_left_bound = self._header_rect.x
+        info_right_bound = self._header_rect.right
+        if mobile_ui:
+            # The mobile header also contains the kingdom chip on the left
+            # and the Collect button on the right. Keep the info pill in the
+            # middle lane so those controls never paint on top of each other.
+            info_left_bound = self._header_rect.x + int(0.28 * _SW)
+            if my_kingdoms:
+                info_right_bound -= int(0.25 * _SW)
+            max_bw = max(80, info_right_bound - info_left_bound)
+            if bw > max_bw:
+                short_base = f'{num_kingdoms}K {int(count or 0)}L {base_rate:.1f}/h'
+                segments = [
+                    self._info_font.render(short_base, True, info_clr),
+                    self._info_font.render(f' +{bonus_rate:.1f}', True, bonus_clr),
+                ]
+                text_w = sum(s.get_width() for s in segments)
+                text_h = max((s.get_height() for s in segments), default=0)
+                bw = min(text_w + px * 2, max_bw)
+                bh = text_h + py * 2
+
         box = pygame.Surface((bw, bh), pygame.SRCALPHA)
         box.fill(settings.KINGDOM_INFO_BG_CLR)
-        bar_x = self._header_rect.x + (self._header_rect.w - bw) // 2
+        if mobile_ui:
+            lane_w = max(1, info_right_bound - info_left_bound)
+            bar_x = info_left_bound + max(0, (lane_w - bw) // 2)
+        else:
+            bar_x = self._header_rect.x + (self._header_rect.w - bw) // 2
         bar_y = self._header_rect.y + self._title_surf.get_height() + int(0.006 * _SH)
         self.window.blit(box, (bar_x, bar_y))
         tx = bar_x + px
@@ -1596,13 +1633,24 @@ class KingdomScreen(MenuScreenMixin, Screen):
             if collectable_side_boosters:
                 parts.append(f'{collectable_side_boosters} side')
             label = 'Collect All' if not parts else 'Collect All: ' + ' + '.join(parts)
+            if mobile_ui:
+                short_parts = [
+                    part.replace(' main', 'm').replace(' side', 's')
+                    for part in parts
+                ]
+                label = 'Collect' if not short_parts else 'Collect: ' + '+'.join(short_parts)
             if any_full:
                 label += '  (FULL!)'
             btn_font = self._nav_font
+            max_btn_text_w = int(0.22 * _SW) if mobile_ui else None
+            if max_btn_text_w:
+                label = self._fit_text(label, btn_font, max_btn_text_w)
             btn_surf = btn_font.render(label, True, (240, 230, 180))
             bpx = int(0.012 * _SW)
             bpy = int(0.006 * _SH)
             btn_w = btn_surf.get_width() + bpx * 2
+            if mobile_ui:
+                btn_w = min(btn_w, int(0.24 * _SW))
             btn_h = max(bh, btn_surf.get_height() + bpy * 2)
             btn_x = bar_x + bw + int(0.010 * _SW)
             # Keep button inside header area; if overflow, place to right of title within header
