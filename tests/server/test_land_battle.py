@@ -1822,6 +1822,13 @@ class TestConquerCounterSpells:
             assert spell.is_active is True
             assert (spell.effect_data or {}).get('power_modifier') == -6
             assert (spell.effect_data or {}).get('counter_status') == 'executed'
+            context = (spell.effect_data or {}).get('conquer_counter_context')
+            assert context == {
+                'round': game.current_round,
+                'advancing_player_id': atk_player.id,
+                'advancing_figure_id': atk_fig.id,
+                'advancing_figure_id_2': None,
+            }
 
             db.session.refresh(game)
             assert game.turn_player_id == atk_player.id

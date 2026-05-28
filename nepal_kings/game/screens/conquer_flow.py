@@ -71,6 +71,7 @@ class TimelineStep:
     info_headline: str = ''
     info_body: str = ''
     info_assets: Tuple[Any, ...] = ()  # extra spell icons / figure objs / Card objs
+    replay_key: Any = None  # stable animation/replay identity for spell beats
 
 
 @dataclass(frozen=True)
@@ -586,6 +587,8 @@ def _counter_spells(game: Any) -> List[dict]:
                 or spell.get('spell_role') == 'counter'
                 or spell.get('type') == 'counter_spell'
                 or spell.get('spell_type') == 'counter'):
+            if not _counter_spell_matches_current_context(game, spell):
+                continue
             add(spell)
 
     for modifier in modifiers:
@@ -799,6 +802,93 @@ def _prelude_target_id(spell: dict, effect_data: dict) -> Any:
         or effect_data.get('target_figure_id')
         or effect_data.get('destroyed_figure_id')
     )
+
+
+def _stable_spell_token(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _counter_context_tuple(context: Any) -> Tuple[Any, Any, Any, Any]:
+    if not isinstance(context, dict):
+        return (None, None, None, None)
+    return (
+        _stable_spell_token(context.get('round')),
+        _stable_spell_token(context.get('advancing_player_id')),
+        _stable_spell_token(context.get('advancing_figure_id')),
+        _stable_spell_token(context.get('advancing_figure_id_2')),
+    )
+
+
+def _spell_replay_key(step_kind: str, spell: dict) -> Any:
+    """Return a stable identity for a prelude/counter spell timeline beat."""
+    if not isinstance(spell, dict):
+        return None
+    spell_id = spell.get('id') or spell.get('spell_id')
+    if spell_id is not None:
+        return ('spell', step_kind, _stable_spell_token(spell_id))
+    effect_data = _spell_effect_data(spell)
+    return (
+        'spell',
+        step_kind,
+        _stable_spell_token(spell.get('spell_name')),
+        _stable_spell_token(spell.get('player_id')),
+        _stable_spell_token(_prelude_target_id(spell, effect_data)),
+        _counter_context_tuple(effect_data.get('conquer_counter_context')),
+    )
+
+
+def _same_identity(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return left is right
+    return str(left) == str(right)
+
+
+def _counter_spell_matches_current_context(game: Any, spell: dict) -> bool:
+    """Prefer counter records that belong to the current advance.
+
+    Newer counter spell rows carry ``conquer_counter_context``.  Older saves
+    do not, so they keep the legacy same-round/target fallback instead of
+    disappearing from historical battle timelines.
+    """
+    if game is None or not isinstance(spell, dict):
+        return False
+    effect_data = _spell_effect_data(spell)
+    context = effect_data.get('conquer_counter_context')
+    if isinstance(context, dict):
+        checks = (
+            ('round', _get(game, 'current_round', None)),
+            ('advancing_player_id', _get(game, 'advancing_player_id', None)),
+            ('advancing_figure_id', _get(game, 'advancing_figure_id', None)),
+            ('advancing_figure_id_2', _get(game, 'advancing_figure_id_2', None)),
+        )
+        for key, current in checks:
+            if current is None:
+                continue
+            if key in context and not _same_identity(context.get(key), current):
+                return False
+        return True
+
+    cast_round = spell.get('cast_round')
+    current_round = _get(game, 'current_round', None)
+    if cast_round is not None and current_round is not None:
+        if not _same_identity(cast_round, current_round):
+            return False
+
+    if spell.get('spell_name') == 'Poison':
+        target_id = _prelude_target_id(spell, effect_data)
+        advancing_ids = {
+            _stable_spell_token(_get(game, 'advancing_figure_id', None)),
+            _stable_spell_token(_get(game, 'advancing_figure_id_2', None)),
+        }
+        advancing_ids.discard(None)
+        if target_id is not None and advancing_ids:
+            if _stable_spell_token(target_id) not in advancing_ids:
+                return False
+    return True
 
 
 def _prelude_target_asset(spell: dict, effect_data: dict, *,
@@ -1050,6 +1140,10 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         ),
         info_assets=_prelude_info_assets(
             own_preludes, own=True, field_screen=field_screen, game=game),
+        replay_key=(
+            _spell_replay_key('prelude_own', own_preludes[0])
+            if own_preludes else None
+        ),
     )
     steps.append(own_pre_step)
 
@@ -1075,6 +1169,10 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         ),
         info_assets=_prelude_info_assets(
             opp_preludes, own=False, field_screen=field_screen, game=game),
+        replay_key=(
+            _spell_replay_key('prelude_opp', opp_preludes[0])
+            if opp_preludes else None
+        ),
     )
     steps.append(opp_pre_step)
 
@@ -1198,6 +1296,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
                 field_screen=field_screen,
                 game=game,
             ),
+            replay_key=_spell_replay_key('counter', first),
         )
         steps.append(counter_step)
 
@@ -1214,6 +1313,33 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         if field_screen is not None else False
     )
     defender_done = bool(defending_id) and not defender_second_active
+    local_turn = bool(
+        _get(game, 'turn', False)
+        or (_get(game, 'turn_player_id', None) is not None
+            and _same_identity(_get(game, 'turn_player_id', None), player_id))
+    )
+    defender_response_open = bool(
+        advancing_id
+        and advancing_player_id
+        and not defending_id
+        and not battle_confirmed
+        and not battle_started
+        and not attacker_second_active
+        and not defender_second_active
+        and not defender_select_active
+        and not defender_pending_local
+    )
+    defender_response_for_you = bool(
+        defender_response_open
+        and not _same_identity(advancing_player_id, player_id)
+        and local_turn
+    )
+    defender_response_waiting = bool(
+        defender_response_open
+        and _same_identity(advancing_player_id, player_id)
+        and not local_turn
+    )
+    defender_response_active = defender_response_for_you or defender_response_waiting
     invader_swap = bool(
         _get(game, 'pending_conquer_own_defender_selection', False)
         or (defender_second_active and own_is_attacker is False)
@@ -1224,6 +1350,10 @@ def derive_conquer_timeline(game: Any, state: Any = None,
     elif defender_done:
         defender_owner = opp_name if own_is_attacker else 'you'
     elif _get(game, 'pending_defender_selection', False) and _get(game, 'turn', False):
+        defender_owner = opp_name
+    elif defender_response_for_you:
+        defender_owner = 'you'
+    elif defender_response_waiting:
         defender_owner = opp_name
     else:
         defender_owner = opp_name if own_is_attacker else 'you'
@@ -1255,6 +1385,7 @@ def derive_conquer_timeline(game: Any, state: Any = None,
         'Chosen by you' if defender_chosen_by_player
         else 'Invader Swap' if invader_swap
         else 'Civil War' if defender_second_active or defending_id_2
+        else 'Response' if defender_response_active
         else ''
     )
     defender_step = TimelineStep(
@@ -1268,15 +1399,26 @@ def derive_conquer_timeline(game: Any, state: Any = None,
             'reveal': defender_reveal,
         } if defender_figure else None,
         completed=defender_done and not defender_pending_local,
-        active=(defender_select_active or defender_pending_local) and defender_visible_after_attacker,
-        interactive=defender_select_active or defender_pending_local,
+        active=(
+            defender_select_active
+            or defender_pending_local
+            or defender_response_active
+        ) and defender_visible_after_attacker,
+        interactive=(
+            defender_select_active
+            or defender_pending_local
+            or defender_response_for_you
+        ),
         primary_action=(
             'confirm' if defender_pending_local
             else 'select_second' if defender_second_active
-            else 'select_defender' if defender_select_active else None
+            else 'select_defender' if defender_select_active
+            else 'respond_advance' if defender_response_for_you
+            else None
         ),
         tone=(
-            'action' if (defender_select_active or defender_pending_local)
+            'action' if (defender_select_active or defender_pending_local or defender_response_for_you)
+            else 'waiting' if defender_response_waiting
             else 'good' if defender_done else 'neutral'
         ),
         sidenote=defender_sidenote,
@@ -1287,6 +1429,8 @@ def derive_conquer_timeline(game: Any, state: Any = None,
             else 'Choose your second Civil War defender' if defender_second_active and invader_swap
             else 'Pick the second Civil War defender' if defender_second_active
             else 'Pick the defender' if defender_select_active
+            else 'Respond to the advance' if defender_response_for_you
+            else 'Defender response' if defender_response_waiting
             else 'Opponent defender chosen by you' if defender_done and defender_chosen_by_player
             else 'Defender locked in' if defender_done
             else 'Awaiting defender'
@@ -1309,6 +1453,10 @@ def derive_conquer_timeline(game: Any, state: Any = None,
                 if defender_select_active and own_is_attacker
                 else 'You selected this opponent figure to fight your advance.'
                 if defender_done and defender_chosen_by_player
+                else 'Counter-advance with a legal figure, use your configured counter spell, or spend your turn.'
+                if defender_response_for_you
+                else f'Waiting for {opp_name} to counter-advance, use a counter spell, or spend the turn.'
+                if defender_response_waiting
                 else 'Counter-advance with a legal figure or spend your turn.'
                 if defender_select_active
                 else ''

@@ -445,6 +445,162 @@ def test_conquer_counter_poison_timeline_step_spawns_target_animation():
     assert effects.spawned[0][3]['floating_text'] == '-6 power'
 
 
+def test_conquer_counter_poison_does_not_replay_when_owner_label_changes():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+    replay_key = ('spell', 'counter', '501')
+    active_spell = {
+        'id': 501,
+        'player_id': 20,
+        'spell_name': 'Poison',
+        'target_figure_id': 77,
+        'effect_data': {
+            'counter_origin': True,
+            'counter_status': 'executed',
+            'target_figure_id': 77,
+        },
+    }
+    screen.state = SimpleNamespace(game=SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        cached_active_spells=[active_spell],
+        battle_modifier=[],
+    ))
+    screen._conquer_lane_figure_rects = [{
+        'figure': SimpleNamespace(id=77),
+        'rect': pygame.Rect(300, 240, 48, 64),
+    }]
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    screen._conquer_collapsed_header_rect = pygame.Rect(0, 0, 160, 48)
+    screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def __init__(self):
+            self.owner = 'Defender'
+            self.completed = False
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='counter',
+                icon_payload='Poison',
+                owner=self.owner,
+                active=not self.completed,
+                completed=self.completed,
+                replay_key=replay_key,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.spawned = []
+
+        def clear(self):
+            pass
+
+        def spawn_spell_cast(self, spell_name, anchor, target_id, **kwargs):
+            self.spawned.append((spell_name, target_id, kwargs))
+
+        def spawn_banner(self, *args, **kwargs):
+            self.spawned.append(('banner', args, kwargs))
+
+    panel = _Panel()
+    effects = _Effects()
+    screen._conquer_timeline_panel = panel
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+    panel.owner = 'Rival'
+    panel.completed = True
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert [event[0] for event in effects.spawned] == ['Poison']
+
+
+def test_conquer_counter_poison_does_not_replay_after_pending_churn():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.window = pygame.Surface((900, 620), pygame.SRCALPHA)
+    replay_key = ('spell', 'counter', '501')
+    active_spell = {
+        'id': 501,
+        'player_id': 20,
+        'spell_name': 'Poison',
+        'target_figure_id': 77,
+        'effect_data': {
+            'counter_origin': True,
+            'counter_status': 'executed',
+            'target_figure_id': 77,
+        },
+    }
+    screen.state = SimpleNamespace(game=SimpleNamespace(
+        mode='conquer',
+        game_id=1,
+        player_id=10,
+        battle_round=0,
+        battle_confirmed=False,
+        cached_active_spells=[active_spell],
+        battle_modifier=[],
+    ))
+    screen._conquer_lane_figure_rects = [{
+        'figure': SimpleNamespace(id=77),
+        'rect': pygame.Rect(300, 240, 48, 64),
+    }]
+    screen._last_seen_figure_rects = {}
+    screen._last_announced_battle_round = 0
+    screen._round_transition_until_ms = 0
+    screen._conquer_collapsed_header_rect = pygame.Rect(0, 0, 160, 48)
+    screen.subscreens = {'field': SimpleNamespace(icon_cache={}, figure_icons=[])}
+
+    class _Panel:
+        _active_step_rect = pygame.Rect(20, 20, 80, 48)
+
+        def __init__(self):
+            self.phase = 'active'
+
+        def derive_display_steps(self, _screen):
+            return [SimpleNamespace(
+                kind='counter',
+                icon_payload='Poison',
+                owner='Rival',
+                active=self.phase == 'active',
+                completed=self.phase == 'completed',
+                replay_key=replay_key,
+            )]
+
+    class _Effects:
+        def __init__(self):
+            self.spawned = []
+
+        def clear(self):
+            pass
+
+        def spawn_spell_cast(self, spell_name, anchor, target_id, **kwargs):
+            self.spawned.append((spell_name, target_id, kwargs))
+
+        def spawn_banner(self, *args, **kwargs):
+            self.spawned.append(('banner', args, kwargs))
+
+    panel = _Panel()
+    effects = _Effects()
+    screen._conquer_timeline_panel = panel
+    screen._conquer_effects = effects
+
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+    panel.phase = 'pending'
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+    panel.phase = 'completed'
+    ConquerGameScreen._pump_conquer_spell_animations(screen)
+
+    assert [event[0] for event in effects.spawned] == ['Poison']
+
+
 def test_conquer_card_prelude_spell_flies_to_tactics_rail():
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)

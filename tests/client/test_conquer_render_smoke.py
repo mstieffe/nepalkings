@@ -1905,12 +1905,14 @@ def test_timeline_panel_counter_spell_bubble_reveals_counter_tactic_mutation():
     assert panel.currently_resolved_step_index(screen) == 3
 
 
-def _card_spell_step(kind, spell_name, *, owner='', active=False, completed=False):
+def _card_spell_step(kind, spell_name, *, owner='', active=False,
+                     completed=False, replay_key=None):
     from game.screens.conquer_flow import TimelineStep
     return TimelineStep(
         kind=kind, title=spell_name, owner=owner,
         icon_kind='spell', icon_payload=spell_name,
         active=active, completed=completed,
+        replay_key=replay_key,
     )
 
 
@@ -2054,6 +2056,23 @@ def test_conquer_unlanded_spell_step_count_tracks_in_flight_counters():
     assert _unlanded_count(steps, {counter_key: 0}) == 0
     # No impact record yet (animation not fired) -> still pending.
     assert _unlanded_count(steps, {}) == 1
+
+
+def test_conquer_unlanded_spell_step_count_uses_stable_replay_key():
+    stable_key = ('spell', 'counter', '502')
+    steps = [
+        _card_spell_step(
+            'counter',
+            'Dump Cards',
+            owner='Rival',
+            completed=True,
+            replay_key=stable_key,
+        ),
+    ]
+
+    assert _unlanded_count(steps, {stable_key: 10 ** 9}) == 1
+    assert _unlanded_count(steps, {stable_key: 0}) == 0
+    assert _unlanded_count(steps, {('counter', 'Dump Cards', 'Defender'): 0}) == 1
 
 
 def test_conquer_unlanded_spell_step_count_skips_modifier_counters():

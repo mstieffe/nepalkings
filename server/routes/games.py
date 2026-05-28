@@ -2816,6 +2816,13 @@ def conquer_defender_counter_spell():
 
         effect_data = dict(spell_data or {}) if isinstance(spell_data, dict) else {}
         effect_data['counter_origin'] = True
+        counter_context = {
+            'round': game.current_round,
+            'advancing_player_id': game.advancing_player_id,
+            'advancing_figure_id': game.advancing_figure_id,
+            'advancing_figure_id_2': game.advancing_figure_id_2,
+        }
+        effect_data['conquer_counter_context'] = counter_context
 
         spell = ActiveSpell(
             game_id=game.id,
@@ -2837,6 +2844,7 @@ def conquer_defender_counter_spell():
         result = _execute_spell(spell, game, defender_player)
         post_data = dict(spell.effect_data or {})
         post_data['counter_origin'] = True
+        post_data['conquer_counter_context'] = counter_context
         if result.get('error'):
             post_data['counter_status'] = 'failed'
             post_data['counter_error'] = result.get('effect') or result.get('error')

@@ -265,6 +265,7 @@ class ConquerGameScreen(GameScreen):
         # enable disappearance / round-change diffs.
         self._seen_active_spell_anim_ids: set = set()
         self._prev_visible_figure_rects = {}
+        self._spell_anim_fired = set()
         # Maps a spell ``step_key`` -> ms timestamp at which the spell's
         # card animation reaches the tactics rail.  The rail withholds that
         # spell's resolution-step mutation until this moment so the effect
@@ -1013,6 +1014,11 @@ class ConquerGameScreen(GameScreen):
                     field._apply_conquer_prelude_to_target(target_fig)
         except Exception:
             return False
+        try:
+            self._sync_conquer_action_modes()
+            self._auto_route_conquer_once()
+        except Exception:
+            pass
         return True
 
     def _draw_conquer_header_button(self, rect, label, color):
@@ -1492,6 +1498,24 @@ class ConquerGameScreen(GameScreen):
                 pass
         return None
 
+    @staticmethod
+    def _spell_step_replay_key(step):
+        key = getattr(step, 'replay_key', None)
+        if key is not None:
+            return key
+        kind = getattr(step, 'kind', '')
+        payload = getattr(step, 'icon_payload', None)
+        owner = getattr(step, 'owner', '') or ''
+        return (kind, payload, owner)
+
+    @staticmethod
+    def _spell_step_phase(step):
+        if getattr(step, 'active', False):
+            return 'active'
+        if getattr(step, 'completed', False):
+            return 'completed'
+        return 'pending'
+
     def _pump_conquer_spell_animations(self):
         """Trigger spell animations driven by timeline step transitions.
 
@@ -1526,6 +1550,7 @@ class ConquerGameScreen(GameScreen):
             self._spell_anim_game_key = game_key
             self._spell_step_phase = {}
             self._spell_anim_seeded = False
+            self._spell_anim_fired = set()
             self._spell_anim_target_fired = set()
             self._conquer_spell_anim_impact_ms = {}
             self._last_announced_battle_round = 0
@@ -1545,6 +1570,7 @@ class ConquerGameScreen(GameScreen):
 
         # Build the current phase map for spell-bearing timeline steps.
         current_phase = {}
+        current_step_info = {}
         for step in steps:
             kind = getattr(step, 'kind', '')
             if kind not in ('prelude_own', 'prelude_opp', 'counter'):
@@ -1552,15 +1578,9 @@ class ConquerGameScreen(GameScreen):
             payload = getattr(step, 'icon_payload', None)
             if not isinstance(payload, str) or not payload:
                 continue
-            owner = getattr(step, 'owner', '') or ''
-            key = (kind, payload, owner)
-            if getattr(step, 'active', False):
-                phase = 'active'
-            elif getattr(step, 'completed', False):
-                phase = 'completed'
-            else:
-                phase = 'pending'
-            current_phase[key] = phase
+            key = self._spell_step_replay_key(step)
+            current_phase[key] = self._spell_step_phase(step)
+            current_step_info[key] = (kind, payload)
 
         self._refresh_spell_target_ghosts(steps, current_phase)
 
@@ -1574,6 +1594,10 @@ class ConquerGameScreen(GameScreen):
                 self._last_seen_figure_rects[fid] = pygame.Rect(rect)
 
         prev_phase = getattr(self, '_spell_step_phase', None) or {}
+        fired_steps = getattr(self, '_spell_anim_fired', None)
+        if fired_steps is None:
+            fired_steps = set()
+            self._spell_anim_fired = fired_steps
 
         if not getattr(self, '_spell_anim_seeded', False):
             # First-frame seed: record current phases, but if the timeline
@@ -1581,39 +1605,49 @@ class ConquerGameScreen(GameScreen):
             # the visible active bubble and animation stay in sync.
             anchor = self._conquer_timeline_anchor_rect()
             for key, phase in current_phase.items():
-                if phase == 'active':
-                    self._fire_spell_step_animation(key, anchor)
+                if phase == 'active' and key not in fired_steps:
+                    step_kind, spell_name = current_step_info.get(key, (None, None))
+                    if self._fire_spell_step_animation(
+                            key, anchor, step_kind=step_kind, spell_name=spell_name):
+                        fired_steps.add(key)
             # Card-effect spells that already completed before the screen
             # mounted get no replay animation — mark their tactics-rail
             # mutation as landed immediately so it stays revealed.
             for key, phase in current_phase.items():
                 if (phase in ('active', 'completed')
                         and key not in self._conquer_spell_anim_impact_ms):
-                    s_kind, s_name, _s_owner = key
+                    s_kind, s_name = current_step_info.get(key, (None, None))
                     s_info = self._resolve_spell_step_info(s_kind, s_name)
                     if self._is_conquer_card_effect_spell(s_name, s_info):
                         self._conquer_spell_anim_impact_ms[key] = 0
+                        fired_steps.add(key)
             self._spell_step_phase = dict(current_phase)
             self._spell_anim_seeded = True
         else:
             anchor = self._conquer_timeline_anchor_rect()
             for key, phase in current_phase.items():
                 old = prev_phase.get(key, 'pending')
+                step_kind, spell_name = current_step_info.get(key, (None, None))
                 # Fire when a spell step first becomes active in this
                 # session, or transitions straight from pending to
                 # completed (happens if the user clicks "Next" quickly).
-                if old == 'pending' and phase in ('active', 'completed'):
-                    self._fire_spell_step_animation(key, anchor)
+                if (old == 'pending'
+                        and phase in ('active', 'completed')
+                        and key not in fired_steps):
+                    if self._fire_spell_step_animation(
+                            key, anchor, step_kind=step_kind, spell_name=spell_name):
+                        fired_steps.add(key)
                 elif (phase in ('active', 'completed')
                       and key not in getattr(self, '_spell_anim_target_fired', set())):
                     # A prior fire on this step was banner-only because
                     # the target was still unresolved (pending-target
                     # prelude like Health Boost).  Re-fire now that the
                     # target id is known so the real animation plays.
-                    _kind, sp_name, _owner = key
-                    spell_info = self._resolve_spell_step_info(_kind, sp_name)
+                    spell_info = self._resolve_spell_step_info(step_kind, spell_name)
                     if self._prelude_spell_target_id(spell_info) is not None:
-                        self._fire_spell_step_animation(key, anchor)
+                        if self._fire_spell_step_animation(
+                                key, anchor, step_kind=step_kind, spell_name=spell_name):
+                            fired_steps.add(key)
             self._spell_step_phase = dict(current_phase)
 
         # --- Round transition banner (Tier 3.3) ---
@@ -1629,23 +1663,34 @@ class ConquerGameScreen(GameScreen):
         elif not confirmed:
             self._last_announced_battle_round = 0
 
-    def _fire_spell_step_animation(self, step_key, anchor_rect):
+    def _fire_spell_step_animation(self, step_key, anchor_rect, *,
+                                   step_kind=None, spell_name=None):
         """Spawn the appropriate effect for a transitioned spell step."""
-        kind, spell_name, _owner = step_key
+        kind = step_kind
+        if spell_name is None:
+            try:
+                kind, spell_name, _owner = step_key
+            except Exception:
+                return False
+        if kind is None:
+            try:
+                kind = step_key[0]
+            except Exception:
+                kind = ''
         if not spell_name:
-            return
+            return False
         spell_info = self._resolve_spell_step_info(kind, spell_name)
         if self._is_conquer_card_effect_spell(spell_name, spell_info):
             impact_ms = self._spawn_conquer_card_spell_animation(
                 spell_name, anchor_rect, spell_info)
             if impact_ms is not None:
                 self._conquer_spell_anim_impact_ms[step_key] = int(impact_ms)
-            return
+            return True
         if self._is_conquer_battle_modifier_spell(spell_name, spell_info):
             self._spawn_conquer_modifier_spell_animation(spell_name, anchor_rect)
-            return
+            return True
         if spell_name not in ('Poison', 'Health Boost', 'Explosion'):
-            return
+            return False
         target_id = self._prelude_spell_target_id(spell_info)
         fired_set = getattr(self, '_spell_anim_target_fired', None)
         if fired_set is None:
@@ -1672,13 +1717,14 @@ class ConquerGameScreen(GameScreen):
             else:
                 # No target known — just flash the banner so the user notices.
                 effects.spawn_banner('Explosion', (255, 168, 56), duration_ms=900)
-            return
+                return False
+            return True
         # Poison / Health Boost
         if target_id is None:
             effects.spawn_banner(spell_name,
                                  (148, 76, 196) if spell_name == 'Poison' else (110, 220, 140),
                                  duration_ms=900)
-            return
+            return False
         ftext = '-6 power' if spell_name == 'Poison' else '+ Health'
         # If the figure isn't currently rendered, fall back to orphan rect anim.
         if self._lookup_conquer_figure_rect(target_id) is None and target_rect is not None:
@@ -1688,6 +1734,7 @@ class ConquerGameScreen(GameScreen):
         else:
             effects.spawn_spell_cast(spell_name, anchor_rect, target_id,
                                      floating_text=ftext)
+        return True
 
     @staticmethod
     def _spell_effect_data(spell_info):
@@ -2065,8 +2112,7 @@ class ConquerGameScreen(GameScreen):
             spell_name = getattr(step, 'icon_payload', None)
             if spell_name not in ('Poison', 'Health Boost', 'Explosion'):
                 continue
-            owner = getattr(step, 'owner', '') or ''
-            phase = current_phase.get((kind, spell_name, owner), 'pending')
+            phase = current_phase.get(self._spell_step_replay_key(step), 'pending')
             if phase not in ('pending', 'active'):
                 continue
             spell_info = self._resolve_spell_step_info(kind, spell_name)
@@ -2499,6 +2545,11 @@ class ConquerGameScreen(GameScreen):
             game_obj = self.state.game if hasattr(self, 'state') else None
             if game_state and game_obj is not None and hasattr(game_obj, 'update_from_dict'):
                 game_obj.update_from_dict(game_state)
+                try:
+                    self._sync_conquer_action_modes()
+                    self._auto_route_conquer_once()
+                except Exception:
+                    pass
         except Exception:
             pass
         if callable(set_banner):
@@ -2804,6 +2855,11 @@ class ConquerGameScreen(GameScreen):
 
         if result.get('game') and hasattr(game, 'update_from_dict'):
             game.update_from_dict(result['game'])
+            try:
+                self._sync_conquer_action_modes()
+                self._auto_route_conquer_once()
+            except Exception:
+                pass
 
         both_ready = bool(result.get('both_ready') or getattr(game, 'battle_turn_player_id', None) is not None)
         game.battle_moves_phase = False
@@ -3190,7 +3246,10 @@ class ConquerGameScreen(GameScreen):
             if not self._is_conquer_card_effect_spell(payload, spell_info):
                 # Figure / battle-modifier spell — never touches the rail.
                 continue
-            key = (step.kind, payload, getattr(step, 'owner', '') or '')
+            replay_key_fn = getattr(
+                self, '_spell_step_replay_key',
+                ConquerGameScreen._spell_step_replay_key)
+            key = replay_key_fn(step)
             impact = impacts.get(key)
             if impact is None:
                 # Animation has not been fired yet (it spawns later this
@@ -3241,7 +3300,10 @@ class ConquerGameScreen(GameScreen):
             if not self._is_conquer_card_effect_spell(payload, spell_info):
                 # Figure / battle-modifier spell — never touches the rail.
                 continue
-            key = (step.kind, payload, getattr(step, 'owner', '') or '')
+            replay_key_fn = getattr(
+                self, '_spell_step_replay_key',
+                ConquerGameScreen._spell_step_replay_key)
+            key = replay_key_fn(step)
             impact = impacts.get(key)
             if impact is None or now < int(impact):
                 pending += 1
@@ -3442,6 +3504,22 @@ class ConquerGameScreen(GameScreen):
         self._conquer_tactic_cache_key = self._battle_state_cache_key()
         self._conquer_opponent_tactic_cache_key = self._conquer_tactic_cache_key
         self._battle_state_pending_key = None
+        if any(key in result for key in (
+                'battle_round', 'battle_turn_player_id', 'battle_confirmed',
+                'invader_player_id', 'advancing_player_id',
+                'advancing_figure_id', 'advancing_figure_id_2',
+                'defending_figure_id', 'defending_figure_id_2',
+                'active_spells', 'battle_modifier', 'conquer_resolution_step')):
+            try:
+                game._game_data_version = int(
+                    getattr(game, '_game_data_version', 0) or 0) + 1
+            except Exception:
+                pass
+        try:
+            self._sync_conquer_action_modes()
+            self._auto_route_conquer_once()
+        except Exception:
+            pass
 
         if result.get('conquer_result') and not getattr(
                 self.state.game, '_conquer_result_dialogue_shown', False):

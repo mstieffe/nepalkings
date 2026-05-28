@@ -929,6 +929,38 @@ def test_counter_spell_step_stays_hidden_before_cast():
     assert 'counter' not in [s.kind for s in steps]
 
 
+def test_counter_spell_from_different_advance_context_stays_hidden():
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    game = _make_game(
+        current_round=3,
+        advancing_figure_id=20,
+        advancing_player_id=1,
+        cached_active_spells=[{
+            'id': 89,
+            'player_id': 2,
+            'spell_name': 'Poison',
+            'target_figure_id': 10,
+            'cast_round': 3,
+            'effect_data': {
+                'counter_origin': True,
+                'counter_status': 'executed',
+                'target_figure_id': 10,
+                'conquer_counter_context': {
+                    'round': 3,
+                    'advancing_player_id': 1,
+                    'advancing_figure_id': 10,
+                    'advancing_figure_id_2': None,
+                },
+            },
+        }],
+    )
+
+    steps = derive_conquer_timeline(game, _make_state(game), None, None)
+
+    assert 'counter' not in [s.kind for s in steps]
+
+
 def test_blitzkrieg_modifier_spell_appears_in_counter_slot_after_attacker():
     from game.screens.conquer_flow import derive_conquer_timeline
 
@@ -965,6 +997,48 @@ def test_blitzkrieg_modifier_spell_appears_in_counter_slot_after_attacker():
     assert 'Blitzkrieg' in counter.info_headline
     assert 'counter-advance is blocked' in counter.info_body
     assert counter.info_assets[0] == {'kind': 'spell', 'name': 'Blitzkrieg'}
+
+
+def test_defender_response_step_is_active_for_local_defender():
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    game = _make_game(
+        opponent_name='Rival',
+        advancing_figure_id=10,
+        advancing_player_id=2,
+        turn=True,
+    )
+
+    steps = derive_conquer_timeline(game, _make_state(game), None, None)
+    defender = {s.kind: s for s in steps}['defender']
+
+    assert defender.active is True
+    assert defender.interactive is True
+    assert defender.owner == 'you'
+    assert defender.sidenote == 'Response'
+    assert defender.info_headline == 'Respond to the advance'
+    assert 'Counter-advance' in defender.info_body
+
+
+def test_defender_response_step_waits_for_attacker():
+    from game.screens.conquer_flow import derive_conquer_timeline
+
+    game = _make_game(
+        opponent_name='Rival',
+        advancing_figure_id=10,
+        advancing_player_id=1,
+        turn=False,
+    )
+
+    steps = derive_conquer_timeline(game, _make_state(game), None, None)
+    defender = {s.kind: s for s in steps}['defender']
+
+    assert defender.active is True
+    assert defender.interactive is False
+    assert defender.owner == 'Rival'
+    assert defender.tone == 'waiting'
+    assert defender.sidenote == 'Response'
+    assert defender.info_headline == 'Defender response'
 
 
 def test_blitzkrieg_prelude_spell_does_not_duplicate_in_counter_slot():
