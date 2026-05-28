@@ -5118,6 +5118,7 @@ class GameScreen(Screen):
             {'id': 'cast_spell', 'button': self.cast_spell_button, 'subscreen': 'cast_spell', 'title': 'Cast Spells',
              'body': 'Spells are powerful turn options to influence the game. Use them to alter cards and figures of yours or your opponent.'},
             {'id': 'change_cards', 'rects': self._duel_change_cards_rects(), 'subscreen': 'field', 'title': 'Change Cards',
+             'separate_highlights': True,
              'body': 'Use the round-arrow buttons beside your hands to swap selected cards when your hand needs better options.'},
             {'id': 'battle_shop', 'button': self.battle_shop_button, 'subscreen': 'battle_shop', 'title': 'Battle Moves',
              'body': 'The battle shop opens during battle prep. Pick the moves you want to carry into the fight.'},
@@ -5329,6 +5330,15 @@ class GameScreen(Screen):
             bounds.union_ip(rect)
         return bounds
 
+    def _duel_highlight_rects(self, step):
+        rects = self._duel_step_rects(step)
+        if not rects:
+            return []
+        if step.get('separate_highlights'):
+            return rects
+        bounds = self._duel_combined_bounds(rects)
+        return [bounds] if bounds else []
+
     def _mark_duel_coach_seen(self, step_id):
         if not step_id:
             return
@@ -5398,12 +5408,14 @@ class GameScreen(Screen):
         self._duel_coach_step = step
         if not step:
             return
-        target = self._duel_target_bounds(step)
+        highlight_rects = self._duel_highlight_rects(step)
+        target = self._duel_combined_bounds(highlight_rects)
         if not target:
             return
         pulse = 2 + int((pygame.time.get_ticks() // 280) % 2)
         target = target.inflate(14, 14)
-        pygame.draw.rect(self.window, (250, 218, 92), target, pulse, border_radius=8)
+        for rect in highlight_rects:
+            pygame.draw.rect(self.window, (250, 218, 92), rect.inflate(14, 14), pulse, border_radius=8)
 
         card_w = min(390, max(330, int(0.31 * settings.SCREEN_WIDTH)))
         body_lines = self._wrap_duel_coach_lines(step['body'], card_w - 24)

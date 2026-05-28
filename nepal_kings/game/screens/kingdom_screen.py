@@ -762,7 +762,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_map_intro',
                 'rect': self._map_viewport_rect,
                 'title': 'Kingdom Map',
-                'body': 'Each hex is land. Your owned lands produce resources; other lands can be scouted and challenged through the land detail view.',
+                'body': 'Each hex is land. Your owned lands produce gold, booster packs and maps; other lands can be scouted and challenged through the land detail view.',
                 'action': 'next',
                 'max_lines': 5,
             }

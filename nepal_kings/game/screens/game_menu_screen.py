@@ -490,7 +490,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 'id': 'post_duel_collection',
                 'rect': self.button_collection.rect,
                 'title': 'Open Your Booster Packs',
-                'body': 'Your first duel is done. Go to Collection next and open one main booster and one side booster to turn those packs into playable cards to be used in your kingdom. Let\'s see how lucky you are.',
+                'body': 'Congrats on your first duel! Next, go to your Collection and open one main booster and one side booster to turn those packs into playable cards to be used in your kingdom. Let\'s see how lucky you are.',
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 5,

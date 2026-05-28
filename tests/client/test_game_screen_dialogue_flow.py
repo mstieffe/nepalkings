@@ -245,6 +245,62 @@ class TestGameScreenDialogueFlow:
         assert len(step['rects']) == 1
         assert step['rects'][0].left < family_button.x < step['rects'][0].right
         assert step['rects'][0].left < second_family_button.x < step['rects'][0].right
+        assert len(GameScreen._duel_highlight_rects(game_screen, step)) == 1
+
+    def test_first_duel_change_cards_coach_highlights_main_and_side_separately(self):
+        import pygame
+
+        GameScreen = _game_screen_class()
+        game_screen = GameScreen.__new__(GameScreen)
+        game = SimpleNamespace(
+            mode='duel',
+            turn=True,
+            game_over=False,
+            pending_game_over=False,
+            pending_forced_advance=False,
+            pending_defender_selection=False,
+            is_battle_active=lambda: False,
+        )
+        button = SimpleNamespace(rect_hit=pygame.Rect(10, 10, 20, 20))
+        main_change = pygame.Rect(70, 420, 32, 32)
+        side_change = pygame.Rect(70, 500, 32, 32)
+        game_screen.state = SimpleNamespace(
+            game=game,
+            subscreen='field',
+            user_dict={'onboarding': {
+                'duel_hints_seen': ['field', 'build', 'cast_spell'],
+                'completed_steps': [],
+            }},
+        )
+        game_screen.dialogue_box = None
+        game_screen.pending_notifications = []
+        game_screen.subscreens = {'field': SimpleNamespace(dialogue_box=None)}
+        game_screen.counter_spell_selector = None
+        game_screen.need_to_respond_to_spell = False
+        game_screen.waiting_for_counter_response = False
+        game_screen.main_hand = SimpleNamespace(buttons=[
+            SimpleNamespace(name='change_cards', rect_hit=main_change),
+        ])
+        game_screen.side_hand = SimpleNamespace(buttons=[
+            SimpleNamespace(name='change_cards', rect_hit=side_change),
+        ])
+        game_screen.field_button = button
+        game_screen.build_button = button
+        game_screen.cast_spell_button = button
+        game_screen.battle_shop_button = button
+        game_screen.battle_button = button
+        game_screen.turn_button = button
+        game_screen.ceasefire_button = button
+        game_screen.invader_button = button
+        game_screen.scoreboard_scroll = SimpleNamespace(rect=pygame.Rect(30, 30, 80, 40))
+        game_screen.resource_scroll = SimpleNamespace(rect=pygame.Rect(30, 80, 80, 40))
+
+        step = GameScreen._current_duel_coach_step(game_screen)
+
+        assert step['id'] == 'change_cards'
+        assert step['separate_highlights'] is True
+        assert GameScreen._duel_highlight_rects(game_screen, step) == [main_change, side_change]
+        assert GameScreen._duel_target_bounds(game_screen, step) == main_change.union(side_change)
 
     def test_first_battle_screen_coach_explains_move_and_scoring_panels(self):
         import pygame

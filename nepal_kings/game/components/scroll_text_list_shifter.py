@@ -8,11 +8,13 @@ from game.components.cards.card_img import CardImg
 
 class ScrollTextListShifter:
     def __init__(self, window, text_list, x, y, delta_x=-settings.get_x(0.01), num_texts_displayed=1,
-                 shift_cooldown=300, scroll_height=None, scroll_rect=None):
+                 shift_cooldown=300, scroll_height=None, scroll_rect=None,
+                 dot_indicator_max_options=5):
         """
         :param text_list: List of text dictionaries, each representing an item.
         :param scroll_height: Height of the scroll background for centering arrows. If None, uses default offset.
         :param scroll_rect: pygame.Rect of the scroll panel (for clipping & chevron placement).
+        :param dot_indicator_max_options: Maximum option count that still uses dot markers.
         """
         self.window = window
         self.title_font = settings.get_font(settings.SCROLL_FONT_SIZE_TITLE, bold=True)
@@ -28,6 +30,7 @@ class ScrollTextListShifter:
         self.last_shift_time = 0  # To track time since the last shift
         self.scroll_height = scroll_height  # Store scroll height for scrollbar calculations
         self.scroll_rect = scroll_rect  # Panel rect for clipping
+        self.dot_indicator_max_options = dot_indicator_max_options
 
         self.card_imgs = self.initialize_card_imgs()
         
@@ -48,7 +51,7 @@ class ScrollTextListShifter:
         self._chevron_sz = settings.SCROLL_CHEVRON_SIZE
         self._chevron_lw = settings.SCROLL_CHEVRON_LINE_W
 
-        # Height reserved for navigation bar (chevrons + dots) at the bottom
+        # Height reserved for navigation bar (chevrons + option indicator) at the bottom
         self._nav_bar_h = int(0.055 * settings.SCREEN_HEIGHT)
 
         if scroll_rect is not None:
@@ -229,28 +232,45 @@ class ScrollTextListShifter:
             points = [(cx, cy - sz), (cx + sz, cy), (cx, cy + sz)]
         pygame.draw.lines(self.window, clr, False, points, self._chevron_lw)
 
+    def _uses_counter_indicator(self, option_count):
+        """Return True when a compact number counter should replace dots."""
+        return option_count > self.dot_indicator_max_options
+
+    def _draw_counter_indicator(self, option_count):
+        current = (self.start_index % option_count) + 1
+        text = f"{current} / {option_count}"
+        surf = self.counter_font.render(text, True, settings.SCROLL_CHEVRON_HOVER_COLOR)
+        rect = surf.get_rect(center=(self._counter_cx, self._arrow_y))
+        self.window.blit(surf, rect)
+
+    def _draw_dot_indicator(self, option_count):
+        dot_r = max(3, int(0.004 * settings.SCREEN_HEIGHT))
+        dot_gap = dot_r * 3
+        total_w = option_count * dot_r * 2 + (option_count - 1) * (dot_gap - dot_r * 2)
+        dot_cx_start = self._counter_cx - total_w // 2 + dot_r
+        dot_cy = self._arrow_y  # same vertical centre as chevrons
+
+        active_index = self.start_index % option_count
+        for i in range(option_count):
+            cx = dot_cx_start + i * dot_gap
+            if i == active_index:
+                pygame.draw.circle(self.window, settings.SCROLL_CHEVRON_HOVER_COLOR, (cx, dot_cy), dot_r)
+            else:
+                pygame.draw.circle(self.window, settings.SCROLL_CHEVRON_COLOR, (cx, dot_cy), max(2, dot_r - 1))
+
     def draw(self):
-        """Draw the navigation bar, dot indicator, and clipped text content."""
+        """Draw the navigation bar, option indicator, and clipped text content."""
         n = len(self.text_list)
 
-        # ---- Navigation bar (chevrons + dots) — fixed at bottom of panel ----
+        # ---- Navigation bar (chevrons + option indicator) - fixed at bottom of panel ----
         if n > self.num_texts_displayed:
             self._draw_chevron(self._left_x, self._arrow_y, 'left', self._left_hovered)
             self._draw_chevron(self._right_x, self._arrow_y, 'right', self._right_hovered)
 
-            # Dot position indicator centred vertically with chevrons
-            dot_r = max(3, int(0.004 * settings.SCREEN_HEIGHT))
-            dot_gap = dot_r * 3
-            total_w = n * dot_r * 2 + (n - 1) * (dot_gap - dot_r * 2)
-            dot_cx_start = self._counter_cx - total_w // 2 + dot_r
-            dot_cy = self._arrow_y  # same vertical centre as chevrons
-
-            for i in range(n):
-                cx = dot_cx_start + i * dot_gap
-                if i == self.start_index:
-                    pygame.draw.circle(self.window, settings.SCROLL_CHEVRON_HOVER_COLOR, (cx, dot_cy), dot_r)
-                else:
-                    pygame.draw.circle(self.window, settings.SCROLL_CHEVRON_COLOR, (cx, dot_cy), max(2, dot_r - 1))
+            if self._uses_counter_indicator(n):
+                self._draw_counter_indicator(n)
+            else:
+                self._draw_dot_indicator(n)
 
         # ---- Draw content with clipping so overflow is hidden ----
         if self._clip_rect is not None:
