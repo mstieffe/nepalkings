@@ -742,8 +742,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
         if self._thread or self._new_msg_picker:
             return None
         seen = self._menu_coach_seen()
+        completed = self._onboarding_completed_steps()
+        first_conquer_complete = 'finish_first_conquer_battle' in completed
         conquer_button_rect = self._detail_conquer_button_rect()
-        if conquer_button_rect and 'kingdom_conquer_button' not in seen:
+        if not first_conquer_complete and conquer_button_rect and 'kingdom_conquer_button' not in seen:
             return {
                 'id': 'kingdom_conquer_button',
                 'rect': conquer_button_rect,
@@ -757,7 +759,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             return None
         if not self._hex_map or self._loading or self._error:
             return None
-        if 'kingdom_map_intro' not in seen:
+        if not first_conquer_complete and 'kingdom_map_intro' not in seen:
             return {
                 'id': 'kingdom_map_intro',
                 'rect': self._map_viewport_rect,
@@ -766,7 +768,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'action': 'next',
                 'max_lines': 5,
             }
-        if 'kingdom_select_land' not in seen:
+        if not first_conquer_complete and 'kingdom_select_land' not in seen:
             return {
                 'id': 'kingdom_select_land',
                 'rect': self._map_viewport_rect,
@@ -774,6 +776,48 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'body': 'Click a land you do not own to inspect it. The tour will continue once the detail view shows an available Conquer action.',
                 'action': 'click',
                 'mark_on_click': False,
+                'max_lines': 5,
+            }
+        if not first_conquer_complete:
+            return None
+
+        if 'kingdom_after_conquer_map' not in seen:
+            return {
+                'id': 'kingdom_after_conquer_map',
+                'rect': self._map_viewport_rect,
+                'title': 'After A Conquest',
+                'body': 'Conquer battles change the map. If you won, the land joins your owned territory and starts contributing production. If you lost, the defender kept the land and only looted cards stayed lost.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        if 'kingdom_connected_lands' not in seen:
+            return {
+                'id': 'kingdom_connected_lands',
+                'rect': self._map_viewport_rect,
+                'title': 'Connected Kingdoms',
+                'body': 'Owned neighboring lands form one kingdom. Conquering next to your land expands it; isolated owned lands become separate kingdoms, and later conquests can connect them.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        production_rect = self._collect_all_rect or self._header_rect
+        if production_rect and 'kingdom_production_intro' not in seen:
+            return {
+                'id': 'kingdom_production_intro',
+                'rect': production_rect,
+                'title': 'Collect Production',
+                'body': 'Your kingdoms build up gold over time, and skills can add booster packs or maps. Use Collect All here, or open a kingdom config to collect and inspect each production item.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        gear_rect = getattr(self, '_kingdom_chip_gear_rect', None)
+        if gear_rect and 'kingdom_config_intro' not in seen:
+            return {
+                'id': 'kingdom_config_intro',
+                'rect': gear_rect,
+                'title': 'Open Kingdom Config',
+                'body': 'This edit icon opens the selected kingdom. Use it to spend skill points, collect individual production, manage shields, cosmetics, and the loot inbox.',
+                'action': 'click',
+                'mark_on_click': True,
                 'max_lines': 5,
             }
         return None

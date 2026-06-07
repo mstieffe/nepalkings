@@ -8,6 +8,7 @@ underlying field/shop/battle components are still shared with duel mode, but
 the parent navigation, HUD, routing, and input policy are conquer-specific.
 """
 
+import logging
 import math
 import sys
 from types import SimpleNamespace
@@ -47,10 +48,13 @@ from game.screens.battle_shop_screen import BattleShopScreen
 from game.screens.field_screen import FieldScreen
 from game.screens.game_screen import GameScreen
 from game.screens.screen import Screen
-from utils import battle_shop_service, game_service
+from utils import battle_shop_service, game_service, onboarding_service
 from utils.background_poller import BackgroundPoller
 from utils.perf_monitor import perf_section
 from utils.utils import GameButton
+
+
+logger = logging.getLogger('nk.screens.conquer_game')
 
 
 class ConquerGameScreen(GameScreen):
@@ -204,6 +208,13 @@ class ConquerGameScreen(GameScreen):
         self._conquer_hint_font = settings.get_font(settings.FS_SMALL)
         self._conquer_badge_font = settings.get_font(
             int(0.015 * settings.SCREEN_HEIGHT * _UI_SCALE), bold=True)
+        self._conquer_battle_coach_buttons = []
+        self._conquer_battle_coach_step = None
+        self._conquer_battle_coach_pressed_button_action = None
+        self._conquer_battle_coach_font = settings.get_font(
+            max(14, int(0.018 * settings.SCREEN_HEIGHT)))
+        self._conquer_battle_coach_title_font = settings.get_font(
+            max(16, int(0.024 * settings.SCREEN_HEIGHT)), bold=True)
         # Slightly larger font for the persistent top-row Withdraw button
         # and status pill so the round indicator stays readable at a glance.
         self._conquer_status_font = settings.get_font(
@@ -1548,7 +1559,7 @@ class ConquerGameScreen(GameScreen):
                     getattr(game, 'player_id', None))
         if getattr(self, '_spell_anim_game_key', None) != game_key:
             self._spell_anim_game_key = game_key
-            self._spell_step_phase = {}
+            self._spell_step_phase_map = {}
             self._spell_anim_seeded = False
             self._spell_anim_fired = set()
             self._spell_anim_target_fired = set()
@@ -1593,7 +1604,7 @@ class ConquerGameScreen(GameScreen):
             if fid is not None and rect is not None:
                 self._last_seen_figure_rects[fid] = pygame.Rect(rect)
 
-        prev_phase = getattr(self, '_spell_step_phase', None) or {}
+        prev_phase = getattr(self, '_spell_step_phase_map', None) or {}
         fired_steps = getattr(self, '_spell_anim_fired', None)
         if fired_steps is None:
             fired_steps = set()
@@ -1621,7 +1632,7 @@ class ConquerGameScreen(GameScreen):
                     if self._is_conquer_card_effect_spell(s_name, s_info):
                         self._conquer_spell_anim_impact_ms[key] = 0
                         fired_steps.add(key)
-            self._spell_step_phase = dict(current_phase)
+            self._spell_step_phase_map = dict(current_phase)
             self._spell_anim_seeded = True
         else:
             anchor = self._conquer_timeline_anchor_rect()
@@ -1648,7 +1659,7 @@ class ConquerGameScreen(GameScreen):
                         if self._fire_spell_step_animation(
                                 key, anchor, step_kind=step_kind, spell_name=spell_name):
                             fired_steps.add(key)
-            self._spell_step_phase = dict(current_phase)
+            self._spell_step_phase_map = dict(current_phase)
 
         # --- Round transition banner (Tier 3.3) ---
         battle_round = int(getattr(game, 'battle_round', 0) or 0)
@@ -1800,6 +1811,384 @@ class ConquerGameScreen(GameScreen):
             return pygame.Rect(layout.battlefield.duel_lane.rect)
         except Exception:
             return None
+
+    def _conquer_onboarding(self):
+        ud = getattr(self.state, 'user_dict', None) or {}
+        onboarding = ud.get('onboarding')
+        return onboarding if isinstance(onboarding, dict) else None
+
+    def _conquer_menu_coach_seen(self):
+        onboarding = self._conquer_onboarding()
+        return set(onboarding.get('menu_hints_seen') or []) if onboarding else set()
+
+    def _conquer_completed_onboarding_steps(self):
+        onboarding = self._conquer_onboarding()
+        return set(onboarding.get('completed_steps') or []) if onboarding else set()
+
+    def _conquer_battle_coach_allowed(self):
+        onboarding = self._conquer_onboarding()
+        if not onboarding:
+            return False
+        if 'finish_first_conquer_battle' in self._conquer_completed_onboarding_steps():
+            return False
+        game = getattr(self.state, 'game', None)
+        if not game or getattr(game, 'mode', None) != 'conquer':
+            return False
+        if not self._is_tactics_hand_game():
+            return False
+        if getattr(self, 'dialogue_box', None) is not None:
+            return False
+        if getattr(self, '_withdraw_dialogue_open', False):
+            return False
+        if getattr(self, 'waiting_for_counter_response', False):
+            return False
+        if getattr(self, 'need_to_respond_to_spell', False):
+            return False
+        if getattr(self, 'counter_spell_selector', None) is not None:
+            return False
+        subscreen = None
+        if hasattr(self, 'subscreens'):
+            subscreen = self.subscreens.get(getattr(self.state, 'subscreen', None))
+        if getattr(subscreen, 'dialogue_box', None) is not None:
+            return False
+        return True
+
+    def _mark_conquer_battle_coach_seen(self, step_id):
+        if not step_id:
+            return
+        try:
+            data = onboarding_service.mark_tip(f'menu:{step_id}')
+            onboarding = data.get('onboarding') if isinstance(data, dict) else None
+            if onboarding is not None and getattr(self.state, 'user_dict', None) is not None:
+                self.state.user_dict['onboarding'] = onboarding
+            return
+        except Exception as exc:
+            logger.debug('Failed to persist conquer battle coach hint %s: %s', step_id, exc)
+        ud = getattr(self.state, 'user_dict', None)
+        if not ud:
+            return
+        onboarding = dict(ud.get('onboarding') or {})
+        seen = list(onboarding.get('menu_hints_seen') or [])
+        if step_id not in seen:
+            seen.append(step_id)
+        onboarding['menu_hints_seen'] = seen
+        ud['onboarding'] = onboarding
+
+    @staticmethod
+    def _conquer_battle_coach_bounds(rects):
+        usable = [pygame.Rect(rect) for rect in rects if rect]
+        if not usable:
+            return None
+        bounds = usable[0].copy()
+        for rect in usable[1:]:
+            bounds.union_ip(rect)
+        return bounds
+
+    def _conquer_battle_coach_target_rects(self, step):
+        if not step:
+            return []
+        if step.get('rects'):
+            return [pygame.Rect(rect) for rect in step.get('rects') if rect]
+        if step.get('rect'):
+            return [pygame.Rect(step['rect'])]
+        return []
+
+    def _conquer_battle_timeline_target_rects(self):
+        for attr in ('_conquer_timeline_info_rect', '_conquer_collapsed_header_rect'):
+            rect = getattr(self, attr, None)
+            if rect is not None:
+                return [pygame.Rect(rect)]
+        try:
+            return [pygame.Rect(self._conquer_timeline_overlay_rect())]
+        except Exception:
+            return []
+
+    def _conquer_battle_prelude_target_rects(self):
+        active_step = self.active_conquer_timeline_step()
+        if active_step is None or getattr(active_step, 'kind', '') not in (
+                'prelude_own', 'prelude_opp', 'counter'):
+            return []
+        return self._conquer_battle_timeline_target_rects()
+
+    def _conquer_battle_field_target_rects(self):
+        rects = []
+        lane_rect = self._conquer_duel_lane_target_rect()
+        if lane_rect is not None:
+            rects.append(pygame.Rect(lane_rect))
+        confirm_rect = (getattr(self, '_conquer_objective_action_rects', {}) or {}).get('confirm')
+        if confirm_rect is not None:
+            rects.append(pygame.Rect(confirm_rect))
+        return rects
+
+    def _conquer_battle_tactics_target_rects(self):
+        rect = self._conquer_tactics_rail_target_rect()
+        return [pygame.Rect(rect)] if rect is not None else []
+
+    def _conquer_battle_tactic_action_rects(self):
+        rail = getattr(self, '_tactics_rail', None)
+        button_rects = []
+        for rect in (getattr(rail, '_action_button_rects', {}) or {}).values():
+            if rect is not None:
+                button_rects.append(pygame.Rect(rect))
+        if not button_rects:
+            return []
+        rects = []
+        hand_rect = getattr(rail, '_dyn_hand_list_rect', None)
+        if hand_rect is not None:
+            rects.append(pygame.Rect(hand_rect))
+        rects.extend(button_rects)
+        return rects
+
+    def _conquer_battle_round_ledger_rects(self):
+        ledger = getattr(self, '_round_ledger', None)
+        rect_fn = getattr(ledger, 'rect', None)
+        if callable(rect_fn):
+            try:
+                return [pygame.Rect(rect_fn())]
+            except Exception:
+                return []
+        return []
+
+    def _conquer_battle_finish_rects(self):
+        try:
+            if not self._conquer_finish_available():
+                return []
+        except Exception:
+            return []
+        rect = (getattr(self, '_conquer_objective_action_rects', {}) or {}).get('finish')
+        return [pygame.Rect(rect)] if rect is not None else []
+
+    def _current_conquer_battle_coach_step(self):
+        if not self._conquer_battle_coach_allowed():
+            return None
+        seen = self._conquer_menu_coach_seen()
+        if 'conquer_battle_timeline_intro' not in seen:
+            rects = self._conquer_battle_timeline_target_rects()
+            if rects:
+                return {
+                    'id': 'conquer_battle_timeline_intro',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Battle Timeline',
+                    'body': 'The top bar is your battle script. It shows setup, prelude spells, target choices, each tactic round, and the final result. Read the highlighted step first whenever you are unsure.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if 'conquer_battle_prelude' not in seen:
+            rects = self._conquer_battle_prelude_target_rects()
+            if rects:
+                return {
+                    'id': 'conquer_battle_prelude',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Prelude And Counters',
+                    'body': 'Prelude and counter effects resolve before the tactic rounds. Some steps are just information; press Next in the timeline when the screen asks for it, then watch the field or tactics rail update.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if 'conquer_battle_field_actions' not in seen:
+            rects = self._conquer_battle_field_target_rects()
+            if rects:
+                return {
+                    'id': 'conquer_battle_field_actions',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Field Choices',
+                    'body': 'When the timeline asks for an attacker, defender, or spell target, click the highlighted figure on the field. If a Confirm button appears in the timeline, press it to lock that choice.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if 'conquer_battle_tactics_rail' not in seen:
+            rects = self._conquer_battle_tactics_target_rects()
+            if rects:
+                return {
+                    'id': 'conquer_battle_tactics_rail',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Your Tactics Hand',
+                    'body': 'The left rail is your hand for the three battle rounds. Pick one available tactic each round. The defender answers with a tactic of their own, then the round is scored.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if 'conquer_battle_tactic_actions' not in seen:
+            rects = self._conquer_battle_tactic_action_rects()
+            if rects:
+                return {
+                    'id': 'conquer_battle_tactic_actions',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Playing A Tactic',
+                    'body': 'Select a tactic, then use Play to commit it. Gamble, Combine, Dismantle, and Skip are optional tools; for your first battle, Play is the main button to remember.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if 'conquer_battle_round_ledger' not in seen:
+            rects = self._conquer_battle_round_ledger_rects()
+            if rects:
+                return {
+                    'id': 'conquer_battle_round_ledger',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Three-Round Ledger',
+                    'body': 'The bottom ledger records all three rounds: your tactic, the defender tactic, the power difference, and the running total. Win more total power to win the land.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if 'conquer_battle_finish' not in seen:
+            rects = self._conquer_battle_finish_rects()
+            if rects:
+                return {
+                    'id': 'conquer_battle_finish',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Finish The Battle',
+                    'body': 'When all three rounds are filled, Finish Battle resolves ownership and loot. The screen can auto-finish after a short wait, but pressing it makes the result immediate.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        return None
+
+    def _wrap_conquer_battle_coach_lines(self, text, max_width, max_lines=5):
+        words = str(text or '').split()
+        lines = []
+        current = ''
+        for word in words:
+            candidate = word if not current else f'{current} {word}'
+            if self._conquer_battle_coach_font.size(candidate)[0] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines[:max_lines]
+
+    def _draw_conquer_battle_coach_button(self, rect, label, action):
+        mx, my = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mx, my)
+        bg = (96, 70, 34) if hovered else (58, 45, 28)
+        bdr = (235, 204, 105) if hovered else (150, 126, 74)
+        pygame.draw.rect(self.window, bg, rect, border_radius=4)
+        pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
+        txt = self._conquer_battle_coach_font.render(label, True, (245, 232, 190))
+        self.window.blit(txt, txt.get_rect(center=rect.center))
+        self._conquer_battle_coach_buttons.append((rect.copy(), action))
+
+    def _draw_conquer_battle_coach(self):
+        step = self._current_conquer_battle_coach_step()
+        self._conquer_battle_coach_buttons = []
+        self._conquer_battle_coach_step = step
+        if not step:
+            return
+        target_rects = self._conquer_battle_coach_target_rects(step)
+        target = self._conquer_battle_coach_bounds(target_rects)
+        if target is None:
+            return
+        pulse = 2 + int((pygame.time.get_ticks() // 280) % 2)
+        for rect in target_rects:
+            pygame.draw.rect(self.window, (250, 218, 92), rect.inflate(14, 14), pulse, border_radius=8)
+        target = target.inflate(14, 14)
+
+        card_w = min(420, max(330, int(0.34 * settings.SCREEN_WIDTH)), settings.SCREEN_WIDTH - 16)
+        body_lines = self._wrap_conquer_battle_coach_lines(
+            step['body'], card_w - 28, max_lines=step.get('max_lines', 5))
+        title_h = self._conquer_battle_coach_title_font.get_height()
+        body_line_h = self._conquer_battle_coach_font.get_height() + 3
+        button_h = max(30, self._conquer_battle_coach_font.get_height() + 10)
+        draws_next = step.get('action', 'next') == 'next'
+        button_space = button_h + 16 if draws_next else 8
+        card_h = max(152, 22 + title_h + 10 + len(body_lines) * body_line_h + button_space)
+        gap = 14
+        if target.right + gap + card_w < settings.SCREEN_WIDTH:
+            card_x = target.right + gap
+        else:
+            card_x = max(8, target.left - gap - card_w)
+        card_y = max(8, min(target.centery - card_h // 2,
+                            settings.SCREEN_HEIGHT - card_h - 8))
+        card = pygame.Rect(card_x, card_y, card_w, card_h)
+        surf = pygame.Surface((card.w, card.h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (24, 20, 16, 235), surf.get_rect(), border_radius=8)
+        self.window.blit(surf, card.topleft)
+        pygame.draw.rect(self.window, (220, 185, 88), card, 2, border_radius=8)
+
+        title_text = self._fit_text(step['title'], self._conquer_battle_coach_title_font, card.w - 24)
+        title = self._conquer_battle_coach_title_font.render(title_text, True, (248, 232, 180))
+        self.window.blit(title, (card.x + 12, card.y + 10))
+        y = card.y + 10 + title_h + 10
+        for line in body_lines:
+            line_surf = self._conquer_battle_coach_font.render(line, True, (214, 204, 174))
+            self.window.blit(line_surf, (card.x + 12, y))
+            y += body_line_h
+
+        if draws_next:
+            button_label = step.get('button_label') or 'Next'
+            button_w = max(76, self._conquer_battle_coach_font.size(button_label)[0] + 28)
+            next_rect = pygame.Rect(card.right - button_w - 14,
+                                    card.bottom - button_h - 12,
+                                    button_w, button_h)
+            self._draw_conquer_battle_coach_button(next_rect, button_label, ('next', step['id']))
+
+    @staticmethod
+    def _conquer_battle_coach_blocking_event_types():
+        event_types = {MOUSEBUTTONDOWN, MOUSEBUTTONUP, MOUSEWHEEL, KEYDOWN, KEYUP}
+        text_input = getattr(pygame, 'TEXTINPUT', None)
+        if text_input is not None:
+            event_types.add(text_input)
+        return event_types
+
+    def _handle_conquer_battle_coach_events(self, events):
+        step = getattr(self, '_conquer_battle_coach_step', None)
+        if step is None:
+            step = self._current_conquer_battle_coach_step()
+            self._conquer_battle_coach_step = step
+        if not step:
+            return False
+        action = step.get('action', 'next')
+        target_rects = self._conquer_battle_coach_target_rects(step)
+        block_types = self._conquer_battle_coach_blocking_event_types()
+        for event in events:
+            if event.type == QUIT:
+                continue
+            if event.type not in block_types:
+                continue
+            if event.type == MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
+                pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                if action != 'click':
+                    self._conquer_battle_coach_pressed_button_action = None
+                    for rect, button_action in list(self._conquer_battle_coach_buttons):
+                        if rect.collidepoint(pos):
+                            self._conquer_battle_coach_pressed_button_action = button_action
+                            break
+                    return True
+                if any(rect.collidepoint(pos) for rect in target_rects):
+                    return False
+                return True
+            if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
+                pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                if action == 'click':
+                    if any(rect.collidepoint(pos) for rect in target_rects):
+                        self._mark_conquer_battle_coach_seen(step.get('id'))
+                        return False
+                    return True
+                pressed_action = getattr(self, '_conquer_battle_coach_pressed_button_action', None)
+                self._conquer_battle_coach_pressed_button_action = None
+                for rect, button_action in list(self._conquer_battle_coach_buttons):
+                    if not rect.collidepoint(pos):
+                        continue
+                    if pressed_action and pressed_action != button_action:
+                        return True
+                    kind, step_id = button_action
+                    if kind == 'next':
+                        self._mark_conquer_battle_coach_seen(step_id)
+                        if step_id in ('conquer_battle_timeline_intro', 'conquer_battle_prelude'):
+                            advance_active = getattr(self, '_advance_active_timeline_step', None)
+                            if callable(advance_active):
+                                advance_active()
+                    return True
+                return True
+            return True
+        return False
 
     def _card_spell_floating_text(self, spell_name, spell_info=None):
         effect_data = self._spell_effect_data(spell_info)
@@ -3420,6 +3809,17 @@ class ConquerGameScreen(GameScreen):
         if not game:
             return
 
+        state_changed = False
+
+        def _update_game_attr(attr, value):
+            nonlocal state_changed
+            try:
+                if getattr(game, attr, None) != value:
+                    setattr(game, attr, value)
+                    state_changed = True
+            except Exception:
+                pass
+
         tactics = result.get('player_tactics') or result.get('player_moves') or []
         opponent_tactics = result.get('opponent_tactics') or result.get('opponent_moves') or []
         self._conquer_tactic_cache = [
@@ -3430,86 +3830,54 @@ class ConquerGameScreen(GameScreen):
         ]
 
         if 'battle_round' in result:
-            try:
-                game.battle_round = result.get('battle_round')
-            except Exception:
-                pass
+            _update_game_attr('battle_round', result.get('battle_round'))
         if 'battle_turn_player_id' in result:
-            try:
-                game.battle_turn_player_id = result.get('battle_turn_player_id')
-            except Exception:
-                pass
+            _update_game_attr('battle_turn_player_id', result.get('battle_turn_player_id'))
         if 'battle_confirmed' in result:
-            try:
-                game.battle_confirmed = bool(result.get('battle_confirmed'))
-            except Exception:
-                pass
+            _update_game_attr('battle_confirmed', bool(result.get('battle_confirmed')))
         elif (getattr(game, 'battle_turn_player_id', None) is not None
               or bool(result.get('battle_complete'))):
-            try:
-                game.battle_confirmed = True
-            except Exception:
-                pass
+            _update_game_attr('battle_confirmed', True)
         if 'invader_player_id' in result:
-            try:
-                game.invader_player_id = result.get('invader_player_id')
-            except Exception:
-                pass
+            _update_game_attr('invader_player_id', result.get('invader_player_id'))
         for attr in (
                 'advancing_player_id', 'advancing_figure_id', 'advancing_figure_id_2',
                 'defending_figure_id', 'defending_figure_id_2'):
             if attr in result:
-                try:
-                    setattr(game, attr, result.get(attr))
-                except Exception:
-                    pass
+                _update_game_attr(attr, result.get(attr))
         if 'battle_skipped_rounds' in result:
-            try:
-                game.battle_skipped_rounds = result.get('battle_skipped_rounds') or {}
-            except Exception:
-                pass
+            _update_game_attr('battle_skipped_rounds', result.get('battle_skipped_rounds') or {})
         if 'conquer_round_deadline_ts' in result:
-            try:
-                game.conquer_round_deadline_ts = result.get('conquer_round_deadline_ts')
-            except Exception:
-                pass
+            _update_game_attr('conquer_round_deadline_ts', result.get('conquer_round_deadline_ts'))
         if 'conquer_round_timeout_sec' in result:
-            try:
-                game.conquer_round_timeout_sec = result.get('conquer_round_timeout_sec')
-            except Exception:
-                pass
+            _update_game_attr('conquer_round_timeout_sec', result.get('conquer_round_timeout_sec'))
         if 'active_spells' in result:
             try:
                 previous_spells = getattr(game, 'cached_active_spells', None)
                 active_spells = result.get('active_spells') or []
-                game.cached_active_spells = active_spells
                 if previous_spells != active_spells:
+                    game.cached_active_spells = active_spells
                     game._figures_data_version = int(
                         getattr(game, '_figures_data_version', 0) or 0) + 1
+                    state_changed = True
             except Exception:
                 pass
         if 'battle_modifier' in result:
-            try:
-                game.battle_modifier = result.get('battle_modifier')
-            except Exception:
-                pass
+            _update_game_attr('battle_modifier', result.get('battle_modifier'))
         if 'conquer_resolution_step' in result:
             try:
                 step = int(result.get('conquer_resolution_step') or 0)
                 self._conquer_resolution_step_server = step
-                setattr(game, 'conquer_resolution_step', step)
+                if getattr(game, 'conquer_resolution_step', None) != step:
+                    setattr(game, 'conquer_resolution_step', step)
+                    state_changed = True
             except Exception:
                 pass
 
         self._conquer_tactic_cache_key = self._battle_state_cache_key()
         self._conquer_opponent_tactic_cache_key = self._conquer_tactic_cache_key
         self._battle_state_pending_key = None
-        if any(key in result for key in (
-                'battle_round', 'battle_turn_player_id', 'battle_confirmed',
-                'invader_player_id', 'advancing_player_id',
-                'advancing_figure_id', 'advancing_figure_id_2',
-                'defending_figure_id', 'defending_figure_id_2',
-                'active_spells', 'battle_modifier', 'conquer_resolution_step')):
+        if state_changed:
             try:
                 game._game_data_version = int(
                     getattr(game, '_game_data_version', 0) or 0) + 1
@@ -7072,6 +7440,9 @@ class ConquerGameScreen(GameScreen):
                     or self._is_tactics_hand_game():
                 self._conquer_timeline_panel.draw_hover_tooltips(self)
 
+        with perf_section('conquer.coach'):
+            self._draw_conquer_battle_coach()
+
     # ----------------------------------------------------------------- update
     def update(self, events):
         if not self._ensure_conquer_screen_game():
@@ -7179,6 +7550,9 @@ class ConquerGameScreen(GameScreen):
                 self.dialogue_box = None
                 self.show_next_queued_notification()
                 return
+
+        if self._handle_conquer_battle_coach_events(events):
+            return
 
         if self._handle_conquer_command_events(events):
             return

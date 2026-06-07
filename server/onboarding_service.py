@@ -196,6 +196,14 @@ MENU_HINT_IDS = (
     'kingdom_conquer_button', 'conquer_config_field',
     'conquer_config_build_edit', 'conquer_config_battle_plan',
     'conquer_config_prelude', 'conquer_config_to_battle',
+    'conquer_battle_timeline_intro', 'conquer_battle_prelude',
+    'conquer_battle_field_actions', 'conquer_battle_tactics_rail',
+    'conquer_battle_tactic_actions', 'conquer_battle_round_ledger',
+    'conquer_battle_finish', 'kingdom_after_conquer_map',
+    'kingdom_connected_lands', 'kingdom_production_intro',
+    'kingdom_config_intro', 'kingdom_config_header',
+    'kingdom_config_production', 'kingdom_config_skills',
+    'kingdom_config_loot_inbox', 'kingdom_config_shields_style',
 )
 
 

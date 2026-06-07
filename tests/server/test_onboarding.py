@@ -262,6 +262,28 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
         'user_items', 'duel', 'guide_first_duel_reward', 'collection_open_main_booster'
     ]
 
+    newest = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
+                         json={'tip_key': 'menu:kingdom_config_shields_style'})
+    assert newest.status_code == 200
+
+    earlier_new = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
+                              json={'tip_key': 'menu:conquer_battle_timeline_intro'})
+    assert earlier_new.status_code == 200
+
+    middle_new = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
+                             json={'tip_key': 'menu:kingdom_after_conquer_map'})
+    assert middle_new.status_code == 200
+    data = middle_new.get_json()
+    assert data['onboarding']['menu_hints_seen'] == [
+        'user_items',
+        'duel',
+        'guide_first_duel_reward',
+        'collection_open_main_booster',
+        'conquer_battle_timeline_intro',
+        'kingdom_after_conquer_map',
+        'kingdom_config_shields_style',
+    ]
+
     duel = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
                        json={'tip_key': 'duel:change_cards'})
     assert duel.status_code == 200

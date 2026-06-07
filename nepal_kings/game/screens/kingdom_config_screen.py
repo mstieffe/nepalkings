@@ -134,6 +134,13 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._touch_scroll_target = None  # None | 'content' | 'cosmetics' | 'skills' | ('cosmetic_section', key)
         self._touch_scroll_last_y = 0
         self._touch_scroll_moved = 0
+        self._kingdom_config_header_rect = None
+        self._kingdom_config_cosmetics_rect = None
+        self._kingdom_config_shield_rect = None
+        self._kingdom_config_vault_rect = None
+        self._kingdom_config_loot_rect = None
+        self._kingdom_config_skills_rect = None
+        self._kingdom_config_skill_button_rect = None
 
     def _load_icon(self, rel_path):
         try:
@@ -940,6 +947,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         super().handle_events(events)
         if self.dialogue_box:
             return
+        coach_step = self._current_kingdom_config_coach_step()
+        if self._handle_menu_coach_events(events, coach_step):
+            return
         for event in events:
             if self._rename_dialog:
                 self._handle_rename_event(event)
@@ -1224,6 +1234,140 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
     def update(self, events=None):
         super().update()
         self._update_icon_buttons()
+
+    def _current_kingdom_config_coach_id(self):
+        if not self._menu_coach_allowed_common():
+            return None
+        if self._loading or not self._kingdom:
+            return None
+        if self._rename_dialog or self._pending_purchase:
+            return None
+        if 'finish_first_conquer_battle' not in self._onboarding_completed_steps():
+            return None
+        seen = self._menu_coach_seen()
+        for step_id in (
+                'kingdom_config_header',
+                'kingdom_config_production',
+                'kingdom_config_skills',
+                'kingdom_config_loot_inbox',
+                'kingdom_config_shields_style'):
+            if step_id not in seen:
+                return step_id
+        return None
+
+    def _ensure_kingdom_config_coach_visible(self, layout, step_id=None):
+        step_id = step_id or self._current_kingdom_config_coach_id()
+        if step_id is None:
+            return
+        viewport = layout.get('content_viewport')
+        if viewport is None:
+            return
+        max_scroll = max(0, int(layout.get('content_h', 0) or 0) - viewport.h)
+        if max_scroll <= 0:
+            self._content_scroll = 0
+            return
+        gap = int(layout.get('gap', 0) or 0)
+        targets = {
+            'kingdom_config_production': (0, layout.get('vault_h', 0)),
+            'kingdom_config_loot_inbox': (
+                layout.get('vault_h', 0) + gap,
+                layout.get('loot_h', 0),
+            ),
+            'kingdom_config_skills': (
+                layout.get('vault_h', 0) + gap + layout.get('loot_h', 0) + gap,
+                layout.get('skills_h', 0),
+            ),
+            'kingdom_config_shields_style': (
+                layout.get('cosmetics_h', 0) + gap,
+                layout.get('shield_h', 0),
+            ),
+        }
+        target = targets.get(step_id)
+        if not target:
+            return
+        target_top, target_h = target
+        current = max(0, min(max_scroll, int(getattr(self, '_content_scroll', 0) or 0)))
+        visible_top = current
+        visible_bottom = current + viewport.h
+        desired = current
+        # If the coached panel is taller than the viewport, trying to satisfy
+        # both top and bottom visibility oscillates every frame. Pin to the
+        # panel top so the overlay and content remain stable.
+        if target_h >= viewport.h:
+            desired = target_top
+        elif target_top < visible_top:
+            desired = target_top
+        elif target_top + target_h > visible_bottom:
+            desired = target_top + target_h - viewport.h
+        self._content_scroll = max(0, min(max_scroll, int(desired)))
+
+    def _current_kingdom_config_coach_step(self):
+        step_id = self._current_kingdom_config_coach_id()
+        if step_id == 'kingdom_config_header':
+            rect = getattr(self, '_kingdom_config_header_rect', None)
+            if rect is not None:
+                return {
+                    'id': step_id,
+                    'rect': rect,
+                    'title': 'Kingdom Header',
+                    'body': "The header shows this kingdom's lands, level, total XP, and progress to the next level. New connected land gives XP by tier, and each level grants skill points.",
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if step_id == 'kingdom_config_production':
+            rect = self._collect_btn_rect or getattr(self, '_kingdom_config_vault_rect', None)
+            if rect is not None:
+                return {
+                    'id': step_id,
+                    'rect': rect,
+                    'title': 'Production Vault',
+                    'body': 'This panel shows pending gold, packs, and maps for the selected kingdom. A full vault stops adding more of that item, so collect production when it is ready.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if step_id == 'kingdom_config_skills':
+            rect = (getattr(self, '_kingdom_config_skill_button_rect', None)
+                    or getattr(self, '_kingdom_config_skills_rect', None))
+            if rect is not None:
+                return {
+                    'id': step_id,
+                    'rect': rect,
+                    'title': 'Spend Skill Points',
+                    'body': 'Skill points come from kingdom levels. Gold Production and Gold Vault are steady early picks; pack, map, shield, core protection, and loot skills support longer plans.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if step_id == 'kingdom_config_loot_inbox':
+            rect = (getattr(self, '_loot_gained_rect', None)
+                    or getattr(self, '_loot_lost_rect', None)
+                    or getattr(self, '_kingdom_config_loot_rect', None))
+            if rect is not None:
+                return {
+                    'id': step_id,
+                    'rect': rect,
+                    'title': 'Loot Inbox',
+                    'body': 'Cards won or lost through conquest appear here. Gained loot waits for collection; lost-card notices show what happened to cards that did not return.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if step_id == 'kingdom_config_shields_style':
+            rects = []
+            for rect in (
+                    getattr(self, '_kingdom_config_cosmetics_rect', None),
+                    getattr(self, '_kingdom_config_shield_rect', None)):
+                if rect is not None:
+                    rects.append(pygame.Rect(rect))
+            if rects:
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Shields And Style',
+                    'body': 'Shields protect a kingdom for a time, while cosmetics change how it appears on the map. These are useful after you understand production and skills.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        return None
 
     def _draw_panel(self, rect, title=None):
         surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
@@ -2194,6 +2338,8 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                 # only register the button when its full hitbox is visible
                 # to keep clicks from firing in empty space below the list.
                 if list_rect.contains(btn):
+                    if self._kingdom_config_skill_button_rect is None:
+                        self._kingdom_config_skill_button_rect = btn.copy()
                     self._draw_button(btn, label, 'upgrade_skill', key, disabled=disabled)
                 else:
                     self._draw_button(btn, label, 'upgrade_skill', key, disabled=True)
@@ -2335,9 +2481,17 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._rename_icon_rect = None
         self._loot_gained_rect = None
         self._loot_lost_rect = None
+        self._kingdom_config_header_rect = None
+        self._kingdom_config_cosmetics_rect = None
+        self._kingdom_config_shield_rect = None
+        self._kingdom_config_vault_rect = None
+        self._kingdom_config_loot_rect = None
+        self._kingdom_config_skills_rect = None
+        self._kingdom_config_skill_button_rect = None
         layout = self._layout_rects()
         _draw_config_frame(self.window, self._box_rect)
         # Unified header pill: pager + name + edit + level/XP in one widget.
+        self._kingdom_config_header_rect = layout['header'].copy()
         self._draw_header_pill(layout['header'])
         self._draw_close_x_button()
 
@@ -2347,6 +2501,7 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self.window.blit(msg, msg.get_rect(center=(settings.SCREEN_WIDTH // 2,
                                                        settings.SCREEN_HEIGHT // 2)))
             self._draw_menu_overlay()
+            self._draw_menu_coach(self._current_kingdom_config_coach_step())
             return
 
         if not self._kingdom:
@@ -2355,12 +2510,14 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             self.window.blit(msg, msg.get_rect(center=(settings.SCREEN_WIDTH // 2,
                                                        settings.SCREEN_HEIGHT // 2)))
             self._draw_menu_overlay()
+            self._draw_menu_coach(self._current_kingdom_config_coach_step())
             return
 
         viewport = layout['content_viewport']
         self._content_scroll_area = viewport
         self._content_content_h = layout['content_h']
         max_scroll = max(0, layout['content_h'] - viewport.h)
+        self._ensure_kingdom_config_coach_visible(layout)
         content_scroll = max(0, min(max_scroll, int(getattr(self, '_content_scroll', 0) or 0)))
         self._content_scroll = content_scroll
 
@@ -2374,10 +2531,13 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             left_w = layout['left_w']
             gap = layout['gap']
             cosmetics_h = layout['cosmetics_h']
-            self._draw_cosmetics_panel(pygame.Rect(left_x, top, left_w, cosmetics_h))
+            cosmetics_rect = pygame.Rect(left_x, top, left_w, cosmetics_h)
+            self._kingdom_config_cosmetics_rect = cosmetics_rect.copy()
+            self._draw_cosmetics_panel(cosmetics_rect)
             shield_y = top + cosmetics_h + gap
-            self._draw_shield_panel(pygame.Rect(left_x, shield_y, left_w,
-                                                layout['shield_h']))
+            shield_rect = pygame.Rect(left_x, shield_y, left_w, layout['shield_h'])
+            self._kingdom_config_shield_rect = shield_rect.copy()
+            self._draw_shield_panel(shield_rect)
 
             right_x = layout['right_x']
             right_w = layout['right_w']
@@ -2385,13 +2545,16 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             vault_h = layout['vault_h']
             gap_v = layout['gap']
             vault_rect = pygame.Rect(right_x, right_top, right_w, vault_h)
+            self._kingdom_config_vault_rect = vault_rect.copy()
             self._draw_vault_panel(vault_rect)
             loot_y = vault_rect.bottom + gap_v
             loot_rect = pygame.Rect(right_x, loot_y, right_w, layout['loot_h'])
+            self._kingdom_config_loot_rect = loot_rect.copy()
             self._draw_loot_inbox_panel(loot_rect)
             skills_y = loot_rect.bottom + gap_v
-            self._draw_skills_panel(pygame.Rect(right_x, skills_y, right_w,
-                                                layout['skills_h']))
+            skills_rect = pygame.Rect(right_x, skills_y, right_w, layout['skills_h'])
+            self._kingdom_config_skills_rect = skills_rect.copy()
+            self._draw_skills_panel(skills_rect)
         finally:
             self._button_clip_rect = old_button_clip
             self.window.set_clip(old_clip)
@@ -2417,3 +2580,4 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         self._floating_text.update(dt_ms)
         self._floating_text.draw(self.window)
         self._draw_menu_overlay()
+        self._draw_menu_coach(self._current_kingdom_config_coach_step())

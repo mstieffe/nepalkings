@@ -426,6 +426,58 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
     assert step['rect'] == conquer_rect
 
 
+def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
+    import pygame
+    from game.screens.kingdom_screen import KingdomScreen
+
+    screen = object.__new__(KingdomScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': [
+            'finish_first_duel',
+            'open_first_main_booster',
+            'open_first_side_booster',
+            'finish_first_conquer_battle',
+        ],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+    screen._thread = None
+    screen._new_msg_picker = None
+    screen._detail_box = None
+    screen._hex_map = object()
+    screen._loading = False
+    screen._error = None
+    screen._map_viewport_rect = pygame.Rect(50, 60, 300, 220)
+    screen._header_rect = pygame.Rect(40, 20, 420, 80)
+    screen._collect_all_rect = pygame.Rect(340, 32, 110, 34)
+    screen._kingdom_chip_gear_rect = pygame.Rect(60, 28, 28, 28)
+
+    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_after_conquer_map'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_after_conquer_map']
+    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_connected_lands'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'kingdom_after_conquer_map',
+        'kingdom_connected_lands',
+    ]
+    step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'kingdom_production_intro'
+    assert step['rect'] == screen._collect_all_rect
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'kingdom_after_conquer_map',
+        'kingdom_connected_lands',
+        'kingdom_production_intro',
+    ]
+    step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'kingdom_config_intro'
+    assert step['action'] == 'click'
+    assert step['rect'] == screen._kingdom_chip_gear_rect
+
+
 def test_conquer_coach_highlights_edit_controls_in_order():
     import pygame
     from game.screens.conquer_screen import ConquerScreen
@@ -471,7 +523,7 @@ def test_conquer_coach_highlights_edit_controls_in_order():
         step = screen._current_conquer_coach_step()
         assert step['id'] == step_id
         if step_id == 'conquer_config_to_battle':
-            assert step['button_label'] == 'Got it!'
+            assert step['button_label'] == 'Got it'
         seen.append(step_id)
 
 

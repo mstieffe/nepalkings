@@ -52,7 +52,13 @@ def _screen_base():
         kingdom_config_land_id=12,
         kingdom_config_id=None,
         message_lines=[],
-        user_dict={'gold': 0, 'booster_packs': 0, 'booster_packs_side': 0, 'maps': 0},
+        user_dict={
+            'gold': 0,
+            'booster_packs': 0,
+            'booster_packs_side': 0,
+            'maps': 0,
+            'onboarding': {'menu_hints_seen': [], 'completed_steps': []},
+        },
         set_msg=MagicMock(),
     )
     screen.window = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
@@ -104,6 +110,21 @@ def _screen_base():
     screen._last_render_ms = 0
     screen._last_seen_level = None
     screen._collect_btn_rect = None
+    screen._menu_coach_buttons = []
+    screen._menu_coach_step = None
+    screen._menu_coach_pressed_button_action = None
+    screen._menu_coach_font = settings.get_font(settings.FS_SMALL)
+    screen._menu_coach_title_font = settings.get_font(settings.FS_BODY, bold=True)
+    screen._onboarding_guide_open = False
+    screen._logout_dialogue = None
+    screen._welcome_present_dialogue = None
+    screen._kingdom_config_header_rect = None
+    screen._kingdom_config_cosmetics_rect = None
+    screen._kingdom_config_shield_rect = None
+    screen._kingdom_config_vault_rect = None
+    screen._kingdom_config_loot_rect = None
+    screen._kingdom_config_skills_rect = None
+    screen._kingdom_config_skill_button_rect = None
     screen._draw_menu_chrome = MagicMock()
     screen._draw_menu_overlay = MagicMock()
     screen._handle_icon_events = MagicMock(return_value=False)
@@ -208,6 +229,106 @@ class TestKingdomConfigLoading:
 
 
 class TestKingdomConfigInteractions:
+
+    def test_current_coach_step_follows_post_conquer_config_order(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen.state.user_dict['onboarding'] = {
+            'menu_hints_seen': [],
+            'completed_steps': ['finish_first_conquer_battle'],
+        }
+        screen._kingdom_config_header_rect = pygame.Rect(20, 20, 360, 72)
+        screen._kingdom_config_vault_rect = pygame.Rect(420, 120, 280, 120)
+        screen._kingdom_config_skills_rect = pygame.Rect(420, 380, 280, 240)
+        screen._kingdom_config_loot_rect = pygame.Rect(420, 250, 280, 110)
+        screen._kingdom_config_cosmetics_rect = pygame.Rect(20, 120, 320, 220)
+        screen._kingdom_config_shield_rect = pygame.Rect(20, 350, 320, 150)
+        screen._collect_btn_rect = pygame.Rect(610, 200, 80, 28)
+        screen._kingdom_config_skill_button_rect = pygame.Rect(580, 420, 104, 30)
+        screen._loot_gained_rect = pygame.Rect(440, 276, 120, 60)
+
+        step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
+        assert step['id'] == 'kingdom_config_header'
+
+        screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_config_header']
+        step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
+        assert step['id'] == 'kingdom_config_production'
+        assert step['rect'] == screen._collect_btn_rect
+
+        screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+            'kingdom_config_header',
+            'kingdom_config_production',
+        ]
+        step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
+        assert step['id'] == 'kingdom_config_skills'
+        assert step['rect'] == screen._kingdom_config_skill_button_rect
+
+    def test_coach_visibility_helper_scrolls_skills_panel_into_view(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen.state.user_dict['onboarding'] = {
+            'menu_hints_seen': ['kingdom_config_header', 'kingdom_config_production'],
+            'completed_steps': ['finish_first_conquer_battle'],
+        }
+        layout = {
+            'content_viewport': pygame.Rect(30, 140, 700, 240),
+            'content_h': 900,
+            'gap': 16,
+            'vault_h': 140,
+            'loot_h': 120,
+            'skills_h': 360,
+            'cosmetics_h': 260,
+            'shield_h': 150,
+        }
+        screen._content_scroll = 0
+
+        KingdomConfigScreen._ensure_kingdom_config_coach_visible(screen, layout)
+
+        assert screen._content_scroll > 0
+
+    def test_coach_visibility_helper_does_not_oscillate_for_oversized_skills_panel(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        layout = {
+            'content_viewport': pygame.Rect(30, 140, 700, 240),
+            'content_h': 900,
+            'gap': 16,
+            'vault_h': 140,
+            'loot_h': 120,
+            'skills_h': 360,
+            'cosmetics_h': 260,
+            'shield_h': 150,
+        }
+        screen._content_scroll = 0
+
+        KingdomConfigScreen._ensure_kingdom_config_coach_visible(
+            screen, layout, step_id='kingdom_config_skills')
+        first_scroll = screen._content_scroll
+        KingdomConfigScreen._ensure_kingdom_config_coach_visible(
+            screen, layout, step_id='kingdom_config_skills')
+
+        assert first_scroll == 292
+        assert screen._content_scroll == first_scroll
+
+    def test_handle_events_checks_coach_before_registered_buttons(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen._buttons = [('upgrade_skill', 'gold_production', pygame.Rect(90, 90, 120, 30))]
+        screen._current_kingdom_config_coach_step = lambda: {
+            'id': 'kingdom_config_header',
+            'rect': pygame.Rect(10, 10, 200, 60),
+            'title': 'Header',
+            'body': 'Body',
+        }
+        screen._handle_menu_coach_events = MagicMock(return_value=True)
+        screen._upgrade_skill = MagicMock()
+
+        event = SimpleNamespace(type=pygame.MOUSEBUTTONUP, button=1, pos=(100, 100))
+
+        KingdomConfigScreen.handle_events(screen, [event])
+
+        screen._handle_menu_coach_events.assert_called_once()
+        screen._upgrade_skill.assert_not_called()
 
     def test_init_uses_menu_chrome_without_legacy_controls(self, monkeypatch):
         from game.screens.kingdom_config_screen import KingdomConfigScreen

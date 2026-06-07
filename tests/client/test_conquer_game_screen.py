@@ -67,6 +67,46 @@ def _base_conquer_screen(game=None):
     return ConquerGameScreen, screen
 
 
+def _battle_coach_screen(*, move_model='tactics_hand', menu_seen=None, completed_steps=None):
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    screen.state = SimpleNamespace(
+        screen='conquer_game',
+        subscreen='field',
+        user_dict={
+            'onboarding': {
+                'menu_hints_seen': list(menu_seen or []),
+                'completed_steps': list(completed_steps or []),
+            },
+        },
+        game=SimpleNamespace(mode='conquer', conquer_move_model=move_model),
+    )
+    screen.subscreens = {
+        'field': SimpleNamespace(dialogue_box=None),
+        'battle_shop': SimpleNamespace(dialogue_box=None),
+        'battle': SimpleNamespace(dialogue_box=None),
+    }
+    screen.dialogue_box = None
+    screen._withdraw_dialogue_open = False
+    screen.waiting_for_counter_response = False
+    screen.need_to_respond_to_spell = False
+    screen.counter_spell_selector = None
+    screen._conquer_timeline_info_rect = pygame.Rect(10, 10, 300, 80)
+    screen._conquer_collapsed_header_rect = pygame.Rect(10, 10, 500, 100)
+    screen._conquer_objective_action_rects = {}
+    screen._conquer_duel_lane_target_rect = lambda: pygame.Rect(320, 150, 260, 180)
+    screen._conquer_tactics_rail_target_rect = lambda: pygame.Rect(10, 120, 180, 320)
+    screen._round_ledger = SimpleNamespace(rect=lambda: pygame.Rect(220, 460, 520, 110))
+    screen._tactics_rail = SimpleNamespace(
+        _action_button_rects={},
+        _dyn_hand_list_rect=pygame.Rect(18, 140, 164, 220),
+    )
+    screen._conquer_finish_available = lambda: False
+    screen._is_tactics_hand_game = lambda: move_model == 'tactics_hand'
+    screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
+    return ConquerGameScreen, screen
+
+
 def test_conquer_support_link_targets_halo_edge_not_icon_center():
     ConquerGameScreen = _conquer_screen_class()
     source = pygame.Rect(100, 100, 44, 56)
@@ -182,6 +222,79 @@ def test_passive_timeline_still_allows_field_inspection_clicks():
     ConquerGameScreen.handle_events(screen, [event])
 
     assert handled == [event]
+
+
+def test_conquer_battle_coach_starts_with_timeline_intro():
+    ConquerGameScreen, screen = _battle_coach_screen()
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_timeline_intro'
+    assert step['title'] == 'Battle Timeline'
+
+
+def test_conquer_battle_coach_hidden_after_first_conquer_completion():
+    ConquerGameScreen, screen = _battle_coach_screen(
+        completed_steps=['finish_first_conquer_battle'])
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step is None
+
+
+def test_conquer_battle_coach_shows_tactic_actions_once_buttons_exist():
+    seen = {
+        'conquer_battle_timeline_intro',
+        'conquer_battle_prelude',
+        'conquer_battle_field_actions',
+        'conquer_battle_tactics_rail',
+    }
+    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=seen)
+    screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='attacker')
+    screen._tactics_rail._action_button_rects = {
+        'play': pygame.Rect(24, 370, 72, 28),
+        'skip': pygame.Rect(104, 370, 72, 28),
+    }
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_tactic_actions'
+    assert len(step['rects']) == 3
+
+
+def test_conquer_battle_coach_events_mark_next_step_seen():
+    ConquerGameScreen, screen = _battle_coach_screen()
+    seen = []
+    advanced = []
+    screen._conquer_battle_coach_step = {
+        'id': 'conquer_battle_timeline_intro',
+        'rect': pygame.Rect(10, 10, 300, 80),
+        'action': 'next',
+    }
+    screen._conquer_battle_coach_buttons = [
+        (pygame.Rect(600, 40, 80, 32), ('next', 'conquer_battle_timeline_intro')),
+    ]
+    screen._mark_conquer_battle_coach_seen = seen.append
+    screen._advance_active_timeline_step = lambda: advanced.append(True)
+
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(620, 50))
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(620, 50))
+
+    handled = ConquerGameScreen._handle_conquer_battle_coach_events(screen, [down])
+    handled = ConquerGameScreen._handle_conquer_battle_coach_events(screen, [up]) or handled
+
+    assert handled is True
+    assert seen == ['conquer_battle_timeline_intro']
+    assert advanced == [True]
+
+
+def test_conquer_battle_prelude_coach_waits_for_actual_prelude_step():
+    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=['conquer_battle_timeline_intro'])
+    screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_field_actions'
 
 
 def test_conquer_explosion_missing_target_gets_ghost_rect_and_animation():
@@ -1682,6 +1795,7 @@ def test_battle_state_poll_applies_timer_and_active_spells():
         battle_round=0,
         conquer_resolution_step=0,
         cached_active_spells=[],
+        _game_data_version=7,
         _figures_data_version=3,
         battle_modifier=[],
     )
@@ -1709,7 +1823,49 @@ def test_battle_state_poll_applies_timer_and_active_spells():
     assert game.conquer_round_timeout_sec == 60
     assert game.cached_active_spells == [active_spell]
     assert game.battle_modifier == [{'type': 'Blitzkrieg'}]
+    assert game._game_data_version == 8
     assert game._figures_data_version == 4
+
+
+def test_battle_state_poll_skips_game_version_bump_when_snapshot_is_unchanged():
+    ConquerGameScreen = _conquer_screen_class()
+    screen = ConquerGameScreen.__new__(ConquerGameScreen)
+    active_spell = {
+        'id': 9,
+        'spell_name': 'Poison',
+        'target_figure_id': 44,
+        'effect_data': {'power_modifier': -6},
+    }
+    game = SimpleNamespace(
+        battle_confirmed=True,
+        battle_turn_player_id=1,
+        battle_round=0,
+        conquer_resolution_step=0,
+        cached_active_spells=[active_spell],
+        battle_modifier=[{'type': 'Blitzkrieg'}],
+        conquer_round_deadline_ts=1234.5,
+        conquer_round_timeout_sec=60,
+        _game_data_version=7,
+        _figures_data_version=3,
+    )
+    screen.state = SimpleNamespace(game=game)
+
+    ConquerGameScreen._apply_battle_state_result(screen, {
+        'success': True,
+        'battle_round': 0,
+        'battle_turn_player_id': 1,
+        'battle_confirmed': True,
+        'player_tactics': [],
+        'opponent_tactics': [],
+        'conquer_round_deadline_ts': 1234.5,
+        'conquer_round_timeout_sec': 60,
+        'active_spells': [active_spell],
+        'battle_modifier': [{'type': 'Blitzkrieg'}],
+        'conquer_resolution_step': 0,
+    })
+
+    assert game._game_data_version == 7
+    assert game._figures_data_version == 3
 
 
 def test_active_battle_clears_stale_single_option_auto_action():

@@ -1348,7 +1348,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_field',
                 'rect': field_rect,
                 'title': 'Conquer Field',
-                'body': 'Your field prepares the attack. Castle, village, and military figures shape the resources and strength you bring into conquest. Note that the number of kings in your castle is limitted by the tier of land you are conquering.',
+                'body': 'Your field prepares the attack. Castle, village, and military figures shape the resources and strength you bring into conquest. Note that the number of kings in your castle is limited by the tier of land you are conquering.',
                 'action': 'next',
                 'max_lines': 5,
             }
@@ -1386,10 +1386,10 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return {
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
-                'title': 'To Battle',
-                'body': 'This starts the conquest when your setup is ready. Note that cards you submit to a conquer attempt are at risk for looting in case you lose. Go back to the collection screen to open more packs. The guided tour ends here - good look adventurer!',
+                'title': 'Start The Conquer Battle',
+                'body': 'When your setup is ready, Start Battle opens the live conquest. Your submitted cards are at risk if you lose, but unlooted cards return after the result. The next screen will guide the timeline, tactics, ledger, and kingdom outcome.',
                 'action': 'next',
-                'button_label': 'Got it!',
+                'button_label': 'Got it',
                 'max_lines': 5,
             }
         return None

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 """Unit tests for ConquerScreen logic (Phase 11)."""
+import pygame
 import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -167,6 +168,48 @@ class TestBattleReadiness:
         screen = ConquerScreen(state)
         screen._config = None
         assert screen._is_battle_ready() is False
+
+
+class TestConquerCoachCopy:
+
+    def test_final_conquer_coach_step_uses_new_battle_handoff_copy(self):
+        from game.screens.conquer_screen import ConquerScreen
+
+        screen = ConquerScreen.__new__(ConquerScreen)
+        screen.state = SimpleNamespace(user_dict={'onboarding': {'menu_hints_seen': []}})
+        screen._menu_coach_allowed_common = lambda: True
+        screen._conquer_coach_ready = lambda: True
+        screen._loading = False
+        screen._error = None
+        screen._config = {'figures': [], 'battle_moves': []}
+        screen._layout_built = True
+        screen._active_subscreen = None
+        screen._figure_detail_box = None
+        screen._move_detail_box = None
+        screen._active_info_key = None
+        screen._menu_coach_seen = lambda: {
+            'conquer_config_field',
+            'conquer_config_build_edit',
+            'conquer_config_battle_plan',
+            'conquer_config_prelude',
+        }
+        screen._conquer_field_coach_rect = lambda: pygame.Rect(0, 0, 0, 0)
+        screen._conquer_combined_rect = lambda *rects: None
+        screen._battle_plan_rect = None
+        screen._btn_buy_move = None
+        screen._prelude_panel_rect = None
+        screen._btn_prelude_edit = None
+        screen._prelude_spell_rect = None
+        screen._btn_build = None
+        screen._btn_battle = pygame.Rect(100, 100, 120, 48)
+
+        step = ConquerScreen._current_conquer_coach_step(screen)
+
+        assert step['id'] == 'conquer_config_to_battle'
+        assert step['title'] == 'Start The Conquer Battle'
+        assert 'guided tour ends here' not in step['body']
+        assert 'timeline, tactics, ledger, and kingdom outcome' in step['body']
+        assert step['button_label'] == 'Got it'
 
 
 class TestConquerScreenNavigation:
