@@ -23,6 +23,7 @@ from game.core.state import State
 from game.core.input_state import process_events as _process_input
 from config import settings
 from utils.perf_monitor import PerfMonitor
+from utils import web_wheel as _web_wheel
 import os
 #import sys
 #import requests
@@ -319,7 +320,7 @@ class Client:
         return player_figures, opponent_figures
 
     def get_events(self):
-        events = pygame.event.get()
+        events = _web_wheel.merge_events(pygame.event.get())
         _process_input(events)
         return events
 
