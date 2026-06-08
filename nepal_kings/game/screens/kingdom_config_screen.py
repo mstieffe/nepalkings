@@ -1301,6 +1301,26 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
             desired = target_top + target_h - viewport.h
         self._content_scroll = max(0, min(max_scroll, int(desired)))
 
+    def _clip_kingdom_config_coach_rects(self, *rects):
+        viewport = getattr(self, '_content_scroll_area', None)
+        usable = []
+        for rect in rects:
+            if rect is None:
+                continue
+            try:
+                candidate = pygame.Rect(rect)
+            except Exception:
+                continue
+            if viewport is None:
+                usable.append(candidate)
+                continue
+            if not candidate.colliderect(viewport):
+                continue
+            clipped = candidate.clip(viewport)
+            if clipped.w > 0 and clipped.h > 0:
+                usable.append(clipped)
+        return usable
+
     def _current_kingdom_config_coach_step(self):
         step_id = self._current_kingdom_config_coach_id()
         if step_id == 'kingdom_config_header':
@@ -1310,60 +1330,68 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
                     'id': step_id,
                     'rect': rect,
                     'title': 'Kingdom Header',
-                    'body': "The header shows this kingdom's lands, level, total XP, and progress to the next level. New connected land gives XP by tier, and each level grants skill points.",
+                    'body': "The header shows this kingdom's lands, level, XP, and next-level progress. Each newly connected land gives XP based on tier; each level grants skill points.",
                     'action': 'next',
                     'max_lines': 5,
                 }
         if step_id == 'kingdom_config_production':
-            rect = self._collect_btn_rect or getattr(self, '_kingdom_config_vault_rect', None)
-            if rect is not None:
-                return {
-                    'id': step_id,
-                    'rect': rect,
-                    'title': 'Production Vault',
-                    'body': 'This panel shows pending gold, packs, and maps for the selected kingdom. A full vault stops adding more of that item, so collect production when it is ready.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if step_id == 'kingdom_config_skills':
-            rect = (getattr(self, '_kingdom_config_skill_button_rect', None)
-                    or getattr(self, '_kingdom_config_skills_rect', None))
-            if rect is not None:
-                return {
-                    'id': step_id,
-                    'rect': rect,
-                    'title': 'Spend Skill Points',
-                    'body': 'Skill points come from kingdom levels. Gold Production and Gold Vault are steady early picks; pack, map, shield, core protection, and loot skills support longer plans.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if step_id == 'kingdom_config_loot_inbox':
-            rect = (getattr(self, '_loot_gained_rect', None)
-                    or getattr(self, '_loot_lost_rect', None)
-                    or getattr(self, '_kingdom_config_loot_rect', None))
-            if rect is not None:
-                return {
-                    'id': step_id,
-                    'rect': rect,
-                    'title': 'Loot Inbox',
-                    'body': 'Cards won or lost through conquest appear here. Gained loot waits for collection; lost-card notices show what happened to cards that did not return.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if step_id == 'kingdom_config_shields_style':
-            rects = []
-            for rect in (
-                    getattr(self, '_kingdom_config_cosmetics_rect', None),
-                    getattr(self, '_kingdom_config_shield_rect', None)):
-                if rect is not None:
-                    rects.append(pygame.Rect(rect))
+            rects = self._clip_kingdom_config_coach_rects(
+                getattr(self, '_collect_btn_rect', None),
+                getattr(self, '_kingdom_config_vault_rect', None),
+            )
             if rects:
                 return {
                     'id': step_id,
                     'rect': rects[0],
                     'rects': rects,
-                    'title': 'Shields And Style',
-                    'body': 'Shields protect a kingdom for a time, while cosmetics change how it appears on the map. These are useful after you understand production and skills.',
+                    'title': 'Production Vault',
+                    'body': 'This panel shows pending gold, packs, and maps. A full vault stops adding that item, so collect production when it is ready.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if step_id == 'kingdom_config_skills':
+            rects = self._clip_kingdom_config_coach_rects(
+                getattr(self, '_kingdom_config_skill_button_rect', None),
+                getattr(self, '_kingdom_config_skills_rect', None),
+            )
+            if rects:
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Spend Skill Points',
+                    'body': 'Skill points come from kingdom levels. Start with Gold Production or Gold Vault; later add packs, maps, shields, or loot upgrades.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if step_id == 'kingdom_config_loot_inbox':
+            rects = self._clip_kingdom_config_coach_rects(
+                getattr(self, '_loot_gained_rect', None),
+                getattr(self, '_loot_lost_rect', None),
+                getattr(self, '_kingdom_config_loot_rect', None),
+            )
+            if rects:
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Loot Inbox',
+                    'body': 'Cards won or lost through conquest appear here. Collect gained loot, and check lost-card notices to see what did not return.',
+                    'action': 'next',
+                    'max_lines': 5,
+                }
+        if step_id == 'kingdom_config_shields_style':
+            rects = self._clip_kingdom_config_coach_rects(
+                getattr(self, '_kingdom_config_cosmetics_rect', None),
+                getattr(self, '_kingdom_config_shield_rect', None),
+            )
+            if rects:
+                return {
+                    'id': step_id,
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Shields and Style',
+                    'body': 'Shields protect a kingdom for a time. Cosmetics change how it appears on the map. Use these after production and skills feel familiar.',
                     'action': 'next',
                     'max_lines': 5,
                 }

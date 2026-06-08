@@ -67,7 +67,8 @@ def _base_conquer_screen(game=None):
     return ConquerGameScreen, screen
 
 
-def _battle_coach_screen(*, move_model='tactics_hand', menu_seen=None, completed_steps=None):
+def _battle_coach_screen(*, move_model='tactics_hand', menu_seen=None,
+                         completed_steps=None, skipped=False):
     ConquerGameScreen = _conquer_screen_class()
     screen = ConquerGameScreen.__new__(ConquerGameScreen)
     screen.state = SimpleNamespace(
@@ -77,6 +78,7 @@ def _battle_coach_screen(*, move_model='tactics_hand', menu_seen=None, completed
             'onboarding': {
                 'menu_hints_seen': list(menu_seen or []),
                 'completed_steps': list(completed_steps or []),
+                'onboarding_skipped': bool(skipped),
             },
         },
         game=SimpleNamespace(mode='conquer', conquer_move_model=move_model),
@@ -242,10 +244,17 @@ def test_conquer_battle_coach_hidden_after_first_conquer_completion():
     assert step is None
 
 
+def test_conquer_battle_coach_hidden_when_tutorial_paused():
+    ConquerGameScreen, screen = _battle_coach_screen(skipped=True)
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step is None
+
+
 def test_conquer_battle_coach_shows_tactic_actions_once_buttons_exist():
     seen = {
         'conquer_battle_timeline_intro',
-        'conquer_battle_prelude',
         'conquer_battle_field_actions',
         'conquer_battle_tactics_rail',
     }
@@ -259,10 +268,11 @@ def test_conquer_battle_coach_shows_tactic_actions_once_buttons_exist():
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
     assert step['id'] == 'conquer_battle_tactic_actions'
+    assert step['action'] == 'next'
     assert len(step['rects']) == 3
 
 
-def test_conquer_battle_coach_events_mark_next_step_seen():
+def test_conquer_battle_coach_next_marks_seen_without_advancing_timeline():
     ConquerGameScreen, screen = _battle_coach_screen()
     seen = []
     advanced = []
@@ -285,16 +295,94 @@ def test_conquer_battle_coach_events_mark_next_step_seen():
 
     assert handled is True
     assert seen == ['conquer_battle_timeline_intro']
-    assert advanced == [True]
+    assert advanced == []
 
 
-def test_conquer_battle_prelude_coach_waits_for_actual_prelude_step():
+def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
+    ConquerGameScreen, screen = _battle_coach_screen()
+    seen = []
+    screen._conquer_battle_coach_step = {
+        'id': 'conquer_battle_field_actions',
+        'rect': pygame.Rect(320, 150, 260, 180),
+        'action': 'click',
+    }
+    screen._conquer_battle_coach_buttons = []
+    screen._mark_conquer_battle_coach_seen = seen.append
+
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(340, 170))
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(340, 170))
+
+    handled = ConquerGameScreen._handle_conquer_battle_coach_events(screen, [down, up])
+
+    assert handled is False
+    assert seen == ['conquer_battle_field_actions']
+
+
+def test_conquer_battle_overview_shows_field_after_timeline():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=['conquer_battle_timeline_intro'])
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
     assert step['id'] == 'conquer_battle_field_actions'
+    assert step['action'] == 'next'
+
+
+def test_conquer_battle_overview_does_not_wait_for_active_field_choice():
+    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
+        'conquer_battle_timeline_intro',
+    ])
+    screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_field_actions'
+    assert step['action'] == 'next'
+
+    screen.active_conquer_timeline_step = lambda: SimpleNamespace(
+        kind='attacker',
+        primary_action='select_advance',
+    )
+
+    step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
+
+    assert step['id'] == 'conquer_battle_field_actions'
+    assert step['action'] == 'next'
+
+
+def test_conquer_battle_intro_pauses_until_overview_seen():
+    ConquerGameScreen, screen = _battle_coach_screen()
+
+    assert ConquerGameScreen._conquer_battle_intro_paused(screen) is True
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = list(
+        ConquerGameScreen._conquer_battle_intro_step_ids())
+
+    assert ConquerGameScreen._conquer_battle_intro_paused(screen) is False
+
+
+def test_conquer_battle_coach_skip_button_pauses_tutorial():
+    ConquerGameScreen, screen = _battle_coach_screen()
+    paused = []
+    screen._conquer_battle_coach_step = {
+        'id': 'conquer_battle_timeline_intro',
+        'rect': pygame.Rect(10, 10, 300, 80),
+        'action': 'next',
+    }
+    skip_rect = pygame.Rect(600, 40, 120, 32)
+    screen._conquer_battle_coach_buttons = [
+        (skip_rect, ('skip_tutorial', 'conquer_battle_timeline_intro')),
+    ]
+    screen._pause_onboarding_tutorial = lambda: paused.append(True)
+
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=skip_rect.center)
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=skip_rect.center)
+
+    handled = ConquerGameScreen._handle_conquer_battle_coach_events(screen, [down])
+    handled = ConquerGameScreen._handle_conquer_battle_coach_events(screen, [up]) or handled
+
+    assert handled is True
+    assert paused == [True]
 
 
 def test_conquer_explosion_missing_target_gets_ghost_rect_and_animation():

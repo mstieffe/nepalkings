@@ -5077,12 +5077,46 @@ class GameScreen(Screen):
         ud = getattr(self.state, 'user_dict', None) or {}
         return ud.get('onboarding') or {}
 
+    def _apply_game_onboarding_payload(self, data):
+        if not data or getattr(self.state, 'user_dict', None) is None:
+            return
+        onboarding = data.get('onboarding')
+        if onboarding is not None:
+            self.state.user_dict['onboarding'] = onboarding
+        balances = data.get('balances') or {}
+        for key in ('gold', 'booster_packs', 'booster_packs_side', 'maps'):
+            if key in balances:
+                self.state.user_dict[key] = balances[key]
+
+    def _set_onboarding_skipped_local(self, skipped):
+        ud = getattr(self.state, 'user_dict', None)
+        if not ud:
+            return
+        onboarding = dict(ud.get('onboarding') or {})
+        onboarding['onboarding_skipped'] = bool(skipped)
+        if skipped:
+            onboarding['welcome_pending'] = False
+        ud['onboarding'] = onboarding
+
+    def _pause_onboarding_tutorial(self):
+        try:
+            data = onboarding_service.skip_onboarding()
+            self._apply_game_onboarding_payload(data)
+        except Exception as exc:
+            logger.debug("Failed to pause onboarding tutorial: %s", exc)
+            self._set_onboarding_skipped_local(True)
+        self._duel_coach_pressed_button_action = None
+        if getattr(self.state, 'set_msg', None):
+            self.state.set_msg('Tutorial paused. Open Guide to continue.')
+
     def _duel_coach_allowed(self):
         game = getattr(self.state, 'game', None)
         onboarding = self._duel_onboarding()
         if not game or getattr(game, 'mode', 'duel') == 'conquer':
             return False
         if not onboarding:
+            return False
+        if onboarding.get('onboarding_skipped'):
             return False
         if 'finish_first_duel' in set(onboarding.get('completed_steps') or []):
             return False
@@ -5450,6 +5484,11 @@ class GameScreen(Screen):
         next_rect = pygame.Rect(card.right - button_w - 14, card.bottom - button_h - 12,
                                 button_w, button_h)
         self._draw_duel_coach_button(next_rect, button_label, ('next', step['id']))
+        skip_label = 'Skip tutorial'
+        skip_w = max(112, self._duel_coach_font.size(skip_label)[0] + 24)
+        skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
+                                skip_w, button_h)
+        self._draw_duel_coach_button(skip_rect, skip_label, ('skip_tutorial', step['id']))
 
     @staticmethod
     def _duel_coach_blocking_event_types():
@@ -5489,6 +5528,8 @@ class GameScreen(Screen):
                     if kind == 'next':
                         self._mark_duel_coach_seen(step_id)
                         self._open_duel_coach_step_subscreen(self._current_duel_coach_step())
+                    elif kind == 'skip_tutorial':
+                        self._pause_onboarding_tutorial()
                     return True
                 return True
             return True

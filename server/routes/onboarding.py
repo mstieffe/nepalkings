@@ -14,6 +14,7 @@ from onboarding_service import (
     mark_menu_hint,
     mark_welcome_seen,
     reset_onboarding,
+    resume_onboarding,
     serialize_onboarding_state,
     skip_onboarding,
 )
@@ -89,6 +90,19 @@ def skip_onboarding_route():
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
     skip_onboarding(user, commit=True)
+    return jsonify({
+        'success': True,
+        'onboarding': serialize_onboarding_state(user),
+    })
+
+
+@onboarding.route('/resume', methods=['POST'])
+@require_token
+def resume_onboarding_route():
+    user = _current_user()
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+    resume_onboarding(user, commit=True)
     return jsonify({
         'success': True,
         'onboarding': serialize_onboarding_state(user),

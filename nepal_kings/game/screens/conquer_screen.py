@@ -1367,7 +1367,7 @@ class ConquerScreen(MenuScreenMixin, Screen):
                 'id': 'conquer_config_battle_plan',
                 'rect': battle_plan_rect,
                 'title': 'Battle Plan',
-                'body': 'This edit button opens battle move shopping. Moves let you plan how each conquest round should pressure the defender.',
+                'body': 'This edit button opens battle move shopping. Those moves become your tactics during the battle.',
                 'action': 'next',
                 'max_lines': 5,
             }
@@ -1386,8 +1386,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return {
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
-                'title': 'Start The Conquer Battle',
-                'body': 'When your setup is ready, Start Battle opens the live conquest. Your submitted cards are at risk if you lose, but unlooted cards return after the result. The next screen will guide the timeline, tactics, ledger, and kingdom outcome.',
+                'title': 'Start Conquer Battle',
+                'body': 'When ready, Start Battle opens the live conquest. Submitted cards can be looted if you lose; unlooted cards return. The next screen explains the timeline, tactics, ledger, and result.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 5,

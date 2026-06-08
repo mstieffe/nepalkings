@@ -471,6 +471,7 @@ class ConquerTimelinePanel:
             getattr(game, 'battle_confirmed', None) if game else None,
             getattr(game, 'battle_turn_player_id', None) if game else None,
             self._game_start_cache_marker(game, state),
+            self._tutorial_intro_pause_marker(screen),
             getattr(screen, '_conquer_resolution_step_server', None),
             ticks // 50,  # 20Hz cadence for hold-timer progress
         )
@@ -504,6 +505,21 @@ class ConquerTimelinePanel:
             screen._conquer_timeline_step_started_at = timers
 
         game = getattr(getattr(screen, 'state', None), 'game', None)
+        intro_paused = getattr(screen, '_conquer_battle_intro_paused', None)
+        if callable(intro_paused) and intro_paused():
+            for idx, step in enumerate(steps):
+                if idx == 0 and step.kind == 'overview':
+                    step.active = True
+                    step.completed = False
+                    step.interactive = False
+                    step.primary_action = None
+                else:
+                    step.active = False
+                    step.completed = False
+                    step.interactive = False
+                    step.primary_action = None
+            return steps
+
         if self._awaiting_game_start_prelude_snapshot(game):
             for idx, step in enumerate(steps):
                 if idx == 0 and step.kind == 'overview':
@@ -580,6 +596,17 @@ class ConquerTimelinePanel:
         if getattr(game, '_game_start_pending', False):
             return True
         return not getattr(game, 'game_start_notification_checked', True)
+
+    @staticmethod
+    def _tutorial_intro_pause_marker(screen):
+        paused_fn = getattr(screen, '_conquer_battle_intro_paused', None)
+        paused = bool(paused_fn()) if callable(paused_fn) else False
+        seen_fn = getattr(screen, '_conquer_menu_coach_seen', None)
+        ids_fn = getattr(screen, '_conquer_battle_intro_step_ids', None)
+        if not (callable(seen_fn) and callable(ids_fn)):
+            return (paused,)
+        seen = set(seen_fn())
+        return (paused, tuple(step_id for step_id in ids_fn() if step_id in seen))
 
     @staticmethod
     def _prelude_spells_cache_marker(spells):

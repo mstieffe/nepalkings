@@ -310,6 +310,23 @@ class TestKingdomConfigInteractions:
         assert first_scroll == 292
         assert screen._content_scroll == first_scroll
 
+    def test_coach_step_clips_scrolled_content_rects_to_visible_viewport(self):
+        KingdomConfigScreen, screen = _screen_base()
+        screen._kingdom = _kingdom_payload()
+        screen.state.user_dict['onboarding'] = {
+            'menu_hints_seen': ['kingdom_config_header'],
+            'completed_steps': ['finish_first_conquer_battle'],
+        }
+        screen._content_scroll_area = pygame.Rect(20, 100, 360, 120)
+        screen._collect_btn_rect = pygame.Rect(60, 82, 90, 42)
+        screen._kingdom_config_vault_rect = pygame.Rect(40, 82, 300, 180)
+
+        step = KingdomConfigScreen._current_kingdom_config_coach_step(screen)
+
+        assert step['id'] == 'kingdom_config_production'
+        assert step['rect'] == pygame.Rect(60, 100, 90, 24)
+        assert step['rects'][1] == pygame.Rect(40, 100, 300, 120)
+
     def test_handle_events_checks_coach_before_registered_buttons(self):
         KingdomConfigScreen, screen = _screen_base()
         screen._kingdom = _kingdom_payload()

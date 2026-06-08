@@ -138,6 +138,89 @@ def test_onboarding_guide_claim_spawns_reward_floaters(monkeypatch):
     assert messages == ['Reward claimed']
 
 
+def test_onboarding_guide_resume_button_clears_paused_flag(monkeypatch):
+    import pygame
+    from game.screens import _menu_base
+
+    screen, _ = _screen_with_gold(100)
+    screen.state.user_dict['onboarding'] = {'onboarding_skipped': True}
+    messages = []
+    screen.state.set_msg = lambda message: messages.append(message)
+    guide_rect = pygame.Rect(0, 0, 400, 400)
+    resume_rect = pygame.Rect(40, 90, 150, 30)
+    screen._onboarding_guide_rect = lambda: guide_rect
+    screen._onboarding_guide_scroll = 0
+    screen._onboarding_guide_scroll_area = pygame.Rect(20, 40, 220, 120)
+    screen._onboarding_guide_content_h = 120
+    screen._onboarding_guide_scrollbar_rect = pygame.Rect(0, 0, 0, 0)
+    screen._onboarding_guide_close_rect = pygame.Rect(360, 20, 24, 24)
+    screen._onboarding_guide_buttons = [(resume_rect, ('resume_tutorial', None))]
+    calls = []
+    monkeypatch.setattr(_menu_base.onboarding_service, 'resume_onboarding', lambda: (
+        calls.append(True) or {'onboarding': {'onboarding_skipped': False}}
+    ))
+
+    event = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=resume_rect.center)
+
+    assert screen._handle_onboarding_guide_events([event]) is True
+    assert calls == [True]
+    assert screen.state.user_dict['onboarding']['onboarding_skipped'] is False
+    assert messages == ['Tutorial resumed']
+
+
+def test_menu_coach_allowed_false_when_tutorial_paused():
+    from game.screens._menu_base import MenuScreenMixin
+
+    screen = object.__new__(MenuScreenMixin)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {'onboarding_skipped': True}})
+    screen._onboarding_guide_open = False
+    screen._logout_dialogue = None
+    screen._welcome_present_dialogue = None
+    screen.dialogue_box = None
+
+    assert screen._menu_coach_allowed_common() is False
+
+
+def test_menu_coach_skip_pauses_without_marking_seen(monkeypatch):
+    import pygame
+    from game.screens import _menu_base
+
+    screen, _ = _screen_with_gold(100)
+    screen.state.user_dict['onboarding'] = {
+        'onboarding_skipped': False,
+        'menu_hints_seen': [],
+    }
+    messages = []
+    screen.state.set_msg = lambda message: messages.append(message)
+    screen._menu_coach_step = {
+        'id': 'duel',
+        'rect': pygame.Rect(10, 10, 120, 40),
+        'action': 'next',
+    }
+    skip_rect = pygame.Rect(240, 80, 120, 32)
+    screen._menu_coach_buttons = [(skip_rect, ('skip_tutorial', 'duel'))]
+    screen._menu_coach_pressed_button_action = None
+    calls = []
+    monkeypatch.setattr(_menu_base.onboarding_service, 'skip_onboarding', lambda: (
+        calls.append(True) or {
+            'onboarding': {
+                'onboarding_skipped': True,
+                'menu_hints_seen': [],
+            }
+        }
+    ))
+
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=skip_rect.center)
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=skip_rect.center)
+
+    assert screen._handle_menu_coach_events([down]) is True
+    assert screen._handle_menu_coach_events([up]) is True
+    assert calls == [True]
+    assert screen.state.user_dict['onboarding']['onboarding_skipped'] is True
+    assert screen.state.user_dict['onboarding']['menu_hints_seen'] == []
+    assert messages == ['Tutorial paused. Open Guide to continue.']
+
+
 def test_onboarding_guide_mouse_wheel_scrolls_achievement_viewport():
     import pygame
 

@@ -229,6 +229,10 @@ def test_skip_and_reset_do_not_clear_claimed_rewards(client, db, two_users, auth
     skipped = client.post('/onboarding/skip', headers=auth_headers_user1).get_json()['onboarding']
     assert skipped['onboarding_skipped'] is True
 
+    resumed = client.post('/onboarding/resume', headers=auth_headers_user1).get_json()['onboarding']
+    assert resumed['onboarding_skipped'] is False
+    assert 'open_first_main_booster' in resumed['claimed_rewards']
+
     reset = client.post('/onboarding/reset', headers=auth_headers_user1).get_json()['onboarding']
     assert reset['onboarding_skipped'] is False
     assert reset['welcome_pending'] is True
@@ -293,3 +297,33 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     unknown = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
                           json={'tip_key': 'menu:unknown'})
     assert unknown.status_code == 400
+
+
+def test_finish_tutorial_reward_unlocks_on_last_menu_hint(client, db, two_users, auth_headers_user1):
+    u1, _ = two_users
+    u1.booster_packs = 0
+    db.session.commit()
+
+    initial = client.get('/onboarding/state', headers=auth_headers_user1).get_json()['onboarding']
+    initial_steps = {step['id']: step for step in initial['core_steps']}
+    assert initial_steps['finish_tutorial']['title'] == 'Finish tutorial'
+    assert initial_steps['finish_tutorial']['reward'] == {'booster_packs': 6}
+    assert initial_steps['finish_tutorial']['completed'] is False
+    assert initial_steps['finish_tutorial']['claimable'] is False
+
+    marked = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
+                         json={'tip_key': 'menu:kingdom_config_shields_style'})
+    data = marked.get_json()
+    assert marked.status_code == 200
+    assert 'finish_tutorial' in data['onboarding']['completed_steps']
+    steps = {step['id']: step for step in data['onboarding']['core_steps']}
+    assert steps['finish_tutorial']['completed'] is True
+    assert steps['finish_tutorial']['claimable'] is True
+
+    claimed = client.post('/onboarding/claim_reward', headers=auth_headers_user1,
+                          json={'reward_id': 'finish_tutorial'})
+    claim_data = claimed.get_json()
+    assert claimed.status_code == 200
+    assert claim_data['reward'] == {'booster_packs': 6}
+    assert claim_data['balances']['booster_packs'] == 6
+    assert 'finish_tutorial' in claim_data['onboarding']['claimed_rewards']

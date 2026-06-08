@@ -1829,6 +1829,8 @@ class ConquerGameScreen(GameScreen):
         onboarding = self._conquer_onboarding()
         if not onboarding:
             return False
+        if onboarding.get('onboarding_skipped'):
+            return False
         if 'finish_first_conquer_battle' in self._conquer_completed_onboarding_steps():
             return False
         game = getattr(self.state, 'game', None)
@@ -1911,6 +1913,19 @@ class ConquerGameScreen(GameScreen):
         return self._conquer_battle_timeline_target_rects()
 
     def _conquer_battle_field_target_rects(self):
+        active_step = self.active_conquer_timeline_step()
+        field_actions = {
+            'confirm',
+            'confirm_figure',
+            'select_target',
+            'select_advance',
+            'select_second',
+            'select_defender',
+            'select_own_defender',
+        }
+        primary_action = getattr(active_step, 'primary_action', None)
+        if primary_action not in field_actions:
+            return []
         rects = []
         lane_rect = self._conquer_duel_lane_target_rect()
         if lane_rect is not None:
@@ -1919,6 +1934,20 @@ class ConquerGameScreen(GameScreen):
         if confirm_rect is not None:
             rects.append(pygame.Rect(confirm_rect))
         return rects
+
+    def _conquer_battle_field_overview_rects(self):
+        lane_rect = self._conquer_duel_lane_target_rect()
+        if lane_rect is not None:
+            return [pygame.Rect(lane_rect)]
+        try:
+            layout = compute_conquer_layout(
+                settings.SCREEN_WIDTH,
+                settings.SCREEN_HEIGHT,
+                mode=self._conquer_effective_layout_mode(),
+            )
+            return [pygame.Rect(layout.battlefield.rect)]
+        except Exception:
+            return []
 
     def _conquer_battle_tactics_target_rects(self):
         rect = self._conquer_tactics_rail_target_rect()
@@ -1958,95 +1987,116 @@ class ConquerGameScreen(GameScreen):
         rect = (getattr(self, '_conquer_objective_action_rects', {}) or {}).get('finish')
         return [pygame.Rect(rect)] if rect is not None else []
 
+    @staticmethod
+    def _conquer_battle_intro_step_ids():
+        return (
+            'conquer_battle_timeline_intro',
+            'conquer_battle_field_actions',
+            'conquer_battle_tactics_rail',
+            'conquer_battle_tactic_actions',
+            'conquer_battle_round_ledger',
+            'conquer_battle_finish',
+        )
+
+    def _conquer_battle_intro_fallback_rects(self):
+        rects = self._conquer_battle_timeline_target_rects()
+        if rects:
+            return rects
+        return [pygame.Rect(
+            int(settings.SCREEN_WIDTH * 0.34),
+            int(settings.SCREEN_HEIGHT * 0.18),
+            int(settings.SCREEN_WIDTH * 0.32),
+            max(48, int(settings.SCREEN_HEIGHT * 0.08)),
+        )]
+
+    def _current_conquer_battle_intro_step(self, seen=None):
+        seen = set(seen or self._conquer_menu_coach_seen())
+        for step_id in self._conquer_battle_intro_step_ids():
+            if step_id in seen:
+                continue
+            if step_id == 'conquer_battle_timeline_intro':
+                rects = self._conquer_battle_timeline_target_rects()
+                return {
+                    'id': step_id,
+                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
+                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
+                    'title': 'Battle Timeline',
+                    'body': 'This row shows the battle order: setup, spells, tactics, then result.',
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 3,
+                }
+            if step_id == 'conquer_battle_field_actions':
+                rects = self._conquer_battle_field_overview_rects()
+                return {
+                    'id': step_id,
+                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
+                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
+                    'title': 'Battlefield',
+                    'body': 'Figure choices and spell targets happen here when the timeline asks for them.',
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 3,
+                }
+            if step_id == 'conquer_battle_tactics_rail':
+                rects = self._conquer_battle_tactics_target_rects()
+                return {
+                    'id': step_id,
+                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
+                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
+                    'title': 'Tactic Hand',
+                    'body': 'Your tactics are on the left. Each round uses one tactic.',
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 3,
+                }
+            if step_id == 'conquer_battle_tactic_actions':
+                rects = self._conquer_battle_tactic_action_rects() or self._conquer_battle_tactics_target_rects()
+                return {
+                    'id': step_id,
+                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
+                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
+                    'title': 'Tactic Actions',
+                    'body': 'Select a tactic, then press Play. The other buttons are optional.',
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 3,
+                }
+            if step_id == 'conquer_battle_round_ledger':
+                rects = self._conquer_battle_round_ledger_rects()
+                return {
+                    'id': step_id,
+                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
+                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
+                    'title': 'Round Ledger',
+                    'body': 'The ledger tracks each round and the total score.',
+                    'action': 'next',
+                    'button_label': 'Got it',
+                    'max_lines': 3,
+                }
+            if step_id == 'conquer_battle_finish':
+                rects = self._conquer_battle_finish_rects() or self._conquer_battle_timeline_target_rects()
+                return {
+                    'id': step_id,
+                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
+                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
+                    'title': 'Finish Battle',
+                    'body': 'After three rounds, Finish Battle resolves ownership and loot.',
+                    'action': 'next',
+                    'button_label': 'Start battle',
+                    'max_lines': 3,
+                }
+        return None
+
+    def _conquer_battle_intro_paused(self):
+        if not self._conquer_battle_coach_allowed():
+            return False
+        return self._current_conquer_battle_intro_step(self._conquer_menu_coach_seen()) is not None
+
     def _current_conquer_battle_coach_step(self):
         if not self._conquer_battle_coach_allowed():
             return None
-        seen = self._conquer_menu_coach_seen()
-        if 'conquer_battle_timeline_intro' not in seen:
-            rects = self._conquer_battle_timeline_target_rects()
-            if rects:
-                return {
-                    'id': 'conquer_battle_timeline_intro',
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Battle Timeline',
-                    'body': 'The top bar is your battle script. It shows setup, prelude spells, target choices, each tactic round, and the final result. Read the highlighted step first whenever you are unsure.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if 'conquer_battle_prelude' not in seen:
-            rects = self._conquer_battle_prelude_target_rects()
-            if rects:
-                return {
-                    'id': 'conquer_battle_prelude',
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Prelude And Counters',
-                    'body': 'Prelude and counter effects resolve before the tactic rounds. Some steps are just information; press Next in the timeline when the screen asks for it, then watch the field or tactics rail update.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if 'conquer_battle_field_actions' not in seen:
-            rects = self._conquer_battle_field_target_rects()
-            if rects:
-                return {
-                    'id': 'conquer_battle_field_actions',
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Field Choices',
-                    'body': 'When the timeline asks for an attacker, defender, or spell target, click the highlighted figure on the field. If a Confirm button appears in the timeline, press it to lock that choice.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if 'conquer_battle_tactics_rail' not in seen:
-            rects = self._conquer_battle_tactics_target_rects()
-            if rects:
-                return {
-                    'id': 'conquer_battle_tactics_rail',
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Your Tactics Hand',
-                    'body': 'The left rail is your hand for the three battle rounds. Pick one available tactic each round. The defender answers with a tactic of their own, then the round is scored.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if 'conquer_battle_tactic_actions' not in seen:
-            rects = self._conquer_battle_tactic_action_rects()
-            if rects:
-                return {
-                    'id': 'conquer_battle_tactic_actions',
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Playing A Tactic',
-                    'body': 'Select a tactic, then use Play to commit it. Gamble, Combine, Dismantle, and Skip are optional tools; for your first battle, Play is the main button to remember.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if 'conquer_battle_round_ledger' not in seen:
-            rects = self._conquer_battle_round_ledger_rects()
-            if rects:
-                return {
-                    'id': 'conquer_battle_round_ledger',
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Three-Round Ledger',
-                    'body': 'The bottom ledger records all three rounds: your tactic, the defender tactic, the power difference, and the running total. Win more total power to win the land.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        if 'conquer_battle_finish' not in seen:
-            rects = self._conquer_battle_finish_rects()
-            if rects:
-                return {
-                    'id': 'conquer_battle_finish',
-                    'rect': rects[0],
-                    'rects': rects,
-                    'title': 'Finish The Battle',
-                    'body': 'When all three rounds are filled, Finish Battle resolves ownership and loot. The screen can auto-finish after a short wait, but pressing it makes the result immediate.',
-                    'action': 'next',
-                    'max_lines': 5,
-                }
-        return None
+        return self._current_conquer_battle_intro_step(self._conquer_menu_coach_seen())
 
     def _wrap_conquer_battle_coach_lines(self, text, max_width, max_lines=5):
         words = str(text or '').split()
@@ -2097,7 +2147,8 @@ class ConquerGameScreen(GameScreen):
         body_line_h = self._conquer_battle_coach_font.get_height() + 3
         button_h = max(30, self._conquer_battle_coach_font.get_height() + 10)
         draws_next = step.get('action', 'next') == 'next'
-        button_space = button_h + 16 if draws_next else 8
+        draws_skip = not (self._conquer_onboarding() or {}).get('onboarding_skipped')
+        button_space = button_h + 16 if (draws_next or draws_skip) else 8
         card_h = max(152, 22 + title_h + 10 + len(body_lines) * body_line_h + button_space)
         gap = 14
         if target.right + gap + card_w < settings.SCREEN_WIDTH:
@@ -2128,6 +2179,13 @@ class ConquerGameScreen(GameScreen):
                                     card.bottom - button_h - 12,
                                     button_w, button_h)
             self._draw_conquer_battle_coach_button(next_rect, button_label, ('next', step['id']))
+        if draws_skip:
+            skip_label = 'Skip tutorial'
+            skip_w = max(112, self._conquer_battle_coach_font.size(skip_label)[0] + 24)
+            skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
+                                    skip_w, button_h)
+            self._draw_conquer_battle_coach_button(
+                skip_rect, skip_label, ('skip_tutorial', step['id']))
 
     @staticmethod
     def _conquer_battle_coach_blocking_event_types():
@@ -2154,23 +2212,18 @@ class ConquerGameScreen(GameScreen):
                 continue
             if event.type == MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                self._conquer_battle_coach_pressed_button_action = None
+                for rect, button_action in list(self._conquer_battle_coach_buttons):
+                    if rect.collidepoint(pos):
+                        self._conquer_battle_coach_pressed_button_action = button_action
+                        return True
                 if action != 'click':
-                    self._conquer_battle_coach_pressed_button_action = None
-                    for rect, button_action in list(self._conquer_battle_coach_buttons):
-                        if rect.collidepoint(pos):
-                            self._conquer_battle_coach_pressed_button_action = button_action
-                            break
                     return True
                 if any(rect.collidepoint(pos) for rect in target_rects):
-                    return False
+                    continue
                 return True
             if event.type == MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
-                if action == 'click':
-                    if any(rect.collidepoint(pos) for rect in target_rects):
-                        self._mark_conquer_battle_coach_seen(step.get('id'))
-                        return False
-                    return True
                 pressed_action = getattr(self, '_conquer_battle_coach_pressed_button_action', None)
                 self._conquer_battle_coach_pressed_button_action = None
                 for rect, button_action in list(self._conquer_battle_coach_buttons):
@@ -2181,10 +2234,14 @@ class ConquerGameScreen(GameScreen):
                     kind, step_id = button_action
                     if kind == 'next':
                         self._mark_conquer_battle_coach_seen(step_id)
-                        if step_id in ('conquer_battle_timeline_intro', 'conquer_battle_prelude'):
-                            advance_active = getattr(self, '_advance_active_timeline_step', None)
-                            if callable(advance_active):
-                                advance_active()
+                    elif kind == 'skip_tutorial':
+                        self._pause_onboarding_tutorial()
+                        self._conquer_battle_coach_pressed_button_action = None
+                    return True
+                if action == 'click':
+                    if any(rect.collidepoint(pos) for rect in target_rects):
+                        self._mark_conquer_battle_coach_seen(step.get('id'))
+                        continue
                     return True
                 return True
             return True
@@ -3560,6 +3617,8 @@ class ConquerGameScreen(GameScreen):
         single-option step, fire it immediately instead so the player can
         skip the auto-advance hold.
         """
+        if self._conquer_battle_intro_paused():
+            return False
         # Pre-empt the auto-advance hold for single-option interactive steps.
         if self._auto_single_option_pending is not None or \
                 self._detect_single_option_context()[0] is not None:
@@ -7488,8 +7547,12 @@ class ConquerGameScreen(GameScreen):
             self._sync_conquer_action_modes()
             self._sync_pending_confirmation_state()
             self._enforce_battle_shop_during_moves()
-            self._maybe_auto_trigger_finish_battle()
-            self._maybe_auto_advance_single_option_step()
+            if not self._conquer_battle_intro_paused():
+                self._maybe_auto_trigger_finish_battle()
+                self._maybe_auto_advance_single_option_step()
+            else:
+                self._finish_battle_available_since_ms = None
+                self._auto_single_option_pending = None
 
     # -------------------------------------------------------------- event input
     def handle_events(self, events):

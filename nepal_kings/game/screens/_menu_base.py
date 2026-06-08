@@ -593,6 +593,35 @@ class MenuScreenMixin:
         ud = getattr(self.state, 'user_dict', None) or {}
         return ud.get('onboarding') or {}
 
+    def _set_onboarding_skipped_local(self, skipped):
+        ud = getattr(self.state, 'user_dict', None)
+        if not ud:
+            return
+        onboarding = dict(ud.get('onboarding') or {})
+        onboarding['onboarding_skipped'] = bool(skipped)
+        if skipped:
+            onboarding['welcome_pending'] = False
+        ud['onboarding'] = onboarding
+
+    def _pause_onboarding_tutorial(self):
+        try:
+            data = onboarding_service.skip_onboarding()
+            self._apply_onboarding_payload(data)
+        except Exception:
+            self._set_onboarding_skipped_local(True)
+        self._menu_coach_pressed_button_action = None
+        if getattr(self.state, 'set_msg', None):
+            self.state.set_msg('Tutorial paused. Open Guide to continue.')
+
+    def _resume_onboarding_tutorial(self):
+        try:
+            data = onboarding_service.resume_onboarding()
+            self._apply_onboarding_payload(data)
+        except Exception:
+            self._set_onboarding_skipped_local(False)
+        if getattr(self.state, 'set_msg', None):
+            self.state.set_msg('Tutorial resumed')
+
     def _current_menu_username(self):
         ud = getattr(self.state, 'user_dict', None) or {}
         return ud.get('username')
@@ -829,6 +858,32 @@ class MenuScreenMixin:
         self.window.blit(intro_surf, (rect.x + 22, intro_y))
 
         area_top = intro_y + intro_surf.get_height() + int(0.026 * _SH)
+        if onboarding.get('onboarding_skipped'):
+            pause_h = max(42, int(0.052 * _SH))
+            pause_rect = pygame.Rect(rect.x + 22, area_top, rect.w - 44, pause_h)
+            pause_bg = pygame.Surface((pause_rect.w, pause_rect.h), pygame.SRCALPHA)
+            pause_bg.fill((34, 29, 23, 168))
+            self.window.blit(pause_bg, pause_rect.topleft)
+            pygame.draw.rect(self.window, (150, 126, 74), pause_rect, 1, border_radius=5)
+            label = self._onboarding_guide_font.render(
+                'Tutorial paused', True, (235, 222, 184))
+            self.window.blit(label, (
+                pause_rect.x + 12,
+                pause_rect.y + pause_rect.h // 2 - label.get_height() // 2,
+            ))
+            resume_label = 'Continue tutorial'
+            resume_w = max(138, self._onboarding_guide_small_font.size(resume_label)[0] + 26)
+            resume_h = max(28, self._onboarding_guide_small_font.get_height() + 8)
+            resume_rect = pygame.Rect(
+                pause_rect.right - resume_w - 12,
+                pause_rect.y + (pause_rect.h - resume_h) // 2,
+                resume_w,
+                resume_h,
+            )
+            self._draw_onboarding_guide_button(
+                resume_rect, resume_label, ('resume_tutorial', None))
+            area_top = pause_rect.bottom + int(0.018 * _SH)
+
         area_h = max(84, int(0.108 * _SH))
         self._draw_onboarding_area_overview(
             pygame.Rect(rect.x + 22, area_top, rect.w - 44, area_h))
@@ -1100,6 +1155,8 @@ class MenuScreenMixin:
                         self._spawn_onboarding_reward_floaters(reward, rect.center)
                         if getattr(self.state, 'set_msg', None):
                             self.state.set_msg(data.get('reward_label') or 'Reward claimed')
+                    elif kind == 'resume_tutorial':
+                        self._resume_onboarding_tutorial()
                 except Exception:
                     if getattr(self.state, 'set_msg', None):
                         self.state.set_msg('Guide action failed')
@@ -1109,7 +1166,10 @@ class MenuScreenMixin:
     # ── lightweight menu coach cards ──────────────────────────────
 
     def _menu_coach_allowed_common(self):
-        if not self._onboarding():
+        onboarding = self._onboarding()
+        if not onboarding:
+            return False
+        if onboarding.get('onboarding_skipped'):
             return False
         if getattr(self, '_onboarding_guide_open', False):
             return False
@@ -1218,7 +1278,8 @@ class MenuScreenMixin:
         body_line_h = self._menu_coach_font.get_height() + 3
         button_h = max(30, self._menu_coach_font.get_height() + 10)
         draws_next = step.get('action', 'next') == 'next'
-        button_space = button_h + 16 if draws_next else 8
+        draws_skip = not (self._onboarding() or {}).get('onboarding_skipped')
+        button_space = button_h + 16 if (draws_next or draws_skip) else 8
         card_h = max(152, 22 + title_h + 10 + len(body_lines) * body_line_h + button_space)
         gap = 14
         if target.right + gap + card_w < _SW:
@@ -1247,6 +1308,12 @@ class MenuScreenMixin:
             next_rect = pygame.Rect(card.right - button_w - 14, card.bottom - button_h - 12,
                                     button_w, button_h)
             self._draw_menu_coach_button(next_rect, label, ('next', step['id']))
+        if draws_skip:
+            label = 'Skip tutorial'
+            button_w = max(112, self._menu_coach_font.size(label)[0] + 24)
+            skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
+                                    button_w, button_h)
+            self._draw_menu_coach_button(skip_rect, label, ('skip_tutorial', step['id']))
 
     def _menu_coach_blocking_event_types(self):
         event_types = {
@@ -1275,24 +1342,18 @@ class MenuScreenMixin:
                 continue
             if event.type == pygame.MOUSEBUTTONDOWN and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
+                self._menu_coach_pressed_button_action = None
+                for rect, button_action in list(self._menu_coach_buttons):
+                    if rect.collidepoint(pos):
+                        self._menu_coach_pressed_button_action = button_action
+                        return True
                 if action != 'click':
-                    self._menu_coach_pressed_button_action = None
-                    for rect, button_action in list(self._menu_coach_buttons):
-                        if rect.collidepoint(pos):
-                            self._menu_coach_pressed_button_action = button_action
-                            break
                     return True
                 if any(rect.collidepoint(pos) for rect in target_rects):
                     return False
                 return True
             if event.type == pygame.MOUSEBUTTONUP and getattr(event, 'button', 0) == 1:
                 pos = getattr(event, 'pos', pygame.mouse.get_pos())
-                if action == 'click':
-                    if any(rect.collidepoint(pos) for rect in target_rects):
-                        if step.get('mark_on_click', True):
-                            self._mark_menu_coach_seen(step.get('id'))
-                        return False
-                    return True
                 pressed_action = getattr(self, '_menu_coach_pressed_button_action', None)
                 self._menu_coach_pressed_button_action = None
                 for rect, button_action in list(self._menu_coach_buttons):
@@ -1304,6 +1365,14 @@ class MenuScreenMixin:
                     if kind == 'next':
                         self._mark_menu_coach_seen(step_id)
                         self._after_menu_coach_next(step_id)
+                    elif kind == 'skip_tutorial':
+                        self._pause_onboarding_tutorial()
+                    return True
+                if action == 'click':
+                    if any(rect.collidepoint(pos) for rect in target_rects):
+                        if step.get('mark_on_click', True):
+                            self._mark_menu_coach_seen(step.get('id'))
+                        return False
                     return True
                 return True
             return True
@@ -1317,6 +1386,8 @@ class MenuScreenMixin:
             return None
         onboarding = self._onboarding()
         if not onboarding:
+            return None
+        if onboarding.get('onboarding_skipped'):
             return None
         completed = set(onboarding.get('completed_steps') or [])
         if 'finish_first_duel' in completed:

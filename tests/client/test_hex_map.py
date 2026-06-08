@@ -269,6 +269,101 @@ class TestCameraTransforms:
         assert abs(before[0] - after[0]) < 0.01
         assert abs(before[1] - after[1]) < 0.01
 
+    def test_fractional_mouse_wheel_zoom_keeps_cursor_world_point(self, monkeypatch):
+        from game.components.hex_map import HexMap
+        import pygame
+        window = pygame.display.get_surface()
+        viewport = pygame.Rect(100, 50, 400, 300)
+        cursor = (260, 170)
+        lands = [_make_land(c, r) for r in range(10) for c in range(18)]
+        hm = HexMap(lands, window, viewport_rect=viewport)
+        hm.camera_x = 40
+        hm.camera_y = 70
+        hm.zoom = 1.0
+        before = hm.screen_to_world(*cursor)
+
+        monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: cursor)
+        hm.handle_event(SimpleNamespace(
+            type=pygame.MOUSEWHEEL,
+            y=0,
+            precise_y=0.25,
+        ))
+
+        after = hm.screen_to_world(*cursor)
+        assert hm.zoom == pytest.approx(1.125)
+        assert abs(before[0] - after[0]) < 0.01
+        assert abs(before[1] - after[1]) < 0.01
+
+    def test_button_wheel_zoom_uses_event_position(self, monkeypatch):
+        from game.components.hex_map import HexMap
+        import pygame
+        window = pygame.display.get_surface()
+        viewport = pygame.Rect(100, 50, 400, 300)
+        cursor = (260, 170)
+        lands = [_make_land(c, r) for r in range(10) for c in range(18)]
+        hm = HexMap(lands, window, viewport_rect=viewport)
+        hm.camera_x = 40
+        hm.camera_y = 70
+        hm.zoom = 1.0
+        before = hm.screen_to_world(*cursor)
+
+        monkeypatch.setattr(pygame.mouse, 'get_pos', lambda: (10, 10))
+        hm.handle_event(SimpleNamespace(
+            type=pygame.MOUSEBUTTONDOWN,
+            button=4,
+            pos=cursor,
+        ))
+
+        after = hm.screen_to_world(*cursor)
+        assert hm.zoom == pytest.approx(1.5)
+        assert abs(before[0] - after[0]) < 0.01
+        assert abs(before[1] - after[1]) < 0.01
+
+    def test_button_wheel_down_zooms_out(self):
+        from game.components.hex_map import HexMap
+        import pygame
+        window = pygame.display.get_surface()
+        viewport = pygame.Rect(100, 50, 400, 300)
+        cursor = (260, 170)
+        lands = [_make_land(c, r) for r in range(10) for c in range(18)]
+        hm = HexMap(lands, window, viewport_rect=viewport)
+        hm.camera_x = 40
+        hm.camera_y = 70
+        hm.zoom = 2.0
+        before = hm.screen_to_world(*cursor)
+
+        hm.handle_event(SimpleNamespace(
+            type=pygame.MOUSEBUTTONDOWN,
+            button=5,
+            pos=cursor,
+        ))
+
+        after = hm.screen_to_world(*cursor)
+        assert hm.zoom == pytest.approx(1.5)
+        assert abs(before[0] - after[0]) < 0.01
+        assert abs(before[1] - after[1]) < 0.01
+
+    def test_wheel_zoom_ignores_positions_outside_viewport(self):
+        from game.components.hex_map import HexMap
+        import pygame
+        window = pygame.display.get_surface()
+        viewport = pygame.Rect(100, 50, 400, 300)
+        lands = [_make_land(c, r) for r in range(10) for c in range(18)]
+        hm = HexMap(lands, window, viewport_rect=viewport)
+        hm.camera_x = 40
+        hm.camera_y = 70
+        hm.zoom = 1.0
+        before = (hm.camera_x, hm.camera_y, hm.zoom)
+
+        hm.handle_event(SimpleNamespace(
+            type=pygame.MOUSEWHEEL,
+            y=1,
+            precise_y=1,
+            pos=(20, 20),
+        ))
+
+        assert (hm.camera_x, hm.camera_y, hm.zoom) == before
+
     def test_nav_button_zoom_uses_viewport_center(self):
         from game.components.hex_map import HexMap
         import pygame

@@ -725,15 +725,28 @@ class HexMap:
                     return clicked
             return None
 
-        if event.type == pygame.MOUSEWHEEL:
-            # Zoom centred on cursor
-            mx, my = pygame.mouse.get_pos()
+        if (event.type == pygame.MOUSEWHEEL or
+                (event.type == pygame.MOUSEBUTTONDOWN
+                 and getattr(event, 'button', None) in (4, 5))):
+            pos = getattr(event, 'pos', None) or pygame.mouse.get_pos()
+            mx, my = pos
             if not self._in_viewport((mx, my)):
                 return None
-            if event.y > 0:
-                self._zoom_at_screen_pos(mx, my, settings.HEX_MAP_ZOOM_STEP)
-            elif event.y < 0:
-                self._zoom_at_screen_pos(mx, my, -settings.HEX_MAP_ZOOM_STEP)
+
+            if event.type == pygame.MOUSEWHEEL:
+                wheel_y = getattr(event, 'precise_y', None)
+                if wheel_y is None or wheel_y == 0:
+                    wheel_y = getattr(event, 'y', 0)
+                wheel_y = float(wheel_y or 0)
+            elif event.button == 4:
+                wheel_y = 1.0
+            else:
+                wheel_y = -1.0
+
+            wheel_y = max(-1.0, min(1.0, wheel_y))
+            if wheel_y:
+                self._zoom_at_screen_pos(
+                    mx, my, wheel_y * settings.HEX_MAP_ZOOM_STEP)
             return None
 
         return None

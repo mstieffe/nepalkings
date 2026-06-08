@@ -206,9 +206,10 @@ class TestConquerCoachCopy:
         step = ConquerScreen._current_conquer_coach_step(screen)
 
         assert step['id'] == 'conquer_config_to_battle'
-        assert step['title'] == 'Start The Conquer Battle'
+        assert step['title'] == 'Start Conquer Battle'
         assert 'guided tour ends here' not in step['body']
-        assert 'timeline, tactics, ledger, and kingdom outcome' in step['body']
+        assert 'timeline, tactics, ledger, and result' in step['body']
+        assert 'can be looted if you lose' in step['body']
         assert step['button_label'] == 'Got it'
 
 

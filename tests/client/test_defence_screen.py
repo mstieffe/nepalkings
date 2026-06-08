@@ -393,6 +393,45 @@ class TestDefenceDraftFlow:
         assert screen._pending_leave_confirm is True
 
 
+class TestVictoryReviewSkip:
+
+    def test_skip_acks_victory_and_navigates_without_touching_draft(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._victory_review_mode = True
+        screen._victory_review_game_id = 42
+        screen._land_id = 7
+        screen._config = _make_config(draft_dirty=True, figures=[])
+
+        with patch.object(screen, '_server_acknowledge_victory_review',
+                          return_value=True) as mock_ack, \
+                patch.object(screen, '_server_save_draft') as mock_save, \
+                patch.object(screen, '_server_discard_draft') as mock_discard, \
+                patch.object(screen, '_server_clear_active_defence') as mock_clear:
+            screen._on_skip_click()
+
+        mock_ack.assert_called_once()
+        mock_save.assert_not_called()
+        mock_discard.assert_not_called()
+        mock_clear.assert_not_called()
+        assert screen._victory_review_mode is False
+        assert screen._victory_review_game_id is None
+        assert state.screen == 'kingdom'
+
+    def test_skip_noop_outside_victory_review(self):
+        from game.screens.defence_screen import DefenceScreen
+        state = _make_state()
+        screen = DefenceScreen(state)
+        screen._victory_review_mode = False
+
+        with patch.object(screen, '_server_acknowledge_victory_review') as mock_ack:
+            screen._on_skip_click()
+
+        mock_ack.assert_not_called()
+        assert state.screen == 'defence'
+
+
 class TestDefenceConfirmData:
 
     def test_save_confirmation_lists_all_committed_cards_as_loot_risk(self):

@@ -71,6 +71,12 @@ CORE_STEPS = [
         'description': 'Customize a kingdom badge, color, surface, or border.',
         'reward': {'gold': 100},
     },
+    {
+        'id': 'finish_tutorial',
+        'title': 'Finish tutorial',
+        'description': 'Reach the final tutorial message in the guide flow.',
+        'reward': {'booster_packs': 6},
+    },
 ]
 
 
@@ -205,6 +211,7 @@ MENU_HINT_IDS = (
     'kingdom_config_production', 'kingdom_config_skills',
     'kingdom_config_loot_inbox', 'kingdom_config_shields_style',
 )
+FINAL_TUTORIAL_MENU_HINT_ID = 'kingdom_config_shields_style'
 
 
 def ensure_onboarding_state_column():
@@ -357,6 +364,13 @@ def skip_onboarding(user, *, commit=False):
     return state
 
 
+def resume_onboarding(user, *, commit=False):
+    state = _state(user)
+    state['onboarding_skipped'] = False
+    _save_state(user, state, commit=commit)
+    return state
+
+
 def reset_onboarding(user, *, commit=False):
     state = _state(user)
     state['onboarding_skipped'] = False
@@ -419,6 +433,8 @@ def _facts(user, state=None):
         completed.add('collect_first_kingdom_production')
     if _saved_defence_count(user_id) >= 1:
         completed.add('save_first_defence_config')
+    if FINAL_TUTORIAL_MENU_HINT_ID in set(state.get('menu_hints_seen') or []):
+        completed.add('finish_tutorial')
 
     early_completed = set()
     if duel_wins >= 1:

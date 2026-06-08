@@ -38,6 +38,12 @@ def skip_onboarding():
     return response.json()
 
 
+def resume_onboarding():
+    response = requests.post(f'{settings.SERVER_URL}/onboarding/resume', timeout=6)
+    response.raise_for_status()
+    return response.json()
+
+
 def reset_onboarding():
     response = requests.post(f'{settings.SERVER_URL}/onboarding/reset', timeout=6)
     response.raise_for_status()

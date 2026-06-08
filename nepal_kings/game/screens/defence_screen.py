@@ -181,10 +181,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         # ── Victory Review mode (post-conquer one-shot edit) ────────
         # Set when the player is routed here right after a successful
-        # conquer.  Swaps title + Save chrome and adds a Clear All button.
+        # conquer.  Swaps title + Save chrome and adds a Clear All button
+        # plus a non-destructive Skip-for-now exit.
         self._victory_review_mode = False
         self._victory_review_game_id = None
         self._btn_clear_all = None
+        self._btn_skip = None
         self._pending_clear_all_confirm = False
         self._pending_victory_ack = False
 
@@ -362,6 +364,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             self._victory_review_mode = False
             self._victory_review_game_id = None
         self._btn_clear_all = None
+        self._btn_skip = None
         self._pending_clear_all_confirm = False
         self._pending_victory_ack = False
 
@@ -535,9 +538,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
         fsz = self._mod_frame_size
 
         # Save Defence / Confirm Defence button (bottom-right of box).
-        # In Victory Review mode the label is longer and we add a sibling
-        # "Clear All" button to its left without overlapping the dividers.
-        save_w = int(0.22 * _SW) if self._victory_review_mode else int(0.20 * _SW)
+        # In Victory Review mode the label is longer and we add two sibling
+        # buttons to its left: "Clear All" (destructive) and "Skip for now"
+        # (non-destructive exit that preserves the partial draft).
+        save_w = int(0.20 * _SW) if self._victory_review_mode else int(0.20 * _SW)
         save_h = max(int(0.055 * _SH), settings.TOUCH_TARGET_MIN)
         self._btn_save = pygame.Rect(
             _BOX_X + _BOX_W - _BOX_PAD - save_w,
@@ -546,15 +550,30 @@ class DefenceScreen(MenuScreenMixin, Screen):
         )
 
         if self._victory_review_mode:
-            clear_w = int(0.16 * _SW)
+            clear_w = int(0.14 * _SW)
+            skip_w = int(0.16 * _SW)
             sibling_gap = int(0.012 * _SW)
+            # Never let sibling buttons intrude on the left field column.
+            min_sibling_x = _BOX_X + _BOX_PAD + int(0.018 * _SW)
+
             clear_x = self._btn_save.x - sibling_gap - clear_w
-            # Never let the Clear All button intrude on the left field column.
-            min_clear_x = _BOX_X + _BOX_PAD + int(0.018 * _SW)
-            if clear_x < min_clear_x:
-                clear_x = min_clear_x
-                clear_w = max(int(0.12 * _SW),
-                              self._btn_save.x - sibling_gap - clear_x)
+            skip_x = clear_x - sibling_gap - skip_w
+            if skip_x < min_sibling_x:
+                # Compress the two sibling widths proportionally so they still
+                # fit between the left column and the Confirm button.
+                available = self._btn_save.x - sibling_gap - min_sibling_x - sibling_gap
+                if available > 0:
+                    skip_w = max(int(0.10 * _SW), available // 2)
+                    clear_w = max(int(0.10 * _SW), available - skip_w)
+                skip_x = min_sibling_x
+                clear_x = skip_x + skip_w + sibling_gap
+
+            self._btn_skip = pygame.Rect(
+                skip_x,
+                self._btn_save.y,
+                skip_w,
+                save_h,
+            )
             self._btn_clear_all = pygame.Rect(
                 clear_x,
                 self._btn_save.y,
@@ -563,6 +582,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
             )
         else:
             self._btn_clear_all = None
+            self._btn_skip = None
 
         right_content_bottom = self._btn_save.y - panel_gap
         right_content_h = max(1, right_content_bottom - content_top)
@@ -1709,6 +1729,13 @@ class DefenceScreen(MenuScreenMixin, Screen):
             clear_clr = (170, 70, 70) if has_figs else (80, 80, 80)
             self._draw_button(self._btn_clear_all, 'Clear All', clear_clr)
 
+        # Victory Review: non-destructive Skip exit.  Leaves whatever the
+        # player has placed as a draft so they can finish later from the
+        # land detail; the kingdom map flags the land as undefended via
+        # the existing defence-incomplete badge.
+        if self._victory_review_mode and self._btn_skip:
+            self._draw_button(self._btn_skip, 'Skip for now', (140, 120, 70))
+
         # ── Divider lines ───────────────────────────────────────────
         div_clr = (90, 80, 60)
         # Vertical divider between left (field/resources) and right (battle) columns
@@ -2379,6 +2406,25 @@ class DefenceScreen(MenuScreenMixin, Screen):
             image_groups=image_groups,
             message_after_images=after_msg,
         )
+
+    def _on_skip_click(self):
+        """Victory Review: leave without finalising the defence.
+
+        The draft (whatever figures the player has placed so far) is
+        already persisted server-side, so we just acknowledge the victory
+        and navigate back to the kingdom.  The land will surface the
+        existing ``defence_incomplete`` badge so the player remembers to
+        finish setup later.
+        """
+        if not self._victory_review_mode:
+            return
+        self._server_acknowledge_victory_review()
+        self._victory_review_mode = False
+        self._victory_review_game_id = None
+        self._pending_victory_ack = True
+        self._pending_nav = self._pending_nav or 'kingdom'
+        self.state.set_msg('Defence left incomplete — finish later from the land')
+        self._complete_pending_navigation()
 
     def _on_clear_all_click(self):
         """Victory Review: confirm dialog before wiping draft + active defence."""
@@ -3384,6 +3430,12 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 if (self._victory_review_mode and self._btn_clear_all
                         and _mobile_collide(self._btn_clear_all, pos)):
                     self._on_clear_all_click()
+                    continue
+
+                # Victory Review: Skip for now button
+                if (self._victory_review_mode and self._btn_skip
+                        and _mobile_collide(self._btn_skip, pos)):
+                    self._on_skip_click()
                     continue
 
                 # Click on filled battle move slot → open detail box
