@@ -245,6 +245,7 @@ class SettingsScreen(MenuScreenMixin, Screen):
 
     def _toggle_specs(self):
         """Return the list of toggle rows to draw: (key, label, value, enabled, hint)."""
+        from utils import sound
         ud = getattr(self.state, 'user_dict', None) or {}
         has_email = bool(ud.get('has_email'))
         notify_on = bool(ud.get('notify_emails_enabled', True))
@@ -255,6 +256,8 @@ class SettingsScreen(MenuScreenMixin, Screen):
         else:
             email_hint = "Emailed when it's your turn and you are offline."
         return [
+            ('sound', 'Sound effects', sound.is_enabled(), True,
+             'Card, battle, and interface sounds.'),
             ('notify_emails', 'Email notifications', notify_on,
              bool(ud) and has_email, email_hint),
         ]
@@ -262,7 +265,7 @@ class SettingsScreen(MenuScreenMixin, Screen):
     def _draw_toggle_rows(self, y, mx, my):
         """Draw all toggle rows starting at y; returns the y below them."""
         self._toggle_rects = {}
-        sec_surf = self._section_font.render('Notifications', True, _SECTION_CLR)
+        sec_surf = self._section_font.render('Preferences', True, _SECTION_CLR)
         self.window.blit(sec_surf, (_BOX_X + int(0.04 * _SW), y))
         y += sec_surf.get_height() + int(0.008 * _SH)
 
@@ -313,7 +316,12 @@ class SettingsScreen(MenuScreenMixin, Screen):
         for key, rect in self._toggle_rects.items():
             if not rect.collidepoint(pos):
                 continue
-            if key == 'notify_emails':
+            if key == 'sound':
+                from utils import sound
+                sound.set_enabled(not sound.is_enabled())
+                if sound.is_enabled():
+                    sound.play('ui_click')
+            elif key == 'notify_emails':
                 ud = self.state.user_dict or {}
                 new_value = not bool(ud.get('notify_emails_enabled', True))
                 from utils import auth_service

@@ -162,6 +162,8 @@ class GameScreen(Screen):
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message, actions, images, and icon."""
         from game.components.dialogue_box import DialogueBox
+        from utils import sound
+        sound.play_for_dialogue(title)
         self._active_dialogue_type = None  # Clear — callers via queue_or_show set it after
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
 

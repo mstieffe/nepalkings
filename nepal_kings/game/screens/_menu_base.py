@@ -531,12 +531,18 @@ class MenuScreenMixin:
             return True
         if event.type == pygame.MOUSEBUTTONUP:
             if self._icon_guide.collide():
+                from utils import sound
+                sound.play('ui_click')
                 self._open_onboarding_guide()
                 return True
             if self._icon_settings.collide():
+                from utils import sound
+                sound.play('ui_click')
                 self.state.screen = 'settings'
                 return True
             if self._icon_home.collide():
+                from utils import sound
+                sound.play('ui_back')
                 self.state.screen = 'game_menu'
                 return True
             if self._icon_logout.collide():

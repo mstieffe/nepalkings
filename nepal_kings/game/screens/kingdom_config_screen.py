@@ -773,6 +773,9 @@ class KingdomConfigScreen(MenuScreenMixin, Screen):
         collected_main = int(data.get('collected_main_boosters', 0) or 0)
         collected_side = int(data.get('collected_side_boosters', 0) or 0)
         collected_maps = int(data.get('collected_maps', 0) or 0)
+        if collected > 0 or collected_main or collected_side or collected_maps:
+            from utils import sound
+            sound.play('coin')
         if collected > 0 and hasattr(self, '_suppress_next_gold_floater'):
             self._suppress_next_gold_floater()
         if 'gold' in data:

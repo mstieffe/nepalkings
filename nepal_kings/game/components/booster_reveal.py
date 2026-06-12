@@ -329,6 +329,8 @@ class BoosterRevealOverlay:
             if self._states[i] == 'hidden' and slot.collidepoint(pos):
                 self._states[i] = 'revealing'
                 self._reveal_started_at[i] = pygame.time.get_ticks()
+                from utils import sound
+                sound.play('booster_reveal')
                 break
 
         return False

@@ -248,6 +248,8 @@ class SubScreen:
 
     def make_dialogue_box(self, message, actions=None, images=None, icon=None, title="", auto_close_delay=None, message_after_images=None):
         """Create a dialogue box with specified message and actions."""
+        from utils import sound
+        sound.play_for_dialogue(title)
         self.dialogue_box = DialogueBox(self.window, message, actions=actions, images=images, icon=icon, title=title, auto_close_delay=auto_close_delay, message_after_images=message_after_images)
 
     def make_scroll_text_list_shifter(self, text_list, x, y, scroll_height=None):

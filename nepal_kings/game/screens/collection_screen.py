@@ -1362,6 +1362,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             self._cards[(suit, rank)] = max(0, old_qty - self._sell_qty)
             if self.state.user_dict:
                 self.state.user_dict['gold'] = self._gold
+            from utils import sound
+            sound.play('coin')
             self.state.set_msg(f'Sold {self._sell_qty} {suit} {rank} for {earned} gold')
         except Exception as e:
             logger.error(f'Sell failed: {e}')
@@ -1406,6 +1408,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             key = (c['suit'], c['rank'])
             self._cards[key] = self._cards.get(key, 0) + 1
         from game.components.booster_reveal import BoosterRevealOverlay
+        from utils import sound
+        sound.play('booster_open')
         self._reveal_overlay = BoosterRevealOverlay(self.window, drawn_cards, pack_type=pack_type)
 
     def _current_collection_coach_step(self):

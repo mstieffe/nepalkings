@@ -321,6 +321,17 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.state.badge_new_challenges = len(new_ch)
                 self.state._new_challenge_ids = set(new_ch)
 
+            # Chime once when fresh games or challenges arrive
+            try:
+                total_new = (int(self.state.badge_new_games or 0)
+                             + int(self.state.badge_new_challenges or 0))
+                if total_new > getattr(self, '_badge_chimed_count', 0):
+                    from utils import sound
+                    sound.play('your_turn')
+                self._badge_chimed_count = total_new
+            except Exception:
+                pass
+
             # -- accepted challenges (notify challenger) --
             try:
                 self._check_accepted_challenges(user)
@@ -456,6 +467,11 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
     def handle_button_clicks(self):
         """Handle clicks on the menu buttons."""
+        if (self.button_duel.collide() or self.button_kingdom.collide()
+                or self.button_collection.collide()
+                or self.button_rankings.collide()):
+            from utils import sound
+            sound.play('ui_click')
         if self.button_duel.collide():
             self._mark_menu_coach_seen('duel')
             self.state.screen = 'duel_menu'

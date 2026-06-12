@@ -349,6 +349,10 @@ def main():
     force_picker = ('--pick-resolution' in sys.argv or '-r' in sys.argv
                     or '--settings' in sys.argv or '-s' in sys.argv)
 
+    # Sound preference (reads ~/.nepalkings/resolution.json)
+    from utils import sound as _sound
+    _sound.init()
+
     saved = _load_saved()
     if saved and not force_picker:
         w, h = saved
@@ -472,6 +476,10 @@ if __name__ == '__main__':
         # ── Haptic feedback support (Vibration API) ───────────────
         from utils import haptics as _haptics
         _haptics.init()
+
+        # ── Sound effects ──────────────────────────────────────────
+        from utils import sound as _sound
+        _sound.init()
 
         from nepal_kings import Client
 

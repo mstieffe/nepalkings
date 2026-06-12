@@ -7503,7 +7503,49 @@ class ConquerGameScreen(GameScreen):
             self._draw_conquer_battle_coach()
 
     # ----------------------------------------------------------------- update
+
+    def _play_conquer_transition_sounds(self):
+        """One-shot stingers for battle start and final result (state-driven
+        screen — there is no single dialog moment to hook)."""
+        try:
+            from utils import sound
+            game = self.state.game
+            if not game:
+                return
+            game_key = getattr(game, 'id', None)
+            if getattr(self, '_sound_state_game_id', None) != game_key:
+                self._sound_state_game_id = game_key
+                self._battle_start_played = bool(
+                    getattr(game, 'battle_turn_player_id', None) is not None
+                    or getattr(game, 'last_battle_result', None))
+                self._result_sound_played = bool(
+                    getattr(game, 'last_battle_result', None))
+            if (not self._battle_start_played
+                    and getattr(game, 'battle_turn_player_id', None) is not None):
+                self._battle_start_played = True
+                sound.play('battle_start')
+            result = getattr(game, 'last_battle_result', None)
+            if result and not self._result_sound_played:
+                self._result_sound_played = True
+                outcome = (result.get('conquer_result')
+                           or result.get('outcome')) if isinstance(result, dict) else None
+                if outcome == 'draw':
+                    sound.play('ui_back')
+                    return
+                winner_pid = result.get('winner_player_id') if isinstance(result, dict) else None
+                own_pid = getattr(game, 'player_id', None)
+                if winner_pid is not None and own_pid is not None:
+                    won = self._ids_equal(winner_pid, own_pid)
+                else:
+                    winner_name = (result.get('winner_name') or '') if isinstance(result, dict) else ''
+                    own_name = (self.state.user_dict or {}).get('username', '')
+                    won = bool(own_name) and winner_name == own_name
+                sound.play('conquer_win' if won else 'battle_lose')
+        except Exception:
+            pass
+
     def update(self, events):
+        self._play_conquer_transition_sounds()
         if not self._ensure_conquer_screen_game():
             return
         self._normalize_conquer_subscreen()

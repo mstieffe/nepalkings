@@ -147,6 +147,8 @@ class BuildFigureScreen(SubScreen):
 
             if response.get('success'):
                 logger.debug(f"Figure {selected_figure.name} created successfully in the database.")
+                from utils import sound
+                sound.play('figure_place')
             else:
                 logger.error(f"Failed to create figure: {response.get('message', 'Unknown error')}")
                 self.game.unlock_actions()
