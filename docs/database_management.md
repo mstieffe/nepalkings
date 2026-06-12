@@ -1,39 +1,53 @@
 # Database Management
 
-## Dropping Tables on Startup
+## Schema Changes: Migrations, Not Resets
 
-By default, the server **does NOT drop tables** on startup to preserve your data.
-Schema changes are handled by an intentional reset/recreate flow; the app does
-not maintain in-place migration helpers for old local databases.
+Schema changes ship through `server/migration_runner.py` and apply
+**automatically at server startup** (locally and on PythonAnywhere reload):
 
-### When to Reset the Database
+- `db.create_all()` creates tables for brand-new models.
+- The ordered `MIGRATIONS` list handles everything else (added columns,
+  backfills). Applied versions are recorded in the `schema_version` table,
+  so each migration runs exactly once per database.
 
-You should drop and recreate tables when:
-- You've added new columns to existing models
-- You've changed data types in models
-- You've added new tables/models
-- You're experiencing database corruption
+### Adding a migration
 
-### How to Reset the Database
+1. Append `(version, description, callable)` to `MIGRATIONS` in
+   `server/migration_runner.py`, using the next integer version.
+2. Make the callable idempotent (check before ALTER — see
+   `_add_column_if_missing()` and the `ensure_*` helpers it wraps).
+3. Never renumber, edit, or remove an entry that has shipped.
+4. Deploy normally with `./deploy_server.sh` — the migration runs when the
+   web app reloads.
 
-**Option 1: Using the helper script (Recommended)**
+### Production data safety
+
+- `./deploy_server.sh` automatically downloads a timestamped snapshot of the
+  live database into `backups/` before every deploy (skip with
+  `--no-backup`, not recommended). The 14 most recent snapshots are kept.
+- Roll back with `scripts/restore_db_backup.sh backups/<file>.db` — this
+  overwrites the live DB and reloads the web app.
+- **Never reset the production database.** `server/RESET_DATABASE.sh`
+  refuses to run when `FLASK_ENV` looks like production and requires a
+  typed `RESET` confirmation.
+
+## Resetting a Local Development Database
+
+For local iteration a reset is often the quickest path:
+
 ```bash
 cd server
-bash RESET_DATABASE.sh
+bash RESET_DATABASE.sh        # asks for confirmation, then drops + recreates
 ```
 
-**Option 2: Setting environment variable**
+or simply delete the SQLite file:
+
 ```bash
 cd server
-DROP_TABLES_ON_STARTUP=True python3 server.py
+killall python3   # kill any running server first
+rm -f test.db
+python3 server.py # tables auto-create, migrations stamp themselves
 ```
-
-**Option 3: Manually editing server_settings.py**
-```python
-# In server_settings.py, temporarily change:
-DROP_TABLES_ON_STARTUP = True  # Change this line
-```
-Then start the server normally. **Remember to change it back to False afterwards!**
 
 ## Local Gameplay Test Account
 
@@ -81,29 +95,18 @@ SQLite database locking errors typically happen because:
    - `pool_pre_ping`: Verifies connections before use
    - `pool_recycle`: Refreshes connections every 300 seconds
 
-3. **Explicit Reset**: Schema updates require a deliberate reset via
-   `DROP_TABLES_ON_STARTUP=True` or by deleting the DB file. No in-place
-   migration/backfill code is run at startup.
+3. **Startup Migrations**: schema changes apply in-place at startup via
+   `server/migration_runner.py`; local resets remain available for
+   development convenience only.
 
 ### Best Practices
 
-- **Development**: Use `DROP_TABLES_ON_STARTUP=True` when testing schema changes
-- **Production/Test deployment reset**: run the reset once intentionally, then set
-   `DROP_TABLES_ON_STARTUP=False` before normal use.
-- **Kill Old Processes**: Before resetting database:
+- **Development**: a local reset is fine when iterating on models; ship the
+  matching migration in the same change.
+- **Production**: never reset — migrations run on reload, and every deploy
+  snapshots the DB into `backups/` first.
+- **Kill Old Processes** before a local reset:
   ```bash
   killall python3
-  # Then start server with DROP_TABLES_ON_STARTUP=True
+  # Then: bash RESET_DATABASE.sh
   ```
-
-## Alternative: Manual Database Reset
-
-If you want complete control, you can manually delete the database file:
-```bash
-cd server
-killall python3  # Kill any running server
-rm -f test.db    # Delete the database file
-python3 server.py  # Start fresh (tables auto-create)
-```
-
-**Note**: This is cleaner than dropping tables because there's no lock contention.

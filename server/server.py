@@ -175,37 +175,16 @@ with app.app_context():
     db.create_all()
 
     try:
-        from kingdom_service import (ensure_conquer_tactics_schema,
-                                     ensure_duel_game_limit_columns,
-                                     ensure_game_ai_seed_column,
-                                     ensure_game_victory_reviewed_at_column,
-                                     ensure_kingdom_production_columns)
-        from onboarding_service import ensure_onboarding_state_column
-        from user_schema_service import ensure_user_legal_columns
-        added_columns = ensure_kingdom_production_columns()
-        if added_columns:
-            logger.info("Kingdom production schema upgraded: added %s",
-                        ', '.join(added_columns))
-        ensured_conquer_schema = ensure_conquer_tactics_schema()
-        if ensured_conquer_schema:
-            logger.info("Conquer tactics schema ensured: %s",
-                        ', '.join(ensured_conquer_schema))
-        added_duel_columns = ensure_duel_game_limit_columns()
-        if added_duel_columns:
-            logger.info("Duel game-limit schema upgraded: added %s",
-                        ', '.join(added_duel_columns))
-        if ensure_game_ai_seed_column():
-            logger.info("Game schema upgraded: added ai_seed column")
-        if ensure_game_victory_reviewed_at_column():
-            logger.info("Game schema upgraded: added victory_reviewed_at column")
-        if ensure_onboarding_state_column():
-            logger.info("User schema upgraded: added onboarding_state column")
-        added_user_columns = ensure_user_legal_columns()
-        if added_user_columns:
-            logger.info("User legal schema upgraded: added %s",
-                        ', '.join(added_user_columns))
-    except Exception as _kingdom_schema_err:  # pragma: no cover — safety net
-        logger.exception("Kingdom production schema upgrade failed: %s", _kingdom_schema_err)
+        from migration_runner import run_migrations
+        _applied = run_migrations()
+        if _applied:
+            logger.info("Applied schema migrations: %s",
+                        ', '.join(f'{v:04d}' for v in _applied))
+    except Exception as _migration_err:  # pragma: no cover — safety net
+        logger.exception("Schema migration failed: %s — the app will start "
+                         "anyway, but the database may be missing recent "
+                         "schema changes. Investigate before accepting "
+                         "traffic.", _migration_err)
         db.session.rollback()
 
     logger.info("Database initialized")
@@ -362,20 +341,8 @@ if __name__ == '__main__':
     try:
         with app.app_context():
             db.create_all()
-            from kingdom_service import (ensure_conquer_tactics_schema,
-                                         ensure_duel_game_limit_columns,
-                                         ensure_game_ai_seed_column,
-                                         ensure_game_victory_reviewed_at_column,
-                                         ensure_kingdom_production_columns)
-            from onboarding_service import ensure_onboarding_state_column
-            from user_schema_service import ensure_user_legal_columns
-            ensure_kingdom_production_columns()
-            ensure_conquer_tactics_schema()
-            ensure_duel_game_limit_columns()
-            ensure_game_ai_seed_column()
-            ensure_game_victory_reviewed_at_column()
-            ensure_onboarding_state_column()
-            ensure_user_legal_columns()
+            from migration_runner import run_migrations
+            run_migrations()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
         logger.error(f'Application failed to start: {e}')

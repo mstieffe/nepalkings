@@ -43,6 +43,42 @@ cd "$SCRIPT_DIR"
 echo "=== Nepal Kings — Deploy Server to PythonAnywhere ==="
 echo ""
 
+# ── 0. Back up the production database ────────────────────────────
+# Every deploy snapshots the live SQLite file into backups/ first, so a
+# bad migration or deploy can always be rolled back with
+# scripts/restore_db_backup.sh. Skip (not recommended) with --no-backup.
+SKIP_BACKUP=false
+for arg in "$@"; do
+    [ "$arg" = "--no-backup" ] && SKIP_BACKUP=true
+done
+REMOTE_DB_PATH="${PA_BASE}/server/instance/nepalkings.db"
+if [ "$SKIP_BACKUP" = false ]; then
+    echo "💾 Backing up production database..."
+    mkdir -p backups
+    BACKUP_FILE="backups/nepalkings-$(date +%Y%m%d-%H%M%S).db"
+    DB_DOWNLOAD_URL="https://${PA_HOST}/api/v0/user/${PA_USER}/files/path${REMOTE_DB_PATH}"
+    HTTP_CODE=$(curl -s -o "$BACKUP_FILE" -w "%{http_code}" $CURL_TIMEOUT \
+        -H "Authorization: Token ${PA_API_TOKEN}" \
+        "$DB_DOWNLOAD_URL")
+    if [ "$HTTP_CODE" = "200" ] && [ -s "$BACKUP_FILE" ]; then
+        SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+        echo "   ✅ Saved $BACKUP_FILE ($SIZE)"
+        # Keep only the 14 most recent backups
+        ls -t backups/nepalkings-*.db 2>/dev/null | tail -n +15 | xargs rm -f 2>/dev/null || true
+    elif [ "$HTTP_CODE" = "404" ]; then
+        rm -f "$BACKUP_FILE"
+        echo "   ⚠️  No production database found (HTTP 404) — first deploy? Continuing."
+    else
+        rm -f "$BACKUP_FILE"
+        echo "   ❌ Backup failed (HTTP $HTTP_CODE). Aborting deploy."
+        echo "      Re-run with --no-backup to deploy anyway (not recommended)."
+        exit 1
+    fi
+else
+    echo "⚠️  Skipping database backup (--no-backup)"
+fi
+echo ""
+
 # ── 1. Collect files to deploy ────────────────────────────────────
 echo "📦 Collecting files..."
 FILES=$(find server/ -type f \
