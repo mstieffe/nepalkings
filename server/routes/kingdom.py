@@ -18,6 +18,11 @@ from models import (db, User, Land, LandAttackLog, KingdomMessage,
                     CardToFigure, ActiveSpell,
                     MainCard, SideCard, Suit, MainRank, CardRole)
 from routes.auth import require_token
+from routes.serialization import (
+    redact_payload_for_viewer,
+    serialize_game_for_viewer,
+    viewer_has_all_seeing_eye,
+)
 from game_service.deck_manager import DeckManager
 from game_service.conquer_prelude_replay_targets import (
     conquer_destroyed_replay_targets_for_prelude,
@@ -5285,7 +5290,7 @@ def conquer_start_battle():
     return jsonify({
         'success': True,
         'game_id': game.id,
-        'game': game.serialize(),
+        'game': serialize_game_for_viewer(game, g.user_id),
         'map_consumed': map_consumed,
         'maps': int(user.maps or 0),
     })
@@ -5342,7 +5347,7 @@ def conquer_resolve_prelude_target():
             'success': False,
             'message': f'No valid target is available for {spell.spell_name}.',
             'reason': 'no_valid_target',
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
         }), 400
 
     valid_target_ids = {f.id for f in valid_targets}
@@ -5364,6 +5369,8 @@ def conquer_resolve_prelude_target():
 
     from routes.spells import _execute_spell
     result = _execute_spell(spell, game, player)
+    reveal_effect = viewer_has_all_seeing_eye(game.serialize(), player.id)
+    response_result = redact_payload_for_viewer(result, player.id, reveal_effect)
     if result.get('error'):
         spell.is_active = False
         failed_data = dict(spell.effect_data or {})
@@ -5375,8 +5382,8 @@ def conquer_resolve_prelude_target():
             'success': False,
             'message': result.get('effect', 'Failed to execute prelude spell.'),
             'reason': 'spell_execution_failed',
-            'spell_effect': result,
-            'game': game.serialize(),
+            'spell_effect': response_result,
+            'game': serialize_game_for_viewer(game, g.user_id),
         }), 400
 
     resolved_data = dict(spell.effect_data or {})
@@ -5402,8 +5409,8 @@ def conquer_resolve_prelude_target():
     return jsonify({
         'success': True,
         'message': f'{spell.spell_name} was applied successfully.',
-        'spell_effect': result,
-        'game': game.serialize(),
+        'spell_effect': response_result,
+        'game': serialize_game_for_viewer(game, g.user_id),
     })
 
 

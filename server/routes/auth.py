@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, g
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
+from sqlalchemy import case, func
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from models import db, User, Player, Game
@@ -28,7 +29,7 @@ def _utcnow():
 _USERNAME_MIN = 3
 _USERNAME_MAX = 30
 _USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
-_PASSWORD_MIN = 6
+_PASSWORD_MIN = 8
 
 
 def _is_valid_email(email):
@@ -149,6 +150,48 @@ def verify_player_ownership(player_id):
     return None
 
 
+def get_game_membership(game_id):
+    """Return the authenticated player's row for a game, or an error tuple."""
+    game = db.session.get(Game, game_id)
+    if not game:
+        return None, jsonify({'success': False, 'message': 'Game not found'}), 404
+    player = Player.query.filter_by(game_id=game_id, user_id=g.user_id).first()
+    if not player:
+        return None, jsonify({'success': False, 'message': 'Forbidden'}), 403
+    return player, None, None
+
+
+def verify_game_membership(game_id):
+    """Check the authenticated user participates in game_id."""
+    _, response, status = get_game_membership(game_id)
+    if response is not None:
+        return response, status
+    return None
+
+
+def serialize_public_user(user):
+    is_online = user.is_ai
+    if not is_online and user.last_active:
+        is_online = (_utcnow() - user.last_active).total_seconds() < 60
+    return {
+        'id': user.id,
+        'username': user.username,
+        'is_online': is_online,
+        'is_ai': user.is_ai,
+    }
+
+
+def serialize_private_user(user):
+    return user.serialize()
+
+
+def _truthy_form_value(name):
+    value = request.form.get(name)
+    if value is None and request.is_json:
+        value = (request.get_json(silent=True) or {}).get(name)
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 # ── Email helper ──────────────────────────────────────────────────
 
 def _send_verification_email(user):
@@ -190,20 +233,24 @@ def _send_verification_email(user):
 # ── Routes ────────────────────────────────────────────────────────
 
 @auth.route('/get_users', methods=['GET'])
+@require_token
 def get_users():
     try:
-        current_username = request.args.get('username')
-        users = User.query.filter(User.username != current_username).all()
+        current_user = db.session.get(User, g.user_id)
+        if not current_user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        users = User.query.filter(User.id != current_user.id).all()
 
-        serialized_users = [user.serialize(include_onboarding=False) for user in users]
+        serialized_users = [serialize_public_user(user) for user in users]
 
-        return jsonify({'users': serialized_users})
+        return jsonify({'success': True, 'users': serialized_users})
     except Exception as e:
         db.session.rollback()
         logging.error(f"Error fetching users: {e}")
         return jsonify({'success': False, 'message': 'An error occurred while fetching users'}), 500
 
 @auth.route('/get_user', methods=['GET'])
+@require_token
 def get_user():
     try:
         username = request.args.get('username')
@@ -219,7 +266,11 @@ def get_user():
             logging.info(f"[get_user] {username}: {len(accepted)} accepted challenge(s) "
                          f"in challenges_issued: {[(c.id, c.game_id) for c in accepted]}")
 
-        serialized_user = user.serialize()
+        serialized_user = (
+            serialize_private_user(user)
+            if user.id == g.user_id
+            else serialize_public_user(user)
+        )
 
         return jsonify({'success': True, 'user': serialized_user})
     except Exception as e:
@@ -233,9 +284,16 @@ def register():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         email = request.form.get('email', '').strip().lower() or None
+        age_confirmed = _truthy_form_value('age_confirmed')
+        terms_accepted = _truthy_form_value('terms_accepted')
+        privacy_accepted = _truthy_form_value('privacy_accepted')
 
         if not username or not password:
             return jsonify({'success': False, 'message': 'Missing username or password'}), 400
+        if not age_confirmed:
+            return jsonify({'success': False, 'message': 'You must confirm that you are at least 13 years old.'}), 400
+        if not terms_accepted or not privacy_accepted:
+            return jsonify({'success': False, 'message': 'You must accept the Terms and acknowledge the Privacy Policy.'}), 400
 
         # Input validation
         if len(username) < _USERNAME_MIN or len(username) > _USERNAME_MAX:
@@ -263,6 +321,12 @@ def register():
             email_verified=False,
             email_verification_token=verification_token,
             email_verification_sent_at=_utcnow() if email else None,
+            age_confirmed=True,
+            age_confirmed_at=_utcnow(),
+            terms_version=settings.LEGAL_TERMS_VERSION,
+            terms_accepted_at=_utcnow(),
+            privacy_version=settings.LEGAL_PRIVACY_VERSION,
+            privacy_accepted_at=_utcnow(),
             booster_packs=settings.STARTER_BOOSTER_PACKS,
             booster_packs_side=settings.STARTER_BOOSTER_PACKS_SIDE,
             maps=settings.STARTER_MAPS,
@@ -279,7 +343,7 @@ def register():
             _send_verification_email(user)
 
         auth_token = generate_token(user.id)
-        serialized_user = user.serialize()
+        serialized_user = serialize_private_user(user)
 
         response = {
             'success': True,
@@ -321,7 +385,7 @@ def login():
         db.session.commit()
 
         token = generate_token(user.id)
-        serialized_user = user.serialize()
+        serialized_user = serialize_private_user(user)
 
         response = {
             'success': True,
@@ -389,22 +453,29 @@ def heartbeat():
 def get_rankings():
     """Return ranking data for all users: gold, total games, wins, losses."""
     try:
-        users = User.query.all()
+        # Aggregate finished-game stats per user in a single query instead
+        # of per-user/per-game lookups (the endpoint is public, so its cost
+        # must stay flat as the user base grows).
+        stat_rows = (
+            db.session.query(
+                Player.user_id,
+                func.count(Game.id).label('total'),
+                func.sum(
+                    case((Game.winner_player_id == Player.id, 1), else_=0)
+                ).label('wins'),
+            )
+            .join(Game, Game.id == Player.game_id)
+            .filter(Game.state == 'finished')
+            .group_by(Player.user_id)
+            .all()
+        )
+        stats_by_user = {row.user_id: row for row in stat_rows}
+
         rankings = []
-        for user in users:
-            # Count finished games where this user was a player
-            player_entries = Player.query.filter_by(user_id=user.id).all()
-            total = 0
-            wins = 0
-            losses = 0
-            for p in player_entries:
-                game = db.session.get(Game, p.game_id)
-                if game and game.state == 'finished':
-                    total += 1
-                    if game.winner_player_id == p.id:
-                        wins += 1
-                    else:
-                        losses += 1
+        for user in User.query.all():
+            stats = stats_by_user.get(user.id)
+            total = stats.total if stats else 0
+            wins = int(stats.wins) if stats and stats.wins is not None else 0
             is_online = False
             if user.last_active:
                 is_online = (_utcnow() - user.last_active).total_seconds() < 60
@@ -413,7 +484,7 @@ def get_rankings():
                 'gold': user.gold,
                 'total_games': total,
                 'wins': wins,
-                'losses': losses,
+                'losses': total - wins,
                 'is_online': is_online,
             })
         return jsonify({'success': True, 'rankings': rankings})

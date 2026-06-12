@@ -79,6 +79,12 @@ class User(db.Model):
     email_verified = db.Column(db.Boolean, nullable=False, default=False)
     email_verification_token = db.Column(db.String(128), nullable=True)
     email_verification_sent_at = db.Column(db.DateTime, nullable=True)
+    age_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    age_confirmed_at = db.Column(db.DateTime, nullable=True)
+    terms_version = db.Column(db.String(32), nullable=True)
+    terms_accepted_at = db.Column(db.DateTime, nullable=True)
+    privacy_version = db.Column(db.String(32), nullable=True)
+    privacy_accepted_at = db.Column(db.DateTime, nullable=True)
     # v2.0: Collection & Kingdom
     booster_packs = db.Column(db.Integer, nullable=False, default=0)
     booster_packs_side = db.Column(db.Integer, nullable=False, default=0)

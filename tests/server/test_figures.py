@@ -248,7 +248,10 @@ class TestFigureRouteCoverage:
         figure = Figure.query.filter_by(game_id=game.id, player_id=p1.id).order_by(Figure.id.desc()).first()
         assert figure is not None
 
-        resp = client.get(f'/figures/get_figure?figure_id={figure.id}')
+        resp = client.get(
+            f'/figures/get_figure?figure_id={figure.id}',
+            headers={'Authorization': f'Bearer {auth_token_p1}'},
+        )
         data = resp.get_json()
 
         assert resp.status_code == 200
@@ -263,7 +266,10 @@ class TestFigureRouteCoverage:
         created = Figure.query.filter_by(game_id=game.id, player_id=p1.id).order_by(Figure.id.desc()).first()
         assert created is not None
 
-        resp = client.get(f'/figures/get_figures?player_id={p1.id}')
+        resp = client.get(
+            f'/figures/get_figures?player_id={p1.id}',
+            headers={'Authorization': f'Bearer {auth_token_p1}'},
+        )
         data = resp.get_json()
 
         assert resp.status_code == 200

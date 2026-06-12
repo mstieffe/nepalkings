@@ -323,6 +323,9 @@ class TestRegistrationStarterPacks:
         rv = client.post('/auth/register', data={
             'username': 'newplayer',
             'password': 'secret123',
+            'age_confirmed': 'true',
+            'terms_accepted': 'true',
+            'privacy_accepted': 'true',
         })
         assert rv.status_code == 200
         data = rv.get_json()

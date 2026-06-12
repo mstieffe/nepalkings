@@ -36,8 +36,9 @@ jobs:
 
       - name: Install Python dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install pygame==2.4.0 requests
+          pip install pygame==2.6.1 requests==2.34.2
 
       # Use Python for the sed replacement — works identically on all platforms
       - name: Patch default server URL

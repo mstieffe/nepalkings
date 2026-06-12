@@ -49,7 +49,18 @@ FILES=$(find server/ -type f \
     ! -path "*__pycache__*" \
     ! -path "server/instance/*" \
     ! -name "*.DS_Store" \
-    ! -name "*.pyc")
+    ! -name "*.pyc" \
+    ! -name "*.db" \
+    ! -name "*.sqlite" \
+    ! -name "*.sqlite3" \
+    ! -name "*.log" \
+    ! -name ".env")
+if [ -d "docs/legal" ]; then
+    LEGAL_FILES=$(find docs/legal -type f \
+        ! -name "*.DS_Store" \
+        ! -name "*.pyc")
+    [ -n "$LEGAL_FILES" ] && FILES="$FILES"$'\n'"$LEGAL_FILES"
+fi
 # Also include root-level deploy helpers
 for extra in pythonanywhere_wsgi.py setup_pythonanywhere.sh; do
     [ -f "$extra" ] && FILES="$FILES"$'\n'"$extra"

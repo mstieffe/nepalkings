@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 # server.py
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -12,7 +12,7 @@ import signal
 import sys
 
 import server_settings as settings
-from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection, kingdom, onboarding
+from routes import games, challenges, auth, msg, figures, spells, battle_shop, collection, kingdom, onboarding, legal
 
 games.settings = settings
 challenges.settings = settings
@@ -22,9 +22,11 @@ figures.settings = settings
 spells.settings = settings
 battle_shop.settings = settings
 onboarding.settings = settings
+legal.settings = settings
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = settings.SECRET_KEY
+app.config['MAX_CONTENT_LENGTH'] = settings.MAX_CONTENT_LENGTH
 
 # ── Production safety guard ───────────────────────────────────────
 # In any non-development environment, refuse to boot if SECRET_KEY is
@@ -62,8 +64,26 @@ limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=[settings.RATE_LIMIT_DEFAULT],
-    storage_uri='memory://',
+    # memory:// keeps per-process counters, so the effective limit is
+    # limit × worker_count; point RATELIMIT_STORAGE_URI at Redis or
+    # similar for shared counters across workers.
+    storage_uri=settings.RATELIMIT_STORAGE_URI,
 )
+
+# ── JSON error for oversized request bodies ──
+# Werkzeug only raises 413 lazily when a view reads the body, where the
+# routes' blanket except-blocks would turn it into a 500 — so reject
+# based on the declared Content-Length before any view runs.
+@app.before_request
+def _reject_oversized_body():
+    length = request.content_length
+    if length is not None and length > app.config['MAX_CONTENT_LENGTH']:
+        return jsonify({'success': False, 'message': 'Request too large'}), 413
+
+
+@app.errorhandler(413)
+def _request_too_large(_e):
+    return jsonify({'success': False, 'message': 'Request too large'}), 413
 
 # ── Security response headers ──
 @app.after_request
@@ -71,6 +91,20 @@ def _set_security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'; "
+        "form-action 'self'"
+    )
+    response.headers['Permissions-Policy'] = (
+        'camera=(), microphone=(), geolocation=(), payment=()'
+    )
+    if not _IS_DEV:
+        response.headers['Strict-Transport-Security'] = (
+            'max-age=31536000; includeSubDomains'
+        )
     return response
 
 # ── Logging configuration ──
@@ -147,6 +181,7 @@ with app.app_context():
                                      ensure_game_victory_reviewed_at_column,
                                      ensure_kingdom_production_columns)
         from onboarding_service import ensure_onboarding_state_column
+        from user_schema_service import ensure_user_legal_columns
         added_columns = ensure_kingdom_production_columns()
         if added_columns:
             logger.info("Kingdom production schema upgraded: added %s",
@@ -165,6 +200,10 @@ with app.app_context():
             logger.info("Game schema upgraded: added victory_reviewed_at column")
         if ensure_onboarding_state_column():
             logger.info("User schema upgraded: added onboarding_state column")
+        added_user_columns = ensure_user_legal_columns()
+        if added_user_columns:
+            logger.info("User legal schema upgraded: added %s",
+                        ', '.join(added_user_columns))
     except Exception as _kingdom_schema_err:  # pragma: no cover — safety net
         logger.exception("Kingdom production schema upgrade failed: %s", _kingdom_schema_err)
         db.session.rollback()
@@ -276,10 +315,24 @@ app.register_blueprint(battle_shop, url_prefix='/battle_shop')
 app.register_blueprint(collection, url_prefix='/collection')
 app.register_blueprint(kingdom, url_prefix='/kingdom')
 app.register_blueprint(onboarding, url_prefix='/onboarding')
+app.register_blueprint(legal, url_prefix='/legal')
 
 # ── Stricter rate limits for auth-sensitive endpoints ──
 limiter.limit(settings.RATE_LIMIT_LOGIN)(app.view_functions['auth.login'])
 limiter.limit(settings.RATE_LIMIT_REGISTER)(app.view_functions['auth.register'])
+
+_lookup_views = (
+    'auth.get_user',
+    'auth.get_users',
+    'auth.get_rankings',
+    'kingdom.get_kingdom_rankings',
+    'challenges.open_challenges',
+    'games.game_results',
+)
+for _view_name in _lookup_views:
+    _view_fn = app.view_functions.get(_view_name)
+    if _view_fn is not None:
+        limiter.limit(settings.RATE_LIMIT_LOOKUP)(_view_fn)
 
 # ── Per-user rate limits for kingdom mutation endpoints ──
 _kingdom_mutate_views = (
@@ -315,12 +368,14 @@ if __name__ == '__main__':
                                          ensure_game_victory_reviewed_at_column,
                                          ensure_kingdom_production_columns)
             from onboarding_service import ensure_onboarding_state_column
+            from user_schema_service import ensure_user_legal_columns
             ensure_kingdom_production_columns()
             ensure_conquer_tactics_schema()
             ensure_duel_game_limit_columns()
             ensure_game_ai_seed_column()
             ensure_game_victory_reviewed_at_column()
             ensure_onboarding_state_column()
+            ensure_user_legal_columns()
         app.run(host='0.0.0.0', port=5000)
     except Exception as e:
         logger.error(f'Application failed to start: {e}')

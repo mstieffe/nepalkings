@@ -64,9 +64,15 @@ def login(username, password):
         return {'success': False, 'message': 'Login failed. Please check your internet connection or try again later.'}
 
 
-def register(username, password, email=None):
+def register(username, password, email=None, legal_confirmed=False):
     try:
-        data = {'username': username, 'password': password}
+        data = {
+            'username': username,
+            'password': password,
+            'age_confirmed': 'true' if legal_confirmed else 'false',
+            'terms_accepted': 'true' if legal_confirmed else 'false',
+            'privacy_accepted': 'true' if legal_confirmed else 'false',
+        }
         if email:
             data['email'] = email
         response = requests.post(f'{settings.SERVER_URL}/auth/register', data=data, timeout=10)

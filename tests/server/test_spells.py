@@ -210,7 +210,10 @@ class TestActiveSpells:
         db.session.add_all([s1, s2])
         db.session.commit()
 
-        resp = client.get(f'/spells/get_active_spells?game_id={game.id}&player_id={p1.id}')
+        resp = client.get(
+            f'/spells/get_active_spells?game_id={game.id}&player_id={p1.id}',
+            headers={'Authorization': f'Bearer {token_sp1}'},
+        )
         data = resp.get_json()
         if 'active_spells' in data:
             active_names = [s['spell_name'] for s in data['active_spells']]
@@ -252,7 +255,9 @@ class TestActiveSpells:
         db.session.commit()
 
         resp = client.get(
-            f'/spells/get_active_spells?game_id={game.id}&player_id={p1.id}')
+            f'/spells/get_active_spells?game_id={game.id}&player_id={p1.id}',
+            headers={'Authorization': f'Bearer {token_sp1}'},
+        )
         data = resp.get_json()
         active_names = [s['spell_name'] for s in data['active_spells']]
 
@@ -431,7 +436,10 @@ class TestPendingSpellRoutes:
         pending_spell_id = cast_data.get('spell_id')
         assert pending_spell_id is not None
 
-        get_resp = client.get(f'/spells/get_pending_spell?spell_id={pending_spell_id}')
+        get_resp = client.get(
+            f'/spells/get_pending_spell?spell_id={pending_spell_id}',
+            headers={'Authorization': f'Bearer {token_sp1}'},
+        )
         get_data = get_resp.get_json()
 
         assert get_data.get('success') is True

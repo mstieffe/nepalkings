@@ -41,7 +41,10 @@ def _auth_headers(app, user):
 def test_register_sets_welcome_present_pending(client):
     resp = client.post('/auth/register', data={
         'username': 'onboard_new',
-        'password': 'pass123',
+        'password': 'pass1234',
+        'age_confirmed': 'true',
+        'terms_accepted': 'true',
+        'privacy_accepted': 'true',
     })
     data = resp.get_json()
     assert resp.status_code == 200
@@ -53,7 +56,10 @@ def test_register_sets_welcome_present_pending(client):
 
 def test_existing_user_has_no_pending_welcome(client, two_users):
     u1, _ = two_users
-    resp = client.get(f'/auth/get_user?username={u1.username}')
+    resp = client.get(
+        f'/auth/get_user?username={u1.username}',
+        headers=_auth_headers(None, u1),
+    )
     onboarding = resp.get_json()['user']['onboarding']
     assert onboarding['welcome_pending'] is False
     assert onboarding['welcome_seen'] is False

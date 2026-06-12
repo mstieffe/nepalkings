@@ -22,10 +22,15 @@ from security_settings import (  # noqa: F401  (public re-export)
     SECRET_KEY,
     SECRET_KEY_FROM_ENV,
     CORS_ORIGINS,
+    MAX_CONTENT_LENGTH,
+    RATELIMIT_STORAGE_URI,
     RATE_LIMIT_DEFAULT,
     RATE_LIMIT_LOGIN,
+    RATE_LIMIT_LOOKUP,
     RATE_LIMIT_REGISTER,
     TOKEN_EXPIRY_SECONDS,
+    LEGAL_PRIVACY_VERSION,
+    LEGAL_TERMS_VERSION,
 )
 from database_settings import (  # noqa: F401  (public re-export)
     DB_URL,
@@ -736,5 +741,4 @@ from kingdom_progression import (  # noqa: F401  (public re-export)
 )
 
 # AI defence generation rules and safe fallbacks live in ai/defence/config.py.
-
 

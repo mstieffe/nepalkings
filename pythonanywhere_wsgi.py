@@ -22,9 +22,7 @@ os.environ['SERVER_URL'] = 'https://nepalkings.pythonanywhere.com'
 # os.environ['CORS_ORIGINS'] = 'https://YOURNAME.github.io'
 # os.environ['CORS_ORIGINS'] = 'https://YOURNAME.github.io,https://www.example.com'
 
-# AI Opponent — key is read from env only, never committed to git.
-# Set OPENAI_API_KEY here (PythonAnywhere WSGI files are private to your account).
-# os.environ['OPENAI_API_KEY'] = ''  # ← paste your key here after deploy
+# AI Opponent (rule-based, no external API).
 os.environ['AI_ENABLED'] = 'True'
 
 from wsgi import application

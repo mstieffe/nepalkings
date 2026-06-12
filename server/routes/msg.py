@@ -2,11 +2,11 @@
 # See LICENSE file in the project root for full license information.
 from flask import Blueprint, request, jsonify, g
 from sqlalchemy.orm import joinedload
-from models import db, LogEntry, ChatMessage
+from models import db, LogEntry, ChatMessage, Player
 import logging
 
 import server_settings as settings
-from routes.auth import require_token, verify_player_ownership
+from routes.auth import require_token, verify_game_membership, verify_player_ownership
 
 msg = Blueprint('msg', __name__)
 
@@ -15,6 +15,8 @@ logger = logging.getLogger('nepalkings.routes.msg')
 # ── Message length limits ──
 _MAX_LOG_MESSAGE = 500
 _MAX_CHAT_MESSAGE = 1000
+_MAX_LOG_FIELD = 64       # author / type
+_MAX_ROUND_TURN = 10000   # sane upper bound for round/turn counters
 
 
 @msg.route('/add_log_entry', methods=['POST'])
@@ -29,12 +31,25 @@ def add_log_entry():
             err = verify_player_ownership(player_id)
             if err:
                 return err
+            player = db.session.get(Player, player_id)
+            if not player or player.game_id != game_id:
+                return jsonify({'success': False, 'message': 'Player not found in this game'}), 403
+        else:
+            membership_err = verify_game_membership(game_id)
+            if membership_err:
+                return membership_err
 
-        round_number = data['round_number']
-        turn_number = data['turn_number']
+        try:
+            round_number = int(data['round_number'])
+            turn_number = int(data['turn_number'])
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'message': 'round_number and turn_number must be integers'}), 400
+        if not (0 <= round_number <= _MAX_ROUND_TURN) or not (0 <= turn_number <= _MAX_ROUND_TURN):
+            return jsonify({'success': False, 'message': 'round_number or turn_number out of range'}), 400
+
         message = data['message'][:_MAX_LOG_MESSAGE] if data.get('message') else ''
-        author = data['author']
-        type = data['type']
+        author = str(data['author'])[:_MAX_LOG_FIELD]
+        type = str(data['type'])[:_MAX_LOG_FIELD]
 
         log_entry = LogEntry(
             game_id=game_id,
@@ -56,12 +71,16 @@ def add_log_entry():
         return jsonify({'success': False, 'message': 'Failed to add log entry'}), 400
 
 @msg.route('/get_log_entries', methods=['GET'])
+@require_token
 def get_log_entries():
     try:
         game_id = request.args.get('game_id')
 
         if not game_id:
             return jsonify({'success': False, 'message': 'Game ID is required'}), 400
+        membership_err = verify_game_membership(game_id)
+        if membership_err:
+            return membership_err
 
         log_entries = LogEntry.query.filter_by(game_id=game_id).order_by(LogEntry.timestamp).all()
 
@@ -86,6 +105,13 @@ def add_chat_message():
             return err
 
         receiver_id = data['receiver_id']
+        sender = db.session.get(Player, sender_id)
+        receiver = db.session.get(Player, receiver_id)
+        if (
+            not sender or sender.game_id != game_id
+            or not receiver or receiver.game_id != game_id
+        ):
+            return jsonify({'success': False, 'message': 'Player not found in this game'}), 403
         message = data['message'][:_MAX_CHAT_MESSAGE] if data.get('message') else ''
 
         chat_message = ChatMessage(
@@ -110,12 +136,16 @@ def add_chat_message():
 
 
 @msg.route('/get_chat_messages', methods=['GET'])
+@require_token
 def get_chat_messages():
     try:
         game_id = request.args.get('game_id')
 
         if not game_id:
             return jsonify({'success': False, 'message': 'Game ID is required'}), 400
+        membership_err = verify_game_membership(game_id)
+        if membership_err:
+            return membership_err
 
         chat_messages = ChatMessage.query.filter_by(game_id=game_id).order_by(ChatMessage.timestamp).all()
 

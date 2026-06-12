@@ -61,6 +61,7 @@ class LoginScreen(Screen):
         super().__init__(state)
         self.loading = False
         self.control_buttons = []
+        self._legal_confirmed = False
 
         # Async auth state (web only)
         self._pending_rid = None   # request-id from http_compat.start_async_post
@@ -78,6 +79,7 @@ class LoginScreen(Screen):
 
         self._field_font = settings.get_font(int(0.026 * _FS))
         self._label_font = settings.get_font(int(0.020 * _FS))
+        self._legal_font = settings.get_font(max(12, int(0.018 * _FS)))
         self._loading_font = settings.get_font(int(0.024 * _FS))
 
         # ── Layout ──────────────────────────────────────────────────
@@ -87,12 +89,14 @@ class LoginScreen(Screen):
         _label_h = self._label_font.get_height() + _LABEL_GAP
         _field_gap   = int(0.020 * _SH)
         _section_gap = int(0.030 * _SH)
+        _legal_gap = int(0.012 * _SH)
+        _legal_h = max(int(0.047 * _SH), self._legal_font.get_height() * 2 + 4)
 
         title_h = self._title_surf.get_height() + settings.GAME_MENU_TITLE_PAD_BOTTOM
 
         content_h = (title_h
                      + _label_h + _FIELD_H + _field_gap
-                     + _label_h + _FIELD_H + _section_gap
+                     + _label_h + _FIELD_H + _legal_gap + _legal_h + _section_gap
                      + _btn_h + _btn_gap + _btn_h)
 
         box_w = _btn_w + settings.GAME_MENU_BOX_PAD_X * 2
@@ -124,7 +128,13 @@ class LoginScreen(Screen):
                                      "password", "", True, False,
                                      max_length=MAX_PASSWORD_LENGTH,
                                      width=_FIELD_W, height=_FIELD_H)
-        y += _FIELD_H + _section_gap
+        y += _FIELD_H + _legal_gap
+
+        # Legal acceptance for registration only.
+        self._legal_rect = pygame.Rect(field_x, y, _FIELD_W, _legal_h)
+        box_size = min(max(14, self._legal_font.get_height()), _legal_h - 4)
+        self._legal_box_rect = pygame.Rect(field_x, y + 2, box_size, box_size)
+        y += _legal_h + _section_gap
 
         # Buttons
         self.button_login = Button(self.window, btn_x, y,
@@ -132,6 +142,7 @@ class LoginScreen(Screen):
         y += _btn_h + _btn_gap
         self.button_register = Button(self.window, btn_x, y,
                                       "Register", width=_btn_w, height=_btn_h)
+        self.button_register.disabled = True
 
         # Apply custom button images
         for btn in (self.button_login, self.button_register):
@@ -228,6 +239,32 @@ class LoginScreen(Screen):
                              (cursor_x, cursor_y),
                              (cursor_x, cursor_y + cursor_h), 2)
 
+    def _draw_legal_confirmation(self):
+        hovered = self._legal_rect.collidepoint(pygame.mouse.get_pos())
+        bdr = _FIELD_BDR_ACTIVE if hovered or self._legal_confirmed else _FIELD_BDR_PASSIVE
+        pygame.draw.rect(self.window, bdr, self._legal_box_rect, 1,
+                         border_radius=max(2, _FIELD_CORNER_R // 2))
+        if self._legal_confirmed:
+            x = self._legal_box_rect.x
+            y = self._legal_box_rect.y
+            w = self._legal_box_rect.w
+            h = self._legal_box_rect.h
+            pygame.draw.line(self.window, _FIELD_LABEL_CLR,
+                             (x + int(0.22 * w), y + int(0.55 * h)),
+                             (x + int(0.43 * w), y + int(0.76 * h)), 2)
+            pygame.draw.line(self.window, _FIELD_LABEL_CLR,
+                             (x + int(0.41 * w), y + int(0.76 * h)),
+                             (x + int(0.80 * w), y + int(0.24 * h)), 2)
+
+        tx = self._legal_box_rect.right + int(0.008 * _SW)
+        ty = self._legal_rect.y
+        line1 = self._legal_font.render('13+ / Terms / Privacy',
+                                        True, _FIELD_TEXT_CLR)
+        line2 = self._legal_font.render('Docs: /legal/versions',
+                                        True, _FIELD_LABEL_CLR)
+        self.window.blit(line1, (tx, ty))
+        self.window.blit(line2, (tx, ty + line1.get_height() + 2))
+
     # ── Render ──────────────────────────────────────────────────────
 
     def render(self):
@@ -245,6 +282,7 @@ class LoginScreen(Screen):
         # Input fields
         self._draw_field(self.field_username, self._username_label_y)
         self._draw_field(self.field_pwd, self._pwd_label_y)
+        self._draw_legal_confirmation()
 
         # Buttons
         if not self.loading:
@@ -281,17 +319,30 @@ class LoginScreen(Screen):
     def handle_register(self):
         if self.loading:
             return
+        if not self._legal_confirmed:
+            self.state.set_msg('Confirm age, Terms, and Privacy before registering.')
+            return
+        legal_data = {
+            'age_confirmed': 'true',
+            'terms_accepted': 'true',
+            'privacy_accepted': 'true',
+        }
         if _IS_WEB:
             self.loading = True
             self._pending_rid = _http.start_async_post(
                 f'{settings.SERVER_URL}/auth/register',
                 data={'username': self.field_username.content,
-                      'password': self.field_pwd.content}
+                      'password': self.field_pwd.content,
+                      **legal_data}
             )
             self._pending_action = 'register'
         else:
             self.loading = True
-            response_data = register(self.field_username.content, self.field_pwd.content)
+            response_data = register(
+                self.field_username.content,
+                self.field_pwd.content,
+                legal_confirmed=True,
+            )
             self.loading = False
             self._apply_register_response(response_data)
 
@@ -384,13 +435,16 @@ class LoginScreen(Screen):
                 self.handle_login()
 
             elif event.type == MOUSEBUTTONUP:
-                if self.button_login.collide():
+                if self._legal_rect.collidepoint(event.pos):
+                    self._legal_confirmed = not self._legal_confirmed
+                elif self.button_login.collide():
                     self.handle_login()
                 elif self.button_register.collide():
                     self.handle_register()
 
     def update(self, events):
         super().update()
+        self.button_register.disabled = not self._legal_confirmed
         self.button_login.update()
         self.button_register.update()
         if _IS_WEB:

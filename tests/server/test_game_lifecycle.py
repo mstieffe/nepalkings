@@ -225,7 +225,7 @@ class TestGameOver:
 
 
 class TestGameResultsRoute:
-    def test_game_results_returns_finished_game_stats(self, client, db, created_game):
+    def test_game_results_returns_finished_game_stats(self, client, db, created_game, auth_headers_user1):
         from models import Game, User
         from routes.games import _check_game_over
 
@@ -239,46 +239,63 @@ class TestGameResultsRoute:
         db.session.commit()
 
         winner_user = db.session.get(User, winner_player.user_id)
-        resp = client.get(f'/games/game_results?username={winner_user.username}')
+        resp = client.get(
+            f'/games/game_results?username={winner_user.username}',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
         assert data.get('success') is True, data
         assert data.get('wins', 0) >= 1
         assert any(r.get('game_id') == game.id for r in data.get('results', []))
 
-    def test_game_results_returns_404_for_unknown_user(self, client):
-        resp = client.get('/games/game_results?username=unknown_player')
+    def test_game_results_rejects_other_user_lookup(self, client, auth_headers_user1):
+        resp = client.get(
+            '/games/game_results?username=unknown_player',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
-        assert resp.status_code == 404
+        assert resp.status_code == 403
         assert data.get('success') is False
 
 
 class TestGameRouteCoverage:
-    def test_get_games_lists_games_for_username(self, client, created_game, two_users):
+    def test_get_games_lists_games_for_username(self, client, created_game, two_users, auth_headers_user1):
         u1, _ = two_users
 
-        resp = client.get(f'/games/get_games?username={u1.username}')
+        resp = client.get(
+            f'/games/get_games?username={u1.username}',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
         assert resp.status_code == 200
         assert any(g.get('id') == created_game['id'] for g in data.get('games', []))
 
-    def test_get_game_returns_serialized_game(self, client, created_game):
-        resp = client.get(f"/games/get_game?game_id={created_game['id']}")
+    def test_get_game_returns_serialized_game(self, client, created_game, auth_headers_user1):
+        resp = client.get(
+            f"/games/get_game?game_id={created_game['id']}",
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
         assert resp.status_code == 200
         assert data.get('game', {}).get('id') == created_game['id']
 
-    def test_get_hand_returns_players_main_and_side_cards(self, client, db, created_game, two_users):
+    def test_get_hand_returns_players_main_and_side_cards(
+        self, client, db, created_game, two_users, auth_headers_user1
+    ):
         from models import Player
 
         u1, _ = two_users
         player = Player.query.filter_by(game_id=created_game['id'], user_id=u1.id).first()
         assert player is not None
 
-        resp = client.get(f'/games/get_hand?player_id={player.id}')
+        resp = client.get(
+            f'/games/get_hand?player_id={player.id}',
+            headers=auth_headers_user1,
+        )
         data = resp.get_json()
 
         assert resp.status_code == 200

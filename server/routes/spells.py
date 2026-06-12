@@ -22,8 +22,14 @@ from game_service.conquer_prelude_replay_targets import (
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import server_settings as settings
-from routes.auth import require_token, verify_player_ownership
+from routes.auth import get_game_membership, require_token, verify_game_membership, verify_player_ownership
 from routes.games import _guard_must_advance, _guard_pending_conquer_prelude_target
+from routes.serialization import (
+    redact_payload_for_viewer,
+    serialize_game_for_viewer,
+    serialize_spell_for_viewer,
+    viewer_has_all_seeing_eye,
+)
 
 logger = logging.getLogger('nepalkings.routes.spells')
 
@@ -34,6 +40,11 @@ _ai_logger = logging.getLogger('nepalkings.ai.trigger')
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _redact_spell_effect_for_requester(spell_effect, game, viewer_player_id):
+    reveal = viewer_has_all_seeing_eye(game.serialize(), viewer_player_id) if game else False
+    return redact_payload_for_viewer(spell_effect, viewer_player_id, reveal)
 
 @spells.after_request
 def _ai_trigger_hook(response):
@@ -250,7 +261,7 @@ def cast_spell():
             return jsonify({
                 'success': True,
                 'message': f'{spell_name} cast successfully. Waiting for opponent.',
-                'game': game.serialize(),
+                'game': serialize_game_for_viewer(game, g.user_id),
                 'spell_id': active_spell.id,
                 'waiting_for_player_id': game.waiting_for_counter_player_id
             }), 200
@@ -258,6 +269,8 @@ def cast_spell():
         else:
             # Execute spell immediately
             spell_effect = _execute_spell(active_spell, game, player)
+            response_spell_effect = _redact_spell_effect_for_requester(
+                spell_effect, game, player_id)
             
             # Check if spell execution failed (e.g., invalid target)
             if spell_effect.get('error'):
@@ -266,7 +279,7 @@ def cast_spell():
                 return jsonify({
                     'success': False,
                     'message': spell_effect.get('effect', 'Spell execution failed'),
-                    'spell_effect': spell_effect,
+                    'spell_effect': response_spell_effect,
                 }), 400
             
             # Add log entry before commit
@@ -292,8 +305,8 @@ def cast_spell():
             return jsonify({
                 'success': True,
                 'message': f'{spell_name} cast successfully',
-                'game': game.serialize(),
-                'spell_effect': spell_effect,
+                'game': serialize_game_for_viewer(game, g.user_id),
+                'spell_effect': response_spell_effect,
                 **(({'game_over': spell_effect['game_over']} ) if 'game_over' in spell_effect else {})
             }), 200
             
@@ -374,7 +387,7 @@ def counter_spell():
         return jsonify({
             'success': True,
             'message': f'Spell countered with {counter_spell_name}. Both players lost cards but kept their turns.',
-            'game': game.serialize(),
+            'game': serialize_game_for_viewer(game, g.user_id),
             'original_spell_cancelled': True,
             'no_turn_lost': True
         }), 200
@@ -433,6 +446,8 @@ def allow_spell():
         # Execute the spell
         caster = db.session.get(Player, pending_spell.player_id)
         spell_effect = _execute_spell(pending_spell, game, caster)
+        response_spell_effect = _redact_spell_effect_for_requester(
+            spell_effect, game, player_id)
         
         # Add log entry before commit
         player = db.session.get(Player, player_id)
@@ -462,8 +477,8 @@ def allow_spell():
         return jsonify({
             'success': True,
             'message': f'{pending_spell.spell_name} executed. Spell was allowed.',
-            'game': game.serialize(),
-            'spell_effect': spell_effect,
+            'game': serialize_game_for_viewer(game, g.user_id),
+            'spell_effect': response_spell_effect,
             'no_turn_lost': True,
             **(({'game_over': spell_effect['game_over']} ) if 'game_over' in spell_effect else {})
         }), 200
@@ -475,6 +490,7 @@ def allow_spell():
 
 
 @spells.route('/get_active_spells', methods=['GET'])
+@require_token
 def get_active_spells():
     """
     Get all active spell effects for a game.
@@ -488,8 +504,12 @@ def get_active_spells():
     
     if not game_id:
         return jsonify({'success': False, 'message': 'game_id required'}), 400
+    viewer, response, status = get_game_membership(game_id)
+    if response is not None:
+        return response, status
     
     game = db.session.get(Game, game_id)
+    reveal = viewer_has_all_seeing_eye(game.serialize(), viewer.id) if game else False
 
     if game and game.mode == 'conquer':
         query = ActiveSpell.query.filter_by(game_id=game_id)
@@ -508,7 +528,10 @@ def get_active_spells():
     
     return jsonify({
         'success': True,
-        'active_spells': [spell.serialize() for spell in active_spells]
+        'active_spells': [
+            serialize_spell_for_viewer(spell, viewer.id, reveal)
+            for spell in active_spells
+        ]
     }), 200
 
 
@@ -526,6 +549,7 @@ def _is_conquer_prelude_replay_spell(spell):
 
 
 @spells.route('/get_pending_spell', methods=['GET'])
+@require_token
 def get_pending_spell():
     """
     Get details of a pending spell by ID.
@@ -542,10 +566,15 @@ def get_pending_spell():
     
     if not spell:
         return jsonify({'success': False, 'message': 'Spell not found'}), 404
+    viewer, response, status = get_game_membership(spell.game_id)
+    if response is not None:
+        return response, status
+    game = db.session.get(Game, spell.game_id)
+    reveal = viewer_has_all_seeing_eye(game.serialize(), viewer.id) if game else False
     
     return jsonify({
         'success': True,
-        'spell': spell.serialize()
+        'spell': serialize_spell_for_viewer(spell, viewer.id, reveal)
     }), 200
 
 

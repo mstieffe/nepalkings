@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify, current_app, g
 from models import db, User, Challenge, ChallengeStatus
 import logging
 import server_settings as settings
-from routes.auth import require_token, verify_player_ownership
+from routes.auth import require_token
 
 challenges = Blueprint('challenges', __name__)
 
@@ -145,10 +145,10 @@ def _schedule_ai_accept(challenge_id, app):
     threading.Thread(target=_do_accept, daemon=True).start()
 
 @challenges.route('/open_challenges', methods=['GET'])
+@require_token
 def open_challenges():
     try:
-        username = request.args.get('username')
-        user = User.query.filter_by(username=username).first()
+        user = db.session.get(User, g.user_id)
         if not user:
             return jsonify({'success': False, 'error': 'User not found'}), 400
 
