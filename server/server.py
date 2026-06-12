@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Marc Stieffenhofer. All rights reserved.
 # See LICENSE file in the project root for full license information.
 # server.py
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -84,6 +84,33 @@ def _reject_oversized_body():
 @app.errorhandler(413)
 def _request_too_large(_e):
     return jsonify({'success': False, 'message': 'Request too large'}), 413
+
+# ── Async-play email notifications ──
+@app.after_request
+def _turn_notification_hook(response):
+    """After any state-changing POST that names a game, check whether an
+    offline player should be emailed (it's-your-turn / game finished).
+    Debouncing and eligibility live in notification_service."""
+    try:
+        if (request.method == 'POST'
+                and getattr(settings, 'NOTIFY_EMAILS_ENABLED', True)
+                and response.status_code < 400):
+            game_id = None
+            try:
+                if request.is_json and request.json:
+                    game_id = request.json.get('game_id')
+                elif request.form:
+                    game_id = request.form.get('game_id')
+            except Exception:
+                game_id = None
+            if game_id:
+                from notification_service import maybe_notify_turn_or_finish
+                maybe_notify_turn_or_finish(
+                    game_id, requester_user_id=getattr(g, 'user_id', None))
+    except Exception:
+        logging.getLogger('nepalkings').exception('turn notification hook failed')
+    return response
+
 
 # ── Security response headers ──
 @app.after_request

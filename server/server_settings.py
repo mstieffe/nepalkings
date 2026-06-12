@@ -87,6 +87,13 @@ SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
 SMTP_FROM = os.getenv('SMTP_FROM', 'noreply@nepalkings.local')
 SERVER_BASE_URL = os.getenv('SERVER_BASE_URL', SERVER_URL)
 
+# Gameplay notification emails (your-turn / challenge received / result).
+# Sent only to offline players who have an email and have not opted out;
+# without SMTP_HOST configured the emails are logged instead of sent.
+NOTIFY_EMAILS_ENABLED = os.getenv('NOTIFY_EMAILS_ENABLED', 'True').lower() == 'true'
+# Public URL of the playable web client, included in notification emails.
+WEB_CLIENT_URL = os.getenv('WEB_CLIENT_URL', '')
+
 # Conquer move model rollout flag.
 # When True (default), new conquer games are created with conquer_move_model='tactics_hand':
 #   - configured battle moves become the player's starting tactics hand

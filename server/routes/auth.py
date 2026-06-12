@@ -496,3 +496,51 @@ def get_rankings():
         db.session.rollback()
         logging.error(f"Rankings failed: {e}")
         return jsonify({'success': False, 'message': 'Failed to fetch rankings'}), 500
+
+
+# ── Notification email preferences ────────────────────────────────
+
+@auth.route('/unsubscribe', methods=['GET'])
+def unsubscribe():
+    """One-click opt-out used in every notification email (no login needed,
+    authenticated by an HMAC of the user id)."""
+    from notification_service import verify_unsubscribe_sig
+
+    uid = request.args.get('uid', '')
+    sig = request.args.get('sig', '')
+    try:
+        user_id = int(uid)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'Invalid link'}), 400
+    if not verify_unsubscribe_sig(user_id, sig):
+        return jsonify({'success': False, 'message': 'Invalid link'}), 400
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'Invalid link'}), 400
+    user.notify_emails_enabled = False
+    db.session.commit()
+    logger.info(f"User '{user.username}' unsubscribed from notification emails")
+    return (
+        '<html><body style="font-family:sans-serif;text-align:center;padding-top:4em">'
+        '<h2>Unsubscribed</h2>'
+        '<p>You will no longer receive gameplay emails from Nepal Kings.</p>'
+        '<p>You can re-enable them anytime in the in-game settings.</p>'
+        '</body></html>',
+        200,
+        {'Content-Type': 'text/html; charset=utf-8'},
+    )
+
+
+@auth.route('/set_notifications', methods=['POST'])
+@require_token
+def set_notifications():
+    """Toggle gameplay notification emails for the logged-in user."""
+    user = db.session.get(User, g.user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+    user.notify_emails_enabled = _truthy_form_value('enabled')
+    db.session.commit()
+    return jsonify({
+        'success': True,
+        'notify_emails_enabled': bool(user.notify_emails_enabled),
+    })

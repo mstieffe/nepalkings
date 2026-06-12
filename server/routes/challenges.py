@@ -91,6 +91,13 @@ def create_challenge():
         # Auto-accept if the opponent is an AI player (with a short delay)
         if opponent_user.is_ai:
             _schedule_ai_accept(challenge.id, current_app._get_current_object())
+        else:
+            # Tell offline human opponents they have been challenged
+            try:
+                from notification_service import notify_challenge_received
+                notify_challenge_received(challenge)
+            except Exception:
+                logger.exception('challenge notification failed')
 
     except Exception as e:
         db.session.rollback()

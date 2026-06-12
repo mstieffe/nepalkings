@@ -110,3 +110,22 @@ def register(username, password, email=None, legal_confirmed=False):
         # Catch general network errors or other issues
         print(f"Network error occurred: {str(e)}")
         return {'success': False, 'message': 'Registration failed. Please check your internet connection or try again later.'}
+
+
+def set_notifications(enabled):
+    """Toggle gameplay notification emails for the logged-in user.
+
+    Returns the server's notify_emails_enabled value, or None on failure.
+    """
+    try:
+        response = requests.post(
+            f'{settings.SERVER_URL}/auth/set_notifications',
+            data={'enabled': 'true' if enabled else 'false'},
+            timeout=5,
+        )
+        data = response.json()
+        if data.get('success'):
+            return bool(data.get('notify_emails_enabled'))
+    except Exception:
+        pass
+    return None
