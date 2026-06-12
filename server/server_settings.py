@@ -72,6 +72,10 @@ INITIAL_GOLD = 2000
 # and is re-exported above. Set a fixed SECRET_KEY env var in production
 # so tokens survive restarts.
 
+# First-party analytics (append-only Event table, no third parties).
+# See server/analytics.py and scripts/funnel_report.py.
+ANALYTICS_ENABLED = os.getenv('ANALYTICS_ENABLED', 'True').lower() == 'true'
+
 # Email verification settings
 # Set EMAIL_VERIFICATION_ENABLED=True and configure SMTP to send real emails.
 # When disabled (default), the verification URL is logged server-side instead.

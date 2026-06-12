@@ -9,6 +9,7 @@ from flask import Blueprint, request, jsonify, g
 from models import db, User, CollectionCard
 from routes.auth import require_token
 import server_settings as config
+from analytics import track
 
 collection = Blueprint('collection', __name__)
 logger = logging.getLogger('nepalkings.routes.collection')
@@ -257,6 +258,7 @@ def open_booster():
         db.session.add(cc)
     from onboarding_service import mark_step
     mark_step(user, 'open_first_main_booster')
+    track('booster_opened', user_id=user.id, kind='main')
     db.session.commit()
 
     return jsonify({
@@ -294,6 +296,7 @@ def open_booster_side():
         db.session.add(cc)
     from onboarding_service import mark_step
     mark_step(user, 'open_first_side_booster')
+    track('booster_opened', user_id=user.id, kind='side')
     db.session.commit()
 
     return jsonify({

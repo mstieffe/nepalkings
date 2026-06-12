@@ -10,6 +10,8 @@ We collect account data such as username, password hash, optional email address,
 
 Technical data may include IP address, request metadata, timestamps, browser or client information, error logs, and security events. Passwords are stored as hashes, not plaintext.
 
+We also keep a first-party gameplay-event log (for example: account created, booster opened, match finished) used solely to understand and improve the new-player experience. This log stays in our own database, contains no IP addresses or device fingerprints, and is never shared with third parties.
+
 ## How We Use Data
 
 We use data to operate accounts, run matches, persist game progress, provide rankings, troubleshoot bugs, prevent abuse, enforce fair play, secure the service, and comply with legal obligations.

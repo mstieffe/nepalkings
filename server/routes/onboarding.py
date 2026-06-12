@@ -5,6 +5,7 @@
 from flask import Blueprint, jsonify, request, g
 
 from models import db, User
+from analytics import track
 from routes.auth import require_token
 from onboarding_service import (
     DUEL_HINT_IDS,
@@ -80,6 +81,10 @@ def claim_onboarding_reward():
     if not reward_id:
         return jsonify({'success': False, 'message': 'Missing reward_id'}), 400
     payload, status = claim_reward(user, reward_id, commit=True)
+    if status == 200 and payload.get('success'):
+        track('onboarding_reward_claimed', user_id=user.id if user else None,
+              reward_id=reward_id)
+        db.session.commit()
     return jsonify(payload), status
 
 
@@ -90,6 +95,8 @@ def skip_onboarding_route():
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
     skip_onboarding(user, commit=True)
+    track('onboarding_skipped', user_id=user.id)
+    db.session.commit()
     return jsonify({
         'success': True,
         'onboarding': serialize_onboarding_state(user),

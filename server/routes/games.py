@@ -20,6 +20,7 @@ from game_service.conquer_tactics_idempotency import (
 )
 from routes.auth import get_game_membership, require_token, verify_game_membership, verify_player_ownership
 from routes.serialization import serialize_game_for_viewer, serialize_spell_for_viewer, viewer_has_all_seeing_eye
+from analytics import track
 from ai.defence.config import AI_DEFENCE_RANK_VALUES
 from ai.defence.generator import get_ai_defence_template_for_land
 
@@ -1087,6 +1088,16 @@ def _duel_reward_expectations(game_limit):
     }
 
 
+def _game_duration_seconds(game):
+    """Whole seconds between game creation and finish, or None."""
+    try:
+        if game.date and game.finished_at:
+            return max(0, int((game.finished_at - game.date).total_seconds()))
+    except Exception:
+        pass
+    return None
+
+
 def _check_game_over(game):
     """Check if any player has reached the game's point limit.
 
@@ -1314,6 +1325,18 @@ def _finalize_game_over(game, winner_player, reason='stake', checkmate_figure_na
         rounds_played=game.current_round,
     )
     db.session.add(result)
+
+    track(
+        'game_finished',
+        user_id=winner_player.user_id,
+        game_id=game.id,
+        mode=game.mode or 'duel',
+        reason=reason,
+        vs_ai=bool((winner_user and winner_user.is_ai) or (loser_user and loser_user.is_ai)),
+        rounds=game.current_round,
+        game_limit=game_limit,
+        duration_s=_game_duration_seconds(game),
+    )
 
     # Log the game result
     log_entry = LogEntry(
@@ -2410,6 +2433,9 @@ def create_game():
         db.session.expire(challenge)          # ensure fresh read before update
         challenge.status = ChallengeStatus.ACCEPTED
         challenge.game_id = game.id
+        track('game_started', user_id=g.user_id, game_id=game.id, mode='duel',
+              vs_ai=bool(user1.is_ai or user2.is_ai),
+              stake=game_stake, game_limit=game_limit)
         db.session.commit()
 
         logger.info(f"Challenge {challenge.id} accepted → game {game.id} "
@@ -6592,6 +6618,8 @@ def finish_battle():
             game.finished_at = _utcnow()
             # No winner — draw
             game.winner_player_id = None
+            track('game_finished', game_id=game.id, mode='conquer',
+                  reason='draw', duration_s=_game_duration_seconds(game))
 
             atk_cfg = (db.session.get(LandConfig, game.conquer_config_id)
                        if game.conquer_config_id else None)
@@ -7299,6 +7327,16 @@ def _resolve_conquer_battle(game, winner, requesting_player):
     game.state = 'finished'
     game.winner_player_id = winner.id
     game.finished_at = _utcnow()
+
+    track(
+        'game_finished',
+        user_id=winner.user_id,
+        game_id=game.id,
+        mode='conquer',
+        reason='battle',
+        winner_is_attacker=bool(winner.id == game.invader_player_id),
+        duration_s=_game_duration_seconds(game),
+    )
 
     # Sigil achievement check (conquer battle finish — covers win_battles
     # and win_conquer_battles for the winner).  Best-effort.

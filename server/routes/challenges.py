@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify, current_app, g
 from models import db, User, Challenge, ChallengeStatus
 import logging
 import server_settings as settings
+from analytics import track
 from routes.auth import require_token
 
 challenges = Blueprint('challenges', __name__)
@@ -83,6 +84,8 @@ def create_challenge():
         )
 
         db.session.add(challenge)
+        track('challenge_created', user_id=challenger_user.id,
+              vs_ai=bool(opponent_user.is_ai), stake=stake, game_limit=game_limit)
         db.session.commit()
 
         # Auto-accept if the opponent is an AI player (with a short delay)

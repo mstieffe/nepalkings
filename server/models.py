@@ -1291,3 +1291,28 @@ class KingdomNotification(db.Model):
             'seen': self.seen,
             'timestamp': self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# First-party analytics (see server/analytics.py)
+
+class Event(db.Model):
+    """Append-only product-analytics event.
+
+    Written via analytics.track(); read by scripts/funnel_report.py.
+    user_id intentionally has no FK so events survive account deletion.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=True, index=True)
+    name = db.Column(db.String(64), nullable=False, index=True)
+    props = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow, index=True)
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'name': self.name,
+            'props': self.props or {},
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }

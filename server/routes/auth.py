@@ -16,6 +16,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from models import db, User, Player, Game
 import server_settings as settings
+from analytics import track
 
 auth = Blueprint('auth', __name__)
 
@@ -337,6 +338,8 @@ def register():
         except Exception:
             logger.exception("Failed to initialize onboarding for new user")
         db.session.add(user)
+        db.session.flush()
+        track('signup', user_id=user.id, has_email=bool(email))
         db.session.commit()
 
         if email and verification_token:
@@ -382,6 +385,7 @@ def login():
         # Capture the previous last_active before updating (for offline-badge detection)
         previous_last_active = user.last_active
         user.last_active = _utcnow()
+        track('login', user_id=user.id)
         db.session.commit()
 
         token = generate_token(user.id)

@@ -29,6 +29,7 @@ from game_service.conquer_prelude_replay_targets import (
 )
 from ai.defence.generator import get_ai_defence_template_for_land
 import server_settings as config
+from analytics import track
 
 kingdom = Blueprint('kingdom', __name__)
 logger = logging.getLogger('nepalkings.routes.kingdom')
@@ -5082,6 +5083,8 @@ def conquer_start_battle():
     )
     db.session.add(game)
     db.session.flush()
+    track('conquer_battle_started', user_id=user.id, game_id=game.id,
+          land_id=land_id, vs_ai=bool(getattr(defender_user, 'is_ai', False)))
 
     # Create players
     atk_player = Player(user_id=user.id, game_id=game.id,
