@@ -556,15 +556,26 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         if onboarding.get('welcome_pending'):
             return None
         seen = self._menu_coach_seen()
+
+        # 1. Right after the welcome present, point out where those items live.
+        if 'user_items' not in seen:
+            return {
+                'id': 'user_items',
+                'rect': self._user_item_display_rect,
+                'title': 'Your Items',
+                'body': 'Items you own are shown here. The welcome present you just opened added gold, boosters, and maps to this display.',
+            }
+
+        # 2. Lead with the actionable journey the welcome promised:
+        #    open boosters -> conquer a land -> first duel. This keeps the
+        #    first session action-first instead of a long generic tour.
+        journey = self._current_journey_coach_step()
+        if journey is not None:
+            return journey
+
+        # 3. Once the journey is underway, offer light orientation for the
+        #    remaining menu areas the journey doesn't already cover.
         steps = [
-            ('user_items', self._user_item_display_rect, 'Your Items',
-             'Items you own are shown here. The welcome present you just opened added gold, boosters, and maps to this display.'),
-            ('kingdom', self.button_kingdom.rect, 'Kingdom',
-             'The heart of the game: conquer lands from the AI, defend them, and collect their production.'),
-            ('collection', self.button_collection.rect, 'Collection',
-             'Figures in your kingdom require cards from your collection. Open booster packs here, then trade or sell cards you do not need.'),
-            ('duel', self.button_duel.rect, 'Duel',
-             'The full head-to-head card game — challenge AI Strategos or other players once your kingdom is underway.'),
             ('rankings', self.button_rankings.rect, 'Rankings',
              'Check rankings when you want to compare progress and see who is climbing.'),
             ('home', self._icon_home.rect, 'Home',
@@ -580,7 +591,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 'title': 'Guide',
                 'body': 'Open the guide next. It tracks learning achievements and the rewards waiting behind them.',
             }
-        return self._current_journey_coach_step()
+        return None
 
     def _after_menu_coach_next(self, step_id):
         if step_id == 'guide':

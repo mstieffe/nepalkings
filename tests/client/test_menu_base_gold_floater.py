@@ -441,9 +441,10 @@ def test_main_menu_area_coach_starts_with_user_item_display():
     assert step['id'] == 'user_items'
     assert step['rect'] == screen._user_item_display_rect
 
-    # Conquer-first ordering: Kingdom is introduced before Duel.
+    # Action-first: after the welcome-items pointer, the coach leads straight
+    # into the journey (open your booster packs), not a generic area tour.
     screen.state.user_dict['onboarding']['menu_hints_seen'] = ['user_items']
-    assert screen._current_area_coach_step()['id'] == 'kingdom'
+    assert screen._current_area_coach_step()['id'] == 'open_boosters_first'
 
 
 def _journey_ready_menu_screen(completed_steps):
