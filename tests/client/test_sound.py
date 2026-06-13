@@ -85,3 +85,21 @@ def test_play_for_dialogue_title_mapping(monkeypatch):
     sound.play_for_dialogue('To Battle!')
     assert sound.play_for_dialogue('Your Prelude') is False
     assert played == ['battle_win', 'battle_lose', 'battle_start']
+
+
+def test_play_for_dialogue_covers_conquer_results(monkeypatch):
+    """Conquer land outcomes must trigger win/lose stingers too — their
+    titles are 'Land Conquered!' / 'Land Lost!' / 'Attack Failed' / etc."""
+    cases = {
+        'Land Conquered!': 'conquer_win',
+        'Defence Successful!': 'conquer_win',
+        'Land Lost!': 'battle_lose',
+        'Attack Failed': 'battle_lose',
+        'Draw!': 'ui_back',
+    }
+    for title, expected in cases.items():
+        played = []
+        monkeypatch.setattr(sound, 'play',
+                            lambda name, volume=1.0: played.append(name) or True)
+        sound.play_for_dialogue(title)
+        assert played == [expected], (title, played)

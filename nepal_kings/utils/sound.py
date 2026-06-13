@@ -166,13 +166,21 @@ def play_for_dialogue(title):
     """Outcome stinger for notification dialogs, keyed off their title.
 
     Central hook used by the screens' make_dialogue_box() paths so every
-    victory/defeat dialog gets the right sound without per-site wiring.
+    win/lose/draw dialog gets the right sound without per-site wiring —
+    covers both duel battle results and conquer-battle land outcomes.
     """
     t = (title or '').lower()
+    # Losses first so "... conquered your land" is not read as a win.
+    if ('defeat' in t or 'you lost' in t or 'land lost' in t
+            or 'attack failed' in t or 'your land' in t):
+        return play('battle_lose')
+    # Conquest wins get the bigger fanfare; duel/battle wins the win stinger.
+    if 'conquered' in t or 'defence successful' in t or 'defended' in t:
+        return play('conquer_win')
     if 'victory' in t or t.startswith('you won') or 'you win' in t:
         return play('battle_win')
-    if 'defeat' in t or 'you lost' in t:
-        return play('battle_lose')
+    if 'draw' in t:
+        return play('ui_back')
     if 'battle' in t and ('begin' in t or 'start' in t or t == 'to battle!'):
         return play('battle_start')
     return False

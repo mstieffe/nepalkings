@@ -1661,6 +1661,10 @@ class ConquerGameScreen(GameScreen):
                         if self._fire_spell_step_animation(
                                 key, anchor, step_kind=step_kind, spell_name=spell_name):
                             fired_steps.add(key)
+                            # Targeted spells (Health Boost / Poison / Explosion)
+                            # only fire for real here, once their target is
+                            # known — the first pass was a banner-only no-op.
+                            self._play_conquer_spell_cast_sound(key)
             self._spell_step_phase_map = dict(current_phase)
 
         # --- Round transition banner (Tier 3.3) ---
@@ -7547,8 +7551,10 @@ class ConquerGameScreen(GameScreen):
     # ----------------------------------------------------------------- update
 
     def _play_conquer_transition_sounds(self):
-        """One-shot stingers for battle start and final result (state-driven
-        screen — there is no single dialog moment to hook)."""
+        """One-shot battle-start drum for the conquer battle. The win/lose/
+        draw result sound is played by the result dialog itself (via
+        sound.play_for_dialogue on its 'Land Conquered!' / 'Land Lost!' /
+        'Draw!' title), which is more reliable than polling game state here."""
         try:
             from utils import sound
             game = self.state.game
@@ -7560,29 +7566,10 @@ class ConquerGameScreen(GameScreen):
                 self._battle_start_played = bool(
                     getattr(game, 'battle_turn_player_id', None) is not None
                     or getattr(game, 'last_battle_result', None))
-                self._result_sound_played = bool(
-                    getattr(game, 'last_battle_result', None))
             if (not self._battle_start_played
                     and getattr(game, 'battle_turn_player_id', None) is not None):
                 self._battle_start_played = True
                 sound.play('battle_start')
-            result = getattr(game, 'last_battle_result', None)
-            if result and not self._result_sound_played:
-                self._result_sound_played = True
-                outcome = (result.get('conquer_result')
-                           or result.get('outcome')) if isinstance(result, dict) else None
-                if outcome == 'draw':
-                    sound.play('ui_back')
-                    return
-                winner_pid = result.get('winner_player_id') if isinstance(result, dict) else None
-                own_pid = getattr(game, 'player_id', None)
-                if winner_pid is not None and own_pid is not None:
-                    won = self._ids_equal(winner_pid, own_pid)
-                else:
-                    winner_name = (result.get('winner_name') or '') if isinstance(result, dict) else ''
-                    own_name = (self.state.user_dict or {}).get('username', '')
-                    won = bool(own_name) and winner_name == own_name
-                sound.play('conquer_win' if won else 'battle_lose')
         except Exception:
             pass
 
