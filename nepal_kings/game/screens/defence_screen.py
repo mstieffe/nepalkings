@@ -1665,6 +1665,54 @@ class DefenceScreen(MenuScreenMixin, Screen):
                                                  top=prompt_rect.y + prompt_pad_y + prompt.get_height() + int(0.006 * _SH)))
         return prompt_rect
 
+    def _current_defence_coach_step(self):
+        """Light first-time guidance for the defence config (mixin coach)."""
+        if not self._menu_coach_allowed_common():
+            return None
+        if (self._loading or self._error or not self._config or not self._layout_built
+                or self._active_subscreen or self._figure_detail_box
+                or self._move_detail_box or self._active_info_key):
+            return None
+        seen = self._menu_coach_seen()
+        if self._btn_build and 'defence_intro' not in seen:
+            return {
+                'id': 'defence_intro',
+                'rect': self._btn_build,
+                'title': 'Defend This Land',
+                'body': 'Set up the figures that hold this land when it is attacked. It works just like building an attack — a King, farms, and warriors — but these defenders stay here to protect the land instead of marching out.',
+                'action': 'next',
+                'max_lines': 6,
+            }
+        if self._battle_plan_rect and 'defence_battle_plan' not in seen:
+            return {
+                'id': 'defence_battle_plan',
+                'rect': self._battle_plan_rect,
+                'title': 'Defence Battle Plan',
+                'body': 'Assign the battle moves your defenders use across the three battle rounds. A saved defence needs all three rounds filled.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        if self._counter_panel_rect and 'defence_final_response' not in seen:
+            return {
+                'id': 'defence_final_response',
+                'rect': self._counter_panel_rect,
+                'title': 'Final Response',
+                'body': 'Pick the final response your defence uses: a battle figure that fights, or a counter spell that disrupts the attacker.',
+                'action': 'next',
+                'max_lines': 5,
+            }
+        if self._btn_save and 'defence_save' not in seen:
+            return {
+                'id': 'defence_save',
+                'rect': self._btn_save,
+                'title': 'Save Your Defence',
+                'body': 'Save the defence to lock it in. Its cards stay reserved while the defence is active, and the land is much harder to take from you.',
+                'action': 'next',
+                'button_label': 'Got it',
+                'max_lines': 5,
+            }
+        return None
+
     def render(self):
         self._draw_menu_chrome()
 
@@ -1789,6 +1837,7 @@ class DefenceScreen(MenuScreenMixin, Screen):
 
         self._draw_info_popup()
 
+        self._draw_menu_coach(self._current_defence_coach_step())
         self._draw_menu_overlay()
 
     def _field_slot_background(self, field_name, rect):
@@ -3137,6 +3186,10 @@ class DefenceScreen(MenuScreenMixin, Screen):
             return
 
         if self.dialogue_box:
+            return
+
+        # Tutorial coach captures input while a card is showing.
+        if self._handle_menu_coach_events(events, self._current_defence_coach_step()):
             return
 
         # If subscreen is active, delegate events

@@ -667,7 +667,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             [
                 f'Hello {username}!',
                 'Welcome to Nepal Kings — build your kingdom, conquer lands from the AI, and duel other rulers in a tactical card game.',
-                'Your first quest takes about 15 minutes: open your booster packs, then conquer your first land. The guide will walk you through every step.',
+                "Let's start with a short tutorial. We'll open your booster packs and conquer your first land together — the guide walks you through each step.",
             ],
             items,
             footer_when_done='Your starter kit is ready to use.',

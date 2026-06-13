@@ -587,6 +587,15 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
         'kingdom_production_intro',
     ]
     step = screen._current_kingdom_coach_step()
+    assert step['id'] == 'kingdom_defence_intro'
+
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
+        'kingdom_after_conquer_map',
+        'kingdom_connected_lands',
+        'kingdom_production_intro',
+        'kingdom_defence_intro',
+    ]
+    step = screen._current_kingdom_coach_step()
     assert step['id'] == 'kingdom_config_intro'
     assert step['action'] == 'click'
     assert step['rect'] == screen._kingdom_chip_gear_rect

@@ -208,6 +208,8 @@ MENU_HINT_IDS = (
     'conquer_battle_tactic_actions', 'conquer_battle_round_ledger',
     'conquer_battle_finish', 'kingdom_after_conquer_map',
     'kingdom_connected_lands', 'kingdom_production_intro',
+    'kingdom_defence_intro', 'defence_intro', 'defence_battle_plan',
+    'defence_final_response', 'defence_save',
     'kingdom_config_intro', 'kingdom_config_header',
     'kingdom_config_production', 'kingdom_config_skills',
     'kingdom_config_loot_inbox', 'kingdom_config_shields_style',

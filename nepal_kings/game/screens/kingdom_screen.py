@@ -808,6 +808,15 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'action': 'next',
                 'max_lines': 5,
             }
+        if 'kingdom_defence_intro' not in seen:
+            return {
+                'id': 'kingdom_defence_intro',
+                'rect': self._map_viewport_rect,
+                'title': 'Defend Your Lands',
+                'body': "A land you own can be attacked by the AI or other players. Select one of your lands and choose Configure Defence to station figures that hold it — it works like building an attack, but to defend. Lands without a saved defence are easier to lose. You can also buy a temporary shield from a kingdom's config.",
+                'action': 'next',
+                'max_lines': 6,
+            }
         gear_rect = getattr(self, '_kingdom_chip_gear_rect', None)
         if gear_rect and 'kingdom_config_intro' not in seen:
             return {

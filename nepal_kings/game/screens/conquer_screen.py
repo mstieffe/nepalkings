@@ -1347,19 +1347,19 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return {
                 'id': 'conquer_config_field',
                 'rect': field_rect,
-                'title': 'Conquer Field',
-                'body': 'Your field prepares the attack. Castle, village, and military figures shape the resources and strength you bring into conquest. Note that the number of kings in your castle is limited by the tier of land you are conquering.',
+                'title': 'Assemble Your Attack',
+                'body': 'This is where you prepare an attack force. You place figures into three areas: the castle (a King, your resource anchor), the village (farms that feed your army), and the military (warriors that do the fighting). Together they form a working economy you bring into battle.',
                 'action': 'next',
-                'max_lines': 5,
+                'max_lines': 6,
             }
         if self._btn_build and 'conquer_config_build_edit' not in seen:
             return {
                 'id': 'conquer_config_build_edit',
                 'rect': self._btn_build,
-                'title': 'Build Figures',
-                'body': 'Use this edit button to add or replace figures before the battle. Figures are the engine behind your conquer resources.',
+                'title': 'Build Figures From Cards',
+                'body': 'Click here to build figures from your collection cards. We gave you a starter deck for exactly this — enough to build a King, a Rice Farm, and Gorkha Warriors. Build all three: the King feeds the farm and warriors, the farm feeds the warriors, and the warriors attack.',
                 'action': 'next',
-                'max_lines': 5,
+                'max_lines': 6,
             }
         battle_plan_rect = self._conquer_combined_rect(self._battle_plan_rect, self._btn_buy_move)
         if battle_plan_rect and 'conquer_config_battle_plan' not in seen:

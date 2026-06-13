@@ -1242,14 +1242,22 @@ class MenuScreenMixin:
             lines.append(current)
         return lines[:max_lines]
 
-    def _draw_menu_coach_button(self, rect, label, action):
+    def _draw_menu_coach_button(self, rect, label, action, muted=False):
         mx, my = pygame.mouse.get_pos()
         hovered = rect.collidepoint(mx, my)
-        bg = (96, 70, 34) if hovered else (58, 45, 28)
-        bdr = (235, 204, 105) if hovered else (150, 126, 74)
+        if muted:
+            # Secondary/ghost style so "Skip tutorial" reads clearly as the
+            # lesser action and isn't confused with the primary "Next".
+            bg = (40, 37, 32) if hovered else (30, 28, 24)
+            bdr = (110, 100, 84) if hovered else (78, 72, 60)
+            txt_clr = (170, 160, 142) if hovered else (132, 124, 108)
+        else:
+            bg = (96, 70, 34) if hovered else (58, 45, 28)
+            bdr = (235, 204, 105) if hovered else (150, 126, 74)
+            txt_clr = (245, 232, 190)
         pygame.draw.rect(self.window, bg, rect, border_radius=4)
         pygame.draw.rect(self.window, bdr, rect, 1, border_radius=4)
-        txt = self._menu_coach_font.render(label, True, (245, 232, 190))
+        txt = self._menu_coach_font.render(label, True, txt_clr)
         self.window.blit(txt, txt.get_rect(center=rect.center))
         self._menu_coach_buttons.append((rect.copy(), action))
 
@@ -1316,10 +1324,11 @@ class MenuScreenMixin:
             self._draw_menu_coach_button(next_rect, label, ('next', step['id']))
         if draws_skip:
             label = 'Skip tutorial'
-            button_w = max(112, self._menu_coach_font.size(label)[0] + 24)
+            button_w = max(96, self._menu_coach_font.size(label)[0] + 20)
             skip_rect = pygame.Rect(card.x + 14, card.bottom - button_h - 12,
                                     button_w, button_h)
-            self._draw_menu_coach_button(skip_rect, label, ('skip_tutorial', step['id']))
+            self._draw_menu_coach_button(skip_rect, label, ('skip_tutorial', step['id']),
+                                         muted=True)
 
     def _menu_coach_blocking_event_types(self):
         event_types = {
