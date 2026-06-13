@@ -80,6 +80,15 @@ and the operational safety net to keep early adopters.
   Privacy links now open the actual documents in a scrollable overlay, and
   the accept checkbox only toggles on the box/label (no more far-right
   toggling).
+- **Onboarding gaps.** The conquer-config coach now explains the
+  attack-force economy and the granted starter deck; a new post-conquer
+  flow explains defending your lands, with a light first-time coach inside
+  the defence config. Welcome copy drops the time estimate. The
+  "Skip tutorial" button is now a muted/secondary style so it isn't
+  confused with "Next".
+- **More + better sound.** Conquer timeline commands (Next/confirm/finish)
+  and coach buttons now click; the win/lose/conquest stingers were enriched
+  (held major chord on win, falling drone on loss, bigger conquest fanfare).
 
 ## Unreleased — Land tiers 1–6, castle cap, loot rank buckets
 
