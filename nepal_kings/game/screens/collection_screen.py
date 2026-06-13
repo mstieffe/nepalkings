@@ -1209,6 +1209,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
             old_tgt = self._cards.get((target, rank), 0)
             self._cards[(suit, rank)] = max(0, old_src - consumed)
             self._cards[(target, rank)] = old_tgt + produced
+            from utils import sound
+            sound.play('coin')
             self.state.set_msg(
                 f'Converted {consumed} {suit} {rank} → {produced} {target} {rank}')
         except Exception as e:
@@ -1507,6 +1509,8 @@ class CollectionScreen(MenuScreenMixin, Screen):
         self._gold = result.get('gold', self._gold)
         if self.state.user_dict:
             self.state.user_dict['gold'] = self._gold
+        from utils import sound
+        sound.play('coin')
         self.state.set_msg('Booster pack purchased!')
         self._spawn_booster_floater(pack_type)
 

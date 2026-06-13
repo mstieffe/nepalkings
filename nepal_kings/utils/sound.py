@@ -151,6 +151,17 @@ def play(name, volume=1.0):
         return False
 
 
+def tap_edge(obj, name='ui_click', volume=0.7):
+    """Play a click on the rising edge of ``obj.clicked`` (mirrors
+    haptics.tap_edge). Stores the previous state on the object so a held
+    press fires exactly once. Call once per frame, after the button's
+    ``clicked`` flag is refreshed. Cheap no-op when sound is disabled."""
+    now = bool(getattr(obj, 'clicked', False))
+    if now and not getattr(obj, '_sound_prev_click', False):
+        play(name, volume=volume)
+    obj._sound_prev_click = now
+
+
 def play_for_dialogue(title):
     """Outcome stinger for notification dialogs, keyed off their title.
 

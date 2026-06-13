@@ -914,6 +914,8 @@ class FieldScreen(SubScreen):
                                 figure.id
                             )
                             if result.get('success'):
+                                from utils import sound
+                                sound.play('card_slide')
                                 logger.debug(f"[FIELD] Advanced {figure.name} successfully")
                                 self.state.set_msg(f"Advanced {figure.name} toward battle!")
                                 # Update game state from response

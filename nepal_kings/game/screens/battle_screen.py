@@ -1884,6 +1884,8 @@ class BattleScreen(SubScreen):
                 actions=['ok'], icon='info', title="Error")
             return
 
+        from utils import sound
+        sound.play('card_place')
         logger.info(f"[BattleScreen] Played {family_name} (id={battle_move_id}) "
               f"in round {self.current_round + 1}")
 
