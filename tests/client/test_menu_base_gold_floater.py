@@ -606,10 +606,12 @@ def test_conquer_coach_highlights_edit_controls_in_order():
     from game.screens.conquer_screen import ConquerScreen
 
     screen = object.__new__(ConquerScreen)
+    # Conquer comes BEFORE the first duel in onboarding, so the config coach
+    # must be ready with only the boosters opened (no finish_first_duel).
     screen.state = SimpleNamespace(user_dict={'onboarding': {
         'menu_hints_seen': [],
         'completed_steps': [
-            'finish_first_duel', 'open_first_main_booster', 'open_first_side_booster'
+            'open_first_main_booster', 'open_first_side_booster'
         ],
     }})
     screen._onboarding_guide_open = False
@@ -701,3 +703,46 @@ def test_menu_coach_click_step_allows_only_target_click():
     step['mark_on_click'] = False
     assert screen._handle_menu_coach_events([inside], step) is False
     assert marked == ['start_first_duel']
+
+
+def test_defence_coach_walks_setup_steps_after_first_conquer():
+    """The defence config should coach a brand-new owner through build →
+    battle plan → final response → save (it had no coaching before)."""
+    import pygame
+    from game.screens.defence_screen import DefenceScreen
+
+    screen = object.__new__(DefenceScreen)
+    screen.state = SimpleNamespace(user_dict={'onboarding': {
+        'menu_hints_seen': [],
+        'completed_steps': [
+            'open_first_main_booster', 'open_first_side_booster',
+            'finish_first_conquer_battle',
+        ],
+    }})
+    screen._onboarding_guide_open = False
+    screen._welcome_present_dialogue = None
+    screen._logout_dialogue = None
+    screen.dialogue_box = None
+    screen._loading = False
+    screen._error = None
+    screen._config = {'land_id': 1}
+    screen._layout_built = True
+    screen._active_subscreen = None
+    screen._figure_detail_box = None
+    screen._move_detail_box = None
+    screen._active_info_key = None
+    screen._btn_build = pygame.Rect(150, 80, 34, 34)
+    screen._battle_plan_rect = pygame.Rect(260, 80, 180, 120)
+    screen._counter_panel_rect = pygame.Rect(260, 340, 180, 120)
+    screen._btn_save = pygame.Rect(520, 500, 140, 42)
+
+    expected = ['defence_intro', 'defence_battle_plan',
+                'defence_final_response', 'defence_save']
+    seen = []
+    for want in expected:
+        screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
+        step = screen._current_defence_coach_step()
+        assert step is not None and step['id'] == want, (want, step)
+        seen.append(want)
+    screen.state.user_dict['onboarding']['menu_hints_seen'] = list(seen)
+    assert screen._current_defence_coach_step() is None

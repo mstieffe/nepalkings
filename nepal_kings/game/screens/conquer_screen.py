@@ -1306,10 +1306,12 @@ class ConquerScreen(MenuScreenMixin, Screen):
         self._draw_menu_coach(self._current_conquer_coach_step())
 
     def _conquer_coach_ready(self):
+        # Conquer comes BEFORE the first duel in the onboarding journey, so
+        # this must not require finish_first_duel — only that the player has
+        # opened their starter boosters (which the conquer config relies on).
         completed = self._onboarding_completed_steps()
         return (
-            'finish_first_duel' in completed
-            and 'open_first_main_booster' in completed
+            'open_first_main_booster' in completed
             and 'open_first_side_booster' in completed
         )
 
