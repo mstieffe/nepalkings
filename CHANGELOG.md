@@ -2,6 +2,57 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased — Player-experience launch prep
+
+Focused on the things between the game and real players: a faster front
+door, a first session that pays off quickly, async-play survivability,
+and the operational safety net to keep early adopters.
+
+### Added
+
+- **First-party analytics.** Append-only `Event` table written via
+  `analytics.track()` (fail-safe, rides the caller's transaction). Hooks at
+  signup, login, challenge creation, game start, all game-finish paths,
+  booster opens, conquer start, and onboarding reward/skip.
+  `scripts/funnel_report.py` prints the new-player funnel, early retention,
+  recent activity, and median duel duration. `ANALYTICS_ENABLED` flag.
+- **Versioned schema migrations.** `server/migration_runner.py` records
+  applied versions in a `schema_version` table and applies ordered,
+  idempotent migrations at startup (the historical `ensure_*()` helpers
+  become migrations 0001–0007). Halts on first failure.
+- **Production data safety.** `deploy_server.sh` now snapshots the live DB
+  into `backups/` before every deploy (keeps 14, aborts on backup failure);
+  `scripts/restore_db_backup.sh` is a confirmed one-command rollback;
+  `RESET_DATABASE.sh` refuses a production `FLASK_ENV` and requires a typed
+  confirmation. Docs rewritten to "migrations, not resets."
+- **Async-play email notifications.** `notification_service.py` emails
+  offline players on challenge-received, your-turn (debounced per game/6h
+  via `Game.turn_email_log`), and game-finished. One-click HMAC unsubscribe,
+  `/auth/set_notifications` toggle, and a Settings → Preferences row. Opt-in
+  by SMTP config; logs instead of sends when unconfigured. `User.notify_emails_enabled`.
+- **Sound effects.** `scripts/assets/generate_sfx.py` synthesizes a 14-sound
+  set (stdlib-only, ~224 KB) into `nepal_kings/sound/`. `utils/sound.py` is a
+  fail-safe engine (lazy mixer, web-gesture-safe, persisted on/off
+  preference) hooked into clicks, cards, boosters, builds, coins, and
+  victory/defeat stingers. Sound toggle in Settings.
+- **Game-length presets** in the new-game screen: Quick (7) / Standard (21) /
+  Epic (35) points; default game limit decoupled from the gold stake.
+- **Web-bundle optimizer** (`scripts/assets/optimize_web_pngs.py`) and build
+  pipeline (`scripts/build_web.sh`): downscales + palette-quantizes a staging
+  copy of the art (source untouched), cutting the browser bundle from
+  ≈79 MB to ≈35 MB. `scripts/package_itch.sh` + `docs/launch/itch_page.md`
+  for an itch.io HTML5 release.
+
+### Changed
+
+- **Conquer-first onboarding.** The new-player journey now runs
+  boosters → first conquest → first duel, so players reach a real battle
+  within minutes. Main menu leads with Kingdom over Duel; beginner AI duel
+  shortened from 15 to 7 points; README, web `index.html`, and welcome copy
+  reframed around the single-player conquest loop. `CORE_STEPS` reordered
+  (display only; completion remains a set, safe for existing accounts).
+- `deploy-web.yml` builds via `scripts/build_web.sh` and triggers on `main`.
+
 ## Unreleased — Land tiers 1–6, castle cap, loot rank buckets
 
 ### Added

@@ -16,7 +16,7 @@ and MySQL alike — event volume is expected to stay small.
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine, text
 
@@ -124,8 +124,7 @@ def main(argv=None):
     lo, hi = RETENTION_WINDOW_HOURS
     returned = 0
     eligible = 0
-    now = datetime.utcnow()
-    last_event_at = defaultdict(lambda: None)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     events_by_user = defaultdict(list)
     for e in human_events:
         events_by_user[e['user_id']].append(e['created_at'])
