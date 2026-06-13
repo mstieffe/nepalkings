@@ -2239,6 +2239,8 @@ class ConquerGameScreen(GameScreen):
                     if pressed_action and pressed_action != button_action:
                         return True
                     kind, step_id = button_action
+                    from utils import sound
+                    sound.play('ui_back' if kind == 'skip_tutorial' else 'ui_click')
                     if kind == 'next':
                         self._mark_conquer_battle_coach_seen(step_id)
                     elif kind == 'skip_tutorial':
@@ -3461,6 +3463,10 @@ class ConquerGameScreen(GameScreen):
             self._conquer_pending_confirmation = None
 
     def _handle_conquer_objective_action(self, action):
+        from utils import sound
+        sound.play({'next': 'ui_click', 'confirm': 'card_slide',
+                    'finish': 'battle_start', 'cancel': 'ui_back',
+                    'withdraw': 'ui_back'}.get(action, 'ui_click'))
         if action == 'next':
             return self._advance_active_timeline_step()
         if action == 'withdraw':

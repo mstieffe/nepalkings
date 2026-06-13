@@ -202,28 +202,47 @@ def build_all():
         gain(noise(0.35, decay=9, lowpass=0.12), 0.5),
     ), peak=0.65))
 
-    # Short plucked major arpeggio for a battle won.
+    # Rising major arpeggio that resolves onto a held major chord — a
+    # fuller, more rewarding "battle won".
     win_notes = [note(72), note(76), note(79), note(84)]
+    win_chord = mix(
+        tone(0.9, note(72), decay=3.2, partials=PLUCK),
+        gain(tone(0.9, note(76), decay=3.2, partials=PLUCK), 0.8),
+        gain(tone(0.9, note(79), decay=3.0, partials=PLUCK), 0.8),
+        gain(tone(0.9, note(84), decay=2.8, partials=PLUCK), 0.7),
+    )
     write_wav('battle_win.wav', finalize(seq(
-        *(((gain(tone(0.30, f, decay=9, partials=PLUCK), 0.9 - 0.1 * i)),
-           0.085 * i) for i, f in enumerate(win_notes))
-    ), peak=0.55))
+        *(((gain(tone(0.26, f, decay=10, partials=PLUCK), 0.9 - 0.08 * i)),
+           0.075 * i) for i, f in enumerate(win_notes)),
+        (gain(win_chord, 0.9), 0.075 * len(win_notes)),
+    ), peak=0.58))
 
-    # Two falling mellow notes for a battle lost.
+    # Three falling notes over a low drone — a clearer, more melancholic
+    # "battle lost".
     write_wav('battle_lose.wav', finalize(seq(
-        (tone(0.40, note(57), decay=7, partials=PLUCK), 0.0),
-        (gain(tone(0.55, note(52), decay=6, partials=PLUCK), 0.9), 0.18),
-    ), peak=0.50))
+        (tone(0.34, note(59), decay=8, partials=PLUCK), 0.00),
+        (gain(tone(0.40, note(55), decay=7, partials=PLUCK), 0.95), 0.16),
+        (gain(tone(0.70, note(51), decay=5, partials=PLUCK), 0.9), 0.34),
+        (gain(tone(0.9, note(39), decay=3.0,
+                   partials=((1.0, 1.0), (2.0, 0.3))), 0.5), 0.30),
+    ), peak=0.52))
 
-    # Bigger layered fanfare for conquering a land.
+    # Bigger triumphant fanfare for conquering a land: rising arpeggio,
+    # a held octave-stacked major chord, and a soft swell.
+    conquer_chord = mix(
+        tone(1.1, note(79), decay=2.6, partials=PLUCK),
+        gain(tone(1.1, note(83), decay=2.6, partials=PLUCK), 0.8),
+        gain(tone(1.1, note(86), decay=2.4, partials=PLUCK), 0.8),
+        gain(tone(1.1, note(91), decay=2.4), 0.4),
+    )
     write_wav('conquer_win.wav', finalize(seq(
-        (tone(0.35, note(67), decay=7, partials=PLUCK), 0.00),
-        (tone(0.35, note(72), decay=7, partials=PLUCK), 0.10),
-        (tone(0.40, note(76), decay=6, partials=PLUCK), 0.20),
-        (mix(tone(0.70, note(79), decay=5, partials=PLUCK),
-             gain(tone(0.70, note(91), decay=6), 0.25)), 0.32),
-        (gain(noise(0.5, decay=6, lowpass=0.10), 0.25), 0.30),
-    ), peak=0.60))
+        (tone(0.30, note(67), decay=8, partials=PLUCK), 0.00),
+        (tone(0.30, note(72), decay=8, partials=PLUCK), 0.09),
+        (tone(0.34, note(76), decay=7, partials=PLUCK), 0.18),
+        (tone(0.34, note(79), decay=7, partials=PLUCK), 0.27),
+        (gain(conquer_chord, 0.95), 0.37),
+        (gain(noise(0.6, decay=5, lowpass=0.09), 0.22), 0.34),
+    ), peak=0.62))
 
     # Gentle two-note "it's your turn" notify.
     write_wav('your_turn.wav', finalize(seq(

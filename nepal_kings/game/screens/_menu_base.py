@@ -1377,6 +1377,8 @@ class MenuScreenMixin:
                     if pressed_action and pressed_action != button_action:
                         return True
                     kind, step_id = button_action
+                    from utils import sound
+                    sound.play('ui_back' if kind == 'skip_tutorial' else 'ui_click')
                     if kind == 'next':
                         self._mark_menu_coach_seen(step_id)
                         self._after_menu_coach_next(step_id)
