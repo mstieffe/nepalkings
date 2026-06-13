@@ -292,22 +292,45 @@ Nepal Kings can be played directly in the browser — no installation required. 
 
 ### How it's deployed
 
-The web client is built and deployed automatically via GitHub Actions whenever changes are pushed to the `web-client` branch (see `.github/workflows/deploy-web.yml`). The workflow:
+The web client is built and deployed automatically via GitHub Actions on
+pushes to `main` (see `.github/workflows/deploy-web.yml`). The workflow runs
+`scripts/build_web.sh`, which:
 
-1. Builds the pygame app into a WebAssembly bundle using `pygbag 0.9.3`
-2. Applies the custom `nepal_kings/web/index.html`
-3. Deploys to GitHub Pages
+1. Stages a clean copy of `nepal_kings/` into `build/web-staging/` (the
+   committed source art is never modified).
+2. Downscales and quantizes the staged images for the web
+   (`scripts/assets/optimize_web_pngs.py`) — this roughly **halves** the
+   bundle (≈79 MB → ≈35 MB), so the game loads much faster on a cold visit.
+3. Builds the WebAssembly bundle with `pygbag 0.9.3` and applies the custom
+   `nepal_kings/web/index.html`.
+4. Deploys `build/web-staging/nepal_kings/build/web` to GitHub Pages.
 
 After a push, the live site updates within a few minutes (build + CDN cache).
 
-### Running the web client locally
+### Building the web client locally
+
+Optimized build (matches CI), then serve it:
+
+```bash
+pip install pygbag==0.9.3 Pillow
+NK_WEB_SERVE=1 scripts/build_web.sh        # builds + serves on :8000
+```
+
+Quick unoptimized build (full-size art, for a fast dev loop):
 
 ```bash
 pip install pygbag==0.9.3
-python -m pygbag nepal_kings
+python -m pygbag nepal_kings               # serves on :8000
 ```
 
-Then open `http://localhost:8000` in your browser.
+### Packaging for itch.io
+
+```bash
+scripts/package_itch.sh                     # → dist/nepal_kings-itch.zip
+```
+
+Upload that zip on itch.io as an HTML game (see `docs/launch/itch_page.md`
+for the full page copy and embed settings).
 
 > **Note:** Do not log in as the same player from multiple clients (desktop + web) simultaneously. This can cause state conflicts during battles.
 
