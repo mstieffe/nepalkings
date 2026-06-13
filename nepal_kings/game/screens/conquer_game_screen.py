@@ -2927,6 +2927,14 @@ class ConquerGameScreen(GameScreen):
         rank = move.get('rank') or ''
         rail = getattr(self, '_tactics_rail', None)
         result = None
+        from utils import sound
+        sound.play({
+            ACTION_PLAY: 'card_place',
+            ACTION_GAMBLE: 'card_slide',
+            ACTION_COMBINE: 'figure_place',
+            ACTION_DISMANTLE: 'card_slide',
+            ACTION_SKIP: 'ui_back',
+        }.get(action, 'ui_click'))
         try:
             if self._is_tactics_hand_game() and action == ACTION_PLAY and mid is not None:
                 call_figure = self._conquer_best_call_figure_for_tactic(move)
@@ -2965,6 +2973,7 @@ class ConquerGameScreen(GameScreen):
         except Exception as exc:
             result = {'success': False, 'message': str(exc) or 'Action failed'}
         if isinstance(result, dict) and result.get('success') is False:
+            sound.play('error')
             set_banner = getattr(rail, 'set_result_banner', None) if rail else None
             message = result.get('message') or 'Action failed'
             if callable(set_banner):
