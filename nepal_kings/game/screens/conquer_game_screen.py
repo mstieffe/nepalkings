@@ -3429,6 +3429,11 @@ class ConquerGameScreen(GameScreen):
     def request_conquer_figure_confirmation(self, kind, figure, icon=None,
                                             message='', title='Confirm'):
         """Ask the timeline panel to confirm a pending field action."""
+        # Soft feedback when a figure is selected for advance/defence (the
+        # confirm itself plays a firmer 'card_slide' via the objective action).
+        if not self._conquer_pending_confirmation:
+            from utils import sound
+            sound.play('ui_click', volume=0.8)
         self._conquer_pending_confirmation = {
             'kind': kind,
             'figure': figure,

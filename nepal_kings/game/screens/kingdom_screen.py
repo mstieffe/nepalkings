@@ -808,7 +808,11 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'action': 'next',
                 'max_lines': 5,
             }
-        if 'kingdom_defence_intro' not in seen:
+        defence_already_handled = (
+            'save_first_defence_config' in completed
+            or 'defence_save' in seen
+        )
+        if not defence_already_handled and 'kingdom_defence_intro' not in seen:
             return {
                 'id': 'kingdom_defence_intro',
                 'rect': self._map_viewport_rect,
@@ -1962,6 +1966,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
                               int(0.07 * _SH)))
         duration = int(getattr(settings, 'COLLECT_FLOAT_DURATION_MS', 900))
         gold_clr = getattr(settings, 'COLLECT_FLOAT_GOLD_CLR', (255, 220, 90))
+        if total_collected > 0 or main_collected or side_collected:
+            from utils import sound
+            sound.play('coin')
         if total_collected > 0:
             self._floating_text.add(FloatingText(
                 f'+{total_collected}g',

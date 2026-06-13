@@ -4771,9 +4771,11 @@ class GameScreen(Screen):
         )
         
         if result.get('success'):
+            from utils import sound
+            sound.play('booster_reveal')  # spell-cast sparkle (duel + conquer counter)
             self.need_to_respond_to_spell = False
             self._last_resolved_spell_id = self.state.game.pending_spell_id
-            
+
             # Clear spell cache immediately so next spell gets fresh data
             self.pending_spell_details = None
             self._cached_castable_spells = None
