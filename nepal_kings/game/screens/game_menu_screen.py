@@ -494,33 +494,57 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         completed = self._onboarding_completed_steps()
         return bool(onboarding and 'finish_first_duel' not in completed)
 
-    def _current_post_duel_coach_step(self):
-        if not self._onboarding():
-            return None
+    def _boosters_unopened(self):
         completed = self._onboarding_completed_steps()
-        if 'finish_first_duel' not in completed:
-            return None
-        if ('open_first_main_booster' not in completed
-                or 'open_first_side_booster' not in completed):
+        return ('open_first_main_booster' not in completed
+                or 'open_first_side_booster' not in completed)
+
+    def _first_conquer_incomplete(self):
+        return ('finish_first_conquer_battle'
+                not in self._onboarding_completed_steps())
+
+    def _current_journey_coach_step(self):
+        """Guided first-session path: boosters → first conquest → first duel.
+
+        Conquest comes first by design: a conquer battle is a single short
+        fight against the AI, so new players reach their first real battle
+        within minutes — the full duel unlocks as the next step after.
+        """
+        seen = self._menu_coach_seen()
+        if self._boosters_unopened():
             return {
-                'id': 'post_duel_collection',
+                'id': 'open_boosters_first',
                 'rect': self.button_collection.rect,
                 'title': 'Open Your Booster Packs',
-                'body': 'Congrats on your first duel! Next, go to your Collection and open one main booster and one side booster to turn those packs into playable cards to be used in your kingdom. Let\'s see how lucky you are.',
+                'body': 'Your welcome present holds booster packs. Open one main and one side booster in the Collection — their cards build the figures for your first conquest.',
                 'action': 'click',
                 'mark_on_click': True,
                 'max_lines': 5,
             }
-        if 'post_boosters_kingdom' not in self._menu_coach_seen():
-            return {
-                'id': 'post_boosters_kingdom',
-                'rect': self.button_kingdom.rect,
-                'title': 'Visit Your Kingdom',
-                'body': 'With fresh cards in your collection, the next layer is kingdom play: choose land, inspect it, and prepare a conquer setup.',
-                'action': 'click',
-                'mark_on_click': True,
-                'max_lines': 5,
-            }
+        if self._first_conquer_incomplete():
+            if 'post_boosters_kingdom' not in seen:
+                return {
+                    'id': 'post_boosters_kingdom',
+                    'rect': self.button_kingdom.rect,
+                    'title': 'Conquer Your First Land',
+                    'body': 'With fresh cards in your collection, head to your Kingdom: pick a nearby land, prepare an attack, and win your first battle. It takes only a few minutes.',
+                    'action': 'click',
+                    'mark_on_click': True,
+                    'max_lines': 5,
+                }
+            return None  # the kingdom screens guide the rest
+        if self._first_duel_incomplete():
+            if 'ready_first_duel' not in seen:
+                return {
+                    'id': 'ready_first_duel',
+                    'rect': self.button_duel.rect,
+                    'title': 'Ready For Your First Duel',
+                    'body': 'Land conquered! Now try the full tactical card game: a short practice duel against AI Strategos, with beginner-friendly settings prepared for you.',
+                    'action': 'click',
+                    'mark_on_click': True,
+                    'max_lines': 5,
+                }
+            return None
         return None
 
     def _current_area_coach_step(self):
@@ -529,18 +553,16 @@ class GameMenuScreen(MenuScreenMixin, Screen):
         onboarding = self._onboarding()
         if onboarding.get('welcome_pending'):
             return None
-        if not self._first_duel_incomplete():
-            return self._current_post_duel_coach_step()
         seen = self._menu_coach_seen()
         steps = [
             ('user_items', self._user_item_display_rect, 'Your Items',
              'Items you own are shown here. The welcome present you just opened added gold, boosters, and maps to this display.'),
-            ('duel', self.button_duel.rect, 'Duel',
-             'Start here. Duels teach the tactical card flow without risking your own cards or lands.'),
             ('kingdom', self.button_kingdom.rect, 'Kingdom',
-             'Develop your kingdom: conquer lands, defend them, and collect production.'),
+             'The heart of the game: conquer lands from the AI, defend them, and collect their production.'),
             ('collection', self.button_collection.rect, 'Collection',
              'Figures in your kingdom require cards from your collection. Open booster packs here, then trade or sell cards you do not need.'),
+            ('duel', self.button_duel.rect, 'Duel',
+             'The full head-to-head card game — challenge AI Strategos or other players once your kingdom is underway.'),
             ('rankings', self.button_rankings.rect, 'Rankings',
              'Check rankings when you want to compare progress and see who is climbing.'),
             ('home', self._icon_home.rect, 'Home',
@@ -556,16 +578,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 'title': 'Guide',
                 'body': 'Open the guide next. It tracks learning achievements and the rewards waiting behind them.',
             }
-        if 'start_first_duel' not in seen:
-            return {
-                'id': 'start_first_duel',
-                'rect': self.button_duel.rect,
-                'title': 'Start Your First Duel',
-                'body': 'Click Duel and begin your first match against AI Strategos.',
-                'action': 'click',
-                'mark_on_click': True,
-            }
-        return None
+        return self._current_journey_coach_step()
 
     def _after_menu_coach_next(self, step_id):
         if step_id == 'guide':
@@ -641,8 +654,8 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             'welcome',
             [
                 f'Hello {username}!',
-                'Welcome to the NepalKings experience - an online tactical card game where you collect cards, build figures, cast spells, and conquer kingdoms.',
-                'Your starter kit is already waiting in your account.',
+                'Welcome to Nepal Kings — build your kingdom, conquer lands from the AI, and duel other rulers in a tactical card game.',
+                'Your first quest takes about 15 minutes: open your booster packs, then conquer your first land. The guide will walk you through every step.',
             ],
             items,
             footer_when_done='Your starter kit is ready to use.',

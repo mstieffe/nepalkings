@@ -441,36 +441,66 @@ def test_main_menu_area_coach_starts_with_user_item_display():
     assert step['id'] == 'user_items'
     assert step['rect'] == screen._user_item_display_rect
 
+    # Conquer-first ordering: Kingdom is introduced before Duel.
     screen.state.user_dict['onboarding']['menu_hints_seen'] = ['user_items']
-    assert screen._current_area_coach_step()['id'] == 'duel'
+    assert screen._current_area_coach_step()['id'] == 'kingdom'
 
 
-def test_main_menu_post_duel_coach_routes_to_collection_then_kingdom():
+def _journey_ready_menu_screen(completed_steps):
+    """A GameMenuScreen with every area + guide hint already seen, so the
+    next coach step comes from the conquer-first journey."""
     import pygame
     from game.screens.game_menu_screen import GameMenuScreen
 
+    seen = [
+        'user_items', 'kingdom', 'collection', 'duel', 'rankings', 'home',
+        'guide_achievements', 'guide_first_duel_reward',
+    ]
     screen = object.__new__(GameMenuScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
-        'menu_hints_seen': [],
+        'menu_hints_seen': list(seen),
         'welcome_pending': False,
-        'completed_steps': ['finish_first_duel'],
+        'completed_steps': list(completed_steps),
     }})
     screen._onboarding_guide_open = False
     screen._welcome_present_dialogue = None
     screen.dialogue_box = None
-    screen.button_collection = SimpleNamespace(rect=pygame.Rect(20, 180, 120, 44))
+    screen._user_item_display_rect = pygame.Rect(8, 10, 180, 36)
+    screen.button_duel = SimpleNamespace(rect=pygame.Rect(20, 80, 120, 44))
     screen.button_kingdom = SimpleNamespace(rect=pygame.Rect(20, 130, 120, 44))
+    screen.button_collection = SimpleNamespace(rect=pygame.Rect(20, 180, 120, 44))
+    screen.button_rankings = SimpleNamespace(rect=pygame.Rect(20, 230, 120, 44))
+    screen._icon_home = SimpleNamespace(rect=pygame.Rect(760, 20, 42, 42))
+    screen._icon_guide = SimpleNamespace(rect=pygame.Rect(760, 70, 42, 42))
+    return screen
 
+
+def test_main_menu_journey_coach_routes_boosters_then_conquer_then_duel():
+    # Fresh account: open boosters first.
+    screen = _journey_ready_menu_screen(completed_steps=[])
     step = screen._current_area_coach_step()
-    assert step['id'] == 'post_duel_collection'
+    assert step['id'] == 'open_boosters_first'
     assert step['rect'] == screen.button_collection.rect
 
-    screen.state.user_dict['onboarding']['completed_steps'].extend([
-        'open_first_main_booster', 'open_first_side_booster'
-    ])
+    # Boosters opened: route to the first conquest, not a duel.
+    screen.state.user_dict['onboarding']['completed_steps'] = [
+        'open_first_main_booster', 'open_first_side_booster',
+    ]
     step = screen._current_area_coach_step()
     assert step['id'] == 'post_boosters_kingdom'
     assert step['rect'] == screen.button_kingdom.rect
+
+    # First land conquered: now invite the player to their first duel.
+    screen.state.user_dict['onboarding']['completed_steps'].append(
+        'finish_first_conquer_battle')
+    step = screen._current_area_coach_step()
+    assert step['id'] == 'ready_first_duel'
+    assert step['rect'] == screen.button_duel.rect
+
+    # First duel done: the journey coach is finished.
+    screen.state.user_dict['onboarding']['completed_steps'].append(
+        'finish_first_duel')
+    assert screen._current_area_coach_step() is None
 
 
 def test_kingdom_coach_progresses_from_map_to_conquer_button():

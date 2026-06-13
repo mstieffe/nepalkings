@@ -722,8 +722,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
     def _kingdom_coach_ready(self):
         completed = self._onboarding_completed_steps()
         return (
-            'finish_first_duel' in completed
-            and 'open_first_main_booster' in completed
+            'open_first_main_booster' in completed
             and 'open_first_side_booster' in completed
         )
 

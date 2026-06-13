@@ -1419,8 +1419,6 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 or self._trade_dialogue or self._profile_dialogue):
             return None
         completed = self._onboarding_completed_steps()
-        if 'finish_first_duel' not in completed:
-            return None
         if 'open_first_main_booster' not in completed:
             return {
                 'id': 'collection_open_main_booster',

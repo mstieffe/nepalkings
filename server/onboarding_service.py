@@ -30,6 +30,18 @@ CORE_STEPS = [
         'reward': {'gold': 50},
     },
     {
+        'id': 'finish_first_conquer_battle',
+        'title': 'Finish a conquer battle',
+        'description': 'Resolve one land battle in kingdom mode.',
+        'reward': {'maps': 1},
+    },
+    {
+        'id': 'collect_first_kingdom_production',
+        'title': 'Collect kingdom production',
+        'description': 'Claim produced gold, packs, or maps from a kingdom.',
+        'reward': {'gold': 50},
+    },
+    {
         'id': 'finish_first_duel',
         'title': 'Finish your first duel',
         'description': 'Play a short duel from start to finish.',
@@ -52,18 +64,6 @@ CORE_STEPS = [
         'title': 'Save a defence',
         'description': 'Prepare a land so it can protect itself.',
         'reward': {'booster_packs': 1},
-    },
-    {
-        'id': 'finish_first_conquer_battle',
-        'title': 'Finish a conquer battle',
-        'description': 'Resolve one land battle in kingdom mode.',
-        'reward': {'maps': 1},
-    },
-    {
-        'id': 'collect_first_kingdom_production',
-        'title': 'Collect kingdom production',
-        'description': 'Claim produced gold, packs, or maps from a kingdom.',
-        'reward': {'gold': 50},
     },
     {
         'id': 'buy_first_cosmetic',
@@ -195,6 +195,7 @@ DUEL_HINT_IDS = (
 MENU_HINT_IDS = (
     'user_items', 'duel', 'kingdom', 'collection', 'rankings', 'home', 'guide',
     'guide_achievements', 'guide_first_duel_reward', 'start_first_duel',
+    'open_boosters_first', 'ready_first_duel',
     'new_game', 'beginner_duel', 'send_first_duel_challenge',
     'post_duel_collection', 'collection_open_main_booster',
     'collection_open_side_booster', 'collection_return_home',
