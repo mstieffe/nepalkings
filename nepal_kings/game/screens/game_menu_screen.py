@@ -73,10 +73,12 @@ class GameMenuScreen(MenuScreenMixin, Screen):
 
         first_btn_y = self._box_rect.y + settings.GAME_MENU_BOX_PAD_TOP + title_h
 
-        self.button_duel = Button(self.window, btn_x, first_btn_y,
-                                  "Duel", width=_btn_w, height=_btn_h)
-        self.button_kingdom = Button(self.window, btn_x, first_btn_y + _btn_h + _btn_gap,
+        # Kingdom leads the menu: conquest/kingdom play is the core single-player
+        # loop and the game's front door; Duel is the head-to-head mode below it.
+        self.button_kingdom = Button(self.window, btn_x, first_btn_y,
                                   "Kingdom", width=_btn_w, height=_btn_h)
+        self.button_duel = Button(self.window, btn_x, first_btn_y + _btn_h + _btn_gap,
+                                  "Duel", width=_btn_w, height=_btn_h)
         self.button_collection = Button(self.window, btn_x, first_btn_y + 2 * (_btn_h + _btn_gap),
                                   "Collection", width=_btn_w, height=_btn_h)
         self.button_rankings = Button(self.window, btn_x, first_btn_y + 3 * (_btn_h + _btn_gap),

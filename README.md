@@ -4,13 +4,23 @@
 
 # Nepal Kings
 
-**Nepal Kings** is a two-player online card game. Some call it *the chess of cards*.  
-It is a strategic duel built around the principle of **attack and defense**, played in two main phases:
+**Build your kingdom, conquer the land, and duel for the crown.**
 
-1. **Build Phase** – players prepare their field, set up figures, and ready their battle cards.  
-2. **Battle Phase** – the actual fight takes place, points are awarded, and attacker/defender roles may switch.  
+**Nepal Kings** is a tactical card game you can play solo or against other
+rulers. Open booster packs, build figures from your collection, and conquer
+AI-held lands one battle at a time to grow your kingdom — then test yourself
+in head-to-head duels when you are ready. Some call the duel *the chess of
+cards*.
 
-The first player to reach the pre-set score (21, 35, or 49 points) wins the game.  
+- **Single-player first.** The full conquest loop — conquer lands, defend
+  them, collect their production, and expand your kingdom — plays entirely
+  against the built-in AI opponent. No other players required.
+- **Duels when you want them.** Challenge the AI or another player to a duel:
+  a strategic clash of **attack and defense** across a Build Phase and a
+  Battle Phase. Pick the length that suits you — **Quick (7)**,
+  **Standard (21)**, or **Epic (35)** points.
+
+The sections below describe the duel rules in detail.
 
 ---
 
