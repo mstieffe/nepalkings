@@ -276,6 +276,42 @@ class TestFigureRouteCoverage:
         assert data.get('success') is True
         assert any(fig.get('id') == created.id for fig in data.get('figures', []))
 
+    def test_opponent_figures_are_fully_visible(self, client, db, app, game_with_players, auth_token_p1):
+        """Field figures are public: p1 must see p2's figures WITH real card
+        data. Redacting card rank/suit (nulls) made CardImg crash at draw
+        time, so opponent figures silently vanished from the field.
+        Regression guard for that bug."""
+        from models import Figure, CardToFigure, MainCard
+
+        game, p1, p2, _, _ = game_with_players
+        fig = Figure(player_id=p2.id, game_id=game.id, family_name='Himalaya Maharaja',
+                     name='Himalaya Maharaja', suit='Spades', color='black',
+                     field='castle', checkmate=True)
+        db.session.add(fig)
+        db.session.flush()
+        card = MainCard(rank='A', suit='Spades', value=15, game_id=game.id,
+                        player_id=p2.id, in_deck=False, part_of_figure=True)
+        db.session.add(card)
+        db.session.flush()
+        db.session.add(CardToFigure(figure_id=fig.id, card_id=card.id,
+                                    card_type='main', role='key'))
+        db.session.commit()
+
+        resp = client.get(
+            f'/figures/get_figures?player_id={p2.id}',
+            headers={'Authorization': f'Bearer {auth_token_p1}'},
+        )
+        data = resp.get_json()
+        assert resp.status_code == 200
+        opp_fig = next(f for f in data['figures'] if f['id'] == fig.id)
+        assert opp_fig['family_name'] == 'Himalaya Maharaja'
+        assert opp_fig['cards'], 'opponent figure must expose its cards'
+        link = opp_fig['cards'][0]
+        # Real card data, not nulled — otherwise CardImg(None, None) crashes.
+        assert link['card_id'] is not None
+        assert link['rank'] == 'A'
+        assert link['suit'] == 'Spades'
+
     def test_update_figure_changes_name_and_consumes_turn(self, client, db, app, game_with_players, auth_token_p1):
         from models import Figure
 

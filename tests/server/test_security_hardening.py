@@ -109,10 +109,13 @@ def test_get_game_redacts_hidden_state_for_viewer(client, db):
     assert hidden_hand_card['value'] == 0
     assert hidden_hand_card['deck_position'] is None
 
-    hidden_figure_card = opponent['figures'][0]['cards'][0]
-    assert hidden_figure_card['card_id'] is None
-    assert hidden_figure_card['rank'] is None
-    assert hidden_figure_card['suit'] is None
+    # Field figures are PUBLIC — the opponent's army and its card composition
+    # stay visible (core to attack/defense strategy). Only hands and unplayed
+    # battle moves are secret.
+    visible_figure_card = opponent['figures'][0]['cards'][0]
+    assert visible_figure_card['card_id'] is not None
+    assert visible_figure_card['rank'] == 'K'
+    assert visible_figure_card['suit'] == 'Spades'
 
     hidden_move = next(move for move in data['battle_moves'] if move['player_id'] == p2.id)
     assert hidden_move['id'] is not None

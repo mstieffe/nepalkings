@@ -55,17 +55,14 @@ def _redact_card_link(link):
     return redacted
 
 
-def _redact_figure(figure):
-    redacted = dict(figure or {})
-    redacted['cards'] = [_redact_card_link(c) for c in redacted.get('cards', [])]
-    return redacted
-
-
 def serialize_figure_for_viewer(figure, viewer_player_id, reveal_opponent=False):
-    data = figure.serialize() if hasattr(figure, 'serialize') else dict(figure or {})
-    if data.get('player_id') != viewer_player_id and not reveal_opponent:
-        return _redact_figure(data)
-    return data
+    # Field figures are PUBLIC in Nepal Kings — both players see each other's
+    # army and its card composition; that visibility is core to the attack/
+    # defense strategy. Only hand cards and unplayed battle moves/tactics are
+    # secret (see serialize_game_for_viewer / redact_battle_move). The
+    # viewer_player_id / reveal_opponent parameters are kept for call-site
+    # compatibility but no longer redact figures.
+    return figure.serialize() if hasattr(figure, 'serialize') else dict(figure or {})
 
 
 def _move_is_revealed(move):
@@ -152,9 +149,10 @@ def serialize_game_for_viewer(game, viewer_user_id):
     for player in data.get('players', []):
         is_viewer = player.get('id') == viewer_player_id
         if not is_viewer and not reveal_opponent:
+            # Hand cards are secret; field figures are public (see
+            # serialize_figure_for_viewer) so they are left intact here.
             player['main_hand'] = [_redact_card(c) for c in player.get('main_hand', [])]
             player['side_hand'] = [_redact_card(c) for c in player.get('side_hand', [])]
-            player['figures'] = [_redact_figure(f) for f in player.get('figures', [])]
 
     for key in ('main_cards', 'side_cards'):
         filtered = []
