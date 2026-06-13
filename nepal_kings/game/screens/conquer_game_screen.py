@@ -1563,6 +1563,7 @@ class ConquerGameScreen(GameScreen):
             self._spell_anim_seeded = False
             self._spell_anim_fired = set()
             self._spell_anim_target_fired = set()
+            self._spell_sound_fired = set()
             self._conquer_spell_anim_impact_ms = {}
             self._last_announced_battle_round = 0
             self._prev_visible_figure_rects = {}
@@ -1648,6 +1649,7 @@ class ConquerGameScreen(GameScreen):
                     if self._fire_spell_step_animation(
                             key, anchor, step_kind=step_kind, spell_name=spell_name):
                         fired_steps.add(key)
+                        self._play_conquer_spell_cast_sound(key)
                 elif (phase in ('active', 'completed')
                       and key not in getattr(self, '_spell_anim_target_fired', set())):
                     # A prior fire on this step was banner-only because
@@ -1673,6 +1675,19 @@ class ConquerGameScreen(GameScreen):
             self._last_announced_battle_round = battle_round
         elif not confirmed:
             self._last_announced_battle_round = 0
+
+    def _play_conquer_spell_cast_sound(self, step_key):
+        """Play the spell-cast sparkle once per spell step that fires live
+        (prelude / counter / tactic spell animating during the battle)."""
+        fired = getattr(self, '_spell_sound_fired', None)
+        if fired is None:
+            fired = set()
+            self._spell_sound_fired = fired
+        if step_key in fired:
+            return
+        fired.add(step_key)
+        from utils import sound
+        sound.play('booster_reveal')
 
     def _fire_spell_step_animation(self, step_key, anchor_rect, *,
                                    step_kind=None, spell_name=None):
