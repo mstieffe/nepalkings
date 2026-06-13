@@ -51,7 +51,23 @@ and the operational safety net to keep early adopters.
   shortened from 15 to 7 points; README, web `index.html`, and welcome copy
   reframed around the single-player conquest loop. `CORE_STEPS` reordered
   (display only; completion remains a set, safe for existing accounts).
+- **Action-first coaching.** The menu coach now leads with the actionable
+  journey right after the welcome present instead of a generic area tour;
+  light orientation (rankings/home/guide) follows. Removed dead onboarding
+  hint ids left from the rework.
 - `deploy-web.yml` builds via `scripts/build_web.sh` and triggers on `main`.
+
+### Fixed
+
+- **Opponent figures vanishing.** The security-hardening pass redacted
+  opponent *figure* card data, but field figures are public in Nepal Kings.
+  The nulled rank/suit made `CardImg` raise at draw time, so the AI's
+  duel maharaja and AI-defended-land figures silently disappeared from the
+  field. Figures are now served unredacted (hands and unplayed battle
+  moves/tactics stay secret).
+- **Silent conquer battles.** Added SFX to the conquer battle's tactic
+  actions (play/gamble/combine/dismantle/skip) and errors; the duel sound
+  hooks didn't reach the conquer screen's field/rail flow.
 
 ## Unreleased — Land tiers 1–6, castle cap, loot rank buckets
 
