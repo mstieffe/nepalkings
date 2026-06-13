@@ -468,12 +468,11 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 self.handle_button_clicks()
 
     def handle_button_clicks(self):
-        """Handle clicks on the menu buttons."""
-        if (self.button_duel.collide() or self.button_kingdom.collide()
-                or self.button_collection.collide()
-                or self.button_rankings.collide()):
-            from utils import sound
-            sound.play('ui_click')
+        """Handle clicks on the menu buttons.
+
+        The click tick comes from the shared Button class (sound.tap_edge),
+        so no explicit play is needed here.
+        """
         if self.button_duel.collide():
             self._mark_menu_coach_seen('duel')
             self.state.screen = 'duel_menu'
@@ -529,7 +528,7 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'id': 'post_boosters_kingdom',
                     'rect': self.button_kingdom.rect,
                     'title': 'Conquer Your First Land',
-                    'body': 'With fresh cards in your collection, head to your Kingdom: pick a nearby land, prepare an attack, and win your first battle. It takes only a few minutes.',
+                    'body': 'Your collection already holds a starter deck — enough to build a King, a farm, and warriors for your first attack. Head to your Kingdom, pick a nearby land, and win your first battle. It takes only a few minutes.',
                     'action': 'click',
                     'mark_on_click': True,
                     'max_lines': 5,

@@ -27,6 +27,26 @@ class TestRegister:
         assert 'token' in data
         assert data['user']['username'] == 'newuser'
 
+    def test_register_grants_buildable_starter_deck(self, client):
+        """New accounts get a curated starter deck that can build a minimal
+        conquer attack (King + Rice Farm + Gorkha Warriors), independent of
+        booster luck."""
+        import server_settings as settings
+        from ai.figure_recipes import find_buildable_figures
+        from models import CollectionCard, User
+
+        resp = client.post('/auth/register', data=_register_data(username='deckuser'))
+        assert resp.status_code == 200
+        user = User.query.filter_by(username='deckuser').first()
+
+        cards = CollectionCard.query.filter_by(user_id=user.id).all()
+        assert len(cards) == len(settings.STARTER_FIGURE_CARDS)
+
+        main_hand = [{'id': c.id, 'rank': c.rank, 'suit': c.suit,
+                      'value': c.value, 'card_type': 'main'} for c in cards]
+        names = {b['name'] for b in find_buildable_figures(main_hand, [], [])}
+        assert {'Djungle King', 'Small Rice Farm', 'Gorkha Warriors'} <= names
+
     def test_register_duplicate_username_fails(self, client):
         client.post('/auth/register', data=_register_data('dup', 'pass1234'))
         resp = client.post('/auth/register', data=_register_data('dup', 'pass1234'))

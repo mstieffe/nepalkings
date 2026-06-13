@@ -339,6 +339,14 @@ def register():
             logger.exception("Failed to initialize onboarding for new user")
         db.session.add(user)
         db.session.flush()
+        # Curated starter deck so the first conquer attack is always buildable.
+        try:
+            from models import CollectionCard
+            for rank, suit, value in settings.STARTER_FIGURE_CARDS:
+                db.session.add(CollectionCard(
+                    user_id=user.id, rank=rank, suit=suit, value=value, locked=False))
+        except Exception:
+            logger.exception("Failed to grant starter figure cards")
         track('signup', user_id=user.id, has_email=bool(email))
         db.session.commit()
 
