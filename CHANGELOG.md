@@ -68,6 +68,18 @@ and the operational safety net to keep early adopters.
 - **Silent conquer battles.** Added SFX to the conquer battle's tactic
   actions (play/gamble/combine/dismantle/skip) and errors; the duel sound
   hooks didn't reach the conquer screen's field/rail flow.
+- **First conquest unbuildable from one booster.** New accounts now get a
+  curated starter deck (K/A/J/J/7/7/8 of Hearts) that builds the full
+  offensive chain (Djungle King → Small Rice Farm → Gorkha Warriors), so the
+  tutorial's first conquer attack is always possible regardless of booster
+  luck.
+- **Sparse audio.** `sound.tap_edge` on the shared button classes now gives
+  almost every button a click tick; added distinct sounds for spell cast,
+  duel battle moves, figure advance, buy booster, and card trade.
+- **Legal terms unviewable / loose hit area.** The registration Terms and
+  Privacy links now open the actual documents in a scrollable overlay, and
+  the accept checkbox only toggles on the box/label (no more far-right
+  toggling).
 
 ## Unreleased — Land tiers 1–6, castle cap, loot rank buckets
 
