@@ -416,7 +416,7 @@ def test_onboarding_payload_preserves_local_hint_progress():
     assert onboarding['duel_hints_seen'] == ['field', 'build']
 
 
-def test_main_menu_area_coach_starts_with_user_item_display():
+def test_main_menu_area_coach_leads_with_journey():
     import pygame
     from game.screens.game_menu_screen import GameMenuScreen
 
@@ -437,14 +437,11 @@ def test_main_menu_area_coach_starts_with_user_item_display():
     screen._icon_home = SimpleNamespace(rect=pygame.Rect(760, 20, 42, 42))
     screen._icon_guide = SimpleNamespace(rect=pygame.Rect(760, 70, 42, 42))
 
+    # Action-first: the coach leads straight into the journey (open your
+    # booster packs) — no generic area tour up front.
     step = screen._current_area_coach_step()
-    assert step['id'] == 'user_items'
-    assert step['rect'] == screen._user_item_display_rect
-
-    # Action-first: after the welcome-items pointer, the coach leads straight
-    # into the journey (open your booster packs), not a generic area tour.
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['user_items']
-    assert screen._current_area_coach_step()['id'] == 'open_boosters_first'
+    assert step['id'] == 'open_boosters_first'
+    assert step['rect'] == screen.button_collection.rect
 
 
 def _journey_ready_menu_screen(completed_steps):
@@ -454,8 +451,8 @@ def _journey_ready_menu_screen(completed_steps):
     from game.screens.game_menu_screen import GameMenuScreen
 
     seen = [
-        'user_items', 'kingdom', 'collection', 'duel', 'rankings', 'home',
-        'guide', 'guide_achievements', 'guide_first_duel_reward',
+        'kingdom', 'collection', 'duel', 'rankings',
+        'guide', 'guide_first_duel_reward',
     ]
     screen = object.__new__(GameMenuScreen)
     screen.state = SimpleNamespace(user_dict={'onboarding': {
@@ -558,10 +555,7 @@ def test_kingdom_coach_progresses_from_map_to_conquer_button():
     screen._error = None
     screen._map_viewport_rect = pygame.Rect(50, 60, 300, 220)
 
-    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_map_intro'
-
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_map_intro']
-    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_select_land'
+    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_pick_land'
 
     conquer_rect = pygame.Rect(120, 180, 140, 34)
     screen._detail_box = SimpleNamespace(
@@ -603,19 +597,12 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
     assert screen._current_kingdom_coach_step()['id'] == 'kingdom_after_conquer_map'
 
     screen.state.user_dict['onboarding']['menu_hints_seen'] = ['kingdom_after_conquer_map']
-    assert screen._current_kingdom_coach_step()['id'] == 'kingdom_connected_lands'
-
-    screen.state.user_dict['onboarding']['menu_hints_seen'] = [
-        'kingdom_after_conquer_map',
-        'kingdom_connected_lands',
-    ]
     step = screen._current_kingdom_coach_step()
     assert step['id'] == 'kingdom_production_intro'
     assert step['rect'] == screen._collect_all_rect
 
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
         'kingdom_after_conquer_map',
-        'kingdom_connected_lands',
         'kingdom_production_intro',
     ]
     step = screen._current_kingdom_coach_step()
@@ -630,7 +617,6 @@ def test_kingdom_coach_shifts_to_post_battle_map_and_config_steps():
         'save_first_defence_config')
     screen.state.user_dict['onboarding']['menu_hints_seen'] = [
         'kingdom_after_conquer_map',
-        'kingdom_connected_lands',
         'kingdom_production_intro',
         'kingdom_defence_intro',
     ]
@@ -678,7 +664,6 @@ def test_conquer_coach_highlights_edit_controls_in_order():
         'conquer_config_field',
         'conquer_config_build_edit',
         'conquer_config_battle_plan',
-        'conquer_config_prelude',
         'conquer_config_to_battle',
     ]
     seen = []

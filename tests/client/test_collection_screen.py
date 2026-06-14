@@ -400,7 +400,7 @@ class TestCollectionCoach:
         screen._icon_home = SimpleNamespace(rect=pygame.Rect(200, 20, 40, 40))
         return screen
 
-    def test_coach_requires_main_then_side_then_home(self):
+    def test_coach_requires_starter_then_main_then_side(self):
         screen = self._screen(completed=['finish_first_duel'])
         step = screen._current_collection_coach_step()
         assert step['id'] == 'collection_starter_cards'
@@ -413,8 +413,10 @@ class TestCollectionCoach:
         screen.state.user_dict['onboarding']['completed_steps'].append('open_first_main_booster')
         assert screen._current_collection_coach_step()['id'] == 'collection_open_side_booster'
 
+        # Both boosters opened: the collection coach is finished (the journey
+        # coach routes the player onward to the Kingdom).
         screen.state.user_dict['onboarding']['completed_steps'].append('open_first_side_booster')
-        assert screen._current_collection_coach_step()['id'] == 'collection_return_home'
+        assert screen._current_collection_coach_step() is None
 
     def test_open_booster_result_marks_local_onboarding_step(self, monkeypatch):
         from game.screens.collection_screen import CollectionScreen

@@ -1426,7 +1426,7 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'id': 'collection_starter_cards',
                 'rect': self._panel_rect,
                 'title': 'Your Starting Cards',
-                'body': 'You already own a small set of starting cards in this collection. They are enough to build your first King, Rice Farm, and Gorkha Warriors, so booster luck cannot block your first conquest.',
+                'body': 'Your starter cards already form an army: a King makes villagers and warriors, farms turn villagers into food, and warriors spend food to fight. That chain is your economy.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 5,
@@ -1436,30 +1436,20 @@ class CollectionScreen(MenuScreenMixin, Screen):
                 'id': 'collection_open_main_booster',
                 'rect': self._btn_open_main_rect,
                 'title': 'Open A Main Booster',
-                'body': 'Main cards build core figures, spells, and battle moves. Cards have three different tiers: common, rare, and epic. Click Open on the main pack panel, then confirm the booster reveal.',
+                'body': 'Open a main booster. Main cards build figures, spells, and tactics.',
                 'action': 'click',
                 'mark_on_click': True,
-                'max_lines': 5,
+                'max_lines': 4,
             }
         if 'open_first_side_booster' not in completed:
             return {
                 'id': 'collection_open_side_booster',
                 'rect': self._btn_open_side_rect,
                 'title': 'Open A Side Booster',
-                'body': 'Side cards unlock more advanced figures and effects. Open one side booster so your collection has both card families.',
+                'body': 'Open a side booster. Side cards unlock advanced figures and effects.',
                 'action': 'click',
                 'mark_on_click': True,
-                'max_lines': 5,
-            }
-        if 'collection_return_home' not in self._menu_coach_seen():
-            return {
-                'id': 'collection_return_home',
-                'rect': self._icon_home.rect,
-                'title': 'Back To The Menu',
-                'body': 'Good. You opened some packs and added cards to your collection. Return to the main menu and the tour will continue with kingdom play.',
-                'action': 'click',
-                'mark_on_click': True,
-                'max_lines': 5,
+                'max_lines': 4,
             }
         return None
 

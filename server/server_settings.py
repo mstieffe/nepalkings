@@ -131,21 +131,25 @@ STARTER_BOOSTER_PACKS = 8                   # Free main-card packs on registrati
 STARTER_BOOSTER_PACKS_SIDE = 2              # Free side-card packs on registration
 
 # Curated starter deck granted at registration so a new player can ALWAYS
-# build a minimal conquer attack, independent of booster luck. These Hearts
-# main cards build the offensive resource chain end-to-end:
+# field a complete, battle-ready first conquer attack, independent of booster
+# luck. The server pre-assembles these into the first conquer config (see
+# _preassemble_tutorial_conquer_attack in routes/kingdom.py). All Hearts main
+# cards; the deck deterministically covers three figures plus three tactics:
 #   Djungle King (K)            -> villager_red x2, warrior_red x1
 #   Small Rice Farm (J + 7)     -> food_red x7      (needs villager_red x1)
 #   Gorkha Warriors (A + 7)     -> attacker         (needs warrior_red x1, food_red x7)
-# The spare J/8 allow a second farm. Values follow standard rank values.
+#   3x Dagger                   -> one number card each (8, 9, 10)
+# Resource math balances (villager_red +1, warrior_red 0, food_red 0).
 # Format: (rank, suit, value).
 STARTER_FIGURE_CARDS = [
     ('K', 'Hearts', 4),
     ('A', 'Hearts', 3),
     ('J', 'Hearts', 1),
-    ('J', 'Hearts', 1),
     ('7', 'Hearts', 7),
     ('7', 'Hearts', 7),
     ('8', 'Hearts', 8),
+    ('9', 'Hearts', 9),
+    ('10', 'Hearts', 10),
 ]
 BOOSTER_PACK_PRICE = 100                    # Gold cost per main pack
 BOOSTER_PACK_SIDE_PRICE = 100               # Gold cost per side pack

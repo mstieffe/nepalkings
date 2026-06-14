@@ -3504,7 +3504,16 @@ class GameScreen(Screen):
             land_label = f'Tier {land_tier} land' if land_tier else 'this land'
             title = 'Land Conquered!'
             icon = 'victory'
-            message = f'You have conquered {land_label}!'
+            # First conquest is a milestone — celebrate it (the dialog already
+            # plays the conquer_win fanfare via sound.play_for_dialogue).
+            _onboarding = (getattr(self.state, 'user_dict', None) or {}).get('onboarding') or {}
+            _first_conquest = ('finish_first_conquer_battle'
+                               not in set(_onboarding.get('completed_steps') or []))
+            if _first_conquest:
+                message = (f'Your first land is yours! You conquered {land_label}, '
+                           'and this kingdom now produces resources over time.')
+            else:
+                message = f'You have conquered {land_label}!'
             if gold_rate:
                 message += f'\n\nGold production increased by {gold_rate:.1f} gold/hour.'
             loot_cards = result.get('loot_gained_cards') or result.get('loot_lost_cards') or []

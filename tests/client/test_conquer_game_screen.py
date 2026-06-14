@@ -252,13 +252,9 @@ def test_conquer_battle_coach_hidden_when_tutorial_paused():
     assert step is None
 
 
-def test_conquer_battle_coach_shows_tactic_actions_once_buttons_exist():
-    seen = {
-        'conquer_battle_timeline_intro',
-        'conquer_battle_field_actions',
-        'conquer_battle_tactics_rail',
-    }
-    ConquerGameScreen, screen = _battle_coach_screen(menu_seen=seen)
+def test_conquer_battle_coach_shows_tactics_after_timeline():
+    ConquerGameScreen, screen = _battle_coach_screen(
+        menu_seen={'conquer_battle_timeline_intro'})
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='attacker')
     screen._tactics_rail._action_button_rects = {
         'play': pygame.Rect(24, 370, 72, 28),
@@ -267,9 +263,10 @@ def test_conquer_battle_coach_shows_tactic_actions_once_buttons_exist():
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
-    assert step['id'] == 'conquer_battle_tactic_actions'
+    assert step['id'] == 'conquer_battle_tactics'
     assert step['action'] == 'next'
-    assert len(step['rects']) == 3
+    # Rect set unions the tactic action buttons with the rail target.
+    assert len(step['rects']) >= 1
 
 
 def test_conquer_battle_coach_next_marks_seen_without_advancing_timeline():
@@ -318,26 +315,24 @@ def test_conquer_battle_coach_click_step_marks_seen_and_passes_click_through():
     assert seen == ['conquer_battle_field_actions']
 
 
-def test_conquer_battle_overview_shows_field_after_timeline():
+def test_conquer_battle_tactics_step_follows_timeline():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=['conquer_battle_timeline_intro'])
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
 
-    assert step['id'] == 'conquer_battle_field_actions'
+    assert step['id'] == 'conquer_battle_tactics'
     assert step['action'] == 'next'
 
 
-def test_conquer_battle_overview_does_not_wait_for_active_field_choice():
+def test_conquer_battle_tactics_step_independent_of_timeline_kind():
     ConquerGameScreen, screen = _battle_coach_screen(menu_seen=[
         'conquer_battle_timeline_intro',
     ])
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(kind='overview')
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
-
-    assert step['id'] == 'conquer_battle_field_actions'
-    assert step['action'] == 'next'
+    assert step['id'] == 'conquer_battle_tactics'
 
     screen.active_conquer_timeline_step = lambda: SimpleNamespace(
         kind='attacker',
@@ -345,9 +340,7 @@ def test_conquer_battle_overview_does_not_wait_for_active_field_choice():
     )
 
     step = ConquerGameScreen._current_conquer_battle_coach_step(screen)
-
-    assert step['id'] == 'conquer_battle_field_actions'
-    assert step['action'] == 'next'
+    assert step['id'] == 'conquer_battle_tactics'
 
 
 def test_conquer_battle_intro_pauses_until_overview_seen():

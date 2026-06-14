@@ -247,29 +247,23 @@ def test_skip_and_reset_do_not_clear_claimed_rewards(client, db, two_users, auth
 
 def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     first = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
-                        json={'tip_key': 'menu:user_items'})
+                        json={'tip_key': 'menu:duel'})
     data = first.get_json()
     assert first.status_code == 200
-    assert data['onboarding']['menu_hints_seen'] == ['user_items']
+    assert data['onboarding']['menu_hints_seen'] == ['duel']
 
     marked = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
-                         json={'tip_key': 'menu:duel'})
+                         json={'tip_key': 'menu:guide_first_duel_reward'})
     data = marked.get_json()
     assert marked.status_code == 200
-    assert data['onboarding']['menu_hints_seen'] == ['user_items', 'duel']
-
-    response = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
-                           json={'tip_key': 'menu:guide_first_duel_reward'})
-    assert response.status_code == 200
-    data = response.get_json()
-    assert data['onboarding']['menu_hints_seen'] == ['user_items', 'duel', 'guide_first_duel_reward']
+    assert data['onboarding']['menu_hints_seen'] == ['duel', 'guide_first_duel_reward']
 
     collection_intro = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
                                    json={'tip_key': 'menu:collection_starter_cards'})
     assert collection_intro.status_code == 200
     data = collection_intro.get_json()
     assert data['onboarding']['menu_hints_seen'] == [
-        'user_items', 'duel', 'guide_first_duel_reward', 'collection_starter_cards'
+        'duel', 'guide_first_duel_reward', 'collection_starter_cards'
     ]
 
     post_duel = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
@@ -277,10 +271,11 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert post_duel.status_code == 200
     data = post_duel.get_json()
     assert data['onboarding']['menu_hints_seen'] == [
-        'user_items', 'duel', 'guide_first_duel_reward',
+        'duel', 'guide_first_duel_reward',
         'collection_starter_cards', 'collection_open_main_booster'
     ]
 
+    # Hints always come back sorted by MENU_HINT_IDS order, not mark order.
     newest = client.post('/onboarding/mark_tip', headers=auth_headers_user1,
                          json={'tip_key': 'menu:kingdom_config_shields_style'})
     assert newest.status_code == 200
@@ -294,7 +289,6 @@ def test_menu_hint_marks_are_persisted(client, auth_headers_user1):
     assert middle_new.status_code == 200
     data = middle_new.get_json()
     assert data['onboarding']['menu_hints_seen'] == [
-        'user_items',
         'duel',
         'guide_first_duel_reward',
         'collection_starter_cards',

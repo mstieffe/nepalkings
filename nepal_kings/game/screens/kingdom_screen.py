@@ -749,33 +749,24 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_conquer_button',
                 'rect': conquer_button_rect,
                 'title': 'Open Conquer Setup',
-                'body': 'This land can be challenged. Click Conquer to choose figures, tactics, and an optional prelude spell.',
+                'body': "Tap Conquer to review your attack — we've already assembled a starter army for you.",
                 'action': 'click',
                 'mark_on_click': True,
-                'max_lines': 5,
+                'max_lines': 4,
             }
         if self._detail_box:
             return None
         if not self._hex_map or self._loading or self._error:
             return None
-        if not first_conquer_complete and 'kingdom_map_intro' not in seen:
+        if not first_conquer_complete and 'kingdom_pick_land' not in seen:
             return {
-                'id': 'kingdom_map_intro',
+                'id': 'kingdom_pick_land',
                 'rect': self._map_viewport_rect,
-                'title': 'Kingdom Map',
-                'body': 'Each hex is land. Your owned lands produce gold, booster packs and maps; other lands can be scouted and challenged through the land detail view.',
-                'action': 'next',
-                'max_lines': 5,
-            }
-        if not first_conquer_complete and 'kingdom_select_land' not in seen:
-            return {
-                'id': 'kingdom_select_land',
-                'rect': self._map_viewport_rect,
-                'title': 'Choose A Land',
-                'body': 'Click a land you do not own to inspect it. The tour will continue once the detail view shows an available Conquer action.',
+                'title': 'Pick A Land',
+                'body': 'Each hex is a land. Tap one you do not own to inspect it, then choose Conquer.',
                 'action': 'click',
                 'mark_on_click': False,
-                'max_lines': 5,
+                'max_lines': 4,
             }
         if not first_conquer_complete:
             return None
@@ -784,17 +775,8 @@ class KingdomScreen(MenuScreenMixin, Screen):
             return {
                 'id': 'kingdom_after_conquer_map',
                 'rect': self._map_viewport_rect,
-                'title': 'After A Conquest',
-                'body': 'Conquer battles change the map. If you won, the land joins your territory and starts producing. If you lost, only cards the defender looted are gone; the rest return.',
-                'action': 'next',
-                'max_lines': 5,
-            }
-        if 'kingdom_connected_lands' not in seen:
-            return {
-                'id': 'kingdom_connected_lands',
-                'rect': self._map_viewport_rect,
-                'title': 'Connected Kingdoms',
-                'body': 'Owned neighboring lands form one kingdom. Conquering next to your land expands it; isolated owned lands become separate kingdoms, and later conquests can connect them.',
+                'title': 'Your First Land!',
+                'body': 'You took your first land — it joins your kingdom and produces over time. Lose a battle and only looted cards are gone.',
                 'action': 'next',
                 'max_lines': 5,
             }
@@ -804,9 +786,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_production_intro',
                 'rect': production_rect,
                 'title': 'Collect Production',
-                'body': 'Kingdoms build up gold over time, and skills can add packs or maps. Use Collect All here, or open a kingdom config to inspect each item.',
+                'body': 'Collect production here. Kingdoms build gold over time; skills add packs and maps.',
                 'action': 'next',
-                'max_lines': 5,
+                'max_lines': 4,
             }
         defence_already_handled = (
             'save_first_defence_config' in completed
@@ -817,9 +799,9 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_defence_intro',
                 'rect': self._map_viewport_rect,
                 'title': 'Defend Your Lands',
-                'body': "A land you own can be attacked by the AI or other players. Select one of your lands and choose Configure Defence to station figures that hold it — it works like building an attack, but to defend. Lands without a saved defence are easier to lose. You can also buy a temporary shield from a kingdom's config.",
+                'body': 'Defend what you own. Select one of your lands and choose Configure Defence to station holders before others attack.',
                 'action': 'next',
-                'max_lines': 6,
+                'max_lines': 5,
             }
         gear_rect = getattr(self, '_kingdom_chip_gear_rect', None)
         if gear_rect and 'kingdom_config_intro' not in seen:
@@ -827,10 +809,10 @@ class KingdomScreen(MenuScreenMixin, Screen):
                 'id': 'kingdom_config_intro',
                 'rect': gear_rect,
                 'title': 'Open Kingdom Config',
-                'body': 'This edit icon opens the selected kingdom. Use it to spend skill points, collect production, manage shields and cosmetics, and review loot.',
+                'body': 'Open Kingdom Config to spend skill points, collect production, and manage shields.',
                 'action': 'click',
                 'mark_on_click': True,
-                'max_lines': 5,
+                'max_lines': 4,
             }
         return None
 
@@ -2630,7 +2612,7 @@ class KingdomScreen(MenuScreenMixin, Screen):
             conquest_outcome=conquest_outcome,
         )
         if self._kingdom_coach_ready() and self._detail_conquer_button_rect():
-            self._mark_menu_coach_seen('kingdom_select_land')
+            self._mark_menu_coach_seen('kingdom_pick_land')
 
     def _on_conquer(self, tile):
         """Transition to the conquer screen for this land."""

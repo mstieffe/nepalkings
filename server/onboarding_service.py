@@ -192,27 +192,28 @@ DUEL_HINT_IDS = (
     'battle_move_panel', 'battle_move_actions', 'battle_figure_diff',
     'battle_rounds_panel', 'battle_total_diff',
 )
+# Order matters: mark_menu_hint re-sorts a user's seen hints by this tuple's
+# order, and several tests assert that ordering. Keep ids in journey order.
+# (duel/kingdom/collection/rankings are marked when the player clicks those
+# main-menu buttons, so they remain even though they are no longer tour steps.)
 MENU_HINT_IDS = (
-    'user_items', 'duel', 'kingdom', 'collection', 'rankings', 'home', 'guide',
-    'guide_achievements', 'guide_first_duel_reward',
+    'duel', 'kingdom', 'collection', 'rankings', 'guide',
+    'guide_first_duel_reward',
     'open_boosters_first', 'ready_first_duel',
     'new_game', 'beginner_duel', 'send_first_duel_challenge',
     'collection_starter_cards', 'collection_open_main_booster',
-    'collection_open_side_booster', 'collection_return_home',
-    'post_boosters_kingdom', 'kingdom_map_intro', 'kingdom_select_land',
+    'collection_open_side_booster',
+    'post_boosters_kingdom', 'kingdom_pick_land',
     'kingdom_conquer_button', 'conquer_config_field',
     'conquer_config_build_edit', 'conquer_config_battle_plan',
-    'conquer_config_prelude', 'conquer_config_to_battle',
-    'conquer_battle_timeline_intro',
-    'conquer_battle_field_actions', 'conquer_battle_tactics_rail',
-    'conquer_battle_tactic_actions', 'conquer_battle_round_ledger',
+    'conquer_config_to_battle',
+    'conquer_battle_timeline_intro', 'conquer_battle_tactics',
     'conquer_battle_finish', 'kingdom_after_conquer_map',
-    'kingdom_connected_lands', 'kingdom_production_intro',
+    'kingdom_production_intro',
     'kingdom_defence_intro', 'defence_intro', 'defence_battle_plan',
     'defence_final_response', 'defence_save',
-    'kingdom_config_intro', 'kingdom_config_header',
-    'kingdom_config_production', 'kingdom_config_skills',
-    'kingdom_config_loot_inbox', 'kingdom_config_shields_style',
+    'kingdom_config_intro', 'kingdom_config_essentials',
+    'kingdom_config_shields_style',
 )
 FINAL_TUTORIAL_MENU_HINT_ID = 'kingdom_config_shields_style'
 

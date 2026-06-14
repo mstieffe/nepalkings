@@ -1349,8 +1349,8 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return {
                 'id': 'conquer_config_field',
                 'rect': field_rect,
-                'title': 'Assemble Your Attack',
-                'body': 'This is where you prepare an attack force. You place figures into three areas: the castle (a King, your resource anchor), the village (farms that feed your army), and the military (warriors that do the fighting). Together they form a working economy you bring into battle.',
+                'title': 'Your Attack Is Ready',
+                'body': 'Your army is built: a King, a Rice Farm, and Gorkha Warriors. Suits cycle — Hearts beat Clubs, Clubs beat Diamonds, Diamonds beat Spades, Spades beat Hearts.',
                 'action': 'next',
                 'max_lines': 6,
             }
@@ -1358,40 +1358,29 @@ class ConquerScreen(MenuScreenMixin, Screen):
             return {
                 'id': 'conquer_config_build_edit',
                 'rect': self._btn_build,
-                'title': 'Build Figures From Cards',
-                'body': 'This edit button opens the figure builder. Your starter deck is enough for a King, a Rice Farm, and Gorkha Warriors. Press Got it, then open it when you are ready. Build all three and return here.',
+                'title': 'Build Your Own (Later)',
+                'body': 'Built for you this time. Later, tap Build to assemble figures from your own cards.',
                 'action': 'next',
                 'button_label': 'Got it',
-                'max_lines': 6,
+                'max_lines': 4,
             }
         battle_plan_rect = self._conquer_combined_rect(self._battle_plan_rect, self._btn_buy_move)
         if battle_plan_rect and 'conquer_config_battle_plan' not in seen:
             return {
                 'id': 'conquer_config_battle_plan',
                 'rect': battle_plan_rect,
-                'title': 'Battle Plan',
-                'body': 'After your figures are ready, use this edit button to choose the three tactics your attack carries into battle. Fill all three rounds, return here, and then start the conquest.',
+                'title': 'Battle Plan Set',
+                'body': 'Your three tactics (Daggers) are set. Later, tap here to choose your own battle plan.',
                 'action': 'next',
                 'button_label': 'Got it',
-                'max_lines': 5,
-            }
-        prelude_rect = self._conquer_combined_rect(
-            self._prelude_panel_rect, self._btn_prelude_edit, self._prelude_spell_rect)
-        if prelude_rect and 'conquer_config_prelude' not in seen:
-            return {
-                'id': 'conquer_config_prelude',
-                'rect': prelude_rect,
-                'title': 'Prelude Spell',
-                'body': 'A prelude spell fires before the conquest begins. It is optional, but it can swing the opening state in your favour.',
-                'action': 'next',
-                'max_lines': 5,
+                'max_lines': 4,
             }
         if self._btn_battle and 'conquer_config_to_battle' not in seen:
             return {
                 'id': 'conquer_config_to_battle',
                 'rect': self._btn_battle,
                 'title': 'Start Conquer Battle',
-                'body': 'When ready, Start Battle opens the live conquest. Submitted cards can be looted if you lose; unlooted cards return. The next screen explains the timeline, tactics, ledger, and result.',
+                'body': 'Start Battle now. Cards can be looted if you lose; the rest return. The next screen explains the timeline, tactics, ledger, and result.',
                 'action': 'next',
                 'button_label': 'Got it',
                 'max_lines': 5,

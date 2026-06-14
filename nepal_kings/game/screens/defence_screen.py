@@ -1680,37 +1680,37 @@ class DefenceScreen(MenuScreenMixin, Screen):
                 'id': 'defence_intro',
                 'rect': self._btn_build,
                 'title': 'Defend This Land',
-                'body': 'Set up the figures that hold this land when it is attacked. It works just like building an attack — a King, farms, and warriors — but these defenders stay here to protect the land instead of marching out.',
+                'body': 'Build figures that hold this land when attacked — like an attack, but they stay to defend.',
                 'action': 'next',
-                'max_lines': 6,
+                'max_lines': 4,
             }
         if self._battle_plan_rect and 'defence_battle_plan' not in seen:
             return {
                 'id': 'defence_battle_plan',
                 'rect': self._battle_plan_rect,
                 'title': 'Defence Battle Plan',
-                'body': 'Assign the battle moves your defenders use across the three battle rounds. A saved defence needs all three rounds filled.',
+                'body': 'Assign the tactics your defenders use. A saved defence needs all three rounds filled.',
                 'action': 'next',
-                'max_lines': 5,
+                'max_lines': 4,
             }
         if self._counter_panel_rect and 'defence_final_response' not in seen:
             return {
                 'id': 'defence_final_response',
                 'rect': self._counter_panel_rect,
                 'title': 'Final Response',
-                'body': 'Pick the final response your defence uses: a battle figure that fights, or a counter spell that disrupts the attacker.',
+                'body': 'Pick a final response: a battle figure that fights, or a counter spell that disrupts.',
                 'action': 'next',
-                'max_lines': 5,
+                'max_lines': 4,
             }
         if self._btn_save and 'defence_save' not in seen:
             return {
                 'id': 'defence_save',
                 'rect': self._btn_save,
                 'title': 'Save Your Defence',
-                'body': 'Save the defence to lock it in. Its cards stay reserved while the defence is active, and the land is much harder to take from you.',
+                'body': 'Save to lock it in. Its cards stay reserved, and the land is much harder to take.',
                 'action': 'next',
                 'button_label': 'Got it',
-                'max_lines': 5,
+                'max_lines': 4,
             }
         return None
 

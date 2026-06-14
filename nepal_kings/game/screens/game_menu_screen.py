@@ -517,10 +517,10 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                 'id': 'open_boosters_first',
                 'rect': self.button_collection.rect,
                 'title': 'Open Your Booster Packs',
-                'body': 'Your welcome present holds booster packs. Go to the Collection, then open one main and one side booster so the first conquest has fresh options.',
+                'body': 'Open your welcome packs. Tap Collection, then open one main and one side booster.',
                 'action': 'click',
                 'mark_on_click': True,
-                'max_lines': 5,
+                'max_lines': 4,
             }
         if self._first_conquer_incomplete():
             if 'post_boosters_kingdom' not in seen:
@@ -528,10 +528,10 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'id': 'post_boosters_kingdom',
                     'rect': self.button_kingdom.rect,
                     'title': 'Conquer Your First Land',
-                    'body': 'Good. You have opened both welcome packs and seen where your cards live. Head to your Kingdom, pick a nearby land, and win your first battle. It takes only a few minutes.',
+                    'body': 'Conquer your first land. Open your Kingdom and pick a nearby land to challenge.',
                     'action': 'click',
                     'mark_on_click': True,
-                    'max_lines': 5,
+                    'max_lines': 4,
                 }
             return None  # the kingdom screens guide the rest
         if self._first_duel_incomplete():
@@ -540,10 +540,10 @@ class GameMenuScreen(MenuScreenMixin, Screen):
                     'id': 'ready_first_duel',
                     'rect': self.button_duel.rect,
                     'title': 'Ready For Your First Duel',
-                    'body': 'Land conquered! Now try the full tactical card game: a short practice duel against AI Strategos, with beginner-friendly settings prepared for you.',
+                    'body': 'Try a full duel. Play a short practice match against AI Strategos.',
                     'action': 'click',
                     'mark_on_click': True,
-                    'max_lines': 5,
+                    'max_lines': 4,
                 }
             return None
         return None
@@ -556,44 +556,24 @@ class GameMenuScreen(MenuScreenMixin, Screen):
             return None
         seen = self._menu_coach_seen()
 
-        # 1. Right after the welcome present, point out where those items live.
-        if 'user_items' not in seen:
-            return {
-                'id': 'user_items',
-                'rect': self._user_item_display_rect,
-                'title': 'Your Items',
-                'body': 'Items you own are shown here. The welcome present you just opened added gold, boosters, and maps to this display.',
-            }
-
-        # 2. Lead with the actionable journey the welcome promised:
-        #    open boosters -> conquer a land -> first duel. This keeps the
-        #    first session action-first instead of a long generic tour.
+        # Lead with the actionable journey the welcome promised: open boosters
+        # -> conquer a land -> first duel. Action-first, not a generic tour.
         journey = self._current_journey_coach_step()
         if journey is not None:
             return journey
 
-        # 3. Once the journey is underway, offer light orientation for the
-        #    remaining menu areas the journey doesn't already cover.
-        steps = [
-            ('rankings', self.button_rankings.rect, 'Rankings',
-             'Check rankings when you want to compare progress and see who is climbing.'),
-            ('home', self._icon_home.rect, 'Home',
-             'This icon always brings you back to the main menu.'),
-        ]
-        for step_id, rect, title, body in steps:
-            if step_id not in seen:
-                return {'id': step_id, 'rect': rect, 'title': title, 'body': body}
+        # Once the journey is underway, point at the guide for reward tracking.
         guide_walkthrough_pending = (
             self._first_duel_incomplete()
-            and ('guide_achievements' not in seen
-                 or 'guide_first_duel_reward' not in seen)
+            and 'guide_first_duel_reward' not in seen
         )
         if 'guide' not in seen or guide_walkthrough_pending:
             return {
                 'id': 'guide',
                 'rect': self._icon_guide.rect,
                 'title': 'Guide',
-                'body': 'Open the guide next. It tracks the conquest path, duel practice, and rewards waiting behind real milestones.',
+                'body': 'Open the guide to track rewards. Finish your first duel to claim its reward.',
+                'max_lines': 4,
             }
         return None
 

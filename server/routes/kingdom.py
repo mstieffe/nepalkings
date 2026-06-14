@@ -1955,6 +1955,140 @@ def _get_or_create_conquer_config(user_id, land_id):
     return cfg
 
 
+# Families pre-assembled into a new player's very first conquer attack, in
+# build order (King first so its production covers the farm/warriors).
+_TUTORIAL_ATTACK_FAMILIES = ('Djungle King', 'Small Rice Farm', 'Gorkha Warriors')
+
+
+def _preassemble_tutorial_conquer_attack(user, cfg, land):
+    """Fill a brand-new player's first (empty) conquer config with a complete,
+    battle-ready starter attack from their curated starter deck, so the first
+    conquest never hits the figure-builder cliff.
+
+    Builds Djungle King + Small Rice Farm + Gorkha Warriors from the reserved
+    Hearts cards, selects the Warriors as the battle figure, and adds three
+    Daggers (the 8/9/10 Hearts) as the battle plan. Best-effort and gated to
+    the tutorial; any unmet precondition skips silently (player builds manually).
+    """
+    from ai.figure_recipes import FIGURE_RECIPES
+    from onboarding_service import _state as _onboarding_state
+
+    # Gate 1: only a freshly-created, untouched conquer config.
+    if (list(cfg.figures) or list(cfg.battle_moves)
+            or cfg.battle_figure_id is not None
+            or cfg.counter_spell_name is not None):
+        return False
+
+    # Gate 2: still in the tutorial (no first conquer battle finished yet).
+    state = _onboarding_state(user)
+    if 'finish_first_conquer_battle' in set(state.get('completed_steps') or []):
+        return False
+    if LandAttackLog.query.filter_by(attacker_user_id=user.id).first() is not None:
+        return False
+
+    # Gate 3: don't spread starter cards across lands — only the config we
+    # just created may exist for this user.
+    conquer_cfg_count = LandConfig.query.filter_by(
+        user_id=user.id, config_type='conquer').count()
+    if conquer_cfg_count > 1:
+        return False
+
+    # Gate 4: castle cap on this land must allow one King.
+    if _castle_cap_for_tier(getattr(land, 'tier', 1)) < 1:
+        return False
+
+    # Index free Hearts cards by rank (the starter deck is all Hearts main).
+    free_by_rank = {}
+    free_cards = CollectionCard.query.filter_by(
+        user_id=user.id, suit='Hearts', locked=False).all()
+    for card in free_cards:
+        free_by_rank.setdefault(card.rank, []).append(card)
+
+    def _take(rank):
+        bucket = free_by_rank.get(rank) or []
+        return bucket.pop() if bucket else None
+
+    recipes = {r['family_name']: r for r in FIGURE_RECIPES}
+    if not all(name in recipes for name in _TUTORIAL_ATTACK_FAMILIES):
+        return False
+
+    # Reserve the exact cards the figures need (7s for figures, leaving 8/9/10
+    # for Daggers). Validate everything is available BEFORE mutating anything.
+    king_key = _take('K')
+    farm_key = _take('J')
+    farm_num = _take('7')
+    war_key = _take('A')
+    war_num = _take('7')
+    dagger_cards = [_take('8'), _take('9'), _take('10')]
+    needed = [king_key, farm_key, farm_num, war_key, war_num, *dagger_cards]
+    if any(c is None for c in needed):
+        return False
+
+    suit = 'Hearts'
+
+    def _build_figure(recipe, key_card, number_card):
+        num_value = int(number_card.value) if number_card is not None else 0
+        if 'produces_fn' in recipe:
+            produces = recipe['produces_fn'](suit, num_value)
+        else:
+            produces = dict(recipe.get('produces', {}))
+        if 'requires_fn' in recipe:
+            requires = recipe['requires_fn'](suit, num_value)
+        else:
+            requires = dict(recipe.get('requires', {}))
+        card_ids = [key_card.id]
+        card_roles = ['key']
+        if number_card is not None:
+            card_ids.append(number_card.id)
+            card_roles.append('number')
+        flags = recipe.get('special_flags', {}) or {}
+        figure = LandConfigFigure(
+            config_id=cfg.id,
+            family_name=recipe['family_name'],
+            name=recipe.get('name', recipe['family_name']),
+            suit=suit,
+            color=recipe['color'],
+            field=recipe['field'],
+            card_ids=card_ids,
+            card_roles=card_roles,
+            produces=produces,
+            requires=requires,
+            description='',
+            upgrade_family_name=recipe.get('upgrade_family_name'),
+            checkmate=bool(flags.get('checkmate', False)),
+            cannot_be_blocked=bool(flags.get('cannot_be_blocked', False)),
+            rest_after_attack=bool(flags.get('rest_after_attack', False)),
+        )
+        db.session.add(figure)
+        db.session.flush()
+        _lock_collection_cards(card_ids, 'conquer_figure', figure.id)
+        return figure
+
+    _build_figure(recipes['Djungle King'], king_key, None)
+    _build_figure(recipes['Small Rice Farm'], farm_key, farm_num)
+    warriors = _build_figure(recipes['Gorkha Warriors'], war_key, war_num)
+
+    cfg.battle_figure_id = warriors.id
+
+    for round_index, card in enumerate(dagger_cards):
+        move = LandConfigBattleMove(
+            config_id=cfg.id,
+            family_name='Dagger',
+            card_id=card.id,
+            suit=suit,
+            rank=card.rank,
+            value=int(card.value),
+            round_index=round_index,
+        )
+        db.session.add(move)
+        db.session.flush()
+        _lock_collection_cards([card.id], 'conquer_move', move.id)
+
+    logger.info("[TUTORIAL_PREASSEMBLE] built starter attack user=%s land=%s cfg=%s",
+                user.id, getattr(land, 'id', None), cfg.id)
+    return True
+
+
 def _wipe_config(cfg):
     """Delete a config and all its children, unlocking every collection card."""
     card_ids = []
@@ -2022,7 +2156,19 @@ def get_conquer_config():
         )
 
     cfg = _get_or_create_conquer_config(g.user_id, land_id)
-    db.session.commit()
+    # First-conquest onboarding: pre-assemble a battle-ready starter attack so
+    # the player never faces the figure builder cold. Best-effort, self-gated.
+    try:
+        _preassemble_tutorial_conquer_attack(user, cfg, land)
+        db.session.commit()
+    except Exception:
+        # Discard any partial pre-assembly (and the just-created cfg), then
+        # fall back to a clean empty config so the screen still loads.
+        db.session.rollback()
+        logger.exception("[TUTORIAL_PREASSEMBLE] failed user=%s land=%s",
+                         g.user_id, land_id)
+        cfg = _get_or_create_conquer_config(g.user_id, land_id)
+        db.session.commit()
 
     return jsonify({
         'success': True,

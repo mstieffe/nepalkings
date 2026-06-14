@@ -2010,10 +2010,7 @@ class ConquerGameScreen(GameScreen):
     def _conquer_battle_intro_step_ids():
         return (
             'conquer_battle_timeline_intro',
-            'conquer_battle_field_actions',
-            'conquer_battle_tactics_rail',
-            'conquer_battle_tactic_actions',
-            'conquer_battle_round_ledger',
+            'conquer_battle_tactics',
             'conquer_battle_finish',
         )
 
@@ -2040,58 +2037,24 @@ class ConquerGameScreen(GameScreen):
                     'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
                     'rects': rects or self._conquer_battle_intro_fallback_rects(),
                     'title': 'Battle Timeline',
-                    'body': 'This row shows the battle order: setup, spells, tactics, then result.',
+                    'body': 'This row is the battle order: setup, spells, tactics, then result. Figure and spell choices happen on the field below.',
                     'action': 'next',
                     'button_label': 'Got it',
-                    'max_lines': 3,
+                    'max_lines': 4,
                 }
-            if step_id == 'conquer_battle_field_actions':
-                rects = self._conquer_battle_field_overview_rects()
+            if step_id == 'conquer_battle_tactics':
+                rects = (self._conquer_battle_tactic_action_rects()
+                         or []) + (self._conquer_battle_tactics_target_rects() or [])
+                rects = rects or self._conquer_battle_intro_fallback_rects()
                 return {
                     'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Battlefield',
-                    'body': 'Figure choices and spell targets happen here when the timeline asks for them.',
+                    'rect': rects[0],
+                    'rects': rects,
+                    'title': 'Play A Tactic',
+                    'body': 'Play one tactic each round. Your Daggers are on the left — select one and press Play.',
                     'action': 'next',
                     'button_label': 'Got it',
-                    'max_lines': 3,
-                }
-            if step_id == 'conquer_battle_tactics_rail':
-                rects = self._conquer_battle_tactics_target_rects()
-                return {
-                    'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Tactic Hand',
-                    'body': 'Your tactics are on the left. Each round uses one tactic.',
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 3,
-                }
-            if step_id == 'conquer_battle_tactic_actions':
-                rects = self._conquer_battle_tactic_action_rects() or self._conquer_battle_tactics_target_rects()
-                return {
-                    'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Tactic Actions',
-                    'body': 'Select a tactic, then press Play. The other buttons are optional.',
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 3,
-                }
-            if step_id == 'conquer_battle_round_ledger':
-                rects = self._conquer_battle_round_ledger_rects()
-                return {
-                    'id': step_id,
-                    'rect': (rects or self._conquer_battle_intro_fallback_rects())[0],
-                    'rects': rects or self._conquer_battle_intro_fallback_rects(),
-                    'title': 'Round Ledger',
-                    'body': 'The ledger tracks each round and the total score.',
-                    'action': 'next',
-                    'button_label': 'Got it',
-                    'max_lines': 3,
+                    'max_lines': 4,
                 }
             if step_id == 'conquer_battle_finish':
                 rects = self._conquer_battle_finish_rects() or self._conquer_battle_timeline_target_rects()

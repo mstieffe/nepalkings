@@ -1414,29 +1414,16 @@ class MenuScreenMixin:
         if 'finish_first_duel' in completed:
             return None
         seen = self._menu_coach_seen()
-        if 'guide_achievements' not in seen:
-            checklist = self._onboarding_guide_section_header_rects.get('checklist')
-            early_goals = self._onboarding_guide_section_header_rects.get('early_goals')
-            target_rects = [rect for rect in (checklist, early_goals) if rect]
-            guide_rect = self._onboarding_guide_rect().inflate(-18, -18)
-            return {
-                'id': 'guide_achievements',
-                'rect': guide_rect,
-                'rects': target_rects or [guide_rect],
-                'title': 'Achievements & Rewards',
-                'body': 'Checklist and Early Goals track achievements that teach the game step by step. Finish goals here to unlock small rewards as you learn.',
-                'max_lines': 5,
-            }
         if 'guide_first_duel_reward' not in seen:
             row = self._onboarding_guide_item_rects.get('finish_first_duel')
             if row is None:
                 row = self._onboarding_guide_rect().inflate(-40, -140)
             return {
                 'id': 'guide_first_duel_reward',
+                'title': 'Rewards Track Your Progress',
                 'rect': row,
-                'title': 'Time For Your First Duel',
-                'body': 'Finish a duel against AI Strategos to claim this reward. Go back to the menu and start a Duel against the AI.',
-                'max_lines': 5,
+                'body': 'The checklist and goals grant rewards as you learn. Finish a duel vs AI Strategos to claim this one.',
+                'max_lines': 4,
             }
         return None
 
